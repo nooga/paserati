@@ -99,6 +99,18 @@ func NewClosure(fn interface{}, upvalues []*Upvalue) Value {
 	return v
 }
 
+// ClosureV creates a Closure value directly from a *Closure pointer.
+// Used by the VM during OpClosure execution.
+func ClosureV(closure *Closure) Value {
+	if closure == nil {
+		// Handle nil closure pointer gracefully, perhaps return Undefined or panic
+		panic("Attempted to create Value from nil Closure pointer")
+	}
+	v := Value{Type: TypeClosure}
+	v.as.obj = closure
+	return v
+}
+
 // Type Checkers
 
 func IsUndefined(v Value) bool {
@@ -211,6 +223,13 @@ func (v Value) String() string {
 type Upvalue struct {
 	Location *Value // Pointer to stack slot (if open) OR nil (if closed)
 	Closed   Value  // Holds the value after the stack slot is invalid (if closed)
+}
+
+// Close closes an open upvalue by copying the value from its stack location
+// into its Closed field and setting Location to nil.
+func (uv *Upvalue) Close(val Value) {
+	uv.Closed = val
+	uv.Location = nil
 }
 
 // Closure represents a function object combined with its captured upvalues.

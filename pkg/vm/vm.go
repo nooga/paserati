@@ -17,7 +17,8 @@ type CallFrame struct {
 	ip      int            // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
-	registers []value.Value
+	registers      []value.Value
+	targetRegister byte // Which register in the CALLER the result should go into
 }
 
 // VM represents the virtual machine state.
@@ -107,7 +108,7 @@ func (vm *VM) run() InterpretResult {
 	ip := frame.ip
 
 	// Store the target register for the *caller* when returning from a function
-	var returnTargetReg byte = 0 // Default for top-level
+	// var returnTargetReg byte = 0 // REMOVED - Now stored in CallFrame
 
 	for {
 		// --- Debugging (Optional) ---
@@ -320,8 +321,8 @@ func (vm *VM) run() InterpretResult {
 			}
 
 			// 4. Push new CallFrame
-			frame.ip = ip             // Save current IP before switching frame
-			returnTargetReg = destReg // Remember where to put the return value in *this* frame
+			frame.ip = ip // Save current IP before switching frame
+			// returnTargetReg = destReg // REMOVED - Stored in new frame below
 
 			// Get pointer to the new frame slot BEFORE accessing caller registers
 			callerFrameRegisters := registers // Cache caller registers before frame points to new one
@@ -330,6 +331,7 @@ func (vm *VM) run() InterpretResult {
 			frame.closure = calleeClosure // Store the closure being executed
 			frame.ip = 0                  // Start at the beginning of the function's code
 			frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+neededRegSlots]
+			frame.targetRegister = destReg // Store target register in the new frame
 			vm.nextRegSlot += neededRegSlots
 			vm.frameCount++
 
@@ -352,7 +354,8 @@ func (vm *VM) run() InterpretResult {
 			retReg := code[ip]
 			ip++
 
-			result := registers[retReg] // Value being returned
+			result := registers[retReg]                   // Value being returned
+			poppingFrameTargetReg := frame.targetRegister // Read target BEFORE popping
 
 			// --- Close upvalues pointing into the returning frame's registers ---
 			vm.closeUpvalues(registers) // Pass the frame's register slice
@@ -372,7 +375,7 @@ func (vm *VM) run() InterpretResult {
 				frame = &vm.frames[vm.frameCount-1] // Switch back to caller frame
 
 				// Place the return value into the designated register in the caller frame
-				frame.registers[returnTargetReg] = result
+				frame.registers[poppingFrameTargetReg] = result
 
 				// Update cached variables for the caller frame
 				closure = frame.closure // Update cached closure
@@ -384,13 +387,12 @@ func (vm *VM) run() InterpretResult {
 				constants = function.Chunk.Constants
 				registers = frame.registers
 				ip = frame.ip
-				// Reset returnTargetReg for next potential return?
-				// Should be set again by the next OpCall.
 			}
 
 		case bytecode.OpReturnUndefined:
 			// Get the undefined value
 			result := value.Undefined()
+			poppingFrameTargetReg := frame.targetRegister // Read target BEFORE popping
 
 			// --- Close upvalues pointing into the returning frame's registers ---
 			vm.closeUpvalues(registers)
@@ -411,7 +413,7 @@ func (vm *VM) run() InterpretResult {
 
 				// Place the undefined value into the designated register in the caller frame
 				// We still need returnTargetReg from the preceding OpCall
-				frame.registers[returnTargetReg] = result
+				frame.registers[poppingFrameTargetReg] = result
 
 				// Update cached variables for the caller frame
 				closure = frame.closure
@@ -448,66 +450,77 @@ func (vm *VM) run() InterpretResult {
 
 		// --- Closure Opcodes ---
 		case bytecode.OpClosure:
-			destReg := code[ip]          // Rx
-			funcConstIdxHi := code[ip+1] // FuncConstIdx (16-bit)
-			funcConstIdxLo := code[ip+2]
-			funcConstIdx := uint16(funcConstIdxHi)<<8 | uint16(funcConstIdxLo)
-			upvalueCount := int(code[ip+3]) // UpvalueCount
-			ip += 4
+			destReg := code[ip]
+			constIdxHi := code[ip+1]
+			constIdxLo := code[ip+2]
+			constIdx := uint16(constIdxHi)<<8 | uint16(constIdxLo)
+			upvalueCount := int(code[ip+3])
+			ip += 4 // Advance IP past OpClosure, destReg, constIdx (2), upvalueCount
 
-			// Get the function blueprint from constants
-			if int(funcConstIdx) >= len(constants) {
+			// 1. Get the function blueprint
+			if int(constIdx) >= len(constants) {
 				frame.ip = ip
-				return vm.runtimeError("Invalid function constant index %d for OpClosure.", funcConstIdx)
+				return vm.runtimeError("Invalid constant index %d for function blueprint", constIdx)
 			}
-			funcProtoVal := constants[funcConstIdx]
-			if !value.IsFunction(funcProtoVal) {
+			fnVal := constants[constIdx]
+			if !value.IsFunction(fnVal) {
 				frame.ip = ip
-				return vm.runtimeError("Constant %d is not a function for OpClosure.", funcConstIdx)
+				return vm.runtimeError("Constant %d is not a function blueprint", constIdx)
 			}
-			funcProto := value.AsFunction(funcProtoVal).(*bytecode.Function)
+			// Assuming the constant is *bytecode.Function as stored by compiler
+			functionProto, ok := value.AsFunction(fnVal).(*bytecode.Function)
+			if !ok {
+				frame.ip = ip
+				return vm.runtimeError("Internal VM Error: Function constant is not *bytecode.Function")
+			}
 
-			// Create upvalue storage
-			upvalues := make([]*value.Upvalue, upvalueCount)
+			// 2. Create the closure object
+			newClosure := &value.Closure{
+				Fn:       functionProto,
+				Upvalues: make([]*value.Upvalue, upvalueCount), // Pre-allocate slice
+			}
 
-			// Capture upvalues
+			// 3. Capture upvalues
 			for i := 0; i < upvalueCount; i++ {
 				isLocal := code[ip] == 1
 				index := code[ip+1]
 				ip += 2
 
 				if isLocal {
-					// Capture local register pointer from the *current* frame
-					captureLoc := &registers[index]
-					// Check if an existing open upvalue already points here
-					found := false
-					for _, openUV := range vm.openUpvalues {
-						// Important: Compare pointers directly
-						if openUV.Location == captureLoc {
-							upvalues[i] = openUV
-							found = true
-							break
+					// Check for the recursive capture signal from the compiler
+					if index == destReg {
+						// Special case: Capture the closure *itself*
+						// Create a closed upvalue pointing directly to the closure object
+						upvalue := &value.Upvalue{}
+						upvalue.Close(value.ClosureV(newClosure)) // Use value.ClosureV helper
+						newClosure.Upvalues[i] = upvalue
+					} else {
+						// Normal case: Capture local variable from the current frame's registers
+						localRegIndex := int(index)
+						if localRegIndex >= len(registers) {
+							frame.ip = ip
+							return vm.runtimeError("Invalid register index %d for local upvalue capture", localRegIndex)
 						}
-					}
-					if !found {
-						// Create new open upvalue if not found
-						newUpvalue := &value.Upvalue{Location: captureLoc}
-						upvalues[i] = newUpvalue
-						vm.openUpvalues = append(vm.openUpvalues, newUpvalue)
+						// Get pointer to the stack slot
+						// We need the memory address of the value.Value in the slice/array.
+						// Using unsafe might be necessary or pass the whole slice and index.
+						// Let's assume captureUpvalue handles finding/creating based on stack location.
+						locationPtr := &registers[localRegIndex] // Get pointer to the Value in the slice
+						newClosure.Upvalues[i] = vm.captureUpvalue(locationPtr)
 					}
 				} else {
-					// Capture from the *enclosing* function's upvalues
-					if int(index) >= len(closure.Upvalues) { // Use current closure's upvalues
+					// Capture upvalue from the enclosing function's closure
+					upvalueIndex := int(index)
+					if closure == nil || upvalueIndex >= len(closure.Upvalues) { // Check frame.closure, not newClosure!
 						frame.ip = ip
-						return vm.runtimeError("Invalid upvalue index %d for upvalue capture.", index)
+						return vm.runtimeError("Invalid upvalue index %d for non-local capture", upvalueIndex)
 					}
-					upvalues[i] = closure.Upvalues[index] // Share the upvalue from the enclosing closure
+					newClosure.Upvalues[i] = closure.Upvalues[upvalueIndex]
 				}
 			}
 
-			// Create the closure and store it
-			newClosure := value.NewClosure(funcProto, upvalues)
-			registers[destReg] = newClosure
+			// 4. Store the created closure in the destination register
+			registers[destReg] = value.ClosureV(newClosure) // Use value.ClosureV helper
 
 		case bytecode.OpLoadFree:
 			destReg := code[ip]        // Rx
@@ -553,36 +566,55 @@ func (vm *VM) run() InterpretResult {
 
 // --- Runtime Helpers ---
 
-// closeUpvalues closes any open upvalues that point to register slots within the memory range of the frame being returned.
-func (vm *VM) closeUpvalues(frameRegisters []value.Value) {
-	if len(frameRegisters) == 0 {
-		return // Nothing to close if frame had no registers
+// captureUpvalue finds an existing open upvalue pointing to `location` or creates a new one.
+func (vm *VM) captureUpvalue(location *value.Value) *value.Upvalue {
+	// Search existing open upvalues from newest to oldest
+	// (More likely to find recently used locals near the top)
+	for i := len(vm.openUpvalues) - 1; i >= 0; i-- {
+		upvalue := vm.openUpvalues[i]
+		// Compare memory addresses directly
+		if upvalue.Location == location {
+			return upvalue
+		}
 	}
-	// Get the memory range of the frame's register slice
-	frameStartAddr := uintptr(unsafe.Pointer(&frameRegisters[0]))
-	// Address *just after* the last element
-	frameEndAddr := uintptr(unsafe.Pointer(&frameRegisters[len(frameRegisters)-1])) + unsafe.Sizeof(value.Value{})
 
-	newOpenUpvalues := vm.openUpvalues[:0] // Reuse slice capacity
+	// If not found, create a new one
+	newUpvalue := &value.Upvalue{Location: location}
+	vm.openUpvalues = append(vm.openUpvalues, newUpvalue)
+	return newUpvalue
+}
+
+// closeUpvalues closes all open upvalues that point to stack locations
+// at or above the given frame's register base.
+func (vm *VM) closeUpvalues(frameRegisters []value.Value) {
+	if len(frameRegisters) == 0 { // Avoid issues if frameRegisters is empty
+		return
+	}
+	// Get the memory address of the first register in the frame's slice.
+	// This serves as the lower bound (inclusive) for closing upvalues.
+	frameBaseAddr := uintptr(unsafe.Pointer(&frameRegisters[0]))
+
+	// Iterate through open upvalues
+	newOpenUpvalues := vm.openUpvalues[:0] // Create a new slice for remaining open upvalues
 	for _, upvalue := range vm.openUpvalues {
-		if upvalue.Location != nil { // Only consider open upvalues
-			uvLocAddr := uintptr(unsafe.Pointer(upvalue.Location))
-			// Check if the upvalue points within the frame's memory range
-			if uvLocAddr >= frameStartAddr && uvLocAddr < frameEndAddr {
-				// Points into the closing frame -> Close it
-				upvalue.Closed = *upvalue.Location // Copy value
-				upvalue.Location = nil             // Mark as closed
-				// Don't add to newOpenUpvalues
+		if upvalue.Location != nil {
+			upvalueAddr := uintptr(unsafe.Pointer(upvalue.Location))
+			// If the upvalue's location is at or above the frame's base address
+			if upvalueAddr >= frameBaseAddr {
+				// Close the upvalue
+				closedValue := *upvalue.Location // Copy the value from the stack
+				upvalue.Close(closedValue)       // Use the new Close method
 			} else {
-				// Points outside the closing frame -> Keep it open
+				// Keep this upvalue open, add it to the new slice
 				newOpenUpvalues = append(newOpenUpvalues, upvalue)
 			}
 		} else {
-			// Already closed -> Keep it (shouldn't strictly be in openUpvalues, but handle defensively)
-			newOpenUpvalues = append(newOpenUpvalues, upvalue)
+			// It was already closed (e.g., recursive capture), keep it implicitly
+			// (or potentially add to newOpenUpvalues if closed ones should persist?)
+			// For now, let's only keep actually open ones in the new list.
 		}
 	}
-	vm.openUpvalues = newOpenUpvalues
+	vm.openUpvalues = newOpenUpvalues // Replace the old list
 }
 
 // runtimeError formats a runtime error message and returns the appropriate result code.
