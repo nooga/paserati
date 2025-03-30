@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"paseratti2/pkg/bytecode"
-	"paseratti2/pkg/value"
 	"paseratti2/pkg/vm"
 )
 
@@ -16,21 +14,21 @@ func main() {
 	myVM := vm.NewVM()
 
 	// Manually create a simple bytecode chunk
-	chunk := bytecode.NewChunk()
+	chunk := vm.NewChunk()
 
 	// Add a constant value (e.g., the number 456)
-	constantIndex := chunk.AddConstant(value.Number(456))
+	constantIndex := chunk.AddConstant(vm.Number(456))
 
 	// --- Generate Register-Based Instructions ---
 	const line = 1
 
 	// Instruction: OpLoadConst R0, const_idx
-	chunk.WriteOpCode(bytecode.OpLoadConst, line)
+	chunk.WriteOpCode(vm.OpLoadConst, line)
 	chunk.WriteByte(0)               // Destination Register: R0
 	chunk.WriteUint16(constantIndex) // Constant index (now 16-bit)
 
 	// Instruction: OpReturn R0
-	chunk.WriteOpCode(bytecode.OpReturn, line)
+	chunk.WriteOpCode(vm.OpReturn, line)
 	chunk.WriteByte(0) // Return value from Register: R0
 
 	// Disassemble the chunk for verification

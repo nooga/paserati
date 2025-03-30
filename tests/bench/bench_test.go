@@ -3,7 +3,6 @@ package bench
 import (
 	"io/ioutil"
 	"os"
-	"paseratti2/pkg/bytecode" // Import added
 	"paseratti2/pkg/compiler"
 	"paseratti2/pkg/lexer"
 	"paseratti2/pkg/parser"
@@ -13,7 +12,7 @@ import (
 
 // compileFile compiles the given source file and handles errors.
 // Uses testing.TB for compatibility with both tests and benchmarks.
-func compileFile(tb testing.TB, filename string) *bytecode.Chunk {
+func compileFile(tb testing.TB, filename string) *vm.Chunk {
 	tb.Helper()
 	sourceBytes, err := ioutil.ReadFile(filename)
 	if err != nil {
