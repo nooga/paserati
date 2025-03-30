@@ -81,6 +81,27 @@ func TestArrowFunctionSyntax(t *testing.T) {
 			script:         `const add = x => y => x + y; const add5 = add(5); add5(3);`,
 			expectedOutput: "8",
 		},
+		{
+			name: "Y Combinator Factorial",
+			script: `// The Y Combinator
+const Y = (f) => ((x) => f((y) => x(x)(y)))((x) => f((y) => x(x)(y)));
+
+// Factorial function generator (using if and ==)
+const FactGen = f => n => {
+  if (n == 0) {
+    return 1;
+  }
+  // Implicit else
+  return n * f(n - 1);
+};
+
+// Create the factorial function using the Y Combinator
+const factorial = Y(FactGen);
+
+// Calculate factorial of 5
+factorial(5); // Should result in 120`,
+			expectedOutput: "120",
+		},
 	}
 
 	for _, tc := range testCases {
