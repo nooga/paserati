@@ -129,7 +129,7 @@ func TestCompileExpressions(t *testing.T) {
 			expectedInstructions: makeInstructions(
 				bytecode.OpLoadConst, Register(0), uint16(0),
 				bytecode.OpNegate, Register(1), Register(0),
-				bytecode.OpReturnUndefined,
+				bytecode.OpReturn, Register(1),
 			),
 		},
 		{
@@ -138,7 +138,7 @@ func TestCompileExpressions(t *testing.T) {
 			expectedInstructions: makeInstructions(
 				bytecode.OpLoadTrue, Register(0),
 				bytecode.OpNot, Register(1), Register(0),
-				bytecode.OpReturnUndefined,
+				bytecode.OpReturn, Register(1),
 			),
 		},
 		{
@@ -155,7 +155,7 @@ func TestCompileExpressions(t *testing.T) {
 				bytecode.OpLoadConst, Register(6), uint16(4), // R6 = 1 (const index 4 - NO DEDUPE)
 				bytecode.OpDivide, Register(7), Register(5), Register(6), // R7 = R5 / R6 (1)
 				bytecode.OpSubtract, Register(8), Register(4), Register(7), // R8 = R4 - R7 (24)
-				bytecode.OpReturnUndefined,
+				bytecode.OpReturn, Register(8),
 			),
 		},
 		{
@@ -167,7 +167,7 @@ func TestCompileExpressions(t *testing.T) {
 				bytecode.OpMove, Register(2), Register(0),
 				bytecode.OpMove, Register(3), Register(1),
 				bytecode.OpLess, Register(4), Register(2), Register(3),
-				bytecode.OpReturnUndefined,
+				bytecode.OpReturn, Register(4),
 			),
 		},
 		{
@@ -182,7 +182,7 @@ func TestCompileExpressions(t *testing.T) {
 				bytecode.OpMultiply, Register(4), Register(2), Register(3), // R4 = R2 * R3 (20)
 				bytecode.OpLoadConst, Register(5), uint16(3), // R5 = 20 (index 3)
 				bytecode.OpEqual, Register(6), Register(4), Register(5), // R6 = R4 == R5 (true)
-				bytecode.OpReturnUndefined,
+				bytecode.OpReturn, Register(6),
 			),
 		},
 	}

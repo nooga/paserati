@@ -18,6 +18,10 @@ type Compiler struct {
 	enclosing   *Compiler // Pointer to the enclosing compiler instance (nil for global)
 	freeSymbols []*Symbol // Symbols resolved in outer scopes (captured)
 	errors      []string
+
+	// Tracking for implicit return from last expression statement in top level
+	lastExprReg      Register
+	lastExprRegValid bool
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -29,6 +33,7 @@ func NewCompiler() *Compiler {
 		enclosing:          nil,              // No enclosing compiler for the top level
 		freeSymbols:        []*Symbol{},      // Initialize empty free symbols slice
 		errors:             []string{},
+		lastExprRegValid:   false, // Initialize tracking fields
 	}
 }
 
@@ -41,6 +46,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		enclosing:          enclosingCompiler,                                            // Link to the outer compiler
 		freeSymbols:        []*Symbol{},                                                  // Initialize empty free symbols slice
 		errors:             []string{},                                                   // Function compilation might have errors
+		// lastExprReg tracking only needed for top-level
 	}
 }
 
@@ -56,13 +62,23 @@ func (c *Compiler) Compile(node parser.Node) (*bytecode.Chunk, []string) {
 		c.errors = append(c.errors, err.Error()) // Add the final error if compileNode returns one
 	}
 
-	// Always add an implicit return at the end of the *top-level* script/chunk.
-	// For functions, the implicit return is handled within compileFunctionLiteral.
-	// We need a way to distinguish the top-level Compile call.
-	// Add a flag or check if it's compiling a Program node?
-	// Let's assume this Compile method is ONLY called for the top level.
-	// TODO: Refactor Compile/compileNode interaction for clarity.
-	c.emitFinalReturn(0) // Use line 0 for implicit final return
+	// Emit final return instruction.
+	// For top level, return last expression value if valid, otherwise undefined.
+	// For functions, always return undefined implicitly (explicit return handled earlier).
+	if c.enclosing == nil { // Top-level script
+		if c.lastExprRegValid {
+			c.emitReturn(c.lastExprReg, 0) // Use line 0 for implicit final return
+		} else {
+			c.emitOpCode(bytecode.OpReturnUndefined, 0) // Use line 0 for implicit final return
+		}
+	} else {
+		// Inside a function, OpReturn or OpReturnUndefined should have been emitted by
+		// compileReturnStatement or compileFunctionLiteral's finalization.
+		// We still add one just in case there's a path without a return.
+		c.emitOpCode(bytecode.OpReturnUndefined, 0)
+	}
+
+	// c.emitFinalReturn(0) // REMOVED - Replaced by the logic above
 
 	return c.chunk, c.errors
 }
@@ -71,6 +87,9 @@ func (c *Compiler) Compile(node parser.Node) (*bytecode.Chunk, []string) {
 func (c *Compiler) compileNode(node parser.Node) error {
 	switch node := node.(type) {
 	case *parser.Program:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Reset for the program start
+		}
 		for _, stmt := range node.Statements {
 			err := c.compileNode(stmt)
 			if err != nil {
@@ -80,12 +99,21 @@ func (c *Compiler) compileNode(node parser.Node) error {
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
-		// TODO: Handle block scope later (new symbol table?)
+		// Block statements don't affect the top-level last expression directly
+		// (unless maybe the block IS the top level? Edge case?)
+		// The last statement *within* the block might matter if it's the consequence
+		// of an if-expression, but let's handle that there.
+		originalLastExprValid := c.lastExprRegValid // Save state if inside top-level
 		for _, stmt := range node.Statements {
 			err := c.compileNode(stmt)
 			if err != nil {
 				return err // Propagate errors up
 			}
+		}
+		if c.enclosing == nil {
+			// Restore previous state unless the block *itself* should provide the value?
+			// Let's assume block statements themselves don't provide the final script value.
+			c.lastExprRegValid = originalLastExprValid
 		}
 
 	// --- Statements ---
@@ -94,16 +122,29 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		if err != nil {
 			return err
 		}
-		// Result register is left allocated, potentially unused.
+		if c.enclosing == nil { // If at top level, track this as potential final value
+			c.lastExprReg = c.regAlloc.Current()
+			c.lastExprRegValid = true
+		}
+		// Result register is left allocated, potentially unused otherwise.
 		// TODO: Consider freeing registers?
 
 	case *parser.LetStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Declarations don't provide final value
+		}
 		return c.compileLetStatement(node)
 
 	case *parser.ConstStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Declarations don't provide final value
+		}
 		return c.compileConstStatement(node)
 
 	case *parser.ReturnStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Explicit return overrides implicit
+		}
 		return c.compileReturnStatement(node)
 
 	// --- Expressions ---
@@ -428,8 +469,16 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 		if enclosingTable == c.currentSymbolTable {
 			// The free variable is local in the *direct* enclosing scope.
-			c.emitByte(1)                              // isLocal = true
-			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+			c.emitByte(1) // isLocal = true
+			// Check if this is the function capturing itself (recursion)
+			if freeSym.Name == funcName {
+				// Special case: Emit the *destination register* of OpClosure.
+				// This signals the VM to capture the closure being created.
+				c.emitByte(byte(destReg))
+			} else {
+				// Capture the value from the enclosing scope's actual register
+				c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+			}
 		} else {
 			// The free variable is also a free variable in the enclosing scope.
 			// We need to capture it from the enclosing scope's upvalues.
@@ -476,15 +525,21 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) error {
 
 	// TODO: Check arity at compile time or runtime?
 
-	// We need to place arguments correctly for the callee.
-	// The VM expects args to start at a certain register offset relative to the frame.
-	// For now, assume args are in sequential registers *after* funcReg.
-	// This needs refinement when call frames are fully implemented in VM.
-
-	// For OpCall Rx, FuncReg, ArgCount:
-	// Rx: where the result goes
-	// FuncReg: register holding the function object
-	// ArgCount: number of arguments passed
+	// Ensure arguments are in the correct registers for the call convention.
+	// Convention: Args must be in registers funcReg+1, funcReg+2, ...
+	for i := 0; i < argCount; i++ {
+		targetArgReg := funcReg + 1 + Register(i)
+		actualArgReg := argRegs[i]
+		// Only move if the argument isn't already in the target register
+		if actualArgReg != targetArgReg {
+			// TODO: Ensure targetArgReg was allocated or handle allocation?
+			// For now, assume the register allocator provides enough headroom
+			// or that targetArgReg might overwrite something no longer needed.
+			// This is slightly dangerous and might need a more robust register
+			// allocation strategy for calls.
+			c.emitMove(targetArgReg, actualArgReg, node.Token.Line) // Use line of call expression
+		}
+	}
 
 	// 3. Allocate register for the return value
 	resultReg := c.regAlloc.Alloc()
