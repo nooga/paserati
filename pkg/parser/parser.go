@@ -40,10 +40,10 @@ type (
 const (
 	_ int = iota
 	LOWEST
-	// COMMA_PREC  // Removed again
-	// COMMA_PREC  // Re-added for parameter lists within parens
-	EQUALS      // == or !=
-	LESSGREATER // > or <
+	ASSIGNMENT  // = (Added)
+	TERNARY     // ?:
+	EQUALS      // ==, !=, ===, !==
+	LESSGREATER // > or < or <= or >=
 	SUM         // + or -
 	PRODUCT     // * or /
 	PREFIX      // -X or !X
@@ -53,18 +53,20 @@ const (
 
 // Precedences map for operator tokens
 var precedences = map[lexer.TokenType]int{
-	lexer.EQ:       EQUALS,
-	lexer.NOT_EQ:   EQUALS,
-	lexer.LT:       LESSGREATER,
-	lexer.GT:       LESSGREATER,
-	lexer.LE:       LESSGREATER,
-	lexer.PLUS:     SUM,
-	lexer.MINUS:    SUM,
-	lexer.SLASH:    PRODUCT,
-	lexer.ASTERISK: PRODUCT,
-	lexer.LPAREN:   CALL, // Added for call expressions
-	// lexer.ARROW:    ARROW_PREC, // Removed
-	// lexer.LBRACKET: INDEX, // For index expressions
+	lexer.ASSIGN:        ASSIGNMENT, // Added
+	lexer.EQ:            EQUALS,
+	lexer.NOT_EQ:        EQUALS,
+	lexer.STRICT_EQ:     EQUALS,
+	lexer.STRICT_NOT_EQ: EQUALS,
+	lexer.LT:            LESSGREATER,
+	lexer.GT:            LESSGREATER,
+	lexer.LE:            LESSGREATER,
+	lexer.PLUS:          SUM,
+	lexer.MINUS:         SUM,
+	lexer.SLASH:         PRODUCT,
+	lexer.ASTERISK:      PRODUCT,
+	lexer.LPAREN:        CALL,
+	lexer.QUESTION:      TERNARY,
 }
 
 // NewParser creates a new Parser.
@@ -95,10 +97,14 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.ASTERISK, p.parseInfixExpression)
 	p.registerInfix(lexer.EQ, p.parseInfixExpression)
 	p.registerInfix(lexer.NOT_EQ, p.parseInfixExpression)
+	p.registerInfix(lexer.STRICT_EQ, p.parseInfixExpression)     // Added
+	p.registerInfix(lexer.STRICT_NOT_EQ, p.parseInfixExpression) // Added
 	p.registerInfix(lexer.LT, p.parseInfixExpression)
 	p.registerInfix(lexer.GT, p.parseInfixExpression)
 	p.registerInfix(lexer.LE, p.parseInfixExpression)
-	p.registerInfix(lexer.LPAREN, p.parseCallExpression) // Added: myFunc( ... )
+	p.registerInfix(lexer.LPAREN, p.parseCallExpression)       // Added: myFunc( ... )
+	p.registerInfix(lexer.QUESTION, p.parseTernaryExpression)  // Added
+	p.registerInfix(lexer.ASSIGN, p.parseAssignmentExpression) // Added
 	// Add index expressions later: LBRACKET
 	// p.registerInfix(lexer.ARROW, p.parseArrowFunctionLiteral) // Removed
 
@@ -178,7 +184,7 @@ func (p *Parser) parseLetStatement() *LetStatement {
 		stmt.Value = nil // No initializer provided, implies undefined
 	}
 
-	// Optional semicolon
+	// Optional semicolon - Consume it here
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
@@ -213,7 +219,7 @@ func (p *Parser) parseConstStatement() *ConstStatement {
 	// TODO: Parse the expression properly
 	stmt.Value = p.parseExpression(LOWEST)
 
-	// Optional semicolon
+	// Optional semicolon - Consume it here
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
@@ -225,15 +231,17 @@ func (p *Parser) parseReturnStatement() *ReturnStatement {
 	stmt := &ReturnStatement{Token: p.curToken}
 	p.nextToken() // Consume 'return'
 
-	// Check if the next token indicates the end of the statement (or potentially start of next)
-	// Allow `return;` or `return}`
-	if p.curTokenIs(lexer.SEMICOLON) || p.curTokenIs(lexer.RBRACE) || p.curTokenIs(lexer.EOF) {
-		stmt.ReturnValue = nil // Represents returning undefined implicitly
-		// Do not consume semicolon here, let the main loop handle it or expectPeek in block
+	if p.curTokenIs(lexer.SEMICOLON) {
+		// Handle 'return;' explicitly by setting nil and consuming ';'
+		stmt.ReturnValue = nil
+		// curToken is already ';', main loop will advance
+	} else if p.curTokenIs(lexer.RBRACE) || p.curTokenIs(lexer.EOF) {
+		// Handle 'return}' or 'return<EOF>' - no expression, no semicolon to consume
+		stmt.ReturnValue = nil
 	} else {
-		// Parse the expression if present
+		// Parse the expression
 		stmt.ReturnValue = p.parseExpression(LOWEST)
-		// Optional semicolon after expression
+		// Optional semicolon - Consume it here
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken()
 		}
@@ -247,7 +255,7 @@ func (p *Parser) parseExpressionStatement() *ExpressionStatement {
 
 	stmt.Expression = p.parseExpression(LOWEST)
 
-	// Optional semicolon for expression statements
+	// Optional semicolon - Consume it here
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
@@ -555,39 +563,73 @@ func (p *Parser) parseGroupedExpression() Expression {
 	return exp
 }
 
-// parseIfExpression handles 'if (condition) { consequence } else { alternative }' syntax
+// parseIfExpression parses an if expression: if (condition) { consequence } else { alternative }
 func (p *Parser) parseIfExpression() Expression {
-	expression := &IfExpression{Token: p.curToken}
+	debugPrint("parseIfExpression starting...")
+	expr := &IfExpression{Token: p.curToken} // 'if' token
 
-	if !p.expectPeek(lexer.LPAREN) { // Expect '(' after 'if'
+	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
 
 	p.nextToken() // Consume '('
-	expression.Condition = p.parseExpression(LOWEST)
+	debugPrint("parseIfExpression parsing condition...")
+	expr.Condition = p.parseExpression(LOWEST)
+	debugPrint("parseIfExpression parsed condition: %s", expr.Condition.String())
 
-	if !p.expectPeek(lexer.RPAREN) { // Expect ')' after condition
+	if !p.expectPeek(lexer.RPAREN) {
 		return nil
 	}
 
-	if !p.expectPeek(lexer.LBRACE) { // Expect '{' for consequence block
+	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
 
-	expression.Consequence = p.parseBlockStatement()
+	debugPrint("parseIfExpression parsing consequence block...")
+	expr.Consequence = p.parseBlockStatement()
+	debugPrint("parseIfExpression parsed consequence block.")
 
 	// Check for optional 'else' block
 	if p.peekTokenIs(lexer.ELSE) {
 		p.nextToken() // Consume 'else'
+		debugPrint("parseIfExpression found 'else'...")
 
-		if !p.expectPeek(lexer.LBRACE) { // Expect '{' for alternative block
+		// Allow 'else if' by parsing another IfExpression directly
+		if p.peekTokenIs(lexer.IF) {
+			debugPrint("parseIfExpression found 'else if'...")
+			p.nextToken() // Consume 'if' for the 'else if' case
+
+			// The alternative for an 'else if' is the nested IfExpression itself.
+			// However, the AST expects a BlockStatement. We wrap the IfExpression
+			// in a dummy BlockStatement.
+			elseIfExpr := p.parseIfExpression() // Recursively parse the 'else if'
+			if elseIfExpr == nil {
+				return nil // Propagate error
+			}
+			// Wrap the nested IfExpression in a BlockStatement for the Alternative field
+			// We use the 'else' token for the block, as it's the start of the alternative branch
+			elseBlock := &BlockStatement{Token: expr.Token} // Use the 'else' token?
+			elseBlock.Statements = []Statement{&ExpressionStatement{Expression: elseIfExpr}}
+			expr.Alternative = elseBlock
+			debugPrint("parseIfExpression parsed 'else if' branch.")
+
+		} else if p.expectPeek(lexer.LBRACE) { // Standard 'else { ... }'
+			debugPrint("parseIfExpression parsing standard 'else' block...")
+			expr.Alternative = p.parseBlockStatement()
+			debugPrint("parseIfExpression parsed standard 'else' block.")
+		} else {
+			// Error: expected '{' or 'if' after 'else'
+			msg := fmt.Sprintf("expected { or if after else, got %s instead at line %d", p.peekToken.Type, p.peekToken.Line)
+			p.errors = append(p.errors, msg)
+			debugPrint("parseIfExpression failed: %s", msg)
 			return nil
 		}
-
-		expression.Alternative = p.parseBlockStatement()
+	} else {
+		debugPrint("parseIfExpression found no 'else' branch.")
 	}
 
-	return expression
+	debugPrint("parseIfExpression finished, returning: %s", expr.String())
+	return expr
 }
 
 // -- Infix Parse Functions --
@@ -671,7 +713,7 @@ func (p *Parser) parseParameterList() []*Identifier {
 	params := []*Identifier{}
 
 	if !p.curTokenIs(lexer.LPAREN) { // Check current token IS LPAREN
-		msg := fmt.Sprintf("line %d: internal error: parseParameterList called without current token being '('", p.curToken.Line)
+		msg := fmt.Sprintf("line %d: internal error: parseParameterList called without current token being '(")
 		p.errors = append(p.errors, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
 		return nil // Should not happen if called correctly
@@ -723,4 +765,61 @@ func (p *Parser) parseParameterList() []*Identifier {
 	debugPrint("parseParameterList: Consumed ')', finished successfully.")
 
 	return params
+}
+
+// parseTernaryExpression parses condition ? consequence : alternative
+func (p *Parser) parseTernaryExpression(condition Expression) Expression {
+	debugPrint("parseTernaryExpression starting with condition: %s", condition.String())
+	expr := &TernaryExpression{
+		Token:     p.curToken, // The '?' token
+		Condition: condition,
+	}
+
+	p.nextToken() // Consume '?'
+
+	// Parse the consequence expression
+	debugPrint("parseTernaryExpression parsing consequence...")
+	expr.Consequence = p.parseExpression(LOWEST) // Ternary has lowest precedence for right-hand side parts
+	debugPrint("parseTernaryExpression parsed consequence: %s", expr.Consequence.String())
+
+	if !p.expectPeek(lexer.COLON) {
+		debugPrint("parseTernaryExpression failed: expected COLON")
+		return nil // Error already added by expectPeek
+	}
+
+	p.nextToken() // Consume ':'
+
+	// Parse the alternative expression
+	debugPrint("parseTernaryExpression parsing alternative...")
+	expr.Alternative = p.parseExpression(LOWEST) // Continue with low precedence
+	debugPrint("parseTernaryExpression parsed alternative: %s", expr.Alternative.String())
+
+	debugPrint("parseTernaryExpression finished, returning: %s", expr.String())
+	return expr
+}
+
+// parseAssignmentExpression handles variable assignment (e.g., x = value)
+func (p *Parser) parseAssignmentExpression(left Expression) Expression {
+	debugPrint("parseAssignmentExpression starting with left: %s (%T)", left.String(), left)
+	expr := &AssignmentExpression{
+		Token: p.curToken, // The '=' token
+		Left:  left,
+	}
+
+	// Basic Check: Ensure the left side is an identifier for now.
+	// Later, could support member access (obj.prop = ...) or index access (arr[i] = ...).
+	if _, ok := left.(*Identifier); !ok {
+		msg := fmt.Sprintf("line %d: invalid left-hand side in assignment: expected identifier, got %T", p.curToken.Line, left)
+		p.errors = append(p.errors, msg)
+		return nil
+	}
+
+	precedence := p.curPrecedence()
+	p.nextToken() // Consume '='
+
+	debugPrint("parseAssignmentExpression parsing right side...")
+	expr.Value = p.parseExpression(precedence)
+	debugPrint("parseAssignmentExpression finished right side: %s (%T)", expr.Value.String(), expr.Value)
+
+	return expr
 }

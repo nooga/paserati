@@ -15,46 +15,49 @@ const (
 	// Format: OpCode <DestReg> <Operand1> <Operand2> ...
 	// Operands can be registers or immediate values (like constant indices)
 
-	OpLoadConst     OpCode = iota // Rx ConstIdx: Load constant Constants[ConstIdx] into register Rx.
-	OpLoadNull                    // Rx: Load null value into register Rx.
-	OpLoadUndefined               // Rx: Load undefined value into register Rx.
-	OpLoadTrue                    // Rx: Load boolean true into register Rx.
-	OpLoadFalse                   // Rx: Load boolean false into register Rx.
-	OpMove                        // Rx Ry: Move value from register Ry into register Rx.
+	OpLoadConst     OpCode = 0 // Rx ConstIdx: Load constant Constants[ConstIdx] into register Rx.
+	OpLoadNull      OpCode = 1 // Rx: Load null value into register Rx.
+	OpLoadUndefined OpCode = 2 // Rx: Load undefined value into register Rx.
+	OpLoadTrue      OpCode = 3 // Rx: Load boolean true into register Rx.
+	OpLoadFalse     OpCode = 4 // Rx: Load boolean false into register Rx.
+	OpMove          OpCode = 5 // Rx Ry: Move value from register Ry into register Rx.
 
 	// Arithmetic (Dest, Left, Right)
-	OpAdd      // Rx Ry Rz: Rx = Ry + Rz
-	OpSubtract // Rx Ry Rz: Rx = Ry - Rz
-	OpMultiply // Rx Ry Rz: Rx = Ry * Rz
-	OpDivide   // Rx Ry Rz: Rx = Ry / Rz
+	OpAdd      OpCode = 6 // Rx Ry Rz: Rx = Ry + Rz
+	OpSubtract OpCode = 7 // Rx Ry Rz: Rx = Ry - Rz
+	OpMultiply OpCode = 8 // Rx Ry Rz: Rx = Ry * Rz
+	OpDivide   OpCode = 9 // Rx Ry Rz: Rx = Ry / Rz
 
 	// Unary
-	OpNegate // Rx Ry: Rx = -Ry
-	OpNot    // Rx Ry: Rx = !Ry (logical not)
+	OpNegate OpCode = 10 // Rx Ry: Rx = -Ry
+	OpNot    OpCode = 11 // Rx Ry: Rx = !Ry (logical not)
 
 	// Comparison (Result Dest, Left, Right) -> Result is boolean
-	OpEqual    // Rx Ry Rz: Rx = (Ry == Rz)
-	OpNotEqual // Rx Ry Rz: Rx = (Ry != Rz)
-	OpGreater  // Rx Ry Rz: Rx = (Ry > Rz)
-	OpLess     // Rx Ry Rz: Rx = (Ry < Rz)
-	// Add GreaterEqual, LessEqual later if needed
+	OpEqual          OpCode = 12 // Rx Ry Rz: Rx = (Ry == Rz)
+	OpNotEqual       OpCode = 13 // Rx Ry Rz: Rx = (Ry != Rz)
+	OpStrictEqual    OpCode = 14 // Rx Ry Rz: Rx = (Ry === Rz)
+	OpStrictNotEqual OpCode = 15 // Rx Ry Rz: Rx = (Ry !== Rz)
+	OpGreater        OpCode = 16 // Rx Ry Rz: Rx = (Ry > Rz)
+	OpLess           OpCode = 17 // Rx Ry Rz: Rx = (Ry < Rz)
+	OpLessEqual      OpCode = 18 // Rx Ry Rz: Rx = (Ry <= Rz)
+	// Add GreaterEqual later if needed
 
 	// Function/Call related
-	OpCall   // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
-	OpReturn // Rx: Return value from register Rx.
+	OpCall   OpCode = 19 // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
+	OpReturn OpCode = 20 // Rx: Return value from register Rx.
 
 	// Closure related
-	OpClosure         // Rx FuncConstIdx UpvalueCount [IsLocal1 Index1 IsLocal2 Index2 ...]: Create closure for function Const[FuncConstIdx] with UpvalueCount upvalues, store in Rx.
-	OpLoadFree        // Rx UpvalueIndex: Load free variable (upvalue) at index UpvalueIndex into register Rx.
-	OpSetUpvalue      // UpvalueIndex Ry: Store value from register Ry into upvalue at index UpvalueIndex.
-	OpReturnUndefined // No operands: Return undefined value from current function.
+	OpClosure         OpCode = 21 // Rx FuncConstIdx UpvalueCount [IsLocal1 Index1 IsLocal2 Index2 ...]: Create closure for function Const[FuncConstIdx] with UpvalueCount upvalues, store in Rx.
+	OpLoadFree        OpCode = 22 // Rx UpvalueIndex: Load free variable (upvalue) at index UpvalueIndex into register Rx.
+	OpSetUpvalue      OpCode = 23 // UpvalueIndex Ry: Store value from register Ry into upvalue at index UpvalueIndex.
+	OpReturnUndefined OpCode = 24 // No operands: Return undefined value from current function.
 
 	// Control Flow
-	OpJumpIfFalse // Rx Offset(16bit): Jump by Offset if Rx is falsey.
-	OpJump        // Offset(16bit): Unconditionally jump by Offset.
+	OpJumpIfFalse OpCode = 25 // Rx Offset(16bit): Jump by Offset if Rx is falsey.
+	OpJump        OpCode = 26 // Offset(16bit): Unconditionally jump by Offset.
 
 	// Add comparison operators as needed
-	OpLessEqual // Rx Ry Rz: Rx = (Ry <= Rz)
+	// OpLessEqual // Rx Ry Rz: Rx = (Ry <= Rz)
 )
 
 // String returns a human-readable name for the OpCode.
@@ -88,6 +91,10 @@ func (op OpCode) String() string {
 		return "OpEqual"
 	case OpNotEqual:
 		return "OpNotEqual"
+	case OpStrictEqual:
+		return "OpStrictEqual"
+	case OpStrictNotEqual:
+		return "OpStrictNotEqual"
 	case OpGreater:
 		return "OpGreater"
 	case OpLess:
@@ -190,7 +197,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int, lin
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	case OpNegate, OpNot, OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
-	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpEqual, OpNotEqual, OpGreater, OpLess, OpLessEqual:
+	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual:
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz
 
 	case OpCall:

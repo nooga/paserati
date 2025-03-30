@@ -218,6 +218,12 @@ func (c *Compiler) compileNode(node parser.Node) error {
 	case *parser.IfExpression:
 		return c.compileIfExpression(node)
 
+	case *parser.TernaryExpression:
+		return c.compileTernaryExpression(node)
+
+	case *parser.AssignmentExpression:
+		return c.compileAssignmentExpression(node)
+
 	default:
 		return fmt.Errorf("compilation not implemented for %T", node)
 	}
@@ -398,6 +404,10 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
 		c.emitGreater(destReg, leftReg, rightReg, line)
 	case "<=":
 		c.emitLessEqual(destReg, leftReg, rightReg, line)
+	case "===":
+		c.emitStrictEqual(destReg, leftReg, rightReg, line)
+	case "!==":
+		c.emitStrictNotEqual(destReg, leftReg, rightReg, line)
 	default:
 		return fmt.Errorf("line %d: unknown infix operator '%s'", line, node.Operator)
 	}
@@ -603,6 +613,104 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression) error {
 	}
 
 	// TODO: Free conditionReg if no longer needed?
+	return nil
+}
+
+// compileTernaryExpression compiles condition ? consequence : alternative
+func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) error {
+	// 1. Compile condition
+	err := c.compileNode(node.Condition)
+	if err != nil {
+		return err
+	}
+	conditionReg := c.regAlloc.Current()
+
+	// 2. Jump if false
+	jumpFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+
+	// --- Consequence Path ---
+	// 3. Compile consequence
+	err = c.compileNode(node.Consequence)
+	if err != nil {
+		return err
+	}
+	consequenceReg := c.regAlloc.Current() // Result is here for this path
+
+	// 4. Allocate result register NOW
+	resultReg := c.regAlloc.Alloc()
+	// 5. Move consequence to result
+	c.emitMove(resultReg, consequenceReg, node.Token.Line)
+
+	// 6. Jump over alternative
+	jumpEndPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+	// --- Alternative Path ---
+	// 7. Patch jumpFalse
+	c.patchJump(jumpFalsePos)
+
+	// 8. Compile alternative
+	err = c.compileNode(node.Alternative)
+	if err != nil {
+		return err
+	}
+	alternativeReg := c.regAlloc.Current() // Result is here for this path
+
+	// 9. Move alternative to result (OVERWRITE resultReg)
+	c.emitMove(resultReg, alternativeReg, node.Token.Line)
+
+	// --- End ---
+	// 10. Patch jumpEnd
+	c.patchJump(jumpEndPos)
+
+	// Now, regardless of path, resultReg holds the correct value.
+	// The allocator's current register *might* be alternativeReg if that path was last
+	// compiled, but we need it to be resultReg.
+	// Since we can't SetCurrent, let's just move resultReg to a NEW register
+	// to make *that* the current one. This is slightly wasteful but works.
+	finalReg := c.regAlloc.Alloc()
+	c.emitMove(finalReg, resultReg, node.Token.Line)
+
+	// Now Current() correctly points to finalReg which holds the unified result.
+	return nil
+}
+
+// compileAssignmentExpression compiles identifier = value
+func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) error {
+	// 1. Compile the value expression (right-hand side)
+	err := c.compileNode(node.Value)
+	if err != nil {
+		return err
+	}
+	valueReg := c.regAlloc.Current() // Value is in this register
+
+	// 2. Ensure left-hand side is an identifier (parser check helps, but double-check)
+	ident, ok := node.Left.(*parser.Identifier)
+	if !ok {
+		return fmt.Errorf("line %d: invalid assignment target, expected identifier got %T", node.Token.Line, node.Left)
+	}
+
+	// 3. Resolve the identifier in the symbol table to find its storage location (register or upvalue)
+	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
+	if !found {
+		return fmt.Errorf("line %d: assignment to undeclared variable '%s'", node.Token.Line, ident.Value)
+	}
+
+	// 4. Emit instruction to store the value
+	if definingTable == c.currentSymbolTable {
+		// Local variable: Move value into its assigned register
+		targetReg := symbolRef.Register
+		c.emitMove(targetReg, valueReg, node.Token.Line)
+	} else {
+		// Free variable (upvalue): Find its index in the current function's free list
+		upvalueIndex := c.addFreeSymbol(&symbolRef)
+		// Emit OpSetUpvalue using the index and the value register
+		c.emitSetUpvalue(upvalueIndex, valueReg, node.Token.Line)
+	}
+
+	// 5. Assignment expression evaluates to the assigned value.
+	// The value is already in valueReg, and since it was the last thing compiled,
+	// the register allocator's Current() should already point to it.
+	// So, no extra move needed here to set the expression result.
 	return nil
 }
 
@@ -902,4 +1010,27 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 	// The closure object is now in destReg
 	return nil // Return nil even if errors occurred; they are collected in c.errors
+}
+
+// Added Helper
+func (c *Compiler) emitStrictEqual(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpStrictEqual, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+// Added Helper
+func (c *Compiler) emitStrictNotEqual(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpStrictNotEqual, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+// Added helper for OpSetUpvalue
+func (c *Compiler) emitSetUpvalue(upvalueIndex uint8, srcReg Register, line int) {
+	c.emitOpCode(vm.OpSetUpvalue, line)
+	c.emitByte(byte(upvalueIndex))
+	c.emitByte(byte(srcReg))
 }

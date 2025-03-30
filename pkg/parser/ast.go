@@ -230,6 +230,27 @@ func (fl *FunctionLiteral) String() string {
 	return out.String()
 }
 
+// AssignmentExpression represents assignment (e.g., x = 5).
+// Note: For now, only assignment to identifiers is supported.
+// <Left Expression (Identifier)> = <Value Expression>
+type AssignmentExpression struct {
+	Token lexer.Token // The '=' token
+	Left  Expression  // The target of the assignment (must be Identifier for now)
+	Value Expression  // The value being assigned
+}
+
+func (ae *AssignmentExpression) expressionNode()      {}
+func (ae *AssignmentExpression) TokenLiteral() string { return ae.Token.Literal }
+func (ae *AssignmentExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(ae.Left.String())
+	out.WriteString(" = ")
+	out.WriteString(ae.Value.String())
+	out.WriteString(")")
+	return out.String()
+}
+
 // ArrowFunctionLiteral represents an arrow function definition.
 // (<Parameters>) => <BodyExpression>
 // Or: (<Parameters>) => { <BodyStatements> }
@@ -374,6 +395,29 @@ func (ce *CallExpression) String() string {
 	out.WriteString(ce.Function.String())
 	out.WriteString("(")
 	out.WriteString(strings.Join(args, ", "))
+	out.WriteString(")")
+	return out.String()
+}
+
+// TernaryExpression represents a conditional (ternary) expression.
+// <Condition> ? <Consequence> : <Alternative>
+type TernaryExpression struct {
+	Token       lexer.Token // The '?' token
+	Condition   Expression
+	Consequence Expression
+	Alternative Expression
+}
+
+func (te *TernaryExpression) expressionNode()      {}
+func (te *TernaryExpression) TokenLiteral() string { return te.Token.Literal }
+func (te *TernaryExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(te.Condition.String())
+	out.WriteString(" ? ")
+	out.WriteString(te.Consequence.String())
+	out.WriteString(" : ")
+	out.WriteString(te.Alternative.String())
 	out.WriteString(")")
 	return out.String()
 }

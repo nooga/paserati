@@ -202,8 +202,8 @@ func (vm *VM) run() InterpretResult {
 			registers[destReg] = Bool(isFalsey(srcVal)) // Use local Bool
 
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
-			OpEqual, OpNotEqual, OpGreater, OpLess,
-			OpLessEqual:
+			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
+			OpGreater, OpLess, OpLessEqual:
 			destReg := code[ip]
 			leftReg := code[ip+1]
 			rightReg := code[ip+2]
@@ -252,6 +252,13 @@ func (vm *VM) run() InterpretResult {
 					registers[destReg] = Bool(isEqual)
 				} else {
 					registers[destReg] = Bool(!isEqual)
+				}
+			case OpStrictEqual, OpStrictNotEqual: // Added cases
+				isStrictlyEqual := valuesStrictEqual(leftVal, rightVal)
+				if opcode == OpStrictEqual {
+					registers[destReg] = Bool(isStrictlyEqual)
+				} else { // OpStrictNotEqual
+					registers[destReg] = Bool(!isStrictlyEqual)
 				}
 			case OpGreater, OpLess, OpLessEqual:
 				// Strictly numbers for comparison
@@ -637,3 +644,39 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	vm.Reset() // Reset VM state after error
 	return InterpretRuntimeError
 }
+
+// valuesEqual compares two values for equality (loose comparison like ==).
+// Already defined in value.go - REMOVING DUPLICATE
+// func valuesEqual(a, b Value) bool { ... }
+
+// valuesStrictEqual compares two values for strict equality (like ===).
+func valuesStrictEqual(a, b Value) bool {
+	if a.Type != b.Type {
+		return false // Different types are never strictly equal
+	}
+
+	// If types are the same, compare values based on type
+	switch a.Type {
+	case TypeNull:
+		return true // null === null
+	case TypeUndefined:
+		return true // undefined === undefined
+	case TypeBool:
+		return AsBool(a) == AsBool(b)
+	case TypeNumber:
+		return AsNumber(a) == AsNumber(b)
+	case TypeString:
+		return AsString(a) == AsString(b)
+	case TypeFunction: // Compare function pointers for identity
+		return AsFunction(a) == AsFunction(b)
+	case TypeClosure: // Compare closure pointers for identity
+		return AsClosure(a) == AsClosure(b)
+	default:
+		// Should not happen for valid types
+		return false
+	}
+}
+
+// isFalsey determines the truthiness of a value.
+// Already defined in value.go - REMOVING DUPLICATE
+// func isFalsey(value Value) bool { ... }

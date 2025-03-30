@@ -59,6 +59,13 @@ const (
 	ELSE     TokenType = "ELSE"
 	RETURN   TokenType = "RETURN"
 	NULL     TokenType = "NULL" // Explicit null
+
+	// New Strict Equality Operators
+	STRICT_EQ     TokenType = "==="
+	STRICT_NOT_EQ TokenType = "!=="
+
+	// New Ternary Operator Tokens
+	QUESTION TokenType = "?"
 )
 
 var keywords = map[string]TokenType{
@@ -167,8 +174,14 @@ func (l *Lexer) NextToken() Token {
 		if l.peekChar() == '=' {
 			ch := l.ch
 			l.readChar()
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: EQ, Literal: literal, Line: l.line}
+			if l.peekChar() == '=' {
+				l.readChar()
+				literal := string(ch) + string(l.ch) + string(l.input[l.position])
+				tok = Token{Type: STRICT_EQ, Literal: literal, Line: l.line}
+			} else {
+				literal := string(ch) + string(l.ch)
+				tok = Token{Type: EQ, Literal: literal, Line: l.line}
+			}
 		} else if l.peekChar() == '>' {
 			ch := l.ch
 			l.readChar()
@@ -181,8 +194,14 @@ func (l *Lexer) NextToken() Token {
 		if l.peekChar() == '=' {
 			ch := l.ch
 			l.readChar()
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: NOT_EQ, Literal: literal, Line: l.line}
+			if l.peekChar() == '=' {
+				l.readChar()
+				literal := string(ch) + string(l.ch) + string(l.input[l.position])
+				tok = Token{Type: STRICT_NOT_EQ, Literal: literal, Line: l.line}
+			} else {
+				literal := string(ch) + string(l.ch)
+				tok = Token{Type: NOT_EQ, Literal: literal, Line: l.line}
+			}
 		} else {
 			tok = newToken(BANG, l.ch, l.line)
 		}
@@ -231,6 +250,8 @@ func (l *Lexer) NextToken() Token {
 		tok.Literal = l.readString()
 		// readString advances the lexer past the closing quote
 		return tok // Early return
+	case '?':
+		tok = newToken(QUESTION, l.ch, l.line)
 	case 0: // EOF
 		tok.Literal = ""
 		tok.Type = EOF
