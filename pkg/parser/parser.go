@@ -2,7 +2,7 @@ package parser
 
 import (
 	"fmt"
-	"paseratti2/pkg/lexer"
+	"paserati/pkg/lexer"
 	"strconv"
 )
 

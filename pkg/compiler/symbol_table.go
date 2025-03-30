@@ -76,6 +76,3 @@ func (st *SymbolTable) UpdateRegister(name string, newRegister Register) {
 	symbol.Register = newRegister
 	st.store[name] = symbol // Reassign the modified struct back to the map
 }
-
-// --- Scope Management ---
-// ... NewEnclosedSymbolTable ...
