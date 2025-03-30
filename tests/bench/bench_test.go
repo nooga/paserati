@@ -1,11 +1,8 @@
 package bench
 
 import (
-	"io/ioutil"
 	"os"
-	"paserati/pkg/compiler"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
+	"paserati/pkg/driver"
 	"paserati/pkg/vm"
 	"testing"
 )
@@ -14,23 +11,16 @@ import (
 // Uses testing.TB for compatibility with both tests and benchmarks.
 func compileFile(tb testing.TB, filename string) *vm.Chunk {
 	tb.Helper()
-	sourceBytes, err := ioutil.ReadFile(filename)
-	if err != nil {
-		tb.Fatalf("Failed to read benchmark file %q: %v", filename, err)
-	}
-	source := string(sourceBytes)
-
-	l := lexer.NewLexer(source)
-	p := parser.NewParser(l)
-	program := p.ParseProgram()
-	if len(p.Errors()) != 0 {
-		tb.Fatalf("Parse errors in %q: %v", filename, p.Errors())
-	}
-
-	comp := compiler.NewCompiler()
-	chunk, compileErrs := comp.Compile(program)
+	chunk, compileErrs := driver.CompileFile(filename)
 	if len(compileErrs) > 0 {
-		tb.Fatalf("Compile errors in %q: %v", filename, compileErrs)
+		var errMsgs []string
+		for _, err := range compileErrs {
+			errMsgs = append(errMsgs, err.Error())
+		}
+		tb.Fatalf("Compile errors in %q: %v", filename, errMsgs)
+	}
+	if chunk == nil {
+		tb.Fatalf("Compilation succeeded for %q but returned nil chunk", filename)
 	}
 	return chunk
 }

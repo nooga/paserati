@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -192,7 +193,12 @@ func (v Value) String() string {
 	case TypeBool:
 		return strconv.FormatBool(v.as.boolean)
 	case TypeNumber:
-		return strconv.FormatFloat(v.as.number, 'f', -1, 64)
+		num := v.as.number
+		// Handle negative zero display explicitly
+		if num == 0 && math.Signbit(num) {
+			return "0" // Display negative zero as just "0"
+		}
+		return strconv.FormatFloat(num, 'f', -1, 64)
 	case TypeString:
 		return v.as.str
 	case TypeFunction:
@@ -234,9 +240,22 @@ type Closure struct {
 }
 
 // isFalsey determines the truthiness of a value according to common dynamic language rules.
-// null and false are falsey, everything else is truthy.
+// false, null, undefined, 0, and "" are falsey. Everything else is truthy.
 func isFalsey(v Value) bool {
-	return IsNull(v) || (IsBool(v) && !AsBool(v))
+	switch v.Type {
+	case TypeNull:
+		return true
+	case TypeUndefined:
+		return true
+	case TypeBool:
+		return !AsBool(v)
+	case TypeNumber:
+		return AsNumber(v) == 0
+	case TypeString:
+		return AsString(v) == ""
+	default:
+		return false
+	}
 }
 
 // valuesEqual checks if two values are equal.
