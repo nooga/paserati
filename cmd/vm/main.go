@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"paseratti2/pkg/vm"
+	"paserati/pkg/vm"
 )
 
 func main() {
-	fmt.Println("--- Paseratti VM [Register] --- (Test Mode)")
+	fmt.Println("--- Paserati VM [Register] --- (Test Mode)")
 
 	// Create a VM instance
 	myVM := vm.NewVM()

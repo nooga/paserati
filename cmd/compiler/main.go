@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"paseratti2/pkg/compiler"
-	"paseratti2/pkg/lexer"
-	"paseratti2/pkg/parser"
-	// For DisassembleChunk
+	"paserati/pkg/compiler"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 )
 
 func main() {
-	fmt.Println("--- Paseratti Compiler ---")
+	fmt.Println("--- Paserati Compiler ---")
 
 	// 1. Check CLI arguments
 	if len(os.Args) != 2 {

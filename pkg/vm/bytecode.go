@@ -2,24 +2,13 @@ package vm
 
 import (
 	"fmt"
-	// "paseratti2/pkg/value" // No longer needed
-	//"paseratti2/pkg/value"
+	// "paserati/pkg/value" // No longer needed
+	//"paserati/pkg/value"
 	"strings"
 )
 
 // OpCode defines the type for bytecode instructions.
 type OpCode uint8
-
-// // Function represents a compiled function.
-// // Moved here from value package to break import cycle.
-// // WILL BE MOVED TO value_types.go
-// type Function struct {
-// 	Arity        int    // Number of parameters expected
-// 	Chunk        *Chunk // Bytecode for the function body
-// 	Name         string // Optional name for debugging
-// 	RegisterSize int    // Number of registers needed for this function's frame
-// 	// TODO: Add UpvalueCount later for closures
-// }
 
 // Enum for Opcodes (Register Machine)
 const (
@@ -465,7 +454,3 @@ func (c *Chunk) jumpInstruction(builder *strings.Builder, name string, offset in
 		return offset + 3 // Op + Offset(2)
 	}
 }
-
-// // Old stack-based disassembly functions (kept for reference, will remove later)
-// func (c *Chunk) constantInstruction(name string, offset int) int { ... }
-// func simpleInstruction(name string, offset int) int { ... }

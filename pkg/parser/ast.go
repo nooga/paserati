@@ -2,7 +2,7 @@ package parser
 
 import (
 	"bytes"
-	"paseratti2/pkg/lexer" // Need token types
+	"paserati/pkg/lexer" // Need token types
 	"strings"
 	// Add types package import later
 )

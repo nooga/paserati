@@ -3,10 +3,10 @@ package bench
 import (
 	"io/ioutil"
 	"os"
-	"paseratti2/pkg/compiler"
-	"paseratti2/pkg/lexer"
-	"paseratti2/pkg/parser"
-	"paseratti2/pkg/vm"
+	"paserati/pkg/compiler"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
+	"paserati/pkg/vm"
 	"testing"
 )
 

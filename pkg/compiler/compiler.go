@@ -3,8 +3,8 @@ package compiler
 import (
 	"fmt"
 	// For token line numbers
-	"paseratti2/pkg/parser"
-	"paseratti2/pkg/vm"
+	"paserati/pkg/parser"
+	"paserati/pkg/vm"
 )
 
 // Compiler transforms an AST into bytecode.
@@ -798,5 +798,3 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	c.chunk.Code[operandStartPos] = byte(offset >> 8)
 	c.chunk.Code[operandStartPos+1] = byte(offset & 0xff)
 }
-
-// TODO: emitCall, etc.
