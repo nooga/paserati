@@ -64,6 +64,3 @@ func BenchmarkFibPlaceholderRun(b *testing.B) {
 
 	// No need to restore stdout here due to defer
 }
-
-// TODO: Add BenchmarkFib20 function once if/else/< are implemented
-// func BenchmarkFib20(b *testing.B) { ... }

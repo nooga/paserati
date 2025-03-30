@@ -230,6 +230,42 @@ func (fl *FunctionLiteral) String() string {
 	return out.String()
 }
 
+// ArrowFunctionLiteral represents an arrow function definition.
+// (<Parameters>) => <BodyExpression>
+// Or: (<Parameters>) => { <BodyStatements> }
+// Or single param: Param => <BodyExpression | BodyStatements>
+type ArrowFunctionLiteral struct {
+	Token      lexer.Token   // The '=>' token
+	Parameters []*Identifier // List of parameter names (Identifier nodes)
+	// TODO: Add parameter types if supported
+	Body Node // Can be Expression or *BlockStatement
+}
+
+func (afl *ArrowFunctionLiteral) expressionNode()      {}                           // Arrow functions are expressions
+func (afl *ArrowFunctionLiteral) TokenLiteral() string { return afl.Token.Literal } // Returns "=>"
+func (afl *ArrowFunctionLiteral) String() string {
+	var out bytes.Buffer
+	params := []string{}
+	for _, p := range afl.Parameters {
+		params = append(params, p.String())
+	}
+
+	// Formatting depends slightly on whether parens are required
+	// Simple heuristic: if not exactly one param, use parens.
+	if len(afl.Parameters) == 1 {
+		out.WriteString(params[0])
+	} else {
+		out.WriteString("(")
+		out.WriteString(strings.Join(params, ", "))
+		out.WriteString(")")
+	}
+
+	out.WriteString(" => ")
+	out.WriteString(afl.Body.String())
+
+	return out.String()
+}
+
 // BlockStatement represents a sequence of statements enclosed in braces.
 // { <statement1>; <statement2>; ... }
 type BlockStatement struct {
