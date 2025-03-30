@@ -1,23 +1,25 @@
-package bytecode
+package vm
 
 import (
 	"fmt"
-	"paseratti2/pkg/value"
+	// "paseratti2/pkg/value" // No longer needed
+	//"paseratti2/pkg/value"
 	"strings"
 )
 
 // OpCode defines the type for bytecode instructions.
 type OpCode uint8
 
-// Function represents a compiled function.
-// Moved here from value package to break import cycle.
-type Function struct {
-	Arity        int    // Number of parameters expected
-	Chunk        *Chunk // Bytecode for the function body
-	Name         string // Optional name for debugging
-	RegisterSize int    // Number of registers needed for this function's frame
-	// TODO: Add UpvalueCount later for closures
-}
+// // Function represents a compiled function.
+// // Moved here from value package to break import cycle.
+// // WILL BE MOVED TO value_types.go
+// type Function struct {
+// 	Arity        int    // Number of parameters expected
+// 	Chunk        *Chunk // Bytecode for the function body
+// 	Name         string // Optional name for debugging
+// 	RegisterSize int    // Number of registers needed for this function's frame
+// 	// TODO: Add UpvalueCount later for closures
+// }
 
 // Enum for Opcodes (Register Machine)
 const (
@@ -126,9 +128,9 @@ func (op OpCode) String() string {
 
 // Chunk represents a sequence of bytecode instructions and associated data.
 type Chunk struct {
-	Code      []byte        // The bytecode instructions (OpCodes and operands)
-	Constants []value.Value // Constant pool
-	Lines     []int         // Line number corresponding to the start of each instruction
+	Code      []byte  // The bytecode instructions (OpCodes and operands)
+	Constants []Value // Constant pool (Now uses Value from vm package)
+	Lines     []int   // Line number corresponding to the start of each instruction
 	// Add MaxRegs later for function definitions
 }
 
@@ -136,7 +138,7 @@ type Chunk struct {
 func NewChunk() *Chunk {
 	return &Chunk{
 		Code:      make([]byte, 0),
-		Constants: make([]value.Value, 0),
+		Constants: make([]Value, 0),
 		Lines:     make([]int, 0),
 	}
 }
@@ -162,7 +164,7 @@ func (c *Chunk) WriteUint16(val uint16) {
 
 // AddConstant adds a value to the chunk's constant pool and returns its index.
 // Returns a uint16 as we might need more than 256 constants.
-func (c *Chunk) AddConstant(v value.Value) uint16 {
+func (c *Chunk) AddConstant(v Value) uint16 {
 	// TODO: Check if constant already exists to avoid duplicates
 	c.Constants = append(c.Constants, v)
 	idx := len(c.Constants) - 1
@@ -383,11 +385,16 @@ func (c *Chunk) closureInstruction(builder *strings.Builder, name string, offset
 	funcProtoStr := "invalid const idx"
 	if int(funcConstIdx) < len(c.Constants) {
 		funcVal := c.Constants[funcConstIdx]
-		if value.IsFunction(funcVal) { // Check type first
-			if f, ok := value.AsFunction(funcVal).(*Function); ok { // Use helper and assert
-				funcProtoStr = f.Name
+		if IsFunction(funcVal) { // Check type first (uses local IsFunction)
+			fn := AsFunction(funcVal) // Use local AsFunction, returns *Function
+			if fn != nil {
+				funcProtoStr = fn.Name
+				if funcProtoStr == "" {
+					funcProtoStr = "<script>" // Or maybe just <fn>?
+				}
 			} else {
-				funcProtoStr = "invalid func type"
+				// Should not happen if IsFunction is true and AsFunction doesn't panic
+				funcProtoStr = "<nil func>"
 			}
 		} else {
 			funcProtoStr = "not a function"

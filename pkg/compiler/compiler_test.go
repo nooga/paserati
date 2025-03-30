@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"paseratti2/pkg/bytecode"
 	"paseratti2/pkg/lexer"
 	"paseratti2/pkg/parser"
-	"paseratti2/pkg/value"
 	"paseratti2/pkg/vm"
 	"reflect"
 	"strings"
@@ -20,11 +18,11 @@ func makeInstructions(ops ...interface{}) []byte {
 	var instructions []byte
 	for _, op := range ops {
 		switch v := op.(type) {
-		case bytecode.OpCode:
+		case vm.OpCode:
 			instructions = append(instructions, byte(v))
 			// If opcode has no operands, continue to next op in loop
 			switch v {
-			case bytecode.OpReturnUndefined:
+			case vm.OpReturnUndefined:
 				continue // No operands follow
 			}
 		case Register:
@@ -58,25 +56,25 @@ func TestCompileSimpleVariables(t *testing.T) {
     `
 
 	// Expected Bytecode based on observed output
-	expectedConstants := []value.Value{
-		value.Number(123.45),
-		value.String("hello"),
+	expectedConstants := []vm.Value{
+		vm.Number(123.45),
+		vm.String("hello"),
 	}
 	expectedInstructions := makeInstructions(
 		// let x = 123.45; (Value -> R0, Define x = R0)
-		bytecode.OpLoadConst, Register(0), uint16(0), // R0 = Constants[0] (123.45)
+		vm.OpLoadConst, Register(0), uint16(0), // R0 = Constants[0] (123.45)
 		// const y = "hello"; (Value -> R1, Define y = R1)
-		bytecode.OpLoadConst, Register(1), uint16(1), // R1 = Constants[1] ("hello")
+		vm.OpLoadConst, Register(1), uint16(1), // R1 = Constants[1] ("hello")
 		// let z = true; (Value -> R2, Define z = R2)
-		bytecode.OpLoadTrue, Register(2),
+		vm.OpLoadTrue, Register(2),
 		// let a = x; (Resolve x -> R0, OpMove R3, R0, Define a = R3)
-		bytecode.OpMove, Register(3), Register(0), // R3 = R0
+		vm.OpMove, Register(3), Register(0), // R3 = R0
 		// return a; (Resolve a -> R3, OpMove R4, R3)
-		bytecode.OpMove, Register(4), Register(3), // R4 = R3
+		vm.OpMove, Register(4), Register(3), // R4 = R3
 		// (Return statement uses last expression register R4)
-		bytecode.OpReturn, Register(4),
+		vm.OpReturn, Register(4),
 		// Implicit final return uses OpReturnUndefined now
-		bytecode.OpReturnUndefined,
+		vm.OpReturnUndefined,
 	)
 
 	// --- Run Compiler ---
@@ -120,69 +118,69 @@ func TestCompileSimpleVariables(t *testing.T) {
 func TestCompileExpressions(t *testing.T) {
 	tests := []struct {
 		input                string
-		expectedConstants    []value.Value
+		expectedConstants    []vm.Value
 		expectedInstructions []byte
 	}{
 		{
 			input:             "-5;",
-			expectedConstants: []value.Value{value.Number(5)},
+			expectedConstants: []vm.Value{vm.Number(5)},
 			expectedInstructions: makeInstructions(
-				bytecode.OpLoadConst, Register(0), uint16(0),
-				bytecode.OpNegate, Register(1), Register(0),
-				bytecode.OpReturn, Register(1),
+				vm.OpLoadConst, Register(0), uint16(0),
+				vm.OpNegate, Register(1), Register(0),
+				vm.OpReturn, Register(1),
 			),
 		},
 		{
 			input:             "!true;",
-			expectedConstants: []value.Value{},
+			expectedConstants: []vm.Value{},
 			expectedInstructions: makeInstructions(
-				bytecode.OpLoadTrue, Register(0),
-				bytecode.OpNot, Register(1), Register(0),
-				bytecode.OpReturn, Register(1),
+				vm.OpLoadTrue, Register(0),
+				vm.OpNot, Register(1), Register(0),
+				vm.OpReturn, Register(1),
 			),
 		},
 		{
 			input: "5 + 10 * 2 - 1 / 1;",
 			// Constants: 5, 10, 2, 1, 1 (no deduplication yet)
-			expectedConstants: []value.Value{value.Number(5), value.Number(10), value.Number(2), value.Number(1), value.Number(1)},
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(10), vm.Number(2), vm.Number(1), vm.Number(1)},
 			expectedInstructions: makeInstructions(
-				bytecode.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				bytecode.OpLoadConst, Register(1), uint16(1), // R1 = 10
-				bytecode.OpLoadConst, Register(2), uint16(2), // R2 = 2
-				bytecode.OpMultiply, Register(3), Register(1), Register(2), // R3 = R1 * R2 (20)
-				bytecode.OpAdd, Register(4), Register(0), Register(3), // R4 = R0 + R3 (25)
-				bytecode.OpLoadConst, Register(5), uint16(3), // R5 = 1 (const index 3)
-				bytecode.OpLoadConst, Register(6), uint16(4), // R6 = 1 (const index 4 - NO DEDUPE)
-				bytecode.OpDivide, Register(7), Register(5), Register(6), // R7 = R5 / R6 (1)
-				bytecode.OpSubtract, Register(8), Register(4), Register(7), // R8 = R4 - R7 (24)
-				bytecode.OpReturn, Register(8),
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 10
+				vm.OpLoadConst, Register(2), uint16(2), // R2 = 2
+				vm.OpMultiply, Register(3), Register(1), Register(2), // R3 = R1 * R2 (20)
+				vm.OpAdd, Register(4), Register(0), Register(3), // R4 = R0 + R3 (25)
+				vm.OpLoadConst, Register(5), uint16(3), // R5 = 1 (const index 3)
+				vm.OpLoadConst, Register(6), uint16(4), // R6 = 1 (const index 4 - NO DEDUPE)
+				vm.OpDivide, Register(7), Register(5), Register(6), // R7 = R5 / R6 (1)
+				vm.OpSubtract, Register(8), Register(4), Register(7), // R8 = R4 - R7 (24)
+				vm.OpReturn, Register(8),
 			),
 		},
 		{
 			input:             "let a = 5; let b = 10; a < b;",
-			expectedConstants: []value.Value{value.Number(5), value.Number(10)},
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(10)},
 			expectedInstructions: makeInstructions(
-				bytecode.OpLoadConst, Register(0), uint16(0),
-				bytecode.OpLoadConst, Register(1), uint16(1),
-				bytecode.OpMove, Register(2), Register(0),
-				bytecode.OpMove, Register(3), Register(1),
-				bytecode.OpLess, Register(4), Register(2), Register(3),
-				bytecode.OpReturn, Register(4),
+				vm.OpLoadConst, Register(0), uint16(0),
+				vm.OpLoadConst, Register(1), uint16(1),
+				vm.OpMove, Register(2), Register(0),
+				vm.OpMove, Register(3), Register(1),
+				vm.OpLess, Register(4), Register(2), Register(3),
+				vm.OpReturn, Register(4),
 			),
 		},
 		{
 			input: "(5 + 5) * 2 == 20;",
 			// Constants: 5, 5, 2, 20 (no deduplication yet)
-			expectedConstants: []value.Value{value.Number(5), value.Number(5), value.Number(2), value.Number(20)},
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(5), vm.Number(2), vm.Number(20)},
 			expectedInstructions: makeInstructions(
-				bytecode.OpLoadConst, Register(0), uint16(0), // R0 = 5 (index 0)
-				bytecode.OpLoadConst, Register(1), uint16(1), // R1 = 5 (index 1 - NO DEDUPE)
-				bytecode.OpAdd, Register(2), Register(0), Register(1), // R2 = R0 + R1 (10)
-				bytecode.OpLoadConst, Register(3), uint16(2), // R3 = 2 (index 2)
-				bytecode.OpMultiply, Register(4), Register(2), Register(3), // R4 = R2 * R3 (20)
-				bytecode.OpLoadConst, Register(5), uint16(3), // R5 = 20 (index 3)
-				bytecode.OpEqual, Register(6), Register(4), Register(5), // R6 = R4 == R5 (true)
-				bytecode.OpReturn, Register(6),
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5 (index 0)
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 5 (index 1 - NO DEDUPE)
+				vm.OpAdd, Register(2), Register(0), Register(1), // R2 = R0 + R1 (10)
+				vm.OpLoadConst, Register(3), uint16(2), // R3 = 2 (index 2)
+				vm.OpMultiply, Register(4), Register(2), Register(3), // R4 = R2 * R3 (20)
+				vm.OpLoadConst, Register(5), uint16(3), // R5 = 20 (index 3)
+				vm.OpEqual, Register(6), Register(4), Register(5), // R6 = R4 == R5 (true)
+				vm.OpReturn, Register(6),
 			),
 		},
 	}
@@ -237,48 +235,48 @@ func TestCompileFunctions(t *testing.T) {
 	// Expected Constants for the MAIN chunk:
 	// 0: Function object for 'double'
 	// 1: Number 10 (for the argument)
-	expectedMainConstants := []value.Value{
-		value.NewFunction(nil), // Placeholder for Function check
-		value.Number(10),
+	expectedMainConstants := []vm.Value{
+		vm.NewFunction(&vm.Function{}), // Placeholder for Function check
+		vm.Number(10),
 	}
 
 	// Expected Instructions for the 'double' FUNCTION chunk:
 	// Parameters: x (R0)
 	expectedFuncInstructions := makeInstructions(
 		// x * 2:
-		bytecode.OpMove, Register(1), Register(0), // R1 = R0 (load x)
-		bytecode.OpLoadConst, Register(2), uint16(0), // R2 = 2 (Constant index 0 within func chunk)
-		bytecode.OpMultiply, Register(3), Register(1), Register(2), // R3 = R1 * R2
+		vm.OpMove, Register(1), Register(0), // R1 = R0 (load x)
+		vm.OpLoadConst, Register(2), uint16(0), // R2 = 2 (Constant index 0 within func chunk)
+		vm.OpMultiply, Register(3), Register(1), Register(2), // R3 = R1 * R2
 		// return R3:
-		bytecode.OpReturn, Register(3),
+		vm.OpReturn, Register(3),
 		// Implicit return added by compiler:
-		bytecode.OpReturnUndefined,
+		vm.OpReturnUndefined,
 	)
-	expectedFuncConstants := []value.Value{value.Number(2)}
+	expectedFuncConstants := []vm.Value{vm.Number(2)}
 
 	// Expected Instructions for the MAIN chunk (Adjusted Registers):
 	expectedMainInstructions := makeInstructions(
 		// let double = function(x) { ... };
 		// Compiles FuncLit -> creates closure -> R0, Define double = R0
-		bytecode.OpClosure, Register(0), uint16(0), byte(0), // R0 = Closure(FuncConst=0, Upvalues=0)
+		vm.OpClosure, Register(0), uint16(0), byte(0), // R0 = Closure(FuncConst=0, Upvalues=0)
 
 		// let result = double(10);
 		// Compile double -> R1 (resolve R0, move R0->R1)
-		bytecode.OpMove, Register(1), Register(0),
+		vm.OpMove, Register(1), Register(0),
 		// Compile 10 -> R2
-		bytecode.OpLoadConst, Register(2), uint16(1), // R2 = 10 (Const Idx 1)
+		vm.OpLoadConst, Register(2), uint16(1), // R2 = 10 (Const Idx 1)
 		// Emit Call R3, R1, 1 (Result in R3, Func/Closure in R1, ArgCount 1)
-		bytecode.OpCall, Register(3), Register(1), byte(1),
+		vm.OpCall, Register(3), Register(1), byte(1),
 		// Define result = R3
 
 		// return result;
 		// Compile result -> R4 (resolve R3, move R3->R4)
-		bytecode.OpMove, Register(4), Register(3),
+		vm.OpMove, Register(4), Register(3),
 		// Emit return R4
-		bytecode.OpReturn, Register(4),
+		vm.OpReturn, Register(4),
 
 		// Implicit final return uses OpReturnUndefined now
-		bytecode.OpReturnUndefined,
+		vm.OpReturnUndefined,
 	)
 
 	// --- Run Compiler ---
@@ -325,10 +323,10 @@ func TestCompileFunctions(t *testing.T) {
 
 	// 4. Check the Function constant in Main Chunk
 	funcVal := mainChunk.Constants[0]
-	if !value.IsFunction(funcVal) {
+	if !vm.IsFunction(funcVal) {
 		t.Fatalf("Main constant[0] is not a function: got %T (%v)", funcVal, funcVal)
 	}
-	compiledFunc := value.AsFunction(funcVal).(*bytecode.Function)
+	compiledFunc := vm.AsFunction(funcVal)
 
 	// 5. Check Function Properties (Arity, Name)
 	expectedArity := 1
@@ -363,7 +361,7 @@ func TestCompileFunctions(t *testing.T) {
 }
 
 // logAllChunks recursively disassembles and logs a chunk and any function chunks within its constants.
-func logAllChunks(t *testing.T, chunk *bytecode.Chunk, name string, logged map[interface{}]bool) {
+func logAllChunks(t *testing.T, chunk *vm.Chunk, name string, logged map[interface{}]bool) {
 	if chunk == nil {
 		return
 	}
@@ -375,18 +373,14 @@ func logAllChunks(t *testing.T, chunk *bytecode.Chunk, name string, logged map[i
 	t.Logf("--- Disassembly [%s] ---\n%s", name, chunk.DisassembleChunk(name))
 
 	for i, constant := range chunk.Constants {
-		var funcProto *bytecode.Function
+		var funcProto *vm.Function
 		constName := fmt.Sprintf("%s Const[%d]", name, i)
 
-		if value.IsFunction(constant) {
-			if fn, ok := value.AsFunction(constant).(*bytecode.Function); ok {
-				funcProto = fn
-			}
-		} else if value.IsClosure(constant) {
-			closure := value.AsClosure(constant)
-			if fn, ok := closure.Fn.(*bytecode.Function); ok {
-				funcProto = fn
-			}
+		if vm.IsFunction(constant) {
+			funcProto = vm.AsFunction(constant)
+		} else if vm.IsClosure(constant) {
+			closure := vm.AsClosure(constant)
+			funcProto = closure.Fn
 		}
 
 		if funcProto != nil {
@@ -596,22 +590,22 @@ func printOpCodesToString(code []byte) string {
 	offset := 0
 	for offset < len(code) {
 		opCodeByte := code[offset]
-		op := bytecode.OpCode(opCodeByte)
+		op := vm.OpCode(opCodeByte)
 		builder.WriteString(fmt.Sprintf("%04d %-16s", offset, op))
 
 		length := 1 // Assume 1 for unknown
 		switch op {
-		case bytecode.OpLoadConst:
+		case vm.OpLoadConst:
 			length = 4 // Op + Reg + Const(2)
-		case bytecode.OpLoadNull, bytecode.OpLoadTrue, bytecode.OpLoadFalse, bytecode.OpReturn:
+		case vm.OpLoadNull, vm.OpLoadTrue, vm.OpLoadFalse, vm.OpReturn:
 			length = 2 // Op + Reg
-		case bytecode.OpNegate, bytecode.OpNot, bytecode.OpMove:
+		case vm.OpNegate, vm.OpNot, vm.OpMove:
 			length = 3 // Op + Dest + Src
-		case bytecode.OpAdd, bytecode.OpSubtract, bytecode.OpMultiply, bytecode.OpDivide,
-			bytecode.OpEqual, bytecode.OpNotEqual, bytecode.OpGreater, bytecode.OpLess,
-			bytecode.OpCall:
+		case vm.OpAdd, vm.OpSubtract, vm.OpMultiply, vm.OpDivide,
+			vm.OpEqual, vm.OpNotEqual, vm.OpGreater, vm.OpLess,
+			vm.OpCall:
 			length = 4 // Op + Dest + Left/Func + Right/ArgCount
-		case bytecode.OpReturnUndefined:
+		case vm.OpReturnUndefined:
 			length = 1 // Just the opcode
 		default:
 			builder.WriteString(" (Unknown Op)")

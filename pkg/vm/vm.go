@@ -3,8 +3,6 @@ package vm
 import (
 	"fmt"
 	"os"
-	"paseratti2/pkg/bytecode"
-	"paseratti2/pkg/value"
 	"unsafe"
 )
 
@@ -13,11 +11,11 @@ const MaxFrames = 64    // Max call stack depth
 
 // CallFrame represents a single active function call.
 type CallFrame struct {
-	closure *value.Closure // Closure being executed (contains Function and Upvalues)
-	ip      int            // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
+	closure *Closure // Closure being executed (contains Function and Upvalues)
+	ip      int      // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
-	registers      []value.Value
+	registers      []Value
 	targetRegister byte // Which register in the CALLER the result should go into
 }
 
@@ -29,11 +27,11 @@ type VM struct {
 
 	// Register file, treated as a stack. Each CallFrame gets a window into this.
 	// This avoids reallocating register arrays for every call.
-	registerStack [RegFileSize * MaxFrames]value.Value
+	registerStack [RegFileSize * MaxFrames]Value
 	nextRegSlot   int // Points to the next available slot in registerStack
 
 	// List of upvalues pointing to variables still on the registerStack
-	openUpvalues []*value.Upvalue
+	openUpvalues []*Upvalue
 	// Globals, open upvalues, etc. would go here later
 }
 
@@ -50,7 +48,7 @@ const (
 func NewVM() *VM {
 	return &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues: make([]*value.Upvalue, 0, 16), // Pre-allocate slightly
+		openUpvalues: make([]*Upvalue, 0, 16), // Pre-allocate slightly
 	}
 }
 
@@ -63,12 +61,17 @@ func (vm *VM) Reset() {
 }
 
 // Interpret starts executing the given chunk of bytecode in a new top-level frame.
-func (vm *VM) Interpret(chunk *bytecode.Chunk) InterpretResult {
+func (vm *VM) Interpret(chunk *Chunk) InterpretResult {
 	vm.Reset()
 
 	// Wrap the main script chunk in a dummy function and closure
-	mainFunc := &bytecode.Function{Chunk: chunk, Name: "<script>", RegisterSize: RegFileSize} // Assume max regs for script
-	mainClosure := &value.Closure{Fn: mainFunc, Upvalues: []*value.Upvalue{}}                 // No upvalues for main
+	mainFunc := &Function{Chunk: chunk, Name: "<script>", RegisterSize: RegFileSize} // Assume max regs for script
+	// Create closure using the NewClosure constructor which returns a Value
+	// We store the *Closure pointer in the CallFrame, not the Value itself.
+	// So, we need the *Closure part of the value returned by NewClosure.
+	// Let's adjust NewClosure slightly or handle it here.
+	// FOR NOW: Manually create the closure struct here.
+	mainClosure := &Closure{Fn: mainFunc, Upvalues: []*Upvalue{}} // No upvalues for main
 
 	// Allocate registers for the main script body/function
 	initialRegs := mainFunc.RegisterSize
@@ -96,11 +99,13 @@ func (vm *VM) run() InterpretResult {
 	frame := &vm.frames[vm.frameCount-1]
 	// Get function/chunk/constants FROM the closure in the frame
 	closure := frame.closure
-	// We need to type-assert closure.Fn to the expected *bytecode.Function
-	function, ok := closure.Fn.(*bytecode.Function)
-	if !ok {
-		// This indicates an internal error - a non-function was stored in a closure
-		return vm.runtimeError("Internal VM Error: Closure does not contain a valid function.")
+	// We now directly access the *Function pointer
+	function := closure.Fn
+	if function == nil { // Check if the function pointer itself is nil
+		return vm.runtimeError("Internal VM Error: Closure contains a nil function pointer.")
+	}
+	if function.Chunk == nil { // Check if the chunk within the function is nil
+		return vm.runtimeError("Internal VM Error: Function associated with closure has a nil chunk.")
 	}
 	code := function.Chunk.Code
 	constants := function.Chunk.Constants
@@ -119,7 +124,7 @@ func (vm *VM) run() InterpretResult {
 		// 	} else { break }
 		// }
 		// fmt.Println()
-		// frame.chunk.DisassembleInstruction(frame.ip) // Requires offset -> line mapping fixed
+		// frame.closure.Fn.Chunk.DisassembleInstruction(ip) // Adjusted for new structure
 		// ---------------------------
 
 		if ip >= len(code) {
@@ -135,11 +140,11 @@ func (vm *VM) run() InterpretResult {
 			}
 		}
 
-		opcode := bytecode.OpCode(code[ip])
-		ip++ // Advance IP past the opcode itself
+		opcode := OpCode(code[ip]) // Use local OpCode
+		ip++                       // Advance IP past the opcode itself
 
 		switch opcode {
-		case bytecode.OpLoadConst:
+		case OpLoadConst: // Use local OpCode constant
 			reg := code[ip]
 			constIdxHi := code[ip+1]
 			constIdxLo := code[ip+2]
@@ -151,54 +156,54 @@ func (vm *VM) run() InterpretResult {
 			}
 			registers[reg] = constants[constIdx]
 
-		case bytecode.OpLoadNull:
+		case OpLoadNull:
 			reg := code[ip]
 			ip++
-			registers[reg] = value.Null()
+			registers[reg] = Null() // Use local Null()
 
-		case bytecode.OpLoadUndefined:
+		case OpLoadUndefined:
 			reg := code[ip]
 			ip++
-			registers[reg] = value.Undefined()
+			registers[reg] = Undefined() // Use local Undefined()
 
-		case bytecode.OpLoadTrue:
+		case OpLoadTrue:
 			reg := code[ip]
 			ip++
-			registers[reg] = value.Bool(true)
+			registers[reg] = Bool(true) // Use local Bool()
 
-		case bytecode.OpLoadFalse:
+		case OpLoadFalse:
 			reg := code[ip]
 			ip++
-			registers[reg] = value.Bool(false)
+			registers[reg] = Bool(false) // Use local Bool()
 
-		case bytecode.OpMove:
+		case OpMove:
 			regDest := code[ip]
 			regSrc := code[ip+1]
 			ip += 2
 			registers[regDest] = registers[regSrc]
 
-		case bytecode.OpNegate:
+		case OpNegate:
 			destReg := code[ip]
 			srcReg := code[ip+1]
 			ip += 2
 			srcVal := registers[srcReg]
-			if !value.IsNumber(srcVal) {
+			if !IsNumber(srcVal) { // Use local IsNumber
 				frame.ip = ip
 				return vm.runtimeError("Operand must be a number for negation.")
 			}
-			registers[destReg] = value.Number(-value.AsNumber(srcVal))
+			registers[destReg] = Number(-AsNumber(srcVal)) // Use local Number/AsNumber
 
-		case bytecode.OpNot:
+		case OpNot:
 			destReg := code[ip]
 			srcReg := code[ip+1]
 			ip += 2
 			srcVal := registers[srcReg]
 			// In many languages, ! evaluates truthiness
-			registers[destReg] = value.Bool(isFalsey(srcVal))
+			registers[destReg] = Bool(isFalsey(srcVal)) // Use local Bool
 
-		case bytecode.OpAdd, bytecode.OpSubtract, bytecode.OpMultiply, bytecode.OpDivide,
-			bytecode.OpEqual, bytecode.OpNotEqual, bytecode.OpGreater, bytecode.OpLess,
-			bytecode.OpLessEqual:
+		case OpAdd, OpSubtract, OpMultiply, OpDivide,
+			OpEqual, OpNotEqual, OpGreater, OpLess,
+			OpLessEqual:
 			destReg := code[ip]
 			leftReg := code[ip+1]
 			rightReg := code[ip+2]
@@ -208,454 +213,427 @@ func (vm *VM) run() InterpretResult {
 
 			// Type checking specific to operation groups
 			switch opcode {
-			case bytecode.OpAdd:
+			case OpAdd:
 				// Allow string concatenation or number addition
-				if value.IsNumber(leftVal) && value.IsNumber(rightVal) {
-					registers[destReg] = value.Number(value.AsNumber(leftVal) + value.AsNumber(rightVal))
-				} else if value.IsString(leftVal) && value.IsString(rightVal) {
+				if IsNumber(leftVal) && IsNumber(rightVal) {
+					registers[destReg] = Number(AsNumber(leftVal) + AsNumber(rightVal))
+				} else if IsString(leftVal) && IsString(rightVal) {
 					// Consider performance of string concat later
-					registers[destReg] = value.String(value.AsString(leftVal) + value.AsString(rightVal))
+					registers[destReg] = String(AsString(leftVal) + AsString(rightVal))
 				} else {
 					frame.ip = ip
 					return vm.runtimeError("Operands must be two numbers or two strings for '+'.")
 				}
-			case bytecode.OpSubtract, bytecode.OpMultiply, bytecode.OpDivide:
+			case OpSubtract, OpMultiply, OpDivide:
 				// Strictly numbers for these
-				if !value.IsNumber(leftVal) || !value.IsNumber(rightVal) {
+				if !IsNumber(leftVal) || !IsNumber(rightVal) {
 					frame.ip = ip
 					opStr := opcode.String()                                              // Get opcode name
 					return vm.runtimeError("Operands must be numbers for %s.", opStr[2:]) // Simple way to get op name like Subtract
 				}
-				leftNum := value.AsNumber(leftVal)
-				rightNum := value.AsNumber(rightVal)
+				leftNum := AsNumber(leftVal)
+				rightNum := AsNumber(rightVal)
 				switch opcode {
-				case bytecode.OpSubtract:
-					registers[destReg] = value.Number(leftNum - rightNum)
-				case bytecode.OpMultiply:
-					registers[destReg] = value.Number(leftNum * rightNum)
-				case bytecode.OpDivide:
+				case OpSubtract:
+					registers[destReg] = Number(leftNum - rightNum)
+				case OpMultiply:
+					registers[destReg] = Number(leftNum * rightNum)
+				case OpDivide:
 					if rightNum == 0 {
 						frame.ip = ip
 						return vm.runtimeError("Division by zero.")
 					}
-					registers[destReg] = value.Number(leftNum / rightNum)
+					registers[destReg] = Number(leftNum / rightNum)
 				}
-			case bytecode.OpEqual, bytecode.OpNotEqual:
+			case OpEqual, OpNotEqual:
 				// Use a helper for equality check (handles type differences)
 				isEqual := valuesEqual(leftVal, rightVal)
-				if opcode == bytecode.OpEqual {
-					registers[destReg] = value.Bool(isEqual)
+				if opcode == OpEqual {
+					registers[destReg] = Bool(isEqual)
 				} else {
-					registers[destReg] = value.Bool(!isEqual)
+					registers[destReg] = Bool(!isEqual)
 				}
-			case bytecode.OpGreater, bytecode.OpLess, bytecode.OpLessEqual:
-				// Strictly numbers for comparison for now
-				if !value.IsNumber(leftVal) || !value.IsNumber(rightVal) {
+			case OpGreater, OpLess, OpLessEqual:
+				// Strictly numbers for comparison
+				if !IsNumber(leftVal) || !IsNumber(rightVal) {
 					frame.ip = ip
 					opStr := opcode.String() // Get opcode name
-					return vm.runtimeError("Operands must be numbers for %s.", opStr[2:])
+					return vm.runtimeError("Operands must be numbers for comparison (%s).", opStr[2:])
 				}
-				leftNum := value.AsNumber(leftVal)
-				rightNum := value.AsNumber(rightVal)
+				leftNum := AsNumber(leftVal)
+				rightNum := AsNumber(rightVal)
+				var result bool
 				switch opcode {
-				case bytecode.OpGreater:
-					registers[destReg] = value.Bool(leftNum > rightNum)
-				case bytecode.OpLess:
-					registers[destReg] = value.Bool(leftNum < rightNum)
-				case bytecode.OpLessEqual:
-					registers[destReg] = value.Bool(leftNum <= rightNum)
+				case OpGreater:
+					result = leftNum > rightNum
+				case OpLess:
+					result = leftNum < rightNum
+				case OpLessEqual:
+					result = leftNum <= rightNum
 				}
+				registers[destReg] = Bool(result)
 			}
 
-		case bytecode.OpCall:
-			destReg := code[ip]         // Rx: Where the return value should go (in caller frame)
-			funcReg := code[ip+1]       // Ry: Register holding the function/closure to call
-			argCount := int(code[ip+2]) // Rz: Number of arguments passed
+		case OpJump:
+			offsetHi := code[ip]
+			offsetLo := code[ip+1]
+			ip += 2
+			offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
+			ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
+
+		case OpJumpIfFalse:
+			condReg := code[ip]
+			offsetHi := code[ip+1]
+			offsetLo := code[ip+2]
+			ip += 3
+			if isFalsey(registers[condReg]) {
+				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
+				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
+			}
+
+		case OpCall:
+			destReg := code[ip]         // Where the result should go
+			funcReg := code[ip+1]       // Register holding the function/closure to call
+			argCount := int(code[ip+2]) // Number of arguments provided
 			ip += 3
 
-			// 1. Get the callable value (Function or Closure)
 			calleeVal := registers[funcReg]
-			var calleeClosure *value.Closure
-			var calleeFunc *bytecode.Function
-			var neededRegSlots int
+			var calleeClosure *Closure
 
-			if value.IsClosure(calleeVal) {
-				calleeClosure = value.AsClosure(calleeVal)
-				// Assert Fn type
-				var fnOk bool
-				calleeFunc, fnOk = calleeClosure.Fn.(*bytecode.Function)
-				if !fnOk {
-					frame.ip = ip
-					return vm.runtimeError("Internal VM Error: Closure contains invalid function type.")
-				}
-			} else if value.IsFunction(calleeVal) {
-				// Allow calling plain functions too (like the main script)
-				// Wrap it in a temporary closure with no upvalues for consistency in CallFrame
-				var fnOk bool
-				calleeFunc, fnOk = value.AsFunction(calleeVal).(*bytecode.Function)
-				if !fnOk {
-					frame.ip = ip
-					return vm.runtimeError("Internal VM Error: Function value contains invalid type.")
-				}
-				calleeClosure = &value.Closure{Fn: calleeFunc, Upvalues: []*value.Upvalue{}}
-			} else {
+			switch calleeVal.Type {
+			case TypeClosure:
+				calleeClosure = AsClosure(calleeVal) // Use local AsClosure
+			case TypeFunction:
+				// Allow calling plain functions directly (implicitly creating a closure with no upvalues)
+				// This is useful for top-level functions that don't close over anything.
+				funcToCall := AsFunction(calleeVal) // Use local AsFunction
+				// Create a temporary closure on the fly
+				calleeClosure = &Closure{Fn: funcToCall, Upvalues: []*Upvalue{}} // Empty slice is okay
+			default:
 				frame.ip = ip
-				return vm.runtimeError("Can only call functions or closures.")
+				return vm.runtimeError("Can only call functions and closures.")
 			}
-			neededRegSlots = calleeFunc.RegisterSize
 
-			// 2. Check arity
+			calleeFunc := calleeClosure.Fn
+
 			if argCount != calleeFunc.Arity {
 				frame.ip = ip
 				return vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
 			}
 
-			// 3. Check for stack overflow (frames and registers)
 			if vm.frameCount == MaxFrames {
 				frame.ip = ip
-				return vm.runtimeError("Call stack overflow.")
+				return vm.runtimeError("Stack overflow.")
 			}
-			if vm.nextRegSlot+neededRegSlots > len(vm.registerStack) {
-				frame.ip = ip
+
+			// --- Setup New Frame ---
+			// Check if enough space in the global register stack
+			requiredRegs := calleeFunc.RegisterSize
+			if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+				// TODO: Implement garbage collection or stack resizing?
 				return vm.runtimeError("Register stack overflow during call.")
 			}
 
-			// 4. Push new CallFrame
-			frame.ip = ip // Save current IP before switching frame
-			// returnTargetReg = destReg // REMOVED - Stored in new frame below
+			// !! Store caller registers *before* getting pointer to new frame slot !!
+			callerRegisters := registers
 
-			// Get pointer to the new frame slot BEFORE accessing caller registers
-			callerFrameRegisters := registers // Cache caller registers before frame points to new one
-			frame = &vm.frames[vm.frameCount] // Point frame to the new frame slot
+			// Save current IP into the current (soon-to-be caller) frame
+			frame.ip = ip
 
-			frame.closure = calleeClosure // Store the closure being executed
-			frame.ip = 0                  // Start at the beginning of the function's code
-			frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+neededRegSlots]
-			frame.targetRegister = destReg // Store target register in the new frame
-			vm.nextRegSlot += neededRegSlots
-			vm.frameCount++
+			// Get pointer to the new frame slot
+			newFrame := &vm.frames[vm.frameCount]
+			newFrame.closure = calleeClosure
+			newFrame.ip = 0                   // Start at the beginning of the called function's code
+			newFrame.targetRegister = destReg // Store where the return value should go in the CALLER
 
-			// 5. Copy arguments into the new frame's parameter registers (R0, R1, ...)
-			argStartReg := funcReg + 1
+			// Allocate register window for the new frame
+			newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+			vm.nextRegSlot += requiredRegs
+
+			// --- Copy Arguments ---
+			// Arguments are typically in registers immediately following the function register in the *caller's* frame.
+			argStartRegInCaller := funcReg + 1
 			for i := 0; i < argCount; i++ {
-				// Copy from caller frame (which is vm.frameCount-2, but we cached its registers)
-				frame.registers[i] = callerFrameRegisters[argStartReg+byte(i)]
+				// Copy from callerRegisters into the new frame's first registers (R0, R1, ...)
+				if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
+					newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+				} else {
+					// Bounds check error - should ideally not happen if compiler is correct
+					return vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
+				}
 			}
 
-			// 6. Update cached variables for the new frame
-			closure = frame.closure                       // Update cached closure
-			function, _ = closure.Fn.(*bytecode.Function) // Re-assert (already checked ok)
+			vm.frameCount++
+
+			// --- Switch Context --- (Update cached variables)
+			frame = newFrame // Current frame is now the new frame
+			closure = frame.closure
+			function = closure.Fn
+			code = function.Chunk.Code
+			constants = function.Chunk.Constants
+			registers = frame.registers
+			ip = frame.ip
+			// --- Context Switch Complete ---
+
+		case OpReturn:
+			srcReg := code[ip]
+			ip++
+			result := registers[srcReg]
+
+			// Save frame pointer and register slice before popping
+			returnFrame := frame
+			frameRegs := returnFrame.registers
+
+			// Close any upvalues that point into the returning frame's registers
+			// vm.closeUpvalues(frameRegs) // Pass the register slice
+			vm.closeUpvalues(returnFrame.registers)
+
+			// Pop the current frame
+			vm.frameCount--
+			vm.nextRegSlot -= len(frameRegs) // Reclaim register space
+
+			if vm.frameCount == 0 {
+				// Returning from the top-level script
+				// Print the result to standard output for testing/REPL purposes
+				fmt.Println(result.String()) // Use String() method for proper output
+				return InterpretOK
+			}
+
+			// --- Switch Context Back to Caller ---
+			frame = &vm.frames[vm.frameCount-1]
+			closure = frame.closure
+			function = closure.Fn
+			code = function.Chunk.Code
+			constants = function.Chunk.Constants
+			registers = frame.registers
+			ip = frame.ip // Restore caller's IP
+
+			// Store the result in the caller's target register
+			registers[returnFrame.targetRegister] = result
+			// --- Context Switch Complete ---
+
+		case OpReturnUndefined:
+			result := Undefined() // Implicit return value
+			returnFrame := frame
+			frameRegs := returnFrame.registers
+
+			// Close upvalues before popping the frame
+			vm.closeUpvalues(frameRegs)
+
+			vm.frameCount--
+			vm.nextRegSlot -= len(frameRegs)
+
+			if vm.frameCount == 0 {
+				// Print the result to standard output for testing/REPL purposes
+				fmt.Println(result.String()) // Use String() method for proper output
+				return InterpretOK           // Return from top-level script
+			}
+
+			frame = &vm.frames[vm.frameCount-1]
+			closure = frame.closure
+			function = closure.Fn
 			code = function.Chunk.Code
 			constants = function.Chunk.Constants
 			registers = frame.registers
 			ip = frame.ip
 
-		case bytecode.OpReturn:
-			retReg := code[ip]
-			ip++
+			registers[returnFrame.targetRegister] = result
 
-			result := registers[retReg]                   // Value being returned
-			poppingFrameTargetReg := frame.targetRegister // Read target BEFORE popping
-
-			// --- Close upvalues pointing into the returning frame's registers ---
-			vm.closeUpvalues(registers) // Pass the frame's register slice
-
-			// --- Pop the frame ---
-			frame.ip = ip // Save final IP of the returning frame
-			returnFrameRegCount := len(registers)
-			vm.frameCount--
-			vm.nextRegSlot -= returnFrameRegCount // Reclaim register slots
-
-			if vm.frameCount == 0 {
-				// Returned from the top-level script, print the final result
-				fmt.Println(result)
-				return InterpretOK
-			} else {
-				// Returning from a function to its caller
-				frame = &vm.frames[vm.frameCount-1] // Switch back to caller frame
-
-				// Place the return value into the designated register in the caller frame
-				frame.registers[poppingFrameTargetReg] = result
-
-				// Update cached variables for the caller frame
-				closure = frame.closure // Update cached closure
-				function, ok = closure.Fn.(*bytecode.Function)
-				if !ok {
-					return vm.runtimeError("Internal VM Error: Invalid closure on frame return.")
-				}
-				code = function.Chunk.Code
-				constants = function.Chunk.Constants
-				registers = frame.registers
-				ip = frame.ip
-			}
-
-		case bytecode.OpReturnUndefined:
-			// Get the undefined value
-			result := value.Undefined()
-			poppingFrameTargetReg := frame.targetRegister // Read target BEFORE popping
-
-			// --- Close upvalues pointing into the returning frame's registers ---
-			vm.closeUpvalues(registers)
-
-			// --- Pop the frame ---
-			frame.ip = ip // Save final IP (although it's just past OpReturnUndefined)
-			returnFrameRegCount := len(registers)
-			vm.frameCount--
-			vm.nextRegSlot -= returnFrameRegCount // Reclaim register slots
-
-			if vm.frameCount == 0 {
-				// Returned from the top-level script
-				fmt.Println(result) // Should print "undefined"
-				return InterpretOK
-			} else {
-				// Returning from a function to its caller
-				frame = &vm.frames[vm.frameCount-1] // Switch back to caller frame
-
-				// Place the undefined value into the designated register in the caller frame
-				// We still need returnTargetReg from the preceding OpCall
-				frame.registers[poppingFrameTargetReg] = result
-
-				// Update cached variables for the caller frame
-				closure = frame.closure
-				function, ok = closure.Fn.(*bytecode.Function)
-				if !ok {
-					return vm.runtimeError("Internal VM Error: Invalid closure on frame return.")
-				}
-				code = function.Chunk.Code
-				constants = function.Chunk.Constants
-				registers = frame.registers
-				ip = frame.ip
-			}
-
-		// --- Control Flow Opcodes ---
-		case bytecode.OpJumpIfFalse:
-			conditionReg := code[ip] // Rx
-			offsetHi := code[ip+1]   // Offset (16-bit, signed)
-			offsetLo := code[ip+2]
-			offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
-			ip += 3
-
-			conditionValue := registers[conditionReg]
-			if isFalsey(conditionValue) {
-				ip += int(offset) // Apply the jump offset
-			}
-
-		case bytecode.OpJump:
-			offsetHi := code[ip] // Offset (16-bit, signed)
-			offsetLo := code[ip+1]
-			offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
-			ip += 2
-
-			ip += int(offset) // Apply the jump offset unconditionally
-
-		// --- Closure Opcodes ---
-		case bytecode.OpClosure:
+		case OpClosure:
 			destReg := code[ip]
-			constIdxHi := code[ip+1]
-			constIdxLo := code[ip+2]
-			constIdx := uint16(constIdxHi)<<8 | uint16(constIdxLo)
+			funcConstIdxHi := code[ip+1]
+			funcConstIdxLo := code[ip+2]
+			funcConstIdx := uint16(funcConstIdxHi)<<8 | uint16(funcConstIdxLo)
 			upvalueCount := int(code[ip+3])
-			ip += 4 // Advance IP past OpClosure, destReg, constIdx (2), upvalueCount
+			ip += 4
 
-			// 1. Get the function blueprint
-			if int(constIdx) >= len(constants) {
+			if int(funcConstIdx) >= len(constants) {
 				frame.ip = ip
-				return vm.runtimeError("Invalid constant index %d for function blueprint", constIdx)
+				return vm.runtimeError("Invalid function constant index %d for closure.", funcConstIdx)
 			}
-			fnVal := constants[constIdx]
-			if !value.IsFunction(fnVal) {
+			protoVal := constants[funcConstIdx]
+			if !IsFunction(protoVal) {
 				frame.ip = ip
-				return vm.runtimeError("Constant %d is not a function blueprint", constIdx)
+				return vm.runtimeError("Constant %d is not a function, cannot create closure.", funcConstIdx)
 			}
-			// Assuming the constant is *bytecode.Function as stored by compiler
-			functionProto, ok := value.AsFunction(fnVal).(*bytecode.Function)
-			if !ok {
-				frame.ip = ip
-				return vm.runtimeError("Internal VM Error: Function constant is not *bytecode.Function")
-			}
+			protoFunc := AsFunction(protoVal)
 
-			// 2. Create the closure object
-			newClosure := &value.Closure{
-				Fn:       functionProto,
-				Upvalues: make([]*value.Upvalue, upvalueCount), // Pre-allocate slice
-			}
-
-			// 3. Capture upvalues
+			// Allocate upvalue pointers slice
+			upvalues := make([]*Upvalue, upvalueCount)
 			for i := 0; i < upvalueCount; i++ {
 				isLocal := code[ip] == 1
-				index := code[ip+1]
+				index := int(code[ip+1])
 				ip += 2
 
 				if isLocal {
-					// Check for the recursive capture signal from the compiler
-					if index == destReg {
-						// Special case: Capture the closure *itself*
-						// Create a closed upvalue pointing directly to the closure object
-						upvalue := &value.Upvalue{}
-						upvalue.Close(value.ClosureV(newClosure)) // Use value.ClosureV helper
-						newClosure.Upvalues[i] = upvalue
-					} else {
-						// Normal case: Capture local variable from the current frame's registers
-						localRegIndex := int(index)
-						if localRegIndex >= len(registers) {
-							frame.ip = ip
-							return vm.runtimeError("Invalid register index %d for local upvalue capture", localRegIndex)
-						}
-						// Get pointer to the stack slot
-						// We need the memory address of the value.Value in the slice/array.
-						// Using unsafe might be necessary or pass the whole slice and index.
-						// Let's assume captureUpvalue handles finding/creating based on stack location.
-						locationPtr := &registers[localRegIndex] // Get pointer to the Value in the slice
-						newClosure.Upvalues[i] = vm.captureUpvalue(locationPtr)
-					}
-				} else {
-					// Capture upvalue from the enclosing function's closure
-					upvalueIndex := int(index)
-					if closure == nil || upvalueIndex >= len(closure.Upvalues) { // Check frame.closure, not newClosure!
+					// Capture local variable from the *current* frame's registers.
+					// The location is index bytes *relative to the start of the current frame's registers*.
+					if index >= len(registers) {
 						frame.ip = ip
-						return vm.runtimeError("Invalid upvalue index %d for non-local capture", upvalueIndex)
+						return vm.runtimeError("Invalid local register index %d for upvalue capture.", index)
 					}
-					newClosure.Upvalues[i] = closure.Upvalues[upvalueIndex]
+					// Pass pointer to the stack slot (register) itself.
+					location := &registers[index]
+					upvalues[i] = vm.captureUpvalue(location)
+				} else {
+					// Capture upvalue from the *enclosing* function (i.e., the current closure).
+					if closure == nil || index >= len(closure.Upvalues) {
+						frame.ip = ip
+						return vm.runtimeError("Invalid upvalue index %d for capture.", index)
+					}
+					upvalues[i] = closure.Upvalues[index]
 				}
 			}
 
-			// 4. Store the created closure in the destination register
-			registers[destReg] = value.ClosureV(newClosure) // Use value.ClosureV helper
+			// Create the closure Value using the constructor
+			// newClosureVal := NewClosure(protoFunc, upvalues)
+			// Create the closure struct directly
+			newClosure := &Closure{
+				Fn:       protoFunc,
+				Upvalues: upvalues,
+			}
+			registers[destReg] = ClosureV(newClosure) // Use ClosureV to create the value
 
-		case bytecode.OpLoadFree:
-			destReg := code[ip]        // Rx
-			upvalueIndex := code[ip+1] // UpvalueIndex
+		case OpLoadFree:
+			destReg := code[ip]
+			upvalueIndex := int(code[ip+1])
 			ip += 2
 
-			if int(upvalueIndex) >= len(closure.Upvalues) {
+			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
 				frame.ip = ip
 				return vm.runtimeError("Invalid upvalue index %d for OpLoadFree.", upvalueIndex)
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
-			// Check if upvalue is closed
-			if upvalue.Location == nil {
-				registers[destReg] = upvalue.Closed
+			if upvalue.Location != nil {
+				// Variable is still open (on the stack)
+				registers[destReg] = *upvalue.Location // Dereference pointer to get value
 			} else {
-				registers[destReg] = *upvalue.Location // Dereference the pointer to get the value
+				// Variable is closed
+				registers[destReg] = upvalue.Closed
 			}
 
-		case bytecode.OpSetUpvalue:
-			upvalueIndex := code[ip] // UpvalueIndex
-			srcReg := code[ip+1]     // Ry: Register holding the value to store
+		case OpSetUpvalue:
+			upvalueIndex := int(code[ip])
+			srcReg := code[ip+1]
 			ip += 2
+			valueToStore := registers[srcReg]
 
-			if int(upvalueIndex) >= len(closure.Upvalues) {
+			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
 				frame.ip = ip
 				return vm.runtimeError("Invalid upvalue index %d for OpSetUpvalue.", upvalueIndex)
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
-			valueToSet := registers[srcReg]
-			// Check if upvalue is closed
-			if upvalue.Location == nil {
-				upvalue.Closed = valueToSet // Assign to closed value
+			if upvalue.Location != nil {
+				// Variable is still open (on the stack), update the stack slot
+				*upvalue.Location = valueToStore // Update value via pointer
 			} else {
-				*upvalue.Location = valueToSet // Assign value through the pointer
+				// Variable is closed, update the Closed field
+				upvalue.Closed = valueToStore
 			}
 
 		default:
-			frame.ip = ip // Save IP
-			return vm.runtimeError("Unknown opcode %d", opcode)
+			frame.ip = ip // Save IP before erroring
+			return vm.runtimeError("Unknown opcode %d encountered.", opcode)
 		}
 	}
+
+	// Unreachable, but keeps the compiler happy
+	// return InterpretRuntimeError
 }
 
-// --- Runtime Helpers ---
-
-// captureUpvalue finds an existing open upvalue pointing to `location` or creates a new one.
-func (vm *VM) captureUpvalue(location *value.Value) *value.Upvalue {
-	// Search existing open upvalues from newest to oldest
-	// (More likely to find recently used locals near the top)
+// captureUpvalue creates a new Upvalue object for a local variable at the given stack location.
+// It checks if an upvalue for this location already exists in the openUpvalues list.
+func (vm *VM) captureUpvalue(location *Value) *Upvalue {
+	// Search from the end because upvalues for locals higher in the stack
+	// are likely to be found sooner (LIFO behavior of stack frames).
 	for i := len(vm.openUpvalues) - 1; i >= 0; i-- {
 		upvalue := vm.openUpvalues[i]
-		// Compare memory addresses directly
+		// Compare pointers directly to see if it's the same stack slot
 		if upvalue.Location == location {
-			return upvalue
+			return upvalue // Found existing open upvalue
 		}
+		// Optimization: If the current upvalue's location is below the target location
+		// on the stack, we won't find the target location later in the list (assuming
+		// openUpvalues is sorted or locals are captured in order).
+		// Requires careful management or unsafe.Pointer comparison.
+		// Let's skip this optimization for now for clarity.
+		// if uintptr(unsafe.Pointer(upvalue.Location)) < uintptr(unsafe.Pointer(location)) {
+		//     break
+		// }
 	}
 
 	// If not found, create a new one
-	newUpvalue := &value.Upvalue{Location: location}
+	newUpvalue := &Upvalue{Location: location} // Closed field is zero-value (Undefined)
 	vm.openUpvalues = append(vm.openUpvalues, newUpvalue)
 	return newUpvalue
 }
 
-// closeUpvalues closes all open upvalues that point to stack locations
-// at or above the given frame's register base.
-func (vm *VM) closeUpvalues(frameRegisters []value.Value) {
-	if len(frameRegisters) == 0 { // Avoid issues if frameRegisters is empty
-		return
+// closeUpvalues closes all open upvalues that point to stack slots within the given
+// frame's registers (which are about to become invalid).
+// It takes the slice representing the frame's registers as input.
+func (vm *VM) closeUpvalues(frameRegisters []Value) {
+	if len(frameRegisters) == 0 || len(vm.openUpvalues) == 0 {
+		return // Nothing to close or no registers in frame
 	}
-	// Get the memory address of the first register in the frame's slice.
-	// This serves as the lower bound (inclusive) for closing upvalues.
-	frameBaseAddr := uintptr(unsafe.Pointer(&frameRegisters[0]))
 
-	// Iterate through open upvalues
-	newOpenUpvalues := vm.openUpvalues[:0] // Create a new slice for remaining open upvalues
+	// Get the memory address range of the frame's register slice.
+	// This is somewhat fragile if the underlying array is reallocated,
+	// but should be okay as registerStack has fixed size.
+	frameStartPtr := uintptr(unsafe.Pointer(&frameRegisters[0]))
+	// Address of one past the last element
+	frameEndPtr := frameStartPtr + uintptr(len(frameRegisters))*unsafe.Sizeof(Value{})
+
+	// Iterate through openUpvalues and close those pointing into the frame.
+	// We also filter the openUpvalues list, removing the closed ones.
+	newOpenUpvalues := vm.openUpvalues[:0] // Reuse underlying array
 	for _, upvalue := range vm.openUpvalues {
-		if upvalue.Location != nil {
-			upvalueAddr := uintptr(unsafe.Pointer(upvalue.Location))
-			// If the upvalue's location is at or above the frame's base address
-			if upvalueAddr >= frameBaseAddr {
-				// Close the upvalue
-				closedValue := *upvalue.Location // Copy the value from the stack
-				upvalue.Close(closedValue)       // Use the new Close method
-			} else {
-				// Keep this upvalue open, add it to the new slice
-				newOpenUpvalues = append(newOpenUpvalues, upvalue)
-			}
+		if upvalue.Location == nil { // Skip already closed upvalues
+			continue
+		}
+		upvaluePtr := uintptr(unsafe.Pointer(upvalue.Location))
+		// Check if the upvalue's location points within the memory range of frameRegisters
+		if upvaluePtr >= frameStartPtr && upvaluePtr < frameEndPtr {
+			// This upvalue points into the frame being popped, close it.
+			closedValue := *upvalue.Location // Copy the value from the stack
+			upvalue.Close(closedValue)       // Update the upvalue object
+			// Do NOT add it back to newOpenUpvalues
 		} else {
-			// It was already closed (e.g., recursive capture), keep it implicitly
-			// (or potentially add to newOpenUpvalues if closed ones should persist?)
-			// For now, let's only keep actually open ones in the new list.
+			// This upvalue points elsewhere (e.g., higher up the stack), keep it open.
+			newOpenUpvalues = append(newOpenUpvalues, upvalue)
 		}
 	}
-	vm.openUpvalues = newOpenUpvalues // Replace the old list
+	vm.openUpvalues = newOpenUpvalues
 }
 
-// runtimeError formats a runtime error message and returns the appropriate result code.
-// It also prints the error to stderr.
+// runtimeError prints an error message and the stack trace.
 func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
-	// TODO: Include line number if available
-	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stderr, "Runtime Error: %s\n", msg)
+	fmt.Fprintf(os.Stderr, "Runtime Error: %s\n", fmt.Sprintf(format, args...))
 
-	// Optionally print stack trace here
+	// Print stack trace
+	for i := vm.frameCount - 1; i >= 0; i-- {
+		frame := &vm.frames[i]
+		closure := frame.closure
+		function := closure.Fn
 
-	vm.Reset() // Clear VM state on runtime error
+		// Calculate the line number for the current instruction pointer (ip)
+		// This requires the line information in the Chunk, which we don't store per-instruction yet.
+		// For now, just print the function name and IP offset.
+		line := -1 // Placeholder
+		if function.Chunk != nil && frame.ip > 0 && frame.ip <= len(function.Chunk.Code) {
+			// Need a mapping from instruction offset to line number.
+			// Placeholder: Find the line corresponding to the *previous* instruction.
+			// Assuming frame.ip points to the *next* instruction to be executed.
+			// This requires the `Lines` array in the Chunk to be populated correctly during compilation.
+			// if len(function.Chunk.Lines) > 0 { ... }
+		}
+
+		funcName := function.Name
+		if funcName == "" {
+			funcName = "<script>"
+		}
+		fmt.Fprintf(os.Stderr, "[line %d] in %s (ip: %d)\n", line, funcName, frame.ip-1) // Show IP of failed instruction
+	}
+
+	vm.Reset() // Reset VM state after error
 	return InterpretRuntimeError
 }
-
-// isFalsey determines the truthiness of a value (null, undefined, and false are falsey).
-func isFalsey(v value.Value) bool {
-	return value.IsNull(v) || value.IsUndefined(v) || (value.IsBool(v) && !value.AsBool(v))
-}
-
-// valuesEqual compares two VM values for strict equality (like ===).
-func valuesEqual(a, b value.Value) bool {
-	if a.Type != b.Type {
-		return false // Strict type equality
-	}
-	switch a.Type {
-	case value.TypeUndefined:
-		return true // undefined === undefined
-	case value.TypeNull:
-		return true // null === null
-	case value.TypeBool:
-		return value.AsBool(a) == value.AsBool(b)
-	case value.TypeNumber:
-		return value.AsNumber(a) == value.AsNumber(b)
-	case value.TypeString:
-		return value.AsString(a) == value.AsString(b)
-	// TODO: Add object/function comparison later (likely by reference)
-	default:
-		return false // Uncomparable types
-	}
-}
-
-// No more push/pop/peek related to the operand stack
-// Register access is direct via frame.registers[index]

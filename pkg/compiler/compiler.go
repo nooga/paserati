@@ -2,16 +2,14 @@ package compiler
 
 import (
 	"fmt"
-	"paseratti2/pkg/bytecode" // For token line numbers
-
 	// For token line numbers
 	"paseratti2/pkg/parser"
-	"paseratti2/pkg/value"
+	"paseratti2/pkg/vm"
 )
 
 // Compiler transforms an AST into bytecode.
 type Compiler struct {
-	chunk              *bytecode.Chunk
+	chunk              *vm.Chunk
 	regAlloc           *RegisterAllocator
 	currentSymbolTable *SymbolTable // Changed from symbolTable
 	// Add scope management later (stack of symbol tables)
@@ -27,7 +25,7 @@ type Compiler struct {
 // NewCompiler creates a new *top-level* Compiler.
 func NewCompiler() *Compiler {
 	return &Compiler{
-		chunk:              bytecode.NewChunk(),
+		chunk:              vm.NewChunk(),
 		regAlloc:           NewRegisterAllocator(),
 		currentSymbolTable: NewSymbolTable(), // Initialize global symbol table
 		enclosing:          nil,              // No enclosing compiler for the top level
@@ -40,7 +38,7 @@ func NewCompiler() *Compiler {
 // newFunctionCompiler creates a compiler instance specifically for a function body.
 func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	return &Compiler{
-		chunk:              bytecode.NewChunk(),                                          // Function gets its own chunk
+		chunk:              vm.NewChunk(),                                                // Function gets its own chunk
 		regAlloc:           NewRegisterAllocator(),                                       // Function gets its own registers
 		currentSymbolTable: NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable), // Enclosed scope
 		enclosing:          enclosingCompiler,                                            // Link to the outer compiler
@@ -52,7 +50,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 
 // Compile traverses the AST and generates bytecode.
 // Returns the generated chunk and any errors encountered.
-func (c *Compiler) Compile(node parser.Node) (*bytecode.Chunk, []string) {
+func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []string) {
 	// Reset is now implicit when a new Compiler is made for a function
 	// c.regAlloc.Reset()
 	// c.symbolTable = NewSymbolTable() // Reset symbol table for new compilation
@@ -69,13 +67,13 @@ func (c *Compiler) Compile(node parser.Node) (*bytecode.Chunk, []string) {
 		if c.lastExprRegValid {
 			c.emitReturn(c.lastExprReg, 0) // Use line 0 for implicit final return
 		} else {
-			c.emitOpCode(bytecode.OpReturnUndefined, 0) // Use line 0 for implicit final return
+			c.emitOpCode(vm.OpReturnUndefined, 0) // Use line 0 for implicit final return
 		}
 	} else {
 		// Inside a function, OpReturn or OpReturnUndefined should have been emitted by
 		// compileReturnStatement or compileFunctionLiteral's finalization.
 		// We still add one just in case there's a path without a return.
-		c.emitOpCode(bytecode.OpReturnUndefined, 0)
+		c.emitOpCode(vm.OpReturnUndefined, 0)
 	}
 
 	// c.emitFinalReturn(0) // REMOVED - Replaced by the logic above
@@ -150,11 +148,11 @@ func (c *Compiler) compileNode(node parser.Node) error {
 	// --- Expressions ---
 	case *parser.NumberLiteral:
 		destReg := c.regAlloc.Alloc()
-		c.emitLoadNewConstant(destReg, value.Number(node.Value), node.Token.Line)
+		c.emitLoadNewConstant(destReg, vm.Number(node.Value), node.Token.Line)
 
 	case *parser.StringLiteral:
 		destReg := c.regAlloc.Alloc()
-		c.emitLoadNewConstant(destReg, value.String(node.Value), node.Token.Line)
+		c.emitLoadNewConstant(destReg, vm.String(node.Value), node.Token.Line)
 
 	case *parser.BooleanLiteral:
 		destReg := c.regAlloc.Alloc()
@@ -180,7 +178,7 @@ func (c *Compiler) compileNode(node parser.Node) error {
 			// This is a free variable
 			freeVarIndex := c.addFreeSymbol(&symbolRef) // Add to list and get index
 			destReg := c.regAlloc.Alloc()               // Allocate register for the loaded value
-			c.emitOpCode(bytecode.OpLoadFree, node.Token.Line)
+			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
 			// fmt.Printf("// Emitted OpLoadFree R%d, Index %d (%s)\n", destReg, freeVarIndex, symbolRef.Name) // Keep for debug if needed
@@ -313,7 +311,7 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) error {
 		c.emitReturn(returnReg, node.Token.Line)
 	} else {
 		// Return undefined implicitly using the optimized opcode
-		c.emitOpCode(bytecode.OpReturnUndefined, node.Token.Line)
+		c.emitOpCode(vm.OpReturnUndefined, node.Token.Line)
 		// No need to load undefined into a register first
 		// undefReg := c.regAlloc.Alloc()
 		// c.emitLoadUndefined(undefReg, node.Token.Line)
@@ -437,21 +435,21 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	if funcName == "" && node.Name != nil { // Fallback to node.Name if hint is empty and node has one
 		funcName = node.Name.Value
 	}
-	funcObj := bytecode.Function{
+	funcObj := vm.Function{
 		Arity:        len(node.Parameters),
 		Chunk:        functionChunk,
 		Name:         funcName,
 		RegisterSize: int(regSize),
-		// UpvalueCount: len(freeSymbols), // TODO: Add UpvalueCount field to bytecode.Function?
+		// UpvalueCount: len(freeSymbols), // TODO: Add UpvalueCount field to vm.Function?
 	}
 
 	// 6. Add the function object to the *outer* compiler's constant pool.
-	funcValue := value.NewFunction(&funcObj)   // Still use value.Function for the raw compiled code
+	funcValue := vm.NewFunction(&funcObj)      // Still use value.Function for the raw compiled code
 	constIdx := c.chunk.AddConstant(funcValue) // Index of the function proto in outer chunk
 
 	// 7. Emit OpClosure in the *outer* chunk.
 	destReg := c.regAlloc.Alloc() // Register for the resulting closure object in the outer scope
-	c.emitOpCode(bytecode.OpClosure, node.Token.Line)
+	c.emitOpCode(vm.OpClosure, node.Token.Line)
 	c.emitByte(byte(destReg))
 	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
 	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
@@ -560,7 +558,7 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression) error {
 	conditionReg := c.regAlloc.Current() // Register holding the condition result
 
 	// 2. Emit placeholder jump for false condition
-	jumpIfFalsePos := c.emitPlaceholderJump(bytecode.OpJumpIfFalse, conditionReg, node.Token.Line)
+	jumpIfFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
 
 	// 3. Compile the consequence block
 	// TODO: Handle block scope if needed later
@@ -573,7 +571,7 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression) error {
 
 	if node.Alternative != nil {
 		// 4a. If there's an else, emit placeholder jump over the else block
-		jumpElsePos := c.emitPlaceholderJump(bytecode.OpJump, 0, node.Consequence.Token.Line) // Use line of opening brace? Or token after consequence?
+		jumpElsePos := c.emitPlaceholderJump(vm.OpJump, 0, node.Consequence.Token.Line) // Use line of opening brace? Or token after consequence?
 
 		// 5a. Backpatch the OpJumpIfFalse to jump *here* (start of else)
 		c.patchJump(jumpIfFalsePos)
@@ -600,7 +598,7 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression) error {
 
 // --- Bytecode Emission Helpers ---
 
-func (c *Compiler) emitOpCode(op bytecode.OpCode, line int) {
+func (c *Compiler) emitOpCode(op vm.OpCode, line int) {
 	c.chunk.WriteOpCode(op, line)
 }
 
@@ -613,119 +611,119 @@ func (c *Compiler) emitUint16(val uint16) {
 }
 
 func (c *Compiler) emitLoadConstant(dest Register, constIdx uint16, line int) {
-	c.emitOpCode(bytecode.OpLoadConst, line)
+	c.emitOpCode(vm.OpLoadConst, line)
 	c.emitByte(byte(dest))
 	c.emitUint16(constIdx)
 }
 
 func (c *Compiler) emitLoadNull(dest Register, line int) {
-	c.emitOpCode(bytecode.OpLoadNull, line)
+	c.emitOpCode(vm.OpLoadNull, line)
 	c.emitByte(byte(dest))
 }
 
 func (c *Compiler) emitLoadUndefined(dest Register, line int) {
-	c.emitOpCode(bytecode.OpLoadUndefined, line)
+	c.emitOpCode(vm.OpLoadUndefined, line)
 	c.emitByte(byte(dest))
 }
 
 func (c *Compiler) emitLoadTrue(dest Register, line int) {
-	c.emitOpCode(bytecode.OpLoadTrue, line)
+	c.emitOpCode(vm.OpLoadTrue, line)
 	c.emitByte(byte(dest))
 }
 
 func (c *Compiler) emitLoadFalse(dest Register, line int) {
-	c.emitOpCode(bytecode.OpLoadFalse, line)
+	c.emitOpCode(vm.OpLoadFalse, line)
 	c.emitByte(byte(dest))
 }
 
 func (c *Compiler) emitMove(dest, src Register, line int) {
-	c.emitOpCode(bytecode.OpMove, line)
+	c.emitOpCode(vm.OpMove, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(src))
 }
 
 func (c *Compiler) emitReturn(src Register, line int) {
-	c.emitOpCode(bytecode.OpReturn, line)
+	c.emitOpCode(vm.OpReturn, line)
 	c.emitByte(byte(src))
 }
 
 func (c *Compiler) emitNegate(dest, src Register, line int) {
-	c.emitOpCode(bytecode.OpNegate, line)
+	c.emitOpCode(vm.OpNegate, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(src))
 }
 
 func (c *Compiler) emitNot(dest, src Register, line int) {
-	c.emitOpCode(bytecode.OpNot, line)
+	c.emitOpCode(vm.OpNot, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(src))
 }
 
 func (c *Compiler) emitAdd(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpAdd, line)
+	c.emitOpCode(vm.OpAdd, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitSubtract(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpSubtract, line)
+	c.emitOpCode(vm.OpSubtract, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitMultiply(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpMultiply, line)
+	c.emitOpCode(vm.OpMultiply, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitDivide(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpDivide, line)
+	c.emitOpCode(vm.OpDivide, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitEqual(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpEqual, line)
+	c.emitOpCode(vm.OpEqual, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitNotEqual(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpNotEqual, line)
+	c.emitOpCode(vm.OpNotEqual, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitGreater(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpGreater, line)
+	c.emitOpCode(vm.OpGreater, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitLess(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpLess, line)
+	c.emitOpCode(vm.OpLess, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitLessEqual(dest, left, right Register, line int) {
-	c.emitOpCode(bytecode.OpLessEqual, line)
+	c.emitOpCode(vm.OpLessEqual, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))
 }
 
 func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
-	c.emitOpCode(bytecode.OpCall, line)
+	c.emitOpCode(vm.OpCall, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(funcReg))
 	c.emitByte(argCount)
@@ -734,11 +732,11 @@ func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
 // emitFinalReturn adds the final OpReturnUndefined instruction.
 func (c *Compiler) emitFinalReturn(line int) {
 	// No need to load undefined first
-	c.emitOpCode(bytecode.OpReturnUndefined, line)
+	c.emitOpCode(vm.OpReturnUndefined, line)
 }
 
 // Overload or new function to handle adding constant and emitting load
-func (c *Compiler) emitLoadNewConstant(dest Register, val value.Value, line int) {
+func (c *Compiler) emitLoadNewConstant(dest Register, val vm.Value, line int) {
 	constIdx := c.chunk.AddConstant(val)
 	c.emitLoadConstant(dest, constIdx, line)
 }
@@ -766,10 +764,10 @@ func (c *Compiler) addFreeSymbol(symbol *Symbol) uint8 { // Assuming max 256 fre
 // Returns the position of the start of the jump instruction in the bytecode.
 // For OpJumpIfFalse, srcReg is the condition register.
 // For OpJump, srcReg is ignored (pass 0 or any value).
-func (c *Compiler) emitPlaceholderJump(op bytecode.OpCode, srcReg Register, line int) int {
+func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) int {
 	pos := len(c.chunk.Code)
 	c.emitOpCode(op, line)
-	if op == bytecode.OpJumpIfFalse {
+	if op == vm.OpJumpIfFalse {
 		c.emitByte(byte(srcReg)) // Register operand
 		c.emitUint16(0xFFFF)     // Placeholder offset
 	} else { // OpJump
@@ -781,9 +779,9 @@ func (c *Compiler) emitPlaceholderJump(op bytecode.OpCode, srcReg Register, line
 // patchJump calculates the distance from a placeholder jump instruction
 // to the current end of the bytecode and writes the offset back.
 func (c *Compiler) patchJump(placeholderPos int) {
-	op := bytecode.OpCode(c.chunk.Code[placeholderPos])
+	op := vm.OpCode(c.chunk.Code[placeholderPos])
 	operandStartPos := placeholderPos + 1
-	if op == bytecode.OpJumpIfFalse {
+	if op == vm.OpJumpIfFalse {
 		operandStartPos = placeholderPos + 2 // Skip register byte
 	}
 
