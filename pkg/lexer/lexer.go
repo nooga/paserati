@@ -46,6 +46,7 @@ const (
 	RPAREN    TokenType = ")"
 	LBRACE    TokenType = "{"
 	RBRACE    TokenType = "}"
+	ARROW     TokenType = "=>" // Added for arrow functions
 	// Add LBRACKET, RBRACKET later for arrays/objects
 
 	// Keywords
@@ -88,6 +89,32 @@ type Lexer struct {
 	readPosition int  // current reading position in input (after current char)
 	ch           byte // current char under examination
 	line         int  // current line number
+}
+
+// CurrentPosition returns the lexer's current byte position in the input.
+// Needed for parser backtracking.
+func (l *Lexer) CurrentPosition() int {
+	return l.position
+}
+
+// SetPosition resets the lexer to a specific byte position and re-reads the character.
+// Needed for parser backtracking.
+// Warning: Does not recalculate line numbers accurately if jumping significantly.
+// Assumes backtracking is local and line changes are minimal or irrelevant for the backtrack.
+func (l *Lexer) SetPosition(pos int) {
+	if pos < 0 {
+		pos = 0
+	}
+	if pos >= len(l.input) {
+		l.position = len(l.input)
+		l.readPosition = len(l.input)
+		l.ch = 0 // EOF
+		return
+	}
+	l.position = pos
+	l.readPosition = pos + 1
+	l.ch = l.input[l.position]
+	// NOTE: Line number is NOT recalculated here. Backtracking assumes it's okay.
 }
 
 // NewLexer creates a new Lexer.
@@ -142,6 +169,11 @@ func (l *Lexer) NextToken() Token {
 			l.readChar()
 			literal := string(ch) + string(l.ch)
 			tok = Token{Type: EQ, Literal: literal, Line: l.line}
+		} else if l.peekChar() == '>' {
+			ch := l.ch
+			l.readChar()
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: ARROW, Literal: literal, Line: l.line}
 		} else {
 			tok = newToken(ASSIGN, l.ch, l.line)
 		}

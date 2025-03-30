@@ -200,7 +200,17 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		return c.compileInfixExpression(node)
 
 	case *parser.FunctionLiteral:
-		return c.compileFunctionLiteral(node, "") // Pass empty name hint
+		// TODO: How should named function literals be handled as expressions?
+		// For now, assume they create a closure in the current scope.
+		name := "<anonymous>"
+		if node.Name != nil {
+			name = node.Name.Value
+		}
+		return c.compileFunctionLiteral(node, name)
+
+	case *parser.ArrowFunctionLiteral:
+		// Arrow functions are always anonymous expressions
+		return c.compileArrowFunctionLiteral(node)
 
 	case *parser.CallExpression:
 		return c.compileCallExpression(node)
@@ -209,9 +219,9 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		return c.compileIfExpression(node)
 
 	default:
-		return fmt.Errorf("compiler: unhandled AST node type %T", node)
+		return fmt.Errorf("compilation not implemented for %T", node)
 	}
-	return nil // Success for this node
+	return nil // Should be unreachable if all cases return error or nil
 }
 
 // --- Statement Compilation ---
@@ -797,4 +807,99 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	// Write the 16-bit offset back into the placeholder bytes (Big Endian)
 	c.chunk.Code[operandStartPos] = byte(offset >> 8)
 	c.chunk.Code[operandStartPos+1] = byte(offset & 0xff)
+}
+
+// compileArrowFunctionLiteral compiles an arrow function literal expression.
+func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) error {
+	// 1. Create a compiler for the function scope
+	funcCompiler := newFunctionCompiler(c)
+
+	// 2. Define parameters in the function's symbol table
+	for _, p := range node.Parameters {
+		reg := funcCompiler.regAlloc.Alloc()
+		funcCompiler.currentSymbolTable.Define(p.Value, reg)
+	}
+
+	// 3. Compile the function body
+	var returnReg Register
+	implicitReturnNeeded := true
+	switch bodyNode := node.Body.(type) {
+	case *parser.BlockStatement:
+		err := funcCompiler.compileNode(bodyNode)
+		if err != nil {
+			funcCompiler.errors = append(funcCompiler.errors, err.Error())
+		}
+		implicitReturnNeeded = false
+	case parser.Expression:
+		err := funcCompiler.compileNode(bodyNode)
+		if err != nil {
+			funcCompiler.errors = append(funcCompiler.errors, err.Error())
+			returnReg = 0
+		} else {
+			returnReg = funcCompiler.regAlloc.Current()
+		}
+		implicitReturnNeeded = true
+	default:
+		funcCompiler.errors = append(funcCompiler.errors, fmt.Sprintf("invalid body type %T for arrow function", node.Body))
+		implicitReturnNeeded = false
+	}
+	if implicitReturnNeeded {
+		funcCompiler.emitReturn(returnReg, node.Token.Line)
+	}
+
+	// Add final implicit return for the function (catches paths that don't hit explicit/implicit returns)
+	funcCompiler.emitFinalReturn(node.Token.Line) // Use arrow token line number
+
+	// Collect errors from sub-compilation
+	if len(funcCompiler.errors) > 0 {
+		c.errors = append(c.errors, funcCompiler.errors...)
+		// Continue even with errors to potentially catch more issues
+	}
+
+	// Get captured free variables and required register count
+	freeSymbols := funcCompiler.freeSymbols
+	regSize := funcCompiler.regAlloc.MaxRegs()
+	functionChunk := funcCompiler.chunk
+
+	// 6. Create the function object
+	compiledFunc := vm.Function{
+		Chunk:        functionChunk,
+		Arity:        len(node.Parameters), // Corrected type to int
+		RegisterSize: int(regSize),         // Use MaxRegs() and cast to int
+		Name:         "<arrow>",
+	}
+
+	// 7. Add function constant to the *enclosing* compiler (c)
+	funcValue := vm.NewFunction(&compiledFunc) // Use vm.NewFunction
+	constIdx := c.chunk.AddConstant(funcValue) // AddConstant only returns index
+
+	// 8. Emit OpClosure in the *enclosing* compiler (c)
+	destReg := c.regAlloc.Alloc() // Register for the closure in the outer scope
+	c.emitOpCode(vm.OpClosure, node.Token.Line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(constIdx)
+	c.emitByte(byte(len(freeSymbols)))
+
+	// Emit operands for each upvalue, matching compileFunctionLiteral logic
+	for _, freeSym := range freeSymbols {
+		// Resolve the symbol again in the *enclosing* compiler's context
+		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
+		if !found {
+			panic(fmt.Sprintf("compiler internal error: free variable %s not found in enclosing scope during closure creation", freeSym.Name))
+		}
+
+		if enclosingTable == c.currentSymbolTable {
+			// The free variable is local in the *direct* enclosing scope.
+			c.emitByte(1)                              // isLocal = true
+			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+		} else {
+			// The free variable is also a free variable in the enclosing scope.
+			enclosingFreeIndex := c.addFreeSymbol(&enclosingSymbol)
+			c.emitByte(0)                        // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
+		}
+	}
+
+	// The closure object is now in destReg
+	return nil // Return nil even if errors occurred; they are collected in c.errors
 }
