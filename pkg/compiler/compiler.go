@@ -728,8 +728,8 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	// 2. Define parameters in the function compiler's *enclosed* scope
 	for _, param := range node.Parameters {
 		reg := functionCompiler.regAlloc.Alloc()
-		// Define in the function's own scope
-		functionCompiler.currentSymbolTable.Define(param.Value, reg)
+		// --- FIX: Access Name field ---
+		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
 	}
 
 	// 3. Compile the body using the function compiler
@@ -787,18 +787,20 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	for i, freeSym := range freeSymbols {
 		fmt.Printf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcName, i, freeSym.Name, freeSym.Register, funcNameForLookup) // DEBUG
 
-		// --- Check for self-capture first (using funcNameForLookup) ---
-		if funcNameForLookup != "" && freeSym.Name == funcNameForLookup && freeSym.Register == nilRegister {
+		// --- Check for self-capture first (Simplified Check) ---
+		// If a free symbol has nilRegister, it MUST be the temporary one
+		// added for recursion resolution. It signifies self-capture.
+		if freeSym.Register == nilRegister {
 			// This is the special self-capture case identified during body compilation.
-			fmt.Printf("// [Closure SelfCapture %s] Emitting isLocal=1, index=destReg=R%d\n", funcName, destReg) // DEBUG
-			c.emitByte(1)                                                                                        // isLocal = true (capture from the stack where the closure will be placed)
-			c.emitByte(byte(destReg))                                                                            // Index = the destination register of OpClosure
-			continue                                                                                             // Skip the normal lookup below
+			fmt.Printf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcName, freeSym.Name, destReg) // DEBUG
+			c.emitByte(1)                                                                                                                                   // isLocal = true (capture from the stack where the closure will be placed)
+			c.emitByte(byte(destReg))                                                                                                                       // Index = the destination register of OpClosure
+			continue                                                                                                                                        // Skip the normal lookup below
 		}
 		// --- END Check ---
 
 		// Resolve the symbol again in the *enclosing* compiler's context
-		// to determine if it's local there or needs to be fetched from an outer upvalue.
+		// (This part should now only run for *non-recursive* free variables)
 		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
 		if !found {
 			// This should theoretically not happen if it was resolved during body compilation
@@ -1458,7 +1460,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	// 2. Define parameters in the function's symbol table
 	for _, p := range node.Parameters {
 		reg := funcCompiler.regAlloc.Alloc()
-		funcCompiler.currentSymbolTable.Define(p.Value, reg)
+		// --- FIX: Access Name field ---
+		funcCompiler.currentSymbolTable.Define(p.Name.Value, reg)
 	}
 
 	// 3. Compile the function body
@@ -1526,18 +1529,20 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	for i, freeSym := range freeSymbols {
 		fmt.Printf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcCompiler.compilingFuncName, i, freeSym.Name, freeSym.Register, funcCompiler.compilingFuncName) // DEBUG
 
-		// --- Check for self-capture first (using funcNameForLookup) ---
-		if funcCompiler.compilingFuncName != "" && freeSym.Name == funcCompiler.compilingFuncName && freeSym.Register == nilRegister {
+		// --- Check for self-capture first (Simplified Check) ---
+		// If a free symbol has nilRegister, it MUST be the temporary one
+		// added for recursion resolution. It signifies self-capture.
+		if freeSym.Register == nilRegister {
 			// This is the special self-capture case identified during body compilation.
-			fmt.Printf("// [Closure SelfCapture %s] Emitting isLocal=1, index=destReg=R%d\n", funcCompiler.compilingFuncName, destReg) // DEBUG
-			c.emitByte(1)                                                                                                              // isLocal = true (capture from the stack where the closure will be placed)
-			c.emitByte(byte(destReg))                                                                                                  // Index = the destination register of OpClosure
-			continue                                                                                                                   // Skip the normal lookup below
+			fmt.Printf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, destReg) // DEBUG
+			c.emitByte(1)                                                                                                                                                         // isLocal = true (capture from the stack where the closure will be placed)
+			c.emitByte(byte(destReg))                                                                                                                                             // Index = the destination register of OpClosure
+			continue                                                                                                                                                              // Skip the normal lookup below
 		}
 		// --- END Check ---
 
 		// Resolve the symbol again in the *enclosing* compiler's context
-		// to determine if it's local there or needs to be fetched from an outer upvalue.
+		// (This part should now only run for *non-recursive* free variables)
 		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
 		if !found {
 			// This should theoretically not happen if it was resolved during body compilation

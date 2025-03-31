@@ -1,0 +1,85 @@
+Okay, that's a significant and exciting direction! Shifting towards static typing is crucial for realizing the vision of Paserati as a TypeScript runtime and unlocking optimizations. You're right, we need to lay the groundwork carefully.
+
+Here's a plan outlining the steps, focusing on foundational elements first:
+
+**Phase 1: Representation and AST Integration**
+
+1.  **Define Core Type System (`pkg/types/types.go`):**
+    *   **`Type` Interface:** Create a base `Type` interface that all specific types will implement. It might include methods like `String() string` for representation and potentially `Equals(other Type) bool`, `IsAssignableTo(target Type) bool` (though assignability rules come later).
+    *   **Primitive Types:** Define constants or structs representing built-in primitive types: `Number`, `String`, `Boolean`, `Null`, `Undefined`, `Any`, `Unknown`, `Never`. These could be singleton instances.
+    *   **Simple Composite Types:** Define initial structs for:
+        *   `FunctionType`: Stores parameter types (`[]Type`) and return type (`Type`).
+        *   `ArrayType`: Stores the element type (`Type`).
+        *   `ObjectType`: Stores properties (map `string -> Type`). Start simple, maybe without index signatures initially.
+        *   `AliasType`: Represents a named type alias (`Name string`, `ResolvedType Type`).
+    *   **Type Registry:** Consider a way to register and look up named types (both built-in primitives and user-defined aliases/interfaces later).
+
+2.  **Enhance AST Nodes (`pkg/parser/ast.go`):**
+    *   **Capture Type Annotations:**
+        *   Modify `LetStatement` and `ConstStatement`: The existing `TypeAnnotation Expression` field is okay for now, but we need to ensure the parser populates it correctly with the parsed type expression.
+        *   Modify `FunctionLiteral`: Change `Parameters []*Identifier` to `Parameters []*Parameter`. Create a new `Parameter` AST node struct:
+            ```go
+            type Parameter struct {
+                Token lexer.Token // The token of the parameter name
+                Name *Identifier
+                TypeAnnotation Expression // Parsed type node (e.g., *Identifier, *FunctionTypeExpr)
+            }
+            ```
+        *   Add `ReturnTypeAnnotation Expression` to `FunctionLiteral`.
+        *   Modify `ArrowFunctionLiteral` similarly to use `Parameters []*Parameter`. Arrow functions don't have explicit return annotations in the syntax, so this field isn't needed there.
+    *   **Store Computed Types:** Add a field to relevant AST nodes (primarily `Expression` nodes, but also `LetStatement`, `ConstStatement`, `Parameter` for their declared type) to hold the *resolved* type after checking/inference:
+        ```go
+        // Add to Expression interface embedding, or individually to concrete expression nodes:
+        ComputedType types.Type // (from pkg/types) - Pointer to the resolved type
+        ```
+        Initialize this to `nil`. This links the AST node to its semantic type.
+
+3.  **Enhance Parser (`pkg/parser/parser.go`):**
+    *   **Parse Type Expressions:** Implement `parseTypeExpression() Expression`. This function will be responsible for parsing the syntax used in type annotations. Start with basics:
+        *   Identifiers (`number`, `string`, `MyType`). These will parse into `Identifier` nodes initially.
+        *   Handle function types: `(param1: type1, ...) => returnType`. This will require parsing parameters with types and the return type, likely creating a new `FunctionTypeExpression` AST node.
+        *   Handle array types: `type[]` or `Array<type>`. Requires a new `ArrayTypeExpression` AST node.
+        *   Handle object literal types: `{ key1: type1; key2: type2 }`. Requires a new `ObjectTypeExpression` AST node.
+        *   (Later: Union `|`, Intersection `&`, Literals `'a'`, `5`, `true`, Generics `<T>`, etc.)
+    *   **Integrate Type Parsing:** Update `parseLetStatement`, `parseConstStatement`, `parseFunctionParameters` (which should now parse `Parameter` nodes), etc. When a `:` is encountered in the appropriate context, call `parseTypeExpression()` and store the result in the `TypeAnnotation` field of the corresponding AST node.
+
+**Phase 2: Type Checking and Inference Infrastructure**
+
+4.  **Type Checker Structure:**
+    *   Create a new package, e.g., `pkg/checker`.
+    *   Define a `Checker` struct. This will hold state during the checking process, such as:
+        *   A reference to the parsed `*Program` AST.
+        *   An `Environment` or enhanced `SymbolTable` stack that maps identifiers to their *types* (`types.Type`) within the current scope.
+        *   A registry for known types (built-ins, user-defined).
+        *   A list for accumulating type errors.
+    *   Implement a `Check(program *Program) []TypeError` method on the `Checker`.
+
+5.  **AST Traversal & Basic Inference:**
+    *   The `Checker` will traverse the AST (Visitor pattern is suitable).
+    *   **Bottom-up:** Start by assigning types to literal nodes:
+        *   Visit `NumberLiteral`: Set `node.ComputedType = types.Number`.
+        *   Visit `StringLiteral`: Set `node.ComputedType = types.String`.
+        *   Visit `BooleanLiteral`: Set `node.ComputedType = types.Boolean`.
+        *   Visit `NullLiteral`: Set `node.ComputedType = types.Null`.
+        *   (Need to decide how to handle `undefined` - maybe via uninitialized `let`?)
+    *   **Symbol Declaration:** When visiting `LetStatement`/`ConstStatement`/`Parameter`:
+        *   Resolve the `TypeAnnotation` expression into a `types.Type` (initially just resolving built-in identifiers like "number" to `types.Number`).
+        *   Add the variable/parameter name and its *declared* type to the current environment/scope.
+        *   If there's an initializer (`Value`), recursively check/infer its type.
+        *   Check if the initializer's `ComputedType` is assignable to the declared type (implement basic assignability rules, e.g., `Number` is assignable to `Number`). Store the declared type in the statement/parameter's `ComputedType`.
+    *   **Expression Type Inference:**
+        *   Visit `InfixExpression`: Look up the types of `Left` and `Right`. Based on the operator (e.g., `+`, `==`) and operand types, determine the result type (e.g., `number + number -> number`, `string + string -> string`, `number == number -> boolean`). Set the `InfixExpression`'s `ComputedType`. Handle errors if operator doesn't support operand types.
+        *   Visit `Identifier`: Look up the identifier in the environment. Set the `Identifier` node's `ComputedType` to the found type. Error if not found.
+        *   (And so on for other expression types).
+
+**Phase 3: Compiler Integration & Optimization**
+
+6.  **Compiler Usage:**
+    *   The compiler runs *after* the type checker has successfully run and populated the `ComputedType` fields on the AST.
+    *   When compiling an expression node, the compiler checks `node.ComputedType`.
+    *   If the type is known and amenable to optimization (e.g., `types.Number`), emit specialized bytecode (e.g., `OpAddInt` instead of a generic `OpAdd`).
+    *   If an `ObjectType` with a known shape is encountered, potentially use this shape information for optimized property access later.
+
+**Let's Start:**
+
+Which part of **Phase 1** would you like to begin with? I suggest starting with **Step 1: Define Core Type System (`pkg/types/types.go`)**, creating the `Type` interface and the basic primitive type representations.
