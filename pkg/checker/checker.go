@@ -897,6 +897,12 @@ func (c *Checker) visit(node parser.Node) {
 			return
 		}
 
+		// allow calling any for now
+		if funcNodeType == types.Any {
+			c.SetComputedType(node, types.Any)
+			return
+		}
+
 		// Assert that the computed type is actually a function type
 		funcType, ok := funcNodeType.(*types.FunctionType)
 		if !ok {
