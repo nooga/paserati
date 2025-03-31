@@ -856,6 +856,10 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Number
 				} else if widenedLeftType == types.String && widenedRightType == types.String {
 					resultType = types.String
+					// <<< NEW: Handle String + Number Coercion >>>
+				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
+					(widenedLeftType == types.Number && widenedRightType == types.String) {
+					resultType = types.String
 				} else {
 					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
