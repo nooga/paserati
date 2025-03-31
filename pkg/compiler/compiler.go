@@ -384,7 +384,7 @@ func (c *Compiler) compileNode(node parser.Node) error {
 
 		// 2. Check property name and object type using the checker's results
 		propertyName := node.Property.Value
-		objectStaticType := c.typeChecker.GetComputedTypeOrAny(node.Object)
+		objectStaticType := node.Object.GetComputedType()
 
 		if objectStaticType == nil {
 			return fmt.Errorf("compiler internal error: checker did not provide type for object at line %v", node.Object.TokenLiteral())
