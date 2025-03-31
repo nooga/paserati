@@ -5,6 +5,7 @@ import (
 	"math"
 	"paserati/pkg/checker" // <<< Added import
 	"paserati/pkg/parser"
+	"paserati/pkg/types" // Added import for types
 	"paserati/pkg/vm"
 )
 
@@ -27,20 +28,14 @@ type Compiler struct {
 	chunk              *vm.Chunk
 	regAlloc           *RegisterAllocator
 	currentSymbolTable *SymbolTable // Changed from symbolTable
-	// Add scope management later (stack of symbol tables)
-	enclosing   *Compiler // Pointer to the enclosing compiler instance (nil for global)
-	freeSymbols []*Symbol // Symbols resolved in outer scopes (captured)
-	errors      []string
-
-	// Tracking for implicit return from last expression statement in top level
-	lastExprReg      Register
-	lastExprRegValid bool
-
-	// --- New: Stack for loop contexts ---
-	loopContextStack []*LoopContext
-
-	// --- New: Name of the function being compiled (for recursive lookup) ---
-	compilingFuncName string
+	enclosing          *Compiler    // Pointer to the enclosing compiler instance (nil for global)
+	freeSymbols        []*Symbol    // Symbols resolved in outer scopes (captured)
+	errors             []string
+	lastExprReg        Register
+	lastExprRegValid   bool
+	loopContextStack   []*LoopContext
+	compilingFuncName  string
+	typeChecker        *checker.Checker // <<< NEW: Reference to the type checker instance
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -48,32 +43,30 @@ func NewCompiler() *Compiler {
 	return &Compiler{
 		chunk:              vm.NewChunk(),
 		regAlloc:           NewRegisterAllocator(),
-		currentSymbolTable: NewSymbolTable(), // Initialize global symbol table
-		enclosing:          nil,              // No enclosing compiler for the top level
-		freeSymbols:        []*Symbol{},      // Initialize empty free symbols slice
+		currentSymbolTable: NewSymbolTable(),
+		enclosing:          nil,
+		freeSymbols:        []*Symbol{},
 		errors:             []string{},
-		lastExprRegValid:   false,                   // Initialize tracking fields
-		loopContextStack:   make([]*LoopContext, 0), // Initialize loop stack
-		compilingFuncName:  "<script>",              // Indicate top-level script context
+		lastExprRegValid:   false,
+		loopContextStack:   make([]*LoopContext, 0),
+		compilingFuncName:  "<script>",
+		typeChecker:        nil, // Initialize as nil
 	}
 }
 
 // newFunctionCompiler creates a compiler instance specifically for a function body.
 func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
-	// Determine the best name for the function being compiled
-	// (Needs the node and nameHint from the call site... how to pass?)
-	// For now, let's leave it blank and set it later where it's called.
-	// We will set it inside compileFunctionLiteral / compileArrowFunctionLiteral
+	// Pass the checker down to nested compilers
 	return &Compiler{
-		chunk:              vm.NewChunk(),                                                // Function gets its own chunk
-		regAlloc:           NewRegisterAllocator(),                                       // Function gets its own registers
-		currentSymbolTable: NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable), // Enclosed scope
-		enclosing:          enclosingCompiler,                                            // Link to the outer compiler
-		freeSymbols:        []*Symbol{},                                                  // Initialize empty free symbols slice
-		errors:             []string{},                                                   // Function compilation might have errors
-		loopContextStack:   make([]*LoopContext, 0),                                      // Function gets its own loop stack
-		compilingFuncName:  "",                                                           // Initialize as empty, set by caller
-		// lastExprReg tracking only needed for top-level
+		chunk:              vm.NewChunk(),
+		regAlloc:           NewRegisterAllocator(),
+		currentSymbolTable: NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
+		enclosing:          enclosingCompiler,
+		freeSymbols:        []*Symbol{},
+		errors:             []string{},
+		loopContextStack:   make([]*LoopContext, 0),
+		compilingFuncName:  "",
+		typeChecker:        enclosingCompiler.typeChecker, // <<< Inherit checker reference
 	}
 }
 
@@ -90,7 +83,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []string) {
 		return nil, []string{"compiler error: Compile input must be *parser.Program for type checking"}
 	}
 
-	typeChecker := checker.NewChecker()
+	typeChecker := checker.NewChecker() // Create checker instance
 	typeErrors := typeChecker.Check(program)
 	if len(typeErrors) > 0 {
 		// Found type errors. Convert them to strings and return immediately.
@@ -101,6 +94,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []string) {
 		// Optionally append to existing compiler errors? For now, just return type errors.
 		return nil, errorStrings
 	}
+	c.typeChecker = typeChecker // <<< Assign checker to compiler field after successful check
 	// --- End Type Checking Step ---
 
 	// --- Bytecode Compilation Step ---
@@ -141,6 +135,11 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []string) {
 
 // compileNode dispatches compilation to the appropriate method based on node type.
 func (c *Compiler) compileNode(node parser.Node) error {
+	// Safety check for nil checker, although it should be set by Compile()
+	if c.typeChecker == nil && c.enclosing == nil { // Only panic if top-level compiler has no checker
+		panic("Compiler internal error: typeChecker is nil during compileNode")
+	}
+
 	switch node := node.(type) {
 	case *parser.Program:
 		if c.enclosing == nil {
@@ -373,6 +372,45 @@ func (c *Compiler) compileNode(node parser.Node) error {
 	case *parser.IndexExpression:
 		return c.compileIndexExpression(node)
 	// --- End Array/Index ---
+
+	// --- NEW: Member Expression ---
+	case *parser.MemberExpression:
+		// 1. Compile the object part
+		err := c.compileNode(node.Object)
+		if err != nil {
+			return err
+		}
+		objectReg := c.regAlloc.Current() // Register holding the object
+
+		// 2. Check property name and object type using the checker's results
+		propertyName := node.Property.Value
+		// <<< Use checker's method to get type >>>
+		objectStaticType := c.typeChecker.GetComputedTypeOrAny(node.Object)
+
+		// <<< Add nil check for safety >>>
+		if objectStaticType == nil {
+			// This might happen if the checker failed to assign a type even on error
+			return fmt.Errorf("compiler internal error: checker did not provide type for object at line %d", node.Token.Line)
+		}
+
+		if propertyName == "length" {
+			// Check if the static type allows .length
+			_, isArray := objectStaticType.(*types.ArrayType)
+			if isArray || objectStaticType == types.String {
+				// 3. Emit OpGetLength
+				destReg := c.regAlloc.Alloc()
+				c.emitGetLength(destReg, objectReg, node.Token.Line)
+				c.regAlloc.SetCurrent(destReg) // Result is now in destReg
+				return nil
+			} else {
+				// Type checker should prevent this, but add safety error
+				return fmt.Errorf("compiler error: type '%s' has no property 'length' at line %d", objectStaticType.String(), node.Token.Line)
+			}
+		} else {
+			// TODO: Handle other properties later (OpGetProperty?)
+			return fmt.Errorf("compiler error: unsupported property '%s' at line %d", propertyName, node.Token.Line)
+		}
+	// --- END NEW ---
 
 	default:
 		return fmt.Errorf("compilation not implemented for %T", node)
@@ -1666,7 +1704,7 @@ func (c *Compiler) emitSetUpvalue(upvalueIndex uint8, srcReg Register, line int)
 	c.emitByte(byte(srcReg))
 }
 
-// --- New: DoWhile Statement Compilation ---
+// --- NEW: DoWhile Statement Compilation ---
 
 func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error {
 	line := node.Token.Line
@@ -1747,7 +1785,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error 
 	return nil
 }
 
-// --- New: Update Expression Compilation ---
+// --- NEW: Update Expression Compilation ---
 
 func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error {
 	line := node.Token.Line
@@ -1922,3 +1960,10 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression) error {
 }
 
 // --- End Array/Index ---
+
+// --- NEW: emitGetLength ---
+func (c *Compiler) emitGetLength(dest, src Register, line int) {
+	c.emitOpCode(vm.OpGetLength, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
