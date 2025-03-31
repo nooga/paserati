@@ -7,7 +7,7 @@ import (
 )
 
 // --- Debug Flag ---
-const debugParser = false
+const debugParser = true
 
 func debugPrint(format string, args ...interface{}) {
 	if debugParser {
@@ -398,7 +398,7 @@ func (p *Parser) parseIdentifier() Expression {
 			Name:           ident,
 			TypeAnnotation: nil, // No type annotation in this shorthand syntax
 		}
-		return p.parseArrowFunctionBodyAndFinish([]*Parameter{param})
+		return p.parseArrowFunctionBodyAndFinish([]*Parameter{param}, nil)
 	}
 
 	debugPrint("parseIdentifier: Just identifier '%s', returning.", ident.Value)
@@ -673,7 +673,24 @@ func (p *Parser) parseGroupedExpression() Expression {
 			p.nextToken() // Consume '=>', curToken is now '=>'
 			debugPrint("parseGroupedExpression: Consumed '=>', cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
 			p.errors = p.errors[:startErrors]
-			return p.parseArrowFunctionBodyAndFinish(params)
+			return p.parseArrowFunctionBodyAndFinish(params, nil)
+		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
+			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found ':' next.", params)
+			p.nextToken() // Consume ':', curToken is now ':'
+			p.nextToken() // Consume the token starting the type expression
+			debugPrint("parseGroupedExpression: Consumed ':', cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
+			p.errors = p.errors[:startErrors]
+
+			returnTypeAnnotation := p.parseTypeExpression()
+
+			if returnTypeAnnotation == nil {
+				return nil
+			} // Propagate error
+
+			p.nextToken() // Consume the token ending the type expression
+			debugPrint("parseGroupedExpression: Consumed type expression, cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
+
+			return p.parseArrowFunctionBodyAndFinish(params, returnTypeAnnotation)
 		} else {
 			debugPrint("parseGroupedExpression: Failed arrow param parse (params=%v, cur='%s', peek='%s') or no '=>', backtracking...", params, p.curToken.Literal, p.peekToken.Type)
 			// --- PRECISE BACKTRACK ---
@@ -857,11 +874,12 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 
 // parseArrowFunctionBodyAndFinish completes parsing an arrow function.
 // It assumes the parameters have been parsed and the current token is '=>'.
-func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter) Expression {
+func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter, returnTypeAnnotation Expression) Expression {
 	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v", p.curToken.Literal, p.curToken.Type, params)
 	arrowFunc := &ArrowFunctionLiteral{
-		Token:      p.curToken, // The '=>' token
-		Parameters: params,     // Use the passed-in parameters
+		Token:                p.curToken, // The '=>' token
+		Parameters:           params,     // Use the passed-in parameters
+		ReturnTypeAnnotation: returnTypeAnnotation,
 	}
 
 	p.nextToken() // Consume '=>' ONLY

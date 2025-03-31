@@ -359,10 +359,11 @@ func (ue *UpdateExpression) String() string {
 // ArrowFunctionLiteral represents an arrow function definition.
 // (<Parameters>) => <BodyExpression | BodyStatements>
 type ArrowFunctionLiteral struct {
-	BaseExpression              // Embed base for ComputedType (Function type)
-	Token          lexer.Token  // The '=>' token
-	Parameters     []*Parameter // << MODIFIED
-	Body           Node         // Can be Expression or *BlockStatement
+	BaseExpression                    // Embed base for ComputedType (Function type)
+	Token                lexer.Token  // The '=>' token
+	Parameters           []*Parameter // << MODIFIED
+	ReturnTypeAnnotation Expression   // << MODIFIED
+	Body                 Node         // Can be Expression or *BlockStatement
 }
 
 func (afl *ArrowFunctionLiteral) expressionNode()      {}
@@ -382,6 +383,11 @@ func (afl *ArrowFunctionLiteral) String() string {
 		out.WriteString("(")
 		out.WriteString(strings.Join(params, ", "))
 		out.WriteString(")")
+	}
+
+	if afl.ReturnTypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(afl.ReturnTypeAnnotation.String())
 	}
 
 	out.WriteString(" => ")
