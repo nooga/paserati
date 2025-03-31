@@ -247,10 +247,16 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 	switch p.curToken.Type {
 	case lexer.IDENT, lexer.NULL, lexer.UNDEFINED:
 		leftExp = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	// --- NEW: Handle Literal Types ---
+	case lexer.STRING:
+		leftExp = p.parseStringLiteral()
+	case lexer.NUMBER:
+		leftExp = p.parseNumberLiteral()
+	case lexer.TRUE, lexer.FALSE:
+		leftExp = p.parseBooleanLiteral()
+	// --- End Literal Types ---
 	// TODO: Add cases for parsing array types `T[]`, function types `(...) => T`, object types `{...}` here.
 	// case lexer.LBRACKET: leftExp = p.parseArrayTypeExpression()
-	// case lexer.LPAREN: leftExp = p.parseFunctionOrGroupedTypeExpression()
-	// case lexer.LBRACE: leftExp = p.parseObjectTypeExpression()
 	default:
 		// Error: Expected a type identifier, array, function, or object type start
 		msg := fmt.Sprintf("line %d: unexpected token %s (%q) at start of type annotation",
