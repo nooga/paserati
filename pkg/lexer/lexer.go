@@ -21,9 +21,11 @@ const (
 	EOF     TokenType = "EOF"     // End Of File
 
 	// Identifiers + Literals
-	IDENT  TokenType = "IDENT"  // functionName, variableName
-	NUMBER TokenType = "NUMBER" // 123, 45.67
-	STRING TokenType = "STRING" // "hello world"
+	IDENT     TokenType = "IDENT"     // functionName, variableName
+	NUMBER    TokenType = "NUMBER"    // 123, 45.67
+	STRING    TokenType = "STRING"    // "hello world"
+	NULL      TokenType = "NULL"      // Added
+	UNDEFINED TokenType = "UNDEFINED" // Added
 
 	// Operators (add more later)
 	ASSIGN   TokenType = "="
@@ -69,7 +71,6 @@ const (
 	IF       TokenType = "IF"
 	ELSE     TokenType = "ELSE"
 	RETURN   TokenType = "RETURN"
-	NULL     TokenType = "NULL" // Explicit null
 	WHILE    TokenType = "WHILE"
 	DO       TokenType = "DO" // Added for do...while
 	FOR      TokenType = "FOR"
@@ -90,21 +91,21 @@ const (
 )
 
 var keywords = map[string]TokenType{
-	"fn":       FUNCTION, // Using 'fn' for brevity like Rust/others?
-	"function": FUNCTION,
-	"let":      LET,
-	"const":    CONST,
-	"true":     TRUE,
-	"false":    FALSE,
-	"if":       IF,
-	"else":     ELSE,
-	"return":   RETURN,
-	"null":     NULL,
-	"while":    WHILE,
-	"do":       DO, // Added for do...while
-	"for":      FOR,
-	"break":    BREAK,    // Added
-	"continue": CONTINUE, // Added
+	"function":  FUNCTION,
+	"let":       LET,
+	"const":     CONST,
+	"true":      TRUE,
+	"false":     FALSE,
+	"if":        IF,
+	"else":      ELSE,
+	"return":    RETURN,
+	"null":      NULL,
+	"undefined": UNDEFINED, // Added
+	"while":     WHILE,
+	"do":        DO, // Added for do...while
+	"for":       FOR,
+	"break":     BREAK,    // Added
+	"continue":  CONTINUE, // Added
 }
 
 // LookupIdent checks the keywords table for an identifier.

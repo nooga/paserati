@@ -284,6 +284,10 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNull(destReg, node.Token.Line)
 
+	case *parser.UndefinedLiteral: // Added
+		destReg := c.regAlloc.Alloc()
+		c.emitLoadUndefined(destReg, node.Token.Line)
+
 	case *parser.Identifier:
 		// Use currentSymbolTable for resolution
 		scopeName := "Function"

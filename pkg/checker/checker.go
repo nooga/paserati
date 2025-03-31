@@ -469,6 +469,9 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.NullLiteral:
 		c.SetComputedType(node, types.Null)
 
+	case *parser.UndefinedLiteral:
+		c.SetComputedType(node, types.Undefined)
+
 	// --- Other Expressions ---
 	case *parser.Identifier:
 		// --- Check concrete pointer AFTER type switch ---

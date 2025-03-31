@@ -4,7 +4,7 @@
 
 ## _"Sir, it's no V8 but we're doing what we can"_
 
-Welcome to **PASERATI** - a _staunchly non-compliant_ TypeScript runtime implementation written in Go. Unlike traditional TypeScript toolchains, Paserati runs TypeScript code directly without transpiling to JavaScript. And yes, that means it will also run _some version_ of JavaScript (which is just TypeScript without annotations)!
+Welcome to **PASERATI** - a _bootleg_ TypeScript runtime implementation written in Go. Unlike traditional TypeScript toolchains, Paserati runs TypeScript code directly without transpiling to JavaScript. And yes, that means it will also run _some version_ of JavaScript (which is just TypeScript without annotations)!
 
 ## What's Under The Hood
 
