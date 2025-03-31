@@ -1,16 +1,21 @@
 package compiler
 
 import (
-	"bytes"
 	"fmt"
-	"io"
-	"os"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
+	// "os"
+	// "bytes"
+	// "io"
+
 	"paserati/pkg/vm"
 	"reflect"
 	"strings"
 	"testing"
+
+	// "paserati/pkg/driver" // REMOVED - Causes import cycle
+	// Keep
+	"paserati/pkg/errors"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 )
 
 // Helper function to create expected instruction sequences
@@ -77,18 +82,33 @@ func TestCompileSimpleVariables(t *testing.T) {
 		vm.OpReturnUndefined,
 	)
 
-	// --- Run Compiler ---
-	l := lexer.NewLexer(input)
-	p := parser.NewParser(l)
-	program := p.ParseProgram()
-	if len(p.Errors()) != 0 {
-		t.Fatalf("Parser encountered errors:\n%v", p.Errors())
+	// --- Parse ---
+	program, parseErrs := compileSource(input) // Use helper
+	if len(parseErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, parseErrs)
+		for _, e := range parseErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
+		t.Fatalf("Parser encountered errors:\n%s", errMsgs.String())
+	}
+	if program == nil {
+		t.Fatalf("Parser returned nil program without errors")
 	}
 
+	// --- Compile ---
 	comp := NewCompiler()
-	chunk, compilerErrors := comp.Compile(program)
-	if len(compilerErrors) != 0 {
-		t.Fatalf("Compiler encountered errors:\n%v", compilerErrors)
+	chunk, compileErrs := comp.Compile(program)
+	if len(compileErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, compileErrs)
+		for _, e := range compileErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
+		t.Fatalf("Compiler encountered errors:\n%s", errMsgs.String())
+	}
+	if chunk == nil {
+		t.Fatalf("Compiler returned nil chunk without errors")
 	}
 
 	// --- Assertions ---
@@ -187,17 +207,33 @@ func TestCompileExpressions(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(fmt.Sprintf("Input_%d", i), func(t *testing.T) {
-			l := lexer.NewLexer(tt.input)
-			p := parser.NewParser(l)
-			program := p.ParseProgram()
-			if len(p.Errors()) != 0 {
-				t.Fatalf("Parser errors:\n%v", p.Errors())
+			// --- Parse ---
+			program, parseErrs := compileSource(tt.input) // Use helper
+			if len(parseErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, parseErrs)
+				for _, e := range parseErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
+				t.Fatalf("Parser errors:\n%s", errMsgs.String())
+			}
+			if program == nil {
+				t.Fatalf("Parser returned nil program without errors")
 			}
 
+			// --- Compile ---
 			comp := NewCompiler()
-			chunk, compilerErrors := comp.Compile(program)
-			if len(compilerErrors) != 0 {
-				t.Fatalf("Compiler errors:\n%v", compilerErrors)
+			chunk, compileErrs := comp.Compile(program)
+			if len(compileErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, compileErrs)
+				for _, e := range compileErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
+				t.Fatalf("Compiler errors:\n%s", errMsgs.String())
+			}
+			if chunk == nil {
+				t.Fatalf("Compiler returned nil chunk without errors")
 			}
 
 			// Compare instructions
@@ -266,8 +302,8 @@ func TestCompileFunctions(t *testing.T) {
 		// Compile 10 -> R2
 		vm.OpLoadConst, Register(2), uint16(1), // R2 = 10 (Const Idx 1)
 		// Emit Call R3, R1, 1 (Result in R3, Func/Closure in R1, ArgCount 1)
-		vm.OpCall, Register(3), Register(1), byte(1),
-		// Define result = R3
+		vm.OpCall, Register(3), Register(1), byte(1), // R3 = call double(R2)
+		// Define result = R3 (implicit in register allocation)
 
 		// return result;
 		// Compile result -> R4 (resolve R3, move R3->R4)
@@ -279,18 +315,33 @@ func TestCompileFunctions(t *testing.T) {
 		vm.OpReturnUndefined,
 	)
 
-	// --- Run Compiler ---
-	l := lexer.NewLexer(input)
-	p := parser.NewParser(l)
-	program := p.ParseProgram()
-	if len(p.Errors()) != 0 {
-		t.Fatalf("Parser errors:\n%v", p.Errors())
+	// --- Parse ---
+	program, parseErrs := compileSource(input) // Updated call
+	if len(parseErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, parseErrs)
+		for _, e := range parseErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
+		t.Fatalf("Parser errors:\n%s", errMsgs.String())
+	}
+	if program == nil {
+		t.Fatalf("Parser returned nil program without errors")
 	}
 
+	// --- Compile ---
 	comp := NewCompiler()
-	mainChunk, compilerErrors := comp.Compile(program)
-	if len(compilerErrors) != 0 {
-		t.Fatalf("Compiler errors:\n%v", compilerErrors)
+	mainChunk, compileErrs := comp.Compile(program) // Use updated return type
+	if len(compileErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, compileErrs)
+		for _, e := range compileErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
+		t.Fatalf("Compiler errors:\n%s", errMsgs.String())
+	}
+	if mainChunk == nil {
+		t.Fatalf("Compiler returned nil chunk without errors")
 	}
 
 	// --- Assertions ---
@@ -407,44 +458,55 @@ let add5 = makeAdder(5);
 let result = add5(10); // Call the closure
 return result; // Explicitly return the result
 `
-	compiler := NewCompiler()
-	program, errs := compileSource(input)
-	if len(errs) > 0 {
-		t.Fatalf("Parser errors: %v", errs)
+	// --- Parse ---
+	program, parseErrs := compileSource(input)
+	if len(parseErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, parseErrs)
+		for _, e := range parseErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
+		t.Fatalf("Parser errors:\n%s", errMsgs.String())
+	}
+	if program == nil {
+		t.Fatalf("Parser returned nil program without errors")
 	}
 
+	// --- Compile ---
+	compiler := NewCompiler()
 	chunk, compileErrs := compiler.Compile(program)
 	if len(compileErrs) > 0 {
-		t.Errorf("Compiler errors: %v", compileErrs)
-		logAllChunks(t, chunk, "Closure Test Compile Error", make(map[interface{}]bool))
-		t.FailNow()
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, compileErrs)
+		for _, e := range compileErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
+		logAllChunks(t, chunk, "Closure Test Compile Error", make(map[interface{}]bool)) // chunk might be nil here
+		t.Fatalf("Compiler errors:\n%s", errMsgs.String())
+	}
+	if chunk == nil {
+		t.Fatalf("Compiler returned nil chunk without errors")
 	}
 
-	// Redirect Stdout to capture VM output
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
+	// --- Run VM ---
 	vmInstance := vm.NewVM()
-	interpretResult := vmInstance.Interpret(chunk)
+	finalValue, runtimeErrs := vmInstance.Interpret(chunk) // Updated call
 
-	// Restore stdout
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	vmOutput := strings.TrimSpace(buf.String())
-
-	if interpretResult != vm.InterpretOK {
-		t.Errorf("VM execution failed with result: %v", interpretResult)
+	// --- Check VM Result ---
+	if len(runtimeErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, runtimeErrs)
+		for _, e := range runtimeErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
 		logAllChunks(t, chunk, "Closure Test Runtime Error", make(map[interface{}]bool))
-		t.FailNow()
+		t.Fatalf("VM execution failed:\n%s", errMsgs.String())
 	}
 
-	expectedOutput := "15" // VM should print the final result
-	if vmOutput != expectedOutput {
-		t.Errorf("VM output mismatch.\nExpected: %q\nGot:      %q", expectedOutput, vmOutput)
+	expectedOutput := "15"              // Expect the final value, not stdout
+	actualOutput := finalValue.String() // Get string representation of the final value
+	if actualOutput != expectedOutput {
+		t.Errorf("VM result mismatch.\nExpected: %q\nGot:      %q", expectedOutput, actualOutput)
 		logAllChunks(t, chunk, "Closure Test Mismatch", make(map[interface{}]bool))
 	}
 }
@@ -452,7 +514,7 @@ return result; // Explicitly return the result
 func TestValuesNullUndefined(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected string
+		expected string // Expected final Value as string
 	}{
 		// Basic Values
 		{"return null;", "null"},
@@ -489,42 +551,54 @@ func TestValuesNullUndefined(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			compiler := NewCompiler()
-			program, errs := compileSource(tt.input)
-			if len(errs) > 0 {
-				t.Fatalf("Parser errors: %v", errs)
+			// --- Parse ---
+			program, parseErrs := compileSource(tt.input)
+			if len(parseErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, parseErrs)
+				for _, e := range parseErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
+				t.Fatalf("Parser errors:\n%s", errMsgs.String())
+			}
+			if program == nil {
+				t.Fatalf("Parser returned nil program without errors")
 			}
 
+			// --- Compile ---
+			compiler := NewCompiler()
 			chunk, compileErrs := compiler.Compile(program)
 			if len(compileErrs) > 0 {
-				t.Errorf("Compiler errors: %v", compileErrs)
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, compileErrs)
+				for _, e := range compileErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
 				logAllChunks(t, chunk, "Value Test Compile Error", make(map[interface{}]bool))
-				t.FailNow()
+				t.Fatalf("Compiler errors:\n%s", errMsgs.String())
+			}
+			if chunk == nil {
+				t.Fatalf("Compiler returned nil chunk without errors")
 			}
 
-			// Capture VM output
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
+			// --- Run VM ---
 			vmInstance := vm.NewVM()
-			interpretResult := vmInstance.Interpret(chunk)
+			finalValue, runtimeErrs := vmInstance.Interpret(chunk) // Updated call
 
-			w.Close()
-			os.Stdout = oldStdout
-
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			vmOutput := strings.TrimSpace(buf.String())
-
-			if interpretResult != vm.InterpretOK {
-				t.Errorf("VM execution failed with result: %v", interpretResult)
+			// --- Check Result ---
+			if len(runtimeErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, runtimeErrs)
+				for _, e := range runtimeErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
 				logAllChunks(t, chunk, "Value Test Runtime Error", make(map[interface{}]bool))
-				t.FailNow()
+				t.Fatalf("VM execution failed:\n%s", errMsgs.String())
 			}
 
-			if vmOutput != tt.expected {
-				t.Errorf("VM output mismatch.\nInput:    %q\nExpected: %q\nGot:      %q", tt.input, tt.expected, vmOutput)
+			actualOutput := finalValue.String()
+			if actualOutput != tt.expected {
+				t.Errorf("VM result mismatch.\nInput:    %q\nExpected: %q\nGot:      %q", tt.input, tt.expected, actualOutput)
 				logAllChunks(t, chunk, "Value Test Mismatch", make(map[interface{}]bool))
 			}
 		})
@@ -541,45 +615,58 @@ let countdown = function(n) {
   return n; // Return n so final result is from initial call
 };
 
-countdown(3); // Should eventually return 3
+// Explicitly return the result of the call for testing
+return countdown(3);
 `
-	compiler := NewCompiler()
-	program, errs := compileSource(input)
-	if len(errs) > 0 {
-		t.Fatalf("Parser errors: %v", errs)
+	// --- Parse ---
+	program, parseErrs := compileSource(input)
+	if len(parseErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, parseErrs)
+		for _, e := range parseErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
+		t.Fatalf("Parser errors:\n%s", errMsgs.String())
+	}
+	if program == nil {
+		t.Fatalf("Parser returned nil program without errors")
 	}
 
+	// --- Compile ---
+	compiler := NewCompiler()
 	chunk, compileErrs := compiler.Compile(program)
 	if len(compileErrs) > 0 {
-		t.Errorf("Compiler errors: %v", compileErrs)
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, compileErrs)
+		for _, e := range compileErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
 		logAllChunks(t, chunk, "Recursion Test Compile Error", make(map[interface{}]bool))
-		t.FailNow()
+		t.Fatalf("Compiler errors:\n%s", errMsgs.String())
+	}
+	if chunk == nil {
+		t.Fatalf("Compiler returned nil chunk without errors")
 	}
 
-	// Capture VM output
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
+	// --- Run VM ---
 	vmInstance := vm.NewVM()
-	interpretResult := vmInstance.Interpret(chunk)
+	finalValue, runtimeErrs := vmInstance.Interpret(chunk) // Updated call
 
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	vmOutput := strings.TrimSpace(buf.String())
-
-	if interpretResult != vm.InterpretOK {
-		t.Errorf("VM execution failed with result: %v", interpretResult)
+	// --- Check Result ---
+	if len(runtimeErrs) > 0 {
+		var errMsgs strings.Builder
+		// errors.DisplayErrors(input, runtimeErrs)
+		for _, e := range runtimeErrs {
+			errMsgs.WriteString(e.Error() + "\n")
+		}
 		logAllChunks(t, chunk, "Recursion Test Runtime Error", make(map[interface{}]bool))
-		t.FailNow()
+		t.Fatalf("VM execution failed:\n%s", errMsgs.String())
 	}
 
 	expectedOutput := "3" // Final result of countdown(3)
-	if vmOutput != expectedOutput {
-		t.Errorf("VM output mismatch.\nInput:    %q\nExpected: %q\nGot:      %q", input, expectedOutput, vmOutput)
+	actualOutput := finalValue.String()
+	if actualOutput != expectedOutput {
+		t.Errorf("VM result mismatch.\nInput:    %q\nExpected: %q\nGot:      %q", input, expectedOutput, actualOutput)
 		logAllChunks(t, chunk, "Recursion Test Mismatch", make(map[interface{}]bool))
 	}
 }
@@ -605,24 +692,38 @@ func printOpCodesToString(code []byte) string {
 			vm.OpEqual, vm.OpNotEqual, vm.OpGreater, vm.OpLess,
 			vm.OpCall:
 			length = 4 // Op + Dest + Left/Func + Right/ArgCount
+		case vm.OpClosure: // Added OpClosure case
+			if offset+3 >= len(code) { // Need at least Op(1) + Dst(1) + FuncIdx(2)
+				builder.WriteString(" (WARN: Truncated Closure Op - Min Header)")
+				length = len(code) - offset // Consume rest
+			} else {
+				numUpvalues := int(code[offset+3])
+				expectedLen := 4 + numUpvalues*2 // Op + Dst + FuncIdx(2) + UpvalCount + (IsLocal+Idx)*N
+				if offset+expectedLen > len(code) {
+					builder.WriteString(fmt.Sprintf(" (WARN: Truncated Closure Op - Expected %d, Got %d bytes)", expectedLen, len(code)-offset))
+					length = len(code) - offset // Consume rest
+				} else {
+					length = expectedLen
+				}
+			}
 		case vm.OpReturnUndefined:
 			length = 1 // Just the opcode
 		default:
 			builder.WriteString(" (Unknown Op)")
 			length = 1 // Default guess
 		}
-		builder.WriteString(fmt.Sprintf(" (len %d)\n", length))
+		builder.WriteString(fmt.Sprintf(" (len %d)\\n", length))
 
 		// Avoid index out of bounds if instruction is partial/malformed
 		if offset+length > len(code) {
 			// Optionally print remaining bytes
-			builder.WriteString(fmt.Sprintf("  WARN: Instruction bytes truncated? Remaining: %v\n", code[offset:]))
+			builder.WriteString(fmt.Sprintf("  WARN: Instruction bytes truncated? Remaining: %v\\n", code[offset:]))
 			break
 		}
 
 		// Basic operand printing (can enhance later)
 		if length > 1 {
-			builder.WriteString(fmt.Sprintf("        Operands: %v\n", code[offset+1:offset+length]))
+			builder.WriteString(fmt.Sprintf("        Operands: %v\\n", code[offset+1:offset+length]))
 		}
 
 		offset += length
@@ -631,14 +732,14 @@ func printOpCodesToString(code []byte) string {
 }
 
 // compileSource is a helper to lex and parse input code for tests.
-func compileSource(input string) (*parser.Program, []string) {
+// Retained ONLY for TestCompileFunctions which needs the AST.
+// Prefer driver.CompileString for most tests.
+func compileSource(input string) (*parser.Program, []errors.PaseratiError) { // Updated return type
 	l := lexer.NewLexer(input)
 	p := parser.NewParser(l)
-	program := p.ParseProgram()
-	if len(p.Errors()) != 0 {
-		return nil, p.Errors()
-	}
-	return program, nil
+	program, parseErrs := p.ParseProgram() // Updated call
+	// Return program even if there are errors, caller should check parseErrs
+	return program, parseErrs // Return program and errors
 }
 
 func TestCompoundAssignments(t *testing.T) {
@@ -704,20 +805,36 @@ func TestCompoundAssignments(t *testing.T) {
 		// TODO: Add tests for compound assignment with upvalues later?
 	}
 
-	// --- Test Runner Logic (similar to TestCompileExpressions) ---
+	// --- Test Runner Logic ---
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.NewLexer(tt.input)
-			p := parser.NewParser(l)
-			program := p.ParseProgram()
-			if len(p.Errors()) != 0 {
-				t.Fatalf("Parser errors:\n%v", p.Errors())
+			// --- Parse ---
+			program, parseErrs := compileSource(tt.input)
+			if len(parseErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, parseErrs)
+				for _, e := range parseErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
+				t.Fatalf("Parser errors:\n%s", errMsgs.String())
+			}
+			if program == nil {
+				t.Fatalf("Parser returned nil program without errors")
 			}
 
+			// --- Compile ---
 			comp := NewCompiler()
-			chunk, compilerErrors := comp.Compile(program)
-			if len(compilerErrors) != 0 {
-				t.Fatalf("Compiler errors:\n%v", compilerErrors)
+			chunk, compileErrs := comp.Compile(program)
+			if len(compileErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, compileErrs)
+				for _, e := range compileErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
+				t.Fatalf("Compiler errors:\n%s", errMsgs.String())
+			}
+			if chunk == nil {
+				t.Fatalf("Compiler returned nil chunk without errors")
 			}
 
 			// Compare instructions
@@ -819,20 +936,36 @@ func TestUpdateExpressions(t *testing.T) {
 		// TODO: Add tests for update expression with upvalues later?
 	}
 
-	// --- Test Runner Logic (copy from TestCompoundAssignments) ---
+	// --- Test Runner Logic ---
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.NewLexer(tt.input)
-			p := parser.NewParser(l)
-			program := p.ParseProgram()
-			if len(p.Errors()) != 0 {
-				t.Fatalf("Parser errors:\n%v", p.Errors())
+			// --- Parse ---
+			program, parseErrs := compileSource(tt.input)
+			if len(parseErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, parseErrs)
+				for _, e := range parseErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
+				t.Fatalf("Parser errors:\n%s", errMsgs.String())
+			}
+			if program == nil {
+				t.Fatalf("Parser returned nil program without errors")
 			}
 
+			// --- Compile ---
 			comp := NewCompiler()
-			chunk, compilerErrors := comp.Compile(program)
-			if len(compilerErrors) != 0 {
-				t.Fatalf("Compiler errors:\n%v", compilerErrors)
+			chunk, compileErrs := comp.Compile(program)
+			if len(compileErrs) > 0 {
+				var errMsgs strings.Builder
+				// errors.DisplayErrors(tt.input, compileErrs)
+				for _, e := range compileErrs {
+					errMsgs.WriteString(e.Error() + "\n")
+				}
+				t.Fatalf("Compiler errors:\n%s", errMsgs.String())
+			}
+			if chunk == nil {
+				t.Fatalf("Compiler returned nil chunk without errors")
 			}
 
 			// Compare instructions

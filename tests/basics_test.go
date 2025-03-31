@@ -1,8 +1,6 @@
 package tests
 
 import (
-	"bytes"
-	"os"
 	"paserati/pkg/driver"
 	"paserati/pkg/vm"
 	"strings"
@@ -14,7 +12,7 @@ import (
 type matrixTestCase struct {
 	name               string
 	input              string
-	expect             string // Expected output OR expected runtime error substring
+	expect             string // Expected output OR expected error substring
 	isError            bool   // True if expect is a runtime error substring
 	expectCompileError bool   // True if expect is a compile error substring
 }
@@ -284,77 +282,75 @@ func TestOperatorsAndLiterals(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// 1. Compile using the driver
-			// Add implicit return for expression statements if not present
 			inputSrc := tc.input
-			if !strings.Contains(inputSrc, "return") && !strings.HasSuffix(strings.TrimSpace(inputSrc), "}") {
-				// Very basic check: if it doesn't have return and doesn't end with }, assume it's an expression
-				// that should be returned. Wrap it.
-				// inputSrc = fmt.Sprintf("return (%s);", strings.TrimRight(inputSrc, ";"))
-				// Simpler: The VM prints the result of the *last expression statement* anyway.
-				// So, no need to add return for simple expression tests.
-			}
 
 			chunk, compileErrs := driver.CompileString(inputSrc)
 
-			// We don't expect compile errors for these simple cases
-			if !tc.expectCompileError && len(compileErrs) > 0 {
-				t.Fatalf("Unexpected compile errors: %v", compileErrs)
-			}
-			if !tc.expectCompileError && chunk == nil {
-				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
-			}
-
+			// Handle expected compile errors
 			if tc.expectCompileError {
 				if len(compileErrs) == 0 {
-					t.Fatalf("Expected compile error, but got no errors.")
+					t.Fatalf("Expected compile error containing %q, but got no errors.", tc.expect)
 				}
-				for _, err := range compileErrs {
-					if !strings.Contains(err.Error(), tc.expect) {
-						t.Fatalf("Expected compile error containing %q, but got %q", tc.expect, err.Error())
+				found := false
+				var allErrors strings.Builder
+				for _, cerr := range compileErrs {
+					allErrors.WriteString(cerr.Error() + "\n")
+					if strings.Contains(cerr.Error(), tc.expect) {
+						found = true
 					}
 				}
-				return // Expected compile error, test passes if found
+				if !found {
+					t.Errorf("Expected compile error containing %q, but got errors:\n%s", tc.expect, allErrors.String())
+				}
+				return // Test passes if expected compile error is found
+			}
+
+			// Handle unexpected compile errors
+			if len(compileErrs) > 0 {
+				var allErrors strings.Builder
+				for _, cerr := range compileErrs {
+					allErrors.WriteString(cerr.Error() + "\n")
+				}
+				t.Fatalf("Unexpected compile errors:\n%s", allErrors.String())
+			}
+			if chunk == nil {
+				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
 			}
 
 			// 2. Run VM
 			vmInstance := vm.NewVM()
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-			oldStderr := os.Stderr
-			rErr, wErr, _ := os.Pipe()
-			os.Stderr = wErr
 
-			interpretResult := vmInstance.Interpret(chunk)
-
-			w.Close()
-			os.Stdout = oldStdout
-			wErr.Close()
-			os.Stderr = oldStderr
-
-			var vmStdout bytes.Buffer
-			_, _ = vmStdout.ReadFrom(r)
-			actualOutput := strings.TrimSpace(vmStdout.String())
-
-			var vmStderr bytes.Buffer
-			_, _ = vmStderr.ReadFrom(rErr)
-			actualRuntimeError := strings.TrimSpace(vmStderr.String())
+			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
 
 			// 3. Check Results
 			if tc.isError {
-				if interpretResult == vm.InterpretOK {
-					t.Errorf("Expected runtime error containing %q, but VM returned InterpretOK. Stdout: %q", tc.expect, actualOutput)
+				if len(runtimeErrs) == 0 {
+					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tc.expect, finalValue.String())
 				} else {
-					if !strings.Contains(actualRuntimeError, tc.expect) {
-						t.Errorf("Expected runtime error containing %q, but got stderr: %q", tc.expect, actualRuntimeError)
+					found := false
+					var allErrors strings.Builder
+					for _, rerr := range runtimeErrs {
+						allErrors.WriteString(rerr.Error() + "\n")
+						if strings.Contains(rerr.Error(), tc.expect) {
+							found = true
+						}
+					}
+					if !found {
+						t.Errorf("Expected runtime error containing %q, but got errors:\n%s", tc.expect, allErrors.String())
 					}
 				}
 			} else {
-				if interpretResult != vm.InterpretOK {
-					t.Errorf("Expected VM to return InterpretOK, but got %v. Stderr: %q", interpretResult, actualRuntimeError)
-				}
-				if actualOutput != tc.expect {
-					t.Errorf("Expected output %q, but got %q", tc.expect, actualOutput)
+				if len(runtimeErrs) > 0 {
+					var allErrors strings.Builder
+					for _, rerr := range runtimeErrs {
+						allErrors.WriteString(rerr.Error() + "\n")
+					}
+					t.Errorf("Expected value %q, but got runtime errors:\n%s", tc.expect, allErrors.String())
+				} else {
+					actualOutput := finalValue.String()
+					if actualOutput != tc.expect {
+						t.Errorf("Expected output %q, but got %q", tc.expect, actualOutput)
+					}
 				}
 			}
 		})
