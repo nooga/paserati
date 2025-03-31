@@ -245,10 +245,13 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 
 	// --- NEW: Handle Literal Type Nodes ---
 	case *parser.StringLiteral:
+		// <<< REVERTED: Should just return the type, not print >>>
 		return &types.LiteralType{Value: vm.String(node.Value)}
 	case *parser.NumberLiteral:
+		// <<< REVERTED: Should just return the type, not print >>>
 		return &types.LiteralType{Value: vm.Number(node.Value)}
 	case *parser.BooleanLiteral:
+		// <<< REVERTED: Should just return the type, not print >>>
 		return &types.LiteralType{Value: vm.Bool(node.Value)}
 	// --- End Literal Type Nodes ---
 
@@ -551,7 +554,7 @@ func (c *Checker) visit(node parser.Node) {
 		} else {
 			// --- No annotation: Infer type ---
 			if computedInitializerType != nil {
-				finalVariableType = getWidenedType(computedInitializerType) // Infer from widened initializer type
+				finalVariableType = types.GetWidenedType(computedInitializerType)
 			} else {
 				finalVariableType = types.Undefined // No annotation, no initializer
 			}
@@ -627,7 +630,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		} else {
 			// --- No annotation: Infer type ---
-			finalType = getWidenedType(computedInitializerType) // Infer from widened initializer type
+			finalType = types.GetWidenedType(computedInitializerType)
 		}
 
 		// Safety fallback if type determination failed somehow
@@ -720,7 +723,10 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.StringLiteral:
 		// Treat string literals as literal types during checking
-		c.SetComputedType(node, &types.LiteralType{Value: vm.String(node.Value)})
+		literalType := &types.LiteralType{Value: vm.String(node.Value)}
+		// <<< DEBUG: Print pointer for StringLiteral node >>>
+		fmt.Printf("// [Checker StringLit] Setting type for Node: %p, Value: %s, Type: %T\n", node, node.Value, literalType)
+		c.SetComputedType(node, literalType)
 
 	case *parser.BooleanLiteral:
 		// Treat boolean literals as literal types during checking
@@ -808,43 +814,67 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle InfixExpression ---
 		c.visit(node.Left)
 		c.visit(node.Right)
+		// <<< Use node's GetComputedType method >>>
 		leftType := node.Left.GetComputedType()
 		rightType := node.Right.GetComputedType()
+
+		// <<< Widen operand types >>>
+		widenedLeftType := types.GetWidenedType(leftType)
+		widenedRightType := types.GetWidenedType(rightType)
+
+		// <<< NEW DEBUG >>>
+		fmt.Printf("// [Checker Infix Pre-Check] Left : %T (%v)\n", leftType, leftType)
+		fmt.Printf("// [Checker Infix Pre-Check] Right: %T (%v)\n", rightType, rightType)
+		fmt.Printf("// [Checker Infix Pre-Check] Widened Left : %T (%v)\n", widenedLeftType, widenedLeftType)
+		fmt.Printf("// [Checker Infix Pre-Check] Widened Right: %T (%v)\n", widenedRightType, widenedRightType)
+		fmt.Printf("// [Checker Infix Pre-Check] Check Condition: %v\n", widenedLeftType != nil && widenedRightType != nil)
+		// <<< END NEW DEBUG >>>
+
 		var resultType types.Type = types.Any // Default to Any on error
 		line := node.Token.Line
 
-		if leftType != nil && rightType != nil { // Proceed only if operand types are known
+		if widenedLeftType != nil && widenedRightType != nil { // Proceed only if operand types are known
 			switch node.Operator {
 			case "+":
-				// Basic rule: number + number = number
-				// TODO: Handle string concatenation later
-				if leftType == types.Number && rightType == types.Number {
+				// Use widened types for checks
+				// <<< DEBUG: Check widened types specifically for '+' >>>
+				fmt.Printf("// [Checker Infix +] Left : %T (%v), Right: %T (%v)\n",
+					widenedLeftType, widenedLeftType, widenedRightType, widenedRightType)
+				fmt.Printf("// [Checker Infix +] Comparing Left == types.String: %v\n", widenedLeftType == types.String)
+				fmt.Printf("// [Checker Infix +] Comparing Right == types.String: %v\n", widenedRightType == types.String)
+				// <<< END DEBUG >>>
+
+				if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
+				} else if widenedLeftType == types.String && widenedRightType == types.String {
+					resultType = types.String // string + string = string
 				} else {
-					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					// TODO: Handle coercion (e.g., string + number)? For now, error.
+					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 				}
 			case "-", "*", "/":
-				if leftType == types.Number && rightType == types.Number {
+				// Use widened types
+				if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
 				} else {
-					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 				}
 			case "<", ">", "<=", ">=":
-				// Expect numbers for comparison for now
-				if leftType == types.Number && rightType == types.Number {
+				// Use widened types
+				if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Boolean
 				} else {
-					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 				}
 			case "==", "!=", "===", "!==":
-				// Basic check: allow comparing same primitive types
-				// TODO: More complex equality rules (null, undefined, coercion)
+				// Equality checks might need the original types for literal comparisons,
+				// but isAssignable handles literal widening internally when needed.
+				// For now, let's check assignability using original types.
 				if c.isAssignable(leftType, rightType) || c.isAssignable(rightType, leftType) {
 					resultType = types.Boolean
 				} else {
-					// Warn or error on always-false comparison?
 					c.addError(line, fmt.Sprintf("comparison between incompatible types '%s' and '%s'", leftType.String(), rightType.String()))
-					resultType = types.Boolean // Comparison still results in a boolean
+					resultType = types.Boolean
 				}
 			case "&&", "||":
 				// Result type is complex (union of branches)
@@ -857,8 +887,16 @@ func (c *Checker) visit(node parser.Node) {
 			default:
 				c.addError(line, fmt.Sprintf("unsupported infix operator: %s", node.Operator))
 			}
-		} // else: Error already reported during operand check
+		} // else: Error already reported during operand check or types were nil
+
+		// <<< DEBUG: Print determined type before storing >>>
+		fmt.Printf("// [Checker Infix] Node: %p (%s), Determined ResultType: %T (%v)\n", node, node.Operator, resultType, resultType)
+
 		c.SetComputedType(node, resultType)
+
+		// <<< DEBUG: Verify type retrieval after storing >>>
+		retrievedType, found := c.GetComputedType(node)
+		fmt.Printf("// [Checker Infix] Node: %p (%s), Retrieved Type: %T (%v), Found: %v\n", node, node.Operator, retrievedType, retrievedType, found)
 
 	case *parser.IfExpression:
 		// --- UPDATED: Handle IfExpression ---
@@ -1350,33 +1388,7 @@ func (c *Checker) visit(node parser.Node) {
 
 	// --- NEW: Member Expression Type Checking ---
 	case *parser.MemberExpression:
-		// 1. Visit the object expression
-		c.visit(node.Object)
-		objectType := c.GetComputedTypeOrAny(node.Object) // Use checker's map helper
-
-		// 2. Get property name
-		propertyName := node.Property.Value
-
-		var resultType types.Type = nil
-		line := node.Token.Line
-
-		// 3. Check for allowed properties
-		switch objectType.(type) {
-		case *types.ArrayType, *types.Primitive:
-			_, isArray := objectType.(*types.ArrayType)
-			if (isArray || objectType == types.String) && propertyName == "length" {
-				resultType = types.Number
-			} else {
-				c.addError(line, fmt.Sprintf("property '%s' does not exist on type '%s'", propertyName, objectType.String()))
-				resultType = types.Any
-			}
-		default:
-			c.addError(line, fmt.Sprintf("type '%s' has no properties", objectType.String()))
-			resultType = types.Any
-		}
-
-		// 4. Set computed type on the MemberExpression node itself using checker's map
-		c.SetComputedType(node, resultType)
+		c.checkMemberExpression(node)
 
 	// --- Loop Statements (Control flow, check condition/body) ---
 	case *parser.WhileStatement:
@@ -1432,7 +1444,11 @@ func (c *Checker) SetComputedType(node parser.Node, typ types.Type) {
 // GetComputedType retrieves the computed type associated with an AST node.
 // Returns the type and true if found, otherwise nil and false.
 func (c *Checker) GetComputedType(node parser.Node) (types.Type, bool) {
+	// <<< DEBUG: Log the lookup attempt >>>
+	fmt.Printf("// [Checker GetComputedType] Looking up type for node: %p (%T)\n", node, node)
 	typ, ok := c.computedTypes[node]
+	fmt.Printf("// [Checker GetComputedType] Result for node %p: Found=%v, Type=%T (%v)\n", node, ok, typ, typ)
+	// <<< END DEBUG >>>
 	return typ, ok
 }
 
@@ -1553,7 +1569,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 		c.visit(elemNode) // Visit element to compute its type
 		elemType := c.GetComputedTypeOrAny(elemNode)
 		// --- Widen literal types ---
-		widenedElemType := getWidenedType(elemType)
+		widenedElemType := types.GetWidenedType(elemType)
 		elementTypes = append(elementTypes, widenedElemType)
 	}
 
@@ -1640,31 +1656,44 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 	fmt.Printf("// [Checker IndexExpr] Computed type: %s\n", resultType.String())
 }
 
-// --- NEW HELPER: getWidenedType ---
+// Helper function
+func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
+	// 1. Visit the object expression
+	c.visit(node.Object)
+	objectType := c.GetComputedTypeOrAny(node.Object)
 
-// getWidenedType converts literal types to their corresponding primitive base types.
-// Other types are returned unchanged.
-func getWidenedType(t types.Type) types.Type {
-	if litType, ok := t.(*types.LiteralType); ok {
-		switch litType.Value.Type {
-		case vm.TypeNumber:
-			return types.Number
-		case vm.TypeString:
-			return types.String
-		case vm.TypeBool:
-			return types.Boolean
-		case vm.TypeNull:
-			return types.Null // Or should null widen to null? Yes.
-		case vm.TypeUndefined:
-			return types.Undefined // Or should undefined widen to undefined? Yes.
-		default:
-			// Should not happen for valid literal types
-			return t // Return original if unexpected underlying type
+	// <<< Widen the object type >>>
+	widenedObjectType := types.GetWidenedType(objectType)
+
+	// 2. Get property name
+	propertyName := node.Property.Value
+
+	var resultType types.Type = nil
+	line := node.Token.Line
+
+	// 3. Check for allowed properties on the *widened* type
+	switch widenedObjectType.(type) { // Switch on widened type
+	case *types.ArrayType:
+		if propertyName == "length" {
+			resultType = types.Number
+		} else {
+			c.addError(line, fmt.Sprintf("property '%s' does not exist on type '%s'", propertyName, widenedObjectType.String()))
+			resultType = types.Any
 		}
+	case *types.Primitive:
+		if widenedObjectType == types.String && propertyName == "length" {
+			resultType = types.Number
+		} else {
+			c.addError(line, fmt.Sprintf("property '%s' does not exist on type '%s'", propertyName, widenedObjectType.String()))
+			resultType = types.Any
+		}
+	// No need for LiteralType case anymore
+	default:
+		// If widened type is not array or string primitive, it has no properties (for now)
+		c.addError(line, fmt.Sprintf("type '%s' has no property '%s'", widenedObjectType.String(), propertyName))
+		resultType = types.Any
 	}
-	// TODO: Should unions containing only literals of the same base type also widen?
-	// e.g., should (1 | 2 | 3) widen to number? Probably.
-	// This would require more complex logic here or in NewUnionType.
 
-	return t // Not a literal type, return as is
+	// 4. Set computed type on the MemberExpression node itself using checker's map
+	c.SetComputedType(node, resultType)
 }

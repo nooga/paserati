@@ -1,0 +1,2 @@
+// expect:
+("a" + "b").length;
