@@ -270,9 +270,18 @@ func (l *Lexer) NextToken() Token {
 			tok = newToken(ASTERISK, l.ch, l.line)
 		}
 	case '/':
-		if l.peekChar() == '/' { // Check for comment first
+		if l.peekChar() == '/' { // Check for single-line comment first
 			l.skipComment()
 			return l.NextToken() // Get next token after comment
+		} else if l.peekChar() == '*' { // Check for multiline comment
+			if l.skipMultilineComment() { // Returns true on success, false on unterminated
+				return l.NextToken() // Get next token after comment
+			} else {
+				// Unterminated comment - return ILLEGAL or EOF?
+				// Let's return EOF if we hit the end, or ILLEGAL if stuck?
+				// For now, let EOF propagate naturally.
+				return Token{Type: ILLEGAL, Literal: "Unterminated multiline comment", Line: l.line}
+			}
 		} else if l.peekChar() == '=' { // Added check for /=
 			ch := l.ch
 			l.readChar() // Consume '='
@@ -440,6 +449,40 @@ func (l *Lexer) skipComment() {
 		l.readChar()
 	}
 	// Don't skip the newline itself, let skipWhitespace handle it
+}
+
+// skipMultilineComment reads until the end of the multiline comment.
+// It consumes the opening '/*' and the closing '*/'.
+// Returns true if the comment is terminated successfully, false otherwise (EOF reached).
+func (l *Lexer) skipMultilineComment() bool {
+	startLine := l.line // For potential error message
+
+	// Consume the opening '/*'
+	l.readChar() // Consume '/'
+	l.readChar() // Consume '*'
+
+	for {
+		if l.ch == 0 { // Reached EOF before finding closing */
+			// Error or warning could be logged here about the unterminated comment starting at startLine
+			fmt.Printf("Lexer Warning: Unterminated multiline comment starting on line %d\n", startLine)
+			return false
+		}
+
+		if l.ch == '*' && l.peekChar() == '/' {
+			// Found closing */
+			l.readChar() // Consume '*'
+			l.readChar() // Consume '/'
+			return true
+		}
+
+		// Handle newlines inside the comment
+		if l.ch == '\n' {
+			l.line++
+		}
+
+		// Consume the current character
+		l.readChar()
+	}
 }
 
 // isLetter checks if the character is a letter or underscore.
