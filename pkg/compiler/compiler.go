@@ -1849,46 +1849,55 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error 
 // --- NEW: Array/Index ---
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) error {
 	elementCount := len(node.Elements)
-	// TODO: Handle elementCount > 255? OpMakeArray currently uses uint8 for count.
-	if elementCount > 255 {
+	if elementCount > 255 { // Check against OpMakeArray count operand size
 		return fmt.Errorf("line %d: array literal exceeds maximum size of 255 elements", node.Token.Line)
 	}
 
-	// Compile elements - they should end up in consecutive registers
-	var firstElementReg Register = nilRegister
+	// 1. Compile elements and store their final registers
+	elementRegs := make([]Register, elementCount)
 	for i, elem := range node.Elements {
 		err := c.compileNode(elem)
 		if err != nil {
 			return err
 		}
-		currentElementReg := c.regAlloc.Current()
-		if i == 0 {
-			firstElementReg = currentElementReg
-		} else {
-			// Verify registers are consecutive (simple check)
-			expectedReg := firstElementReg + Register(i)
-			if currentElementReg != expectedReg {
-				// This indicates an issue with register allocation or expression compilation
-				// that didn't leave results in consecutive registers.
-				// A more robust compiler might handle this by moving values.
-				return fmt.Errorf("internal compiler error: array element registers not consecutive (expected R%d, got R%d) at line %d", expectedReg, currentElementReg, node.Token.Line)
+		elementRegs[i] = c.regAlloc.Current() // Store the register holding the final result of this element
+	}
+
+	// 2. Allocate a contiguous block for the elements and move them
+	var firstTargetReg Register
+	if elementCount > 0 {
+		// Allocate the first register of the target contiguous block
+		firstTargetReg = c.regAlloc.Alloc()
+		// Allocate the rest of the registers needed for the contiguous block
+		for i := 1; i < elementCount; i++ {
+			// We rely on the allocator returning consecutive regs here
+			// when called consecutively. A more robust allocator might
+			// offer a specific "allocate block" function.
+			_ = c.regAlloc.Alloc()
+		}
+
+		// Move elements from their original registers (elementRegs)
+		// into the new contiguous block starting at firstTargetReg.
+		for i := 0; i < elementCount; i++ {
+			targetReg := firstTargetReg + Register(i)
+			sourceReg := elementRegs[i]
+			if sourceReg != targetReg { // Avoid redundant moves
+				c.emitMove(targetReg, sourceReg, node.Token.Line) // Use array literal's line number?
 			}
 		}
+	} else {
+		// Handle empty array case: OpMakeArray needs a StartReg, use 0.
+		firstTargetReg = 0
 	}
 
-	// Allocate register for the array itself
+	// 3. Allocate register for the array itself
 	arrayReg := c.regAlloc.Alloc()
 
-	// Emit OpMakeArray
-	// If no elements, firstElementReg remains nilRegister, pass 0
-	startRegByte := byte(0)
-	if firstElementReg != nilRegister {
-		startRegByte = byte(firstElementReg)
-	}
+	// 4. Emit OpMakeArray using the contiguous block
 	c.emitOpCode(vm.OpMakeArray, node.Token.Line)
-	c.emitByte(byte(arrayReg))     // DestReg
-	c.emitByte(startRegByte)       // StartReg
-	c.emitByte(byte(elementCount)) // Count
+	c.emitByte(byte(arrayReg))       // DestReg: where the new array object goes
+	c.emitByte(byte(firstTargetReg)) // StartReg: start of the contiguous element block
+	c.emitByte(byte(elementCount))   // Count: number of elements
 
 	// Result (the array) is now in arrayReg
 	c.regAlloc.SetCurrent(arrayReg)
