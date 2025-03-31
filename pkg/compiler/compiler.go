@@ -17,6 +17,8 @@ type LoopContext struct {
 	// List of bytecode positions where OpJump placeholders for break statements start.
 	// These need to be patched later to the loop's end address.
 	BreakPlaceholderPosList []int
+	// List of bytecode positions where OpJump placeholders for continue statements start.
+	ContinuePlaceholderPosList []int
 }
 
 // Compiler transforms an AST into bytecode.
@@ -405,56 +407,205 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) error 
 }
 
 func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
-	// Compile left operand
-	err := c.compileNode(node.Left)
-	if err != nil {
-		return err
-	}
-	leftReg := c.regAlloc.Current() // Register holding the left value
+	line := node.Token.Line // Use operator token line number
 
-	// Compile right operand
-	// IMPORTANT: For stack-like allocation, the right operand's result
-	// will be in the *next* register.
-	err = c.compileNode(node.Right)
-	if err != nil {
-		return err
-	}
-	rightReg := c.regAlloc.Current() // Register holding the right value
+	// --- Standard binary operators (arithmetic, comparison) ---
+	if node.Operator != "&&" && node.Operator != "||" && node.Operator != "??" {
+		err := c.compileNode(node.Left)
+		if err != nil {
+			return err
+		}
+		leftReg := c.regAlloc.Current()
 
-	// Allocate a register for the result of the infix operation
+		err = c.compileNode(node.Right)
+		if err != nil {
+			return err
+		}
+		rightReg := c.regAlloc.Current()
+
+		destReg := c.regAlloc.Alloc() // Allocate dest register *before* emitting op
+
+		switch node.Operator {
+		case "+":
+			c.emitAdd(destReg, leftReg, rightReg, line)
+			break
+		case "-":
+			c.emitSubtract(destReg, leftReg, rightReg, line)
+			break
+		case "*":
+			c.emitMultiply(destReg, leftReg, rightReg, line)
+			break
+		case "/":
+			c.emitDivide(destReg, leftReg, rightReg, line)
+			break
+		case "==":
+			c.emitEqual(destReg, leftReg, rightReg, line)
+			break
+		case "!=":
+			c.emitNotEqual(destReg, leftReg, rightReg, line)
+			break
+		case "<":
+			c.emitLess(destReg, leftReg, rightReg, line)
+			break
+		case ">":
+			c.emitGreater(destReg, leftReg, rightReg, line)
+			break
+		case "<=":
+			c.emitLessEqual(destReg, leftReg, rightReg, line)
+			break
+		case "===":
+			c.emitStrictEqual(destReg, leftReg, rightReg, line)
+			break
+		case "!==":
+			c.emitStrictNotEqual(destReg, leftReg, rightReg, line)
+			break
+		default:
+			return fmt.Errorf("line %d: unknown standard infix operator '%s'", line, node.Operator)
+		}
+		// Result is now in destReg (allocator current is destReg)
+		c.regAlloc.SetCurrent(destReg)
+		return nil
+	}
+
+	// --- Logical Operators (&&, ||, ??) with Short-Circuiting ---
+	// Allocate result register *before* compiling operands for logical ops too
 	destReg := c.regAlloc.Alloc()
 
-	// Emit the corresponding binary opcode
-	line := node.Token.Line // Use operator token line number
-	switch node.Operator {
-	case "+":
-		c.emitAdd(destReg, leftReg, rightReg, line)
-	case "-":
-		c.emitSubtract(destReg, leftReg, rightReg, line)
-	case "*":
-		c.emitMultiply(destReg, leftReg, rightReg, line)
-	case "/":
-		c.emitDivide(destReg, leftReg, rightReg, line)
-	case "==":
-		c.emitEqual(destReg, leftReg, rightReg, line)
-	case "!=":
-		c.emitNotEqual(destReg, leftReg, rightReg, line)
-	case "<":
-		c.emitLess(destReg, leftReg, rightReg, line)
-	case ">":
-		c.emitGreater(destReg, leftReg, rightReg, line)
-	case "<=":
-		c.emitLessEqual(destReg, leftReg, rightReg, line)
-	case "===":
-		c.emitStrictEqual(destReg, leftReg, rightReg, line)
-	case "!==":
-		c.emitStrictNotEqual(destReg, leftReg, rightReg, line)
-	default:
-		return fmt.Errorf("line %d: unknown infix operator '%s'", line, node.Operator)
+	if node.Operator == "||" { // a || b
+		err := c.compileNode(node.Left)
+		if err != nil {
+			return err
+		}
+		leftReg := c.regAlloc.Current()
+
+		// Jump to right eval if left is FALSEY
+		jumpToRightPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
+
+		// If left was TRUTHY: result is left, move to destReg and jump to end
+		c.emitMove(destReg, leftReg, line)
+		jumpToEndPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+		// Patch jumpToRightPlaceholder to land here (start of right operand eval)
+		c.patchJump(jumpToRightPlaceholder)
+
+		// Compile right operand (only executed if left was falsey)
+		err = c.compileNode(node.Right)
+		if err != nil {
+			return err
+		}
+		rightReg := c.regAlloc.Current()
+		// Result is right, move to destReg
+		c.emitMove(destReg, rightReg, line)
+
+		// Patch jumpToEndPlaceholder to land here
+		c.patchJump(jumpToEndPlaceholder)
+		// Result is now unified in destReg
+		c.regAlloc.SetCurrent(destReg)
+		return nil
+
+	} else if node.Operator == "&&" { // a && b
+		err := c.compileNode(node.Left)
+		if err != nil {
+			return err
+		}
+		leftReg := c.regAlloc.Current()
+
+		// If left is FALSEY, jump to end, result is left
+		jumpToEndPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
+
+		// If left was TRUTHY (didn't jump), compile right operand
+		err = c.compileNode(node.Right)
+		if err != nil {
+			return err
+		}
+		rightReg := c.regAlloc.Current()
+		// Result is right, move rightReg to destReg
+		c.emitMove(destReg, rightReg, line) // If true path, result is right
+		// Jump over the false path's move
+		jumpSkipFalseMovePlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+		// Patch jumpToEndPlaceholder to land here (false path)
+		c.patchJump(jumpToEndPlaceholder)
+		// Result is left, move leftReg to destReg
+		c.emitMove(destReg, leftReg, line) // If false path, result is left
+
+		// Patch the skip jump
+		c.patchJump(jumpSkipFalseMovePlaceholder)
+
+		// Result is now unified in destReg
+		c.regAlloc.SetCurrent(destReg)
+		return nil
+
+	} else if node.Operator == "??" { // a ?? b
+		err := c.compileNode(node.Left)
+		if err != nil {
+			return err
+		}
+		leftReg := c.regAlloc.Current()
+
+		// Temp registers for checks
+		isNullReg := c.regAlloc.Alloc()
+		isUndefReg := c.regAlloc.Alloc()
+		nullConstReg := c.regAlloc.Alloc()
+		undefConstReg := c.regAlloc.Alloc()
+
+		// Load null and undefined constants
+		c.emitLoadNewConstant(nullConstReg, vm.Null(), line)
+		c.emitLoadNewConstant(undefConstReg, vm.Undefined(), line)
+
+		// Check if left == null
+		c.emitStrictEqual(isNullReg, leftReg, nullConstReg, line)
+		// Jump if *NOT* null (jump if false) to the undefined check
+		jumpCheckUndefPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullReg, line)
+
+		// If left IS null. Jump straight to evaluating the right side.
+		jumpEvalRightPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+		// Land here if left was NOT null. Patch the first jump.
+		c.patchJump(jumpCheckUndefPlaceholder)
+
+		// Check if left == undefined
+		c.emitStrictEqual(isUndefReg, leftReg, undefConstReg, line)
+		// Jump if *NOT* undefined (and also not null) to skip the right side eval.
+		jumpSkipRightPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, isUndefReg, line)
+
+		// Land here if left *was* null OR undefined. Patch the jump from the null check.
+		c.patchJump(jumpEvalRightPlaceholder)
+
+		// --- Eval Right Path ---
+		// Compile right operand
+		err = c.compileNode(node.Right)
+		if err != nil {
+			return err
+		}
+		rightReg := c.regAlloc.Current()
+		// Move result to destReg
+		c.emitMove(destReg, rightReg, line)
+		// Jump over the skip-right landing pad
+		jumpEndPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+		// --- Skip Right Path ---
+		// Land here if left was NOT nullish. Patch the jump from the undefined check.
+		c.patchJump(jumpSkipRightPlaceholder)
+		// Result is already correctly in leftReg. Move it to destReg.
+		c.emitMove(destReg, leftReg, line)
+
+		// Land here after either path finishes. Patch the jump from the right-eval path.
+		c.patchJump(jumpEndPlaceholder)
+
+		// Release temporary registers (if allocator had a mechanism)
+		// c.regAlloc.Release(isNullReg)
+		// c.regAlloc.Release(isUndefReg)
+		// c.regAlloc.Release(nullConstReg)
+		// c.regAlloc.Release(undefConstReg)
+
+		// Unified result is now in destReg
+		c.regAlloc.SetCurrent(destReg)
+		return nil
 	}
 
-	// The result is now in destReg
-	return nil
+	// Should be unreachable
+	return fmt.Errorf("line %d: logical/coalescing operator '%s' compilation fell through", line, node.Operator)
 }
 
 func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint string) error {
@@ -808,74 +959,91 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 }
 
 func (c *Compiler) compileForStatement(node *parser.ForStatement) error {
-	line := node.Token.Line
+	// No new scope for initializer, it shares the outer scope
 
-	// --- Compile Initializer (outside loop context) ---
+	// 1. Initializer
 	if node.Initializer != nil {
-		err := c.compileNode(node.Initializer)
-		if err != nil {
-			return fmt.Errorf("error compiling for initializer: %w", err)
+		if err := c.compileNode(node.Initializer); err != nil {
+			return err
 		}
 	}
 
-	// --- Setup Loop Context ---
-	conditionCheckStartPos := len(c.chunk.Code) // Mark position before condition check
+	// --- Loop Start & Context Setup ---
+	loopStartPos := len(c.chunk.Code) // Position before condition check
 	loopContext := &LoopContext{
-		LoopStartPos: conditionCheckStartPos,
-		// ContinueTargetPos will be set later (start of update)
-		BreakPlaceholderPosList: make([]int, 0),
+		LoopStartPos:               loopStartPos,
+		BreakPlaceholderPosList:    make([]int, 0),
+		ContinuePlaceholderPosList: make([]int, 0),
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
+	// Scope for body/vars is handled by compileNode for the BlockStatement
 
-	var jumpToEndPlaceholderPos int = -1 // Initialize placeholder position
-
-	// --- Compile Condition & Jump Out ---
+	// --- 2. Condition (Optional) ---
+	var conditionExitJumpPlaceholderPos int = -1
 	if node.Condition != nil {
-		err := c.compileNode(node.Condition)
-		if err != nil {
-			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
-			return fmt.Errorf("error compiling for condition: %w", err)
+		if err := c.compileNode(node.Condition); err != nil {
+			// Clean up loop context if condition compilation fails
+			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+			return err
 		}
 		conditionReg := c.regAlloc.Current()
-		jumpToEndPlaceholderPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
+		conditionExitJumpPlaceholderPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+	} // If no condition, it's an infinite loop (handled by break/return)
+
+	// --- 3. Body ---
+	// Continue placeholders will be added to loopContext here
+	if err := c.compileNode(node.Body); err != nil {
+		// Clean up loop context if body compilation fails
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+		return err
 	}
 
-	// --- Compile Body ---
-	err := c.compileNode(node.Body)
-	if err != nil {
-		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
-		return fmt.Errorf("error compiling for body: %w", err)
+	// --- 4. Patch Continues & Compile Update ---
+
+	// *** Patch Continue Jumps ***
+	updateStartPos := len(c.chunk.Code)
+	for _, continuePos := range loopContext.ContinuePlaceholderPosList { // Use context on stack
+		c.patchJump(continuePos) // Patch placeholder to jump to current position (updateStartPos)
+		fmt.Printf("// [CompilerDebug] For: Patched continue jump at %d to target %d\n", continuePos, updateStartPos)
 	}
 
-	// --- Mark Continue Target & Compile Update ---
-	continueTargetPos := len(c.chunk.Code)            // Continue jumps here (before update)
-	loopContext.ContinueTargetPos = continueTargetPos // Set it in the context
-
+	// *** Compile Update Expression (Optional) ***
 	if node.Update != nil {
-		err = c.compileNode(node.Update)
-		if err != nil {
-			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
-			return fmt.Errorf("error compiling for update: %w", err)
+		if err := c.compileNode(node.Update); err != nil {
+			// Clean up loop context if update compilation fails
+			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+			return err
 		}
+		// Result of update expression is discarded implicitly by not using c.lastReg
 	}
 
-	// --- Jump Back To Condition Check ---
+	// --- 5. Jump back to Loop Start (before condition) ---
 	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
-	backOffset := conditionCheckStartPos - jumpBackInstructionEndPos
-	c.emitOpCode(vm.OpJump, line)
+	backOffset := loopStartPos - jumpBackInstructionEndPos
+	c.emitOpCode(vm.OpJump, node.Body.Token.Line) // Use body's line for jump back
 	c.emitUint16(uint16(int16(backOffset)))
 
-	// --- Finish Loop ---
-	// Patch Conditional Jump Out (if condition existed)
-	if jumpToEndPlaceholderPos != -1 {
-		c.patchJump(jumpToEndPlaceholderPos)
-	}
+	// --- 6. Loop End & Patch Condition/Breaks ---
 
-	// Pop context and patch breaks
+	// Position *after* the loop (target for breaks/condition exit) is implicitly len(c.chunk.Code)
+	// loopEndPos := len(c.chunk.Code) // REMOVED - Not needed if patchJump uses current len()
+
+	// Pop loop context
 	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
 	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-	for _, breakPlaceholderPos := range poppedContext.BreakPlaceholderPosList {
-		c.patchJump(breakPlaceholderPos)
+
+	// Patch the condition exit jump (if there was a condition)
+	// This needs to happen *at* the final position
+	if conditionExitJumpPlaceholderPos != -1 {
+		c.patchJump(conditionExitJumpPlaceholderPos) // Patch to jump to current position
+		// fmt.Printf("// [CompilerDebug] For: Patched condition exit jump at %d to target %d\n", conditionExitJumpPlaceholderPos, len(c.chunk.Code))
+	}
+
+	// Patch all break jumps
+	// This needs to happen *at* the final position
+	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
+		c.patchJump(breakPos) // Patch to jump to current position
+		// fmt.Printf("// [CompilerDebug] For: Patched break jump at %d to target %d\n", breakPos, len(c.chunk.Code))
 	}
 
 	return nil
@@ -907,14 +1075,14 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) erro
 
 	// Get current loop context (top of stack)
 	currentLoopContext := c.loopContextStack[len(c.loopContextStack)-1]
-	continueTarget := currentLoopContext.ContinueTargetPos
 
-	// Emit unconditional jump back to the continue target
-	jumpInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
-	backOffset := continueTarget - jumpInstructionEndPos
+	// Emit placeholder jump (OpJump) - Pass 0 for srcReg as it's ignored
+	placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 
-	c.emitOpCode(vm.OpJump, node.Token.Line)
-	c.emitUint16(uint16(int16(backOffset))) // Emit calculated signed offset
+	// Add placeholder position to the context's list for later patching
+	currentLoopContext.ContinuePlaceholderPosList = append(currentLoopContext.ContinuePlaceholderPosList, placeholderPos)
+
+	fmt.Printf("// [CompilerDebug] Continue: Added placeholder at %d\n", placeholderPos)
 
 	return nil
 }

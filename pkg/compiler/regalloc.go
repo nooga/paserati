@@ -11,30 +11,40 @@ type RegisterAllocator struct {
 	nextReg Register // Index of the next register to allocate
 	maxReg  Register // Highest register index allocated so far
 	// Could add a free list later for more complex allocation
+
+	// New fields for tracking logical current/result register
+	currentReg Register
+	currentSet bool
 }
 
 // NewRegisterAllocator creates a new allocator for a scope (e.g., a function).
 func NewRegisterAllocator() *RegisterAllocator {
 	return &RegisterAllocator{
-		nextReg: 0,
-		maxReg:  0,
+		nextReg:    0,
+		maxReg:     0,
+		currentReg: 0,     // Initialize
+		currentSet: false, // Initialize
 	}
 }
 
 // Alloc allocates the next available register.
 func (ra *RegisterAllocator) Alloc() Register {
 	reg := ra.nextReg
-	if ra.nextReg+1 > 0 { // Check for overflow (uint8)
+	if ra.nextReg < 255 { // Check before incrementing to avoid overflow wrap-around
 		ra.nextReg++
 	} else {
-		// Handle register exhaustion - Panic for now, could return an error
-		// or trigger spilling in a more advanced allocator.
+		// Handle register exhaustion - Panic for now
 		panic("Compiler Error: Ran out of registers!")
 	}
 
 	if reg > ra.maxReg {
 		ra.maxReg = reg
 	}
+
+	// Update logical current register on allocation
+	ra.currentReg = reg
+	ra.currentSet = true
+
 	return reg
 }
 
@@ -44,25 +54,33 @@ func (ra *RegisterAllocator) Peek() Register {
 	return ra.nextReg
 }
 
-// Current returns the index of the most recently allocated register.
-// Returns 0 if no registers have been allocated yet (use Peek to check if allocation happened).
-// Caution: Use carefully, might be confusing if registers are freed later.
+// Current returns the index of the register holding the most recent logical result.
+// Falls back to the highest allocated register if not explicitly set.
 func (ra *RegisterAllocator) Current() Register {
-	if ra.nextReg == 0 {
-		return 0 // Or maybe return an error/bool?
+	if ra.currentSet {
+		return ra.currentReg
+	} else if ra.nextReg > 0 {
+		// Fallback: return highest allocated if nothing set (matches old behavior)
+		return ra.nextReg - 1
+	} else {
+		// Nothing allocated yet
+		return 0 // Or handle as error?
 	}
-	return ra.nextReg - 1
 }
 
-// MaxRegs returns the maximum register index allocated by this allocator.
-// Useful for determining the required register file size for the function frame.
-// Returns 0 if no registers were allocated.
+// SetCurrent explicitly sets the register considered to hold the current/result value.
+func (ra *RegisterAllocator) SetCurrent(reg Register) {
+	// Optional: Add check? if reg > ra.maxReg { panic(...) }
+	ra.currentReg = reg
+	ra.currentSet = true
+}
+
+// MaxRegs returns the maximum register index allocated by this allocator + 1
+// (representing the number of register slots needed).
 func (ra *RegisterAllocator) MaxRegs() Register {
 	if ra.nextReg == 0 {
 		return 0 // No registers allocated
 	}
-	// maxReg holds the highest index *used*, so we need maxReg + 1 slots.
-	// Example: if only R0 is used, maxReg=0, need 1 slot.
 	return ra.maxReg + 1
 }
 
@@ -70,6 +88,8 @@ func (ra *RegisterAllocator) MaxRegs() Register {
 func (ra *RegisterAllocator) Reset() {
 	ra.nextReg = 0
 	ra.maxReg = 0
+	ra.currentReg = 0
+	ra.currentSet = false
 }
 
 // --- Optional/Future ---
