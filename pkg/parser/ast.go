@@ -680,3 +680,24 @@ func (te *TernaryExpression) String() string {
 	}
 	return out.String()
 }
+
+// --- NEW: TypeAliasStatement ---
+
+// TypeAliasStatement represents a `type Name = Type;` declaration.
+type TypeAliasStatement struct {
+	Token lexer.Token // The 'type' token
+	Name  *Identifier // The name of the alias
+	Type  Expression  // The type expression being aliased
+}
+
+func (tas *TypeAliasStatement) statementNode()       {}
+func (tas *TypeAliasStatement) TokenLiteral() string { return tas.Token.Literal }
+func (tas *TypeAliasStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(tas.TokenLiteral() + " ")
+	out.WriteString(tas.Name.String())
+	out.WriteString(" = ")
+	out.WriteString(tas.Type.String())
+	out.WriteString(";")
+	return out.String()
+}

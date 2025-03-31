@@ -19,39 +19,51 @@ func (e *TypeError) Error() string {
 
 // Environment manages type information within scopes.
 type Environment struct {
-	symbols map[string]types.Type // Stores type bindings for the current scope
-	outer   *Environment          // Pointer to the enclosing environment
+	symbols     map[string]types.Type // Stores type bindings for variables/constants
+	typeAliases map[string]types.Type // Stores resolved types for type aliases
+	outer       *Environment          // Pointer to the enclosing environment
 }
 
 // NewEnvironment creates a new top-level type environment.
 func NewEnvironment() *Environment {
 	return &Environment{
-		symbols: make(map[string]types.Type),
-		outer:   nil, // No outer scope for the global environment
+		symbols:     make(map[string]types.Type),
+		typeAliases: make(map[string]types.Type), // Initialize
+		outer:       nil,
 	}
 }
 
 // NewEnclosedEnvironment creates a new environment nested within an outer one.
 func NewEnclosedEnvironment(outer *Environment) *Environment {
 	return &Environment{
-		symbols: make(map[string]types.Type),
-		outer:   outer,
+		symbols:     make(map[string]types.Type),
+		typeAliases: make(map[string]types.Type), // Initialize
+		outer:       outer,
 	}
 }
 
-// Define adds a new type binding to the current environment scope.
-// It returns false if the name is already defined *in this specific scope*.
-// --- FIX: Allow overwriting in the same scope to handle updates ---
+// Define adds a new *variable* type binding to the current environment scope.
 func (e *Environment) Define(name string, typ types.Type) bool {
-	// if _, exists := e.symbols[name]; exists {
-	// 	 return false // Already defined in this scope - REMOVED TO ALLOW UPDATES
-	// }
 	e.symbols[name] = typ
 	return true
 }
 
-// Resolve looks up a name in the current environment and its outer scopes.
-// Returns the type and true if found, otherwise nil and false.
+// DefineTypeAlias adds a new *type alias* binding to the current environment scope.
+// Returns false if the alias name conflicts with an existing variable OR type alias in this scope.
+func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
+	// Check for conflict with existing variable/constant in this scope
+	if _, exists := e.symbols[name]; exists {
+		return false
+	}
+	// Check for conflict with existing type alias in this scope
+	if _, exists := e.typeAliases[name]; exists {
+		return false
+	}
+	e.typeAliases[name] = typ
+	return true
+}
+
+// Resolve looks up a *variable* name in the current environment and its outer scopes.
 func (e *Environment) Resolve(name string) (types.Type, bool) {
 	// --- DEBUG ---
 	fmt.Printf("// [Env Resolve] env=%p, name='%s', outer=%p\n", e, name, e.outer) // Log entry
@@ -82,6 +94,40 @@ func (e *Environment) Resolve(name string) (types.Type, bool) {
 
 	// Not found in any scope
 	fmt.Printf("// [Env Resolve] '%s' not found in env %p (no outer)\n", name, e) // DEBUG
+	return nil, false
+}
+
+// ResolveType looks up a *type name* (could be alias or primitive) in the current environment and its outer scopes.
+// Returns the resolved type and true if found, otherwise nil and false.
+func (e *Environment) ResolveType(name string) (types.Type, bool) {
+	// --- DEBUG ---
+	fmt.Printf("// [Env ResolveType] env=%p, name='%s', outer=%p\n", e, name, e.outer)
+	if e == nil {
+		return nil, false
+	} // Safety
+	if e.typeAliases == nil {
+		fmt.Printf("// [Env ResolveType] ERROR: env %p has nil typeAliases map!\n", e)
+		return nil, false
+	}
+	// --- END DEBUG ---
+
+	// 1. Check type aliases in current scope
+	typ, ok := e.typeAliases[name]
+	if ok {
+		fmt.Printf("// [Env ResolveType] Found alias '%s' in env %p\n", name, e)
+		return typ, true
+	}
+
+	// 2. If not found in current aliases, check outer scopes recursively
+	if e.outer != nil {
+		fmt.Printf("// [Env ResolveType] Alias '%s' not in env %p, checking outer %p...\n", name, e, e.outer)
+		return e.outer.ResolveType(name)
+	}
+
+	// 3. If not found in any alias scope, check built-in primitives (only at global level?)
+	//    (This check is actually done in the Checker's resolveTypeAnnotation after trying env.ResolveType)
+
+	fmt.Printf("// [Env ResolveType] Alias '%s' not found in env %p (no outer)\n", name, e)
 	return nil, false
 }
 
@@ -143,7 +189,14 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		return nil // Indicate error
 	}
 
-	// Check against known primitive type names
+	// --- UPDATED: Prioritize alias resolution ---
+	// 1. Attempt to resolve as a type alias in the environment
+	resolvedAlias, found := c.env.ResolveType(ident.Value)
+	if found {
+		return resolvedAlias // Successfully resolved as an alias
+	}
+
+	// 2. If not found as an alias, check against known primitive type names
 	switch ident.Value {
 	case "number":
 		return types.Number
@@ -161,8 +214,11 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		return types.Unknown
 	case "never":
 		return types.Never
+	case "void": // Added Void type check
+		return types.Void
 	default:
-		// TODO: Look up in custom type registry/environment later
+		// 3. If neither alias nor primitive, it's an unknown type name
+		// TODO: Look up in custom type registry/environment later (if needed)
 		line := ident.Token.Line
 		c.addError(line, fmt.Sprintf("unknown type name: %s", ident.Value))
 		return nil // Indicate error
@@ -237,6 +293,9 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 	// --- Statements ---
+	case *parser.TypeAliasStatement:
+		c.checkTypeAliasStatement(node)
+
 	case *parser.ExpressionStatement:
 		c.visit(node.Expression)
 		// TODO: Check if expression result is used? (e.g., void context)
@@ -1052,4 +1111,28 @@ func (c *Checker) GetComputedTypeOrAny(node parser.Node) types.Type {
 		return typ
 	}
 	return types.Any // Default to Any if no type was computed/stored
+}
+
+// --- NEW: Type Alias Statement Check ---
+
+func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
+	// 1. Resolve the type expression on the right-hand side
+	aliasedType := c.resolveTypeAnnotation(node.Type)
+	if aliasedType == nil {
+		// Error already added by resolveTypeAnnotation or invalid type expr
+		// We could add another error here, but maybe redundant.
+		// fmt.Printf("// [Checker TypeAlias] Failed to resolve type for alias '%s'\n", node.Name.Value)
+		return // Cannot define alias if type resolution failed
+	}
+
+	// 2. Define the alias in the current environment
+	if !c.env.DefineTypeAlias(node.Name.Value, aliasedType) {
+		c.addError(node.Name.Token.Line, fmt.Sprintf("type alias name '%s' conflicts with an existing variable or type alias in this scope", node.Name.Value))
+	}
+
+	// TODO: Add cycle detection? (e.g., type A = B; type B = A;)
+	// TODO: Set computed type on the node itself? Maybe not necessary for aliases.
+
+	fmt.Printf("// [Checker TypeAlias] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
+
 }
