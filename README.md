@@ -79,7 +79,7 @@ _Slaps the roof._
 
 ## Contributing
 
-Not yet lol. Unless you really want to!
+Seriously, why would you want to contribute to this?
 
 ## License
 
@@ -88,6 +88,8 @@ This project is licensed under the MIT License.
 ## AI Disclaimer
 
 This project is made with AI. Google Gemini 2.5 Pro wrote almost all the code so far under more or less careful direction and scrutiny.
+
+That fun sticker at the top of the README? It's made with GPT-4o.
 
 If you don't like AI just don't use it.
 
