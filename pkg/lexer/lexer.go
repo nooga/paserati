@@ -51,6 +51,9 @@ const (
 	INC TokenType = "++" // Added
 	DEC TokenType = "--" // Added
 
+	// Type Operator
+	PIPE TokenType = "|" // Added for Union Types
+
 	// Delimiters
 	COMMA     TokenType = ","
 	SEMICOLON TokenType = ";"
@@ -301,14 +304,14 @@ func (l *Lexer) NextToken() Token {
 		} else {
 			tok = newToken(ILLEGAL, l.ch, l.line) // Single '&' is illegal for now
 		}
-	case '|': // Added
+	case '|': // Modified for Union Type
 		if l.peekChar() == '|' {
 			ch := l.ch
 			l.readChar() // Consume second '|'
 			literal := string(ch) + string(l.ch)
 			tok = Token{Type: LOGICAL_OR, Literal: literal, Line: l.line}
 		} else {
-			tok = newToken(ILLEGAL, l.ch, l.line) // Single '|' is illegal for now
+			tok = newToken(PIPE, l.ch, l.line) // Single '|' is Union Type
 		}
 	case '<':
 		if l.peekChar() == '=' {
