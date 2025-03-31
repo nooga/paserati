@@ -330,6 +330,94 @@ func (ie *IfExpression) String() string {
 	return out.String()
 }
 
+// --- New: WhileStatement ---
+
+// WhileStatement represents a 'while (condition) { body }' statement.
+type WhileStatement struct {
+	Token     lexer.Token // The 'while' token
+	Condition Expression
+	Body      *BlockStatement
+}
+
+func (ws *WhileStatement) statementNode()       {}
+func (ws *WhileStatement) TokenLiteral() string { return ws.Token.Literal }
+func (ws *WhileStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("while")
+	out.WriteString("(")
+	if ws.Condition != nil {
+		out.WriteString(ws.Condition.String())
+	}
+	out.WriteString(") ")
+	if ws.Body != nil {
+		out.WriteString(ws.Body.String())
+	}
+	return out.String()
+}
+
+// --- New: ForStatement ---
+
+// ForStatement represents a C-style 'for (initializer; condition; update) { body }' statement.
+// Initializer can be a LetStatement or an ExpressionStatement.
+// Condition and Update are optional expressions.
+type ForStatement struct {
+	Token       lexer.Token // The 'for' token
+	Initializer Statement   // Can be *LetStatement or *ExpressionStatement or nil
+	Condition   Expression  // Can be nil
+	Update      Expression  // Can be nil
+	Body        *BlockStatement
+}
+
+func (fs *ForStatement) statementNode()       {}
+func (fs *ForStatement) TokenLiteral() string { return fs.Token.Literal }
+func (fs *ForStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("for (")
+	if fs.Initializer != nil {
+		out.WriteString(fs.Initializer.String())
+	} else {
+		// Add semicolon if initializer is missing but condition or update exists
+		if fs.Condition != nil || fs.Update != nil {
+			out.WriteString(";")
+		}
+	}
+	// Don't add semicolon automatically after initializer String(), assume it adds its own if needed (like ExpressionStatement)
+
+	if fs.Condition != nil {
+		out.WriteString(" ") // Space before condition if initializer existed
+		out.WriteString(fs.Condition.String())
+	}
+	out.WriteString(";") // Always add semicolon after condition section
+
+	if fs.Update != nil {
+		out.WriteString(" ") // Space before update
+		out.WriteString(fs.Update.String())
+	}
+	out.WriteString(") ")
+	if fs.Body != nil {
+		out.WriteString(fs.Body.String())
+	}
+	return out.String()
+}
+
+// --- New: Break Statement ---
+type BreakStatement struct {
+	Token lexer.Token // The 'break' token
+}
+
+func (bs *BreakStatement) statementNode()       {}
+func (bs *BreakStatement) TokenLiteral() string { return bs.Token.Literal }
+func (bs *BreakStatement) String() string       { return bs.TokenLiteral() + ";" }
+
+// --- New: Continue Statement ---
+type ContinueStatement struct {
+	Token lexer.Token // The 'continue' token
+}
+
+func (cs *ContinueStatement) statementNode()       {}
+func (cs *ContinueStatement) TokenLiteral() string { return cs.Token.Literal }
+func (cs *ContinueStatement) String() string       { return cs.TokenLiteral() + ";" }
+
 // --- TODO: Add more expression types later (Infix, Prefix, Call, If, etc.) ---
 
 // PrefixExpression represents a prefix operator expression.
