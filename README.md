@@ -8,16 +8,22 @@ Welcome to **PASERATI** - a _staunchly non-compliant_ TypeScript runtime impleme
 
 ## What's Under The Hood
 
+_Pops the hood, looks around, slams the hood shut._
+
 Paserati aims to be performance-adjacent, like any other JavaScript engine written in Go, but with loftier ambitions to overtake all of them. It compiles TypeScript directly to bytecode for a register-based virtual machine, skipping the JavaScript middle-man entirely. Compile-time type checking will be used to specialize the bytecode for the given types which should allow for some interesting optimizations like unboxed values and static method dispatch.
 
 ## Goals
 
+_Lights a cigarette._
+
 - **Quality Entertainment**: Feel the rush of running TypeScript without a bulky V8.
-- **Education**: Explore language implementation, compilers, and VMs in a practical way.
+- **Education**: Explore language implementation, compilers, and VMs in a practical way. Also, testbed for large-scale software engineering with AI assistance.
 - **Utility**: Eventually become a useful embedded scripting language for Go applications.
 - **Decent Runtime Performance**: Beat the fastest existing JS engine implemented in Go.
 
 ## Non-goals
+
+_Tosses 2/3 of the cigarette out the window._
 
 - **Utility**: Don't expect this to ever replace your TypeScript toolchain. Go see [microsoft/typescript-go](https://github.com/microsoft/typescript-go) for that.
 - **Performance on par with real engines**: I'm not going to make a JIT in Go, I'll stop just short of that.
@@ -25,7 +31,9 @@ Paserati aims to be performance-adjacent, like any other JavaScript engine writt
 
 ## Example
 
-It does tricks with functions.
+_Lights another cigarette, curses at the cigarette, throws it out the window._
+
+For example, uh, it does tricks with functions.
 
 ```typescript
 // The Y Combinator in Paserati
@@ -48,6 +56,8 @@ factorial(5); // Result: 120
 
 ## Usage
 
+_Turns the ignition key, there is a click, tires go flat_
+
 ```bash
 # Run the REPL
 ./paserati
@@ -61,11 +71,15 @@ go test ./tests/...
 
 ## Current Status
 
-Just starting up, glowplugs still on _...wheezing sounds..._. The engine turns over sometimes, but don't expect to win any races yet. Still working on getting it past the driveway without stalling on basic JS syntax. _Slaps the roof_
+_Scratches a nasty red spot on the roof._
+
+Just starting up, glowplugs still on _...wheezing sounds..._. The engine turns over sometimes, but don't expect to win any races yet. Still working on getting it past the driveway without stalling on basic JS syntax.
+
+_Slaps the roof._
 
 ## Contributing
 
-Not yet lol.
+Not yet lol. Unless you really want to!
 
 ## License
 
