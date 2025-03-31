@@ -264,11 +264,131 @@ func TestForStatement(t *testing.T) {
 				t.Fatalf("Compilation succeeded but returned nil chunk")
 			}
 
-			// --- Added: Disassemble failing tests ---
-			if tt.name == "For loop with continue" || tt.name == "For loop simple continue" {
-				t.Logf("--- Disassembly for %s ---\n%s", tt.name, chunk.DisassembleChunk(tt.name))
+			// --- REMOVED: Disassemble failing tests ---
+			/*
+				if tt.name == "For loop with continue" || tt.name == "For loop simple continue" {
+					t.Logf("--- Disassembly for %s ---\n%s", tt.name, chunk.DisassembleChunk(tt.name))
+				}
+			*/
+			// --- End REMOVED ---
+
+			vmInstance := vm.NewVM()
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			oldStderr := os.Stderr
+			rErr, wErr, _ := os.Pipe()
+			os.Stderr = wErr
+
+			interpretResult := vmInstance.Interpret(chunk)
+
+			w.Close()
+			os.Stdout = oldStdout
+			wErr.Close()
+			os.Stderr = oldStderr
+
+			var vmStdout bytes.Buffer
+			_, _ = vmStdout.ReadFrom(r)
+			actualOutput := strings.TrimSpace(vmStdout.String())
+
+			var vmStderr bytes.Buffer
+			_, _ = vmStderr.ReadFrom(rErr)
+			actualRuntimeError := strings.TrimSpace(vmStderr.String())
+
+			if tt.isError {
+				if interpretResult == vm.InterpretOK {
+					t.Errorf("Expected runtime error containing %q, but VM returned OK. Stdout: %q", tt.expected, actualOutput)
+				} else if !strings.Contains(actualRuntimeError, tt.expected) {
+					t.Errorf("Expected runtime error containing %q, but got stderr: %q", tt.expected, actualRuntimeError)
+				}
+			} else {
+				if interpretResult != vm.InterpretOK {
+					t.Errorf("Expected VM OK, but got %v. Stderr: %q", interpretResult, actualRuntimeError)
+				}
+				if actualOutput != tt.expected {
+					t.Errorf("Expected output=%q, got=%q", tt.expected, actualOutput)
+				}
 			}
-			// --- End Added ---
+		})
+	}
+}
+
+func TestDoWhileStatement(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string // Expected final value output (stdout)
+		isError  bool
+	}{
+		{
+			name: "Simple do-while loop",
+			input: `
+				let i = 0;
+				let result = 0;
+				do {
+					result = result + i;
+					i = i + 1;
+				} while (i < 3);
+				result; // Expect 0 + 1 + 2 = 3
+			`,
+			expected: "3",
+		},
+		{
+			name: "Do-while loop condition initially false",
+			input: `
+				let result = 100;
+				let i = 0;
+				do {
+					result = 50; // Body executes once
+					i = 1;
+				} while (i < 1); // Condition is false after first run
+				result; // Should be 50
+			`,
+			expected: "50",
+		},
+		{
+			name: "Do-while loop with break",
+			input: `
+				let i = 0;
+				let result = 0;
+				do {
+					if (i == 2) {
+						break;
+					}
+					result = result + i;
+					i = i + 1;
+				} while(i < 5);
+				result; // Should be 0 + 1 = 1
+			`,
+			expected: "1",
+		},
+		{
+			name: "Do-while loop with continue",
+			input: `
+				let i = 0;
+				let result = 0;
+				do {
+					i = i + 1;
+					if (i == 2) {
+						continue; // Skip result = result + i when i=2
+					}
+					result = result + i; // Add 1, 3, 4
+				} while(i < 4);
+				result; // Should be 1 + 3 + 4 = 8
+			`,
+			expected: "8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunk, compileErrs := driver.CompileString(tt.input)
+			if len(compileErrs) > 0 {
+				t.Fatalf("Unexpected compile errors: %v", compileErrs)
+			}
+			if chunk == nil {
+				t.Fatalf("Compilation succeeded but returned nil chunk")
+			}
 
 			vmInstance := vm.NewVM()
 			oldStdout := os.Stdout

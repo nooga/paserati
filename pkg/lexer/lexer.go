@@ -37,6 +37,17 @@ const (
 	EQ       TokenType = "=="
 	NOT_EQ   TokenType = "!="
 	LE       TokenType = "<="
+	GE       TokenType = ">=" // Added (assuming GT might become GE)
+
+	// Compound Assignment
+	PLUS_ASSIGN     TokenType = "+=" // Added
+	MINUS_ASSIGN    TokenType = "-=" // Added
+	ASTERISK_ASSIGN TokenType = "*=" // Added
+	SLASH_ASSIGN    TokenType = "/=" // Added
+
+	// Increment/Decrement
+	INC TokenType = "++" // Added
+	DEC TokenType = "--" // Added
 
 	// Delimiters
 	COMMA     TokenType = ","
@@ -60,6 +71,7 @@ const (
 	RETURN   TokenType = "RETURN"
 	NULL     TokenType = "NULL" // Explicit null
 	WHILE    TokenType = "WHILE"
+	DO       TokenType = "DO" // Added for do...while
 	FOR      TokenType = "FOR"
 	BREAK    TokenType = "BREAK"    // Added
 	CONTINUE TokenType = "CONTINUE" // Added
@@ -89,6 +101,7 @@ var keywords = map[string]TokenType{
 	"return":   RETURN,
 	"null":     NULL,
 	"while":    WHILE,
+	"do":       DO, // Added for do...while
 	"for":      FOR,
 	"break":    BREAK,    // Added
 	"continue": CONTINUE, // Added
@@ -219,16 +232,51 @@ func (l *Lexer) NextToken() Token {
 			tok = newToken(BANG, l.ch, l.line)
 		}
 	case '+':
-		tok = newToken(PLUS, l.ch, l.line)
+		if l.peekChar() == '=' { // Check for +=
+			ch := l.ch
+			l.readChar() // Consume '='
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: PLUS_ASSIGN, Literal: literal, Line: l.line}
+		} else if l.peekChar() == '+' { // Check for ++
+			ch := l.ch
+			l.readChar() // Consume second '+'
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: INC, Literal: literal, Line: l.line}
+		} else {
+			tok = newToken(PLUS, l.ch, l.line)
+		}
 	case '-':
-		tok = newToken(MINUS, l.ch, l.line)
+		if l.peekChar() == '=' { // Check for -=
+			ch := l.ch
+			l.readChar() // Consume '='
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: MINUS_ASSIGN, Literal: literal, Line: l.line}
+		} else if l.peekChar() == '-' { // Check for --
+			ch := l.ch
+			l.readChar() // Consume second '-'
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: DEC, Literal: literal, Line: l.line}
+		} else {
+			tok = newToken(MINUS, l.ch, l.line)
+		}
 	case '*':
-		tok = newToken(ASTERISK, l.ch, l.line)
+		if l.peekChar() == '=' { // Added check for *=
+			ch := l.ch
+			l.readChar() // Consume '='
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: ASTERISK_ASSIGN, Literal: literal, Line: l.line}
+		} else {
+			tok = newToken(ASTERISK, l.ch, l.line)
+		}
 	case '/':
-		// Handle comments or division
-		if l.peekChar() == '/' {
+		if l.peekChar() == '/' { // Check for comment first
 			l.skipComment()
 			return l.NextToken() // Get next token after comment
+		} else if l.peekChar() == '=' { // Added check for /=
+			ch := l.ch
+			l.readChar() // Consume '='
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: SLASH_ASSIGN, Literal: literal, Line: l.line}
 		} else {
 			tok = newToken(SLASH, l.ch, l.line)
 		}
@@ -260,8 +308,14 @@ func (l *Lexer) NextToken() Token {
 			tok = newToken(LT, l.ch, l.line)
 		}
 	case '>':
-		// TODO: Add >= later if needed
-		tok = newToken(GT, l.ch, l.line)
+		if l.peekChar() == '=' { // Added check for >=
+			ch := l.ch
+			l.readChar()
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: GE, Literal: literal, Line: l.line}
+		} else {
+			tok = newToken(GT, l.ch, l.line)
+		}
 	case ';':
 		tok = newToken(SEMICOLON, l.ch, l.line)
 	case ':':
