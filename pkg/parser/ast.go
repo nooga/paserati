@@ -727,3 +727,77 @@ func (ute *UnionTypeExpression) String() string {
 	}
 	return out.String()
 }
+
+// --- NEW: ArrayLiteral ---
+
+// ArrayLiteral represents an array literal expression (e.g., [1, "two"]).
+type ArrayLiteral struct {
+	BaseExpression             // Embed base for ComputedType (e.g., types.ArrayType)
+	Token          lexer.Token // The '[' token
+	Elements       []Expression
+}
+
+func (al *ArrayLiteral) expressionNode()      {}
+func (al *ArrayLiteral) TokenLiteral() string { return al.Token.Literal }
+func (al *ArrayLiteral) String() string {
+	var out bytes.Buffer
+	elements := []string{}
+	for _, el := range al.Elements {
+		if el != nil {
+			elements = append(elements, el.String())
+		}
+	}
+	out.WriteString("[")
+	out.WriteString(strings.Join(elements, ", "))
+	out.WriteString("]")
+	if al.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", al.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// --- NEW: ArrayTypeExpression ---
+
+// ArrayTypeExpression represents an array type syntax (e.g., number[]).
+type ArrayTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType (types.ArrayType)
+	Token          lexer.Token // The '[' token
+	ElementType    Expression  // The type expression for the elements
+}
+
+func (ate *ArrayTypeExpression) expressionNode()      {}
+func (ate *ArrayTypeExpression) TokenLiteral() string { return ate.Token.Literal }
+func (ate *ArrayTypeExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString(ate.ElementType.String())
+	out.WriteString("[]")
+	if ate.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ate.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// --- NEW: IndexExpression ---
+
+// IndexExpression represents accessing an element by index (e.g., myArray[i]).
+type IndexExpression struct {
+	BaseExpression             // Embed base for ComputedType (element type)
+	Token          lexer.Token // The '[' token
+	Left           Expression  // The expression evaluating to the array/object being indexed
+	Index          Expression  // The expression evaluating to the index
+}
+
+func (ie *IndexExpression) expressionNode()      {}
+func (ie *IndexExpression) TokenLiteral() string { return ie.Token.Literal }
+func (ie *IndexExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(ie.Left.String())
+	out.WriteString("[")
+	out.WriteString(ie.Index.String())
+	out.WriteString("])")
+	if ie.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ie.ComputedType.String()))
+	}
+	return out.String()
+}

@@ -62,8 +62,9 @@ const (
 	RPAREN    TokenType = ")"
 	LBRACE    TokenType = "{"
 	RBRACE    TokenType = "}"
+	LBRACKET  TokenType = "["  // Added for Arrays
+	RBRACKET  TokenType = "]"  // Added for Arrays
 	ARROW     TokenType = "=>" // Added for arrow functions
-	// Add LBRACKET, RBRACKET later for arrays/objects
 
 	// Keywords
 	FUNCTION TokenType = "FUNCTION"
@@ -345,6 +346,10 @@ func (l *Lexer) NextToken() Token {
 		tok = newToken(LBRACE, l.ch, l.line)
 	case '}':
 		tok = newToken(RBRACE, l.ch, l.line)
+	case '[': // Added
+		tok = newToken(LBRACKET, l.ch, l.line)
+	case ']': // Added
+		tok = newToken(RBRACKET, l.ch, l.line)
 	case '"':
 		tok.Type = STRING
 		tok.Literal = l.readString()
