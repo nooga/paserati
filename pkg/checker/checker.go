@@ -651,11 +651,59 @@ func (c *Checker) visit(node parser.Node) {
 		c.currentInferredReturnTypes = outerInferredReturnTypes
 
 	case *parser.CallExpression:
-		// TODO: Handle CallExpression
+		// --- UPDATED: Handle CallExpression ---
+		// 1. Check the expression being called
 		c.visit(node.Function)
-		for _, arg := range node.Arguments {
-			c.visit(arg)
+		funcNodeType := node.Function.GetComputedType()
+		if funcNodeType == nil {
+			// Error visiting the function expression itself
+			// Set result to Any and return, error was already added
+			node.SetComputedType(types.Any)
+			return
 		}
+
+		// Assert that the computed type is actually a function type
+		funcType, ok := funcNodeType.(*types.FunctionType)
+		if !ok {
+			c.addError(node.Token.Line, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
+			node.SetComputedType(types.Any) // Result type is unknown/error
+			return
+		}
+
+		// 2. Check Arity (Number of arguments)
+		expectedArgCount := len(funcType.ParameterTypes)
+		actualArgCount := len(node.Arguments)
+		if actualArgCount != expectedArgCount {
+			c.addError(node.Token.Line, fmt.Sprintf("expected %d arguments, but got %d", expectedArgCount, actualArgCount))
+			// Continue checking assignable args anyway? Or stop?
+			// Let's stop checking args if arity is wrong, but still set return type.
+			node.SetComputedType(funcType.ReturnType)
+			return
+		}
+
+		// 3. Check Argument Types
+		for i, argNode := range node.Arguments {
+			c.visit(argNode) // Visit argument to compute its type
+			argType := argNode.GetComputedType()
+			paramType := funcType.ParameterTypes[i]
+
+			if argType == nil {
+				// Error computing argument type, can't check assignability
+				// Error already added, just skip assignability check for this arg.
+				continue
+			}
+
+			if !isAssignable(argType, paramType) {
+				argLine := 0 // TODO: Get line from argNode token
+				c.addError(argLine, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
+				// Continue checking other arguments even if one fails
+			}
+		}
+
+		// 4. Set Result Type
+		// If function returns 'never', maybe the call expression type should also be 'never'?
+		// if funcType.ReturnType == types.Never { ... }
+		node.SetComputedType(funcType.ReturnType)
 
 	case *parser.AssignmentExpression:
 		// TODO: Handle AssignmentExpression
