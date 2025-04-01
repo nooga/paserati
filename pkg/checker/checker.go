@@ -304,12 +304,14 @@ func (c *Checker) visit(node parser.Node) {
 
 		// 3. Determine the final type and check assignability
 		finalVariableType := declaredType // Renamed for clarity
-		if finalVariableType == nil {     // Infer from initializer
+		if finalVariableType == nil {     // Infer from initializer or lack thereof
 			if finalInitializerType != nil {
 				finalVariableType = finalInitializerType
 			} else {
-				// No annotation, no initializer - Error added below
-				finalVariableType = types.Any // Still assign Any to prevent cascade
+				// --- FIX: No annotation, no initializer -> infer Undefined ---
+				finalVariableType = types.Undefined // Assign Undefined, not Any
+				// Remove the error message for this valid case
+				// c.addError(node.Token.Line, fmt.Sprintf("cannot infer type for variable '%s'; missing initializer or type annotation", node.Name.Value))
 			}
 		} else { // Have annotation, check initializer assignment
 			if finalInitializerType != nil {
@@ -324,10 +326,10 @@ func (c *Checker) visit(node parser.Node) {
 			} // else: No initializer, annotation is enough
 		}
 
-		// Check for missing initializer/annotation (if not caught by Define error)
-		if node.Value == nil && node.TypeAnnotation == nil {
-			c.addError(node.Token.Line, fmt.Sprintf("cannot infer type for variable '%s'; missing initializer or type annotation", node.Name.Value))
-		}
+		// Check for missing initializer/annotation - This check is now redundant due to the fix above
+		// if node.Value == nil && node.TypeAnnotation == nil {
+		// 	 c.addError(node.Token.Line, fmt.Sprintf("cannot infer type for variable '%s'; missing initializer or type annotation", node.Name.Value))
+		// }
 
 		// 4. UPDATE variable type in the current environment with the final type
 		// We use Define again which will overwrite the temporary type.
