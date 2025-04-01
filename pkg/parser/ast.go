@@ -2,9 +2,10 @@ package parser
 
 import (
 	"bytes"
+	"fmt"
 	"paserati/pkg/lexer" // Need token types
+	"paserati/pkg/types" // Need types package for ComputedType
 	"strings"
-	// Add types package import later
 )
 
 // --- Interfaces ---
@@ -25,7 +26,24 @@ type Statement interface {
 type Expression interface {
 	Node
 	expressionNode() // Dummy method for distinguishing expression types
+	// --- NEW: Field to store resolved type ---
+	GetComputedType() types.Type
+	SetComputedType(t types.Type)
 }
+
+// --- Base struct for Expressions to hold ComputedType --- (Optional but helps)
+type BaseExpression struct {
+	ComputedType types.Type
+}
+
+func (be *BaseExpression) GetComputedType() types.Type {
+	return be.ComputedType
+}
+
+func (be *BaseExpression) SetComputedType(t types.Type) {
+	be.ComputedType = t
+}
+func (be *BaseExpression) expressionNode() {} // Implement dummy method
 
 // --- Program Node ---
 
@@ -56,8 +74,9 @@ func (p *Program) String() string {
 type LetStatement struct {
 	Token          lexer.Token // The lexer.LET token
 	Name           *Identifier // The variable name
-	TypeAnnotation Expression  // Optional type annotation (Expression for now, refine later)
+	TypeAnnotation Expression  // Parsed type node (e.g., *Identifier)
 	Value          Expression  // The expression being assigned
+	ComputedType   types.Type  // Stores the resolved type from TypeAnnotation
 }
 
 func (ls *LetStatement) statementNode()       {}
@@ -65,14 +84,22 @@ func (ls *LetStatement) TokenLiteral() string { return ls.Token.Literal }
 func (ls *LetStatement) String() string {
 	var out bytes.Buffer
 	out.WriteString(ls.TokenLiteral() + " ")
-	out.WriteString(ls.Name.String())
+	if ls.Name != nil {
+		out.WriteString(ls.Name.String())
+	}
 	if ls.TypeAnnotation != nil {
-		out.WriteString(" : ")
+		out.WriteString(": ")
 		out.WriteString(ls.TypeAnnotation.String())
 	}
 	out.WriteString(" = ")
 	if ls.Value != nil {
 		out.WriteString(ls.Value.String())
+	} else {
+		// Indicate undefined if no value is provided (affects computed type later)
+		// out.WriteString("undefined")
+	}
+	if ls.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ls.ComputedType.String()))
 	}
 	out.WriteString(";")
 	return out.String()
@@ -84,24 +111,27 @@ func (ls *LetStatement) String() string {
 type ConstStatement struct {
 	Token          lexer.Token // The lexer.CONST token
 	Name           *Identifier // The variable name
-	TypeAnnotation Expression  // Optional type annotation
+	TypeAnnotation Expression  // Parsed type node
 	Value          Expression  // The expression being assigned
+	ComputedType   types.Type  // Stores the resolved type from TypeAnnotation
 }
 
 func (cs *ConstStatement) statementNode()       {}
 func (cs *ConstStatement) TokenLiteral() string { return cs.Token.Literal }
 func (cs *ConstStatement) String() string {
-	// Similar implementation to LetStatement.String()
 	var out bytes.Buffer
 	out.WriteString(cs.TokenLiteral() + " ")
 	out.WriteString(cs.Name.String())
 	if cs.TypeAnnotation != nil {
-		out.WriteString(" : ")
+		out.WriteString(": ")
 		out.WriteString(cs.TypeAnnotation.String())
 	}
 	out.WriteString(" = ")
 	if cs.Value != nil {
 		out.WriteString(cs.Value.String())
+	}
+	if cs.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", cs.ComputedType.String()))
 	}
 	out.WriteString(";")
 	return out.String()
@@ -137,7 +167,11 @@ func (es *ExpressionStatement) statementNode()       {}
 func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
 func (es *ExpressionStatement) String() string {
 	if es.Expression != nil {
-		return es.Expression.String() // Often doesn't need trailing semicolon in representation
+		str := es.Expression.String()
+		if compType := es.Expression.GetComputedType(); compType != nil {
+			str += fmt.Sprintf(" /* type: %s */", compType.String())
+		}
+		return str
 	}
 	return ""
 }
@@ -146,18 +180,47 @@ func (es *ExpressionStatement) String() string {
 
 // Identifier represents an identifier (variable name, function name, type name).
 type Identifier struct {
-	Token lexer.Token // The lexer.IDENT token
-	Value string      // The name of the identifier
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.IDENT token
+	Value          string      // The name of the identifier
 }
 
 func (i *Identifier) expressionNode()      {}
 func (i *Identifier) TokenLiteral() string { return i.Token.Literal }
 func (i *Identifier) String() string       { return i.Value }
 
+// --- NEW: Parameter Node ---
+// Represents a function parameter with an optional type annotation.
+// <Name> : <TypeAnnotation>
+type Parameter struct {
+	Token          lexer.Token // The token of the parameter name
+	Name           *Identifier
+	TypeAnnotation Expression // Parsed type node (e.g., *Identifier)
+	ComputedType   types.Type // Stores the resolved type from TypeAnnotation
+}
+
+func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
+func (p *Parameter) TokenLiteral() string { return p.Token.Literal }
+func (p *Parameter) String() string {
+	var out bytes.Buffer
+	if p.Name != nil {
+		out.WriteString(p.Name.String())
+	}
+	if p.TypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(p.TypeAnnotation.String())
+	}
+	if p.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", p.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // BooleanLiteral represents `true` or `false`.
 type BooleanLiteral struct {
-	Token lexer.Token // The lexer.TRUE or lexer.FALSE token
-	Value bool
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.TRUE or lexer.FALSE token
+	Value          bool
 }
 
 func (b *BooleanLiteral) expressionNode()      {}
@@ -166,8 +229,9 @@ func (b *BooleanLiteral) String() string       { return b.Token.Literal }
 
 // NumberLiteral represents numeric literals (integers or floats).
 type NumberLiteral struct {
-	Token lexer.Token // The lexer.NUMBER token
-	Value float64     // Store as float64 for simplicity
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.NUMBER token
+	Value          float64     // Store as float64 for simplicity
 }
 
 func (n *NumberLiteral) expressionNode()      {}
@@ -176,8 +240,9 @@ func (n *NumberLiteral) String() string       { return n.Token.Literal }
 
 // StringLiteral represents string literals.
 type StringLiteral struct {
-	Token lexer.Token // The lexer.STRING token
-	Value string
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.STRING token
+	Value          string
 }
 
 func (s *StringLiteral) expressionNode()      {}
@@ -186,7 +251,8 @@ func (s *StringLiteral) String() string       { return s.Token.Literal } // Mayb
 
 // NullLiteral represents the `null` keyword.
 type NullLiteral struct {
-	Token lexer.Token // The lexer.NULL token
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.NULL token
 }
 
 func (nl *NullLiteral) expressionNode()      {}
@@ -194,15 +260,15 @@ func (nl *NullLiteral) TokenLiteral() string { return nl.Token.Literal }
 func (nl *NullLiteral) String() string       { return nl.Token.Literal }
 
 // FunctionLiteral represents a function definition.
-// function <Name>(<Parameters>) : <ReturnType> { <Body> }
-// Or anonymous: function(<Parameters>) : <ReturnType> { <Body> }
+// function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
+// Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 type FunctionLiteral struct {
-	Token      lexer.Token   // The 'function' token
-	Name       *Identifier   // Optional function name
-	Parameters []*Identifier // List of parameter names (Identifier nodes)
-	// TODO: Add parameter types
-	ReturnType Expression      // Optional return type annotation
-	Body       *BlockStatement // Function body
+	BaseExpression                       // Embed base for ComputedType (Function type)
+	Token                lexer.Token     // The 'function' token
+	Name                 *Identifier     // Optional function name
+	Parameters           []*Parameter    // << MODIFIED
+	ReturnTypeAnnotation Expression      // << RENAMED & TYPE CHANGED
+	Body                 *BlockStatement // Function body
 }
 
 func (fl *FunctionLiteral) expressionNode()      {} // Functions can be expressions
@@ -211,7 +277,9 @@ func (fl *FunctionLiteral) String() string {
 	var out bytes.Buffer
 	params := []string{}
 	for _, p := range fl.Parameters {
-		params = append(params, p.String()) // Add type later
+		if p != nil {
+			params = append(params, p.String())
+		}
 	}
 	out.WriteString(fl.TokenLiteral())
 	if fl.Name != nil {
@@ -221,12 +289,17 @@ func (fl *FunctionLiteral) String() string {
 	out.WriteString("(")
 	out.WriteString(strings.Join(params, ", "))
 	out.WriteString(")")
-	if fl.ReturnType != nil {
-		out.WriteString(" : ")
-		out.WriteString(fl.ReturnType.String())
+	if fl.ReturnTypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(fl.ReturnTypeAnnotation.String())
+	}
+	if fl.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", fl.ComputedType.String()))
 	}
 	out.WriteString(" ")
-	out.WriteString(fl.Body.String())
+	if fl.Body != nil {
+		out.WriteString(fl.Body.String())
+	}
 	return out.String()
 }
 
@@ -234,10 +307,11 @@ func (fl *FunctionLiteral) String() string {
 // Note: For now, only assignment to identifiers is supported.
 // <Left Expression (Identifier)> = <Value Expression>
 type AssignmentExpression struct {
-	Token    lexer.Token // The assignment token (e.g., '=', '+=')
-	Operator string      // The operator literal (e.g., "=", "+=")
-	Left     Expression  // The target of the assignment (must be Identifier for now)
-	Value    Expression  // The value being assigned
+	BaseExpression             // Embed base for ComputedType (usually type of Value)
+	Token          lexer.Token // The assignment token (e.g., '=', '+=')
+	Operator       string      // The operator literal (e.g., "=", "+=")
+	Left           Expression  // The target of the assignment (must be Identifier for now)
+	Value          Expression  // The value being assigned
 }
 
 func (ae *AssignmentExpression) expressionNode()      {}
@@ -246,19 +320,23 @@ func (ae *AssignmentExpression) String() string {
 	var out bytes.Buffer
 	out.WriteString("(")
 	out.WriteString(ae.Left.String())
-	out.WriteString(" " + ae.Operator + " ") // Use the Operator field
+	out.WriteString(" " + ae.Operator + " ")
 	out.WriteString(ae.Value.String())
 	out.WriteString(")")
+	if ae.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ae.ComputedType.String()))
+	}
 	return out.String()
 }
 
 // UpdateExpression represents prefix or postfix increment/decrement (e.g., ++x, x--).
 // Currently restricted to identifiers as arguments.
 type UpdateExpression struct {
-	Token    lexer.Token // The '++' or '--' token
-	Operator string      // "++" or "--"
-	Argument Expression  // The expression being updated (e.g., Identifier)
-	Prefix   bool        // true if operator is prefix (++x), false if postfix (x++)
+	BaseExpression             // Embed base for ComputedType (usually number)
+	Token          lexer.Token // The '++' or '--' token
+	Operator       string      // "++" or "--"
+	Argument       Expression  // The expression being updated (e.g., Identifier)
+	Prefix         bool        // true if operator is prefix (++x), false if postfix (x++)
 }
 
 func (ue *UpdateExpression) expressionNode()      {}
@@ -272,32 +350,33 @@ func (ue *UpdateExpression) String() string {
 		out.WriteString(ue.Argument.String())
 		out.WriteString(ue.Operator)
 	}
+	if ue.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ue.ComputedType.String()))
+	}
 	return out.String()
 }
 
 // ArrowFunctionLiteral represents an arrow function definition.
-// (<Parameters>) => <BodyExpression>
-// Or: (<Parameters>) => { <BodyStatements> }
-// Or single param: Param => <BodyExpression | BodyStatements>
+// (<Parameters>) => <BodyExpression | BodyStatements>
 type ArrowFunctionLiteral struct {
-	Token      lexer.Token   // The '=>' token
-	Parameters []*Identifier // List of parameter names (Identifier nodes)
-	// TODO: Add parameter types if supported
-	Body Node // Can be Expression or *BlockStatement
+	BaseExpression              // Embed base for ComputedType (Function type)
+	Token          lexer.Token  // The '=>' token
+	Parameters     []*Parameter // << MODIFIED
+	Body           Node         // Can be Expression or *BlockStatement
 }
 
-func (afl *ArrowFunctionLiteral) expressionNode()      {}                           // Arrow functions are expressions
-func (afl *ArrowFunctionLiteral) TokenLiteral() string { return afl.Token.Literal } // Returns "=>"
+func (afl *ArrowFunctionLiteral) expressionNode()      {}
+func (afl *ArrowFunctionLiteral) TokenLiteral() string { return afl.Token.Literal }
 func (afl *ArrowFunctionLiteral) String() string {
 	var out bytes.Buffer
 	params := []string{}
 	for _, p := range afl.Parameters {
-		params = append(params, p.String())
+		if p != nil {
+			params = append(params, p.String())
+		}
 	}
 
-	// Formatting depends slightly on whether parens are required
-	// Simple heuristic: if not exactly one param, use parens.
-	if len(afl.Parameters) == 1 {
+	if len(afl.Parameters) == 1 && afl.Parameters[0] != nil && afl.Parameters[0].TypeAnnotation == nil {
 		out.WriteString(params[0])
 	} else {
 		out.WriteString("(")
@@ -306,8 +385,12 @@ func (afl *ArrowFunctionLiteral) String() string {
 	}
 
 	out.WriteString(" => ")
-	out.WriteString(afl.Body.String())
-
+	if afl.Body != nil {
+		out.WriteString(afl.Body.String())
+	}
+	if afl.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", afl.ComputedType.String()))
+	}
 	return out.String()
 }
 
@@ -322,21 +405,31 @@ func (bs *BlockStatement) statementNode()       {} // Can act as a statement
 func (bs *BlockStatement) TokenLiteral() string { return bs.Token.Literal }
 func (bs *BlockStatement) String() string {
 	var out bytes.Buffer
-	out.WriteString("{\n") // Start block
+	out.WriteString("{\n")
 	for _, s := range bs.Statements {
-		out.WriteString("\t" + s.String() + "\n") // Indent statements
+		if s != nil {
+			lines := strings.Split(s.String(), "\n")
+			for i, line := range lines {
+				out.WriteString("\t" + line)
+				if i < len(lines)-1 {
+					out.WriteString("\n")
+				}
+			}
+			out.WriteString("\n")
+		}
 	}
-	out.WriteString("}") // End block
+	out.WriteString("}")
 	return out.String()
 }
 
 // IfExpression represents an if/else conditional expression.
 // if (<Condition>) { <Consequence> } else { <Alternative> }
 type IfExpression struct {
-	Token       lexer.Token // The 'if' token
-	Condition   Expression
-	Consequence *BlockStatement
-	Alternative *BlockStatement // Optional
+	BaseExpression             // Embed base for ComputedType (Union of consequence/alternative types?)
+	Token          lexer.Token // The 'if' token
+	Condition      Expression
+	Consequence    *BlockStatement
+	Alternative    *BlockStatement // Optional
 }
 
 func (ie *IfExpression) expressionNode()      {}
@@ -344,12 +437,15 @@ func (ie *IfExpression) TokenLiteral() string { return ie.Token.Literal }
 func (ie *IfExpression) String() string {
 	var out bytes.Buffer
 	out.WriteString("if")
-	out.WriteString(ie.Condition.String()) // Might need parens around condition for clarity
+	out.WriteString(ie.Condition.String())
 	out.WriteString(" ")
 	out.WriteString(ie.Consequence.String())
 	if ie.Alternative != nil {
 		out.WriteString("else ")
 		out.WriteString(ie.Alternative.String())
+	}
+	if ie.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ie.ComputedType.String()))
 	}
 	return out.String()
 }
@@ -400,21 +496,17 @@ func (fs *ForStatement) String() string {
 	if fs.Initializer != nil {
 		out.WriteString(fs.Initializer.String())
 	} else {
-		// Add semicolon if initializer is missing but condition or update exists
 		if fs.Condition != nil || fs.Update != nil {
 			out.WriteString(";")
 		}
 	}
-	// Don't add semicolon automatically after initializer String(), assume it adds its own if needed (like ExpressionStatement)
-
 	if fs.Condition != nil {
-		out.WriteString(" ") // Space before condition if initializer existed
+		out.WriteString(" ")
 		out.WriteString(fs.Condition.String())
 	}
-	out.WriteString(";") // Always add semicolon after condition section
-
+	out.WriteString(";")
 	if fs.Update != nil {
-		out.WriteString(" ") // Space before update
+		out.WriteString(" ")
 		out.WriteString(fs.Update.String())
 	}
 	out.WriteString(") ")
@@ -469,9 +561,10 @@ func (dws *DoWhileStatement) String() string {
 // <operator><Right>
 // e.g., !true, -15
 type PrefixExpression struct {
-	Token    lexer.Token // The prefix token, e.g. ! or -
-	Operator string      // "!" or "-"
-	Right    Expression  // The expression to the right of the operator
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The prefix token, e.g. ! or -
+	Operator       string      // "!" or "-"
+	Right          Expression  // The expression to the right of the operator
 }
 
 func (pe *PrefixExpression) expressionNode()      {}
@@ -482,6 +575,9 @@ func (pe *PrefixExpression) String() string {
 	out.WriteString(pe.Operator)
 	out.WriteString(pe.Right.String())
 	out.WriteString(")")
+	if pe.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", pe.ComputedType.String()))
+	}
 	return out.String()
 }
 
@@ -489,10 +585,11 @@ func (pe *PrefixExpression) String() string {
 // <Left> <operator> <Right>
 // e.g., 5 + 5, x == y
 type InfixExpression struct {
-	Token    lexer.Token // The operator token, e.g. +
-	Left     Expression  // The expression to the left of the operator
-	Operator string      // e.g., "+", "-", "*", "/", "==", "!=", "<", ">"
-	Right    Expression  // The expression to the right of the operator
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The operator token, e.g. +
+	Left           Expression  // The expression to the left of the operator
+	Operator       string      // e.g., "+", "-", "*", "/", "==", "!=", "<", ">"
+	Right          Expression  // The expression to the right of the operator
 }
 
 func (ie *InfixExpression) expressionNode()      {}
@@ -504,6 +601,9 @@ func (ie *InfixExpression) String() string {
 	out.WriteString(" " + ie.Operator + " ")
 	out.WriteString(ie.Right.String())
 	out.WriteString(")")
+	if ie.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ie.ComputedType.String()))
+	}
 	return out.String()
 }
 
@@ -511,9 +611,10 @@ func (ie *InfixExpression) String() string {
 // <Function>(<Arguments>)
 // Function can be an identifier or a function literal.
 type CallExpression struct {
-	Token     lexer.Token  // The '(' token
-	Function  Expression   // Identifier or FunctionLiteral being called
-	Arguments []Expression // List of arguments
+	BaseExpression              // Embed base for ComputedType (Function's return type)
+	Token          lexer.Token  // The '(' token
+	Function       Expression   // Identifier or FunctionLiteral being called
+	Arguments      []Expression // List of arguments
 }
 
 func (ce *CallExpression) expressionNode()      {}
@@ -522,23 +623,29 @@ func (ce *CallExpression) String() string {
 	var out bytes.Buffer
 	args := []string{}
 	for _, a := range ce.Arguments {
-		args = append(args, a.String())
+		if a != nil {
+			args = append(args, a.String())
+		}
 	}
 
 	out.WriteString(ce.Function.String())
 	out.WriteString("(")
 	out.WriteString(strings.Join(args, ", "))
 	out.WriteString(")")
+	if ce.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ce.ComputedType.String()))
+	}
 	return out.String()
 }
 
 // TernaryExpression represents a conditional (ternary) expression.
 // <Condition> ? <Consequence> : <Alternative>
 type TernaryExpression struct {
-	Token       lexer.Token // The '?' token
-	Condition   Expression
-	Consequence Expression
-	Alternative Expression
+	BaseExpression             // Embed base for ComputedType (Union of consequence/alternative types?)
+	Token          lexer.Token // The '?' token
+	Condition      Expression
+	Consequence    Expression
+	Alternative    Expression
 }
 
 func (te *TernaryExpression) expressionNode()      {}
@@ -552,5 +659,8 @@ func (te *TernaryExpression) String() string {
 	out.WriteString(" : ")
 	out.WriteString(te.Alternative.String())
 	out.WriteString(")")
+	if te.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", te.ComputedType.String()))
+	}
 	return out.String()
 }
