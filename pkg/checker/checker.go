@@ -72,6 +72,12 @@ type Checker struct {
 	// TODO: Add Type Registry if needed
 	env    *Environment // Current type environment
 	errors []TypeError
+
+	// --- NEW: Context for checking function bodies ---
+	// Expected return type of the function currently being checked (set by explicit annotation).
+	currentExpectedReturnType types.Type
+	// List of types found in return statements within the current function (used for inference).
+	currentInferredReturnTypes []types.Type
 }
 
 // NewChecker creates a new type checker.
@@ -79,6 +85,9 @@ func NewChecker() *Checker {
 	return &Checker{
 		env:    NewEnvironment(), // Start with a global environment
 		errors: []TypeError{},
+		// Initialize function context fields to nil/empty
+		currentExpectedReturnType:  nil,
+		currentInferredReturnTypes: nil,
 	}
 }
 
@@ -309,10 +318,37 @@ func (c *Checker) visit(node parser.Node) {
 		node.ComputedType = declaredType
 
 	case *parser.ReturnStatement:
-		// TODO: Handle ReturnStatement
-		// 1. Visit ReturnValue to infer its type
-		// 2. Check if return type matches enclosing function's expected return type
-		c.visit(node.ReturnValue)
+		// --- UPDATED: Handle ReturnStatement ---
+		var actualReturnType types.Type = types.Undefined // Default if no return value
+		if node.ReturnValue != nil {
+			c.visit(node.ReturnValue)
+			actualReturnType = node.ReturnValue.GetComputedType()
+			if actualReturnType == nil {
+				// Error during value inference, treat as Any to avoid cascading errors?
+				actualReturnType = types.Any
+			}
+		}
+
+		// Check against expected type if available
+		if c.currentExpectedReturnType != nil {
+			if !isAssignable(actualReturnType, c.currentExpectedReturnType) {
+				line := 0 // TODO: Get line from return value token?
+				if node.ReturnValue != nil {
+					// Try to get line from expression node if possible
+					// line = node.ReturnValue.TokenLiteral() ... needs Token access
+				}
+				c.addError(line, fmt.Sprintf("cannot return type '%s'; expected type '%s'", actualReturnType.String(), c.currentExpectedReturnType.String()))
+			}
+		} else {
+			// No explicit annotation, collect for inference
+			// Ensure the slice exists (might be visiting return outside a function theoretically?)
+			if c.currentInferredReturnTypes != nil {
+				c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, actualReturnType)
+			} else {
+				// This case (return outside a function) should likely be a separate error?
+				// Or maybe caught by parser? For now, just ignore.
+			}
+		}
 
 	case *parser.BlockStatement:
 		// --- UPDATED: Handle Block Scope ---
@@ -447,23 +483,172 @@ func (c *Checker) visit(node parser.Node) {
 		c.visit(node.Alternative)
 
 	case *parser.FunctionLiteral:
-		// TODO: Handle FunctionLiteral
-		// - Process params, return type annotation
-		// - Create FunctionType
-		// - Check body
-		c.visit(node.Name) // Might be nil
-		for _, p := range node.Parameters {
-			c.visit(p)
+		// --- UPDATED: Handle FunctionLiteral ---
+		// 1. Save outer context
+		outerExpectedReturnType := c.currentExpectedReturnType
+		outerInferredReturnTypes := c.currentInferredReturnTypes
+
+		// 2. Resolve Parameter Types
+		paramTypes := []types.Type{}
+		paramNames := []*parser.Identifier{}
+		for _, param := range node.Parameters {
+			var paramType types.Type = types.Any // Default, USE INTERFACE TYPE
+			if param.TypeAnnotation != nil {
+				resolvedParamType := c.resolveTypeAnnotation(param.TypeAnnotation)
+				if resolvedParamType != nil {
+					paramType = resolvedParamType // Assign interface{} to interface{}
+				} // else: error already added by resolveTypeAnnotation
+			}
+			paramTypes = append(paramTypes, paramType)
+			paramNames = append(paramNames, param.Name)
+			// Set computed type on the parameter node itself
+			param.ComputedType = paramType
 		}
-		c.visit(node.ReturnTypeAnnotation) // Might be nil
+
+		// 3. Resolve Explicit Return Type Annotation & Set Context
+		expectedReturnType := c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
+		c.currentExpectedReturnType = expectedReturnType // May be nil
+		c.currentInferredReturnTypes = nil               // Reset for this function
+		if expectedReturnType == nil {
+			// Only allocate if we need to infer
+			c.currentInferredReturnTypes = []types.Type{}
+		}
+
+		// 4. Create function scope & define parameters
+		originalEnv := c.env
+		funcEnv := NewEnclosedEnvironment(originalEnv)
+		c.env = funcEnv
+		for i, nameNode := range paramNames {
+			if !funcEnv.Define(nameNode.Value, paramTypes[i]) {
+				// This shouldn't happen if parser prevents duplicate param names
+				c.addError(nameNode.Token.Line, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
+			}
+		}
+
+		// 5. Visit Body
 		c.visit(node.Body)
 
-	case *parser.ArrowFunctionLiteral:
-		// TODO: Handle ArrowFunctionLiteral
-		for _, p := range node.Parameters {
-			c.visit(p)
+		// 6. Determine Final Return Type (Inference)
+		var finalReturnType types.Type = expectedReturnType // USE INTERFACE TYPE
+		if finalReturnType == nil {                         // If no explicit annotation, infer
+			if len(c.currentInferredReturnTypes) == 0 {
+				finalReturnType = types.Undefined // Treat as void/undefined
+			} else {
+				// TODO: Find best common type. For now, use first or Any if multiple distinct.
+				finalReturnType = c.currentInferredReturnTypes[0] // Assign interface{} to interface{}
+				for _, typ := range c.currentInferredReturnTypes[1:] {
+					if typ != finalReturnType {
+						finalReturnType = types.Any // Fallback to Any if types differ
+						break
+					}
+				}
+			}
 		}
+		if finalReturnType == nil { // Should not happen, but safety check
+			finalReturnType = types.Any
+		}
+
+		// 7. Create FunctionType
+		funcType := &types.FunctionType{
+			ParameterTypes: paramTypes,
+			ReturnType:     finalReturnType,
+		}
+
+		// 8. Set ComputedType on the FunctionLiteral node
+		node.SetComputedType(funcType)
+
+		// 9. Define named function in the *outer* scope
+		if node.Name != nil {
+			if !originalEnv.Define(node.Name.Value, funcType) {
+				c.addError(node.Name.Token.Line, fmt.Sprintf("function '%s' already declared in this scope", node.Name.Value))
+			}
+		}
+
+		// 10. Restore outer environment and context
+		c.env = originalEnv
+		c.currentExpectedReturnType = outerExpectedReturnType
+		c.currentInferredReturnTypes = outerInferredReturnTypes
+
+	case *parser.ArrowFunctionLiteral:
+		// --- UPDATED: Handle ArrowFunctionLiteral (Similar to FunctionLiteral) ---
+		// 1. Save outer context
+		outerExpectedReturnType := c.currentExpectedReturnType
+		outerInferredReturnTypes := c.currentInferredReturnTypes
+
+		// 2. Resolve Parameter Types
+		paramTypes := []types.Type{}
+		paramNames := []*parser.Identifier{}
+		for _, param := range node.Parameters {
+			var paramType types.Type = types.Any // Default, USE INTERFACE TYPE
+			if param.TypeAnnotation != nil {
+				resolvedParamType := c.resolveTypeAnnotation(param.TypeAnnotation)
+				if resolvedParamType != nil {
+					paramType = resolvedParamType // Assign interface{} to interface{}
+				}
+			}
+			paramTypes = append(paramTypes, paramType)
+			paramNames = append(paramNames, param.Name)
+			param.ComputedType = paramType
+		}
+
+		// 3. Set Context (Arrow functions *cannot* have return type annotations)
+		c.currentExpectedReturnType = nil // Always infer for arrow
+		c.currentInferredReturnTypes = []types.Type{}
+
+		// 4. Create function scope & define parameters
+		originalEnv := c.env
+		funcEnv := NewEnclosedEnvironment(originalEnv)
+		c.env = funcEnv
+		for i, nameNode := range paramNames {
+			if !funcEnv.Define(nameNode.Value, paramTypes[i]) {
+				c.addError(nameNode.Token.Line, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
+			}
+		}
+
+		// 5. Visit Body
 		c.visit(node.Body)
+		var bodyType types.Type = types.Any
+		// Special handling for expression body
+		if exprBody, ok := node.Body.(parser.Expression); ok {
+			bodyType = exprBody.GetComputedType()
+			if bodyType == nil {
+				bodyType = types.Any
+			}
+			// If body is an expression, its type *is* the single inferred return type
+			// unless the body itself contains return statements (complex case).
+			// For now, assume expression body implies direct return of its value.
+			c.currentInferredReturnTypes = []types.Type{bodyType}
+		} // Else: Body is BlockStatement, returns handled by ReturnStatement visitor
+
+		// 6. Determine Final Return Type (Inference)
+		var finalReturnType types.Type = types.Undefined // Default for void, USE INTERFACE TYPE
+		if len(c.currentInferredReturnTypes) > 0 {
+			// TODO: Find best common type. For now, use first or Any if multiple distinct.
+			finalReturnType = c.currentInferredReturnTypes[0] // Assign interface{} to interface{}
+			for _, typ := range c.currentInferredReturnTypes[1:] {
+				if typ != finalReturnType {
+					finalReturnType = types.Any // Fallback to Any if types differ
+					break
+				}
+			}
+		} // else: No return statements found, stays Undefined
+		if finalReturnType == nil { // Safety check
+			finalReturnType = types.Any
+		}
+
+		// 7. Create FunctionType
+		funcType := &types.FunctionType{
+			ParameterTypes: paramTypes,
+			ReturnType:     finalReturnType,
+		}
+
+		// 8. Set ComputedType on the ArrowFunctionLiteral node
+		node.SetComputedType(funcType)
+
+		// 9. Restore outer environment and context
+		c.env = originalEnv
+		c.currentExpectedReturnType = outerExpectedReturnType
+		c.currentInferredReturnTypes = outerInferredReturnTypes
 
 	case *parser.CallExpression:
 		// TODO: Handle CallExpression
