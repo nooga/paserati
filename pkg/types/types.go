@@ -2,8 +2,6 @@ package types
 
 import "fmt"
 
-// TODO: Define type system (interfaces, structs for primitive types, object types, etc.)
-
 // Type is the interface implemented by all type representations.
 type Type interface {
 	// String returns a string representation of the type, suitable for debugging or printing.
@@ -46,20 +44,27 @@ var (
 
 // FunctionType represents the type of a function.
 type FunctionType struct {
-	ParameterTypes []Type // TODO: Parameter names?
+	ParameterTypes []Type
 	ReturnType     Type
 }
 
 func (ft *FunctionType) String() string {
-	// Basic representation for now
 	params := ""
 	for i, p := range ft.ParameterTypes {
 		if i > 0 {
 			params += ", "
 		}
-		params += p.String()
+		if p != nil { // Add nil check
+			params += p.String()
+		} else {
+			params += "<nil>"
+		}
 	}
-	return fmt.Sprintf("(%s) => %s", params, ft.ReturnType.String())
+	retTypeStr := "<nil>"
+	if ft.ReturnType != nil { // Add nil check
+		retTypeStr = ft.ReturnType.String()
+	}
+	return fmt.Sprintf("(%s) => %s", params, retTypeStr)
 }
 func (ft *FunctionType) typeNode() {}
 
@@ -69,7 +74,11 @@ type ArrayType struct {
 }
 
 func (at *ArrayType) String() string {
-	return fmt.Sprintf("%s[]", at.ElementType.String()) // Or use Array<T> syntax?
+	elemTypeStr := "<nil>"
+	if at.ElementType != nil { // Add nil check
+		elemTypeStr = at.ElementType.String()
+	}
+	return fmt.Sprintf("%s[]", elemTypeStr)
 }
 func (at *ArrayType) typeNode() {}
 
@@ -81,14 +90,17 @@ type ObjectType struct {
 }
 
 func (ot *ObjectType) String() string {
-	// Simple representation
 	props := ""
 	i := 0
 	for name, typ := range ot.Properties {
 		if i > 0 {
 			props += "; "
 		}
-		props += fmt.Sprintf("%s: %s", name, typ.String())
+		typStr := "<nil>"
+		if typ != nil { // Add nil check
+			typStr = typ.String()
+		}
+		props += fmt.Sprintf("%s: %s", name, typStr)
 		i++
 	}
 	return fmt.Sprintf("{ %s }", props)
@@ -102,6 +114,6 @@ type AliasType struct {
 }
 
 func (at *AliasType) String() string {
-	return at.Name // Simply return the alias name
+	return at.Name
 }
 func (at *AliasType) typeNode() {}
