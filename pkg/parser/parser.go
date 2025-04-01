@@ -568,6 +568,16 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 
 	// Current token is RBRACE, don't consume it here, let the caller (e.g. parseFunctionLiteral) handle it or the main loop advance.
 
+	// --- DEBUG: Log block state before returning ---
+	statementsPtr := &block.Statements // Get pointer to the slice header itself
+	fmt.Printf("// [Parser Debug] Returning Block: Ptr=%p, Statements Slice Header Ptr=%p", block, statementsPtr)
+	if block.Statements == nil {
+		fmt.Printf(", Statements=nil\n")
+	} else {
+		fmt.Printf(", Statements.Len=%d\n", len(block.Statements))
+	}
+	// --- END DEBUG ---
+
 	return block
 }
 
@@ -756,7 +766,26 @@ func (p *Parser) parseIfExpression() Expression {
 
 		} else if p.expectPeek(lexer.LBRACE) { // Standard 'else { ... }'
 			debugPrint("parseIfExpression parsing standard 'else' block...")
-			expr.Alternative = p.parseBlockStatement()
+			// Call parseBlockStatement first before assigning
+			alternativeBlock := p.parseBlockStatement()
+
+			// --- DEBUG: Log state of block BEFORE assignment ---
+			fmt.Printf("// [Parser IfExpr] Assigning Alternative: BlockPtr=%p", alternativeBlock)
+			if alternativeBlock != nil {
+				statementsPtr := &alternativeBlock.Statements // Get pointer to the slice header
+				fmt.Printf(", StmtSliceHeaderPtr=%p", statementsPtr)
+				if alternativeBlock.Statements == nil {
+					fmt.Printf(", Statements=nil\n")
+				} else {
+					fmt.Printf(", Statements.Len=%d\n", len(alternativeBlock.Statements))
+				}
+			} else {
+				fmt.Printf(", Block=nil\n")
+			}
+			// --- END DEBUG ---
+
+			expr.Alternative = alternativeBlock // Assign the parsed block
+
 			if expr.Alternative == nil {
 				return nil
 			} // <<< NIL CHECK

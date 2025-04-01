@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 )
@@ -40,10 +41,11 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 
 // Define adds a new type binding to the current environment scope.
 // It returns false if the name is already defined *in this specific scope*.
+// --- FIX: Allow overwriting in the same scope to handle updates ---
 func (e *Environment) Define(name string, typ types.Type) bool {
-	if _, exists := e.symbols[name]; exists {
-		return false // Already defined in this scope
-	}
+	// if _, exists := e.symbols[name]; exists {
+	// 	 return false // Already defined in this scope - REMOVED TO ALLOW UPDATES
+	// }
 	e.symbols[name] = typ
 	return true
 }
@@ -51,18 +53,35 @@ func (e *Environment) Define(name string, typ types.Type) bool {
 // Resolve looks up a name in the current environment and its outer scopes.
 // Returns the type and true if found, otherwise nil and false.
 func (e *Environment) Resolve(name string) (types.Type, bool) {
+	// --- DEBUG ---
+	fmt.Printf("// [Env Resolve] env=%p, name='%s', outer=%p\n", e, name, e.outer) // Log entry
+	if e == nil {
+		fmt.Printf("// [Env Resolve] ERROR: Attempted to resolve '%s' on nil environment!\n", name)
+		// Prevent panic, but this indicates a bug elsewhere.
+		return nil, false
+	}
+	if e.symbols == nil {
+		fmt.Printf("// [Env Resolve] ERROR: env %p has nil symbols map!\n", e)
+		// Prevent panic, indicate bug.
+		return nil, false
+	}
+	// --- END DEBUG ---
+
 	// Check current scope first
 	typ, ok := e.symbols[name]
 	if ok {
+		fmt.Printf("// [Env Resolve] Found '%s' in env %p\n", name, e) // DEBUG
 		return typ, true
 	}
 
 	// If not found and there's an outer scope, check there recursively
 	if e.outer != nil {
+		fmt.Printf("// [Env Resolve] '%s' not in env %p, checking outer %p...\n", name, e, e.outer) // DEBUG
 		return e.outer.Resolve(name)
 	}
 
 	// Not found in any scope
+	fmt.Printf("// [Env Resolve] '%s' not found in env %p (no outer)\n", name, e) // DEBUG
 	return nil, false
 }
 
@@ -78,6 +97,7 @@ type Checker struct {
 	currentExpectedReturnType types.Type
 	// List of types found in return statements within the current function (used for inference).
 	currentInferredReturnTypes []types.Type
+	computedTypes              map[parser.Node]types.Type // Store computed types for nodes
 }
 
 // NewChecker creates a new type checker.
@@ -88,6 +108,7 @@ func NewChecker() *Checker {
 		// Initialize function context fields to nil/empty
 		currentExpectedReturnType:  nil,
 		currentInferredReturnTypes: nil,
+		computedTypes:              make(map[parser.Node]types.Type), // Initialize the map
 	}
 }
 
@@ -151,7 +172,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 // isAssignable checks if a value of type `source` can be assigned to a variable
 // of type `target`.
 // TODO: Expand significantly for structural typing, unions, intersections etc.
-func isAssignable(source, target types.Type) bool {
+func (c *Checker) isAssignable(source, target types.Type) bool {
 	if source == nil || target == nil {
 		// Cannot determine assignability if one type is unknown/error
 		// Defaulting to true might hide errors, false seems safer.
@@ -203,6 +224,9 @@ func (c *Checker) visit(node parser.Node) {
 	if node == nil {
 		return
 	}
+	// --- DEBUG: Log entry and current env ---
+	fmt.Printf("// [Checker Visit Enter] Node: %T, Env: %p\n", node, c.env)
+	// --- END DEBUG ---
 
 	// Dispatch based on node type
 	switch node := node.(type) {
@@ -219,119 +243,158 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.LetStatement:
 		// --- UPDATED: Handle LetStatement ---
-		var declaredType types.Type = types.Any // Default to Any, use interface type
-
-		// 1. Resolve TypeAnnotation to types.Type
+		// 1. Handle Type Annotation (if present)
+		var declaredType types.Type
 		if node.TypeAnnotation != nil {
-			resolvedAnnotationType := c.resolveTypeAnnotation(node.TypeAnnotation)
-			if resolvedAnnotationType == nil {
-				// Error resolving annotation, stop processing this statement
-				return
-			}
-			declaredType = resolvedAnnotationType // Assign interface to interface
-		}
-
-		// 2. Visit Value expression to infer its type
-		var initializerType types.Type
-		if node.Value != nil {
-			c.visit(node.Value)
-			initializerType = node.Value.GetComputedType()
-			if initializerType == nil {
-				initializerType = types.Any
-			}
-		}
-
-		// 3. Determine final type and check assignability
-		if node.TypeAnnotation != nil {
-			// Annotation present
-			if node.Value != nil {
-				// Both annotation and initializer: Check assignability
-				if !isAssignable(initializerType, declaredType) {
-					line := 0 // TODO: Get line from node.Value token
-					c.addError(line, fmt.Sprintf("cannot assign type '%s' to variable with type '%s'", initializerType.String(), declaredType.String()))
-				}
-			} // else: Annotation only, declaredType already set
+			declaredType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		} else {
-			// No annotation
-			if node.Value != nil {
-				// Initializer only: Infer type
-				declaredType = initializerType // Assign interface to interface
-			} // else: Neither annotation nor initializer: declaredType defaults to Any
+			declaredType = nil // Indicates type inference is needed
 		}
 
-		// Handle `let x;` case specifically -> should be undefined? Or Any? TS uses Any.
-		if node.TypeAnnotation == nil && node.Value == nil {
-			declaredType = types.Any // Explicitly set to Any for `let x;`
-		}
+		// --- FIX V2 for recursive functions assigned to variables ---
+		// Determine a preliminary type for the initializer if it's a function literal.
+		var preliminaryInitializerType types.Type = nil
+		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
+			// Extract param types (default Any)
+			prelimParamTypes := []types.Type{}
+			for _, p := range funcLit.Parameters {
+				if p.TypeAnnotation != nil {
+					pt := c.resolveTypeAnnotation(p.TypeAnnotation)
+					if pt != nil {
+						prelimParamTypes = append(prelimParamTypes, pt)
+					} else {
+						prelimParamTypes = append(prelimParamTypes, types.Any) // Error resolving, use Any
+					}
+				} else {
+					prelimParamTypes = append(prelimParamTypes, types.Any) // No annotation, use Any
+				}
+			}
+			// Extract return type annotation (can be nil)
+			prelimReturnType := c.resolveTypeAnnotation(funcLit.ReturnTypeAnnotation)
+			preliminaryInitializerType = &types.FunctionType{
+				ParameterTypes: prelimParamTypes,
+				ReturnType:     prelimReturnType,
+			}
+		} // TODO: Handle ArrowFunctionLiteral similarly if needed
 
-		// 4. Define Name in environment with the final determined type
-		if !c.env.Define(node.Name.Value, declaredType) {
+		// Temporarily define the variable name in the current scope before visiting the value.
+		// Use preliminary func type if available, then declared type, else Any.
+		tempType := preliminaryInitializerType
+		if tempType == nil {
+			tempType = declaredType // Use annotation if no prelim func type
+		}
+		if tempType == nil {
+			tempType = types.Any // Fallback to Any
+		}
+		if !c.env.Define(node.Name.Value, tempType) {
+			// If Define fails here, it's a true redeclaration error.
 			c.addError(node.Name.Token.Line, fmt.Sprintf("variable '%s' already declared in this scope", node.Name.Value))
 		}
+		fmt.Printf("// [Checker LetStmt] Temp Define '%s' as: %s\n", node.Name.Value, tempType.String()) // DEBUG
+		// --- END FIX V2 ---
 
-		// 5. Set the statement's computed type (useful for the declaration itself? maybe not)
-		node.ComputedType = declaredType
+		// 2. Handle Initializer (if present)
+		var finalInitializerType types.Type // Renamed for clarity
+		if node.Value != nil {
+			c.visit(node.Value) // Compute type of the initializer
+			finalInitializerType = c.GetComputedTypeOrAny(node.Value)
+		} else {
+			finalInitializerType = nil // No initializer
+		}
+
+		// 3. Determine the final type and check assignability
+		finalVariableType := declaredType // Renamed for clarity
+		if finalVariableType == nil {     // Infer from initializer
+			if finalInitializerType != nil {
+				finalVariableType = finalInitializerType
+			} else {
+				// No annotation, no initializer - Error added below
+				finalVariableType = types.Any // Still assign Any to prevent cascade
+			}
+		} else { // Have annotation, check initializer assignment
+			if finalInitializerType != nil {
+				if !c.isAssignable(finalInitializerType, finalVariableType) {
+					c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", finalInitializerType.String(), node.Name.Value, finalVariableType.String()))
+				}
+				// --- Check if inferred type matches annotation if both function types ---
+				// If declaredType was a func type and finalInitializerType is also a func type,
+				// we might want stricter checks here later (e.g., subtype compatibility)
+				// For now, isAssignable handles basic cases.
+				// If prelim was used, the finalInitializerType *should* be compatible or better.
+			} // else: No initializer, annotation is enough
+		}
+
+		// Check for missing initializer/annotation (if not caught by Define error)
+		if node.Value == nil && node.TypeAnnotation == nil {
+			c.addError(node.Token.Line, fmt.Sprintf("cannot infer type for variable '%s'; missing initializer or type annotation", node.Name.Value))
+		}
+
+		// 4. UPDATE variable type in the current environment with the final type
+		// We use Define again which will overwrite the temporary type.
+		// --- DEBUG: Check types before and after update ---
+		currentType, _ := c.env.Resolve(node.Name.Value)
+		fmt.Printf("// [Checker LetStmt] Updating '%s'. Current type: %s, Final type: %s\n", node.Name.Value, currentType.String(), finalVariableType.String())
+		// --- END DEBUG ---
+		if !c.env.Define(node.Name.Value, finalVariableType) { // Use finalVariableType
+			fmt.Printf("// [Checker LetStmt] WARNING: Re-Define failed unexpectedly for '%s'\n", node.Name.Value)
+		}
+		// --- DEBUG: Check type after update ---
+		updatedType, _ := c.env.Resolve(node.Name.Value)
+		fmt.Printf("// [Checker LetStmt] Updated '%s'. Type after update: %s\n", node.Name.Value, updatedType.String())
+		// --- END DEBUG ---
+
+		// Set computed type on the Name Identifier node itself
+		c.SetComputedType(node.Name, finalVariableType)
 
 	case *parser.ConstStatement:
-		// --- UPDATED: Handle ConstStatement (Similar to Let, but must have initializer) ---
-		var declaredType types.Type = types.Any // Default, use interface type
-
-		// 1. Resolve TypeAnnotation
+		// --- UPDATED: Handle ConstStatement (Very similar to LetStatement) ---
+		// 1. Handle Type Annotation (if present)
+		var declaredType types.Type
 		if node.TypeAnnotation != nil {
-			resolvedAnnotationType := c.resolveTypeAnnotation(node.TypeAnnotation)
-			if resolvedAnnotationType == nil {
-				return
-			}
-			declaredType = resolvedAnnotationType // Assign interface to interface
-		}
-
-		// 2. Visit Value expression (Const MUST have a value)
-		if node.Value == nil {
-			// This should be caught by the parser, but double-check.
-			c.addError(node.Token.Line, fmt.Sprintf("const declaration '%s' must be initialized", node.Name.Value))
-			return
-		}
-		c.visit(node.Value)
-		initializerType := node.Value.GetComputedType()
-		if initializerType == nil {
-			initializerType = types.Any // Default to Any if inference failed
-		}
-
-		// 3. Determine final type and check assignability
-		if node.TypeAnnotation != nil {
-			// Annotation present: Check assignability
-			if !isAssignable(initializerType, declaredType) {
-				line := 0 // TODO: Get line from node.Value token
-				c.addError(line, fmt.Sprintf("cannot assign type '%s' to const variable with type '%s'", initializerType.String(), declaredType.String()))
-			}
+			declaredType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		} else {
-			// No annotation: Infer type from initializer
-			declaredType = initializerType // Assign interface to interface
+			declaredType = nil // Indicates type inference is needed
 		}
 
-		// 4. Define Name in environment
-		if !c.env.Define(node.Name.Value, declaredType) {
-			c.addError(node.Name.Token.Line, fmt.Sprintf("const variable '%s' already declared in this scope", node.Name.Value))
+		// 2. Handle Initializer (Must be present for const)
+		var initializerType types.Type
+		if node.Value != nil {
+			c.visit(node.Value) // Compute type of the initializer
+			initializerType = c.GetComputedTypeOrAny(node.Value)
+		} else {
+			// Constants MUST be initialized
+			c.addError(node.Token.Line, fmt.Sprintf("const declaration '%s' must be initialized", node.Name.Value))
+			initializerType = types.Any // Assign Any to prevent further cascading errors downstream
 		}
 
-		// 5. Set statement's computed type
-		node.ComputedType = declaredType
+		// 3. Determine the final type and check assignability
+		finalType := declaredType
+		if finalType == nil { // Infer from initializer
+			finalType = initializerType // Since initializer is mandatory
+		} else { // Have annotation, check initializer assignment
+			if !c.isAssignable(initializerType, finalType) {
+				c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", initializerType.String(), node.Name.Value, finalType.String()))
+			}
+		}
+
+		// 4. Define variable in the current environment
+		if !c.env.Define(node.Name.Value, finalType) {
+			c.addError(node.Name.Token.Line, fmt.Sprintf("constant '%s' already declared in this scope", node.Name.Value))
+		}
+		// Set computed type on the Name Identifier node itself
+		c.SetComputedType(node.Name, finalType)
 
 	case *parser.ReturnStatement:
 		// --- UPDATED: Handle ReturnStatement ---
 		var actualReturnType types.Type = types.Undefined // Default if no return value
 		if node.ReturnValue != nil {
 			c.visit(node.ReturnValue)
-			actualReturnType = node.ReturnValue.GetComputedType()
-			if actualReturnType == nil {
-				// Error during value inference, treat as Any to avoid cascading errors?
-				actualReturnType = types.Any
-			}
+			actualReturnType = c.GetComputedTypeOrAny(node.ReturnValue)
 		}
 
 		// Check against expected type if available
 		if c.currentExpectedReturnType != nil {
-			if !isAssignable(actualReturnType, c.currentExpectedReturnType) {
+			if !c.isAssignable(actualReturnType, c.currentExpectedReturnType) {
 				line := 0 // TODO: Get line from return value token?
 				if node.ReturnValue != nil {
 					// Try to get line from expression node if possible
@@ -352,42 +415,104 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.BlockStatement:
 		// --- UPDATED: Handle Block Scope ---
+		// --- DEBUG ---
+		fmt.Printf("// [Checker Visit Block] Entering Block. Current Env: %p\n", c.env)
+		if c.env == nil {
+			panic("Checker env is nil before creating block scope!")
+		}
+		// --- END DEBUG ---
 		// 1. Create a new enclosed environment
 		originalEnv := c.env // Store the current environment
 		c.env = NewEnclosedEnvironment(originalEnv)
 
+		// --- DEBUG: Check node.Statements before ranging ---
+		if node.Statements == nil {
+			fmt.Printf("// [Checker Visit Block] WARNING: node.Statements is nil for Block %p\n", node)
+		} else {
+			fmt.Printf("// [Checker Visit Block] node.Statements length: %d\n", len(node.Statements))
+		}
+		// --- END DEBUG ---
+
 		// 2. Visit statements within the new scope
-		for _, stmt := range node.Statements {
+		for i, stmt := range node.Statements { // Add index 'i' for logging
+			// --- DEBUG ---
+			fmt.Printf("// [Checker Visit Block Loop] Index: %d, Stmt Type: %T, Stmt Ptr: %p\n", i, stmt, stmt)
+			if stmt == nil {
+				fmt.Printf("// [Checker Visit Block Loop] ERROR: Stmt at index %d is nil! Skipping.\n", i)
+				continue // Skip visiting nil statement
+			}
+			// --- END DEBUG ---
 			c.visit(stmt)
 		}
 
+		// --- DEBUG ---
+		fmt.Printf("// [Checker Visit Block] Exiting Block. Restoring Env: %p (from current %p)\n", originalEnv, c.env)
+		if originalEnv == nil {
+			panic("Checker originalEnv is nil before restoring block scope!")
+		}
+		// --- END DEBUG ---
 		// 3. Restore the outer environment
 		c.env = originalEnv
 
 	// --- Literal Expressions ---
 	case *parser.NumberLiteral:
-		node.SetComputedType(types.Number)
+		c.SetComputedType(node, types.Number)
 
 	case *parser.StringLiteral:
-		node.SetComputedType(types.String)
+		c.SetComputedType(node, types.String)
 
 	case *parser.BooleanLiteral:
-		node.SetComputedType(types.Boolean)
+		c.SetComputedType(node, types.Boolean)
 
 	case *parser.NullLiteral:
-		node.SetComputedType(types.Null)
+		c.SetComputedType(node, types.Null)
 
 	// --- Other Expressions ---
 	case *parser.Identifier:
+		// --- Check concrete pointer AFTER type switch ---
+		if node == nil {
+			fmt.Printf("// [Checker Debug] visit(Identifier): node is nil!\n") // DEBUG
+			return
+		}
+		// --- Log state BEFORE potentially problematic operations ---
+		fmt.Printf("// [Checker Debug] visit(Identifier): node=%p, Value='%s', Token={%s %q %d}\n", node, node.Value, node.Token.Type, node.Token.Literal, node.Token.Line) // DEBUG
+		fmt.Printf("// [Checker Debug] visit(Identifier): c.env=%p\n", c.env)                                                                                               // DEBUG
+
 		// --- UPDATED: Handle Identifier (Value Context Only) ---
 		// Assume this is visited in a value context.
 		// Type context identifiers are handled by resolveTypeAnnotation.
-		typ, found := c.env.Resolve(node.Value)
+
+		// Safety check for incomplete nodes from parser errors - *REMOVED* (covered by check above)
+		// if node == nil {
+		// 	return
+		// }
+
+		typ, found := c.env.Resolve(node.Value) // Use node.Value directly
 		if !found {
-			c.addError(node.Token.Line, fmt.Sprintf("undefined variable: %s", node.Value))
-			node.SetComputedType(types.Any) // Set to Any on error?
+			fmt.Printf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
+			// Use token from node if available, else use line 0
+			line := 0
+			tokenValue := "<unknown>"
+			// Check if Token is not the zero value before accessing Line
+			if node.Token != (lexer.Token{}) {
+				line = node.Token.Line
+				tokenValue = node.Value // Use node.Value directly
+			}
+			c.addError(line, fmt.Sprintf("undefined variable: %s", tokenValue))
+			// Set computed type if node itself is not nil (already checked)
+			c.SetComputedType(node, types.Any) // Set to Any on error?
 		} else {
-			node.SetComputedType(typ)
+			// --- DEBUG: Log raw type value immediately after resolve ---
+			// fmt.Printf("// [Checker Debug] Identifier: Resolved type for '%s': Ptr=%p, Value=%#v\n", node.Value, typ, typ) // Re-commented
+			// --- END DEBUG ---
+
+			fmt.Printf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String()) // DEBUG - Uncommented
+
+			// node is guaranteed non-nil here
+			c.SetComputedType(node, typ)
+			// --- DEBUG: Explicit panic before return ---
+			// panic(fmt.Sprintf("Intentional panic after setting type for Identifier '%s'", node.Value))
+			// --- END DEBUG ---
 		}
 
 	case *parser.PrefixExpression:
@@ -412,7 +537,7 @@ func (c *Checker) visit(node parser.Node) {
 				c.addError(line, fmt.Sprintf("unsupported prefix operator: %s", node.Operator))
 			}
 		} // else: Error already reported during operand check
-		node.SetComputedType(resultType)
+		c.SetComputedType(node, resultType)
 
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
@@ -449,7 +574,7 @@ func (c *Checker) visit(node parser.Node) {
 			case "==", "!=", "===", "!==":
 				// Basic check: allow comparing same primitive types
 				// TODO: More complex equality rules (null, undefined, coercion)
-				if isAssignable(leftType, rightType) || isAssignable(rightType, leftType) {
+				if c.isAssignable(leftType, rightType) || c.isAssignable(rightType, leftType) {
 					resultType = types.Boolean
 				} else {
 					// Warn or error on always-false comparison?
@@ -468,13 +593,34 @@ func (c *Checker) visit(node parser.Node) {
 				c.addError(line, fmt.Sprintf("unsupported infix operator: %s", node.Operator))
 			}
 		} // else: Error already reported during operand check
-		node.SetComputedType(resultType)
+		c.SetComputedType(node, resultType)
 
 	case *parser.IfExpression:
-		// TODO: Handle IfExpression
+		// --- UPDATED: Handle IfExpression ---
+		// 1. Check Condition
 		c.visit(node.Condition)
+		condType := c.GetComputedTypeOrAny(node.Condition) // Use checker's method
+		// Condition doesn't strictly *have* to be boolean in dynamically typed langs,
+		// but often desirable. Let's allow 'any' for now, could tighten later.
+		if condType != types.Any && condType != types.Boolean {
+			// Allow null/undefined? For now, let's be slightly stricter.
+			c.addError(node.Token.Line, fmt.Sprintf("if condition must be boolean or any, got %s", condType.String()))
+		}
+
+		// 2. Check Consequence block
 		c.visit(node.Consequence)
-		c.visit(node.Alternative)
+
+		// 3. Check Alternative block (if it exists)
+		if node.Alternative != nil {
+			c.visit(node.Alternative)
+		}
+
+		// 4. Determine overall type (tricky! depends on return/break/continue)
+		// For now, if expressions don't have a value themselves (unless ternary)
+		// They control flow. Let's assign Void for now, representing no value produced by the if itself.
+		// A more advanced checker might determine if both branches *must* return/throw,
+		// or compute a union type of the last expressions if they are treated as values.
+		c.SetComputedType(node, types.Void) // Use checker's method
 
 	case *parser.TernaryExpression:
 		// TODO: Handle TernaryExpression
@@ -515,6 +661,12 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		// 4. Create function scope & define parameters
+		// --- DEBUG ---
+		fmt.Printf("// [Checker Visit FuncLit] Creating Func Scope. Current Env: %p\n", c.env)
+		if c.env == nil {
+			panic("Checker env is nil before creating func scope!")
+		}
+		// --- END DEBUG ---
 		originalEnv := c.env
 		funcEnv := NewEnclosedEnvironment(originalEnv)
 		c.env = funcEnv
@@ -525,6 +677,21 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		}
 
+		// --- FIX for Recursion: Define function name in its own scope BEFORE visiting body ---
+		var initialFuncType *types.FunctionType
+		if node.Name != nil {
+			initialFuncType = &types.FunctionType{
+				ParameterTypes: paramTypes,         // We know param types already
+				ReturnType:     expectedReturnType, // Use explicit annotation if present, else nil
+			}
+			if !funcEnv.Define(node.Name.Value, initialFuncType) {
+				// This might happen if a param has the same name as the function
+				c.addError(node.Name.Token.Line, fmt.Sprintf("identifier '%s' already declared in this scope (parameter or function name conflict)", node.Name.Value))
+			}
+			fmt.Printf("// [Checker Visit FuncLit] Defined self '%s' in INNER Env: %p with initial type %s\n", node.Name.Value, funcEnv, initialFuncType.String()) // DEBUG
+		}
+		// --- END FIX ---
+
 		// 5. Visit Body
 		c.visit(node.Body)
 
@@ -534,37 +701,69 @@ func (c *Checker) visit(node parser.Node) {
 			if len(c.currentInferredReturnTypes) == 0 {
 				finalReturnType = types.Undefined // Treat as void/undefined
 			} else {
-				// TODO: Find best common type. For now, use first or Any if multiple distinct.
-				finalReturnType = c.currentInferredReturnTypes[0] // Assign interface{} to interface{}
-				for _, typ := range c.currentInferredReturnTypes[1:] {
-					if typ != finalReturnType {
-						finalReturnType = types.Any // Fallback to Any if types differ
-						break
+				// --- FIX: Improve inference for multiple returns ---
+				if len(c.currentInferredReturnTypes) == 1 {
+					finalReturnType = c.currentInferredReturnTypes[0]
+				} else {
+					firstType := c.currentInferredReturnTypes[0]
+					allSame := true
+					for _, typ := range c.currentInferredReturnTypes[1:] {
+						// TODO: Use proper type equality check later
+						if typ != firstType {
+							allSame = false
+							break
+						}
+					}
+					if allSame {
+						finalReturnType = firstType
+					} else {
+						// TODO: Implement Union type, fallback to Any for now
+						finalReturnType = types.Any
 					}
 				}
+				// --- END FIX ---
 			}
 		}
 		if finalReturnType == nil { // Should not happen, but safety check
 			finalReturnType = types.Any
 		}
 
-		// 7. Create FunctionType
-		funcType := &types.FunctionType{
-			ParameterTypes: paramTypes,
-			ReturnType:     finalReturnType,
+		// 7. Create or Update FunctionType
+		// Reuse the initial type if created, otherwise create new
+		var funcType *types.FunctionType
+		if initialFuncType != nil {
+			funcType = initialFuncType
+			funcType.ReturnType = finalReturnType // Update with the final inferred/checked type
+		} else {
+			funcType = &types.FunctionType{
+				ParameterTypes: paramTypes,
+				ReturnType:     finalReturnType,
+			}
 		}
 
 		// 8. Set ComputedType on the FunctionLiteral node
-		node.SetComputedType(funcType)
+		c.SetComputedType(node, funcType)
 
-		// 9. Define named function in the *outer* scope
+		// 9. Define named function in the *outer* scope (using final type)
 		if node.Name != nil {
-			if !originalEnv.Define(node.Name.Value, funcType) {
+			// --- DEBUG ---
+			fmt.Printf("// [Checker Visit FuncLit] Defining func '%s' in OUTER Env: %p with final type %s\n", node.Name.Value, originalEnv, funcType.String())
+			if originalEnv == nil {
+				panic("Checker originalEnv is nil before defining named func!")
+			}
+			// --- END DEBUG ---
+			if !originalEnv.Define(node.Name.Value, funcType) { // Use the final funcType here
 				c.addError(node.Name.Token.Line, fmt.Sprintf("function '%s' already declared in this scope", node.Name.Value))
 			}
 		}
 
 		// 10. Restore outer environment and context
+		// --- DEBUG ---
+		fmt.Printf("// [Checker Visit FuncLit] Exiting Func. Restoring Env: %p (from current %p)\n", originalEnv, c.env)
+		if originalEnv == nil {
+			panic("Checker originalEnv is nil before restoring func scope!")
+		}
+		// --- END DEBUG ---
 		c.env = originalEnv
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
@@ -596,6 +795,12 @@ func (c *Checker) visit(node parser.Node) {
 		c.currentInferredReturnTypes = []types.Type{}
 
 		// 4. Create function scope & define parameters
+		// --- DEBUG ---
+		fmt.Printf("// [Checker Visit ArrowFunc] Creating Func Scope. Current Env: %p\n", c.env)
+		if c.env == nil {
+			panic("Checker env is nil before creating arrow scope!")
+		}
+		// --- END DEBUG ---
 		originalEnv := c.env
 		funcEnv := NewEnclosedEnvironment(originalEnv)
 		c.env = funcEnv
@@ -610,10 +815,7 @@ func (c *Checker) visit(node parser.Node) {
 		var bodyType types.Type = types.Any
 		// Special handling for expression body
 		if exprBody, ok := node.Body.(parser.Expression); ok {
-			bodyType = exprBody.GetComputedType()
-			if bodyType == nil {
-				bodyType = types.Any
-			}
+			bodyType = c.GetComputedTypeOrAny(exprBody)
 			// If body is an expression, its type *is* the single inferred return type
 			// unless the body itself contains return statements (complex case).
 			// For now, assume expression body implies direct return of its value.
@@ -623,14 +825,27 @@ func (c *Checker) visit(node parser.Node) {
 		// 6. Determine Final Return Type (Inference)
 		var finalReturnType types.Type = types.Undefined // Default for void, USE INTERFACE TYPE
 		if len(c.currentInferredReturnTypes) > 0 {
-			// TODO: Find best common type. For now, use first or Any if multiple distinct.
-			finalReturnType = c.currentInferredReturnTypes[0] // Assign interface{} to interface{}
-			for _, typ := range c.currentInferredReturnTypes[1:] {
-				if typ != finalReturnType {
-					finalReturnType = types.Any // Fallback to Any if types differ
-					break
+			// --- FIX: Improve inference for multiple returns (same as FunctionLiteral) ---
+			if len(c.currentInferredReturnTypes) == 1 {
+				finalReturnType = c.currentInferredReturnTypes[0]
+			} else {
+				firstType := c.currentInferredReturnTypes[0]
+				allSame := true
+				for _, typ := range c.currentInferredReturnTypes[1:] {
+					// TODO: Use proper type equality check later
+					if typ != firstType {
+						allSame = false
+						break
+					}
+				}
+				if allSame {
+					finalReturnType = firstType
+				} else {
+					// TODO: Implement Union type, fallback to Any for now
+					finalReturnType = types.Any
 				}
 			}
+			// --- END FIX ---
 		} // else: No return statements found, stays Undefined
 		if finalReturnType == nil { // Safety check
 			finalReturnType = types.Any
@@ -642,10 +857,20 @@ func (c *Checker) visit(node parser.Node) {
 			ReturnType:     finalReturnType,
 		}
 
+		// --- DEBUG: Log type before setting ---
+		fmt.Printf("// [Checker ArrowFunc] Computed funcType: %s\n", funcType.String())
+		// --- END DEBUG ---
+
 		// 8. Set ComputedType on the ArrowFunctionLiteral node
-		node.SetComputedType(funcType)
+		c.SetComputedType(node, funcType)
 
 		// 9. Restore outer environment and context
+		// --- DEBUG ---
+		fmt.Printf("// [Checker Visit ArrowFunc] Exiting Arrow Func. Restoring Env: %p (from current %p)\n", originalEnv, c.env)
+		if originalEnv == nil {
+			panic("Checker originalEnv is nil before restoring arrow scope!")
+		}
+		// --- END DEBUG ---
 		c.env = originalEnv
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
@@ -654,11 +879,19 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle CallExpression ---
 		// 1. Check the expression being called
 		c.visit(node.Function)
-		funcNodeType := node.Function.GetComputedType()
-		if funcNodeType == nil {
-			// Error visiting the function expression itself
-			// Set result to Any and return, error was already added
-			node.SetComputedType(types.Any)
+		// --- DEBUG: Check if we return here ---
+		fmt.Printf("// [Checker CallExpr] Returned from visiting node.Function: %T\n", node.Function)
+		// --- END DEBUG ---
+		funcNodeType, ok := c.GetComputedType(node.Function) // Retrieve type stored by the identifier visit
+		if !ok {
+			// Error visiting the function expression itself? Or type not found?
+			funcIdent, isIdent := node.Function.(*parser.Identifier)
+			errMsg := "cannot determine type of called expression"
+			if isIdent {
+				errMsg = fmt.Sprintf("cannot determine type of called identifier '%s'", funcIdent.Value)
+			}
+			c.addError(node.Token.Line, errMsg)
+			c.SetComputedType(node, types.Any)
 			return
 		}
 
@@ -666,7 +899,7 @@ func (c *Checker) visit(node parser.Node) {
 		funcType, ok := funcNodeType.(*types.FunctionType)
 		if !ok {
 			c.addError(node.Token.Line, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
-			node.SetComputedType(types.Any) // Result type is unknown/error
+			c.SetComputedType(node, types.Any) // Result type is unknown/error
 			return
 		}
 
@@ -677,14 +910,14 @@ func (c *Checker) visit(node parser.Node) {
 			c.addError(node.Token.Line, fmt.Sprintf("expected %d arguments, but got %d", expectedArgCount, actualArgCount))
 			// Continue checking assignable args anyway? Or stop?
 			// Let's stop checking args if arity is wrong, but still set return type.
-			node.SetComputedType(funcType.ReturnType)
+			c.SetComputedType(node, funcType.ReturnType)
 			return
 		}
 
 		// 3. Check Argument Types
 		for i, argNode := range node.Arguments {
 			c.visit(argNode) // Visit argument to compute its type
-			argType := argNode.GetComputedType()
+			argType := c.GetComputedTypeOrAny(argNode)
 			paramType := funcType.ParameterTypes[i]
 
 			if argType == nil {
@@ -693,7 +926,7 @@ func (c *Checker) visit(node parser.Node) {
 				continue
 			}
 
-			if !isAssignable(argType, paramType) {
+			if !c.isAssignable(argType, paramType) {
 				argLine := 0 // TODO: Get line from argNode token
 				c.addError(argLine, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
 				// Continue checking other arguments even if one fails
@@ -703,7 +936,7 @@ func (c *Checker) visit(node parser.Node) {
 		// 4. Set Result Type
 		// If function returns 'never', maybe the call expression type should also be 'never'?
 		// if funcType.ReturnType == types.Never { ... }
-		node.SetComputedType(funcType.ReturnType)
+		c.SetComputedType(node, funcType.ReturnType)
 
 	case *parser.AssignmentExpression:
 		// TODO: Handle AssignmentExpression
@@ -753,4 +986,29 @@ func (c *Checker) visit(node parser.Node) {
 func (c *Checker) addError(line int, message string) {
 	// TODO: Get line number from token if available
 	c.errors = append(c.errors, TypeError{Line: line, Message: message})
+}
+
+// --- Type Helper Functions ---
+
+// SetComputedType associates a computed type with an AST node.
+func (c *Checker) SetComputedType(node parser.Node, typ types.Type) {
+	if node == nil {
+		return // Or panic? Avoid polluting map with nil nodes.
+	}
+	c.computedTypes[node] = typ
+}
+
+// GetComputedType retrieves the computed type associated with an AST node.
+// Returns the type and true if found, otherwise nil and false.
+func (c *Checker) GetComputedType(node parser.Node) (types.Type, bool) {
+	typ, ok := c.computedTypes[node]
+	return typ, ok
+}
+
+// GetComputedTypeOrAny retrieves the computed type or returns types.Any if none is found.
+func (c *Checker) GetComputedTypeOrAny(node parser.Node) types.Type {
+	if typ, ok := c.GetComputedType(node); ok {
+		return typ
+	}
+	return types.Any // Default to Any if no type was computed/stored
 }
