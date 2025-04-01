@@ -119,6 +119,33 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "IfElseIfTrue", input: "let r=0; if (false) { r=1; } else if (true) { r=2; } else { r=3; } r;", expect: "2"},
 		{name: "IfElseIfFalse", input: "let r=0; if (false) { r=1; } else if (false) { r=2; } else { r=3; } r;", expect: "3"},
 		{name: "IfElseIfChain", input: "let r=0; if (1>2) { r=1; } else if (2>3) { r=2; } else if (3>4) { r=3; } else { r=4; } r;", expect: "4"},
+
+		// --- Logical Operators (&&, ||) ---
+		{name: "Logical OR True L", input: "true || false;", expect: "true"},
+		{name: "Logical OR True R", input: "false || true;", expect: "true"},
+		{name: "Logical OR False", input: "false || false;", expect: "false"},
+		{name: "Logical OR ShortCircuit", input: "true || (1/0);", expect: "true"}, // Should not divide by zero
+		{name: "Logical OR Truthy Value L", input: `"a" || false;`, expect: "a"},
+		{name: "Logical OR Truthy Value R", input: `false || "b";`, expect: "b"},
+		{name: "Logical OR Falsey Values", input: `0 || "";`, expect: ""}, // Returns last falsey
+
+		{name: "Logical AND True", input: "true && true;", expect: "true"},
+		{name: "Logical AND False L", input: "false && true;", expect: "false"},
+		{name: "Logical AND False R", input: "true && false;", expect: "false"},
+		{name: "Logical AND ShortCircuit", input: "false && (1/0);", expect: "false"}, // Should not divide by zero
+		{name: "Logical AND Truthy Values", input: `"a" && 1;`, expect: "1"},          // Returns last truthy
+		{name: "Logical AND Falsey Value L", input: `0 && true;`, expect: "0"},
+		{name: "Logical AND Falsey Value R", input: `true && "";`, expect: ""},
+
+		// --- Nullish Coalescing (??) ---
+		{name: "Coalesce Null", input: "null ?? 10;", expect: "10"},
+		{name: "Coalesce Undefined", input: "let u; u ?? 20;", expect: "20"},
+		{name: "Coalesce False", input: "false ?? 30;", expect: "false"}, // false is not nullish
+		{name: "Coalesce Zero", input: "0 ?? 40;", expect: "0"},          // 0 is not nullish
+		{name: "Coalesce EmptyStr", input: `"" ?? 50;`, expect: ""},      // "" is not nullish
+		{name: "Coalesce Left Value", input: `"hello" ?? "world";`, expect: "hello"},
+		{name: "Coalesce Right Value", input: `null ?? "world";`, expect: "world"},
+		{name: "Coalesce Short Circuit", input: `1 ?? (1/0);`, expect: "1"}, // Should not divide by zero
 	}
 
 	for _, tc := range testCases {

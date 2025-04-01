@@ -237,6 +237,20 @@ func TestForStatement(t *testing.T) {
 			`,
 			expected: "4",
 		},
+		{
+			name: "For loop simple continue",
+			input: `
+				let result = 0;
+				for (let i=0; i < 5; i=i+1) {
+					if (i == 2) {
+						continue;
+					}
+					result = result + i; // Add 0, 1, 3, 4
+				}
+				result; // Expect 0 + 1 + 3 + 4 = 8
+			`,
+			expected: "8",
+		},
 		// TODO: Add tests for nested loops, continue, etc. later
 	}
 
@@ -249,6 +263,12 @@ func TestForStatement(t *testing.T) {
 			if chunk == nil {
 				t.Fatalf("Compilation succeeded but returned nil chunk")
 			}
+
+			// --- Added: Disassemble failing tests ---
+			if tt.name == "For loop with continue" || tt.name == "For loop simple continue" {
+				t.Logf("--- Disassembly for %s ---\n%s", tt.name, chunk.DisassembleChunk(tt.name))
+			}
+			// --- End Added ---
 
 			vmInstance := vm.NewVM()
 			oldStdout := os.Stdout

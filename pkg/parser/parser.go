@@ -7,7 +7,7 @@ import (
 )
 
 // --- Debug Flag ---
-const debugParser = true
+const debugParser = false
 
 func debugPrint(format string, args ...interface{}) {
 	if debugParser {
