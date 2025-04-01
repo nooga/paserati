@@ -3,8 +3,7 @@ package compiler
 import (
 	"fmt"
 	"math"
-
-	// For token line numbers
+	"paserati/pkg/checker" // <<< Added import
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
 )
@@ -78,16 +77,47 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	}
 }
 
-// Compile traverses the AST and generates bytecode.
-// Returns the generated chunk and any errors encountered.
+// Compile traverses the AST, performs type checking, and generates bytecode.
+// Returns the generated chunk and any errors encountered (including type errors).
 func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []string) {
+
+	// --- Type Checking Step ---
+	program, ok := node.(*parser.Program)
+	if !ok {
+		// Compiler currently expects the root node to be a Program.
+		// If not, it cannot type check. Return an immediate error.
+		// This might need adjustment if Compile is ever called on subtrees directly.
+		return nil, []string{"compiler error: Compile input must be *parser.Program for type checking"}
+	}
+
+	typeChecker := checker.NewChecker()
+	typeErrors := typeChecker.Check(program)
+	if len(typeErrors) > 0 {
+		// Found type errors. Convert them to strings and return immediately.
+		errorStrings := make([]string, len(typeErrors))
+		for i, err := range typeErrors {
+			errorStrings[i] = err.Error() // Use the Error() method from TypeError
+		}
+		// Optionally append to existing compiler errors? For now, just return type errors.
+		return nil, errorStrings
+	}
+	// --- End Type Checking Step ---
+
+	// --- Bytecode Compilation Step ---
 	// Reset is now implicit when a new Compiler is made for a function
 	// c.regAlloc.Reset()
 	// c.symbolTable = NewSymbolTable() // Reset symbol table for new compilation
 
-	err := c.compileNode(node)
+	// Type checking passed, proceed to compile the AST.
+	// Use the already type-checked program node.
+	err := c.compileNode(program)
 	if err != nil {
-		c.errors = append(c.errors, err.Error()) // Add the final error if compileNode returns one
+		c.errors = append(c.errors, err.Error()) // Add the final compile error if compileNode returns one
+	}
+
+	// Combine any remaining *compiler* errors (should be rare if type checking is robust)
+	if len(c.errors) > 0 {
+		return c.chunk, c.errors
 	}
 
 	// Emit final return instruction.
@@ -106,9 +136,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []string) {
 		c.emitOpCode(vm.OpReturnUndefined, 0)
 	}
 
-	// c.emitFinalReturn(0) // REMOVED - Replaced by the logic above
-
-	return c.chunk, c.errors
+	return c.chunk, nil // Return chunk and nil errors on success
 }
 
 // compileNode dispatches compilation to the appropriate method based on node type.
