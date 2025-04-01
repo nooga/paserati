@@ -192,6 +192,37 @@ func (p *Parser) parseStatement() Statement {
 	}
 }
 
+// --- NEW: Type Expression Parsing (Placeholder) ---
+
+// parseTypeExpression parses a type annotation.
+// TODO: Implement parsing for complex types (arrays, functions, objects, unions, etc.)
+func (p *Parser) parseTypeExpression() Expression {
+	// For now, assume types are simple identifiers (like 'number', 'string', 'MyType')
+	// Later, this will need to handle array types (T[]), function types ((T1, T2) => R),
+	// object types ({k: T}), unions (T | U), intersections (T & U), etc.
+	debugPrint("parseTypeExpression: START, cur='%s'", p.curToken.Literal)
+
+	// Basic case: Assume it's an identifier for now.
+	if p.curTokenIs(lexer.IDENT) {
+		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		// We don't advance token here, caller should have positioned curToken correctly
+		// and will advance after this call returns.
+		debugPrint("parseTypeExpression: Parsed IDENT '%s'", ident.Value)
+		return ident
+	}
+
+	// TODO: Add parsing for other type constructs (function types, array types etc.)
+	// Example placeholder for function type syntax `() => type`
+	// if p.curTokenIs(lexer.LPAREN) { ... parse function type ... }
+
+	// Error if it's not a recognized type syntax start
+	msg := fmt.Sprintf("line %d: unexpected token %s (%q) while parsing type annotation",
+		p.curToken.Line, p.curToken.Type, p.curToken.Literal)
+	p.errors = append(p.errors, msg)
+	debugPrint("parseTypeExpression: ERROR - %s", msg)
+	return nil
+}
+
 func (p *Parser) parseLetStatement() *LetStatement {
 	stmt := &LetStatement{Token: p.curToken}
 
@@ -201,12 +232,17 @@ func (p *Parser) parseLetStatement() *LetStatement {
 
 	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-	// Optional Type Annotation (simplistic for now: just expect an identifier if colon exists)
+	// Optional Type Annotation
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
-		p.nextToken() // Consume the type identifier token
-		// TODO: Proper type expression parsing
-		stmt.TypeAnnotation = p.parseIdentifier() // Assume simple identifier type for now
+		p.nextToken() // Consume token starting the type expression
+		// --- MODIFIED: Use parseTypeExpression ---
+		stmt.TypeAnnotation = p.parseTypeExpression()
+		if stmt.TypeAnnotation == nil {
+			return nil
+		} // Propagate parsing error
+	} else {
+		stmt.TypeAnnotation = nil // No type annotation provided
 	}
 
 	// Allow omitting = value, defaulting to undefined
@@ -227,7 +263,6 @@ func (p *Parser) parseLetStatement() *LetStatement {
 }
 
 func (p *Parser) parseConstStatement() *ConstStatement {
-	// Structure is identical to let for now
 	stmt := &ConstStatement{Token: p.curToken}
 
 	if !p.expectPeek(lexer.IDENT) {
@@ -239,9 +274,14 @@ func (p *Parser) parseConstStatement() *ConstStatement {
 	// Optional Type Annotation
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
-		p.nextToken() // Consume the type identifier token
-		// TODO: Proper type expression parsing
-		stmt.TypeAnnotation = p.parseIdentifier() // Assume simple identifier type for now
+		p.nextToken() // Consume the token starting the type expression
+		// --- MODIFIED: Use parseTypeExpression ---
+		stmt.TypeAnnotation = p.parseTypeExpression()
+		if stmt.TypeAnnotation == nil {
+			return nil
+		} // Propagate parsing error
+	} else {
+		stmt.TypeAnnotation = nil // No type annotation provided
 	}
 
 	if !p.expectPeek(lexer.ASSIGN) {
@@ -250,7 +290,6 @@ func (p *Parser) parseConstStatement() *ConstStatement {
 
 	p.nextToken() // Consume '='
 
-	// TODO: Parse the expression properly
 	stmt.Value = p.parseExpression(LOWEST)
 
 	// Optional semicolon - Consume it here
@@ -307,6 +346,11 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		return nil
 	}
 	leftExp := prefix()
+	// --- NIL CHECK AFTER PREFIX ---
+	if leftExp == nil {
+		debugPrint("parseExpression(prec=%d): prefix function for '%s' returned nil", precedence, p.curToken.Literal)
+		return nil // Prefix parsing failed, propagate nil
+	}
 	debugPrint("parseExpression(prec=%d): after prefix, leftExp=%T, cur='%s', peek='%s'", precedence, leftExp, p.curToken.Literal, p.peekToken.Literal)
 
 	for !p.peekTokenIs(lexer.SEMICOLON) && precedence < p.peekPrecedence() {
@@ -321,6 +365,13 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		debugPrint("parseExpression(prec=%d): after infix nextToken(), cur='%s' (%s)", precedence, p.curToken.Literal, p.curToken.Type)
 
 		leftExp = infix(leftExp)
+		// --- NIL CHECK AFTER INFIX ---
+		if leftExp == nil {
+			// This shouldn't happen if infix functions correctly handle their errors,
+			// but check defensively.
+			debugPrint("parseExpression(prec=%d): infix function returned nil", precedence)
+			return nil
+		}
 		debugPrint("parseExpression(prec=%d): after infix call, leftExp=%T, cur='%s', peek='%s'", precedence, leftExp, p.curToken.Literal, p.peekToken.Literal)
 	}
 
@@ -336,10 +387,18 @@ func (p *Parser) parseIdentifier() Expression {
 
 	if p.peekTokenIs(lexer.ARROW) {
 		debugPrint("parseIdentifier: Found '=>' after identifier '%s'", ident.Value)
-		// We need curToken to be '=>' for parseArrowFunctionBodyAndFinish
+		// This handles the case like: x => ...
+		// Here 'x' is the single parameter.
 		p.nextToken() // Consume the identifier token (which is curToken)
 		debugPrint("parseIdentifier: Consumed IDENT, cur is now '%s' (%s)", p.curToken.Literal, p.curToken.Type)
-		return p.parseArrowFunctionBodyAndFinish([]*Identifier{ident})
+
+		// --- FIX: Create Parameter node for shorthand arrow function ---
+		param := &Parameter{
+			Token:          ident.Token,
+			Name:           ident,
+			TypeAnnotation: nil, // No type annotation in this shorthand syntax
+		}
+		return p.parseArrowFunctionBodyAndFinish([]*Parameter{param})
 	}
 
 	debugPrint("parseIdentifier: Just identifier '%s', returning.", ident.Value)
@@ -377,21 +436,37 @@ func (p *Parser) parseFunctionLiteral() Expression {
 	// Optional Function Name
 	if p.peekTokenIs(lexer.IDENT) {
 		p.nextToken() // Consume name identifier
-		lit.Name = p.parseIdentifier().(*Identifier)
+		// Assuming parseIdentifier correctly returns an *Identifier here
+		nameIdent, ok := p.parseIdentifier().(*Identifier)
+		if !ok {
+			msg := fmt.Sprintf("line %d: expected identifier for function name, got %T", p.curToken.Line, nameIdent)
+			p.errors = append(p.errors, msg)
+			return nil
+		}
+		lit.Name = nameIdent
 	}
 
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
 
+	// --- MODIFIED: Use parseFunctionParameters ---
 	lit.Parameters = p.parseFunctionParameters() // Includes consuming RPAREN
+	if lit.Parameters == nil {
+		return nil
+	} // Propagate error
 
-	// Optional Return Type
+	// Optional Return Type Annotation
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
-		p.nextToken() // Consume the type identifier token
-		// TODO: Proper type expression parsing
-		lit.ReturnType = p.parseIdentifier() // Assume simple identifier type for now
+		p.nextToken() // Consume the token starting the type expression
+		// --- MODIFIED: Use parseTypeExpression ---
+		lit.ReturnTypeAnnotation = p.parseTypeExpression()
+		if lit.ReturnTypeAnnotation == nil {
+			return nil
+		} // Propagate parsing error
+	} else {
+		lit.ReturnTypeAnnotation = nil // No annotation provided
 	}
 
 	if !p.expectPeek(lexer.LBRACE) {
@@ -403,36 +478,72 @@ func (p *Parser) parseFunctionLiteral() Expression {
 	return lit
 }
 
-func (p *Parser) parseFunctionParameters() []*Identifier {
-	identifiers := []*Identifier{}
+// --- MODIFIED: parseFunctionParameters to handle Parameter struct & types ---
+func (p *Parser) parseFunctionParameters() []*Parameter {
+	parameters := []*Parameter{}
 
 	// Check for empty parameter list: function() { ... }
 	if p.peekTokenIs(lexer.RPAREN) {
 		p.nextToken() // Consume ')'
-		return identifiers
+		return parameters
 	}
 
-	p.nextToken() // Consume '(' or ',' to get to the first parameter
+	p.nextToken() // Consume '(' or ',' to get to the first parameter name
 
-	// First parameter
-	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	// TODO: Add parameter type parsing here (after colon)
-	identifiers = append(identifiers, ident)
+	// Parse first parameter
+	if !p.curTokenIs(lexer.IDENT) {
+		msg := fmt.Sprintf("line %d: expected identifier for parameter name, got %s", p.curToken.Line, p.curToken.Type)
+		p.errors = append(p.errors, msg)
+		return nil
+	}
+	param := &Parameter{Token: p.curToken}
+	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	// Check for Type Annotation
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Consume token starting the type expression
+		param.TypeAnnotation = p.parseTypeExpression()
+		if param.TypeAnnotation == nil {
+			return nil
+		} // Propagate error
+	} else {
+		param.TypeAnnotation = nil
+	}
+	parameters = append(parameters, param)
 
 	// Subsequent parameters
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // Consume ','
-		p.nextToken() // Consume identifier
-		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		// TODO: Add parameter type parsing here
-		identifiers = append(identifiers, ident)
+		p.nextToken() // Consume identifier for next param name
+
+		if !p.curTokenIs(lexer.IDENT) {
+			msg := fmt.Sprintf("line %d: expected identifier for parameter name after comma, got %s", p.curToken.Line, p.curToken.Type)
+			p.errors = append(p.errors, msg)
+			return nil
+		}
+		param := &Parameter{Token: p.curToken}
+		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+		// Check for Type Annotation
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume ':'
+			p.nextToken() // Consume token starting the type expression
+			param.TypeAnnotation = p.parseTypeExpression()
+			if param.TypeAnnotation == nil {
+				return nil
+			} // Propagate error
+		} else {
+			param.TypeAnnotation = nil
+		}
+		parameters = append(parameters, param)
 	}
 
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil // Expected closing parenthesis
 	}
 
-	return identifiers
+	return parameters
 }
 
 func (p *Parser) parseBlockStatement() *BlockStatement {
@@ -539,42 +650,30 @@ func (p *Parser) parseGroupedExpression() Expression {
 	startPos := p.l.CurrentPosition()
 	startCur := p.curToken
 	startPeek := p.peekToken
-	startErrors := len(p.errors) // Track error count for backtracking
+	startErrors := len(p.errors)
 	debugPrint("parseGroupedExpression: Starting at pos %d, cur='%s', peek='%s'", startPos, startCur.Literal, startPeek.Literal)
 
 	// --- Attempt to parse as Arrow Function Parameters ---
-	// Check if curToken is '('
 	if p.curTokenIs(lexer.LPAREN) {
 		debugPrint("parseGroupedExpression: Attempting arrow param parse...")
-		// Create a temporary params list - parseParameterList consumes tokens
-		// We need to call it carefully. It expects to be called when cur=LPAREN.
-		params := p.parseParameterList() // This consumes up to and including ')'
+		params := p.parseParameterList() // Consumes up to and including ')'
 
-		// Check if param parsing succeeded AND if '=>' follows
 		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
-			// Success! It's an arrow function.
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found '=>' next.", params)
 			p.nextToken() // Consume '=>', curToken is now '=>'
 			debugPrint("parseGroupedExpression: Consumed '=>', cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
-			// Remove any speculative errors added during param parsing try
 			p.errors = p.errors[:startErrors]
 			return p.parseArrowFunctionBodyAndFinish(params)
 		} else {
 			debugPrint("parseGroupedExpression: Failed arrow param parse (params=%v, cur='%s', peek='%s') or no '=>', backtracking...", params, p.curToken.Literal, p.peekToken.Type)
-			// Backtrack: Restore lexer and parser state
+			// --- PRECISE BACKTRACK ---
 			p.l.SetPosition(startPos) // Reset lexer position
-			p.curToken = startCur
-			p.peekToken = startPeek
-			// Reset token state by calling nextToken twice (like in NewParser)
-			// This is crucial to re-sync peekToken correctly after SetPosition.
-			// p.nextToken()
-			// p.nextToken()
-			// Simpler alternative: just call nextToken once after setting cur/peek?
-			// Let's try setting cur/peek and then letting the normal flow call nextToken.
-
-			// Remove any errors added during the failed attempt
+			p.curToken = startCur     // Restore original curToken
+			p.peekToken = startPeek   // Restore original peekToken
+			// DO NOT call nextToken() here, state should be exactly as before the attempt.
+			// The subsequent code expects curToken to be the starting '('.
 			p.errors = p.errors[:startErrors]
-			debugPrint("parseGroupedExpression: Backtrack complete. cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+			debugPrint("parseGroupedExpression: Precise Backtrack complete. cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
 		}
 	} else {
 		debugPrint("parseGroupedExpression: Not starting with '(', cannot be parenthesized arrow params.")
@@ -582,14 +681,16 @@ func (p *Parser) parseGroupedExpression() Expression {
 
 	// --- If not arrow function, parse as regular Grouped Expression ---
 	debugPrint("parseGroupedExpression: Parsing as regular grouped expression.")
-	if !p.curTokenIs(lexer.LPAREN) {
-		// Should already be handled by prefix dispatch, but check defensively
-		p.noPrefixParseFnError(lexer.LPAREN)
+	if !p.curTokenIs(lexer.LPAREN) { // Check curToken IS LPAREN after potential backtrack
+		p.noPrefixParseFnError(p.curToken.Type)
 		return nil
 	}
 	p.nextToken() // Consume '('
 	debugPrint("parseGroupedExpression: Consumed '(', cur='%s'", p.curToken.Literal)
 	exp := p.parseExpression(LOWEST)
+	if exp == nil {
+		return nil
+	} // Propagate error from inner expression
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil // Missing closing parenthesis
 	}
@@ -609,6 +710,9 @@ func (p *Parser) parseIfExpression() Expression {
 	p.nextToken() // Consume '('
 	debugPrint("parseIfExpression parsing condition...")
 	expr.Condition = p.parseExpression(LOWEST)
+	if expr.Condition == nil {
+		return nil
+	} // <<< NIL CHECK
 	debugPrint("parseIfExpression parsed condition: %s", expr.Condition.String())
 
 	if !p.expectPeek(lexer.RPAREN) {
@@ -621,6 +725,9 @@ func (p *Parser) parseIfExpression() Expression {
 
 	debugPrint("parseIfExpression parsing consequence block...")
 	expr.Consequence = p.parseBlockStatement()
+	if expr.Consequence == nil {
+		return nil
+	} // <<< NIL CHECK
 	debugPrint("parseIfExpression parsed consequence block.")
 
 	// Check for optional 'else' block
@@ -650,6 +757,9 @@ func (p *Parser) parseIfExpression() Expression {
 		} else if p.expectPeek(lexer.LBRACE) { // Standard 'else { ... }'
 			debugPrint("parseIfExpression parsing standard 'else' block...")
 			expr.Alternative = p.parseBlockStatement()
+			if expr.Alternative == nil {
+				return nil
+			} // <<< NIL CHECK
 			debugPrint("parseIfExpression parsed standard 'else' block.")
 		} else {
 			// Error: expected '{' or 'if' after 'else'
@@ -718,11 +828,11 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 
 // parseArrowFunctionBodyAndFinish completes parsing an arrow function.
 // It assumes the parameters have been parsed and the current token is '=>'.
-func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Identifier) Expression {
+func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter) Expression {
 	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v", p.curToken.Literal, p.curToken.Type, params)
 	arrowFunc := &ArrowFunctionLiteral{
 		Token:      p.curToken, // The '=>' token
-		Parameters: params,
+		Parameters: params,     // Use the passed-in parameters
 	}
 
 	p.nextToken() // Consume '=>' ONLY
@@ -743,18 +853,13 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Identifier) Expressio
 // parseParameterList parses a list of identifiers enclosed in parentheses.
 // Expects the current token to be '('. Consumes tokens up to and including the closing ')'.
 // Returns the list of identifier nodes or nil if parsing fails.
-func (p *Parser) parseParameterList() []*Identifier {
-	params := []*Identifier{}
+func (p *Parser) parseParameterList() []*Parameter {
+	params := []*Parameter{}
 
 	if !p.curTokenIs(lexer.LPAREN) { // Check current token IS LPAREN
-		msg := fmt.Sprintf("line %d: internal error: parseParameterList called without current token being '(", p.curToken.Line)
-		p.errors = append(p.errors, msg)
-		debugPrint("parseParameterList: Error - %s", msg)
-		return nil // Should not happen if called correctly
+		// This case should ideally not be hit if called correctly from parseGroupedExpression
+		return nil
 	}
-	// No nextToken here, caller consumes '(', or we are already past it.
-	// Let's assume the caller just ensures curToken is '(' before calling.
-	// So, we look at peekToken immediately for ')' or the first param.
 	debugPrint("parseParameterList: Starting, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
 
 	// Handle empty list: () => ...
@@ -765,16 +870,29 @@ func (p *Parser) parseParameterList() []*Identifier {
 	}
 
 	// Parse the first parameter
-	p.nextToken() // Move to the first parameter identifier
+	p.nextToken() // Move past '(' to the first parameter identifier
 	if !p.curTokenIs(lexer.IDENT) {
 		msg := fmt.Sprintf("line %d: expected identifier as parameter, got %s", p.curToken.Line, p.curToken.Type)
 		p.errors = append(p.errors, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
 		return nil
 	}
-	firstParam := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	params = append(params, firstParam)
-	debugPrint("parseParameterList: Parsed param '%s'", firstParam.Value)
+	param := &Parameter{Token: p.curToken}
+	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	// Check for Type Annotation
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Consume token starting the type expression
+		param.TypeAnnotation = p.parseTypeExpression()
+		if param.TypeAnnotation == nil {
+			return nil
+		} // Propagate error
+	} else {
+		param.TypeAnnotation = nil
+	}
+	params = append(params, param)
+	debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
 
 	// Parse subsequent parameters (comma-separated)
 	for p.peekTokenIs(lexer.COMMA) {
@@ -786,9 +904,22 @@ func (p *Parser) parseParameterList() []*Identifier {
 			debugPrint("parseParameterList: Error - %s", msg)
 			return nil
 		}
-		param := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		param := &Parameter{Token: p.curToken}
+		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+		// Check for Type Annotation
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume ':'
+			p.nextToken() // Consume token starting the type expression
+			param.TypeAnnotation = p.parseTypeExpression()
+			if param.TypeAnnotation == nil {
+				return nil
+			} // Propagate error
+		} else {
+			param.TypeAnnotation = nil
+		}
 		params = append(params, param)
-		debugPrint("parseParameterList: Parsed param '%s'", param.Value)
+		debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
 	}
 
 	// Expect closing parenthesis
@@ -814,6 +945,9 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 	// Parse the consequence expression
 	debugPrint("parseTernaryExpression parsing consequence...")
 	expr.Consequence = p.parseExpression(LOWEST) // Ternary has lowest precedence for right-hand side parts
+	if expr.Consequence == nil {
+		return nil
+	} // <<< NIL CHECK
 	debugPrint("parseTernaryExpression parsed consequence: %s", expr.Consequence.String())
 
 	if !p.expectPeek(lexer.COLON) {
@@ -826,6 +960,9 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 	// Parse the alternative expression
 	debugPrint("parseTernaryExpression parsing alternative...")
 	expr.Alternative = p.parseExpression(LOWEST) // Continue with low precedence
+	if expr.Alternative == nil {
+		return nil
+	} // <<< NIL CHECK
 	debugPrint("parseTernaryExpression parsed alternative: %s", expr.Alternative.String())
 
 	debugPrint("parseTernaryExpression finished, returning: %s", expr.String())
@@ -912,7 +1049,7 @@ func (p *Parser) parseForStatement() *ForStatement {
 			if p.peekTokenIs(lexer.COLON) {
 				p.nextToken()
 				p.nextToken() // Consume IDENT, ':', cur=Type
-				letStmt.TypeAnnotation = p.parseIdentifier()
+				letStmt.TypeAnnotation = p.parseTypeExpression()
 			}
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken()

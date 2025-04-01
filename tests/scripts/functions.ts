@@ -1,4 +1,4 @@
-// expect: 14
+// expect: 21
 
 let f = function g(x) {
   if (x < 7) {
@@ -14,4 +14,12 @@ let a = function b(x) {
   return x;
 };
 
-f(0) + a(0);
+function c() {
+  function d() {
+    return 1;
+  }
+  const e = () => 6;
+  return d() + e();
+}
+
+f(0) + a(0) + c();
