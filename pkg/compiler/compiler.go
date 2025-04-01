@@ -39,6 +39,9 @@ type Compiler struct {
 
 	// --- New: Stack for loop contexts ---
 	loopContextStack []*LoopContext
+
+	// --- New: Name of the function being compiled (for recursive lookup) ---
+	compilingFuncName string
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -52,11 +55,16 @@ func NewCompiler() *Compiler {
 		errors:             []string{},
 		lastExprRegValid:   false,                   // Initialize tracking fields
 		loopContextStack:   make([]*LoopContext, 0), // Initialize loop stack
+		compilingFuncName:  "<script>",              // Indicate top-level script context
 	}
 }
 
 // newFunctionCompiler creates a compiler instance specifically for a function body.
 func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
+	// Determine the best name for the function being compiled
+	// (Needs the node and nameHint from the call site... how to pass?)
+	// For now, let's leave it blank and set it later where it's called.
+	// We will set it inside compileFunctionLiteral / compileArrowFunctionLiteral
 	return &Compiler{
 		chunk:              vm.NewChunk(),                                                // Function gets its own chunk
 		regAlloc:           NewRegisterAllocator(),                                       // Function gets its own registers
@@ -65,6 +73,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		freeSymbols:        []*Symbol{},                                                  // Initialize empty free symbols slice
 		errors:             []string{},                                                   // Function compilation might have errors
 		loopContextStack:   make([]*LoopContext, 0),                                      // Function gets its own loop stack
+		compilingFuncName:  "",                                                           // Initialize as empty, set by caller
 		// lastExprReg tracking only needed for top-level
 	}
 }
@@ -196,6 +205,36 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		}
 		return c.compileDoWhileStatement(node)
 
+	case *parser.FunctionLiteral: // Handle Function *Declarations* (when used as a statement)
+		// This handles `function foo() {}` syntax at the statement level.
+		// Function literals used in expressions (e.g., assignments) are handled below.
+		if node.Name == nil {
+			// Anonymous function used as a statement - likely an error or useless code.
+			// For now, we could compile it but it won't be callable.
+			// Or return an error?
+			return fmt.Errorf("line %d: anonymous function used as statement", node.Token.Line)
+		}
+
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Function declarations don't produce a value
+		}
+
+		// --- Handle named function recursion ---
+		// 1. Define the function name temporarily.
+		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+
+		// 2. Compile the function literal body.
+		//    Pass the variable name (f) as the hint for the function object's name
+		//    if the function literal itself is anonymous.
+		err := c.compileFunctionLiteral(node, node.Name.Value) // Pass name as hint
+		if err != nil {
+			return err
+		}
+		valueReg := c.regAlloc.Current() // Register holding the closure
+
+		// 3. Update the symbol table entry.
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, valueReg)
+
 	// --- Expressions ---
 	case *parser.NumberLiteral:
 		destReg := c.regAlloc.Alloc()
@@ -219,45 +258,59 @@ func (c *Compiler) compileNode(node parser.Node) error {
 
 	case *parser.Identifier:
 		// Use currentSymbolTable for resolution
-		symbolRef, definingTable, ok := c.currentSymbolTable.Resolve(node.Value)
-		if !ok {
+		scopeName := "Function"
+		if c.currentSymbolTable.Outer == nil {
+			scopeName = "Global"
+		}
+		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
+		if !found {
 			return fmt.Errorf("line %d: undefined variable '%s'", node.Token.Line, node.Value)
 		}
 
 		// Check if the symbol is defined in an outer scope (a free variable)
-		if definingTable != c.currentSymbolTable {
-			// This is a free variable
-			freeVarIndex := c.addFreeSymbol(&symbolRef) // Add to list and get index
-			destReg := c.regAlloc.Alloc()               // Allocate register for the loaded value
+		isLocal := definingTable == c.currentSymbolTable
+
+		// --- NEW RECURSION CHECK --- // Revised Check
+		// Check if this is a recursive call identifier referencing the temp definition.
+		isRecursiveSelfCall := isLocal &&
+			symbolRef.Register == nilRegister && // Is it our temporary definition?
+			scopeName == "Function" // Are we compiling inside a function? // Removed check against c.compilingFuncName
+
+		if isRecursiveSelfCall {
+			// Treat as a free variable that captures the closure itself.
+			// This requires adding it to freeSymbols and emitting OpLoadFree.
+			// The closure emission logic already handles the self-capture part
+			// when it sees a free var matching funcName.
+			freeVarIndex := c.addFreeSymbol(&symbolRef)
+			destReg := c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
-			// fmt.Printf("// Emitted OpLoadFree R%d, Index %d (%s)\n", destReg, freeVarIndex, symbolRef.Name) // Keep for debug if needed
+		} else if !isLocal {
+			// This is a regular free variable (defined in an outer scope)
+			freeVarIndex := c.addFreeSymbol(&symbolRef)
+			destReg := c.regAlloc.Alloc()
+			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
+			c.emitByte(byte(destReg))
+			c.emitByte(byte(freeVarIndex))
 		} else {
-			// This is a local or global variable (handled by current stack frame)
-			// Current logic:
+			// This is a standard local or global variable (handled by current stack frame)
 			srcReg := symbolRef.Register
+			// --- PANIC CHECK --- Check if srcReg is the nilRegister unexpectedly
+			if srcReg == nilRegister {
+				// This panic should now be unreachable if the logic is correct
+				panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
+			}
+			// --- END PANIC CHECK ---
 			destReg := c.regAlloc.Alloc()
 			c.emitMove(destReg, srcReg, node.Token.Line)
 		}
-
-		// Note: c.regAlloc.Current() should point to the register holding the value
-		// whether loaded via OpMove or (eventually) OpLoadFree.
 
 	case *parser.PrefixExpression:
 		return c.compilePrefixExpression(node)
 
 	case *parser.InfixExpression:
 		return c.compileInfixExpression(node)
-
-	case *parser.FunctionLiteral:
-		// TODO: How should named function literals be handled as expressions?
-		// For now, assume they create a closure in the current scope.
-		name := "<anonymous>"
-		if node.Name != nil {
-			name = node.Name.Value
-		}
-		return c.compileFunctionLiteral(node, name)
 
 	case *parser.ArrowFunctionLiteral:
 		// Arrow functions are always anonymous expressions
@@ -291,27 +344,27 @@ func (c *Compiler) compileNode(node parser.Node) error {
 const nilRegister Register = 255 // Or another value guaranteed not to be used
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement) error {
-	var valueReg Register = nilRegister // Placeholder for uninitialized or function being defined
+	var valueReg Register = nilRegister
 	var err error
+	isValueFunc := false // Flag to track if value is a function literal
 
-	// Check if the value is a function literal BEFORE compiling value
 	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-		// --- Handle named function recursion ---
-		// 1. Define the function name in the current scope TEMPORARILY.
-		//    It points to an invalid register initially (nilRegister).
-		//    This allows the function body to resolve the name recursively.
+		isValueFunc = true
+		// --- Handle let f = function g() {} or let f = function() {} ---
+		// 1. Define the *variable name (f)* temporarily for potential recursion
+		//    within the function body (e.g., recursive anonymous function).
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
 		// 2. Compile the function literal body.
-		//    This resolves free vars (including potentially the recursive name).
-		//    It emits OpClosure into a specific register.
+		//    Pass the variable name (f) as the hint for the function object's name
+		//    if the function literal itself is anonymous.
 		err = c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
 			return err
 		}
-		valueReg = c.regAlloc.Current() // Register holding the *actual* closure object
+		valueReg = c.regAlloc.Current() // Register holding the closure
 
-		// 3. Update the symbol table entry to point to the correct closure register.
+		// 3. Update the symbol table entry for the *variable name (f)*.
 		c.currentSymbolTable.UpdateRegister(node.Name.Value, valueReg)
 
 	} else if node.Value != nil {
@@ -323,16 +376,16 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) error {
 		valueReg = c.regAlloc.Current()
 	} // else: node.Value is nil (implicit undefined handled below)
 
-	// Handle implicit undefined initialization if needed
-	if valueReg == nilRegister { // Check if still placeholder (only happens for `let x;`)
+	// Handle implicit undefined (`let x;`)
+	if valueReg == nilRegister {
 		undefReg := c.regAlloc.Alloc()
 		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 		valueReg = undefReg
-		// Define the symbol ONLY if it wasn't a function defined above
+		// Define symbol for the `let x;` case
 		c.currentSymbolTable.Define(node.Name.Value, valueReg)
-	} else if _, ok := node.Value.(*parser.FunctionLiteral); !ok {
-		// If it wasn't a function, define the symbol now.
-		// Function symbols were already defined/updated above.
+	} else if !isValueFunc {
+		// Define symbol ONLY for non-function values.
+		// Function assignments were handled above.
 		c.currentSymbolTable.Define(node.Name.Value, valueReg)
 	}
 
@@ -340,40 +393,57 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) error {
 }
 
 func (c *Compiler) compileConstStatement(node *parser.ConstStatement) error {
-	// Const *must* have an initializer, parser should enforce this, or we check here.
-	// Assuming parser guarantees node.Value is not nil for const.
-	if node.Value == nil { // Defensive check, might not be needed if parser guarantees it
-		return fmt.Errorf("line %d: constant '%s' must be initialized", node.Token.Line, node.Name.Value)
+	if node.Value == nil { /* ... error ... */
 	}
-	var valueReg Register = nilRegister // Placeholder for uninitialized
+	var valueReg Register = nilRegister
 	var err error
+	isValueFunc := false // Flag
 
-	// Check if the value is a function literal
 	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-		// --- Handle named function recursion ---
-		c.currentSymbolTable.Define(node.Name.Value, nilRegister) // Define temporarily
+		isValueFunc = true
+		// --- Handle const f = function g() {} or const f = function() {} ---
+		// 1. Define the *const name (f)* temporarily for recursion.
+		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+
+		// 2. Compile the function literal body, passing const name as hint.
 		err = c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
 			return err
 		}
 		valueReg = c.regAlloc.Current()
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, valueReg) // Update with correct register
+
+		// 3. Update the temporary definition for the *const name (f)*.
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, valueReg)
 	} else {
 		// Compile other value types normally
 		err = c.compileNode(node.Value)
 		if err != nil {
 			return err
 		}
-		valueReg = c.regAlloc.Current() // Get the register holding the computed value
+		valueReg = c.regAlloc.Current()
 	}
-	// Define the variable
-	c.currentSymbolTable.Define(node.Name.Value, valueReg) // Use currentSymbolTable
+
+	// Define symbol ONLY for non-function values.
+	// Const function assignments were handled above.
+	if !isValueFunc {
+		c.currentSymbolTable.Define(node.Name.Value, valueReg)
+	}
 	return nil
 }
 
 func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) error {
 	if node.ReturnValue != nil {
-		err := c.compileNode(node.ReturnValue)
+		var err error
+		// Check if the return value is a function literal itself
+		if funcLit, ok := node.ReturnValue.(*parser.FunctionLiteral); ok {
+			// Compile directly, bypassing the compileNode case for declarations.
+			// Pass empty hint as it's an anonymous function expression here.
+			err = c.compileFunctionLiteral(funcLit, "")
+		} else {
+			// Compile other expression types normally via compileNode
+			err = c.compileNode(node.ReturnValue)
+		}
+
 		if err != nil {
 			return err
 		}
@@ -382,10 +452,6 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) error {
 	} else {
 		// Return undefined implicitly using the optimized opcode
 		c.emitOpCode(vm.OpReturnUndefined, node.Token.Line)
-		// No need to load undefined into a register first
-		// undefReg := c.regAlloc.Alloc()
-		// c.emitLoadUndefined(undefReg, node.Token.Line)
-		// c.emitReturn(undefReg, node.Token.Line)
 	}
 	return nil
 }
@@ -449,6 +515,16 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
 		case "/":
 			c.emitDivide(destReg, leftReg, rightReg, line)
 			break
+		case "<=":
+			c.emitLessEqual(destReg, leftReg, rightReg, line)
+			break
+		case ">=":
+			// Implement as !(left < right)
+			tempReg := c.regAlloc.Alloc() // Temp register for (left < right)
+			c.emitLess(tempReg, leftReg, rightReg, line)
+			c.emitNot(destReg, tempReg, line) // destReg = !(tempReg)
+			// Allocator should ideally handle freeing tempReg if needed, or maybe release manually?
+			break
 		case "==":
 			c.emitEqual(destReg, leftReg, rightReg, line)
 			break
@@ -460,9 +536,6 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
 			break
 		case ">":
 			c.emitGreater(destReg, leftReg, rightReg, line)
-			break
-		case "<=":
-			c.emitLessEqual(destReg, leftReg, rightReg, line)
 			break
 		case "===":
 			c.emitStrictEqual(destReg, leftReg, rightReg, line)
@@ -623,6 +696,35 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	// 1. Create a new Compiler instance for the function body, linked to the current one
 	functionCompiler := newFunctionCompiler(c) // Pass `c` as the enclosing compiler
 
+	// --- Determine and set the function name being compiled ---
+	var determinedFuncName string
+	if nameHint != "" {
+		determinedFuncName = nameHint
+	} else if node.Name != nil {
+		determinedFuncName = node.Name.Value
+	} else {
+		determinedFuncName = "<anonymous>"
+	}
+	functionCompiler.compilingFuncName = determinedFuncName
+	// --- End Set Name ---
+
+	// --- NEW: Define inner name in inner scope for recursion ---
+	var funcNameForLookup string // Name used for potential recursive lookup
+	if node.Name != nil {
+		funcNameForLookup = node.Name.Value
+		// Define the function's own name within its scope temporarily
+		// This allows the name to be resolved locally during body compilation.
+		// It will be treated as a free variable pointing to the closure itself.
+		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
+	} else if nameHint != "" {
+		// If anonymous but assigned (e.g., let f = function() { f(); }),
+		// use the hint name for potential recursive calls.
+		funcNameForLookup = nameHint
+		// Define the hint name within the function's scope temporarily.
+		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
+	}
+	// --- END NEW ---
+
 	// 2. Define parameters in the function compiler's *enclosed* scope
 	for _, param := range node.Parameters {
 		reg := functionCompiler.regAlloc.Alloc()
@@ -654,16 +756,19 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	regSize := functionCompiler.regAlloc.MaxRegs()
 
 	// 5. Create the bytecode.Function object
-	funcName := nameHint                    // Use hint first
-	if funcName == "" && node.Name != nil { // Fallback to node.Name if hint is empty and node has one
+	var funcName string
+	if nameHint != "" { // Prioritize hint from let/const assignment
+		funcName = nameHint
+	} else if node.Name != nil { // Fallback to name from function keyword syntax
 		funcName = node.Name.Value
+	} else {
+		funcName = "<anonymous>" // Default for anonymous literals not assigned
 	}
 	funcObj := vm.Function{
 		Arity:        len(node.Parameters),
 		Chunk:        functionChunk,
-		Name:         funcName,
+		Name:         funcName, // Use determined name
 		RegisterSize: int(regSize),
-		// UpvalueCount: len(freeSymbols), // TODO: Add UpvalueCount field to vm.Function?
 	}
 
 	// 6. Add the function object to the *outer* compiler's constant pool.
@@ -671,14 +776,27 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	constIdx := c.chunk.AddConstant(funcValue) // Index of the function proto in outer chunk
 
 	// 7. Emit OpClosure in the *outer* chunk.
-	destReg := c.regAlloc.Alloc() // Register for the resulting closure object in the outer scope
+	destReg := c.regAlloc.Alloc()                                             // Register for the resulting closure object in the outer scope
+	fmt.Printf("// [Closure %s] Allocated destReg: R%d\n", funcName, destReg) // DEBUG
 	c.emitOpCode(vm.OpClosure, node.Token.Line)
 	c.emitByte(byte(destReg))
 	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
 	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
 
 	// Emit operands for each upvalue
-	for _, freeSym := range freeSymbols {
+	for i, freeSym := range freeSymbols {
+		fmt.Printf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcName, i, freeSym.Name, freeSym.Register, funcNameForLookup) // DEBUG
+
+		// --- Check for self-capture first (using funcNameForLookup) ---
+		if funcNameForLookup != "" && freeSym.Name == funcNameForLookup && freeSym.Register == nilRegister {
+			// This is the special self-capture case identified during body compilation.
+			fmt.Printf("// [Closure SelfCapture %s] Emitting isLocal=1, index=destReg=R%d\n", funcName, destReg) // DEBUG
+			c.emitByte(1)                                                                                        // isLocal = true (capture from the stack where the closure will be placed)
+			c.emitByte(byte(destReg))                                                                            // Index = the destination register of OpClosure
+			continue                                                                                             // Skip the normal lookup below
+		}
+		// --- END Check ---
+
 		// Resolve the symbol again in the *enclosing* compiler's context
 		// to determine if it's local there or needs to be fetched from an outer upvalue.
 		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
@@ -689,40 +807,23 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		}
 
 		if enclosingTable == c.currentSymbolTable {
+			fmt.Printf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcName, freeSym.Name, enclosingSymbol.Register) // DEBUG
 			// The free variable is local in the *direct* enclosing scope.
 			c.emitByte(1) // isLocal = true
-			// Check if this is the function capturing itself (recursion)
-			if freeSym.Name == funcName {
-				// Special case: Emit the *destination register* of OpClosure.
-				// This signals the VM to capture the closure being created.
-				c.emitByte(byte(destReg))
-			} else {
-				// Capture the value from the enclosing scope's actual register
-				c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
-			}
+			// Capture the value from the enclosing scope's actual register
+			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
 		} else {
 			// The free variable is also a free variable in the enclosing scope.
 			// We need to capture it from the enclosing scope's upvalues.
 			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(&enclosingSymbol) // Use the same helper
-			c.emitByte(0)                                           // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex))                    // Index = upvalue index in enclosing scope
+			enclosingFreeIndex := c.addFreeSymbol(&enclosingSymbol)                                                                                        // Use the same helper
+			fmt.Printf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcName, freeSym.Name, enclosingFreeIndex) // DEBUG
+			c.emitByte(0)                                                                                                                                  // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex))                                                                                                           // Index = upvalue index in enclosing scope
 		}
 	}
 
-	// Note: OpLoadConst is no longer emitted here. OpClosure creates the runtime value.
-
-	// Function definition using `let name = function(){}` or `const name = function(){}`
-	// is handled by compileLetStatement/compileConstStatement which define the symbol
-	// in the *outer* scope using the outer compiler's currentSymbolTable.
-	// They will now store the closure created by OpClosure.
-	// Only define the symbol here if the function was defined using `function name(){}` syntax.
-	if nameHint == "" && node.Name != nil {
-		// Define in the *outer* scope as well
-		c.currentSymbolTable.Define(node.Name.Value, destReg) // destReg now holds the closure
-	}
-
-	return nil // Return nil even if there were body errors, errors are collected
+	return nil // Return nil even if there were body errors, errors are collected in c.errors
 }
 
 func (c *Compiler) compileCallExpression(node *parser.CallExpression) error {
@@ -1009,7 +1110,6 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 		jumpInstructionEndPos := continuePos + 1 + 2 // OpCode + 16bit offset
 		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
 		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
-			// This should be rare, but good to check
 			return fmt.Errorf("internal compiler error: continue jump offset %d exceeds 16-bit limit at line %d", targetOffset, node.Token.Line)
 		}
 		// Manually write the 16-bit offset into the placeholder jump instruction
@@ -1338,20 +1438,22 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	jumpInstructionEndPos := operandStartPos + 2
 	offset := len(c.chunk.Code) - jumpInstructionEndPos
 
-	if offset > 65535 {
+	if offset > math.MaxInt16 || offset < math.MinInt16 { // Use math constants
 		// Handle error: jump offset too large
-		panic("Compiler error: jump offset exceeds 16 bits")
+		// TODO: Add proper error handling instead of panic
+		panic(fmt.Sprintf("Compiler error: jump offset %d exceeds 16-bit limit", offset))
 	}
 
 	// Write the 16-bit offset back into the placeholder bytes (Big Endian)
-	c.chunk.Code[operandStartPos] = byte(offset >> 8)
-	c.chunk.Code[operandStartPos+1] = byte(offset & 0xff)
+	c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)     // High byte
+	c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF) // Low byte
 }
 
 // compileArrowFunctionLiteral compiles an arrow function literal expression.
 func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) error {
 	// 1. Create a compiler for the function scope
 	funcCompiler := newFunctionCompiler(c)
+	funcCompiler.compilingFuncName = "<arrow>" // Set name for arrow functions
 
 	// 2. Define parameters in the function's symbol table
 	for _, p := range node.Parameters {
@@ -1368,16 +1470,16 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		if err != nil {
 			funcCompiler.errors = append(funcCompiler.errors, err.Error())
 		}
-		implicitReturnNeeded = false
+		implicitReturnNeeded = false // Block handles its own returns or falls through
 	case parser.Expression:
 		err := funcCompiler.compileNode(bodyNode)
 		if err != nil {
 			funcCompiler.errors = append(funcCompiler.errors, err.Error())
-			returnReg = 0
+			returnReg = 0 // Indicate error or inability to get result reg
 		} else {
 			returnReg = funcCompiler.regAlloc.Current()
 		}
-		implicitReturnNeeded = true
+		implicitReturnNeeded = true // Expression body needs implicit return
 	default:
 		funcCompiler.errors = append(funcCompiler.errors, fmt.Sprintf("invalid body type %T for arrow function", node.Body))
 		implicitReturnNeeded = false
@@ -1403,43 +1505,63 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	// 6. Create the function object
 	compiledFunc := vm.Function{
 		Chunk:        functionChunk,
-		Arity:        len(node.Parameters), // Corrected type to int
-		RegisterSize: int(regSize),         // Use MaxRegs() and cast to int
-		Name:         "<arrow>",
+		Arity:        len(node.Parameters),
+		RegisterSize: int(regSize),
+		Name:         "<arrow>", // Arrow functions are anonymous
 	}
 
 	// 7. Add function constant to the *enclosing* compiler (c)
-	funcValue := vm.NewFunction(&compiledFunc) // Use vm.NewFunction
-	constIdx := c.chunk.AddConstant(funcValue) // AddConstant only returns index
+	funcValue := vm.NewFunction(&compiledFunc)
+	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c)
-	destReg := c.regAlloc.Alloc() // Register for the closure in the outer scope
+	destReg := c.regAlloc.Alloc()                                                                   // Register for the resulting closure object in the outer scope
+	fmt.Printf("// [Closure %s] Allocated destReg: R%d\n", funcCompiler.compilingFuncName, destReg) // DEBUG
 	c.emitOpCode(vm.OpClosure, node.Token.Line)
 	c.emitByte(byte(destReg))
-	c.emitUint16(constIdx)
-	c.emitByte(byte(len(freeSymbols)))
+	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
+	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
 
-	// Emit operands for each upvalue, matching compileFunctionLiteral logic
-	for _, freeSym := range freeSymbols {
+	// Emit operands for each upvalue
+	for i, freeSym := range freeSymbols {
+		fmt.Printf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcCompiler.compilingFuncName, i, freeSym.Name, freeSym.Register, funcCompiler.compilingFuncName) // DEBUG
+
+		// --- Check for self-capture first (using funcNameForLookup) ---
+		if funcCompiler.compilingFuncName != "" && freeSym.Name == funcCompiler.compilingFuncName && freeSym.Register == nilRegister {
+			// This is the special self-capture case identified during body compilation.
+			fmt.Printf("// [Closure SelfCapture %s] Emitting isLocal=1, index=destReg=R%d\n", funcCompiler.compilingFuncName, destReg) // DEBUG
+			c.emitByte(1)                                                                                                              // isLocal = true (capture from the stack where the closure will be placed)
+			c.emitByte(byte(destReg))                                                                                                  // Index = the destination register of OpClosure
+			continue                                                                                                                   // Skip the normal lookup below
+		}
+		// --- END Check ---
+
 		// Resolve the symbol again in the *enclosing* compiler's context
+		// to determine if it's local there or needs to be fetched from an outer upvalue.
 		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
 		if !found {
+			// This should theoretically not happen if it was resolved during body compilation
+			// but handle defensively.
 			panic(fmt.Sprintf("compiler internal error: free variable %s not found in enclosing scope during closure creation", freeSym.Name))
 		}
 
 		if enclosingTable == c.currentSymbolTable {
+			fmt.Printf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register) // DEBUG
 			// The free variable is local in the *direct* enclosing scope.
-			c.emitByte(1)                              // isLocal = true
+			c.emitByte(1) // isLocal = true
+			// Capture the value from the enclosing scope's actual register
 			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
 		} else {
 			// The free variable is also a free variable in the enclosing scope.
-			enclosingFreeIndex := c.addFreeSymbol(&enclosingSymbol)
-			c.emitByte(0)                        // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
+			// We need to capture it from the enclosing scope's upvalues.
+			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
+			enclosingFreeIndex := c.addFreeSymbol(&enclosingSymbol)                                                                                                              // Use the same helper
+			fmt.Printf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex) // DEBUG
+			c.emitByte(0)                                                                                                                                                        // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex))                                                                                                                                 // Index = upvalue index in enclosing scope
 		}
 	}
 
-	// The closure object is now in destReg
 	return nil // Return nil even if errors occurred; they are collected in c.errors
 }
 
@@ -1503,7 +1625,6 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error 
 	// 6. Conditional Jump back to Loop Start
 	// We need OpJumpIfTrue, but we only have OpJumpIfFalse.
 	// So, we invert the condition and use OpJumpIfFalse.
-	// This requires an extra register for the inverted condition.
 	invertedConditionReg := c.regAlloc.Alloc()
 	c.emitNot(invertedConditionReg, conditionReg, line)
 
@@ -1572,6 +1693,8 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error 
 	if definingTable == c.currentSymbolTable {
 		// Local variable: Get its register.
 		targetReg = symbolRef.Register
+		// If it's a compound assignment, the existing value in targetReg is used directly.
+		// If it's simple assignment '=', targetReg will be overwritten later.
 	} else {
 		// Upvalue: Get its index and load current value into a temporary register.
 		isUpvalue = true
