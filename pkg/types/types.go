@@ -37,6 +37,7 @@ var (
 	Any       = &Primitive{Name: "any"}
 	Unknown   = &Primitive{Name: "unknown"}
 	Never     = &Primitive{Name: "never"}
+	Void      = &Primitive{Name: "void"}
 	// Add Void later if needed for function returns? TS uses undefined.
 )
 
