@@ -481,9 +481,9 @@ func TestValuesNullUndefined(t *testing.T) {
 		// {"return !undefined;", "true"},          // Cannot use 'undefined' keyword
 		{"return !false;", "true"},
 		{"return !true;", "false"},
-		{"return !0;", "false"}, // 0 is considered truthy in this simple check
+		{"return !0;", "true"}, // 0 is considered falsey
 		{"return !1;", "false"},
-		{"return !\"\";", "false"}, // Empty string is truthy
+		{"return !\"\";", "true"}, // Empty string is falsey
 		{"return !\"a\";", "false"},
 	}
 

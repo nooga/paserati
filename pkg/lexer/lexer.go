@@ -59,6 +59,15 @@ const (
 	ELSE     TokenType = "ELSE"
 	RETURN   TokenType = "RETURN"
 	NULL     TokenType = "NULL" // Explicit null
+	WHILE    TokenType = "WHILE"
+	FOR      TokenType = "FOR"
+	BREAK    TokenType = "BREAK"    // Added
+	CONTINUE TokenType = "CONTINUE" // Added
+
+	// Logical Operators
+	LOGICAL_AND TokenType = "&&" // Added
+	LOGICAL_OR  TokenType = "||" // Added
+	COALESCE    TokenType = "??" // Added
 
 	// New Strict Equality Operators
 	STRICT_EQ     TokenType = "==="
@@ -79,6 +88,10 @@ var keywords = map[string]TokenType{
 	"else":     ELSE,
 	"return":   RETURN,
 	"null":     NULL,
+	"while":    WHILE,
+	"for":      FOR,
+	"break":    BREAK,    // Added
+	"continue": CONTINUE, // Added
 }
 
 // LookupIdent checks the keywords table for an identifier.
@@ -212,12 +225,30 @@ func (l *Lexer) NextToken() Token {
 	case '*':
 		tok = newToken(ASTERISK, l.ch, l.line)
 	case '/':
-		// Handle comments
+		// Handle comments or division
 		if l.peekChar() == '/' {
 			l.skipComment()
-			return l.NextToken() // Recursively call NextToken after skipping comment
+			return l.NextToken() // Get next token after comment
 		} else {
 			tok = newToken(SLASH, l.ch, l.line)
+		}
+	case '&': // Added
+		if l.peekChar() == '&' {
+			ch := l.ch
+			l.readChar() // Consume second '&'
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: LOGICAL_AND, Literal: literal, Line: l.line}
+		} else {
+			tok = newToken(ILLEGAL, l.ch, l.line) // Single '&' is illegal for now
+		}
+	case '|': // Added
+		if l.peekChar() == '|' {
+			ch := l.ch
+			l.readChar() // Consume second '|'
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: LOGICAL_OR, Literal: literal, Line: l.line}
+		} else {
+			tok = newToken(ILLEGAL, l.ch, l.line) // Single '|' is illegal for now
 		}
 	case '<':
 		if l.peekChar() == '=' {
@@ -250,8 +281,15 @@ func (l *Lexer) NextToken() Token {
 		tok.Literal = l.readString()
 		// readString advances the lexer past the closing quote
 		return tok // Early return
-	case '?':
-		tok = newToken(QUESTION, l.ch, l.line)
+	case '?': // Modified for ??
+		if l.peekChar() == '?' {
+			ch := l.ch
+			l.readChar() // Consume second '?'
+			literal := string(ch) + string(l.ch)
+			tok = Token{Type: COALESCE, Literal: literal, Line: l.line}
+		} else {
+			tok = newToken(QUESTION, l.ch, l.line) // Original ternary operator
+		}
 	case 0: // EOF
 		tok.Literal = ""
 		tok.Type = EOF

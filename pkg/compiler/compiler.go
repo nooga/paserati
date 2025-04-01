@@ -7,6 +7,18 @@ import (
 	"paserati/pkg/vm"
 )
 
+// --- New: Loop Context for Break/Continue ---
+type LoopContext struct {
+	// Start of the loop condition check (target for continue in while)
+	LoopStartPos int
+	// Start of the update expression (target for continue in for)
+	// Set to LoopStartPos for while loops
+	ContinueTargetPos int
+	// List of bytecode positions where OpJump placeholders for break statements start.
+	// These need to be patched later to the loop's end address.
+	BreakPlaceholderPosList []int
+}
+
 // Compiler transforms an AST into bytecode.
 type Compiler struct {
 	chunk              *vm.Chunk
@@ -20,6 +32,9 @@ type Compiler struct {
 	// Tracking for implicit return from last expression statement in top level
 	lastExprReg      Register
 	lastExprRegValid bool
+
+	// --- New: Stack for loop contexts ---
+	loopContextStack []*LoopContext
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -31,7 +46,8 @@ func NewCompiler() *Compiler {
 		enclosing:          nil,              // No enclosing compiler for the top level
 		freeSymbols:        []*Symbol{},      // Initialize empty free symbols slice
 		errors:             []string{},
-		lastExprRegValid:   false, // Initialize tracking fields
+		lastExprRegValid:   false,                   // Initialize tracking fields
+		loopContextStack:   make([]*LoopContext, 0), // Initialize loop stack
 	}
 }
 
@@ -44,6 +60,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		enclosing:          enclosingCompiler,                                            // Link to the outer compiler
 		freeSymbols:        []*Symbol{},                                                  // Initialize empty free symbols slice
 		errors:             []string{},                                                   // Function compilation might have errors
+		loopContextStack:   make([]*LoopContext, 0),                                      // Function gets its own loop stack
 		// lastExprReg tracking only needed for top-level
 	}
 }
@@ -145,6 +162,30 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		}
 		return c.compileReturnStatement(node)
 
+	case *parser.WhileStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false
+		}
+		return c.compileWhileStatement(node)
+
+	case *parser.ForStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false
+		}
+		return c.compileForStatement(node)
+
+	case *parser.BreakStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false
+		}
+		return c.compileBreakStatement(node)
+
+	case *parser.ContinueStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false
+		}
+		return c.compileContinueStatement(node)
+
 	// --- Expressions ---
 	case *parser.NumberLiteral:
 		destReg := c.regAlloc.Alloc()
@@ -227,7 +268,7 @@ func (c *Compiler) compileNode(node parser.Node) error {
 	default:
 		return fmt.Errorf("compilation not implemented for %T", node)
 	}
-	return nil // Should be unreachable if all cases return error or nil
+	return nil // Return nil on success if no specific error occurred in this frame
 }
 
 // --- Statement Compilation ---
@@ -711,6 +752,170 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	// The value is already in valueReg, and since it was the last thing compiled,
 	// the register allocator's Current() should already point to it.
 	// So, no extra move needed here to set the expression result.
+	return nil
+}
+
+// --- Loop Compilation (Updated) ---
+
+func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
+	line := node.Token.Line
+
+	// --- Setup Loop Context ---
+	loopStartPos := len(c.chunk.Code) // Position before condition evaluation
+	loopContext := &LoopContext{
+		LoopStartPos:            loopStartPos,
+		ContinueTargetPos:       loopStartPos, // Continue goes back to condition in while
+		BreakPlaceholderPosList: make([]int, 0),
+	}
+	c.loopContextStack = append(c.loopContextStack, loopContext)
+
+	// --- Compile Condition ---
+	err := c.compileNode(node.Condition)
+	if err != nil {
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
+		return fmt.Errorf("error compiling while condition: %w", err)
+	}
+	conditionReg := c.regAlloc.Current()
+
+	// --- Jump Out If False ---
+	jumpToEndPlaceholderPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
+
+	// --- Compile Body ---
+	err = c.compileNode(node.Body)
+	if err != nil {
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
+		return fmt.Errorf("error compiling while body: %w", err)
+	}
+
+	// --- Jump Back To Start ---
+	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
+	backOffset := loopStartPos - jumpBackInstructionEndPos
+	c.emitOpCode(vm.OpJump, line)
+	c.emitUint16(uint16(int16(backOffset))) // Emit calculated signed offset
+
+	// --- Finish Loop ---
+	// Patch the initial conditional jump to land here (after the backward jump)
+	c.patchJump(jumpToEndPlaceholderPos)
+
+	// Pop context and patch breaks
+	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
+	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+	for _, breakPlaceholderPos := range poppedContext.BreakPlaceholderPosList {
+		c.patchJump(breakPlaceholderPos) // Patch break jumps to loop end
+	}
+
+	return nil
+}
+
+func (c *Compiler) compileForStatement(node *parser.ForStatement) error {
+	line := node.Token.Line
+
+	// --- Compile Initializer (outside loop context) ---
+	if node.Initializer != nil {
+		err := c.compileNode(node.Initializer)
+		if err != nil {
+			return fmt.Errorf("error compiling for initializer: %w", err)
+		}
+	}
+
+	// --- Setup Loop Context ---
+	conditionCheckStartPos := len(c.chunk.Code) // Mark position before condition check
+	loopContext := &LoopContext{
+		LoopStartPos: conditionCheckStartPos,
+		// ContinueTargetPos will be set later (start of update)
+		BreakPlaceholderPosList: make([]int, 0),
+	}
+	c.loopContextStack = append(c.loopContextStack, loopContext)
+
+	var jumpToEndPlaceholderPos int = -1 // Initialize placeholder position
+
+	// --- Compile Condition & Jump Out ---
+	if node.Condition != nil {
+		err := c.compileNode(node.Condition)
+		if err != nil {
+			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
+			return fmt.Errorf("error compiling for condition: %w", err)
+		}
+		conditionReg := c.regAlloc.Current()
+		jumpToEndPlaceholderPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
+	}
+
+	// --- Compile Body ---
+	err := c.compileNode(node.Body)
+	if err != nil {
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
+		return fmt.Errorf("error compiling for body: %w", err)
+	}
+
+	// --- Mark Continue Target & Compile Update ---
+	continueTargetPos := len(c.chunk.Code)            // Continue jumps here (before update)
+	loopContext.ContinueTargetPos = continueTargetPos // Set it in the context
+
+	if node.Update != nil {
+		err = c.compileNode(node.Update)
+		if err != nil {
+			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
+			return fmt.Errorf("error compiling for update: %w", err)
+		}
+	}
+
+	// --- Jump Back To Condition Check ---
+	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
+	backOffset := conditionCheckStartPos - jumpBackInstructionEndPos
+	c.emitOpCode(vm.OpJump, line)
+	c.emitUint16(uint16(int16(backOffset)))
+
+	// --- Finish Loop ---
+	// Patch Conditional Jump Out (if condition existed)
+	if jumpToEndPlaceholderPos != -1 {
+		c.patchJump(jumpToEndPlaceholderPos)
+	}
+
+	// Pop context and patch breaks
+	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
+	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+	for _, breakPlaceholderPos := range poppedContext.BreakPlaceholderPosList {
+		c.patchJump(breakPlaceholderPos)
+	}
+
+	return nil
+}
+
+// --- New: Break/Continue Compilation ---
+
+func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) error {
+	if len(c.loopContextStack) == 0 {
+		return fmt.Errorf("line %d: break statement not within a loop", node.Token.Line)
+	}
+
+	// Get current loop context (top of stack)
+	currentLoopContext := c.loopContextStack[len(c.loopContextStack)-1]
+
+	// Emit placeholder jump (OpJump) - Pass 0 for srcReg as it's ignored
+	placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+	// Add placeholder position to the context's list for later patching
+	currentLoopContext.BreakPlaceholderPosList = append(currentLoopContext.BreakPlaceholderPosList, placeholderPos)
+
+	return nil
+}
+
+func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) error {
+	if len(c.loopContextStack) == 0 {
+		return fmt.Errorf("line %d: continue statement not within a loop", node.Token.Line)
+	}
+
+	// Get current loop context (top of stack)
+	currentLoopContext := c.loopContextStack[len(c.loopContextStack)-1]
+	continueTarget := currentLoopContext.ContinueTargetPos
+
+	// Emit unconditional jump back to the continue target
+	jumpInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
+	backOffset := continueTarget - jumpInstructionEndPos
+
+	c.emitOpCode(vm.OpJump, node.Token.Line)
+	c.emitUint16(uint16(int16(backOffset))) // Emit calculated signed offset
+
 	return nil
 }
 
