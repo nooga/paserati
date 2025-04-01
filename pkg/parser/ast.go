@@ -234,9 +234,10 @@ func (fl *FunctionLiteral) String() string {
 // Note: For now, only assignment to identifiers is supported.
 // <Left Expression (Identifier)> = <Value Expression>
 type AssignmentExpression struct {
-	Token lexer.Token // The '=' token
-	Left  Expression  // The target of the assignment (must be Identifier for now)
-	Value Expression  // The value being assigned
+	Token    lexer.Token // The assignment token (e.g., '=', '+=')
+	Operator string      // The operator literal (e.g., "=", "+=")
+	Left     Expression  // The target of the assignment (must be Identifier for now)
+	Value    Expression  // The value being assigned
 }
 
 func (ae *AssignmentExpression) expressionNode()      {}
@@ -245,9 +246,32 @@ func (ae *AssignmentExpression) String() string {
 	var out bytes.Buffer
 	out.WriteString("(")
 	out.WriteString(ae.Left.String())
-	out.WriteString(" = ")
+	out.WriteString(" " + ae.Operator + " ") // Use the Operator field
 	out.WriteString(ae.Value.String())
 	out.WriteString(")")
+	return out.String()
+}
+
+// UpdateExpression represents prefix or postfix increment/decrement (e.g., ++x, x--).
+// Currently restricted to identifiers as arguments.
+type UpdateExpression struct {
+	Token    lexer.Token // The '++' or '--' token
+	Operator string      // "++" or "--"
+	Argument Expression  // The expression being updated (e.g., Identifier)
+	Prefix   bool        // true if operator is prefix (++x), false if postfix (x++)
+}
+
+func (ue *UpdateExpression) expressionNode()      {}
+func (ue *UpdateExpression) TokenLiteral() string { return ue.Token.Literal }
+func (ue *UpdateExpression) String() string {
+	var out bytes.Buffer
+	if ue.Prefix {
+		out.WriteString(ue.Operator)
+		out.WriteString(ue.Argument.String())
+	} else {
+		out.WriteString(ue.Argument.String())
+		out.WriteString(ue.Operator)
+	}
 	return out.String()
 }
 
@@ -407,7 +431,7 @@ type BreakStatement struct {
 
 func (bs *BreakStatement) statementNode()       {}
 func (bs *BreakStatement) TokenLiteral() string { return bs.Token.Literal }
-func (bs *BreakStatement) String() string       { return bs.TokenLiteral() + ";" }
+func (bs *BreakStatement) String() string       { return bs.Token.Literal + ";" }
 
 // --- New: Continue Statement ---
 type ContinueStatement struct {
@@ -416,7 +440,28 @@ type ContinueStatement struct {
 
 func (cs *ContinueStatement) statementNode()       {}
 func (cs *ContinueStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *ContinueStatement) String() string       { return cs.TokenLiteral() + ";" }
+func (cs *ContinueStatement) String() string       { return cs.Token.Literal + ";" }
+
+// --- New: DoWhileStatement ---
+
+// DoWhileStatement represents a `do { ... } while (condition);` loop.
+type DoWhileStatement struct {
+	Token     lexer.Token     // The 'do' token
+	Body      *BlockStatement // The loop body
+	Condition Expression      // The condition to check after the body
+}
+
+func (dws *DoWhileStatement) statementNode()       {}
+func (dws *DoWhileStatement) TokenLiteral() string { return dws.Token.Literal }
+func (dws *DoWhileStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("do ")
+	out.WriteString(dws.Body.String())
+	out.WriteString(" while (")
+	out.WriteString(dws.Condition.String())
+	out.WriteString(");")
+	return out.String()
+}
 
 // --- TODO: Add more expression types later (Infix, Prefix, Call, If, etc.) ---
 

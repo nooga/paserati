@@ -146,6 +146,138 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "Coalesce Left Value", input: `"hello" ?? "world";`, expect: "hello"},
 		{name: "Coalesce Right Value", input: `null ?? "world";`, expect: "world"},
 		{name: "Coalesce Short Circuit", input: `1 ?? (1/0);`, expect: "1"}, // Should not divide by zero
+
+		// --- Compound Assignment Tests ---
+		{name: "CompAssign Simple Add", input: "let x = 5; x += 3; x;", expect: "8"},
+		{name: "CompAssign Simple Sub", input: "let y = 10; y -= 2; y;", expect: "8"},
+		{name: "CompAssign Simple Mul", input: "let z = 4; z *= 2; z;", expect: "8"},
+		{name: "CompAssign Simple Div", input: "let w = 16; w /= 2; w;", expect: "8"},
+
+		// --- Compound Assignment in Loops ---
+		{name: "CompAssign WhileAdd", input: `
+        let sum = 0;
+        let i = 1;
+        while (i <= 4) {
+            sum += i; // 1 + 2 + 3 + 4
+            i += 1;
+        }
+        sum;
+        `, expect: "10"},
+		{name: "CompAssign ForSub", input: `
+        let val = 10;
+        for (let i=0; i<3; i+=1) {
+            val -= i; // 10 - 0 - 1 - 2
+        }
+        val;
+        `, expect: "7"},
+		{name: "CompAssign DoWhileMul", input: `
+        let prod = 1;
+        let counter = 4;
+        do {
+            prod *= 2;
+            counter -= 1;
+        } while (counter > 0);
+        prod; // 1 * 2 * 2 * 2 * 2 = 16
+        `, expect: "16"},
+
+		// --- Compound Assignment in Closures ---
+		{name: "CompAssign ClosureAdd", input: `
+        let x = 10;
+        let adder = function() { x += 5; };
+        adder();
+        adder();
+        x; // 10 + 5 + 5
+        `, expect: "20"},
+		{name: "CompAssign ClosureSub", input: `
+        let makeSubtractor = function() {
+            let outer = 100;
+            return function(val) { outer -= val; return outer; };
+        };
+        let sub = makeSubtractor();
+        sub(10);
+        sub(20);
+        sub(5); // 100 - 10 - 20 - 5 = 65
+        `, expect: "65"},
+
+		// --- Increment/Decrement Tests ---
+		{name: "IncDec Simple Prefix Inc", input: "let x = 5; let y = ++x; y;", // x becomes 6, y is 6
+			expect: "6",
+		},
+		{name: "IncDec Simple Prefix Inc SideEffect", input: "let x = 5; ++x; x;", // x becomes 6
+			expect: "6",
+		},
+		{name: "IncDec Simple Postfix Inc", input: "let x = 5; let y = x++; y;", // x becomes 6, y is 5
+			expect: "5",
+		},
+		{name: "IncDec Simple Postfix Inc SideEffect", input: "let x = 5; x++; x;", // x becomes 6
+			expect: "6",
+		},
+		{name: "IncDec Simple Prefix Dec", input: "let x = 5; let y = --x; y;", // x becomes 4, y is 4
+			expect: "4",
+		},
+		{name: "IncDec Simple Prefix Dec SideEffect", input: "let x = 5; --x; x;", // x becomes 4
+			expect: "4",
+		},
+		{name: "IncDec Simple Postfix Dec", input: "let x = 5; let y = x--; y;", // x becomes 4, y is 5
+			expect: "5",
+		},
+		{name: "IncDec Simple Postfix Dec SideEffect", input: "let x = 5; x--; x;", // x becomes 4
+			expect: "4",
+		},
+
+		// --- Increment/Decrement in Loops ---
+		{name: "IncDec WhilePrefix", input: `
+        let i = 0;
+        let sum = 0;
+        while (++i < 4) { // i becomes 1, 2, 3 (sum += 1, 2, 3)
+            sum += i;
+        }
+        sum; // 1 + 2 + 3 = 6
+        `, expect: "6",
+		},
+		{name: "IncDec WhilePostfix", input: `
+        let i = 0;
+        let sum = 0;
+        while (i++ < 3) { // i is 0, 1, 2 in condition (sum += 0, 1, 2)
+            sum += i;     // i is 1, 2, 3 in body
+        }
+        sum; // 1 + 2 + 3 = 6 
+        `, expect: "6",
+		},
+		{name: "IncDec ForPrefix", input: `
+        let res = 1;
+        for(let i = 0; i < 3; ++i) {
+            res *= 2;
+        }
+        res; // 1 * 2 * 2 * 2 = 8
+        `, expect: "8",
+		},
+		{name: "IncDec ForPostfix", input: `
+        let res = 1;
+        for(let i = 0; i < 3; i++) {
+            res *= 2;
+        }
+        res; // 1 * 2 * 2 * 2 = 8
+        `, expect: "8",
+		},
+
+		// --- Increment/Decrement in Closures ---
+		{name: "IncDec Closure Prefix", input: `
+        let x = 10;
+        let inc = function() { return ++x; }; // Returns new value
+        inc(); // x=11, returns 11
+        inc(); // x=12, returns 12
+        x + inc(); // 12 + 13 (x becomes 13)
+        `, expect: "25",
+		},
+		{name: "IncDec Closure Postfix", input: `
+        let x = 10;
+        let inc = function() { return x++; }; // Returns old value
+        inc(); // x=11, returns 10
+        inc(); // x=12, returns 11
+        x + inc(); // 12 + 12 (x becomes 13)
+        `, expect: "24",
+		},
 	}
 
 	for _, tc := range testCases {

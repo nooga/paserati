@@ -640,3 +640,222 @@ func compileSource(input string) (*parser.Program, []string) {
 	}
 	return program, nil
 }
+
+func TestCompoundAssignments(t *testing.T) {
+	tests := []struct {
+		name                 string
+		input                string
+		expectedConstants    []vm.Value
+		expectedInstructions []byte
+	}{
+		{
+			name:  "Add Assign Local",
+			input: "let x = 5; x += 3; x;",
+			// Expected: Load 5->R0, Def x=R0. Load 3->R1. OpAdd R0,R0,R1. Load x->R2. Ret R2.
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(3)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
+				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x = x + 3)
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (load x)
+				vm.OpReturn, Register(2), // Return R2
+				// Implicit final OpReturnUndefined NOT added when last stmt is expr
+			),
+		},
+		{
+			name:  "Subtract Assign Local",
+			input: "let y = 10; y -= 4; y;",
+			// Expected: Load 10->R0, Def y=R0. Load 4->R1. OpSub R0,R0,R1. Load y->R2. Ret R2.
+			expectedConstants: []vm.Value{vm.Number(10), vm.Number(4)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 10
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 4
+				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (load y)
+				vm.OpReturn, Register(2),
+			),
+		},
+		{
+			name:  "Multiply Assign Local",
+			input: "let z = 2; z *= 6; z;",
+			// Expected: Load 2->R0, Def z=R0. Load 6->R1. OpMul R0,R0,R1. Load z->R2. Ret R2.
+			expectedConstants: []vm.Value{vm.Number(2), vm.Number(6)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 2
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 6
+				vm.OpMultiply, Register(0), Register(0), Register(1), // R0 = R0 * R1
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (load z)
+				vm.OpReturn, Register(2),
+			),
+		},
+		{
+			name:  "Divide Assign Local",
+			input: "let w = 12; w /= 3; w;",
+			// Expected: Load 12->R0, Def w=R0. Load 3->R1. OpDiv R0,R0,R1. Load w->R2. Ret R2.
+			expectedConstants: []vm.Value{vm.Number(12), vm.Number(3)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 12
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
+				vm.OpDivide, Register(0), Register(0), Register(1), // R0 = R0 / R1
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (load w)
+				vm.OpReturn, Register(2),
+			),
+		},
+		// TODO: Add tests for compound assignment with upvalues later?
+	}
+
+	// --- Test Runner Logic (similar to TestCompileExpressions) ---
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.NewLexer(tt.input)
+			p := parser.NewParser(l)
+			program := p.ParseProgram()
+			if len(p.Errors()) != 0 {
+				t.Fatalf("Parser errors:\n%v", p.Errors())
+			}
+
+			comp := NewCompiler()
+			chunk, compilerErrors := comp.Compile(program)
+			if len(compilerErrors) != 0 {
+				t.Fatalf("Compiler errors:\n%v", compilerErrors)
+			}
+
+			// Compare instructions
+			if !reflect.DeepEqual(chunk.Code, tt.expectedInstructions) {
+				t.Errorf("Instruction mismatch for test '%s':", tt.name)
+				t.Errorf("  Input:    %q", tt.input)
+				t.Errorf("  Expected: %v", tt.expectedInstructions)
+				t.Errorf("  Got:      %v", chunk.Code)
+				t.Errorf("--- Disassembled Expected (approx) ---")
+				t.Logf("\n%s", printOpCodesToString(tt.expectedInstructions))
+				t.Errorf("--- Disassembled Got ---")
+				t.Logf("\n%s", chunk.DisassembleChunk("Compiled Chunk - "+tt.name))
+				t.FailNow()
+			}
+
+			// Compare constants
+			if !reflect.DeepEqual(chunk.Constants, tt.expectedConstants) {
+				t.Errorf("Constant pool mismatch for test '%s':", tt.name)
+				t.Errorf("  Input:    %q", tt.input)
+				t.Errorf("  Expected: %v", tt.expectedConstants)
+				t.Errorf("  Got:      %v", chunk.Constants)
+				t.FailNow()
+			}
+		})
+	}
+}
+
+func TestUpdateExpressions(t *testing.T) {
+	tests := []struct {
+		name                 string
+		input                string
+		expectedConstants    []vm.Value
+		expectedInstructions []byte
+	}{
+		{
+			name:  "Prefix Increment Local",
+			input: "let x = 5; let y = ++x; y;", // x becomes 6, y is 6
+			// Expected: Load 5->R0, Def x=R0. Load 1->R1. OpAdd R0,R0,R1. Move R2,R0(new val). Def y=R2. Move R3,R2. Ret R3.
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
+				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments)
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (result of ++x is new value)
+				// Symbol y = R2
+				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(3),
+				// vm.OpReturnUndefined, // Implicit final OpReturnUndefined NOT added when last stmt is expr
+			),
+		},
+		{
+			name:  "Postfix Increment Local",
+			input: "let x = 5; let y = x++; y;", // x becomes 6, y is 5
+			// Expected: Load 5->R0, Def x=R0. Load 1->R1. Move R2,R0(save orig). OpAdd R0,R0,R1. Def y=R2. Move R3,R2. Ret R3.
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (save original value of x)
+				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments using R1)
+				// Result of x++ is R2 (original value)
+				// Symbol y = R2
+				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(3),
+				// vm.OpReturnUndefined,
+			),
+		},
+		{
+			name:              "Prefix Decrement Local",
+			input:             "let x = 5; let y = --x; y;", // x becomes 4, y is 4
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
+				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (new value)
+				// Symbol y = R2
+				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(3),
+				// vm.OpReturnUndefined,
+			),
+		},
+		{
+			name:              "Postfix Decrement Local",
+			input:             "let x = 5; let y = x--; y;", // x becomes 4, y is 5
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)},
+			expectedInstructions: makeInstructions(
+				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
+				vm.OpMove, Register(2), Register(0), // R2 = R0 (save original x)
+				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
+				// Result is R2
+				// Symbol y = R2
+				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(3),
+				// vm.OpReturnUndefined,
+			),
+		},
+		// TODO: Add tests for update expression with upvalues later?
+	}
+
+	// --- Test Runner Logic (copy from TestCompoundAssignments) ---
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.NewLexer(tt.input)
+			p := parser.NewParser(l)
+			program := p.ParseProgram()
+			if len(p.Errors()) != 0 {
+				t.Fatalf("Parser errors:\n%v", p.Errors())
+			}
+
+			comp := NewCompiler()
+			chunk, compilerErrors := comp.Compile(program)
+			if len(compilerErrors) != 0 {
+				t.Fatalf("Compiler errors:\n%v", compilerErrors)
+			}
+
+			// Compare instructions
+			if !reflect.DeepEqual(chunk.Code, tt.expectedInstructions) {
+				t.Errorf("Instruction mismatch for test '%s':", tt.name)
+				t.Errorf("  Input:    %q", tt.input)
+				t.Errorf("  Expected: %v", tt.expectedInstructions)
+				t.Errorf("  Got:      %v", chunk.Code)
+				t.Errorf("--- Disassembled Expected (approx) ---")
+				t.Logf("\n%s", printOpCodesToString(tt.expectedInstructions))
+				t.Errorf("--- Disassembled Got ---")
+				t.Logf("\n%s", chunk.DisassembleChunk("Compiled Chunk - "+tt.name))
+				t.FailNow()
+			}
+
+			// Compare constants
+			if !reflect.DeepEqual(chunk.Constants, tt.expectedConstants) {
+				t.Errorf("Constant pool mismatch for test '%s':", tt.name)
+				t.Errorf("  Input:    %q", tt.input)
+				t.Errorf("  Expected: %v", tt.expectedConstants)
+				t.Errorf("  Got:      %v", chunk.Constants)
+				t.FailNow()
+			}
+		})
+	}
+}

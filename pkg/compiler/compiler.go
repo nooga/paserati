@@ -2,6 +2,8 @@ package compiler
 
 import (
 	"fmt"
+	"math"
+
 	// For token line numbers
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
@@ -188,6 +190,12 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		}
 		return c.compileContinueStatement(node)
 
+	case *parser.DoWhileStatement:
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Loops don't produce a value
+		}
+		return c.compileDoWhileStatement(node)
+
 	// --- Expressions ---
 	case *parser.NumberLiteral:
 		destReg := c.regAlloc.Alloc()
@@ -266,6 +274,9 @@ func (c *Compiler) compileNode(node parser.Node) error {
 
 	case *parser.AssignmentExpression:
 		return c.compileAssignmentExpression(node)
+
+	case *parser.UpdateExpression:
+		return c.compileUpdateExpression(node)
 
 	default:
 		return fmt.Errorf("compilation not implemented for %T", node)
@@ -868,41 +879,77 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 
 // compileAssignmentExpression compiles identifier = value
 func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) error {
-	// 1. Compile the value expression (right-hand side)
+	line := node.Token.Line
+
+	// 1. Ensure left-hand side is an identifier (parser check helps, but double-check)
+	ident, ok := node.Left.(*parser.Identifier)
+	if !ok {
+		return fmt.Errorf("line %d: invalid assignment target, expected identifier got %T", line, node.Left)
+	}
+
+	// 2. Resolve the identifier to find its storage location (register or upvalue)
+	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
+	if !found {
+		return fmt.Errorf("line %d: assignment to undeclared variable '%s'", line, ident.Value)
+	}
+
+	// 3. Determine target register and load current value if needed (for compound ops or upvalues)
+	var targetReg Register
+	isUpvalue := false
+	var upvalueIndex uint8
+
+	if definingTable == c.currentSymbolTable {
+		// Local variable: Get its assigned register.
+		targetReg = symbolRef.Register
+		// If it's a compound assignment, the existing value in targetReg is used directly.
+		// If it's simple assignment '=', targetReg will be overwritten later.
+	} else {
+		// Free variable (upvalue): Find its index.
+		isUpvalue = true
+		upvalueIndex = c.addFreeSymbol(&symbolRef)
+		// Allocate a register to hold the current value loaded from the upvalue.
+		targetReg = c.regAlloc.Alloc()
+		// Emit OpLoadFree manually
+		c.emitOpCode(vm.OpLoadFree, line)
+		c.emitByte(byte(targetReg)) // Destination register
+		c.emitByte(upvalueIndex)    // Upvalue index
+	}
+
+	// 4. Compile the value expression (right-hand side)
 	err := c.compileNode(node.Value)
 	if err != nil {
 		return err
 	}
-	valueReg := c.regAlloc.Current() // Value is in this register
+	valueReg := c.regAlloc.Current() // RHS Value is in this register
 
-	// 2. Ensure left-hand side is an identifier (parser check helps, but double-check)
-	ident, ok := node.Left.(*parser.Identifier)
-	if !ok {
-		return fmt.Errorf("line %d: invalid assignment target, expected identifier got %T", node.Token.Line, node.Left)
+	// 5. Perform operation if compound assignment, or move for simple assignment
+	switch node.Operator {
+	case "+=":
+		c.emitAdd(targetReg, targetReg, valueReg, line) // target = target + value
+	case "-=":
+		c.emitSubtract(targetReg, targetReg, valueReg, line) // target = target - value
+	case "*=":
+		c.emitMultiply(targetReg, targetReg, valueReg, line) // target = target * value
+	case "/=":
+		c.emitDivide(targetReg, targetReg, valueReg, line) // target = target / value
+	case "=":
+		// Simple assignment: Move RHS value into target register.
+		// If it was an upvalue, targetReg holds the *loaded* current value,
+		// but we want to overwrite it with the new valueReg before SetUpvalue.
+		c.emitMove(targetReg, valueReg, line)
+	default:
+		return fmt.Errorf("line %d: unsupported assignment operator '%s'", line, node.Operator)
+	}
+	// Result of operation (or move) is now in targetReg
+
+	// 6. Store result back if it was an upvalue
+	if isUpvalue {
+		c.emitSetUpvalue(upvalueIndex, targetReg, line)
 	}
 
-	// 3. Resolve the identifier in the symbol table to find its storage location (register or upvalue)
-	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
-	if !found {
-		return fmt.Errorf("line %d: assignment to undeclared variable '%s'", node.Token.Line, ident.Value)
-	}
+	// 7. Assignment expression evaluates to the assigned value (now in targetReg).
+	c.regAlloc.SetCurrent(targetReg)
 
-	// 4. Emit instruction to store the value
-	if definingTable == c.currentSymbolTable {
-		// Local variable: Move value into its assigned register
-		targetReg := symbolRef.Register
-		c.emitMove(targetReg, valueReg, node.Token.Line)
-	} else {
-		// Free variable (upvalue): Find its index in the current function's free list
-		upvalueIndex := c.addFreeSymbol(&symbolRef)
-		// Emit OpSetUpvalue using the index and the value register
-		c.emitSetUpvalue(upvalueIndex, valueReg, node.Token.Line)
-	}
-
-	// 5. Assignment expression evaluates to the assigned value.
-	// The value is already in valueReg, and since it was the last thing compiled,
-	// the register allocator's Current() should already point to it.
-	// So, no extra move needed here to set the expression result.
 	return nil
 }
 
@@ -914,9 +961,10 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 	// --- Setup Loop Context ---
 	loopStartPos := len(c.chunk.Code) // Position before condition evaluation
 	loopContext := &LoopContext{
-		LoopStartPos:            loopStartPos,
-		ContinueTargetPos:       loopStartPos, // Continue goes back to condition in while
-		BreakPlaceholderPosList: make([]int, 0),
+		LoopStartPos:               loopStartPos,
+		ContinueTargetPos:          loopStartPos, // Continue goes back to condition in while
+		BreakPlaceholderPosList:    make([]int, 0),
+		ContinuePlaceholderPosList: make([]int, 0),
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
@@ -953,6 +1001,20 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 	for _, breakPlaceholderPos := range poppedContext.BreakPlaceholderPosList {
 		c.patchJump(breakPlaceholderPos) // Patch break jumps to loop end
+	}
+
+	// --- NEW: Patch continue jumps ---
+	// Continue jumps back to the condition check (loopStartPos)
+	for _, continuePos := range poppedContext.ContinuePlaceholderPosList {
+		jumpInstructionEndPos := continuePos + 1 + 2 // OpCode + 16bit offset
+		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
+		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
+			// This should be rare, but good to check
+			return fmt.Errorf("internal compiler error: continue jump offset %d exceeds 16-bit limit at line %d", targetOffset, node.Token.Line)
+		}
+		// Manually write the 16-bit offset into the placeholder jump instruction
+		c.chunk.Code[continuePos+1] = byte(int16(targetOffset) >> 8)   // High byte
+		c.chunk.Code[continuePos+2] = byte(int16(targetOffset) & 0xFF) // Low byte
 	}
 
 	return nil
@@ -1001,10 +1063,10 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) error {
 	// --- 4. Patch Continues & Compile Update ---
 
 	// *** Patch Continue Jumps ***
-	updateStartPos := len(c.chunk.Code)
+	// Patch continue jumps to land here, *before* the update expression
+	// updateStartPos := len(c.chunk.Code) // REMOVED - patchJump uses current position
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList { // Use context on stack
-		c.patchJump(continuePos) // Patch placeholder to jump to current position (updateStartPos)
-		fmt.Printf("// [CompilerDebug] For: Patched continue jump at %d to target %d\n", continuePos, updateStartPos)
+		c.patchJump(continuePos) // Patch placeholder to jump to current position
 	}
 
 	// *** Compile Update Expression (Optional) ***
@@ -1036,14 +1098,12 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) error {
 	// This needs to happen *at* the final position
 	if conditionExitJumpPlaceholderPos != -1 {
 		c.patchJump(conditionExitJumpPlaceholderPos) // Patch to jump to current position
-		// fmt.Printf("// [CompilerDebug] For: Patched condition exit jump at %d to target %d\n", conditionExitJumpPlaceholderPos, len(c.chunk.Code))
 	}
 
 	// Patch all break jumps
 	// This needs to happen *at* the final position
 	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
 		c.patchJump(breakPos) // Patch to jump to current position
-		// fmt.Printf("// [CompilerDebug] For: Patched break jump at %d to target %d\n", breakPos, len(c.chunk.Code))
 	}
 
 	return nil
@@ -1081,8 +1141,6 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) erro
 
 	// Add placeholder position to the context's list for later patching
 	currentLoopContext.ContinuePlaceholderPosList = append(currentLoopContext.ContinuePlaceholderPosList, placeholderPos)
-
-	fmt.Printf("// [CompilerDebug] Continue: Added placeholder at %d\n", placeholderPos)
 
 	return nil
 }
@@ -1406,4 +1464,171 @@ func (c *Compiler) emitSetUpvalue(upvalueIndex uint8, srcReg Register, line int)
 	c.emitOpCode(vm.OpSetUpvalue, line)
 	c.emitByte(byte(upvalueIndex))
 	c.emitByte(byte(srcReg))
+}
+
+// --- New: DoWhile Statement Compilation ---
+
+func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error {
+	line := node.Token.Line
+
+	// 1. Mark Loop Start (before body)
+	loopStartPos := len(c.chunk.Code)
+
+	// 2. Setup Loop Context
+	loopContext := &LoopContext{
+		LoopStartPos:               loopStartPos, // Continue jumps here
+		BreakPlaceholderPosList:    make([]int, 0),
+		ContinuePlaceholderPosList: make([]int, 0),
+	}
+	c.loopContextStack = append(c.loopContextStack, loopContext)
+
+	// 3. Compile Body (executes at least once)
+	if err := c.compileNode(node.Body); err != nil {
+		// Pop context if body compilation fails
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+		return fmt.Errorf("error compiling do-while body: %w", err)
+	}
+
+	// 4. Mark Condition Position (for clarity, not used directly in jump calcs below)
+	_ = len(c.chunk.Code) // conditionPos := len(c.chunk.Code)
+
+	// 5. Compile Condition
+	if err := c.compileNode(node.Condition); err != nil {
+		// Pop context if condition compilation fails
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+		return fmt.Errorf("error compiling do-while condition: %w", err)
+	}
+	conditionReg := c.regAlloc.Current()
+
+	// 6. Conditional Jump back to Loop Start
+	// We need OpJumpIfTrue, but we only have OpJumpIfFalse.
+	// So, we invert the condition and use OpJumpIfFalse.
+	// This requires an extra register for the inverted condition.
+	invertedConditionReg := c.regAlloc.Alloc()
+	c.emitNot(invertedConditionReg, conditionReg, line)
+
+	// Now jump back if the *inverted* condition is FALSE (i.e., original was TRUE)
+	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 + 1 // OpCode + Reg + 16bit offset
+	backOffset := loopStartPos - jumpBackInstructionEndPos
+	if backOffset > math.MaxInt16 || backOffset < math.MinInt16 {
+		return fmt.Errorf("internal compiler error: do-while loop jump offset %d exceeds 16-bit limit at line %d", backOffset, line)
+	}
+	c.emitOpCode(vm.OpJumpIfFalse, line)    // Use OpJumpIfFalse on inverted result
+	c.emitByte(byte(invertedConditionReg))  // Jump based on the inverted condition
+	c.emitUint16(uint16(int16(backOffset))) // Emit calculated signed offset
+
+	// Release the temporary inverted condition register if possible
+	// c.regAlloc.Release(invertedConditionReg) // Depends on allocator design
+
+	// --- 7. Loop End & Patching ---
+	// Position after the loop (target for breaks) is implicitly len(c.chunk.Code)
+
+	// 8. Pop loop context
+	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
+	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+
+	// 9. Patch Break Jumps
+	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
+		c.patchJump(breakPos) // Patch break jumps to loop end
+	}
+
+	// 10. Patch Continue Jumps
+	// Continue jumps back to the body start (loopStartPos)
+	for _, continuePos := range poppedContext.ContinuePlaceholderPosList {
+		jumpInstructionEndPos := continuePos + 1 + 2 // OpJump OpCode + 16bit offset
+		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
+		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
+			return fmt.Errorf("internal compiler error: do-while continue jump offset %d exceeds 16-bit limit at line %d", targetOffset, line)
+		}
+		// Manually write the 16-bit offset into the placeholder OpJump instruction
+		c.chunk.Code[continuePos+1] = byte(int16(targetOffset) >> 8)   // High byte
+		c.chunk.Code[continuePos+2] = byte(int16(targetOffset) & 0xFF) // Low byte
+	}
+
+	return nil
+}
+
+// --- New: Update Expression Compilation ---
+
+func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error {
+	line := node.Token.Line
+
+	// 1. Argument must be an identifier (parser should enforce, but check again)
+	ident, ok := node.Argument.(*parser.Identifier)
+	if !ok {
+		return fmt.Errorf("line %d: invalid target for %s: expected identifier, got %T", line, node.Operator, node.Argument)
+	}
+
+	// 2. Resolve identifier and determine if local or upvalue
+	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
+	if !found {
+		return fmt.Errorf("line %d: applying %s to undeclared variable '%s'", line, node.Operator, ident.Value)
+	}
+
+	var targetReg Register
+	isUpvalue := false
+	var upvalueIndex uint8
+
+	if definingTable == c.currentSymbolTable {
+		// Local variable: Get its register.
+		targetReg = symbolRef.Register
+	} else {
+		// Upvalue: Get its index and load current value into a temporary register.
+		isUpvalue = true
+		upvalueIndex = c.addFreeSymbol(&symbolRef)
+		targetReg = c.regAlloc.Alloc()
+		c.emitOpCode(vm.OpLoadFree, line)
+		c.emitByte(byte(targetReg))
+		c.emitByte(upvalueIndex)
+	}
+	// Now targetReg holds the *current* value (either directly or loaded from upvalue)
+
+	// 3. Load constant 1
+	constOneReg := c.regAlloc.Alloc()
+	constOneIdx := c.chunk.AddConstant(vm.Number(1))
+	c.emitLoadConstant(constOneReg, constOneIdx, line)
+
+	// 4. Perform Pre/Post logic
+	resultReg := c.regAlloc.Alloc() // Register to hold the expression's final result
+
+	if node.Prefix {
+		// Prefix (++x or --x):
+		// a. Operate: targetReg = targetReg +/- constOneReg
+		switch node.Operator {
+		case "++":
+			c.emitAdd(targetReg, targetReg, constOneReg, line)
+		case "--":
+			c.emitSubtract(targetReg, targetReg, constOneReg, line)
+		}
+		// b. Store back if upvalue
+		if isUpvalue {
+			c.emitSetUpvalue(upvalueIndex, targetReg, line)
+		}
+		// c. Result of expression is the *new* value
+		c.emitMove(resultReg, targetReg, line)
+
+	} else {
+		// Postfix (x++ or x--):
+		// a. Save original value: resultReg = targetReg
+		c.emitMove(resultReg, targetReg, line)
+		// b. Operate: targetReg = targetReg +/- constOneReg
+		switch node.Operator {
+		case "++":
+			c.emitAdd(targetReg, targetReg, constOneReg, line)
+		case "--":
+			c.emitSubtract(targetReg, targetReg, constOneReg, line)
+		}
+		// c. Store back if upvalue
+		if isUpvalue {
+			c.emitSetUpvalue(upvalueIndex, targetReg, line)
+		}
+		// d. Result of expression is the *original* value (already saved in resultReg)
+	}
+
+	// Release temporary register for constant 1 (optional, depends on allocator)
+	// c.regAlloc.Release(constOneReg)
+
+	// 5. Set compiler's current register to the expression result
+	c.regAlloc.SetCurrent(resultReg)
+	return nil
 }

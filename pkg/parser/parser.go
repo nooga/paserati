@@ -49,30 +49,38 @@ const (
 	LESSGREATER // > or < or <= or >=
 	SUM         // + or -
 	PRODUCT     // * or /
-	PREFIX      // -X or !X
+	PREFIX      // -X or !X or ++X or --X
+	POSTFIX     // X++ or X-- (Higher than prefix/call)
 	CALL        // myFunction(X)
 	INDEX       // array[index]
 )
 
 // Precedences map for operator tokens
 var precedences = map[lexer.TokenType]int{
-	lexer.ASSIGN:        ASSIGNMENT,
-	lexer.EQ:            EQUALS,
-	lexer.NOT_EQ:        EQUALS,
-	lexer.STRICT_EQ:     EQUALS,
-	lexer.STRICT_NOT_EQ: EQUALS,
-	lexer.LT:            LESSGREATER,
-	lexer.GT:            LESSGREATER,
-	lexer.LE:            LESSGREATER,
-	lexer.PLUS:          SUM,
-	lexer.MINUS:         SUM,
-	lexer.SLASH:         PRODUCT,
-	lexer.ASTERISK:      PRODUCT,
-	lexer.LPAREN:        CALL,
-	lexer.QUESTION:      TERNARY,
-	lexer.LOGICAL_AND:   LOGICAL_AND,
-	lexer.LOGICAL_OR:    LOGICAL_OR,
-	lexer.COALESCE:      COALESCE,
+	lexer.ASSIGN:          ASSIGNMENT,
+	lexer.PLUS_ASSIGN:     ASSIGNMENT,
+	lexer.MINUS_ASSIGN:    ASSIGNMENT,
+	lexer.ASTERISK_ASSIGN: ASSIGNMENT,
+	lexer.SLASH_ASSIGN:    ASSIGNMENT,
+	lexer.EQ:              EQUALS,
+	lexer.NOT_EQ:          EQUALS,
+	lexer.STRICT_EQ:       EQUALS,
+	lexer.STRICT_NOT_EQ:   EQUALS,
+	lexer.LT:              LESSGREATER,
+	lexer.GT:              LESSGREATER,
+	lexer.LE:              LESSGREATER,
+	lexer.GE:              LESSGREATER,
+	lexer.PLUS:            SUM,
+	lexer.MINUS:           SUM,
+	lexer.SLASH:           PRODUCT,
+	lexer.ASTERISK:        PRODUCT,
+	lexer.LPAREN:          CALL,
+	lexer.QUESTION:        TERNARY,
+	lexer.LOGICAL_AND:     LOGICAL_AND,
+	lexer.LOGICAL_OR:      LOGICAL_OR,
+	lexer.COALESCE:        COALESCE,
+	lexer.INC:             POSTFIX,
+	lexer.DEC:             POSTFIX,
 }
 
 // NewParser creates a new Parser.
@@ -91,10 +99,12 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.NULL, p.parseNullLiteral)
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
-	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)    // !true
-	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)   // -5
-	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression) // (5 + 5)
-	p.registerPrefix(lexer.IF, p.parseIfExpression)          // if (condition) { ... }
+	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)      // !true
+	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)     // -5
+	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression) // Added ++x
+	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression) // Added --x
+	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)   // (5 + 5)
+	p.registerPrefix(lexer.IF, p.parseIfExpression)            // if (condition) { ... }
 
 	p.infixParseFns = make(map[lexer.TokenType]infixParseFn)
 	p.registerInfix(lexer.PLUS, p.parseInfixExpression)
@@ -103,20 +113,24 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.ASTERISK, p.parseInfixExpression)
 	p.registerInfix(lexer.EQ, p.parseInfixExpression)
 	p.registerInfix(lexer.NOT_EQ, p.parseInfixExpression)
-	p.registerInfix(lexer.STRICT_EQ, p.parseInfixExpression)     // Added
-	p.registerInfix(lexer.STRICT_NOT_EQ, p.parseInfixExpression) // Added
+	p.registerInfix(lexer.STRICT_EQ, p.parseInfixExpression)
+	p.registerInfix(lexer.STRICT_NOT_EQ, p.parseInfixExpression)
 	p.registerInfix(lexer.LT, p.parseInfixExpression)
 	p.registerInfix(lexer.GT, p.parseInfixExpression)
 	p.registerInfix(lexer.LE, p.parseInfixExpression)
-	p.registerInfix(lexer.LPAREN, p.parseCallExpression)       // Added: myFunc( ... )
-	p.registerInfix(lexer.QUESTION, p.parseTernaryExpression)  // Added
-	p.registerInfix(lexer.ASSIGN, p.parseAssignmentExpression) // Added
-	// Add new infix operators
-	p.registerInfix(lexer.LOGICAL_AND, p.parseInfixExpression) // Added
-	p.registerInfix(lexer.LOGICAL_OR, p.parseInfixExpression)  // Added
-	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)    // Added
-	// Add index expressions later: LBRACKET
-	// p.registerInfix(lexer.ARROW, p.parseArrowFunctionLiteral) // Removed
+	p.registerInfix(lexer.GE, p.parseInfixExpression)
+	p.registerInfix(lexer.LPAREN, p.parseCallExpression)
+	p.registerInfix(lexer.QUESTION, p.parseTernaryExpression)
+	p.registerInfix(lexer.ASSIGN, p.parseAssignmentExpression)
+	p.registerInfix(lexer.PLUS_ASSIGN, p.parseAssignmentExpression)
+	p.registerInfix(lexer.MINUS_ASSIGN, p.parseAssignmentExpression)
+	p.registerInfix(lexer.ASTERISK_ASSIGN, p.parseAssignmentExpression)
+	p.registerInfix(lexer.SLASH_ASSIGN, p.parseAssignmentExpression)
+	p.registerInfix(lexer.LOGICAL_AND, p.parseInfixExpression)
+	p.registerInfix(lexer.LOGICAL_OR, p.parseInfixExpression)
+	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)
+	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression) // Added x++
+	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression) // Added x--
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -165,6 +179,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseReturnStatement()
 	case lexer.WHILE:
 		return p.parseWhileStatement()
+	case lexer.DO:
+		return p.parseDoWhileStatement()
 	case lexer.FOR:
 		return p.parseForStatement()
 	case lexer.BREAK:
@@ -820,8 +836,9 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	debugPrint("parseAssignmentExpression starting with left: %s (%T)", left.String(), left)
 	expr := &AssignmentExpression{
-		Token: p.curToken, // The '=' token
-		Left:  left,
+		Token:    p.curToken,         // The assignment token (=, +=, etc.)
+		Operator: p.curToken.Literal, // Store the operator string
+		Left:     left,
 	}
 
 	// Basic Check: Ensure the left side is an identifier for now.
@@ -833,7 +850,7 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	}
 
 	precedence := p.curPrecedence()
-	p.nextToken() // Consume '='
+	p.nextToken() // Consume assignment operator
 
 	debugPrint("parseAssignmentExpression parsing right side...")
 	expr.Value = p.parseExpression(precedence)
@@ -998,4 +1015,84 @@ func (p *Parser) parseContinueStatement() *ContinueStatement {
 	}
 
 	return stmt
+}
+
+// --- New: Do-While Statement Parsing ---
+
+func (p *Parser) parseDoWhileStatement() *DoWhileStatement {
+	stmt := &DoWhileStatement{Token: p.curToken}
+
+	// Expect { after 'do'
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+
+	stmt.Body = p.parseBlockStatement()
+
+	// Expect 'while' after the block
+	if !p.expectPeek(lexer.WHILE) {
+		return nil
+	}
+
+	// Expect '(' after 'while'
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+
+	p.nextToken() // Consume '(', move to expression
+	stmt.Condition = p.parseExpression(LOWEST)
+
+	// Expect ')' after expression
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil
+	}
+
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+// --- New: Update Expression Parsing ---
+
+func (p *Parser) parsePrefixUpdateExpression() Expression {
+	expr := &UpdateExpression{
+		Token:    p.curToken, // ++ or --
+		Operator: p.curToken.Literal,
+		Prefix:   true,
+	}
+	p.nextToken()                             // Consume ++ or --
+	expr.Argument = p.parseExpression(PREFIX) // Parse argument with PREFIX precedence
+
+	// Check if argument is assignable (currently just Identifier)
+	if _, ok := expr.Argument.(*Identifier); !ok {
+		msg := fmt.Sprintf("line %d: invalid argument for prefix %s: expected identifier, got %T",
+			expr.Token.Line, expr.Operator, expr.Argument)
+		p.errors = append(p.errors, msg)
+		return nil
+	}
+
+	return expr
+}
+
+func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
+	expr := &UpdateExpression{
+		Token:    p.curToken, // ++ or --
+		Operator: p.curToken.Literal,
+		Argument: left, // Argument is the expression on the left
+		Prefix:   false,
+	}
+
+	// Check if argument is assignable (currently just Identifier)
+	if _, ok := expr.Argument.(*Identifier); !ok {
+		msg := fmt.Sprintf("line %d: invalid argument for postfix %s: expected identifier, got %T",
+			expr.Token.Line, expr.Operator, expr.Argument)
+		p.errors = append(p.errors, msg)
+		return nil
+	}
+
+	// No need to consume token, parseExpression loop does that.
+	return expr
 }
