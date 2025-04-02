@@ -548,44 +548,32 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
 		switch node.Operator {
 		case "+":
 			c.emitAdd(destReg, leftReg, rightReg, line)
-			break
 		case "-":
 			c.emitSubtract(destReg, leftReg, rightReg, line)
-			break
 		case "*":
 			c.emitMultiply(destReg, leftReg, rightReg, line)
-			break
 		case "/":
 			c.emitDivide(destReg, leftReg, rightReg, line)
-			break
 		case "<=":
 			c.emitLessEqual(destReg, leftReg, rightReg, line)
-			break
 		case ">=":
 			// Implement as !(left < right)
 			tempReg := c.regAlloc.Alloc() // Temp register for (left < right)
 			c.emitLess(tempReg, leftReg, rightReg, line)
 			c.emitNot(destReg, tempReg, line) // destReg = !(tempReg)
 			// Allocator should ideally handle freeing tempReg if needed, or maybe release manually?
-			break
 		case "==":
 			c.emitEqual(destReg, leftReg, rightReg, line)
-			break
 		case "!=":
 			c.emitNotEqual(destReg, leftReg, rightReg, line)
-			break
 		case "<":
 			c.emitLess(destReg, leftReg, rightReg, line)
-			break
 		case ">":
 			c.emitGreater(destReg, leftReg, rightReg, line)
-			break
 		case "===":
 			c.emitStrictEqual(destReg, leftReg, rightReg, line)
-			break
 		case "!==":
 			c.emitStrictNotEqual(destReg, leftReg, rightReg, line)
-			break
 		default:
 			return fmt.Errorf("line %d: unknown standard infix operator '%s'", line, node.Operator)
 		}

@@ -573,11 +573,11 @@ func (vm *VM) run() InterpretResult {
 
 			if !IsArray(arrayVal) {
 				frame.ip = ip
-				return vm.runtimeError("Cannot index non-array type '%s'", arrayVal.Type)
+				return vm.runtimeError("Cannot index non-array type '%v'", arrayVal.Type)
 			}
 			if !IsNumber(indexVal) {
 				frame.ip = ip
-				return vm.runtimeError("Array index must be a number, got '%s'", indexVal.Type)
+				return vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
 			}
 
 			arr := AsArray(arrayVal)
@@ -605,11 +605,11 @@ func (vm *VM) run() InterpretResult {
 
 			if !IsArray(arrayVal) {
 				frame.ip = ip
-				return vm.runtimeError("Cannot set index on non-array type '%s'", arrayVal.Type)
+				return vm.runtimeError("Cannot set index on non-array type '%v'", arrayVal.Type)
 			}
 			if !IsNumber(indexVal) {
 				frame.ip = ip
-				return vm.runtimeError("Array index must be a number, got '%s'", indexVal.Type)
+				return vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
 			}
 
 			arr := AsArray(arrayVal)
