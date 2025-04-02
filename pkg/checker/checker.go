@@ -471,7 +471,7 @@ func (c *Checker) visit(node parser.Node) {
 			declaredType = nil // Indicates type inference is needed
 		}
 
-		// --- FIX V2 for recursive functions assigned to variables ---
+		// --- FIX V2 for recursive functions assigned to variables (Needs review with new logic) ---
 		// Determine a preliminary type for the initializer if it's a function literal.
 		var preliminaryInitializerType types.Type = nil
 		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
@@ -522,38 +522,46 @@ func (c *Checker) visit(node parser.Node) {
 			computedInitializerType = nil // No initializer
 		}
 
-		// --- WIDEN INITIALIZER TYPE ---
-		widenedInitializerType := getWidenedType(computedInitializerType) // Apply widening
-		// --- END WIDEN ---
+		// 3. Determine the final type and check assignment errors
+		var finalVariableType types.Type
 
-		// 3. Determine the final type and check assignability
-		finalVariableType := declaredType // Renamed for clarity
-		if finalVariableType == nil {     // Infer from initializer or lack thereof
-			if widenedInitializerType != nil { // Use widened type for inference
-				finalVariableType = widenedInitializerType
-			} else {
-				// --- FIX: No annotation, no initializer -> infer Undefined ---
-				finalVariableType = types.Undefined // Assign Undefined, not Any
-				// Remove the error message for this valid case
-				// c.addError(node.Token.Line, fmt.Sprintf("cannot infer type for variable '%s'; missing initializer or type annotation", node.Name.Value))
-			}
-		} else { // Have annotation, check initializer assignment
-			if computedInitializerType != nil { // Check against the original computed type, not the widened one
-				if !c.isAssignable(computedInitializerType, finalVariableType) {
+		if declaredType != nil {
+			// --- If annotation exists, variable type IS the annotation ---
+			finalVariableType = declaredType
+
+			if computedInitializerType != nil {
+				// Check if initializer is assignable to the declared type for error reporting
+				assignable := c.isAssignable(computedInitializerType, declaredType)
+
+				// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
+				isEmptyArrayAssignment := false
+				if _, isTargetArray := declaredType.(*types.ArrayType); isTargetArray { // Use blank identifier
+					if sourceArrayType, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
+						if sourceArrayType.ElementType == types.Unknown {
+							isEmptyArrayAssignment = true
+						}
+					}
+				}
+				// --- END SPECIAL CASE ---
+
+				if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
 					c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalVariableType.String()))
 				}
-				// --- Check if inferred type matches annotation if both function types ---
-				// If declaredType was a func type and finalInitializerType is also a func type,
-				// we might want stricter checks here later (e.g., subtype compatibility)
-				// For now, isAssignable handles basic cases.
-				// If prelim was used, the finalInitializerType *should* be compatible or better.
-			} // else: No initializer, annotation is enough
+			} // else: No initializer, declaredType is fine
+		} else {
+			// --- No annotation: Infer type ---
+			if computedInitializerType != nil {
+				finalVariableType = getWidenedType(computedInitializerType) // Infer from widened initializer type
+			} else {
+				finalVariableType = types.Undefined // No annotation, no initializer
+			}
 		}
 
-		// Check for missing initializer/annotation - This check is now redundant due to the fix above
-		// if node.Value == nil && node.TypeAnnotation == nil {
-		// 	 c.addError(node.Token.Line, fmt.Sprintf("cannot infer type for variable '%s'; missing initializer or type annotation", node.Name.Value))
-		// }
+		// Safety fallback if type determination failed somehow
+		if finalVariableType == nil {
+			fmt.Printf("// [Checker LetStmt] WARNING: finalVariableType is nil for '%s', falling back to Any\n", node.Name.Value)
+			finalVariableType = types.Any
+		}
 
 		// 4. UPDATE variable type in the current environment with the final type
 		// We use Define again which will overwrite the temporary type.
@@ -573,7 +581,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.SetComputedType(node.Name, finalVariableType)
 
 	case *parser.ConstStatement:
-		// --- UPDATED: Handle ConstStatement (Very similar to LetStatement) ---
+		// --- UPDATED: Handle ConstStatement ---
 		// 1. Handle Type Annotation (if present)
 		var declaredType types.Type
 		if node.TypeAnnotation != nil {
@@ -593,18 +601,39 @@ func (c *Checker) visit(node parser.Node) {
 			computedInitializerType = types.Any // Assign Any to prevent further cascading errors downstream
 		}
 
-		// --- WIDEN INITIALIZER TYPE ---
-		widenedInitializerType := getWidenedType(computedInitializerType) // Apply widening
-		// --- END WIDEN ---
+		// 3. Determine the final type and check assignment errors
+		var finalType types.Type
 
-		// 3. Determine the final type and check assignability
-		finalType := declaredType
-		if finalType == nil { // Infer from initializer
-			finalType = widenedInitializerType // Use widened type for inference
-		} else { // Have annotation, check initializer assignment
-			if !c.isAssignable(computedInitializerType, finalType) { // Check against original computed type
+		if declaredType != nil {
+			// --- If annotation exists, constant type IS the annotation ---
+			finalType = declaredType
+
+			// Check if initializer is assignable to the declared type for error reporting
+			assignable := c.isAssignable(computedInitializerType, declaredType)
+
+			// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
+			isEmptyArrayAssignment := false
+			if _, isTargetArray := declaredType.(*types.ArrayType); isTargetArray { // Use blank identifier
+				if sourceArrayType, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
+					if sourceArrayType.ElementType == types.Unknown {
+						isEmptyArrayAssignment = true
+					}
+				}
+			}
+			// --- END SPECIAL CASE ---
+
+			if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
 				c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalType.String()))
 			}
+		} else {
+			// --- No annotation: Infer type ---
+			finalType = getWidenedType(computedInitializerType) // Infer from widened initializer type
+		}
+
+		// Safety fallback if type determination failed somehow
+		if finalType == nil {
+			fmt.Printf("// [Checker ConstStmt] WARNING: finalType is nil for '%s', falling back to Any\n", node.Name.Value)
+			finalType = types.Any
 		}
 
 		// 4. Define variable in the current environment

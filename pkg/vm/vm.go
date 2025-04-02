@@ -613,16 +613,37 @@ func (vm *VM) run() InterpretResult {
 			}
 
 			arr := AsArray(arrayVal)
-			idx := int(AsNumber(indexVal)) // TODO: Handle non-integer indices?
+			idx := int(AsNumber(indexVal)) // TODO: Handle non-integer indices? Handle potential float truncation?
 
-			// Bounds check
-			if idx < 0 || idx >= len(arr.Elements) {
+			// --- NEW: Handle Array Expansion ---
+			if idx < 0 {
 				frame.ip = ip
-				// Error on out-of-bounds set?
-				return vm.runtimeError("Array index %d out of bounds for array of length %d", idx, len(arr.Elements))
+				// Negative indices are invalid
+				return vm.runtimeError("Array index cannot be negative, got %d", idx)
+			} else if idx < len(arr.Elements) {
+				// Index is within current bounds: Overwrite existing element
+				arr.Elements[idx] = valueVal
+			} else if idx == len(arr.Elements) {
+				// Index is exactly at the end: Append the new element
+				arr.Elements = append(arr.Elements, valueVal)
+			} else { // idx > len(arr.Elements)
+				// Index is beyond the end: Expand array and then append
+				neededCapacity := idx + 1
+				if cap(arr.Elements) < neededCapacity {
+					// Reallocate with enough capacity if needed
+					newElements := make([]Value, len(arr.Elements), neededCapacity)
+					copy(newElements, arr.Elements)
+					arr.Elements = newElements
+				}
+				// Fill the gap with Undefined values
+				for i := len(arr.Elements); i < idx; i++ {
+					arr.Elements = append(arr.Elements, Undefined())
+				}
+				// Append the actual value at the target index
+				arr.Elements = append(arr.Elements, valueVal)
 			}
+			// --- END NEW ---
 
-			arr.Elements[idx] = valueVal
 			// OpSetIndex itself doesn't produce a result register, the assignment expression does (valueReg)
 
 		// --- End Array Opcodes ---
