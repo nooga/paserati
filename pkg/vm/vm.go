@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"os"
+	"paserati/pkg/errors"
 	"unsafe"
 )
 
@@ -33,6 +34,8 @@ type VM struct {
 	// List of upvalues pointing to variables still on the registerStack
 	openUpvalues []*Upvalue
 	// Globals, open upvalues, etc. would go here later
+
+	errors []errors.PaseratiError
 }
 
 // InterpretResult represents the outcome of an interpretation.
@@ -57,27 +60,31 @@ func (vm *VM) Reset() {
 	vm.frameCount = 0
 	vm.nextRegSlot = 0
 	vm.openUpvalues = vm.openUpvalues[:0] // Clear slice while keeping capacity
+	vm.errors = vm.errors[:0]             // Clear errors slice
 	// No need to clear registerStack explicitly, slots will be overwritten.
 }
 
 // Interpret starts executing the given chunk of bytecode in a new top-level frame.
-func (vm *VM) Interpret(chunk *Chunk) InterpretResult {
+// Returns the final value (currently Undefined) and any runtime errors.
+func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	vm.Reset()
 
 	// Wrap the main script chunk in a dummy function and closure
 	mainFunc := &Function{Chunk: chunk, Name: "<script>", RegisterSize: RegFileSize} // Assume max regs for script
-	// Create closure using the NewClosure constructor which returns a Value
-	// We store the *Closure pointer in the CallFrame, not the Value itself.
-	// So, we need the *Closure part of the value returned by NewClosure.
-	// Let's adjust NewClosure slightly or handle it here.
-	// FOR NOW: Manually create the closure struct here.
-	mainClosure := &Closure{Fn: mainFunc, Upvalues: []*Upvalue{}} // No upvalues for main
+	mainClosure := &Closure{Fn: mainFunc, Upvalues: []*Upvalue{}}                    // No upvalues for main
 
 	// Allocate registers for the main script body/function
 	initialRegs := mainFunc.RegisterSize
 	if vm.nextRegSlot+initialRegs > len(vm.registerStack) {
-		fmt.Println("Register stack overflow (initial frame)")
-		return InterpretRuntimeError
+		// Manually create and add the stack overflow error
+		// TODO: Find a better way to get position info for this initial error.
+		placeholderToken := errors.Position{Line: 0, Column: 0, StartPos: 0, EndPos: 0}
+		runtimeErr := &errors.RuntimeError{
+			Position: placeholderToken,
+			Msg:      "Register stack overflow (initial frame)",
+		}
+		vm.errors = append(vm.errors, runtimeErr)
+		return Undefined(), vm.errors // Return Undefined and the error
 	}
 
 	frame := &vm.frames[vm.frameCount] // Get pointer to the frame slot
@@ -87,14 +94,33 @@ func (vm *VM) Interpret(chunk *Chunk) InterpretResult {
 	vm.nextRegSlot += initialRegs
 	vm.frameCount++
 
-	return vm.run()
+	// Run the VM
+	resultStatus, finalValue := vm.run() // Capture both status and value
+
+	// No longer need to read from registerStack[0]
+	// var finalValue Value
+	// if vm.nextRegSlot > 0 && result == InterpretOK {
+	// 	finalValue = vm.registerStack[0]
+	// } else {
+	// 	finalValue = Undefined()
+	// }
+
+	if resultStatus == InterpretRuntimeError {
+		// An error occurred, return the potentially partial value and the collected errors
+		return finalValue, vm.errors
+	} else {
+		// Execution finished without runtime error (InterpretOK)
+		// Return the final value returned by run() and empty errors slice
+		return finalValue, vm.errors // vm.errors should be empty here
+	}
 }
 
 // run is the main execution loop.
-func (vm *VM) run() InterpretResult {
+// It now returns the InterpretResult status AND the final script Value.
+func (vm *VM) run() (InterpretResult, Value) {
 	// --- Caching frame variables ---
 	if vm.frameCount == 0 {
-		return InterpretOK // Nothing to run
+		return InterpretOK, Undefined() // Nothing to run
 	}
 	frame := &vm.frames[vm.frameCount-1]
 	// Get function/chunk/constants FROM the closure in the frame
@@ -102,41 +128,31 @@ func (vm *VM) run() InterpretResult {
 	// We now directly access the *Function pointer
 	function := closure.Fn
 	if function == nil { // Check if the function pointer itself is nil
-		return vm.runtimeError("Internal VM Error: Closure contains a nil function pointer.")
+		// runtimeError now collects the error and returns the enum
+		// Need to return a default value along with the error status
+		status := vm.runtimeError("Internal VM Error: Closure contains a nil function pointer.")
+		return status, Undefined()
 	}
 	if function.Chunk == nil { // Check if the chunk within the function is nil
-		return vm.runtimeError("Internal VM Error: Function associated with closure has a nil chunk.")
+		status := vm.runtimeError("Internal VM Error: Function associated with closure has a nil chunk.")
+		return status, Undefined()
 	}
 	code := function.Chunk.Code
 	constants := function.Chunk.Constants
 	registers := frame.registers // This is the frame's register window
 	ip := frame.ip
 
-	// Store the target register for the *caller* when returning from a function
-	// var returnTargetReg byte = 0 // REMOVED - Now stored in CallFrame
-
 	for {
-		// --- Debugging (Optional) ---
-		// fmt.Printf("ip=%04d regs=")
-		// for i := 0; i < 10; i++ { // Print first few regs
-		// 	if i < len(frame.registers) {
-		// 		fmt.Printf("[R%d:%s] ", i, frame.registers[i])
-		// 	} else { break }
-		// }
-		// fmt.Println()
-		// frame.closure.Fn.Chunk.DisassembleInstruction(ip) // Adjusted for new structure
-		// ---------------------------
-
 		if ip >= len(code) {
 			// Save IP before erroring
 			frame.ip = ip
 			if vm.frameCount > 1 {
 				// If we run off the end of a function without OpReturn, that's an error
-				return vm.runtimeError("Implicit return missing in function?")
+				status := vm.runtimeError("Implicit return missing in function?")
+				return status, Undefined()
 			} else {
-				// Running off end of main script is okay if implicit return wasn't added (shouldn't happen)
-				fmt.Println("Warning: Reached end of main script bytecode without explicit or implicit return.")
-				return InterpretOK
+				// Running off end of main script is okay, return Undefined implicitly
+				return InterpretOK, Undefined()
 			}
 		}
 
@@ -144,7 +160,7 @@ func (vm *VM) run() InterpretResult {
 		ip++                       // Advance IP past the opcode itself
 
 		switch opcode {
-		case OpLoadConst: // Use local OpCode constant
+		case OpLoadConst:
 			reg := code[ip]
 			constIdxHi := code[ip+1]
 			constIdxLo := code[ip+2]
@@ -152,7 +168,8 @@ func (vm *VM) run() InterpretResult {
 			ip += 3
 			if int(constIdx) >= len(constants) {
 				frame.ip = ip // Save IP
-				return vm.runtimeError("Invalid constant index %d", constIdx)
+				status := vm.runtimeError("Invalid constant index %d", constIdx)
+				return status, Undefined()
 			}
 			registers[reg] = constants[constIdx]
 
@@ -189,7 +206,8 @@ func (vm *VM) run() InterpretResult {
 			srcVal := registers[srcReg]
 			if !IsNumber(srcVal) { // Use local IsNumber
 				frame.ip = ip
-				return vm.runtimeError("Operand must be a number for negation.")
+				status := vm.runtimeError("Operand must be a number for negation.")
+				return status, Undefined()
 			}
 			registers[destReg] = Number(-AsNumber(srcVal)) // Use local Number/AsNumber
 
@@ -226,14 +244,16 @@ func (vm *VM) run() InterpretResult {
 					registers[destReg] = String(fmt.Sprintf("%v", AsNumber(leftVal)) + AsString(rightVal))
 				} else {
 					frame.ip = ip
-					return vm.runtimeError("Operands must be two numbers, two strings, or a string and a number for '+'.")
+					status := vm.runtimeError("Operands must be two numbers, two strings, or a string and a number for '+'.")
+					return status, Undefined()
 				}
 			case OpSubtract, OpMultiply, OpDivide:
 				// Strictly numbers for these
 				if !IsNumber(leftVal) || !IsNumber(rightVal) {
 					frame.ip = ip
-					opStr := opcode.String()                                              // Get opcode name
-					return vm.runtimeError("Operands must be numbers for %s.", opStr[2:]) // Simple way to get op name like Subtract
+					opStr := opcode.String()                                                 // Get opcode name
+					status := vm.runtimeError("Operands must be numbers for %s.", opStr[2:]) // Simple way to get op name like Subtract
+					return status, Undefined()
 				}
 				leftNum := AsNumber(leftVal)
 				rightNum := AsNumber(rightVal)
@@ -245,7 +265,8 @@ func (vm *VM) run() InterpretResult {
 				case OpDivide:
 					if rightNum == 0 {
 						frame.ip = ip
-						return vm.runtimeError("Division by zero.")
+						status := vm.runtimeError("Division by zero.")
+						return status, Undefined()
 					}
 					registers[destReg] = Number(leftNum / rightNum)
 				}
@@ -269,7 +290,8 @@ func (vm *VM) run() InterpretResult {
 				if !IsNumber(leftVal) || !IsNumber(rightVal) {
 					frame.ip = ip
 					opStr := opcode.String() // Get opcode name
-					return vm.runtimeError("Operands must be numbers for comparison (%s).", opStr[2:])
+					status := vm.runtimeError("Operands must be numbers for comparison (%s).", opStr[2:])
+					return status, Undefined()
 				}
 				leftNum := AsNumber(leftVal)
 				rightNum := AsNumber(rightVal)
@@ -322,19 +344,22 @@ func (vm *VM) run() InterpretResult {
 				calleeClosure = &Closure{Fn: funcToCall, Upvalues: []*Upvalue{}} // Empty slice is okay
 			default:
 				frame.ip = ip
-				return vm.runtimeError("Can only call functions and closures.")
+				status := vm.runtimeError("Can only call functions and closures.")
+				return status, Undefined()
 			}
 
 			calleeFunc := calleeClosure.Fn
 
 			if argCount != calleeFunc.Arity {
 				frame.ip = ip
-				return vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+				status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+				return status, Undefined()
 			}
 
 			if vm.frameCount == MaxFrames {
 				frame.ip = ip
-				return vm.runtimeError("Stack overflow.")
+				status := vm.runtimeError("Stack overflow.")
+				return status, Undefined()
 			}
 
 			// --- Setup New Frame ---
@@ -342,7 +367,8 @@ func (vm *VM) run() InterpretResult {
 			requiredRegs := calleeFunc.RegisterSize
 			if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 				// TODO: Implement garbage collection or stack resizing?
-				return vm.runtimeError("Register stack overflow during call.")
+				status := vm.runtimeError("Register stack overflow during call.")
+				return status, Undefined()
 			}
 
 			// !! Store caller registers *before* getting pointer to new frame slot !!
@@ -370,7 +396,8 @@ func (vm *VM) run() InterpretResult {
 					newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
 				} else {
 					// Bounds check error - should ideally not happen if compiler is correct
-					return vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
+					status := vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
+					return status, Undefined()
 				}
 			}
 
@@ -390,28 +417,38 @@ func (vm *VM) run() InterpretResult {
 			srcReg := code[ip]
 			ip++
 			result := registers[srcReg]
+			frame.ip = ip // Save final IP of this frame
 
-			// Save frame pointer and register slice before popping
-			returnFrame := frame
-			frameRegs := returnFrame.registers
-
-			// Close any upvalues that point into the returning frame's registers
-			// vm.closeUpvalues(frameRegs) // Pass the register slice
-			vm.closeUpvalues(returnFrame.registers)
+			// Close upvalues for the returning frame
+			vm.closeUpvalues(frame.registers)
 
 			// Pop the current frame
+			// Stash required info before modifying frameCount/nextRegSlot
+			returningFrameRegSize := function.RegisterSize
+			callerTargetRegister := frame.targetRegister
+
 			vm.frameCount--
-			vm.nextRegSlot -= len(frameRegs) // Reclaim register space
+			vm.nextRegSlot -= returningFrameRegSize // Reclaim register space
 
 			if vm.frameCount == 0 {
-				// Returning from the top-level script
-				// Print the result to standard output for testing/REPL purposes
-				fmt.Println(result.String()) // Use String() method for proper output
-				return InterpretOK
+				// Returned from the top-level script frame.
+				// Return the result directly.
+				return InterpretOK, result
 			}
 
-			// --- Switch Context Back to Caller ---
-			frame = &vm.frames[vm.frameCount-1]
+			// Get the caller frame (which is now the top frame)
+			callerFrame := &vm.frames[vm.frameCount-1]
+			// Place the result into the caller's target register
+			if int(callerTargetRegister) < len(callerFrame.registers) {
+				callerFrame.registers[callerTargetRegister] = result
+			} else {
+				// This would be an internal error (compiler/vm mismatch)
+				status := vm.runtimeError("Internal Error: Invalid target register %d for return value.", callerTargetRegister)
+				return status, Undefined()
+			}
+
+			// Restore cached variables for the caller frame
+			frame = callerFrame // Update local frame pointer
 			closure = frame.closure
 			function = closure.Fn
 			code = function.Chunk.Code
@@ -419,36 +456,42 @@ func (vm *VM) run() InterpretResult {
 			registers = frame.registers
 			ip = frame.ip // Restore caller's IP
 
-			// Store the result in the caller's target register
-			registers[returnFrame.targetRegister] = result
-			// --- Context Switch Complete ---
-
 		case OpReturnUndefined:
-			result := Undefined() // Implicit return value
-			returnFrame := frame
-			frameRegs := returnFrame.registers
+			frame.ip = ip // Save final IP
 
-			// Close upvalues before popping the frame
-			vm.closeUpvalues(frameRegs)
+			// Close upvalues for the returning frame
+			vm.closeUpvalues(frame.registers)
+
+			// Pop the current frame
+			returningFrameRegSize := function.RegisterSize
+			callerTargetRegister := frame.targetRegister
 
 			vm.frameCount--
-			vm.nextRegSlot -= len(frameRegs)
+			vm.nextRegSlot -= returningFrameRegSize
 
 			if vm.frameCount == 0 {
-				// Print the result to standard output for testing/REPL purposes
-				fmt.Println(result.String()) // Use String() method for proper output
-				return InterpretOK           // Return from top-level script
+				// Returned undefined from top-level
+				return InterpretOK, Undefined()
 			}
 
-			frame = &vm.frames[vm.frameCount-1]
+			// Get the caller frame
+			callerFrame := &vm.frames[vm.frameCount-1]
+			// Place Undefined into the caller's target register
+			if int(callerTargetRegister) < len(callerFrame.registers) {
+				callerFrame.registers[callerTargetRegister] = Undefined()
+			} else {
+				status := vm.runtimeError("Internal Error: Invalid target register %d for return undefined.", callerTargetRegister)
+				return status, Undefined()
+			}
+
+			// Restore cached variables for the caller frame
+			frame = callerFrame // Update local frame pointer
 			closure = frame.closure
 			function = closure.Fn
 			code = function.Chunk.Code
 			constants = function.Chunk.Constants
 			registers = frame.registers
-			ip = frame.ip
-
-			registers[returnFrame.targetRegister] = result
+			ip = frame.ip // Restore caller's IP
 
 		case OpClosure:
 			destReg := code[ip]
@@ -460,12 +503,14 @@ func (vm *VM) run() InterpretResult {
 
 			if int(funcConstIdx) >= len(constants) {
 				frame.ip = ip
-				return vm.runtimeError("Invalid function constant index %d for closure.", funcConstIdx)
+				status := vm.runtimeError("Invalid function constant index %d for closure.", funcConstIdx)
+				return status, Undefined()
 			}
 			protoVal := constants[funcConstIdx]
 			if !IsFunction(protoVal) {
 				frame.ip = ip
-				return vm.runtimeError("Constant %d is not a function, cannot create closure.", funcConstIdx)
+				status := vm.runtimeError("Constant %d is not a function, cannot create closure.", funcConstIdx)
+				return status, Undefined()
 			}
 			protoFunc := AsFunction(protoVal)
 
@@ -481,7 +526,8 @@ func (vm *VM) run() InterpretResult {
 					// The location is index bytes *relative to the start of the current frame's registers*.
 					if index >= len(registers) {
 						frame.ip = ip
-						return vm.runtimeError("Invalid local register index %d for upvalue capture.", index)
+						status := vm.runtimeError("Invalid local register index %d for upvalue capture.", index)
+						return status, Undefined()
 					}
 					// Pass pointer to the stack slot (register) itself.
 					location := &registers[index]
@@ -490,7 +536,8 @@ func (vm *VM) run() InterpretResult {
 					// Capture upvalue from the *enclosing* function (i.e., the current closure).
 					if closure == nil || index >= len(closure.Upvalues) {
 						frame.ip = ip
-						return vm.runtimeError("Invalid upvalue index %d for capture.", index)
+						status := vm.runtimeError("Invalid upvalue index %d for capture.", index)
+						return status, Undefined()
 					}
 					upvalues[i] = closure.Upvalues[index]
 				}
@@ -512,7 +559,8 @@ func (vm *VM) run() InterpretResult {
 
 			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
 				frame.ip = ip
-				return vm.runtimeError("Invalid upvalue index %d for OpLoadFree.", upvalueIndex)
+				status := vm.runtimeError("Invalid upvalue index %d for OpLoadFree.", upvalueIndex)
+				return status, Undefined()
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
 			if upvalue.Location != nil {
@@ -531,7 +579,8 @@ func (vm *VM) run() InterpretResult {
 
 			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
 				frame.ip = ip
-				return vm.runtimeError("Invalid upvalue index %d for OpSetUpvalue.", upvalueIndex)
+				status := vm.runtimeError("Invalid upvalue index %d for OpSetUpvalue.", upvalueIndex)
+				return status, Undefined()
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
 			if upvalue.Location != nil {
@@ -557,7 +606,8 @@ func (vm *VM) run() InterpretResult {
 			// Bounds check for register access
 			if startIdx < 0 || endIdx > len(registers) {
 				frame.ip = ip
-				return vm.runtimeError("Internal Error: Register index out of bounds during array creation (start=%d, count=%d, frame size=%d)", startIdx, count, len(registers))
+				status := vm.runtimeError("Internal Error: Register index out of bounds during array creation (start=%d, count=%d, frame size=%d)", startIdx, count, len(registers))
+				return status, Undefined()
 			}
 
 			copy(elements, registers[startIdx:endIdx])
@@ -577,11 +627,13 @@ func (vm *VM) run() InterpretResult {
 
 			if !IsArray(arrayVal) {
 				frame.ip = ip
-				return vm.runtimeError("Cannot index non-array type '%v'", arrayVal.Type)
+				status := vm.runtimeError("Cannot index non-array type '%v'", arrayVal.Type)
+				return status, Undefined()
 			}
 			if !IsNumber(indexVal) {
 				frame.ip = ip
-				return vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
+				status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
+				return status, Undefined()
 			}
 
 			arr := AsArray(arrayVal)
@@ -609,11 +661,13 @@ func (vm *VM) run() InterpretResult {
 
 			if !IsArray(arrayVal) {
 				frame.ip = ip
-				return vm.runtimeError("Cannot set index on non-array type '%v'", arrayVal.Type)
+				status := vm.runtimeError("Cannot set index on non-array type '%v'", arrayVal.Type)
+				return status, Undefined()
 			}
 			if !IsNumber(indexVal) {
 				frame.ip = ip
-				return vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
+				status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
+				return status, Undefined()
 			}
 
 			arr := AsArray(arrayVal)
@@ -623,7 +677,8 @@ func (vm *VM) run() InterpretResult {
 			if idx < 0 {
 				frame.ip = ip
 				// Negative indices are invalid
-				return vm.runtimeError("Array index cannot be negative, got %d", idx)
+				status := vm.runtimeError("Array index cannot be negative, got %d", idx)
+				return status, Undefined()
 			} else if idx < len(arr.Elements) {
 				// Index is within current bounds: Overwrite existing element
 				arr.Elements[idx] = valueVal
@@ -671,7 +726,8 @@ func (vm *VM) run() InterpretResult {
 				length = float64(len(str))
 			default:
 				frame.ip = ip
-				return vm.runtimeError("Cannot get length of type '%v'", srcVal.Type)
+				status := vm.runtimeError("Cannot get length of type '%v'", srcVal.Type)
+				return status, Undefined()
 			}
 
 			registers[destReg] = Number(length)
@@ -679,12 +735,10 @@ func (vm *VM) run() InterpretResult {
 
 		default:
 			frame.ip = ip // Save IP before erroring
-			return vm.runtimeError("Unknown opcode %d encountered.", opcode)
+			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
+			return status, Undefined()
 		}
 	}
-
-	// Unreachable, but keeps the compiler happy
-	// return InterpretRuntimeError
 }
 
 // captureUpvalue creates a new Upvalue object for a local variable at the given stack location.
@@ -751,36 +805,50 @@ func (vm *VM) closeUpvalues(frameRegisters []Value) {
 	vm.openUpvalues = newOpenUpvalues
 }
 
-// runtimeError prints an error message and the stack trace.
+// runtimeError formats a runtime error message, appends it to the VM's error list,
+// and returns the InterpretRuntimeError status.
 func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
-	fmt.Fprintf(os.Stderr, "Runtime Error: %s\n", fmt.Sprintf(format, args...))
-
-	// Print stack trace
-	for i := vm.frameCount - 1; i >= 0; i-- {
-		frame := &vm.frames[i]
-		closure := frame.closure
-		function := closure.Fn
-
-		// Calculate the line number for the current instruction pointer (ip)
-		// This requires the line information in the Chunk, which we don't store per-instruction yet.
-		// For now, just print the function name and IP offset.
-		line := -1 // Placeholder
-		if function.Chunk != nil && frame.ip > 0 && frame.ip <= len(function.Chunk.Code) {
-			// Need a mapping from instruction offset to line number.
-			// Placeholder: Find the line corresponding to the *previous* instruction.
-			// Assuming frame.ip points to the *next* instruction to be executed.
-			// This requires the `Lines` array in the Chunk to be populated correctly during compilation.
-			// if len(function.Chunk.Lines) > 0 { ... }
+	// Get the current frame to access chunk and IP
+	if vm.frameCount == 0 {
+		// Should not happen if called during run()
+		// Create a generic error if no frame context
+		runtimeErr := &errors.RuntimeError{
+			Position: errors.Position{Line: 0, Column: 0, StartPos: 0, EndPos: 0}, // No position info
+			Msg:      fmt.Sprintf(format, args...),
 		}
-
-		funcName := function.Name
-		if funcName == "" {
-			funcName = "<script>"
-		}
-		fmt.Fprintf(os.Stderr, "[line %d] in %s (ip: %d)\n", line, funcName, frame.ip-1) // Show IP of failed instruction
+		vm.errors = append(vm.errors, runtimeErr)
+		// Also print to stderr as a fallback in this unexpected case
+		fmt.Fprintf(os.Stderr, "[VM Error - No Frame]: %s\n", runtimeErr.Msg)
+		return InterpretRuntimeError
 	}
 
-	vm.Reset() // Reset VM state after error
+	frame := &vm.frames[vm.frameCount-1]
+	// ip points to the *next* instruction, error occurred at ip-1
+	instructionPos := frame.ip - 1
+	line := 0
+	// Safety check for chunk and bounds before calling GetLine
+	if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.Chunk != nil {
+		line = frame.closure.Fn.Chunk.GetLine(instructionPos)
+	}
+
+	msg := fmt.Sprintf(format, args...)
+
+	runtimeErr := &errors.RuntimeError{
+		// TODO: Get Column/StartPos/EndPos if possible later
+		Position: errors.Position{
+			Line:     line,
+			Column:   0, // Placeholder
+			StartPos: 0, // Placeholder
+			EndPos:   0, // Placeholder
+		},
+		Msg: msg,
+	}
+	vm.errors = append(vm.errors, runtimeErr)
+
+	// --- Keep stderr print temporarily for immediate feedback during refactor? ---
+	// fmt.Fprintf(os.Stderr, "[line %d] Runtime Error: %s\n", line, msg)
+	// --- Remove later ---
+
 	return InterpretRuntimeError
 }
 

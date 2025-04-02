@@ -22,3 +22,4 @@ go.work
 .vscode/
 *.swp
 *.swo 
+pkg/.DS_Store

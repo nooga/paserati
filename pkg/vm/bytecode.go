@@ -145,6 +145,18 @@ type Chunk struct {
 	// Add MaxRegs later for function definitions
 }
 
+// GetLine returns the source line number corresponding to a given bytecode offset.
+// It assumes the Lines slice is populated correctly (same length as Code, storing line per OpCode).
+func (c *Chunk) GetLine(offset int) int {
+	// Basic bounds check
+	if offset < 0 || offset >= len(c.Lines) {
+		// Return 0 or -1 to indicate an invalid offset or missing line info?
+		// Let's return 0, assuming line numbers are 1-based.
+		return 0
+	}
+	return c.Lines[offset]
+}
+
 // NewChunk creates a new, empty Chunk.
 func NewChunk() *Chunk {
 	return &Chunk{

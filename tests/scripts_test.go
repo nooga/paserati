@@ -2,16 +2,15 @@ package tests
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io/ioutil"
-	"os"
 	"paserati/pkg/driver" // Use the new driver package
 	"paserati/pkg/vm"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	// Add
 )
 
 // Expectation represents the expected outcome of a script.
@@ -97,18 +96,24 @@ func TestScripts(t *testing.T) {
 				if expectation.ResultType == "compile_error" {
 					// Check if any error message contains the expected substring
 					found := false
+					var allErrors strings.Builder
 					for _, cerr := range compileErrs {
+						allErrors.WriteString(cerr.Error() + "\n")
 						if strings.Contains(cerr.Error(), expectation.Value) {
 							found = true
-							break
+							// Don't break, maybe log all errors?
 						}
 					}
 					if !found {
-						t.Errorf("Expected compile error containing %q, but got errors: %v", expectation.Value, compileErrs)
+						t.Errorf("Expected compile error containing %q, but got errors:\n%s", expectation.Value, allErrors.String())
 					}
-					return // Expected compile error, test passes if found
+					return // Expected compile error, test passes if found (or specific message found)
 				} else {
-					t.Fatalf("Unexpected compile errors: %v", compileErrs)
+					var allErrors strings.Builder
+					for _, cerr := range compileErrs {
+						allErrors.WriteString(cerr.Error() + "\n")
+					}
+					t.Fatalf("Unexpected compile errors:\n%s", allErrors.String())
 				}
 			} else if expectation.ResultType == "compile_error" {
 				t.Fatalf("Expected compile error containing %q, but compilation succeeded.", expectation.Value)
@@ -121,45 +126,59 @@ func TestScripts(t *testing.T) {
 
 			// 4. Run VM
 			vmInstance := vm.NewVM()
-			// Capture stdout/stderr for checking results or runtime errors
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-			oldStderr := os.Stderr
-			rErr, wErr, _ := os.Pipe()
-			os.Stderr = wErr
+			// Remove stdout/stderr capture
+			// oldStdout := os.Stdout
+			// r, w, _ := os.Pipe()
+			// os.Stdout = w
+			// oldStderr := os.Stderr
+			// rErr, wErr, _ := os.Pipe()
+			// os.Stderr = wErr
 
-			interpretResult := vmInstance.Interpret(chunk)
+			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
 
-			w.Close()
-			os.Stdout = oldStdout
-			wErr.Close()
-			os.Stderr = oldStderr
-
-			var vmStdout bytes.Buffer
-			_, _ = vmStdout.ReadFrom(r)
-			actualOutput := strings.TrimSpace(vmStdout.String())
-
-			var vmStderr bytes.Buffer
-			_, _ = vmStderr.ReadFrom(rErr)
-			actualRuntimeError := strings.TrimSpace(vmStderr.String())
+			// Remove stdout/stderr restoration and reading
+			// w.Close()
+			// os.Stdout = oldStdout
+			// wErr.Close()
+			// os.Stderr = oldStderr
+			// var vmStdout bytes.Buffer
+			// _, _ = vmStdout.ReadFrom(r)
+			// actualOutput := strings.TrimSpace(vmStdout.String())
+			// var vmStderr bytes.Buffer
+			// _, _ = vmStderr.ReadFrom(rErr)
+			// actualRuntimeError := strings.TrimSpace(vmStderr.String())
 
 			// 5. Check Runtime Results
 			switch expectation.ResultType {
 			case "value":
-				if interpretResult != vm.InterpretOK {
-					t.Errorf("Expected VM to return InterpretOK, but got %v. Stderr: %q", interpretResult, actualRuntimeError)
-				}
-				if actualOutput != expectation.Value {
-					t.Errorf("Expected output %q, but got %q", expectation.Value, actualOutput)
+				if len(runtimeErrs) > 0 {
+					var allErrors strings.Builder
+					for _, rerr := range runtimeErrs {
+						allErrors.WriteString(rerr.Error() + "\n")
+					}
+					t.Errorf("Expected value %q, but got runtime errors:\n%s", expectation.Value, allErrors.String())
+				} else {
+					actualOutput := finalValue.String()
+					if actualOutput != expectation.Value {
+						t.Errorf("Expected output %q, but got %q", expectation.Value, actualOutput)
+					}
 				}
 			case "runtime_error":
-				if interpretResult == vm.InterpretOK {
-					t.Errorf("Expected runtime error containing %q, but VM returned InterpretOK. Stdout: %q", expectation.Value, actualOutput)
+				if len(runtimeErrs) == 0 {
+					t.Errorf("Expected runtime error containing %q, but got no runtime errors. Final value: %s", expectation.Value, finalValue.String())
 				} else {
-					// Check if stderr contains the expected message
-					if !strings.Contains(actualRuntimeError, expectation.Value) {
-						t.Errorf("Expected runtime error containing %q, but got stderr: %q", expectation.Value, actualRuntimeError)
+					// Check if any runtime error message contains the expected substring
+					found := false
+					var allErrors strings.Builder
+					for _, rerr := range runtimeErrs {
+						allErrors.WriteString(rerr.Error() + "\n")
+						if strings.Contains(rerr.Error(), expectation.Value) {
+							found = true
+							// Don't break, log all errors?
+						}
+					}
+					if !found {
+						t.Errorf("Expected runtime error containing %q, but got errors:\n%s", expectation.Value, allErrors.String())
 					}
 				}
 			default:

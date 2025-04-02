@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
 	"strconv"
 )
@@ -20,7 +21,7 @@ func debugPrint(format string, args ...interface{}) {
 // Parser takes a lexer and builds an AST.
 type Parser struct {
 	l      *lexer.Lexer
-	errors []string
+	errors []errors.PaseratiError
 
 	curToken  lexer.Token
 	peekToken lexer.Token
@@ -98,7 +99,7 @@ var precedences = map[lexer.TokenType]int{
 func NewParser(l *lexer.Lexer) *Parser {
 	p := &Parser{
 		l:      l,
-		errors: []string{},
+		errors: []errors.PaseratiError{},
 	}
 
 	// Initialize Pratt parser maps
@@ -155,7 +156,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 }
 
 // Errors returns the list of parsing errors.
-func (p *Parser) Errors() []string {
+func (p *Parser) Errors() []errors.PaseratiError {
 	return p.errors
 }
 
@@ -166,8 +167,8 @@ func (p *Parser) nextToken() {
 	debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 }
 
-// ParseProgram parses the entire input and returns the root Program node.
-func (p *Parser) ParseProgram() *Program {
+// ParseProgram parses the entire input and returns the root Program node and any errors.
+func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program := &Program{}
 	program.Statements = []Statement{}
 
@@ -176,10 +177,14 @@ func (p *Parser) ParseProgram() *Program {
 		if stmt != nil {
 			program.Statements = append(program.Statements, stmt)
 		}
-		p.nextToken()
+		if p.curToken.Type != lexer.EOF {
+			p.nextToken()
+		} else {
+			break
+		}
 	}
 
-	return program
+	return program, p.errors
 }
 
 // --- Statement Parsing ---
@@ -266,9 +271,9 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 	// case lexer.LBRACKET: leftExp = p.parseArrayTypeExpression()
 	default:
 		// Error: Expected a type identifier, array, function, or object type start
-		msg := fmt.Sprintf("line %d: unexpected token %s (%q) at start of type annotation",
-			p.curToken.Line, p.curToken.Type, p.curToken.Literal)
-		p.errors = append(p.errors, msg)
+		msg := fmt.Sprintf("unexpected token %s (%q) at start of type annotation",
+			p.curToken.Type, p.curToken.Literal)
+		p.addError(p.curToken, msg)
 		debugPrint("parseTypeExpressionRecursive: ERROR - %s", msg)
 		return nil
 	}
@@ -532,7 +537,7 @@ func (p *Parser) parseNumberLiteral() Expression {
 	value, err := strconv.ParseFloat(p.curToken.Literal, 64)
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as float64", p.curToken.Literal)
-		p.errors = append(p.errors, msg)
+		p.addError(p.curToken, msg)
 		return nil
 	}
 	lit.Value = value
@@ -562,10 +567,11 @@ func (p *Parser) parseFunctionLiteral() Expression {
 	if p.peekTokenIs(lexer.IDENT) {
 		p.nextToken() // Consume name identifier
 		// Assuming parseIdentifier correctly returns an *Identifier here
-		nameIdent, ok := p.parseIdentifier().(*Identifier)
+		nameIdentExpr := p.parseIdentifier()
+		nameIdent, ok := nameIdentExpr.(*Identifier)
 		if !ok {
-			msg := fmt.Sprintf("line %d: expected identifier for function name, got %T", p.curToken.Line, nameIdent)
-			p.errors = append(p.errors, msg)
+			msg := fmt.Sprintf("expected identifier for function name, got %s", p.curToken.Type)
+			p.addError(p.curToken, msg)
 			return nil
 		}
 		lit.Name = nameIdent
@@ -617,8 +623,9 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 
 	// Parse first parameter
 	if !p.curTokenIs(lexer.IDENT) {
-		msg := fmt.Sprintf("line %d: expected identifier for parameter name, got %s", p.curToken.Line, p.curToken.Type)
-		p.errors = append(p.errors, msg)
+		msg := fmt.Sprintf("expected identifier for parameter name, got %s", p.curToken.Type)
+		p.addError(p.curToken, msg)
+		debugPrint("parseParameterList: Error - %s", msg)
 		return nil
 	}
 	param := &Parameter{Token: p.curToken}
@@ -643,8 +650,9 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 		p.nextToken() // Consume identifier for next param name
 
 		if !p.curTokenIs(lexer.IDENT) {
-			msg := fmt.Sprintf("line %d: expected identifier for parameter name after comma, got %s", p.curToken.Line, p.curToken.Type)
-			p.errors = append(p.errors, msg)
+			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
+			p.addError(p.curToken, msg)
+			debugPrint("parseParameterList: Error - %s", msg)
 			return nil
 		}
 		param := &Parameter{Token: p.curToken}
@@ -741,14 +749,14 @@ func (p *Parser) expectPeek(t lexer.TokenType) bool {
 // --- Error Handling ---
 
 func (p *Parser) peekError(t lexer.TokenType) {
-	msg := fmt.Sprintf("line %d: expected next token to be %s, got %s instead",
-		p.peekToken.Line, t, p.peekToken.Type)
-	p.errors = append(p.errors, msg)
+	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
+		t, p.peekToken.Type)
+	p.addError(p.peekToken, msg)
 }
 
 func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
-	msg := fmt.Sprintf("line %d: no prefix parse function for %s found", p.curToken.Line, t)
-	p.errors = append(p.errors, msg)
+	msg := fmt.Sprintf("no prefix parse function for %s found", t)
+	p.addError(p.curToken, msg)
 }
 
 // --- Precedence Helper ---
@@ -936,8 +944,8 @@ func (p *Parser) parseIfExpression() Expression {
 			debugPrint("parseIfExpression parsed standard 'else' block.")
 		} else {
 			// Error: expected '{' or 'if' after 'else'
-			msg := fmt.Sprintf("expected { or if after else, got %s instead at line %d", p.peekToken.Type, p.peekToken.Line)
-			p.errors = append(p.errors, msg)
+			msg := fmt.Sprintf("expected { or if after else, got %s instead", p.peekToken.Type)
+			p.addError(p.peekToken, msg)
 			debugPrint("parseIfExpression failed: %s", msg)
 			return nil
 		}
@@ -1062,8 +1070,8 @@ func (p *Parser) parseParameterList() []*Parameter {
 	// Parse the first parameter
 	p.nextToken() // Move past '(' to the first parameter identifier
 	if !p.curTokenIs(lexer.IDENT) {
-		msg := fmt.Sprintf("line %d: expected identifier as parameter, got %s", p.curToken.Line, p.curToken.Type)
-		p.errors = append(p.errors, msg)
+		msg := fmt.Sprintf("expected identifier as parameter, got %s", p.curToken.Type)
+		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
 		return nil
 	}
@@ -1089,8 +1097,8 @@ func (p *Parser) parseParameterList() []*Parameter {
 		p.nextToken() // Consume ','
 		p.nextToken() // Consume identifier
 		if !p.curTokenIs(lexer.IDENT) {
-			msg := fmt.Sprintf("line %d: expected identifier after comma, got %s", p.curToken.Line, p.curToken.Type)
-			p.errors = append(p.errors, msg)
+			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
+			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
 			return nil
 		}
@@ -1178,16 +1186,18 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		if expr.Operator == "=" {
 			validLHS = true
 		} else {
-			msg := fmt.Sprintf("line %d: operator %s cannot be applied to index expression", p.curToken.Line, expr.Operator)
-			p.errors = append(p.errors, msg)
+			msg := fmt.Sprintf("operator %s cannot be applied to index expression", expr.Operator)
+			p.addError(expr.Token, msg)
 			return nil
 		}
 		// TODO: Add case for MemberExpression later
+	case *MemberExpression:
+		validLHS = true
 	}
 
 	if !validLHS {
-		msg := fmt.Sprintf("line %d: invalid left-hand side in assignment: %T", p.curToken.Line, left)
-		p.errors = append(p.errors, msg)
+		msg := fmt.Sprintf("invalid left-hand side in assignment: %s", left.String())
+		p.addError(expr.Token, msg)
 		return nil
 	}
 
@@ -1410,9 +1420,9 @@ func (p *Parser) parsePrefixUpdateExpression() Expression {
 
 	// Check if argument is assignable (currently just Identifier)
 	if _, ok := expr.Argument.(*Identifier); !ok {
-		msg := fmt.Sprintf("line %d: invalid argument for prefix %s: expected identifier, got %T",
-			expr.Token.Line, expr.Operator, expr.Argument)
-		p.errors = append(p.errors, msg)
+		msg := fmt.Sprintf("invalid argument for prefix %s: expected identifier, got %T",
+			expr.Operator, expr.Argument)
+		p.addError(expr.Token, msg)
 		return nil
 	}
 
@@ -1429,9 +1439,9 @@ func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
 
 	// Check if argument is assignable (currently just Identifier)
 	if _, ok := expr.Argument.(*Identifier); !ok {
-		msg := fmt.Sprintf("line %d: invalid argument for postfix %s: expected identifier, got %T",
-			expr.Token.Line, expr.Operator, expr.Argument)
-		p.errors = append(p.errors, msg)
+		msg := fmt.Sprintf("invalid argument for postfix %s: expected identifier, got %T",
+			expr.Operator, expr.Argument)
+		p.addError(expr.Token, msg)
 		return nil
 	}
 
@@ -1486,8 +1496,8 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 
 	if !p.expectPeek(lexer.IDENT) {
 		// If the token after '.' is not an identifier, it's a syntax error.
-		msg := fmt.Sprintf("line %d: expected identifier after '.', got %s", p.curToken.Line, p.curToken.Type)
-		p.errors = append(p.errors, msg)
+		msg := fmt.Sprintf("expected identifier after '.', got %s", p.peekToken.Type)
+		p.addError(p.peekToken, msg)
 		return nil
 	}
 
@@ -1498,4 +1508,18 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 	// We don't call parseExpression here because the right side MUST be an identifier.
 	// The precedence check in the main parseExpression loop handles chaining, e.g., a.b.c
 	return exp
+}
+
+// addError creates a SyntaxError and appends it to the parser's error list.
+func (p *Parser) addError(tok lexer.Token, msg string) {
+	syntaxErr := &errors.SyntaxError{
+		Position: errors.Position{
+			Line:     tok.Line,
+			Column:   tok.Column,
+			StartPos: tok.StartPos,
+			EndPos:   tok.EndPos,
+		},
+		Msg: msg,
+	}
+	p.errors = append(p.errors, syntaxErr)
 }
