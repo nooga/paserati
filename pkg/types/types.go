@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"paserati/pkg/vm"
 	"strings"
 )
 
@@ -133,6 +134,66 @@ func (ut *UnionType) String() string {
 	return strings.Join(strs, " | ")
 }
 func (ut *UnionType) typeNode() {}
+
+// --- NEW: LiteralType ---
+
+// LiteralType represents a specific literal value used as a type.
+type LiteralType struct {
+	Value vm.Value // Store the actual VM value (String, Number, Bool)
+}
+
+func (lt *LiteralType) String() string {
+	// Use the String() method of the underlying vm.Value
+	return lt.Value.String()
+}
+func (lt *LiteralType) typeNode() {}
+
+// --- NEW: UnionType Constructor ---
+
+// NewUnionType creates a new union type from the given types.
+// It flattens nested unions and removes duplicate types.
+// If the resulting union has only one type, it returns that type directly.
+func NewUnionType(ts ...Type) Type {
+	uniqueTypes := make(map[Type]bool)
+	flattenedTypes := make([]Type, 0, len(ts))
+
+	var collectTypes func(t Type)
+	collectTypes = func(t Type) {
+		if t == nil { // Should not happen, but be safe
+			return
+		}
+		if union, ok := t.(*UnionType); ok {
+			// If it's a union, recursively collect its members
+			for _, member := range union.Types {
+				collectTypes(member)
+			}
+		} else {
+			// If it's not a union, add it if unique
+			if !uniqueTypes[t] {
+				uniqueTypes[t] = true
+				flattenedTypes = append(flattenedTypes, t)
+			}
+		}
+	}
+
+	// Collect types from the input slice
+	for _, t := range ts {
+		collectTypes(t)
+	}
+
+	// Handle simplification
+	if len(flattenedTypes) == 0 {
+		// Should this happen? Maybe return Never or Any?
+		// Let's return Never for an empty union.
+		return Never
+	} else if len(flattenedTypes) == 1 {
+		// If only one unique type remains, return it directly
+		return flattenedTypes[0]
+	}
+
+	// TODO: Sort flattenedTypes for a canonical representation?
+	return &UnionType{Types: flattenedTypes}
+}
 
 // AliasType represents a named type alias.
 type AliasType struct {

@@ -5,6 +5,7 @@ import (
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
+	"paserati/pkg/vm"
 )
 
 // TypeError represents an error found during type checking.
@@ -227,15 +228,18 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return nil
 		}
 
-		// TODO: Flatten nested unions and remove duplicates for canonical form?
-		// For now, just create a simple binary union type.
-		// A more robust implementation would collect all constituent types.
-		unionType := &types.UnionType{
-			Types: []types.Type{leftType, rightType},
-		}
-		// Set computed type on the AST node itself? Might be useful.
-		// c.SetComputedType(node, unionType)
-		return unionType
+		// --- UPDATED: Use NewUnionType constructor ---
+		// This handles flattening and duplicate removal automatically.
+		return types.NewUnionType(leftType, rightType)
+
+	// --- NEW: Handle Literal Type Nodes ---
+	case *parser.StringLiteral:
+		return &types.LiteralType{Value: vm.String(node.Value)}
+	case *parser.NumberLiteral:
+		return &types.LiteralType{Value: vm.Number(node.Value)}
+	case *parser.BooleanLiteral:
+		return &types.LiteralType{Value: vm.Bool(node.Value)}
+	// --- End Literal Type Nodes ---
 
 	// TODO: Add cases for other complex type expressions (Array, Function, Object)
 	// case *parser.ArrayTypeExpression: ...
@@ -325,6 +329,67 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 	}
 
 	// --- End Union Type Handling ---
+
+	// --- NEW: Literal Type Handling ---
+	sourceLiteral, sourceIsLiteral := source.(*types.LiteralType)
+	targetLiteral, targetIsLiteral := target.(*types.LiteralType)
+
+	if sourceIsLiteral && targetIsLiteral {
+		// Assigning LiteralType to LiteralType: Values must be strictly equal
+		// Use vm.valuesEqual (unexported) logic for now.
+		// Types must match AND values must match.
+		if sourceLiteral.Value.Type != targetLiteral.Value.Type {
+			return false
+		}
+		// Use the existing loose equality check from VM package
+		// as types are already confirmed to be the same.
+		// Need to export valuesEqual or replicate logic.
+		// Let's replicate the core logic here for simplicity for now.
+		switch sourceLiteral.Value.Type {
+		case vm.TypeNull:
+			return true // null === null
+		case vm.TypeUndefined:
+			return true // undefined === undefined
+		case vm.TypeBool:
+			return vm.AsBool(sourceLiteral.Value) == vm.AsBool(targetLiteral.Value)
+		case vm.TypeNumber:
+			return vm.AsNumber(sourceLiteral.Value) == vm.AsNumber(targetLiteral.Value)
+		case vm.TypeString:
+			return vm.AsString(sourceLiteral.Value) == vm.AsString(targetLiteral.Value)
+		default:
+			return false // Literal types cannot be functions/closures/etc.
+		}
+		// return vm.valuesEqual(sourceLiteral.Value, targetLiteral.Value) // If vm.valuesEqual was exported
+	} else if sourceIsLiteral {
+		// Assigning LiteralType TO Non-LiteralType (target):
+		// Check if the literal's underlying primitive type is assignable to the target.
+		// e.g., LiteralType{"hello"} -> string (true)
+		// e.g., LiteralType{123} -> number (true)
+		// e.g., LiteralType{true} -> boolean (true)
+		// e.g., LiteralType{"hello"} -> number (false)
+		var underlyingPrimitiveType types.Type
+		switch sourceLiteral.Value.Type {
+		case vm.TypeString:
+			underlyingPrimitiveType = types.String
+		case vm.TypeNumber:
+			underlyingPrimitiveType = types.Number
+		case vm.TypeBool:
+			underlyingPrimitiveType = types.Boolean
+		// Cannot have literal types for null/undefined/functions/etc.
+		default:
+			return false // Or maybe Any/Unknown?
+		}
+		// Check assignability between the underlying primitive and the target
+		return c.isAssignable(underlyingPrimitiveType, target)
+	} else if targetIsLiteral {
+		// Assigning Non-LiteralType (source) TO LiteralType:
+		// This is generally only possible if the source is also a literal type
+		// with the exact same value, which is covered by the first case (sourceIsLiteral && targetIsLiteral).
+		// Or if the source is 'any'/'unknown' (already handled).
+		// Or if the source is 'never' (already handled).
+		return false
+	}
+	// --- End Literal Type Handling ---
 
 	// TODO: Handle null/undefined assignability based on strict flags later.
 	// For now, let's be strict unless target is Any/Unknown/Union.
@@ -586,13 +651,16 @@ func (c *Checker) visit(node parser.Node) {
 
 	// --- Literal Expressions ---
 	case *parser.NumberLiteral:
-		c.SetComputedType(node, types.Number)
+		// Treat number literals as literal types during checking
+		c.SetComputedType(node, &types.LiteralType{Value: vm.Number(node.Value)})
 
 	case *parser.StringLiteral:
-		c.SetComputedType(node, types.String)
+		// Treat string literals as literal types during checking
+		c.SetComputedType(node, &types.LiteralType{Value: vm.String(node.Value)})
 
 	case *parser.BooleanLiteral:
-		c.SetComputedType(node, types.Boolean)
+		// Treat boolean literals as literal types during checking
+		c.SetComputedType(node, &types.LiteralType{Value: vm.Bool(node.Value)})
 
 	case *parser.NullLiteral:
 		c.SetComputedType(node, types.Null)
