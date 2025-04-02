@@ -173,6 +173,10 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		}
 
 	// --- Statements ---
+	case *parser.TypeAliasStatement: // Added
+		// Type aliases only exist for type checking, ignore in compiler.
+		return nil
+
 	case *parser.ExpressionStatement:
 		err := c.compileNode(node.Expression)
 		if err != nil {

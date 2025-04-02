@@ -188,9 +188,40 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseBreakStatement()
 	case lexer.CONTINUE:
 		return p.parseContinueStatement()
+	case lexer.TYPE:
+		return p.parseTypeAliasStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
+}
+
+// --- NEW: Type Alias Statement Parsing ---
+func (p *Parser) parseTypeAliasStatement() *TypeAliasStatement {
+	stmt := &TypeAliasStatement{Token: p.curToken} // 'type' token
+
+	if !p.expectPeek(lexer.IDENT) {
+		return nil // Expected identifier after 'type'
+	}
+
+	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	if !p.expectPeek(lexer.ASSIGN) {
+		return nil // Expected '=' after identifier
+	}
+
+	p.nextToken() // Consume '=', move to the start of the type expression
+
+	stmt.Type = p.parseTypeExpression()
+	if stmt.Type == nil {
+		return nil // Error parsing the type expression
+	}
+
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
 }
 
 // --- NEW: Type Expression Parsing (Placeholder) ---
