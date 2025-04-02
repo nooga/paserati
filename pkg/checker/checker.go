@@ -1485,7 +1485,9 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	for _, elemNode := range node.Elements {
 		c.visit(elemNode) // Visit element to compute its type
 		elemType := c.GetComputedTypeOrAny(elemNode)
-		elementTypes = append(elementTypes, elemType)
+		// --- Widen literal types ---
+		widenedElemType := getWidenedType(elemType)
+		elementTypes = append(elementTypes, widenedElemType)
 	}
 
 	// Determine the element type for the array.
@@ -1569,4 +1571,33 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 	// 5. Set computed type on the IndexExpression node
 	c.SetComputedType(node, resultType)
 	fmt.Printf("// [Checker IndexExpr] Computed type: %s\n", resultType.String())
+}
+
+// --- NEW HELPER: getWidenedType ---
+
+// getWidenedType converts literal types to their corresponding primitive base types.
+// Other types are returned unchanged.
+func getWidenedType(t types.Type) types.Type {
+	if litType, ok := t.(*types.LiteralType); ok {
+		switch litType.Value.Type {
+		case vm.TypeNumber:
+			return types.Number
+		case vm.TypeString:
+			return types.String
+		case vm.TypeBool:
+			return types.Boolean
+		case vm.TypeNull:
+			return types.Null // Or should null widen to null? Yes.
+		case vm.TypeUndefined:
+			return types.Undefined // Or should undefined widen to undefined? Yes.
+		default:
+			// Should not happen for valid literal types
+			return t // Return original if unexpected underlying type
+		}
+	}
+	// TODO: Should unions containing only literals of the same base type also widen?
+	// e.g., should (1 | 2 | 3) widen to number? Probably.
+	// This would require more complex logic here or in NewUnionType.
+
+	return t // Not a literal type, return as is
 }

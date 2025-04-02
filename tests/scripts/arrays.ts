@@ -25,9 +25,9 @@ let strVar: string = strings_arr_test[1];
 let mixedVar: number | string | boolean | null | undefined = mixed_arr_test[4];
 
 // 5. Type Checking Errors (commented out)
-let wrongNum: string = numbers_arr_test[0];
-let wrongIndex = numbers_arr_test["a"];
-numbers_arr_test[0] = "hello";
+// let wrongNum: string = numbers_arr_test[0];
+// let wrongIndex = numbers_arr_test["a"];
+// numbers_arr_test[0] = "hello";
 
 // 6. Test Calculation - Make this the final expression
 let calc_result_arr_test = numbers_arr_test[0] / 5; // 10 / 5 = 2
