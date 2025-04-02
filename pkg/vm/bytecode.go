@@ -190,14 +190,14 @@ func (c *Chunk) DisassembleChunk(name string) string {
 	builder.WriteString(fmt.Sprintf("== %s ==\n", name))
 	offset := 0
 	for offset < len(c.Code) {
-		offset = c.disassembleInstruction(&builder, offset, -1)
+		offset = c.disassembleInstruction(&builder, offset)
 	}
 	return builder.String()
 }
 
 // disassembleInstruction appends the string representation of a single instruction
 // to the builder and returns the offset of the next instruction.
-func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int, line int) int {
+func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int {
 	builder.WriteString(fmt.Sprintf("%04d      ", offset))
 
 	instruction := OpCode(c.Code[offset])
