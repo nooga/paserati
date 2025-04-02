@@ -232,6 +232,17 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		// This handles flattening and duplicate removal automatically.
 		return types.NewUnionType(leftType, rightType)
 
+	// --- NEW: Handle ArrayTypeExpression ---
+	case *parser.ArrayTypeExpression:
+		elemType := c.resolveTypeAnnotation(node.ElementType)
+		if elemType == nil {
+			return nil // Error resolving element type
+		}
+		arrayType := &types.ArrayType{ElementType: elemType}
+		// Set computed type on the AST node?
+		// c.SetComputedType(node, arrayType)
+		return arrayType
+
 	// --- NEW: Handle Literal Type Nodes ---
 	case *parser.StringLiteral:
 		return &types.LiteralType{Value: vm.String(node.Value)}
@@ -390,6 +401,22 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 		return false
 	}
 	// --- End Literal Type Handling ---
+
+	// --- NEW: Array Type Assignability ---
+	sourceArray, sourceIsArray := source.(*types.ArrayType)
+	targetArray, targetIsArray := target.(*types.ArrayType)
+
+	if sourceIsArray && targetIsArray {
+		// Both are arrays. Check if source element type is assignable to target element type.
+		// This is a basic covariance check. Stricter checks might be needed later.
+		if sourceArray.ElementType == nil || targetArray.ElementType == nil {
+			// If either element type is unknown (shouldn't happen?), consider it not assignable for safety.
+			return false
+		}
+		return c.isAssignable(sourceArray.ElementType, targetArray.ElementType)
+	}
+
+	// --- End Array Type Handling ---
 
 	// TODO: Handle null/undefined assignability based on strict flags later.
 	// For now, let's be strict unless target is Any/Unknown/Union.
@@ -1202,12 +1229,87 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.AssignmentExpression:
 		// TODO: Handle AssignmentExpression
+		line := node.Token.Line
+		if indexExpr, isIndexExpr := node.Left.(*parser.IndexExpression); isIndexExpr {
+			// --- Handle arr[idx] = value ---
+			if node.Operator != "=" {
+				c.addError(line, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported", node.Operator))
+				c.SetComputedType(node, types.Any) // Set error type
+				return
+			}
+
+			// Visit the parts to get their types
+			c.visit(indexExpr.Left)  // Visit the array part: computes array type
+			c.visit(indexExpr.Index) // Visit the index part: checks index type
+			c.visit(node.Value)      // Visit the RHS value: computes value type
+
+			// Get the types computed by the visits above
+			arrayType := c.GetComputedTypeOrAny(indexExpr.Left)
+			indexType := c.GetComputedTypeOrAny(indexExpr.Index)
+			valueType := c.GetComputedTypeOrAny(node.Value)
+
+			// Determine the expected element type from the array type
+			var expectedElementType types.Type = types.Any
+			if arrT, ok := arrayType.(*types.ArrayType); ok {
+				if arrT.ElementType != nil {
+					expectedElementType = arrT.ElementType
+				}
+			} // TODO: Handle assignment to string index? Other indexable types?
+
+			// Check if index is number (already checked within checkIndexExpression, but maybe check again?)
+			if !c.isAssignable(indexType, types.Number) {
+				// Error already added by checkIndexExpression if called via visit(indexExpr)
+				// c.addError(line, fmt.Sprintf("array index must be number, got %s", indexType.String()))
+			}
+
+			// --- CHECK ASSIGNMENT ---
+			if !c.isAssignable(valueType, expectedElementType) {
+				// Use line number from the value node if possible
+				valueLine := line // Fallback to assignment token line
+				if valueToken := GetTokenFromNode(node.Value); valueToken != (lexer.Token{}) {
+					valueLine = valueToken.Line
+				}
+				c.addError(valueLine, fmt.Sprintf("cannot assign type '%s' to array element of type '%s'", valueType.String(), expectedElementType.String()))
+			}
+			// --- END CHECK ---
+
+			// Assignment expression evaluates to the assigned value
+			c.SetComputedType(node, valueType)
+			return
+		}
+
+		// --- Existing Identifier Assignment ---
+		// Visit LHS identifier
 		c.visit(node.Left)
+		lhsType, _ := c.GetComputedType(node.Left) // Assume it was found (handled by identifier visit)
+
+		// Visit RHS value
 		c.visit(node.Value)
+		rhsType := c.GetComputedTypeOrAny(node.Value)
+
+		// Check assignability
+		if lhsType != nil && !c.isAssignable(rhsType, lhsType) {
+			// Get line number from value node if possible
+			valueLine := line
+			if valueToken := GetTokenFromNode(node.Value); valueToken != (lexer.Token{}) {
+				valueLine = valueToken.Line
+			}
+			leftIdent := node.Left.(*parser.Identifier) // Assume it's an identifier here
+			c.addError(valueLine, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", rhsType.String(), leftIdent.Value, lhsType.String()))
+		}
+
+		// Set computed type for the assignment expression (value assigned)
+		c.SetComputedType(node, rhsType)
 
 	case *parser.UpdateExpression:
 		// TODO: Handle UpdateExpression
 		c.visit(node.Argument)
+
+	// --- NEW: Array/Index Type Checking ---
+	case *parser.ArrayLiteral:
+		c.checkArrayLiteral(node)
+	case *parser.IndexExpression:
+		c.checkIndexExpression(node)
 
 	// --- Loop Statements (Control flow, check condition/body) ---
 	case *parser.WhileStatement:
@@ -1275,6 +1377,83 @@ func (c *Checker) GetComputedTypeOrAny(node parser.Node) types.Type {
 	return types.Any // Default to Any if no type was computed/stored
 }
 
+// --- NEW HELPER: GetTokenFromNode (Best effort) ---
+
+// GetTokenFromNode attempts to extract the primary token associated with a parser node.
+// This is useful for getting line numbers for error reporting.
+// Returns the zero value of lexer.Token if no specific token can be easily extracted.
+func GetTokenFromNode(node parser.Node) lexer.Token {
+	switch n := node.(type) {
+	// Statements (use the primary keyword/token)
+	case *parser.LetStatement:
+		return n.Token
+	case *parser.ConstStatement:
+		return n.Token
+	case *parser.ReturnStatement:
+		return n.Token
+	case *parser.ExpressionStatement:
+		return n.Token // Token of the start of the expression
+	case *parser.BlockStatement:
+		return n.Token // The '{' token
+	case *parser.IfExpression:
+		return n.Token // The 'if' token
+	case *parser.WhileStatement:
+		return n.Token
+	case *parser.ForStatement:
+		return n.Token
+	case *parser.BreakStatement:
+		return n.Token
+	case *parser.ContinueStatement:
+		return n.Token
+	case *parser.DoWhileStatement:
+		return n.Token
+	case *parser.TypeAliasStatement:
+		return n.Token
+
+	// Expressions (use the primary token where available)
+	case *parser.Identifier:
+		return n.Token
+	case *parser.NumberLiteral:
+		return n.Token
+	case *parser.StringLiteral:
+		return n.Token
+	case *parser.BooleanLiteral:
+		return n.Token
+	case *parser.NullLiteral:
+		return n.Token
+	case *parser.UndefinedLiteral:
+		return n.Token
+	case *parser.FunctionLiteral:
+		return n.Token // The 'function' token
+	case *parser.ArrowFunctionLiteral:
+		return n.Token // The '=>' token
+	case *parser.PrefixExpression:
+		return n.Token // The operator token
+	case *parser.InfixExpression:
+		return n.Token // The operator token
+	case *parser.TernaryExpression:
+		return n.Token // The '?' token
+	case *parser.CallExpression:
+		return n.Token // The '(' token
+	case *parser.IndexExpression:
+		return n.Token // The '[' token
+	case *parser.ArrayLiteral:
+		return n.Token // The '[' token
+	case *parser.AssignmentExpression:
+		return n.Token // The operator token
+	case *parser.UpdateExpression:
+		return n.Token // The operator token
+	// Add other expression types if they have a clear primary token
+
+	// Add specific handling for UnionTypeExpression if needed, but it's primarily structural
+	// case *parser.UnionTypeExpression: return n.Token // The '|' token?
+
+	default:
+		// Cannot easily determine a representative token
+		return lexer.Token{} // Return zero value
+	}
+}
+
 // --- NEW: Type Alias Statement Check ---
 
 func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
@@ -1297,4 +1476,97 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 
 	fmt.Printf("// [Checker TypeAlias] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
 
+}
+
+// --- NEW: Array Literal Check ---
+
+func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
+	elementTypes := []types.Type{}
+	for _, elemNode := range node.Elements {
+		c.visit(elemNode) // Visit element to compute its type
+		elemType := c.GetComputedTypeOrAny(elemNode)
+		elementTypes = append(elementTypes, elemType)
+	}
+
+	// Determine the element type for the array.
+	// For now, let's create a union of all element types.
+	// TODO: A stricter checker might require homogenous arrays or infer `any[]`.
+	var finalElementType types.Type
+	if len(elementTypes) == 0 {
+		// Empty array literal - infer type `unknown[]` or `any[]`?
+		// Let's use `unknown` as it's slightly safer than `any`.
+		finalElementType = types.Unknown
+	} else {
+		// Use NewUnionType to flatten/uniquify element types
+		finalElementType = types.NewUnionType(elementTypes...)
+	}
+
+	// Create the ArrayType
+	arrayType := &types.ArrayType{ElementType: finalElementType}
+
+	// Set the computed type for the ArrayLiteral node itself
+	c.SetComputedType(node, arrayType)
+
+	fmt.Printf("// [Checker ArrayLit] Computed type: %s\n", arrayType.String())
+}
+
+// --- NEW: Index Expression Check ---
+func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
+	// 1. Visit the base expression (array/object)
+	c.visit(node.Left)
+	leftType := c.GetComputedTypeOrAny(node.Left)
+
+	// 2. Visit the index expression
+	c.visit(node.Index)
+	indexType := c.GetComputedTypeOrAny(node.Index)
+
+	var resultType types.Type = types.Any // Default result type on error
+	line := node.Token.Line
+
+	// 3. Check base type (allow Array for now)
+	switch base := leftType.(type) {
+	case *types.ArrayType:
+		// Base is ArrayType
+		// 4. Check index type (must be number for array)
+		if !c.isAssignable(indexType, types.Number) {
+			c.addError(line, fmt.Sprintf("array index must be of type number, got %s", indexType.String()))
+			// Proceed with Any as result type
+		} else {
+			// Index type is valid, result type is the array's element type
+			if base.ElementType != nil {
+				resultType = base.ElementType
+			} else {
+				// Should not happen if ArrayType is constructed correctly
+				resultType = types.Unknown
+			}
+		}
+
+	// TODO: Add case for ObjectType (index should be string or number?)
+	// case *types.ObjectType:
+	// ... check indexType (string/number) ...
+	// ... determine result type based on object properties or index signature ...
+
+	case *types.Primitive:
+		// Allow indexing on strings?
+		if base == types.String {
+			// 4. Check index type (must be number for string)
+			if !c.isAssignable(indexType, types.Number) {
+				c.addError(line, fmt.Sprintf("string index must be of type number, got %s", indexType.String()))
+			}
+			// Result of indexing a string is always a string (or potentially undefined)
+			// Let's use string | undefined? Or just string?
+			// For simplicity now, let's say string.
+			// A more precise type might be: types.NewUnionType(types.String, types.Undefined)
+			resultType = types.String
+		} else {
+			c.addError(line, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+		}
+
+	default:
+		c.addError(line, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+	}
+
+	// 5. Set computed type on the IndexExpression node
+	c.SetComputedType(node, resultType)
+	fmt.Printf("// [Checker IndexExpr] Computed type: %s\n", resultType.String())
 }

@@ -367,6 +367,13 @@ func (c *Compiler) compileNode(node parser.Node) error {
 	case *parser.UpdateExpression:
 		return c.compileUpdateExpression(node)
 
+	// --- NEW: Array/Index ---
+	case *parser.ArrayLiteral:
+		return c.compileArrayLiteral(node)
+	case *parser.IndexExpression:
+		return c.compileIndexExpression(node)
+	// --- End Array/Index ---
+
 	default:
 		return fmt.Errorf("compilation not implemented for %T", node)
 	}
@@ -1016,14 +1023,56 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 	return nil
 }
 
-// compileAssignmentExpression compiles identifier = value
+// compileAssignmentExpression compiles identifier = value OR indexExpr = value
 func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) error {
 	line := node.Token.Line
 
-	// 1. Ensure left-hand side is an identifier (parser check helps, but double-check)
+	// Check if left-hand side is an index expression
+	if indexExpr, isIndexExpr := node.Left.(*parser.IndexExpression); isIndexExpr {
+		// --- Handle arr[idx] = value ---
+
+		// Operator must be simple assignment '=' for index assignment
+		if node.Operator != "=" {
+			return fmt.Errorf("line %d: invalid operator '%s' for index assignment, only '=' is supported", line, node.Operator)
+		}
+
+		// 1. Compile array expression
+		err := c.compileNode(indexExpr.Left)
+		if err != nil {
+			return err
+		}
+		arrayReg := c.regAlloc.Current()
+
+		// 2. Compile index expression
+		err = c.compileNode(indexExpr.Index)
+		if err != nil {
+			return err
+		}
+		indexReg := c.regAlloc.Current()
+
+		// 3. Compile the value expression (RHS)
+		err = c.compileNode(node.Value)
+		if err != nil {
+			return err
+		}
+		valueReg := c.regAlloc.Current()
+
+		// 4. Emit OpSetIndex
+		c.emitOpCode(vm.OpSetIndex, node.Token.Line) // Use '=' token line
+		c.emitByte(byte(arrayReg))
+		c.emitByte(byte(indexReg))
+		c.emitByte(byte(valueReg))
+
+		// 5. Assignment expression evaluates to the assigned value (RHS)
+		c.regAlloc.SetCurrent(valueReg)
+		return nil
+	}
+
+	// --- Existing logic for identifier assignment ---
+	// 1. Ensure left-hand side is an identifier (if not index expression)
 	ident, ok := node.Left.(*parser.Identifier)
 	if !ok {
-		return fmt.Errorf("line %d: invalid assignment target, expected identifier got %T", line, node.Left)
+		return fmt.Errorf("line %d: invalid assignment target, expected identifier or index expression, got %T", line, node.Left)
 	}
 
 	// 2. Resolve the identifier to find its storage location (register or upvalue)
@@ -1796,3 +1845,83 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error 
 	c.regAlloc.SetCurrent(resultReg)
 	return nil
 }
+
+// --- NEW: Array/Index ---
+func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) error {
+	elementCount := len(node.Elements)
+	// TODO: Handle elementCount > 255? OpMakeArray currently uses uint8 for count.
+	if elementCount > 255 {
+		return fmt.Errorf("line %d: array literal exceeds maximum size of 255 elements", node.Token.Line)
+	}
+
+	// Compile elements - they should end up in consecutive registers
+	var firstElementReg Register = nilRegister
+	for i, elem := range node.Elements {
+		err := c.compileNode(elem)
+		if err != nil {
+			return err
+		}
+		currentElementReg := c.regAlloc.Current()
+		if i == 0 {
+			firstElementReg = currentElementReg
+		} else {
+			// Verify registers are consecutive (simple check)
+			expectedReg := firstElementReg + Register(i)
+			if currentElementReg != expectedReg {
+				// This indicates an issue with register allocation or expression compilation
+				// that didn't leave results in consecutive registers.
+				// A more robust compiler might handle this by moving values.
+				return fmt.Errorf("internal compiler error: array element registers not consecutive (expected R%d, got R%d) at line %d", expectedReg, currentElementReg, node.Token.Line)
+			}
+		}
+	}
+
+	// Allocate register for the array itself
+	arrayReg := c.regAlloc.Alloc()
+
+	// Emit OpMakeArray
+	// If no elements, firstElementReg remains nilRegister, pass 0
+	startRegByte := byte(0)
+	if firstElementReg != nilRegister {
+		startRegByte = byte(firstElementReg)
+	}
+	c.emitOpCode(vm.OpMakeArray, node.Token.Line)
+	c.emitByte(byte(arrayReg))     // DestReg
+	c.emitByte(startRegByte)       // StartReg
+	c.emitByte(byte(elementCount)) // Count
+
+	// Result (the array) is now in arrayReg
+	c.regAlloc.SetCurrent(arrayReg)
+	return nil
+}
+
+func (c *Compiler) compileIndexExpression(node *parser.IndexExpression) error {
+	// 1. Compile the expression being indexed (the array)
+	err := c.compileNode(node.Left)
+	if err != nil {
+		return err
+	}
+	arrayReg := c.regAlloc.Current()
+
+	// 2. Compile the index expression
+	err = c.compileNode(node.Index)
+	if err != nil {
+		return err
+	}
+	indexReg := c.regAlloc.Current()
+
+	// 3. Allocate register for the result
+	destReg := c.regAlloc.Alloc()
+
+	// 4. Emit OpGetIndex
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line) // Use '[' token line
+	c.emitByte(byte(destReg))
+	c.emitByte(byte(arrayReg))
+	c.emitByte(byte(indexReg))
+
+	// Result is now in destReg
+	c.regAlloc.SetCurrent(destReg)
+	return nil
+}
+
+// --- End Array/Index ---

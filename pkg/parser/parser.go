@@ -60,6 +60,7 @@ const (
 	_ int = iota
 	TYPE_LOWEST
 	TYPE_UNION // |
+	TYPE_ARRAY // [] (Higher precedence than union)
 )
 
 // Precedences map for operator tokens
@@ -82,6 +83,7 @@ var precedences = map[lexer.TokenType]int{
 	lexer.SLASH:           PRODUCT,
 	lexer.ASTERISK:        PRODUCT,
 	lexer.LPAREN:          CALL,
+	lexer.LBRACKET:        INDEX,
 	lexer.QUESTION:        TERNARY,
 	lexer.LOGICAL_AND:     LOGICAL_AND,
 	lexer.LOGICAL_OR:      LOGICAL_OR,
@@ -113,6 +115,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression) // Added --x
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)   // (5 + 5)
 	p.registerPrefix(lexer.IF, p.parseIfExpression)            // if (condition) { ... }
+	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral)      // Added [1, 2]
 
 	p.infixParseFns = make(map[lexer.TokenType]infixParseFn)
 	p.registerInfix(lexer.PLUS, p.parseInfixExpression)
@@ -139,6 +142,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)
 	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression) // Added x++
 	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression) // Added x--
+	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression)    // Added arr[idx]
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -279,6 +283,12 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 			if leftExp == nil {
 				return nil // Error during union parsing
 			}
+		case lexer.LBRACKET: // Handle T[] syntax
+			p.nextToken()                                 // Consume '['
+			leftExp = p.parseArrayTypeExpression(leftExp) // Need to implement this
+			if leftExp == nil {
+				return nil // Error during array type parsing
+			}
 		// TODO: Add cases for other potential infix type operators (e.g., '&' for intersection)
 		default:
 			// No infix operator found or lower precedence
@@ -310,10 +320,25 @@ func (p *Parser) peekTypePrecedence() int {
 	switch p.peekToken.Type {
 	case lexer.PIPE:
 		return TYPE_UNION
+	case lexer.LBRACKET: // For T[] syntax
+		return TYPE_ARRAY
 	// TODO: Add other type operators (e.g., lexer.AMPERSAND for TYPE_INTERSECTION)
 	default:
 		return TYPE_LOWEST
 	}
+}
+
+// --- NEW: Helper for infix array type parsing T[] ---
+func (p *Parser) parseArrayTypeExpression(elementType Expression) Expression {
+	arrayTypeExp := &ArrayTypeExpression{
+		Token:       p.curToken, // The '[' token
+		ElementType: elementType,
+	}
+	// We expect immediate RBRACKET for T[] syntax
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil // Expected ']' after '[' for array type
+	}
+	return arrayTypeExp
 }
 
 func (p *Parser) parseLetStatement() *LetStatement {
@@ -1122,10 +1147,25 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		Left:     left,
 	}
 
-	// Basic Check: Ensure the left side is an identifier for now.
-	// Later, could support member access (obj.prop = ...) or index access (arr[i] = ...).
-	if _, ok := left.(*Identifier); !ok {
-		msg := fmt.Sprintf("line %d: invalid left-hand side in assignment: expected identifier, got %T", p.curToken.Line, left)
+	// Check if the left side is assignable (Identifier or IndexExpression)
+	validLHS := false
+	switch left.(type) {
+	case *Identifier:
+		validLHS = true
+	case *IndexExpression:
+		// Allow simple assignment (=) for index expressions
+		if expr.Operator == "=" {
+			validLHS = true
+		} else {
+			msg := fmt.Sprintf("line %d: operator %s cannot be applied to index expression", p.curToken.Line, expr.Operator)
+			p.errors = append(p.errors, msg)
+			return nil
+		}
+		// TODO: Add case for MemberExpression later
+	}
+
+	if !validLHS {
+		msg := fmt.Sprintf("line %d: invalid left-hand side in assignment: %T", p.curToken.Line, left)
 		p.errors = append(p.errors, msg)
 		return nil
 	}
@@ -1376,4 +1416,38 @@ func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
 
 	// No need to consume token, parseExpression loop does that.
 	return expr
+}
+
+// --- NEW: Array Literal Parsing ---
+func (p *Parser) parseArrayLiteral() Expression {
+	array := &ArrayLiteral{Token: p.curToken} // '['
+
+	array.Elements = p.parseExpressionList(lexer.RBRACKET)
+	if array.Elements == nil {
+		// If parseExpressionList returned nil, it means it didn't find the RBRACKET.
+		// Error message was likely added by expectPeek within parseExpressionList.
+		return nil
+	}
+
+	return array
+}
+
+// --- NEW: Index Expression Parsing ---
+func (p *Parser) parseIndexExpression(left Expression) Expression {
+	exp := &IndexExpression{
+		Token: p.curToken, // '['
+		Left:  left,
+	}
+
+	p.nextToken() // Consume '[', move to the start of the index expression
+	exp.Index = p.parseExpression(LOWEST)
+	if exp.Index == nil {
+		return nil // Error parsing index expression
+	}
+
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil // Expected ']'
+	}
+
+	return exp
 }

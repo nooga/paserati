@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 )
 
 // ValueType represents the type of a Value.
@@ -17,6 +18,7 @@ const (
 	TypeString
 	TypeFunction // Represents *Function
 	TypeClosure  // Represents *Closure
+	TypeArray    // Represents *Array (Added)
 	// Add TypeObject later
 )
 
@@ -42,6 +44,7 @@ type Value struct {
 		str     string
 		fn      *Function // Direct pointer for functions
 		closure *Closure  // Direct pointer for closures
+		arr     *Array    // Direct pointer for arrays (Added)
 		// obj     interface{} // Keep for other potential object types? Or remove if only Fn/Closure?
 		// For now, removing obj, assuming only these complex types for now.
 	}
@@ -215,6 +218,18 @@ func (v Value) String() string {
 		} else {
 			return "<closure>"
 		}
+	case TypeArray:
+		arr := v.as.arr
+		var builder strings.Builder
+		builder.WriteString("[")
+		for i, elem := range arr.Elements {
+			if i > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString(elem.String()) // Recursively call String()
+		}
+		builder.WriteString("]")
+		return builder.String()
 	default:
 		return fmt.Sprintf("Unknown ValueType: %d", v.Type)
 	}
@@ -281,7 +296,40 @@ func valuesEqual(a, b Value) bool {
 	case TypeClosure:
 		// Closure equality is typically by reference
 		return AsClosure(a) == AsClosure(b)
+	case TypeArray:
+		// Array equality is by reference
+		return AsArray(a) == AsArray(b)
 	default:
 		return false // Should not happen
 	}
 }
+
+// --- NEW: Array Type --- (Added)
+
+// Array represents a runtime array value.
+type Array struct {
+	Elements []Value
+}
+
+// --- NEW: Array Constructor/Checker/Accessor --- (Added)
+
+// NewArray creates a new Array value containing the given elements.
+func NewArray(elements []Value) Value {
+	arr := &Array{Elements: elements}
+	v := Value{Type: TypeArray}
+	v.as.arr = arr
+	return v
+}
+
+func IsArray(v Value) bool {
+	return v.Type == TypeArray
+}
+
+func AsArray(v Value) *Array {
+	if !IsArray(v) {
+		panic("value is not an array")
+	}
+	return v.as.arr
+}
+
+// --- END NEW ---

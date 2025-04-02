@@ -538,6 +538,95 @@ func (vm *VM) run() InterpretResult {
 				upvalue.Closed = valueToStore
 			}
 
+		// --- NEW: Array Opcodes ---
+		case OpMakeArray:
+			destReg := code[ip]
+			startReg := code[ip+1]
+			count := int(code[ip+2])
+			ip += 3
+
+			// Create a new slice and copy elements from registers
+			elements := make([]Value, count)
+			startIdx := int(startReg)
+			endIdx := startIdx + count
+
+			// Bounds check for register access
+			if startIdx < 0 || endIdx > len(registers) {
+				frame.ip = ip
+				return vm.runtimeError("Internal Error: Register index out of bounds during array creation (start=%d, count=%d, frame size=%d)", startIdx, count, len(registers))
+			}
+
+			copy(elements, registers[startIdx:endIdx])
+
+			// Create the array value
+			arrayValue := NewArray(elements)
+			registers[destReg] = arrayValue
+
+		case OpGetIndex:
+			destReg := code[ip]
+			arrayReg := code[ip+1]
+			indexReg := code[ip+2]
+			ip += 3
+
+			arrayVal := registers[arrayReg]
+			indexVal := registers[indexReg]
+
+			if !IsArray(arrayVal) {
+				frame.ip = ip
+				return vm.runtimeError("Cannot index non-array type '%s'", arrayVal.Type)
+			}
+			if !IsNumber(indexVal) {
+				frame.ip = ip
+				return vm.runtimeError("Array index must be a number, got '%s'", indexVal.Type)
+			}
+
+			arr := AsArray(arrayVal)
+			idx := int(AsNumber(indexVal)) // TODO: Handle non-integer indices?
+
+			// Bounds check
+			if idx < 0 || idx >= len(arr.Elements) {
+				frame.ip = ip
+				// Return undefined for out-of-bounds access, like JS?
+				// Or throw runtime error? Let's return undefined for now.
+				registers[destReg] = Undefined()
+			} else {
+				registers[destReg] = arr.Elements[idx]
+			}
+
+		case OpSetIndex:
+			arrayReg := code[ip]
+			indexReg := code[ip+1]
+			valueReg := code[ip+2]
+			ip += 3
+
+			arrayVal := registers[arrayReg]
+			indexVal := registers[indexReg]
+			valueVal := registers[valueReg]
+
+			if !IsArray(arrayVal) {
+				frame.ip = ip
+				return vm.runtimeError("Cannot set index on non-array type '%s'", arrayVal.Type)
+			}
+			if !IsNumber(indexVal) {
+				frame.ip = ip
+				return vm.runtimeError("Array index must be a number, got '%s'", indexVal.Type)
+			}
+
+			arr := AsArray(arrayVal)
+			idx := int(AsNumber(indexVal)) // TODO: Handle non-integer indices?
+
+			// Bounds check
+			if idx < 0 || idx >= len(arr.Elements) {
+				frame.ip = ip
+				// Error on out-of-bounds set?
+				return vm.runtimeError("Array index %d out of bounds for array of length %d", idx, len(arr.Elements))
+			}
+
+			arr.Elements[idx] = valueVal
+			// OpSetIndex itself doesn't produce a result register, the assignment expression does (valueReg)
+
+		// --- End Array Opcodes ---
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			return vm.runtimeError("Unknown opcode %d encountered.", opcode)

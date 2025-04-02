@@ -56,6 +56,11 @@ const (
 	OpJumpIfFalse OpCode = 25 // Rx Offset(16bit): Jump by Offset if Rx is falsey.
 	OpJump        OpCode = 26 // Offset(16bit): Unconditionally jump by Offset.
 
+	// Array Operations (NEW)
+	OpMakeArray OpCode = 27 // DestReg StartReg Count: Create array in DestReg from Count values starting at StartReg.
+	OpGetIndex  OpCode = 28 // DestReg ArrayReg IndexReg: DestReg = ArrayReg[IndexReg]
+	OpSetIndex  OpCode = 29 // ArrayReg IndexReg ValueReg: ArrayReg[IndexReg] = ValueReg
+
 	// Add comparison operators as needed
 	// OpLessEqual // Rx Ry Rz: Rx = (Ry <= Rz)
 )
@@ -117,6 +122,12 @@ func (op OpCode) String() string {
 		return "OpJump"
 	case OpLessEqual:
 		return "OpLessEqual"
+	case OpMakeArray:
+		return "OpMakeArray"
+	case OpGetIndex:
+		return "OpGetIndex"
+	case OpSetIndex:
+		return "OpSetIndex"
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}
@@ -219,6 +230,14 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int, lin
 		return c.jumpInstruction(builder, instruction.String(), offset, true) // Has register operand
 	case OpJump:
 		return c.jumpInstruction(builder, instruction.String(), offset, false) // No register operand
+
+	// Array Operations
+	case OpMakeArray:
+		return c.makeArrayInstruction(builder, instruction.String(), offset)
+	case OpGetIndex:
+		return c.getIndexInstruction(builder, instruction.String(), offset)
+	case OpSetIndex:
+		return c.setIndexInstruction(builder, instruction.String(), offset)
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))
@@ -460,4 +479,61 @@ func (c *Chunk) jumpInstruction(builder *strings.Builder, name string, offset in
 		builder.WriteString(fmt.Sprintf("%-16s %d (to %04d)\n", name, jumpOffset, jumpTarget))
 		return offset + 3 // Op + Offset(2)
 	}
+}
+
+// makeArrayInstruction handles OpMakeArray DestReg StartReg Count
+func (c *Chunk) makeArrayInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	startReg := c.Code[offset+2]
+	count := c.Code[offset+3]
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, Count %d\n", name, destReg, startReg, count))
+	return offset + 4 // Opcode + 3 register bytes
+}
+
+// getIndexInstruction handles OpGetIndex DestReg ArrayReg IndexReg
+func (c *Chunk) getIndexInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	arrayReg := c.Code[offset+2]
+	indexReg := c.Code[offset+3]
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d\n", name, destReg, arrayReg, indexReg))
+	return offset + 4 // Opcode + 3 register bytes
+}
+
+// setIndexInstruction handles OpSetIndex ArrayReg IndexReg ValueReg
+func (c *Chunk) setIndexInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+	arrayReg := c.Code[offset+1]
+	indexReg := c.Code[offset+2]
+	valueReg := c.Code[offset+3]
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d\n", name, arrayReg, indexReg, valueReg))
+	return offset + 4 // Opcode + 3 register bytes
 }
