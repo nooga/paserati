@@ -220,9 +220,13 @@ func (vm *VM) run() InterpretResult {
 				} else if IsString(leftVal) && IsString(rightVal) {
 					// Consider performance of string concat later
 					registers[destReg] = String(AsString(leftVal) + AsString(rightVal))
+				} else if IsString(leftVal) && IsNumber(rightVal) {
+					registers[destReg] = String(AsString(leftVal) + fmt.Sprintf("%v", AsNumber(rightVal)))
+				} else if IsNumber(leftVal) && IsString(rightVal) {
+					registers[destReg] = String(fmt.Sprintf("%v", AsNumber(leftVal)) + AsString(rightVal))
 				} else {
 					frame.ip = ip
-					return vm.runtimeError("Operands must be two numbers or two strings for '+'.")
+					return vm.runtimeError("Operands must be two numbers, two strings, or a string and a number for '+'.")
 				}
 			case OpSubtract, OpMultiply, OpDivide:
 				// Strictly numbers for these

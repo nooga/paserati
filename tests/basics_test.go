@@ -12,10 +12,11 @@ import (
 // --- Operator & Literal Matrix Test ---
 
 type matrixTestCase struct {
-	name    string
-	input   string
-	expect  string // Expected output OR expected runtime error substring
-	isError bool   // True if expect is a runtime error substring
+	name               string
+	input              string
+	expect             string // Expected output OR expected runtime error substring
+	isError            bool   // True if expect is a runtime error substring
+	expectCompileError bool   // True if expect is a compile error substring
 }
 
 func TestOperatorsAndLiterals(t *testing.T) {
@@ -48,8 +49,8 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "InfixDivNum", input: "10 / 4;", expect: "2.5"},
 		{name: "InfixAddStr", input: `"f" + "oo";`, expect: "foo"},
 		{name: "InfixDivZero", input: "1 / 0;", expect: "Division by zero", isError: true},
-		{name: "InfixAddMismatch", input: `1 + "a";`, expect: "Operands must be two numbers or two strings for '+'", isError: true},
-		{name: "InfixSubMismatch", input: `"a" - 1;`, expect: "Operands must be numbers for Subtract", isError: true},
+		{name: "InfixAddMismatch", input: `1 + "a";`, expect: "1a"},
+		{name: "InfixSubMismatch", input: `"a" - 1;`, expect: "operator '-' cannot be applied to types 'string' and 'number'", isError: true, expectCompileError: true},
 
 		// Infix Comparison
 		{name: "InfixLT_T", input: "5 < 10;", expect: "true"},
@@ -296,11 +297,23 @@ func TestOperatorsAndLiterals(t *testing.T) {
 			chunk, compileErrs := driver.CompileString(inputSrc)
 
 			// We don't expect compile errors for these simple cases
-			if len(compileErrs) > 0 {
+			if !tc.expectCompileError && len(compileErrs) > 0 {
 				t.Fatalf("Unexpected compile errors: %v", compileErrs)
 			}
-			if chunk == nil {
+			if !tc.expectCompileError && chunk == nil {
 				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
+			}
+
+			if tc.expectCompileError {
+				if len(compileErrs) == 0 {
+					t.Fatalf("Expected compile error, but got no errors.")
+				}
+				for _, err := range compileErrs {
+					if !strings.Contains(err.Error(), tc.expect) {
+						t.Fatalf("Expected compile error containing %q, but got %q", tc.expect, err.Error())
+					}
+				}
+				return // Expected compile error, test passes if found
 			}
 
 			// 2. Run VM
