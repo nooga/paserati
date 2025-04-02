@@ -384,19 +384,19 @@ func (c *Compiler) compileNode(node parser.Node) error {
 
 		// 2. Check property name and object type using the checker's results
 		propertyName := node.Property.Value
-		// <<< Use checker's method to get type >>>
 		objectStaticType := c.typeChecker.GetComputedTypeOrAny(node.Object)
 
-		// <<< Add nil check for safety >>>
 		if objectStaticType == nil {
-			// This might happen if the checker failed to assign a type even on error
-			return fmt.Errorf("compiler internal error: checker did not provide type for object at line %d", node.Token.Line)
+			return fmt.Errorf("compiler internal error: checker did not provide type for object at line %v", node.Object.TokenLiteral())
 		}
 
+		// <<< Widen the retrieved static type >>>
+		widenedObjectType := types.GetWidenedType(objectStaticType)
+
 		if propertyName == "length" {
-			// Check if the static type allows .length
-			_, isArray := objectStaticType.(*types.ArrayType)
-			if isArray || objectStaticType == types.String {
+			// Check if the *widened* static type allows .length
+			_, isArray := widenedObjectType.(*types.ArrayType)
+			if isArray || widenedObjectType == types.String {
 				// 3. Emit OpGetLength
 				destReg := c.regAlloc.Alloc()
 				c.emitGetLength(destReg, objectReg, node.Token.Line)
@@ -404,7 +404,7 @@ func (c *Compiler) compileNode(node parser.Node) error {
 				return nil
 			} else {
 				// Type checker should prevent this, but add safety error
-				return fmt.Errorf("compiler error: type '%s' has no property 'length' at line %d", objectStaticType.String(), node.Token.Line)
+				return fmt.Errorf("compiler error: type '%s' (widened from '%s') has no property 'length' at line %d", widenedObjectType.String(), objectStaticType.String(), node.Token.Line)
 			}
 		} else {
 			// TODO: Handle other properties later (OpGetProperty?)
