@@ -9,9 +9,12 @@ type TokenType string
 
 // Token represents a lexical token.
 type Token struct {
-	Type    TokenType
-	Literal string // The actual text of the token (lexeme)
-	Line    int    // Line number where the token starts
+	Type     TokenType
+	Literal  string // The actual text of the token (lexeme)
+	Line     int    // 1-based line number where the token starts
+	Column   int    // 1-based column number (rune index) where the token starts
+	StartPos int    // 0-based byte offset where the token starts
+	EndPos   int    // 0-based byte offset after the token ends
 }
 
 // --- Token Types ---
@@ -127,10 +130,11 @@ func LookupIdent(ident string) TokenType {
 // Lexer holds the state of the scanner.
 type Lexer struct {
 	input        string
-	position     int  // current position in input (points to current char)
-	readPosition int  // current reading position in input (after current char)
+	position     int  // current position in input (points to current char's byte offset)
+	readPosition int  // current reading position in input (byte offset after current char)
 	ch           byte // current char under examination
-	line         int  // current line number
+	line         int  // current 1-based line number
+	column       int  // current 1-based column number (position of l.position on l.line)
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -161,13 +165,20 @@ func (l *Lexer) SetPosition(pos int) {
 
 // NewLexer creates a new Lexer.
 func NewLexer(input string) *Lexer {
-	l := &Lexer{input: input, line: 1}
-	l.readChar() // Initialize l.ch, l.position, l.readPosition
+	l := &Lexer{input: input, line: 1, column: 1} // Start at line 1, column 1
+	l.readChar()                                  // Initialize l.ch, l.position, l.readPosition, and potentially update line/column if input starts with newline
 	return l
 }
 
 // readChar gives us the next character and advances our position in the input string.
+// It also updates the line and column count.
 func (l *Lexer) readChar() {
+	// Before advancing, check if the current character was a newline
+	if l.ch == '\n' {
+		l.line++
+		l.column = 0 // Reset column, it will be incremented below
+	}
+
 	if l.readPosition >= len(l.input) {
 		l.ch = 0 // 0 is ASCII for NUL, signifies EOF
 	} else {
@@ -175,6 +186,7 @@ func (l *Lexer) readChar() {
 	}
 	l.position = l.readPosition
 	l.readPosition++
+	l.column++ // Increment column for the character now at l.position
 }
 
 // peekChar looks ahead in the input without consuming the character.
@@ -187,11 +199,10 @@ func (l *Lexer) peekChar() byte {
 }
 
 // skipWhitespace consumes whitespace characters (space, tab, newline, carriage return).
+// It relies on readChar to update line and column counts.
 func (l *Lexer) skipWhitespace() {
 	for l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
-		if l.ch == '\n' {
-			l.line++
-		}
+		// The line/column update happens inside readChar
 		l.readChar()
 	}
 }
@@ -202,274 +213,330 @@ func (l *Lexer) NextToken() Token {
 
 	l.skipWhitespace()
 
-	tok.Line = l.line // Assign line number before reading the char for the token
+	// Capture token start position *after* skipping whitespace
+	startLine := l.line
+	startCol := l.column
+	startPos := l.position
 
 	switch l.ch {
 	case '=':
 		if l.peekChar() == '=' {
-			ch := l.ch
-			l.readChar()
+			l.readChar() // Consume '='
 			if l.peekChar() == '=' {
-				l.readChar()
-				literal := string(ch) + string(l.ch) + string(l.input[l.position])
-				tok = Token{Type: STRICT_EQ, Literal: literal, Line: l.line}
+				l.readChar()                                // Consume second '='
+				literal := l.input[startPos : l.position+1] // Read the actual '==='
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: STRICT_EQ, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			} else {
-				literal := string(ch) + string(l.ch)
-				tok = Token{Type: EQ, Literal: literal, Line: l.line}
+				literal := l.input[startPos : l.position+1] // Read the actual '=='
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: EQ, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
 		} else if l.peekChar() == '>' {
-			ch := l.ch
-			l.readChar()
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: ARROW, Literal: literal, Line: l.line}
+			l.readChar()                                // Consume '>'
+			literal := l.input[startPos : l.position+1] // Read the actual '=>'
+			l.readChar()                                // Advance past '>'
+			tok = Token{Type: ARROW, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(ASSIGN, l.ch, l.line)
+			literal := string(l.ch) // Just '='
+			l.readChar()            // Advance past '='
+			tok = Token{Type: ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '!':
 		if l.peekChar() == '=' {
-			ch := l.ch
-			l.readChar()
+			l.readChar() // Consume '='
 			if l.peekChar() == '=' {
-				l.readChar()
-				literal := string(ch) + string(l.ch) + string(l.input[l.position])
-				tok = Token{Type: STRICT_NOT_EQ, Literal: literal, Line: l.line}
+				l.readChar()                                // Consume second '='
+				literal := l.input[startPos : l.position+1] // Read the actual '!=='
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: STRICT_NOT_EQ, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			} else {
-				literal := string(ch) + string(l.ch)
-				tok = Token{Type: NOT_EQ, Literal: literal, Line: l.line}
+				literal := l.input[startPos : l.position+1] // Read the actual '!='
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: NOT_EQ, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
 		} else {
-			tok = newToken(BANG, l.ch, l.line)
+			literal := string(l.ch) // Just '!'
+			l.readChar()            // Advance past '!'
+			tok = Token{Type: BANG, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '+':
 		if l.peekChar() == '=' { // Check for +=
-			ch := l.ch
-			l.readChar() // Consume '='
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: PLUS_ASSIGN, Literal: literal, Line: l.line}
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read the actual '+='
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: PLUS_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else if l.peekChar() == '+' { // Check for ++
-			ch := l.ch
-			l.readChar() // Consume second '+'
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: INC, Literal: literal, Line: l.line}
+			l.readChar()                                // Consume second '+'
+			literal := l.input[startPos : l.position+1] // Read the actual '++'
+			l.readChar()                                // Advance past '+'
+			tok = Token{Type: INC, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(PLUS, l.ch, l.line)
+			literal := string(l.ch) // Just '+'
+			l.readChar()            // Advance past '+'
+			tok = Token{Type: PLUS, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '-':
 		if l.peekChar() == '=' { // Check for -=
-			ch := l.ch
-			l.readChar() // Consume '='
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: MINUS_ASSIGN, Literal: literal, Line: l.line}
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read the actual '-='
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: MINUS_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else if l.peekChar() == '-' { // Check for --
-			ch := l.ch
-			l.readChar() // Consume second '-'
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: DEC, Literal: literal, Line: l.line}
+			l.readChar()                                // Consume second '-'
+			literal := l.input[startPos : l.position+1] // Read the actual '--'
+			l.readChar()                                // Advance past '-'
+			tok = Token{Type: DEC, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(MINUS, l.ch, l.line)
+			literal := string(l.ch) // Just '-'
+			l.readChar()            // Advance past '-'
+			tok = Token{Type: MINUS, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '*':
-		if l.peekChar() == '=' { // Added check for *=
-			ch := l.ch
-			l.readChar() // Consume '='
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: ASTERISK_ASSIGN, Literal: literal, Line: l.line}
+		if l.peekChar() == '=' { // Check for *=
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read the actual '*='
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: ASTERISK_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(ASTERISK, l.ch, l.line)
+			literal := string(l.ch) // Just '*'
+			l.readChar()            // Advance past '*'
+			tok = Token{Type: ASTERISK, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '/':
-		if l.peekChar() == '/' { // Check for single-line comment first
-			l.skipComment()
-			return l.NextToken() // Get next token after comment
-		} else if l.peekChar() == '*' { // Check for multiline comment
-			if l.skipMultilineComment() { // Returns true on success, false on unterminated
-				return l.NextToken() // Get next token after comment
-			} else {
-				// Unterminated comment - return ILLEGAL or EOF?
-				// Let's return EOF if we hit the end, or ILLEGAL if stuck?
-				// For now, let EOF propagate naturally.
-				return Token{Type: ILLEGAL, Literal: "Unterminated multiline comment", Line: l.line}
+		if l.peekChar() == '/' {
+			l.skipComment()      // Skips to the end of the line or EOF
+			return l.NextToken() // Recursively call NextToken to get the token after the comment
+		} else if l.peekChar() == '*' {
+			if !l.skipMultilineComment() { // Skips until '*/' or EOF
+				// Unterminated comment, return an ILLEGAL token
+				literal := "Unterminated multiline comment"
+				// Use start position of the '/*' but the error ends at current position (EOF)
+				tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				return tok // Explicitly return, don't advance char
 			}
+			return l.NextToken() // Get the token after the multiline comment
 		} else if l.peekChar() == '=' { // Added check for /=
-			ch := l.ch
-			l.readChar() // Consume '='
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: SLASH_ASSIGN, Literal: literal, Line: l.line}
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read the actual '/='
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: SLASH_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(SLASH, l.ch, l.line)
+			literal := string(l.ch) // Just '/'
+			l.readChar()            // Advance past '/'
+			tok = Token{Type: SLASH, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
-	case '&': // Added
-		if l.peekChar() == '&' {
-			ch := l.ch
-			l.readChar() // Consume second '&'
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: LOGICAL_AND, Literal: literal, Line: l.line}
+	case '&':
+		if l.peekChar() == '&' { // Check for &&
+			l.readChar()                                // Consume second '&'
+			literal := l.input[startPos : l.position+1] // Read the actual '&&'
+			l.readChar()                                // Advance past '&'
+			tok = Token{Type: LOGICAL_AND, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(ILLEGAL, l.ch, l.line) // Single '&' is illegal for now
+			// Single '&' is illegal for now
+			literal := string(l.ch)
+			l.readChar()
+			tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
-	case '|': // Modified for Union Type
-		if l.peekChar() == '|' {
-			ch := l.ch
-			l.readChar() // Consume second '|'
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: LOGICAL_OR, Literal: literal, Line: l.line}
+	case '|':
+		if l.peekChar() == '|' { // Check for ||
+			l.readChar()                                // Consume second '|'
+			literal := l.input[startPos : l.position+1] // Read the actual '||'
+			l.readChar()                                // Advance past '|'
+			tok = Token{Type: LOGICAL_OR, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(PIPE, l.ch, l.line) // Single '|' is Union Type
+			// Single '|' is Union Type
+			literal := string(l.ch)
+			l.readChar()
+			tok = Token{Type: PIPE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '<':
 		if l.peekChar() == '=' {
-			ch := l.ch
-			l.readChar()
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: LE, Literal: literal, Line: l.line}
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read the actual '<='
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: LE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(LT, l.ch, l.line)
+			literal := string(l.ch) // Just '<'
+			l.readChar()            // Advance past '<'
+			tok = Token{Type: LT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '>':
-		if l.peekChar() == '=' { // Added check for >=
-			ch := l.ch
-			l.readChar()
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: GE, Literal: literal, Line: l.line}
+		if l.peekChar() == '=' {
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read the actual '>='
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: GE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
-			tok = newToken(GT, l.ch, l.line)
+			literal := string(l.ch) // Just '>'
+			l.readChar()            // Advance past '>'
+			tok = Token{Type: GT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case ';':
-		tok = newToken(SEMICOLON, l.ch, l.line)
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: SEMICOLON, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case ':':
-		tok = newToken(COLON, l.ch, l.line)
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: COLON, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case ',':
-		tok = newToken(COMMA, l.ch, l.line)
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: COMMA, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case '(':
-		tok = newToken(LPAREN, l.ch, l.line)
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: LPAREN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case ')':
-		tok = newToken(RPAREN, l.ch, l.line)
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: RPAREN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case '{':
-		tok = newToken(LBRACE, l.ch, l.line)
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: LBRACE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case '}':
-		tok = newToken(RBRACE, l.ch, l.line)
-	case '[': // Added
-		tok = newToken(LBRACKET, l.ch, l.line)
-	case ']': // Added
-		tok = newToken(RBRACKET, l.ch, l.line)
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: RBRACE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+	case '[':
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: LBRACKET, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+	case ']':
+		literal := string(l.ch)
+		l.readChar()
+		tok = Token{Type: RBRACKET, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case '"':
-		tok.Type = STRING
-		tok.Literal = l.readString()
-		// readString advances the lexer past the closing quote
-		return tok // Early return
-	case '?': // Modified for ??
-		if l.peekChar() == '?' {
-			ch := l.ch
-			l.readChar() // Consume second '?'
-			literal := string(ch) + string(l.ch)
-			tok = Token{Type: COALESCE, Literal: literal, Line: l.line}
+		literal := l.readString() // Reads until closing " or EOF
+		// l.position is now *after* the closing quote
+		endPos := l.position
+		// Check if string is unterminated (readString returns literal until EOF)
+		if startPos+1 < len(l.input) && l.input[endPos-1] != '"' { // Check if last char wasn't quote
+			tok = Token{Type: ILLEGAL, Literal: "Unterminated string", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		} else {
-			tok = newToken(QUESTION, l.ch, l.line) // Original ternary operator
+			tok = Token{Type: STRING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+		}
+	case '?':
+		if l.peekChar() == '?' { // Check for ??
+			l.readChar()                                // Consume second '?'
+			literal := l.input[startPos : l.position+1] // Read the actual '??'
+			l.readChar()                                // Advance past '?'
+			tok = Token{Type: COALESCE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		} else {
+			// Original ternary operator
+			literal := string(l.ch)
+			l.readChar()
+			tok = Token{Type: QUESTION, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '.':
-		// Check for spread operator ...
 		if l.peekChar() == '.' {
-			firstDotPos := l.position
-			l.readChar() // Consume second dot
+			l.readChar() // Consume second '.'
 			if l.peekChar() == '.' {
-				l.readChar() // Consume third dot
-				tok = Token{Type: SPREAD, Literal: "...", Line: l.line}
+				l.readChar()                                // Consume third '.'
+				literal := l.input[startPos : l.position+1] // Read the actual '...'
+				l.readChar()                                // Advance past '.'
+				tok = Token{Type: SPREAD, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			} else {
-				// Sequence like '..' is illegal. Go back to after the first dot.
-				l.SetPosition(firstDotPos + 1) // Reset to char after first dot
-				tok = newToken(DOT, '.', l.line)
+				// Sequence like '..' is illegal. Treat the first dot as DOT.
+				// We already consumed the second dot, so don't need SetPosition.
+				// We just need to create the token for the *first* dot.
+				literal := string(l.input[startPos])
+				// Reset lexer to be positioned *after* the first dot for the next token
+				l.SetPosition(startPos + 1) // This resets l.ch, l.position, l.readPosition, but NOT line/col
+				// Manually fix column as SetPosition doesn't handle it well
+				// We know we are on the same line, just one char after the start.
+				l.line = startLine
+				l.column = startCol + 1
+				tok = Token{Type: DOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: startPos + 1}
 			}
 		} else {
 			// Just a single dot
-			tok = newToken(DOT, l.ch, l.line)
+			literal := string(l.ch)
+			l.readChar()
+			tok = Token{Type: DOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case 0: // EOF
-		tok.Literal = ""
-		tok.Type = EOF
+		tok = Token{Type: EOF, Literal: "", Line: startLine, Column: startCol, StartPos: startPos, EndPos: startPos}
 	default:
 		if isLetter(l.ch) {
-			tok.Literal = l.readIdentifier()
-			tok.Type = LookupIdent(tok.Literal)
-			return tok // Early return for identifiers/keywords
+			literal := l.readIdentifier() // Consumes letters/digits/_
+			tokType := LookupIdent(literal)
+			// readIdentifier leaves l.position *after* the last char of the identifier
+			tok = Token{Type: tokType, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			return tok // Return early, readIdentifier already called readChar()
 		} else if isDigit(l.ch) {
-			tok.Type = NUMBER
-			tok.Literal = l.readNumber()
-			return tok // Early return for numbers
+			literal := l.readNumber() // Consumes digits and potentially '.'
+			// readNumber leaves l.position *after* the last char of the number
+			tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			return tok // Return early, readNumber already called readChar()
 		} else {
-			tok = newToken(ILLEGAL, l.ch, l.line)
+			// Illegal character
+			literal := string(l.ch)
+			l.readChar() // Consume the illegal character
+			tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	}
 
-	l.readChar() // Advance the lexer for the next token
 	return tok
 }
 
-// newToken is a helper to create a Token for a single character.
-func newToken(tokenType TokenType, ch byte, line int) Token {
-	return Token{Type: tokenType, Literal: string(ch), Line: line}
-}
-
 // readIdentifier reads an identifier (letters, digits, _) and advances the lexer's position.
+// It returns the literal string found.
 func (l *Lexer) readIdentifier() string {
-	position := l.position
-	for isLetter(l.ch) || isDigit(l.ch) {
+	startPos := l.position
+	for isLetter(l.ch) || isDigit(l.ch) || l.ch == '_' {
 		l.readChar()
 	}
-	return l.input[position:l.position]
+	return l.input[startPos:l.position]
 }
 
 // readNumber reads a number (integer or float) and advances the lexer's position.
+// It returns the literal string found.
 func (l *Lexer) readNumber() string {
-	position := l.position
-	// Read integer part
+	startPos := l.position
 	for isDigit(l.ch) {
 		l.readChar()
 	}
-
 	// Look for a fractional part
 	if l.ch == '.' && isDigit(l.peekChar()) {
-		// Consume the "."
-		l.readChar()
-
-		// Read fractional part
+		l.readChar() // Consume the '.'
 		for isDigit(l.ch) {
 			l.readChar()
 		}
 	}
-	// TODO: Add exponent support (e.g., 1.23e-4)
-	return l.input[position:l.position]
+	// TODO: Add support for exponents (e.g., 1e-10)
+	return l.input[startPos:l.position]
 }
 
-// readString reads a double-quoted string literal.
-// It consumes characters until the closing quote or EOF.
-// Does not currently handle escape sequences.
+// readString reads a string literal enclosed in double quotes.
+// It handles simple escape sequences like \" and \\.
+// It returns the literal string content (without the surrounding quotes).
+// It advances the lexer's position to *after* the closing quote.
 func (l *Lexer) readString() string {
-	// Store starting line for potential error reporting
-	startLine := l.line
-	// Current position is the opening quote, advance past it.
-	position := l.position + 1
+	startPos := l.position + 1 // Start reading *after* the opening quote
 	for {
 		l.readChar()
-		if l.ch == '"' || l.ch == 0 { // Found closing quote or EOF
+		if l.ch == '\\' { // Handle escape character
+			if l.peekChar() == '"' || l.peekChar() == '\\' {
+				l.readChar() // Consume the escaped character ('"' or '\\')
+			}
+			// TODO: Handle other escapes like \n, \t, \r, unicode?
+		} else if l.ch == '"' || l.ch == 0 { // Closing quote or EOF
 			break
 		}
-		// Handle newlines within strings (update line count)
-		if l.ch == '\n' {
-			l.line++
-		}
 	}
+	literal := l.input[startPos:l.position] // Extract content
 
-	if l.ch == 0 { // Check for unterminated string
-		// TODO: Better error handling? Return ILLEGAL token?
-		// For now, return the partial string read.
-		// The parser would likely catch this as an error later.
-		fmt.Printf("Lexer Warning: Unterminated string starting on line %d\n", startLine)
-		return l.input[position:l.position] // Return what we got before EOF
+	if l.ch == '"' { // If we found the closing quote, advance past it
+		l.readChar()
 	}
+	// If l.ch is 0 (EOF), we leave the position at EOF
 
-	strContent := l.input[position:l.position]
-	l.readChar() // Consume the closing quote for the *next* call to NextToken
-	return strContent
+	// TODO: Unescaping the literal string? For now, return raw content.
+	// Maybe unescaping should happen later?
+	return literal
 }
 
 // skipComment reads until the end of the line.

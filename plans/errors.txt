@@ -1,0 +1,119 @@
+That's an excellent plan! Improving error reporting and standardizing component outputs will make the language much more robust and user-friendly. Your proposed changes address the key weaknesses: inconsistent output, reliance on stdio, and lack of precise location information.
+
+Here’s a breakdown of the plan, incorporating your suggestions and adding a bit more detail:
+
+**Phase 1: Enhance Position Information (Lexer & Token)**
+
+1.  **Modify `lexer.Token`:**
+    *   Add `Column int` (1-based character column of token start).
+    *   Add `StartPos int` (0-based byte offset of token start).
+    *   Add `EndPos int` (0-based byte offset *after* token end).
+2.  **Update `lexer.Lexer`:**
+    *   Add `column int` (1-based column of `l.position`).
+    *   Modify `readChar()`:
+        *   If `l.ch == '\n'`, increment `l.line` and reset `l.column = 0` (it will become 1 when the *next* character is read).
+        *   Otherwise, increment `l.column`.
+    *   Modify `skipWhitespace()`: Ensure it correctly updates `l.line` and `l.column` as it consumes characters. Resetting `l.column` on newline is crucial.
+3.  **Update Token Creation (`lexer.NextToken`)**:
+    *   Before reading the token characters, store `startCol := l.column` and `startPos := l.position`.
+    *   After reading the token characters (e.g., after `readIdentifier`, `readNumber`, etc.), store `endPos := l.position`.
+    *   Populate the new fields: `Column: startCol`, `StartPos: startPos`, `EndPos: endPos`. Handle multi-character tokens correctly (e.g., `==`, `===`, `+=`, keywords, literals).
+
+**Phase 2: Propagate Position to Errors**
+
+1.  **Define `common.Position` Struct (New Package `pkg/common`)**:
+    ```go
+    package common
+
+    type Position struct {
+        Line     int // 1-based
+        Column   int // 1-based
+        StartPos int // 0-based byte offset start
+        EndPos   int // 0-based byte offset end
+    }
+    ```
+    *   *(This centralizes the definition)*
+2.  **Update Error Structs**:
+    *   `parser.ParseError`: Replace `Line int` with `Pos common.Position`.
+    *   `checker.TypeError`: Replace `Line int` with `Pos common.Position`.
+    *   *(Consider adding `Pos common.Position` to `vm.RuntimeError` later, potentially with less precision)*.
+3.  **Update Error Creation**:
+    *   Modify `parser.addError`, `checker.addError` (and similar functions) to accept a `lexer.Token` or `common.Position`.
+    *   Create the `common.Position` from the token's fields when creating error objects.
+    *   `checker.GetTokenFromNode` should be updated to return the best available `lexer.Token` from the AST node to facilitate this.
+
+**Phase 3: Refactor Component Output & Error Handling**
+
+1.  **Parser (`pkg/parser`)**:
+    *   `ParseProgram()` returns `(*ast.Program, []ParseError)`.
+    *   `Parser.Errors()` returns `[]ParseError`.
+    *   Remove `fmt.Printf` for errors.
+2.  **Checker (`pkg/checker`)**:
+    *   `Check()` returns `[]TypeError` (already does).
+    *   Ensure `addError` only appends errors. Remove debug `fmt.Printf` eventually.
+3.  **Compiler (`pkg/compiler`)**:
+    *   `Compile()` returns `(*vm.Function, []CompilerError)` (using a new `CompilerError` struct embedding `common.Position`).
+    *   Collect errors instead of panicking or printing directly.
+4.  **VM (`pkg/vm`)**:
+    *   `Interpret()` returns `(vm.Value, InterpretResult, []vm.RuntimeError)` (or similar). `InterpretResult` could potentially indicate OK/RuntimeError, and the slice holds the specific errors.
+    *   `run()` should return `(vm.Value, InterpretResult, []vm.RuntimeError)`. When an error occurs, create a `RuntimeError` (maybe with less precise position for now) and return up the stack.
+    *   Remove `fmt.Fprintf(os.Stderr, ...)` from `runtimeError`.
+    *   Remove `fmt.Println(result.String())` from `OpReturn`/`OpReturnUndefined`.
+
+**Phase 4: Centralized Handling (Main/REPL)**
+
+1.  **Orchestration (`main.go` or `repl/repl.go`)**:
+    *   Chain the calls: `parser.ParseProgram`, `checker.Check`, `compiler.Compile`, `vm.Interpret`.
+    *   After each step, check the returned error slice.
+    *   If errors exist, call a new `displayErrors(source string, errors []ErrorInterface)` function (where `ErrorInterface` has methods for `Message()` and `Position()`). Stop processing.
+    *   `displayErrors` uses the source code and error positions to show context.
+    *   If all steps succeed, print the final `vm.Value` returned by `Interpret`.
+
+**How to Proceed:**
+
+This looks like a solid plan. I agree **Phase 1 (Lexer & Token Position)** is the best place to start. It's foundational and relatively self-contained.
+
+Shall we begin by modifying the `Token` struct and the `Lexer` in `pkg/lexer/lexer.go`?
+
+Okay, consolidating error types into a dedicated `pkg/errors` package is a great idea for better organization and consistency.
+
+Here's the updated plan incorporating that:
+
+**Phase 0: Define Centralized Error Structures (`pkg/errors`)**
+
+1.  **Create Directory:** Make the `pkg/errors` directory.
+2.  **Define `Position` (`pkg/errors/position.go`)**:
+    *   Create a `Position` struct containing `Line`, `Column`, `StartPos`, `EndPos`.
+3.  **Define Error Interface & Structs (`pkg/errors/errors.go`)**:
+    *   Define a base `Error` interface (e.g., `PaseratiError`) with methods like `Error() string`, `Pos() Position`, `Kind() string` (returning "Syntax", "Type", "Compile", "Runtime").
+    *   Define concrete error structs (e.g., `SyntaxError`, `TypeError`, `CompileError`, `RuntimeError`) that embed `Position` and a message string, and implement the `PaseratiError` interface.
+
+**Phase 1: Enhance Position Information (Lexer & Token)**
+
+1.  **Modify `lexer.Token`:**
+    *   Add the fields: `Line int`, `Column int`, `StartPos int`, `EndPos int`.
+2.  **Update `lexer.Lexer`:**
+    *   Add `column int`.
+    *   Modify `readChar()` and `skipWhitespace()` to correctly track `l.line` and `l.column`.
+3.  **Update Token Creation (`lexer.NextToken`)**:
+    *   Store start line/col/pos before reading.
+    *   Populate all position fields in the created `Token` after reading.
+
+**Phase 2: Propagate Position to Errors**
+
+1.  **Update Error Struct Usage**:
+    *   Modify `parser.ParseError`, `checker.TypeError`, etc. to *use* or *be replaced by* the structs defined in `pkg/errors` (e.g., `errors.SyntaxError`, `errors.TypeError`).
+2.  **Update Error Creation**:
+    *   Modify error reporting functions (`addError`, etc.) in Parser, Checker, Compiler, VM to create instances of the appropriate `pkg/errors` structs, populating the `Position` field from the relevant `lexer.Token`.
+    *   Update/use `checker.GetTokenFromNode` to get the token needed for position info.
+
+**Phase 3 & 4: Refactor Output & Centralized Handling**
+
+*   (Remain the same as the previous plan, but ensure components return slices of the appropriate `errors.PaseratiError` types).
+
+**Let's start with Phase 0 & 1 together:**
+
+1.  Create `pkg/errors/position.go` and `pkg/errors/errors.go` with the `Position` struct and the basic error interface/struct definitions.
+2.  Modify `pkg/lexer/lexer.go` to add position fields to `Token` and update the `Lexer` logic to track and populate them.
+
+I can create the initial files and structures for `pkg/errors` and then proceed with the lexer modifications. Would you like me to do that?
