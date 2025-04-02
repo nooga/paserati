@@ -792,9 +792,16 @@ func (c *Checker) visit(node parser.Node) {
 			param.ComputedType = paramType
 		}
 
-		// 3. Set Context (Arrow functions *cannot* have return type annotations)
-		c.currentExpectedReturnType = nil // Always infer for arrow
-		c.currentInferredReturnTypes = []types.Type{}
+		// --- NEW: Resolve Return Type Annotation ---
+		expectedReturnType := c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
+
+		// --- UPDATED: Set Context using expected type ---
+		c.currentExpectedReturnType = expectedReturnType // Use resolved annotation (can be nil)
+		c.currentInferredReturnTypes = nil               // Reset for this function
+		if expectedReturnType == nil {
+			// Only allocate if we need to infer
+			c.currentInferredReturnTypes = []types.Type{}
+		}
 
 		// 4. Create function scope & define parameters
 		// --- DEBUG ---
@@ -815,40 +822,63 @@ func (c *Checker) visit(node parser.Node) {
 		// 5. Visit Body
 		c.visit(node.Body)
 		var bodyType types.Type = types.Any
+		isExprBody := false
 		// Special handling for expression body
 		if exprBody, ok := node.Body.(parser.Expression); ok {
+			isExprBody = true
 			bodyType = c.GetComputedTypeOrAny(exprBody)
-			// If body is an expression, its type *is* the single inferred return type
-			// unless the body itself contains return statements (complex case).
-			// For now, assume expression body implies direct return of its value.
-			c.currentInferredReturnTypes = []types.Type{bodyType}
-		} // Else: Body is BlockStatement, returns handled by ReturnStatement visitor
+			// If body is an expression, its type *is* the single inferred return type,
+			// unless overridden by an annotation.
+			if c.currentInferredReturnTypes != nil { // Only append if inference is active
+				c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, bodyType)
+			}
 
-		// 6. Determine Final Return Type (Inference)
-		var finalReturnType types.Type = types.Undefined // Default for void, USE INTERFACE TYPE
-		if len(c.currentInferredReturnTypes) > 0 {
-			// --- FIX: Improve inference for multiple returns (same as FunctionLiteral) ---
-			if len(c.currentInferredReturnTypes) == 1 {
-				finalReturnType = c.currentInferredReturnTypes[0]
-			} else {
-				firstType := c.currentInferredReturnTypes[0]
-				allSame := true
-				for _, typ := range c.currentInferredReturnTypes[1:] {
-					// TODO: Use proper type equality check later
-					if typ != firstType {
-						allSame = false
-						break
-					}
-				}
-				if allSame {
-					finalReturnType = firstType
-				} else {
-					// TODO: Implement Union type, fallback to Any for now
-					finalReturnType = types.Any
+			// --- NEW: Check expression body type against annotation ---
+			if expectedReturnType != nil {
+				if !c.isAssignable(bodyType, expectedReturnType) {
+					// TODO: Get line number from exprBody token if possible
+					c.addError(node.Token.Line, fmt.Sprintf("cannot return expression of type '%s' from arrow function with return type annotation '%s'", bodyType.String(), expectedReturnType.String()))
 				}
 			}
-			// --- END FIX ---
-		} // else: No return statements found, stays Undefined
+			// --- END NEW ---
+		} // Else: Body is BlockStatement, returns handled by ReturnStatement visitor
+
+		// 6. Determine Final Return Type (Inference or Annotation)
+		var finalReturnType types.Type = expectedReturnType // Start with annotation
+		if finalReturnType == nil {                         // Infer ONLY if no annotation
+			if len(c.currentInferredReturnTypes) == 0 {
+				// If it was an expression body, we should have added its type already.
+				// If it's a block body with no returns, it's Undefined.
+				if isExprBody {
+					// Should have been added above, but double check
+					finalReturnType = bodyType
+				} else {
+					finalReturnType = types.Undefined // No returns in block, infer Undefined
+				}
+			} else {
+				// Inference logic for multiple returns (existing logic seems okay)
+				if len(c.currentInferredReturnTypes) == 1 {
+					finalReturnType = c.currentInferredReturnTypes[0]
+				} else {
+					firstType := c.currentInferredReturnTypes[0]
+					allSame := true
+					for _, typ := range c.currentInferredReturnTypes[1:] {
+						// TODO: Use proper type equality check later
+						if typ != firstType { // Basic check
+							allSame = false
+							break
+						}
+					}
+					if allSame {
+						finalReturnType = firstType
+					} else {
+						// TODO: Implement Union type, fallback to Any for now
+						finalReturnType = types.Any
+					}
+				}
+			}
+		} // else: Annotation exists. ReturnStatement visitor handles checks for block bodies. Expression body check done above.
+
 		if finalReturnType == nil { // Safety check
 			finalReturnType = types.Any
 		}
