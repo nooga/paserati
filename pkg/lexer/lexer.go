@@ -76,6 +76,7 @@ const (
 	FOR      TokenType = "FOR"
 	BREAK    TokenType = "BREAK"    // Added
 	CONTINUE TokenType = "CONTINUE" // Added
+	TYPE     TokenType = "TYPE"     // Added for type aliases
 
 	// Logical Operators
 	LOGICAL_AND TokenType = "&&" // Added
@@ -106,6 +107,7 @@ var keywords = map[string]TokenType{
 	"for":       FOR,
 	"break":     BREAK,    // Added
 	"continue":  CONTINUE, // Added
+	"type":      TYPE,     // Added
 }
 
 // LookupIdent checks the keywords table for an identifier.
