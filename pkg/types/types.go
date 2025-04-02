@@ -1,6 +1,9 @@
 package types
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Type is the interface implemented by all type representations.
 type Type interface {
@@ -107,6 +110,29 @@ func (ot *ObjectType) String() string {
 	return fmt.Sprintf("{ %s }", props)
 }
 func (ot *ObjectType) typeNode() {}
+
+// --- NEW: UnionType ---
+
+// UnionType represents a union of multiple types (e.g., string | number).
+// Stores constituent types in a slice.
+type UnionType struct {
+	Types []Type // Slice holding the types in the union
+	// TODO: Consider storing unique types or a canonical representation?
+}
+
+func (ut *UnionType) String() string {
+	strs := make([]string, len(ut.Types))
+	for i, t := range ut.Types {
+		if t != nil {
+			strs[i] = t.String()
+		} else {
+			strs[i] = "<nil>"
+		}
+	}
+	// TODO: Consider sorting for canonical representation?
+	return strings.Join(strs, " | ")
+}
+func (ut *UnionType) typeNode() {}
 
 // AliasType represents a named type alias.
 type AliasType struct {

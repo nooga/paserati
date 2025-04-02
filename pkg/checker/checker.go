@@ -181,46 +181,70 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		return nil
 	}
 
-	ident, ok := node.(*parser.Identifier)
-	if !ok {
-		// We only handle simple identifier types for now.
-		line := 0 // TODO: Get line number from node token
-		c.addError(line, fmt.Sprintf("unsupported type annotation syntax: expected identifier, got %T", node))
-		return nil // Indicate error
-	}
+	// Dispatch based on the structure of the type expression node
+	switch node := node.(type) {
+	case *parser.Identifier:
+		// --- UPDATED: Prioritize alias resolution ---
+		// 1. Attempt to resolve as a type alias in the environment
+		resolvedAlias, found := c.env.ResolveType(node.Value)
+		if found {
+			return resolvedAlias // Successfully resolved as an alias
+		}
 
-	// --- UPDATED: Prioritize alias resolution ---
-	// 1. Attempt to resolve as a type alias in the environment
-	resolvedAlias, found := c.env.ResolveType(ident.Value)
-	if found {
-		return resolvedAlias // Successfully resolved as an alias
-	}
+		// 2. If not found as an alias, check against known primitive type names
+		switch node.Value {
+		case "number":
+			return types.Number
+		case "string":
+			return types.String
+		case "boolean":
+			return types.Boolean
+		case "null":
+			return types.Null
+		case "undefined":
+			return types.Undefined
+		case "any":
+			return types.Any
+		case "unknown":
+			return types.Unknown
+		case "never":
+			return types.Never
+		case "void": // Added Void type check
+			return types.Void
+		default:
+			// 3. If neither alias nor primitive, it's an unknown type name
+			line := node.Token.Line
+			c.addError(line, fmt.Sprintf("unknown type name: %s", node.Value))
+			return nil // Indicate error
+		}
 
-	// 2. If not found as an alias, check against known primitive type names
-	switch ident.Value {
-	case "number":
-		return types.Number
-	case "string":
-		return types.String
-	case "boolean":
-		return types.Boolean
-	case "null":
-		return types.Null
-	case "undefined":
-		return types.Undefined
-	case "any":
-		return types.Any
-	case "unknown":
-		return types.Unknown
-	case "never":
-		return types.Never
-	case "void": // Added Void type check
-		return types.Void
+	case *parser.UnionTypeExpression: // Added
+		leftType := c.resolveTypeAnnotation(node.Left)
+		rightType := c.resolveTypeAnnotation(node.Right)
+
+		if leftType == nil || rightType == nil {
+			// Error occurred resolving one of the sides
+			return nil
+		}
+
+		// TODO: Flatten nested unions and remove duplicates for canonical form?
+		// For now, just create a simple binary union type.
+		// A more robust implementation would collect all constituent types.
+		unionType := &types.UnionType{
+			Types: []types.Type{leftType, rightType},
+		}
+		// Set computed type on the AST node itself? Might be useful.
+		// c.SetComputedType(node, unionType)
+		return unionType
+
+	// TODO: Add cases for other complex type expressions (Array, Function, Object)
+	// case *parser.ArrayTypeExpression: ...
+	// case *parser.FunctionTypeExpression: ...
+
 	default:
-		// 3. If neither alias nor primitive, it's an unknown type name
-		// TODO: Look up in custom type registry/environment later (if needed)
-		line := ident.Token.Line
-		c.addError(line, fmt.Sprintf("unknown type name: %s", ident.Value))
+		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
+		line := 0 // TODO: Get line number from node token
+		c.addError(line, fmt.Sprintf("unsupported type annotation node: %T", node))
 		return nil // Indicate error
 	}
 }
@@ -252,23 +276,68 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 		return true // Never type is assignable to anything
 	}
 
-	// TODO: Handle null/undefined assignability based on strict flags later.
-	// For now, let's be strict unless target is Any/Unknown.
-	if source == types.Null && target != types.Null {
-		return false
-	}
-	if source == types.Undefined && target != types.Undefined {
-		return false
-	}
-
 	// Check for identical types (using pointer equality for primitives)
 	if source == target {
 		return true
 	}
 
+	// --- NEW: Union Type Handling ---
+	sourceUnion, sourceIsUnion := source.(*types.UnionType)
+	targetUnion, targetIsUnion := target.(*types.UnionType)
+
+	if targetIsUnion {
+		// Assigning TO a union: Source must be assignable to at least one type in the target union.
+		if sourceIsUnion {
+			// Assigning UNION to UNION (S_union to T_union):
+			// Every type in S_union must be assignable to at least one type in T_union.
+			for _, sType := range sourceUnion.Types {
+				assignableToOneInTarget := false
+				for _, tType := range targetUnion.Types {
+					if c.isAssignable(sType, tType) {
+						assignableToOneInTarget = true
+						break
+					}
+				}
+				if !assignableToOneInTarget {
+					return false // Found a type in source union not assignable to any in target union
+				}
+			}
+			return true // All types in source union were assignable to the target union
+		} else {
+			// Assigning NON-UNION to UNION (S to T_union):
+			// S must be assignable to at least one type in T_union.
+			for _, tType := range targetUnion.Types {
+				if c.isAssignable(source, tType) {
+					return true // Found a compatible type in the union
+				}
+			}
+			return false // Source not assignable to any type in the target union
+		}
+	} else if sourceIsUnion {
+		// Assigning FROM a union TO a non-union (S_union to T):
+		// Every type in S_union must be assignable to T.
+		for _, sType := range sourceUnion.Types {
+			if !c.isAssignable(sType, target) {
+				return false // Found a type in the source union not assignable to the target
+			}
+		}
+		return true // All types in source union were assignable to target
+	}
+
+	// --- End Union Type Handling ---
+
+	// TODO: Handle null/undefined assignability based on strict flags later.
+	// For now, let's be strict unless target is Any/Unknown/Union.
+	if source == types.Null && target != types.Null { // Allow null -> T | null
+		return false
+	}
+	if source == types.Undefined && target != types.Undefined { // Allow undefined -> T | undefined
+		return false
+	}
+
 	// TODO: Add structural checks for objects/arrays
 	// TODO: Add checks for function type compatibility
-	// TODO: Add checks for unions/intersections
+	// TODO: Add checks for intersections
 
 	// Default: not assignable
 	return false
@@ -1027,7 +1096,39 @@ func (c *Checker) visit(node parser.Node) {
 			}
 
 			if !c.isAssignable(argType, paramType) {
-				argLine := 0 // TODO: Get line from argNode token
+				// --- FIXED: Extract line number from argument node ---
+				argLine := 0 // Default line number
+				switch n := argNode.(type) {
+				// List common node types that have a Token field
+				case *parser.Identifier:
+					argLine = n.Token.Line
+				case *parser.NumberLiteral:
+					argLine = n.Token.Line
+				case *parser.StringLiteral:
+					argLine = n.Token.Line
+				case *parser.BooleanLiteral:
+					argLine = n.Token.Line
+				case *parser.NullLiteral:
+					argLine = n.Token.Line
+				case *parser.UndefinedLiteral:
+					argLine = n.Token.Line
+				case *parser.PrefixExpression:
+					argLine = n.Token.Line // Token is operator
+				case *parser.InfixExpression:
+					argLine = n.Token.Line // Token is operator
+				case *parser.CallExpression:
+					argLine = n.Token.Line // Token is '('
+				case *parser.FunctionLiteral:
+					argLine = n.Token.Line // Token is 'function'
+				case *parser.ArrowFunctionLiteral:
+					argLine = n.Token.Line // Token is '=>'
+				// Add other expression types holding a relevant Token here...
+				default:
+					// Fallback or attempt to get token via interface if Node had GetToken()
+					// For now, default 0 is kept if type assertion fails
+					fmt.Printf("// [Checker Warning] Could not get specific line number for arg type %T\n", argNode)
+				}
+				// --- End Fix ---
 				c.addError(argLine, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
 				// Continue checking other arguments even if one fails
 			}

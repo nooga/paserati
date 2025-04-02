@@ -55,6 +55,13 @@ const (
 	INDEX       // array[index]
 )
 
+// --- NEW: Type Precedence ---
+const (
+	_ int = iota
+	TYPE_LOWEST
+	TYPE_UNION // |
+)
+
 // Precedences map for operator tokens
 var precedences = map[lexer.TokenType]int{
 	lexer.ASSIGN:          ASSIGNMENT,
@@ -226,32 +233,81 @@ func (p *Parser) parseTypeAliasStatement() *TypeAliasStatement {
 
 // --- NEW: Type Expression Parsing (Placeholder) ---
 
-// parseTypeExpression parses a type annotation.
-// TODO: Implement parsing for complex types (arrays, functions, objects, unions, etc.)
+// parseTypeExpression parses a type annotation, potentially including union types.
 func (p *Parser) parseTypeExpression() Expression {
-	// For now, assume types are simple identifiers (like 'number', 'string', 'MyType')
-	// Later, this will need to handle array types (T[]), function types ((T1, T2) => R),
-	// object types ({k: T}), unions (T | U), intersections (T & U), etc.
-	debugPrint("parseTypeExpression: START, cur='%s'", p.curToken.Literal)
+	return p.parseTypeExpressionRecursive(TYPE_LOWEST)
+}
 
-	// Allow built-in type keywords (null, undefined) and general identifiers
-	if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.NULL) || p.curTokenIs(lexer.UNDEFINED) {
-		// Treat null and undefined tokens as Identifiers in this context
-		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		debugPrint("parseTypeExpression: Parsed IDENT/Keyword '%s'", ident.Value)
-		return ident
+// parseTypeExpressionRecursive handles precedence for type operators.
+func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
+	debugPrint("parseTypeExpressionRecursive(prec=%d): START, cur='%s'", precedence, p.curToken.Literal)
+
+	// Parse the initial type (prefix part)
+	var leftExp Expression
+	switch p.curToken.Type {
+	case lexer.IDENT, lexer.NULL, lexer.UNDEFINED:
+		leftExp = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	// TODO: Add cases for parsing array types `T[]`, function types `(...) => T`, object types `{...}` here.
+	// case lexer.LBRACKET: leftExp = p.parseArrayTypeExpression()
+	// case lexer.LPAREN: leftExp = p.parseFunctionOrGroupedTypeExpression()
+	// case lexer.LBRACE: leftExp = p.parseObjectTypeExpression()
+	default:
+		// Error: Expected a type identifier, array, function, or object type start
+		msg := fmt.Sprintf("line %d: unexpected token %s (%q) at start of type annotation",
+			p.curToken.Line, p.curToken.Type, p.curToken.Literal)
+		p.errors = append(p.errors, msg)
+		debugPrint("parseTypeExpressionRecursive: ERROR - %s", msg)
+		return nil
+	}
+	debugPrint("parseTypeExpressionRecursive: Parsed prefix type %T ('%s')", leftExp, leftExp.String())
+
+	// Look for infix type operators (like '|')
+	for precedence < p.peekTypePrecedence() {
+		peekType := p.peekToken.Type
+		debugPrint("parseTypeExpressionRecursive: Found infix type operator '%s'", peekType)
+
+		switch peekType {
+		case lexer.PIPE:
+			p.nextToken() // Consume '|'
+			leftExp = p.parseUnionTypeExpression(leftExp)
+			if leftExp == nil {
+				return nil // Error during union parsing
+			}
+		// TODO: Add cases for other potential infix type operators (e.g., '&' for intersection)
+		default:
+			// No infix operator found or lower precedence
+			return leftExp
+		}
+		debugPrint("parseTypeExpressionRecursive: After infix, leftExp=%T ('%s')", leftExp, leftExp.String())
 	}
 
-	// TODO: Add parsing for other type constructs (function types, array types etc.)
-	// Example placeholder for function type syntax `() => type`
-	// if p.curTokenIs(lexer.LPAREN) { ... parse function type ... }
+	return leftExp
+}
 
-	// Error if it's not a recognized type syntax start
-	msg := fmt.Sprintf("line %d: unexpected token %s (%q) while parsing type annotation",
-		p.curToken.Line, p.curToken.Type, p.curToken.Literal)
-	p.errors = append(p.errors, msg)
-	debugPrint("parseTypeExpression: ERROR - %s", msg)
-	return nil
+// --- NEW: Helper for infix union type parsing ---
+func (p *Parser) parseUnionTypeExpression(left Expression) Expression {
+	unionExp := &UnionTypeExpression{
+		Token: p.curToken, // The '|' token
+		Left:  left,
+	}
+	precedence := TYPE_UNION
+	p.nextToken() // Consume the token starting the right-hand side type
+	unionExp.Right = p.parseTypeExpressionRecursive(precedence)
+	if unionExp.Right == nil {
+		return nil // Error parsing right side
+	}
+	return unionExp
+}
+
+// --- NEW: Precedence helper for type operators ---
+func (p *Parser) peekTypePrecedence() int {
+	switch p.peekToken.Type {
+	case lexer.PIPE:
+		return TYPE_UNION
+	// TODO: Add other type operators (e.g., lexer.AMPERSAND for TYPE_INTERSECTION)
+	default:
+		return TYPE_LOWEST
+	}
 }
 
 func (p *Parser) parseLetStatement() *LetStatement {

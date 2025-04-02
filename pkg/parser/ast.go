@@ -701,3 +701,29 @@ func (tas *TypeAliasStatement) String() string {
 	out.WriteString(";")
 	return out.String()
 }
+
+// --- NEW: UnionTypeExpression ---
+
+// UnionTypeExpression represents a union type (e.g., string | number).
+// For now, just binary unions (A | B). Can be nested for more types.
+type UnionTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType (which will be a UnionType)
+	Token          lexer.Token // The '|' token
+	Left           Expression  // The type expression on the left
+	Right          Expression  // The type expression on the right
+}
+
+func (ute *UnionTypeExpression) expressionNode()      {}
+func (ute *UnionTypeExpression) TokenLiteral() string { return ute.Token.Literal }
+func (ute *UnionTypeExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(ute.Left.String())
+	out.WriteString(" | ")
+	out.WriteString(ute.Right.String())
+	out.WriteString(")")
+	if ute.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ute.ComputedType.String()))
+	}
+	return out.String()
+}
