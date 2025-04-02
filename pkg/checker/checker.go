@@ -514,19 +514,23 @@ func (c *Checker) visit(node parser.Node) {
 		// --- END FIX V2 ---
 
 		// 2. Handle Initializer (if present)
-		var finalInitializerType types.Type // Renamed for clarity
+		var computedInitializerType types.Type // Type computed directly from initializer visit
 		if node.Value != nil {
 			c.visit(node.Value) // Compute type of the initializer
-			finalInitializerType = c.GetComputedTypeOrAny(node.Value)
+			computedInitializerType = c.GetComputedTypeOrAny(node.Value)
 		} else {
-			finalInitializerType = nil // No initializer
+			computedInitializerType = nil // No initializer
 		}
+
+		// --- WIDEN INITIALIZER TYPE ---
+		widenedInitializerType := getWidenedType(computedInitializerType) // Apply widening
+		// --- END WIDEN ---
 
 		// 3. Determine the final type and check assignability
 		finalVariableType := declaredType // Renamed for clarity
 		if finalVariableType == nil {     // Infer from initializer or lack thereof
-			if finalInitializerType != nil {
-				finalVariableType = finalInitializerType
+			if widenedInitializerType != nil { // Use widened type for inference
+				finalVariableType = widenedInitializerType
 			} else {
 				// --- FIX: No annotation, no initializer -> infer Undefined ---
 				finalVariableType = types.Undefined // Assign Undefined, not Any
@@ -534,9 +538,9 @@ func (c *Checker) visit(node parser.Node) {
 				// c.addError(node.Token.Line, fmt.Sprintf("cannot infer type for variable '%s'; missing initializer or type annotation", node.Name.Value))
 			}
 		} else { // Have annotation, check initializer assignment
-			if finalInitializerType != nil {
-				if !c.isAssignable(finalInitializerType, finalVariableType) {
-					c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", finalInitializerType.String(), node.Name.Value, finalVariableType.String()))
+			if computedInitializerType != nil { // Check against the original computed type, not the widened one
+				if !c.isAssignable(computedInitializerType, finalVariableType) {
+					c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalVariableType.String()))
 				}
 				// --- Check if inferred type matches annotation if both function types ---
 				// If declaredType was a func type and finalInitializerType is also a func type,
@@ -579,23 +583,27 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		// 2. Handle Initializer (Must be present for const)
-		var initializerType types.Type
+		var computedInitializerType types.Type
 		if node.Value != nil {
 			c.visit(node.Value) // Compute type of the initializer
-			initializerType = c.GetComputedTypeOrAny(node.Value)
+			computedInitializerType = c.GetComputedTypeOrAny(node.Value)
 		} else {
 			// Constants MUST be initialized
 			c.addError(node.Token.Line, fmt.Sprintf("const declaration '%s' must be initialized", node.Name.Value))
-			initializerType = types.Any // Assign Any to prevent further cascading errors downstream
+			computedInitializerType = types.Any // Assign Any to prevent further cascading errors downstream
 		}
+
+		// --- WIDEN INITIALIZER TYPE ---
+		widenedInitializerType := getWidenedType(computedInitializerType) // Apply widening
+		// --- END WIDEN ---
 
 		// 3. Determine the final type and check assignability
 		finalType := declaredType
 		if finalType == nil { // Infer from initializer
-			finalType = initializerType // Since initializer is mandatory
+			finalType = widenedInitializerType // Use widened type for inference
 		} else { // Have annotation, check initializer assignment
-			if !c.isAssignable(initializerType, finalType) {
-				c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", initializerType.String(), node.Name.Value, finalType.String()))
+			if !c.isAssignable(computedInitializerType, finalType) { // Check against original computed type
+				c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalType.String()))
 			}
 		}
 
