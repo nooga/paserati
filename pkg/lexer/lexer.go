@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"fmt"
+	"strings" // Added for strings.Builder
 )
 
 // TokenType represents the type of a token.
@@ -408,13 +409,21 @@ func (l *Lexer) NextToken() Token {
 		literal := string(l.ch)
 		l.readChar()
 		tok = Token{Type: RBRACKET, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-	case '"':
-		literal := l.readString() // Reads until closing " or EOF
-		// l.position is now *after* the closing quote
-		endPos := l.position
-		// Check if string is unterminated (readString returns literal until EOF)
-		if startPos+1 < len(l.input) && l.input[endPos-1] != '"' { // Check if last char wasn't quote
-			tok = Token{Type: ILLEGAL, Literal: "Unterminated string", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+	case '"': // Double quoted string
+		literal, ok := l.readString('"')
+		endPos := l.position // readString advances past the closing quote if successful
+		if !ok {
+			// Determine if it was unterminated or invalid escape
+			// For now, use a generic message. l.position is where the error occurred.
+			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+		} else {
+			tok = Token{Type: STRING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+		}
+	case '\'': // Single quoted string
+		literal, ok := l.readString('\'')
+		endPos := l.position // readString advances past the closing quote if successful
+		if !ok {
+			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		} else {
 			tok = Token{Type: STRING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		}
@@ -492,51 +501,201 @@ func (l *Lexer) readIdentifier() string {
 	return l.input[startPos:l.position]
 }
 
-// readNumber reads a number (integer or float) and advances the lexer's position.
-// It returns the literal string found.
+// readNumber reads a number literal (integer or float, various bases) and advances the lexer's position.
+// Handles decimal (optional exponent/fraction), hex (0x), binary (0b), octal (0o).
+// Handles numeric separators '_'.
+// Returns the raw literal string found.
+// It performs basic validation (e.g., separator placement) and stops if invalid sequence is found.
 func (l *Lexer) readNumber() string {
 	startPos := l.position
-	for isDigit(l.ch) {
-		l.readChar()
-	}
-	// Look for a fractional part
-	if l.ch == '.' && isDigit(l.peekChar()) {
-		l.readChar() // Consume the '.'
-		for isDigit(l.ch) {
-			l.readChar()
+	base := 10
+	consumedPrefix := false
+
+	// 1. Check for base prefix (0x, 0b, 0o)
+	if l.ch == '0' {
+		peek := l.peekChar()
+		switch peek {
+		case 'x', 'X':
+			base = 16
+			l.readChar() // Consume '0'
+			l.readChar() // Consume 'x' or 'X'
+			consumedPrefix = true
+		case 'b', 'B':
+			base = 2
+			l.readChar() // Consume '0'
+			l.readChar() // Consume 'b' or 'B'
+			consumedPrefix = true
+		case 'o', 'O':
+			base = 8
+			l.readChar() // Consume '0'
+			l.readChar() // Consume 'o' or 'O'
+			consumedPrefix = true
 		}
 	}
-	// TODO: Add support for exponents (e.g., 1e-10)
+
+	// 2. Read integer part (handling separators)
+	lastCharWasDigit := false
+	for {
+		if isDigitForBase(l.ch, base) {
+			l.readChar()
+			lastCharWasDigit = true
+		} else if l.ch == '_' {
+			if !lastCharWasDigit { // Separator must follow a digit
+				// Invalid format (e.g., 0x_1, 1__2, starts with _)
+				// Return what we have *before* the invalid separator.
+				return l.input[startPos:l.position]
+			}
+			l.readChar()                     // Consume '_'
+			if !isDigitForBase(l.ch, base) { // Separator must be followed by a digit
+				// Invalid format (e.g., 1_)
+				// Return what we have *before* the separator and the following non-digit.
+				return l.input[startPos : l.position-1]
+			}
+			lastCharWasDigit = false // Reset after consuming separator
+		} else {
+			break // Not a valid digit or separator for this base
+		}
+	}
+
+	// Check if *any* digits were read after the prefix
+	if consumedPrefix && l.position == startPos+2 {
+		// Only prefix was read (e.g., "0x", "0b") - invalid
+		// Return just the prefix as the consumed part.
+		return l.input[startPos:l.position]
+	}
+
+	// 3. Read fractional part (only for base 10)
+	if base == 10 && l.ch == '.' {
+		// Check if the character *after* the dot is a digit or separator
+		peek := l.peekChar()
+		if isDigit(peek) || peek == '_' {
+			l.readChar()             // Consume '.'
+			lastCharWasDigit = false // Reset for fraction part validation
+			for {
+				if isDigit(l.ch) {
+					l.readChar()
+					lastCharWasDigit = true
+				} else if l.ch == '_' {
+					if !lastCharWasDigit { // Separator must follow a digit
+						return l.input[startPos:l.position]
+					}
+					l.readChar()        // Consume '_'
+					if !isDigit(l.ch) { // Separator must be followed by a digit
+						return l.input[startPos : l.position-1]
+					}
+					lastCharWasDigit = false // Reset
+				} else {
+					break // End of fractional part
+				}
+			}
+			// Must end fraction with a digit
+			if l.input[l.position-1] == '_' {
+				return l.input[startPos : l.position-1]
+			}
+		}
+	}
+
+	// 4. Read exponent part (only for base 10)
+	if base == 10 && (l.ch == 'e' || l.ch == 'E') {
+		l.readChar() // Consume 'e' or 'E'
+		if l.ch == '+' || l.ch == '-' {
+			l.readChar() // Consume sign
+		}
+
+		digitsReadExponent := false
+		lastCharWasDigit = false // Reset
+		for {
+			if isDigit(l.ch) {
+				l.readChar()
+				lastCharWasDigit = true
+				digitsReadExponent = true
+			} else if l.ch == '_' {
+				if !lastCharWasDigit { // Separator must follow a digit
+					return l.input[startPos:l.position]
+				}
+				l.readChar()        // Consume '_'
+				if !isDigit(l.ch) { // Separator must be followed by a digit
+					return l.input[startPos : l.position-1]
+				}
+				lastCharWasDigit = false // Reset
+			} else {
+				break // End of exponent part
+			}
+		}
+
+		// Exponent must have digits and not end with separator
+		if !digitsReadExponent {
+			// Invalid: 'e'/'E' not followed by digits (e.g., "1e", "1e+")
+			// Return up to the 'e'/'E' or the sign
+			return l.input[startPos:l.position]
+		}
+		if l.input[l.position-1] == '_' {
+			return l.input[startPos : l.position-1]
+		}
+	}
+
 	return l.input[startPos:l.position]
 }
 
-// readString reads a string literal enclosed in double quotes.
-// It handles simple escape sequences like \" and \\.
-// It returns the literal string content (without the surrounding quotes).
-// It advances the lexer's position to *after* the closing quote.
-func (l *Lexer) readString() string {
-	startPos := l.position + 1 // Start reading *after* the opening quote
+// readString reads a string literal enclosed in the given quote character.
+// It handles basic escape sequences: \n, \t, \r, \\, and escaped quotes.
+// Returns the unescaped string content and a boolean indicating success.
+// Success is false if the string is unterminated or contains an invalid escape sequence.
+// Advances the lexer's position to *after* the closing quote if successful.
+func (l *Lexer) readString(quote byte) (string, bool) {
+	var builder strings.Builder
+	// Consume the opening quote
+	l.readChar()
+
 	for {
-		l.readChar()
-		if l.ch == '\\' { // Handle escape character
-			if l.peekChar() == '"' || l.peekChar() == '\\' {
-				l.readChar() // Consume the escaped character ('"' or '\\')
-			}
-			// TODO: Handle other escapes like \n, \t, \r, unicode?
-		} else if l.ch == '"' || l.ch == 0 { // Closing quote or EOF
-			break
+		// Check for termination conditions *before* processing the character
+		if l.ch == quote {
+			l.readChar() // Consume the closing quote
+			return builder.String(), true
 		}
-	}
-	literal := l.input[startPos:l.position] // Extract content
+		if l.ch == 0 { // EOF
+			// Unterminated string
+			return "", false
+		}
 
-	if l.ch == '"' { // If we found the closing quote, advance past it
+		if l.ch == '\\' { // Handle escape sequence
+			l.readChar() // Consume the backslash
+			switch l.ch {
+			case 'n':
+				builder.WriteByte('\n')
+			case 't':
+				builder.WriteByte('\t')
+			case 'r':
+				builder.WriteByte('\r')
+			case '\\':
+				builder.WriteByte('\\')
+			case quote: // Handle escaped quote (' or ")
+				builder.WriteByte(quote)
+			case 0: // EOF after backslash
+				return "", false // Invalid escape sequence due to EOF
+			default:
+				// Invalid escape sequence (e.g., \z)
+				// Option 1: Treat as illegal string
+				return "", false
+				// Option 2: Treat backslash literally (sometimes allowed)
+				// builder.WriteByte('\\')
+				// builder.WriteByte(l.ch)
+			}
+		} else {
+			// Regular character
+			// Check for unescaped newline within the string, which is often illegal
+			if l.ch == '\n' || l.ch == '\r' {
+				// Treat unescaped newline as termination error
+				return "", false
+			}
+			builder.WriteByte(l.ch)
+		}
+
+		// Advance to the next character *after* processing the current one
 		l.readChar()
 	}
-	// If l.ch is 0 (EOF), we leave the position at EOF
-
-	// TODO: Unescaping the literal string? For now, return raw content.
-	// Maybe unescaping should happen later?
-	return literal
+	// The loop should only be exited via the successful termination check (l.ch == quote)
+	// or via returning false for errors. This point should not be reached.
 }
 
 // skipComment reads until the end of the line.
@@ -591,4 +750,35 @@ func isDigit(ch byte) bool {
 	return '0' <= ch && ch <= '9'
 }
 
-// --- TODO: Implement readString for string literals ---
+// isHexDigit checks if the character is a hexadecimal digit (0-9, a-f, A-F).
+func isHexDigit(ch byte) bool {
+	return ('0' <= ch && ch <= '9') || ('a' <= ch && ch <= 'f') || ('A' <= ch && ch <= 'F')
+}
+
+// isOctalDigit checks if the character is an octal digit (0-7).
+func isOctalDigit(ch byte) bool {
+	return '0' <= ch && ch <= '7'
+}
+
+// isBinaryDigit checks if the character is a binary digit (0-1).
+func isBinaryDigit(ch byte) bool {
+	return ch == '0' || ch == '1'
+}
+
+// isDigitForBase checks if the character is a valid digit for the given base.
+func isDigitForBase(ch byte, base int) bool {
+	switch base {
+	case 16:
+		return isHexDigit(ch)
+	case 10:
+		return isDigit(ch)
+	case 8:
+		return isOctalDigit(ch)
+	case 2:
+		return isBinaryDigit(ch)
+	default:
+		return false
+	}
+}
+
+// --- TODO: Implement readString for string literals --- // Removed TODO
