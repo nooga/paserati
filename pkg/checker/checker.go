@@ -795,10 +795,14 @@ func (c *Checker) visit(node parser.Node) {
 			widenedRightType := types.GetWidenedType(rightType)
 			switch node.Operator {
 			case "-":
-				if widenedRightType == types.Number {
+				// --- NEW: Allow if operand is 'any' ---
+				if widenedRightType == types.Any {
+					resultType = types.Any
+				} else if widenedRightType == types.Number {
 					resultType = types.Number
 				} else {
 					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
+					// Keep resultType = types.Any (default)
 				}
 			case "!":
 				// Logical NOT can be applied to any type (implicitly converts to boolean)
@@ -840,53 +844,64 @@ func (c *Checker) visit(node parser.Node) {
 		var resultType types.Type = types.Any // Default to Any on error
 		line := node.Token.Line
 
+		// --- NEW: Allow operations if any operand is 'any' ---
+		isAnyOperand := widenedLeftType == types.Any || widenedRightType == types.Any
+
 		if widenedLeftType != nil && widenedRightType != nil { // Proceed only if operand types are known
 			switch node.Operator {
 			case "+":
-				// Use widened types for checks
-				// <<< DEBUG: Check widened types specifically for '+' >>>
-				debugPrintf("// [Checker Infix +] Left : %T (%v), Right: %T (%v)\n",
-					widenedLeftType, widenedLeftType, widenedRightType, widenedRightType)
-				debugPrintf("// [Checker Infix +] Comparing Left == types.String: %v\n", widenedLeftType == types.String)
-				debugPrintf("// [Checker Infix +] Comparing Right == types.String: %v\n", widenedRightType == types.String)
-				// <<< END DEBUG >>>
-
-				if widenedLeftType == types.Number && widenedRightType == types.Number {
+				if isAnyOperand {
+					resultType = types.Any
+				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
 				} else if widenedLeftType == types.String && widenedRightType == types.String {
-					resultType = types.String // string + string = string
+					resultType = types.String
 				} else {
-					// TODO: Handle coercion (e.g., string + number)? For now, error.
 					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					// Keep resultType = types.Any (default)
 				}
 			case "-", "*", "/":
-				// Use widened types
-				if widenedLeftType == types.Number && widenedRightType == types.Number {
+				if isAnyOperand {
+					resultType = types.Any
+				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
 				} else {
 					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					// Keep resultType = types.Any (default)
 				}
 			case "<", ">", "<=", ">=":
-				// Use widened types
-				if widenedLeftType == types.Number && widenedRightType == types.Number {
+				if isAnyOperand {
+					resultType = types.Any // Comparison with any results in any? Or boolean? Let's try Any first.
+					// Alternatively: resultType = types.Boolean (safer, result is always boolean)
+				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Boolean
 				} else {
 					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					resultType = types.Boolean // Comparison errors still result in boolean
 				}
 			case "==", "!=", "===", "!==":
-				// <<< FIX: Allow comparison between any types, result is always boolean >>>
-				// The runtime will handle the actual comparison logic.
-				// We could add warnings for comparing obviously incompatible types (e.g., function == number)
-				// but for now, let's just allow it type-wise.
+				// Comparison always results in boolean, even with 'any'
 				resultType = types.Boolean
 			case "&&", "||":
-				// Result type is complex (union of branches)
 				// TODO: Implement Union types. For now, default to Any.
-				resultType = types.Any
+				// If one operand is any, result is any.
+				if isAnyOperand {
+					resultType = types.Any
+				} else {
+					// Need proper type analysis here based on logic.
+					// For now, fallback to Any if not involving Any.
+					resultType = types.Any
+				}
 			case "??":
-				// Result type is type of left if not null/undef, else type of right.
 				// TODO: Implement Union types. For now, default to Any.
-				resultType = types.Any
+				// If left is any, result is any. If right is any and left is null/undef, result is any.
+				if isAnyOperand { // Simplified check for now
+					resultType = types.Any
+				} else {
+					// Need proper type analysis here based on null/undefined checks.
+					// For now, fallback to Any if not involving Any.
+					resultType = types.Any
+				}
 			default:
 				c.addError(line, fmt.Sprintf("unsupported infix operator: %s", node.Operator))
 			}
@@ -922,10 +937,42 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(types.Void) // Use checker's method
 
 	case *parser.TernaryExpression:
-		// TODO: Handle TernaryExpression
+		// --- NEW: Handle TernaryExpression ---
 		c.visit(node.Condition)
+		// TODO: Check if condition is boolean?
+
 		c.visit(node.Consequence)
 		c.visit(node.Alternative)
+
+		consType := node.Consequence.GetComputedType()
+		altType := node.Alternative.GetComputedType()
+
+		// Handle nil types from potential errors during visit
+		if consType == nil {
+			consType = types.Any
+		}
+		if altType == nil {
+			altType = types.Any
+		}
+
+		var resultType types.Type
+		// Basic type inference: if types match, use that type, otherwise Any.
+		// TODO: Use Union types here when available.
+		if consType == altType { // Pointer comparison works for primitives and Any
+			resultType = consType
+		} else {
+			// Check structural equality for ArrayTypes (basic version)
+			consArray, consIsArray := consType.(*types.ArrayType)
+			altArray, altIsArray := altType.(*types.ArrayType)
+			if consIsArray && altIsArray && consArray.ElementType == altArray.ElementType {
+				resultType = consType // Types are equivalent array types
+			} else {
+				// TODO: Add structural checks for ObjectType, FunctionType?
+				resultType = types.Any // Types differ, fallback to Any
+			}
+		}
+
+		node.SetComputedType(resultType)
 
 	case *parser.FunctionLiteral:
 		// --- UPDATED: Handle FunctionLiteral ---
@@ -1380,8 +1427,28 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(rhsType)
 
 	case *parser.UpdateExpression:
-		// TODO: Handle UpdateExpression
+		// --- NEW: Handle UpdateExpression ---
 		c.visit(node.Argument)
+		argType := node.Argument.GetComputedType()
+		line := node.Token.Line
+		resultType := types.Number // Default result is number
+
+		if argType == nil {
+			argType = types.Any // Handle nil from visit error
+		}
+
+		widenedArgType := types.GetWidenedType(argType)
+
+		if widenedArgType != types.Number && widenedArgType != types.Any {
+			// Allow 'any' for now, but error on other non-numbers
+			c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedArgType.String()))
+			resultType = types.Any // Result is Any if operand is invalid
+		}
+
+		// TODO: Check if the argument is assignable (e.g., not a literal 5++)
+		// This might belong in a later compilation/resolution stage or require LHS checks here.
+
+		node.SetComputedType(resultType)
 
 	// --- NEW: Array/Index Type Checking ---
 	case *parser.ArrayLiteral:
