@@ -695,11 +695,13 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 
 	// --- DEBUG: Log block state before returning ---
 	statementsPtr := &block.Statements // Get pointer to the slice header itself
-	fmt.Printf("// [Parser Debug] Returning Block: Ptr=%p, Statements Slice Header Ptr=%p", block, statementsPtr)
-	if block.Statements == nil {
-		fmt.Printf(", Statements=nil\n")
-	} else {
-		fmt.Printf(", Statements.Len=%d\n", len(block.Statements))
+	if debugParser {
+		debugPrint("// [Parser Debug] Returning Block: Ptr=%p, Statements Slice Header Ptr=%p", block, statementsPtr)
+		if block.Statements == nil {
+			fmt.Printf(", Statements=nil\n")
+		} else {
+			fmt.Printf(", Statements.Len=%d\n", len(block.Statements))
+		}
 	}
 	// --- END DEBUG ---
 
