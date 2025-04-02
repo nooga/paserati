@@ -210,6 +210,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseContinueStatement()
 	case lexer.TYPE:
 		return p.parseTypeAliasStatement()
+	case lexer.SWITCH:
+		return p.parseSwitchStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -1336,7 +1338,7 @@ func (p *Parser) parseForStatement() *ForStatement {
 			return nil
 		}
 	} else { // Initializer IS empty
-		p.nextToken() // Consume the first ';', cur becomes ';'
+		p.nextToken() // Consume the first ';', cur becomes first ';'
 		stmt.Initializer = nil
 		debugPrint("parseForStatement: Initializer is EMPTY, cur=';'")
 	}
@@ -1571,4 +1573,130 @@ func (p *Parser) addError(tok lexer.Token, msg string) {
 		Msg: msg,
 	}
 	p.errors = append(p.errors, syntaxErr)
+}
+
+// --- NEW: Switch Statement Parsing ---
+
+// parseSwitchStatement parses a switch statement:
+// switch ( <expression> ) { <caseClauses> }
+func (p *Parser) parseSwitchStatement() *SwitchStatement {
+	stmt := &SwitchStatement{Token: p.curToken} // 'switch' token
+	stmt.Cases = []*SwitchCase{}
+
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil // Expected '(' after 'switch'
+	}
+
+	p.nextToken() // Consume '('
+	stmt.Expression = p.parseExpression(LOWEST)
+	if stmt.Expression == nil {
+		return nil // Error parsing switch expression
+	}
+
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil // Expected ')' after switch expression
+	}
+
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil // Expected '{' to start switch body
+	}
+
+	p.nextToken() // Consume '{'
+
+	// Parse case/default clauses
+	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+		if p.curTokenIs(lexer.CASE) || p.curTokenIs(lexer.DEFAULT) {
+			caseClause := p.parseSwitchCase()
+			if caseClause != nil {
+				stmt.Cases = append(stmt.Cases, caseClause)
+			} else {
+				// Error parsing case, try to recover by advancing until next potential case/default/end
+				p.nextToken() // Consume the token that caused the error in parseSwitchCase
+				for !p.curTokenIs(lexer.CASE) && !p.curTokenIs(lexer.DEFAULT) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+					p.nextToken()
+				}
+				continue // Continue parsing the next case/default if found
+			}
+			// parseSwitchCase leaves the current token at the start of the *next* case/default or RBRACE
+		} else {
+			msg := fmt.Sprintf("expected 'case' or 'default' inside switch block, got %s instead", p.curToken.Type)
+			p.addError(p.curToken, msg)
+			// Recovery: Advance until we potentially find the next clause or the end brace
+			for !p.curTokenIs(lexer.CASE) && !p.curTokenIs(lexer.DEFAULT) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+				p.nextToken()
+			}
+		}
+		// Do not call nextToken() here, parseSwitchCase or the error recovery loop should leave curToken ready for the next iteration check
+	}
+
+	if !p.curTokenIs(lexer.RBRACE) {
+		p.peekError(lexer.RBRACE) // Expected '}'
+		return nil
+	}
+
+	// Don't consume '}' here, let the main ParseProgram loop advance
+
+	return stmt
+}
+
+// parseSwitchCase parses a single 'case' or 'default' clause within a switch statement.
+func (p *Parser) parseSwitchCase() *SwitchCase {
+	caseClause := &SwitchCase{Token: p.curToken} // 'case' or 'default' token
+
+	if p.curTokenIs(lexer.CASE) {
+		p.nextToken() // Consume 'case'
+		caseClause.Condition = p.parseExpression(LOWEST)
+		if caseClause.Condition == nil {
+			return nil // Error parsing case condition
+		}
+		// After parseExpression, curToken is the last token of the expression.
+		// We expect the *next* token (peek) to be ':'.
+		if !p.peekTokenIs(lexer.COLON) { // Check if peek is colon
+			p.peekError(lexer.COLON)
+			return nil // Expected ':' after case expression
+		}
+		// Colon is present in peek. Advance twice: once past expr end, once past colon.
+		p.nextToken() // Consume end-of-expression token
+		p.nextToken() // Consume ':'
+	} else { // Must be DEFAULT
+		p.nextToken() // Consume 'default'
+		// Now curToken *should* be the ':'.
+		if !p.curTokenIs(lexer.COLON) { // Check the CURRENT token
+			p.peekError(lexer.COLON) // Report error based on expectation
+			return nil               // Expected ':' immediately after 'default'
+		}
+		// curToken is ':', condition is nil implicitly.
+		p.nextToken() // Consume ':' once
+	}
+
+	// Now curToken is the first token of the statement list after the colon.
+
+	// Parse the statements belonging to this case
+	caseClause.Body = &BlockStatement{Token: caseClause.Token}
+	caseClause.Body.Statements = []Statement{}
+
+	// Loop until the next case, default, or the end of the switch block
+	// Similar loop logic as parseBlockStatement
+	for !p.curTokenIs(lexer.CASE) && !p.curTokenIs(lexer.DEFAULT) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+		stmt := p.parseStatement() // parseStatement consumes tokens including optional semicolon
+		if stmt != nil {
+			caseClause.Body.Statements = append(caseClause.Body.Statements, stmt)
+		} else {
+			// If parseStatement returns nil due to an error, break the inner loop
+			// to avoid infinite loops and let the outer switch parser handle recovery.
+			// An error message should have already been added by parseStatement or its children.
+			break
+		}
+
+		// Advance AFTER parsing the statement, similar to parseBlockStatement
+		// Check for termination conditions before advancing.
+		if p.curTokenIs(lexer.EOF) || p.curTokenIs(lexer.CASE) || p.curTokenIs(lexer.DEFAULT) || p.curTokenIs(lexer.RBRACE) {
+			break // Reached end of case block or EOF
+		}
+		p.nextToken() // Advance to the next token to continue parsing statements within the case
+	}
+
+	// The token that terminated the loop (CASE, DEFAULT, RBRACE, or EOF) is the current token.
+	// We leave it for the outer loop (parseSwitchStatement) to handle.
+	return caseClause
 }

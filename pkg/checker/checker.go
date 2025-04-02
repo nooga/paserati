@@ -1413,6 +1413,9 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.ContinueStatement:
 		break // Nothing to check type-wise
 
+	case *parser.SwitchStatement: // Added
+		c.checkSwitchStatement(node)
+
 	// --- Parameter (visited within function context) ---
 	case *parser.Parameter:
 		c.visit(node.Name)
@@ -1689,4 +1692,62 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 
 	// <<< USE NODE METHOD >>>
 	node.SetComputedType(resultType)
+}
+
+// --- NEW: Switch Statement Check ---
+
+func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
+	// 1. Visit the switch expression
+	c.visit(node.Expression)
+	switchExprType := node.Expression.GetComputedType()
+	if switchExprType == nil {
+		switchExprType = types.Any // Default to Any if expression check failed
+	}
+	widenedSwitchExprType := types.GetWidenedType(switchExprType)
+
+	// 2. Visit cases
+	for _, caseClause := range node.Cases {
+		if caseClause.Condition != nil {
+			// Visit case condition
+			c.visit(caseClause.Condition)
+			caseCondType := caseClause.Condition.GetComputedType()
+			if caseCondType == nil {
+				caseCondType = types.Any // Default to Any on error
+			}
+			widenedCaseCondType := types.GetWidenedType(caseCondType)
+
+			// --- Basic Comparability Check --- (Simplified for now)
+			// Allow comparison if either is Any/Unknown or if they are the same primitive type.
+			// This is not perfect for === semantics but catches basic errors.
+			isAny := widenedSwitchExprType == types.Any || widenedCaseCondType == types.Any
+			isUnknown := widenedSwitchExprType == types.Unknown || widenedCaseCondType == types.Unknown
+			_, isSwitchFunc := widenedSwitchExprType.(*types.FunctionType)
+			_, isCaseFunc := widenedCaseCondType.(*types.FunctionType)
+			_, isSwitchArray := widenedSwitchExprType.(*types.ArrayType)
+			_, isCaseArray := widenedCaseCondType.(*types.ArrayType)
+
+			incompatible := false
+			if (isSwitchFunc != isCaseFunc) && !isAny && !isUnknown {
+				incompatible = true // Can't compare func and non-func (unless any/unknown)
+			}
+			if (isSwitchArray != isCaseArray) && !isAny && !isUnknown {
+				// Maybe allow comparing array to any/null/undefined? Needs refinement.
+				// For now, treat array vs non-array as incompatible unless any/unknown involved.
+				incompatible = true
+			}
+			// Add more checks? e.g., number vs string? Current VM might coerce.
+			// Strict equality usually doesn't coerce, so maybe check primitives match?
+
+			if incompatible {
+				c.addError(caseClause.Condition, fmt.Sprintf("this case expression type (%s) is not comparable to the switch expression type (%s)", widenedCaseCondType, widenedSwitchExprType))
+			}
+			// --- End Comparability Check ---
+		}
+
+		// Visit case body (BlockStatement, handles its own scope)
+		c.visit(caseClause.Body)
+	}
+
+	// Switch statements don't produce a value themselves
+	// node.SetComputedType(types.Void) // Remove this line
 }
