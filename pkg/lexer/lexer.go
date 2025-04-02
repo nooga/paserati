@@ -87,6 +87,9 @@ const (
 	BREAK    TokenType = "BREAK"    // Added
 	CONTINUE TokenType = "CONTINUE" // Added
 	TYPE     TokenType = "TYPE"     // Added for type aliases
+	SWITCH   TokenType = "SWITCH"   // Added for switch statements
+	CASE     TokenType = "CASE"     // Added for switch statements
+	DEFAULT  TokenType = "DEFAULT"  // Added for switch statements
 
 	// Logical Operators
 	LOGICAL_AND TokenType = "&&" // Added
@@ -118,6 +121,9 @@ var keywords = map[string]TokenType{
 	"break":     BREAK,    // Added
 	"continue":  CONTINUE, // Added
 	"type":      TYPE,     // Added
+	"switch":    SWITCH,   // Added
+	"case":      CASE,     // Added
+	"default":   DEFAULT,  // Added
 }
 
 // LookupIdent checks the keywords table for an identifier.

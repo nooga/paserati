@@ -826,3 +826,61 @@ func (me *MemberExpression) String() string {
 	}
 	return out.String()
 }
+
+// --- NEW: Switch Statement Nodes ---
+
+// SwitchCase represents a single case or default clause within a switch statement.
+type SwitchCase struct {
+	Token     lexer.Token     // The 'case' or 'default' token
+	Condition Expression      // The expression to match (nil for default)
+	Body      *BlockStatement // The block of statements to execute
+}
+
+// Not a full Node, but needs String() for debugging SwitchStatement.String()
+func (sc *SwitchCase) String() string {
+	var out bytes.Buffer
+	if sc.Condition != nil {
+		out.WriteString("case ")
+		out.WriteString(sc.Condition.String())
+	} else {
+		out.WriteString("default")
+	}
+	out.WriteString(":\n") // Use newline for better readability
+	if sc.Body != nil {
+		// Indent the body for clarity
+		bodyStr := sc.Body.String()
+		indentedBody := strings.ReplaceAll(bodyStr, "\n", "\n  ") // Indent lines
+		out.WriteString("  ")
+		out.WriteString(indentedBody)
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
+// SwitchStatement represents a switch statement.
+// switch (Expression) { Case* Default? Case* }
+type SwitchStatement struct {
+	Token      lexer.Token   // The 'switch' token
+	Expression Expression    // The expression being evaluated
+	Cases      []*SwitchCase // The list of case/default clauses
+}
+
+func (ss *SwitchStatement) statementNode()       {}
+func (ss *SwitchStatement) TokenLiteral() string { return ss.Token.Literal }
+func (ss *SwitchStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("switch (")
+	if ss.Expression != nil {
+		out.WriteString(ss.Expression.String())
+	}
+	out.WriteString(") {\n")
+	for _, c := range ss.Cases {
+		// Indent cases slightly
+		caseStr := c.String()
+		indentedCase := strings.ReplaceAll(caseStr, "\n", "\n  ")
+		out.WriteString("  ")
+		out.WriteString(indentedCase)
+	}
+	out.WriteString("}")
+	return out.String()
+}

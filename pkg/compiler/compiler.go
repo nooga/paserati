@@ -241,6 +241,12 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		}
 		return c.compileDoWhileStatement(node)
 
+	case *parser.SwitchStatement: // Added
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Switch statements don't produce a value
+		}
+		return c.compileSwitchStatement(node)
+
 	case *parser.FunctionLiteral: // Handle Function *Declarations* (when used as a statement)
 		// This handles `function foo() {}` syntax at the statement level.
 		// Function literals used in expressions (e.g., assignments) are handled below.
@@ -2085,4 +2091,185 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		// Return a dummy token if type is unhandled
 		return lexer.Token{Type: lexer.ILLEGAL, Line: 1, Column: 1}
 	}
+}
+
+// --- NEW: Switch Statement Compilation ---
+
+// compileSwitchStatement compiles a switch statement.
+//
+//	switch (expr) {
+//	  case val1: body1; break;
+//	  case val2: body2;
+//	  default: bodyD; break;
+//	}
+//
+// Compilation strategy:
+//  1. Compile switch expression.
+//  2. For each case:
+//     a. Compile case value.
+//     b. Compare with switch expression value (StrictEqual).
+//     c. If not equal, jump to the *next* case test (OpJumpIfFalse).
+//     d. If equal, execute the case body.
+//     e. Handle break: Jumps to the end of the entire switch.
+//     f. Implicit fallthrough means after a body (without break), execution continues to the next case test.
+//  3. Handle default: If reached (all cases failed), execute default body.
+//  4. Patch all jumps.
+func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.PaseratiError {
+	// 1. Compile the expression being switched on
+	err := c.compileNode(node.Expression)
+	if err != nil {
+		return err
+	}
+	switchExprReg := c.regAlloc.Current()
+	// Keep this register allocated until the end of the switch
+
+	// List to hold the positions of OpJumpIfFalse instructions for each case test.
+	// These jump to the *next* case test if the current one fails.
+	caseTestFailJumps := []int{}
+
+	// List to hold the positions of OpJump instructions that jump to the end of the switch
+	// (used by break statements and potentially at the end of cases without breaks).
+	jumpToEndPatches := []int{}
+
+	// Find the default case (if any) - needed for patching the last case's jump
+	defaultCaseBodyIndex := -1
+	for i, caseClause := range node.Cases {
+		if caseClause.Condition == nil { // This is the default case
+			if defaultCaseBodyIndex != -1 {
+				// Use the switch statement node for error reporting context
+				c.addError(node, "Multiple default cases in switch statement")
+				return nil // Indicate error occurred
+			}
+			defaultCaseBodyIndex = i
+		}
+	}
+
+	// Push a context to handle break statements within the switch
+	c.pushLoopContext(-1, -1) // -1 indicates no target for continue/loop start
+
+	// --- Iterate through cases to emit comparison and body code ---
+	caseBodyStartPositions := make([]int, len(node.Cases))
+
+	for i, caseClause := range node.Cases {
+		// Get line info directly from the token
+		caseLine := caseClause.Token.Line
+
+		// Patch jumps from *previous* failed case tests to point here
+		for _, jumpPos := range caseTestFailJumps {
+			c.patchJump(jumpPos)
+		}
+		caseTestFailJumps = []int{} // Clear the list for the current case
+
+		if caseClause.Condition != nil { // Regular 'case expr:'
+			// Compile the case condition
+			err = c.compileNode(caseClause.Condition)
+			if err != nil {
+				return err
+			}
+			// Use Current() as CurrentAndFree is not available
+			caseCondReg := c.regAlloc.Current()
+
+			// Compare switch expression value with case condition value
+			// Use Alloc() instead of Allocate()
+			matchReg := c.regAlloc.Alloc()
+			c.emitStrictEqual(matchReg, switchExprReg, caseCondReg, caseLine)
+
+			// If no match, jump to the next case test (or default/end)
+			jumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, matchReg, caseLine)
+			caseTestFailJumps = append(caseTestFailJumps, jumpPos)
+			// Remove Free(), not available in current allocator
+			// c.regAlloc.Free(matchReg)
+
+			// Record the start position of the body for potential jumps
+			caseBodyStartPositions[i] = c.currentPosition()
+
+			// Compile the case body
+			err = c.compileNode(caseClause.Body)
+			if err != nil {
+				return err
+			}
+			// Implicit fallthrough *to the end* unless break exists.
+			// Add a jump to the end, break will have already added its own.
+			// Check if the last instruction was already a jump (from break/return)
+			// This is tricky, let's always add the jump for now, might be redundant.
+			endCaseJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, caseLine) // 0 = unused reg for OpJump
+			jumpToEndPatches = append(jumpToEndPatches, endCaseJumpPos)
+
+		} else { // 'default:' case
+			// Record the start position of the default body
+			caseBodyStartPositions[i] = c.currentPosition()
+
+			// Compile the default case body
+			err = c.compileNode(caseClause.Body)
+			if err != nil {
+				return err
+			}
+			// Add jump to end (optional, could just fall out if it's last)
+			endCaseJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, caseLine) // 0 = unused reg for OpJump
+			jumpToEndPatches = append(jumpToEndPatches, endCaseJumpPos)
+		}
+	}
+
+	// Patch the last set of test failure jumps to point to the end of the switch
+	for _, jumpPos := range caseTestFailJumps {
+		c.patchJump(jumpPos)
+	}
+
+	// Remove unused variable
+	// endSwitchPos := c.currentPosition()
+
+	// Patch all break jumps and end-of-case jumps
+	loopCtx := c.currentLoopContext()
+	if loopCtx != nil { // Should always exist here
+		for _, breakJumpPos := range loopCtx.BreakPlaceholderPosList {
+			c.patchJump(breakJumpPos)
+		}
+	}
+	for _, endJumpPos := range jumpToEndPatches {
+		c.patchJump(endJumpPos)
+	}
+
+	// Pop the break context
+	c.popLoopContext()
+
+	// Remove Free(), not available in current allocator
+	// c.regAlloc.Free(switchExprReg)
+
+	return nil
+}
+
+// --- NEW: Loop Context Helpers ---
+
+// pushLoopContext adds a new loop context to the stack.
+func (c *Compiler) pushLoopContext(loopStartPos, continueTargetPos int) {
+	context := &LoopContext{
+		LoopStartPos:               loopStartPos,
+		ContinueTargetPos:          continueTargetPos,
+		BreakPlaceholderPosList:    make([]int, 0),
+		ContinuePlaceholderPosList: make([]int, 0),
+	}
+	c.loopContextStack = append(c.loopContextStack, context)
+}
+
+// popLoopContext removes the current loop context from the stack.
+func (c *Compiler) popLoopContext() {
+	if len(c.loopContextStack) > 0 {
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+	}
+	// Consider adding error handling if pop is called on an empty stack
+}
+
+// currentLoopContext returns the loop context currently at the top of the stack, or nil if empty.
+func (c *Compiler) currentLoopContext() *LoopContext {
+	if len(c.loopContextStack) == 0 {
+		return nil
+	}
+	return c.loopContextStack[len(c.loopContextStack)-1]
+}
+
+// --- NEW: Bytecode Position Helper ---
+
+// currentPosition returns the index of the next byte to be written to the chunk.
+func (c *Compiler) currentPosition() int {
+	return len(c.chunk.Code)
 }
