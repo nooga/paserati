@@ -61,6 +61,8 @@ const (
 	OpGetIndex  OpCode = 28 // DestReg ArrayReg IndexReg: DestReg = ArrayReg[IndexReg]
 	OpSetIndex  OpCode = 29 // ArrayReg IndexReg ValueReg: ArrayReg[IndexReg] = ValueReg
 
+	OpGetLength OpCode = 30 // <<< NEW: DestReg SrcReg: DestReg = length(SrcReg)
+
 	// Add comparison operators as needed
 	// OpLessEqual // Rx Ry Rz: Rx = (Ry <= Rz)
 )
@@ -128,6 +130,8 @@ func (op OpCode) String() string {
 		return "OpGetIndex"
 	case OpSetIndex:
 		return "OpSetIndex"
+	case OpGetLength:
+		return "OpGetLength"
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}
