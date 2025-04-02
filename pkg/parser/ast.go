@@ -259,6 +259,16 @@ func (nl *NullLiteral) expressionNode()      {}
 func (nl *NullLiteral) TokenLiteral() string { return nl.Token.Literal }
 func (nl *NullLiteral) String() string       { return nl.Token.Literal }
 
+// UndefinedLiteral represents the `undefined` keyword.
+type UndefinedLiteral struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.UNDEFINED token
+}
+
+func (ul *UndefinedLiteral) expressionNode()      {}
+func (ul *UndefinedLiteral) TokenLiteral() string { return ul.Token.Literal }
+func (ul *UndefinedLiteral) String() string       { return ul.Token.Literal }
+
 // FunctionLiteral represents a function definition.
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
