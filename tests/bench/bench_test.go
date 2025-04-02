@@ -4,6 +4,7 @@ import (
 	"os"
 	"paserati/pkg/driver"
 	"paserati/pkg/vm"
+	"strings"
 	"testing"
 )
 
@@ -11,13 +12,15 @@ import (
 // Uses testing.TB for compatibility with both tests and benchmarks.
 func compileFile(tb testing.TB, filename string) *vm.Chunk {
 	tb.Helper()
-	chunk, compileErrs := driver.CompileFile(filename)
+	chunk, compileErrs := driver.CompileFile(filename) // Returns PaseratiError slice
 	if len(compileErrs) > 0 {
-		var errMsgs []string
+		var errMsgs strings.Builder
 		for _, err := range compileErrs {
-			errMsgs = append(errMsgs, err.Error())
+			errMsgs.WriteString(err.Error() + "\\n") // Use the error string directly
 		}
-		tb.Fatalf("Compile errors in %q: %v", filename, errMsgs)
+		// Display formatted errors if possible (might require source)
+		// errors.DisplayErrors(source, compileErrs) // Need source string here
+		tb.Fatalf("Compile errors in %q:\\n%s", filename, errMsgs.String())
 	}
 	if chunk == nil {
 		tb.Fatalf("Compilation succeeded for %q but returned nil chunk", filename)
@@ -48,7 +51,19 @@ func BenchmarkFibPlaceholderRun(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Important: Reset the VM state for each iteration if Interpret doesn't fully reset
 		// vmInstance.Reset() // Interpret() currently calls Reset(), so this might be redundant
-		_ = vmInstance.Interpret(chunk) // Run the compiled code, ignore result for benchmark
+
+		// Run the compiled code, capture value and errors
+		_, runtimeErrs := vmInstance.Interpret(chunk)
+
+		// Fail benchmark immediately if runtime errors occur
+		if len(runtimeErrs) > 0 {
+			var errMsgs strings.Builder
+			// Need source to display properly, just list errors for now
+			for _, rErr := range runtimeErrs {
+				errMsgs.WriteString(rErr.Error() + "\\n")
+			}
+			b.Fatalf("Runtime error during benchmark iteration %d:\\n%s", i, errMsgs.String())
+		}
 	}
 	b.StopTimer() // Stop timing
 

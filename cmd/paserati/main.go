@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 	"paserati/pkg/driver"
-	"paserati/pkg/vm"
+	// \"paserati/pkg/vm\" // Remove: VM no longer directly used here
 )
 
 func main() {
@@ -25,32 +25,23 @@ func main() {
 	}
 }
 
-// runFile compiles and executes a Paserati script from a file.
+// runFile uses the driver to compile and execute a Paserati script from a file.
 func runFile(filename string) {
-	chunk, compileErrs := driver.CompileFile(filename)
-	if compileErrs != nil {
-		fmt.Fprintf(os.Stderr, "Compile errors:\n")
-		for _, err := range compileErrs {
-			fmt.Fprintf(os.Stderr, "\t%s\n", err)
-		}
-		os.Exit(65) // Exit code 65: data format error
+	// driver.RunFile handles compilation, interpretation, and error display.
+	ok := driver.RunFile(filename)
+	if !ok {
+		// Exit with a generic error code if RunFile reported errors.
+		// Specific error codes (65, 70) distinction is lost here,
+		// but the errors were already printed by the driver.
+		os.Exit(70) // Exit code 70: internal software error (generic catch-all)
 	}
-
-	machine := vm.NewVM()
-	result := machine.Interpret(chunk)
-
-	// Check for runtime errors
-	if result == vm.InterpretRuntimeError {
-		// The VM's runtimeError function already prints the error and stack trace.
-		os.Exit(70) // Exit code 70: internal software error
-	}
-	// InterpretCompileError shouldn't happen here as we check compileErrs above
+	// If ok is true, execution succeeded and result (if any) was printed.
 }
 
 // runRepl starts the Read-Eval-Print Loop.
 func runRepl() {
 	reader := bufio.NewReader(os.Stdin)
-	machine := vm.NewVM() // Create one VM instance for the REPL session
+	// machine := vm.NewVM() // No longer needed
 
 	fmt.Println("Paserati REPL (Ctrl+C to exit)")
 
@@ -70,26 +61,30 @@ func runRepl() {
 			continue
 		}
 
-		// Compile the input line
-		chunk, compileErrs := driver.CompileString(line)
-		if compileErrs != nil {
-			// Print compile errors but continue the REPL loop
-			fmt.Fprintf(os.Stderr, "Compile errors:\n")
-			for _, e := range compileErrs {
-				fmt.Fprintf(os.Stderr, "\t%s\n", e)
-			}
-			continue // Don't try to interpret if compilation failed
-		}
+		// Use driver.RunString for each line.
+		// It handles compile, interpret, error display, and result printing.
+		_ = driver.RunString(line) // Ignore the bool return in REPL
 
-		// Interpret the compiled chunk
-		// We reset the VM partially for each line, mainly the stack pointer
-		// The Interpret method handles resetting frame count, etc.
-		_ = machine.Interpret(chunk) // Use blank identifier to ignore result
-
-		// Runtime errors are printed by the VM itself via runtimeError.
-		// InterpretOK might print the result if the code ends with OpReturn.
-		// We don't need to explicitly check result here unless we want
-		// different REPL behavior based on the outcome.
-
+		// --- Old REPL logic ---
+		// // Compile the input line
+		// chunk, compileErrs := driver.CompileString(line)
+		// if compileErrs != nil {
+		// 	// Print compile errors but continue the REPL loop
+		// 	fmt.Fprintf(os.Stderr, "Compile errors:\n")
+		// 	for _, e := range compileErrs {
+		// 		fmt.Fprintf(os.Stderr, \"\\t%s\\n\", e)
+		// 	}
+		// 	continue // Don't try to interpret if compilation failed
+		// }
+		//
+		// // Interpret the compiled chunk
+		// // We reset the VM partially for each line, mainly the stack pointer
+		// // The Interpret method handles resetting frame count, etc.
+		// _ = machine.Interpret(chunk) // Use blank identifier to ignore result
+		//
+		// // Runtime errors are printed by the VM itself via runtimeError.
+		// // InterpretOK might print the result if the code ends with OpReturn.
+		// // We don't need to explicitly check result here unless we want
+		// // different REPL behavior based on the outcome.
 	}
 }

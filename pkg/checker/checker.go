@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"paserati/pkg/errors" // Added import
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
@@ -14,16 +15,6 @@ func debugPrintf(format string, args ...interface{}) {
 	if checkerDebug {
 		fmt.Printf(format, args...)
 	}
-}
-
-// TypeError represents an error found during type checking.
-type TypeError struct {
-	Line    int    // Line number where the error occurred
-	Message string // Description of the error
-}
-
-func (e *TypeError) Error() string {
-	return fmt.Sprintf("Type Error (Line %d): %s", e.Line, e.Message)
 }
 
 // Environment manages type information within scopes.
@@ -146,8 +137,8 @@ func (e *Environment) ResolveType(name string) (types.Type, bool) {
 type Checker struct {
 	program *parser.Program // Root AST node
 	// TODO: Add Type Registry if needed
-	env    *Environment // Current type environment
-	errors []TypeError
+	env    *Environment           // Current type environment
+	errors []errors.PaseratiError // Changed from []TypeError
 
 	// --- NEW: Context for checking function bodies ---
 	// Expected return type of the function currently being checked (set by explicit annotation).
@@ -159,8 +150,8 @@ type Checker struct {
 // NewChecker creates a new type checker.
 func NewChecker() *Checker {
 	return &Checker{
-		env:    NewEnvironment(), // Start with a global environment
-		errors: []TypeError{},
+		env:    NewEnvironment(),         // Start with a global environment
+		errors: []errors.PaseratiError{}, // Initialize with correct type
 		// Initialize function context fields to nil/empty
 		currentExpectedReturnType:  nil,
 		currentInferredReturnTypes: nil,
@@ -168,9 +159,9 @@ func NewChecker() *Checker {
 }
 
 // Check analyzes the given program AST for type errors.
-func (c *Checker) Check(program *parser.Program) []TypeError {
+func (c *Checker) Check(program *parser.Program) []errors.PaseratiError { // Changed return type
 	c.program = program
-	c.errors = []TypeError{} // Reset errors
+	c.errors = []errors.PaseratiError{} // Reset errors
 
 	// Start traversal from the program root
 	c.visit(program)
@@ -221,8 +212,8 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return types.Void
 		default:
 			// 3. If neither alias nor primitive, it's an unknown type name
-			line := node.Token.Line
-			c.addError(line, fmt.Sprintf("unknown type name: %s", node.Value))
+			// Use the Identifier node itself for error reporting
+			c.addError(node, fmt.Sprintf("unknown type name: %s", node.Value))
 			return nil // Indicate error
 		}
 
@@ -256,6 +247,10 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		return &types.LiteralType{Value: vm.Number(node.Value)}
 	case *parser.BooleanLiteral:
 		return &types.LiteralType{Value: vm.Bool(node.Value)}
+	case *parser.NullLiteral:
+		return types.Null
+	case *parser.UndefinedLiteral:
+		return types.Undefined
 	// --- End Literal Type Nodes ---
 
 	// TODO: Add cases for other complex type expressions (Array, Function, Object)
@@ -264,8 +259,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
-		line := 0 // TODO: Get line number from node token
-		c.addError(line, fmt.Sprintf("unsupported type annotation node: %T", node))
+		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
 		return nil // Indicate error
 	}
 }
@@ -507,7 +501,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 		if !c.env.Define(node.Name.Value, tempType) {
 			// If Define fails here, it's a true redeclaration error.
-			c.addError(node.Name.Token.Line, fmt.Sprintf("variable '%s' already declared in this scope", node.Name.Value))
+			c.addError(node.Name, fmt.Sprintf("variable '%s' already declared in this scope", node.Name.Value))
 		}
 		debugPrintf("// [Checker LetStmt] Temp Define '%s' as: %s\n", node.Name.Value, tempType.String()) // DEBUG
 		// --- END FIX V2 ---
@@ -544,7 +538,7 @@ func (c *Checker) visit(node parser.Node) {
 				// --- END SPECIAL CASE ---
 
 				if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
-					c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalVariableType.String()))
+					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalVariableType.String()))
 				}
 			} // else: No initializer, declaredType is fine
 		} else {
@@ -596,7 +590,7 @@ func (c *Checker) visit(node parser.Node) {
 			computedInitializerType = node.Value.GetComputedType() // <<< USE NODE METHOD
 		} else {
 			// Constants MUST be initialized
-			c.addError(node.Token.Line, fmt.Sprintf("const declaration '%s' must be initialized", node.Name.Value))
+			c.addError(node.Value, fmt.Sprintf("const declaration '%s' must be initialized", node.Name.Value))
 			computedInitializerType = types.Any // Assign Any to prevent further cascading errors downstream
 		}
 
@@ -622,7 +616,7 @@ func (c *Checker) visit(node parser.Node) {
 			// --- END SPECIAL CASE ---
 
 			if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
-				c.addError(node.Token.Line, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalType.String()))
+				c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalType.String()))
 			}
 		} else {
 			// --- No annotation: Infer type ---
@@ -637,7 +631,7 @@ func (c *Checker) visit(node parser.Node) {
 
 		// 4. Define variable in the current environment
 		if !c.env.Define(node.Name.Value, finalType) {
-			c.addError(node.Name.Token.Line, fmt.Sprintf("constant '%s' already declared in this scope", node.Name.Value))
+			c.addError(node.Name, fmt.Sprintf("constant '%s' already declared in this scope", node.Name.Value))
 		}
 		// Set computed type on the Name Identifier node itself
 		node.Name.SetComputedType(finalType) // <<< USE NODE METHOD
@@ -656,23 +650,15 @@ func (c *Checker) visit(node parser.Node) {
 		// Check against expected type if available
 		if c.currentExpectedReturnType != nil {
 			if !c.isAssignable(actualReturnType, c.currentExpectedReturnType) {
-				line := 0 // TODO: Get line from return value token?
-				if node.ReturnValue != nil {
-					// Try to get line from expression node if possible
-					// line = node.ReturnValue.TokenLiteral() ... needs Token access
-				}
-				c.addError(line, fmt.Sprintf("cannot return type '%s'; expected type '%s'", actualReturnType.String(), c.currentExpectedReturnType.String()))
-			}
-		} else {
-			// No explicit annotation, collect for inference
-			// Ensure the slice exists (might be visiting return outside a function theoretically?)
-			if c.currentInferredReturnTypes != nil {
-				c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, actualReturnType)
-			} else {
-				// This case (return outside a function) should likely be a separate error?
-				// Or maybe caught by parser? For now, just ignore.
+				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
+					actualReturnType, c.currentExpectedReturnType)
+				// Report the error at the return value expression node
+				c.addError(node.ReturnValue, msg)
 			}
 		}
+
+		// Add to inferred types
+		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, actualReturnType)
 
 	case *parser.BlockStatement:
 		// --- UPDATED: Handle Block Scope ---
@@ -758,15 +744,7 @@ func (c *Checker) visit(node parser.Node) {
 		typ, found := c.env.Resolve(node.Value) // Use node.Value directly
 		if !found {
 			debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
-			// Use token from node if available, else use line 0
-			line := 0
-			tokenValue := "<unknown>"
-			// Check if Token is not the zero value before accessing Line
-			if node.Token != (lexer.Token{}) {
-				line = node.Token.Line
-				tokenValue = node.Value // Use node.Value directly
-			}
-			c.addError(line, fmt.Sprintf("undefined variable: %s", tokenValue))
+			c.addError(node, fmt.Sprintf("undefined variable: %s", node.Value))
 			// Set computed type if node itself is not nil (already checked)
 			node.SetComputedType(types.Any) // Set to Any on error?
 		} else {
@@ -788,7 +766,6 @@ func (c *Checker) visit(node parser.Node) {
 		c.visit(node.Right) // Visit the operand first
 		rightType := node.Right.GetComputedType()
 		var resultType types.Type = types.Any // Default to Any on error
-		line := node.Token.Line
 
 		if rightType != nil { // Proceed only if operand type is known
 			// <<< FIX: Use widened type for checks >>>
@@ -801,14 +778,14 @@ func (c *Checker) visit(node parser.Node) {
 				} else if widenedRightType == types.Number {
 					resultType = types.Number
 				} else {
-					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
 			case "!":
 				// Logical NOT can be applied to any type (implicitly converts to boolean)
 				resultType = types.Boolean
 			default:
-				c.addError(line, fmt.Sprintf("unsupported prefix operator: %s", node.Operator))
+				c.addError(node.Right, fmt.Sprintf("unsupported prefix operator: %s", node.Operator))
 			}
 		} // else: Error might have occurred visiting operand, or type is nil.
 		node.SetComputedType(resultType)
@@ -842,7 +819,6 @@ func (c *Checker) visit(node parser.Node) {
 		// <<< END NEW DEBUG >>>
 
 		var resultType types.Type = types.Any // Default to Any on error
-		line := node.Token.Line
 
 		// --- NEW: Allow operations if any operand is 'any' ---
 		isAnyOperand := widenedLeftType == types.Any || widenedRightType == types.Any
@@ -861,7 +837,7 @@ func (c *Checker) visit(node parser.Node) {
 					(widenedLeftType == types.Number && widenedRightType == types.String) {
 					resultType = types.String
 				} else {
-					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
 			case "-", "*", "/":
@@ -870,7 +846,7 @@ func (c *Checker) visit(node parser.Node) {
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
 				} else {
-					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
 			case "<", ">", "<=", ">=":
@@ -880,7 +856,7 @@ func (c *Checker) visit(node parser.Node) {
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Boolean
 				} else {
-					c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					resultType = types.Boolean // Comparison errors still result in boolean
 				}
 			case "==", "!=", "===", "!==":
@@ -907,7 +883,7 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				}
 			default:
-				c.addError(line, fmt.Sprintf("unsupported infix operator: %s", node.Operator))
+				c.addError(node.Right, fmt.Sprintf("unsupported infix operator: %s", node.Operator))
 			}
 		} // else: Error already reported during operand check or types were nil
 
@@ -915,10 +891,6 @@ func (c *Checker) visit(node parser.Node) {
 		debugPrintf("// [Checker Infix] Node: %p (%s), Determined ResultType: %T (%v)\n", node, node.Operator, resultType, resultType)
 
 		node.SetComputedType(resultType)
-
-		// <<< DEBUG: Verify type retrieval after storing >>>
-		retrievedType := node.GetComputedType()
-		debugPrintf("// [Checker Infix] Node: %p (%s), Retrieved Type: %T (%v), Found: %v\n", node, node.Operator, retrievedType, retrievedType)
 
 	case *parser.IfExpression:
 		// --- UPDATED: Handle IfExpression ---
@@ -1023,7 +995,7 @@ func (c *Checker) visit(node parser.Node) {
 		for i, nameNode := range paramNames {
 			if !funcEnv.Define(nameNode.Value, paramTypes[i]) {
 				// This shouldn't happen if parser prevents duplicate param names
-				c.addError(nameNode.Token.Line, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
+				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
 			}
 		}
 
@@ -1036,7 +1008,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 			if !funcEnv.Define(node.Name.Value, initialFuncType) {
 				// This might happen if a param has the same name as the function
-				c.addError(node.Name.Token.Line, fmt.Sprintf("identifier '%s' already declared in this scope (parameter or function name conflict)", node.Name.Value))
+				c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared in this scope (parameter or function name conflict)", node.Name.Value))
 			}
 			debugPrintf("// [Checker Visit FuncLit] Defined self '%s' in INNER Env: %p with initial type %s\n", node.Name.Value, funcEnv, initialFuncType.String()) // DEBUG
 		}
@@ -1103,7 +1075,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 			// --- END DEBUG ---
 			if !originalEnv.Define(node.Name.Value, funcType) { // Use the final funcType here
-				c.addError(node.Name.Token.Line, fmt.Sprintf("function '%s' already declared in this scope", node.Name.Value))
+				c.addError(node.Name, fmt.Sprintf("function '%s' already declared in this scope", node.Name.Value))
 			}
 		}
 
@@ -1163,7 +1135,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.env = funcEnv
 		for i, nameNode := range paramNames {
 			if !funcEnv.Define(nameNode.Value, paramTypes[i]) {
-				c.addError(nameNode.Token.Line, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
+				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
 			}
 		}
 
@@ -1185,7 +1157,7 @@ func (c *Checker) visit(node parser.Node) {
 			if expectedReturnType != nil {
 				if !c.isAssignable(bodyType, expectedReturnType) {
 					// TODO: Get line number from exprBody token if possible
-					c.addError(node.Token.Line, fmt.Sprintf("cannot return expression of type '%s' from arrow function with return type annotation '%s'", bodyType.String(), expectedReturnType.String()))
+					c.addError(exprBody, fmt.Sprintf("cannot return expression of type '%s' from arrow function with return type annotation '%s'", bodyType.String(), expectedReturnType.String()))
 				}
 			}
 			// --- END NEW ---
@@ -1270,7 +1242,7 @@ func (c *Checker) visit(node parser.Node) {
 			if isIdent {
 				errMsg = fmt.Sprintf("cannot determine type of called identifier '%s'", funcIdent.Value)
 			}
-			c.addError(node.Token.Line, errMsg)
+			c.addError(node, errMsg)
 			node.SetComputedType(types.Any)
 			return
 		}
@@ -1284,7 +1256,7 @@ func (c *Checker) visit(node parser.Node) {
 		// Assert that the computed type is actually a function type
 		funcType, ok := funcNodeType.(*types.FunctionType)
 		if !ok {
-			c.addError(node.Token.Line, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
+			c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
 			node.SetComputedType(types.Any) // Result type is unknown/error
 			return
 		}
@@ -1293,7 +1265,7 @@ func (c *Checker) visit(node parser.Node) {
 		expectedArgCount := len(funcType.ParameterTypes)
 		actualArgCount := len(node.Arguments)
 		if actualArgCount != expectedArgCount {
-			c.addError(node.Token.Line, fmt.Sprintf("expected %d arguments, but got %d", expectedArgCount, actualArgCount))
+			c.addError(node, fmt.Sprintf("expected %d arguments, but got %d", expectedArgCount, actualArgCount))
 			// Continue checking assignable args anyway? Or stop?
 			// Let's stop checking args if arity is wrong, but still set return type.
 			node.SetComputedType(funcType.ReturnType)
@@ -1313,40 +1285,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 
 			if !c.isAssignable(argType, paramType) {
-				// --- FIXED: Extract line number from argument node ---
-				argLine := 0 // Default line number
-				switch n := argNode.(type) {
-				// List common node types that have a Token field
-				case *parser.Identifier:
-					argLine = n.Token.Line
-				case *parser.NumberLiteral:
-					argLine = n.Token.Line
-				case *parser.StringLiteral:
-					argLine = n.Token.Line
-				case *parser.BooleanLiteral:
-					argLine = n.Token.Line
-				case *parser.NullLiteral:
-					argLine = n.Token.Line
-				case *parser.UndefinedLiteral:
-					argLine = n.Token.Line
-				case *parser.PrefixExpression:
-					argLine = n.Token.Line // Token is operator
-				case *parser.InfixExpression:
-					argLine = n.Token.Line // Token is operator
-				case *parser.CallExpression:
-					argLine = n.Token.Line // Token is '('
-				case *parser.FunctionLiteral:
-					argLine = n.Token.Line // Token is 'function'
-				case *parser.ArrowFunctionLiteral:
-					argLine = n.Token.Line // Token is '=>'
-				// Add other expression types holding a relevant Token here...
-				default:
-					// Fallback or attempt to get token via interface if Node had GetToken()
-					// For now, default 0 is kept if type assertion fails
-					debugPrintf("// [Checker Warning] Could not get specific line number for arg type %T\n", argNode)
-				}
-				// --- End Fix ---
-				c.addError(argLine, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
+				c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
 				// Continue checking other arguments even if one fails
 			}
 		}
@@ -1358,11 +1297,10 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.AssignmentExpression:
 		// TODO: Handle AssignmentExpression
-		line := node.Token.Line
 		if indexExpr, isIndexExpr := node.Left.(*parser.IndexExpression); isIndexExpr {
 			// --- Handle arr[idx] = value ---
 			if node.Operator != "=" {
-				c.addError(line, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported", node.Operator))
+				c.addError(node.Value, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported", node.Operator))
 				node.SetComputedType(types.Any) // Set error type
 				return
 			}
@@ -1394,11 +1332,7 @@ func (c *Checker) visit(node parser.Node) {
 			// --- CHECK ASSIGNMENT ---
 			if !c.isAssignable(valueType, expectedElementType) {
 				// Use line number from the value node if possible
-				valueLine := line // Fallback to assignment token line
-				if valueToken := GetTokenFromNode(node.Value); valueToken != (lexer.Token{}) {
-					valueLine = valueToken.Line
-				}
-				c.addError(valueLine, fmt.Sprintf("cannot assign type '%s' to array element of type '%s'", valueType.String(), expectedElementType.String()))
+				c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to array element of type '%s'", valueType.String(), expectedElementType.String()))
 			}
 			// --- END CHECK ---
 
@@ -1418,13 +1352,8 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Check assignability
 		if lhsType != nil && !c.isAssignable(rhsType, lhsType) {
-			// Get line number from value node if possible
-			valueLine := line
-			if valueToken := GetTokenFromNode(node.Value); valueToken != (lexer.Token{}) {
-				valueLine = valueToken.Line
-			}
 			leftIdent := node.Left.(*parser.Identifier) // Assume it's an identifier here
-			c.addError(valueLine, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", rhsType.String(), leftIdent.Value, lhsType.String()))
+			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", rhsType.String(), leftIdent.Value, lhsType.String()))
 		}
 
 		// Set computed type for the assignment expression (value assigned)
@@ -1434,7 +1363,6 @@ func (c *Checker) visit(node parser.Node) {
 		// --- NEW: Handle UpdateExpression ---
 		c.visit(node.Argument)
 		argType := node.Argument.GetComputedType()
-		line := node.Token.Line
 		resultType := types.Number // Default result is number
 
 		if argType == nil {
@@ -1445,7 +1373,7 @@ func (c *Checker) visit(node parser.Node) {
 
 		if widenedArgType != types.Number && widenedArgType != types.Any {
 			// Allow 'any' for now, but error on other non-numbers
-			c.addError(line, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedArgType.String()))
+			c.addError(node.Argument, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedArgType.String()))
 			resultType = types.Any // Result is Any if operand is invalid
 		}
 
@@ -1500,9 +1428,18 @@ func (c *Checker) visit(node parser.Node) {
 }
 
 // Helper to add type errors (consider adding token/node info later)
-func (c *Checker) addError(line int, message string) {
-	// TODO: Get line number from token if available
-	c.errors = append(c.errors, TypeError{Line: line, Message: message})
+func (c *Checker) addError(node parser.Node, message string) {
+	token := GetTokenFromNode(node)
+	err := &errors.TypeError{
+		Position: errors.Position{
+			Line:     token.Line,
+			Column:   token.Column,
+			StartPos: token.StartPos,
+			EndPos:   token.EndPos,
+		},
+		Msg: message,
+	}
+	c.errors = append(c.errors, err)
 }
 
 // --- NEW HELPER: GetTokenFromNode (Best effort) ---
@@ -1596,7 +1533,7 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 
 	// 2. Define the alias in the current environment
 	if !c.env.DefineTypeAlias(node.Name.Value, aliasedType) {
-		c.addError(node.Name.Token.Line, fmt.Sprintf("type alias name '%s' conflicts with an existing variable or type alias in this scope", node.Name.Value))
+		c.addError(node.Name, fmt.Sprintf("type alias name '%s' conflicts with an existing variable or type alias in this scope", node.Name.Value))
 	}
 
 	// TODO: Add cycle detection? (e.g., type A = B; type B = A;)
@@ -1651,7 +1588,6 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 	indexType := node.Index.GetComputedType()
 
 	var resultType types.Type = types.Any // Default result type on error
-	line := node.Token.Line
 
 	// 3. Check base type (allow Array for now)
 	switch base := leftType.(type) {
@@ -1659,7 +1595,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		// Base is ArrayType
 		// 4. Check index type (must be number for array)
 		if !c.isAssignable(indexType, types.Number) {
-			c.addError(line, fmt.Sprintf("array index must be of type number, got %s", indexType.String()))
+			c.addError(node.Index, fmt.Sprintf("array index must be of type number, got %s", indexType.String()))
 			// Proceed with Any as result type
 		} else {
 			// Index type is valid, result type is the array's element type
@@ -1680,7 +1616,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		if base == types.String {
 			// 4. Check index type (must be number for string)
 			if !c.isAssignable(indexType, types.Number) {
-				c.addError(line, fmt.Sprintf("string index must be of type number, got %s", indexType.String()))
+				c.addError(node.Index, fmt.Sprintf("string index must be of type number, got %s", indexType.String()))
 			}
 			// Result of indexing a string is always a string (or potentially undefined)
 			// Let's use string | undefined? Or just string?
@@ -1688,11 +1624,11 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			// A more precise type might be: types.NewUnionType(types.String, types.Undefined)
 			resultType = types.String
 		} else {
-			c.addError(line, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+			c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 		}
 
 	default:
-		c.addError(line, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+		c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 	}
 
 	// Set computed type on the IndexExpression node
@@ -1711,14 +1647,13 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	widenedObjectType := types.GetWidenedType(objectType)
 	propertyName := node.Property.Value // Property is always an Identifier
 	var resultType types.Type = nil     // Initialize to nil, indicating property not found yet
-	line := node.Token.Line
 
 	// Handle primitive types first by comparing against exported variables
 	if widenedObjectType == types.String {
 		if propertyName == "length" {
 			resultType = types.Number // string.length is number
 		} else {
-			c.addError(line, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
+			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
 			resultType = types.Any
 		}
 	} else if widenedObjectType == types.Any {
@@ -1730,17 +1665,17 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if propertyName == "length" {
 				resultType = types.Number // Array.length is number
 			} else {
-				c.addError(line, fmt.Sprintf("property '%s' does not exist on type 'array'", propertyName))
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'array'", propertyName))
 				resultType = types.Any
 			}
 		case *types.ObjectType:
 			// TODO: Check object properties/methods
-			c.addError(line, fmt.Sprintf("property access on object types not implemented yet"))
+			c.addError(node.Property, fmt.Sprintf("property access on object types not implemented yet"))
 			resultType = types.Any
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
-			c.addError(line, fmt.Sprintf("property access is not supported on type %s", obj.String()))
+			c.addError(node.Property, fmt.Sprintf("property access is not supported on type %s", obj.String()))
 			resultType = types.Any
 		}
 	}
@@ -1748,7 +1683,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	if resultType == nil {
 		// This fallback should ideally not be reached if all types are handled above.
 		// It might indicate an unhandled primitive or struct type.
-		c.addError(line, fmt.Sprintf("internal error: property '%s' check failed for type %s", propertyName, widenedObjectType.String()))
+		c.addError(node.Property, fmt.Sprintf("internal error: property '%s' check failed for type %s", propertyName, widenedObjectType.String()))
 		resultType = types.Any
 	}
 

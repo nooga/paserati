@@ -3,9 +3,11 @@ package compiler
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/checker" // <<< Added import
+	"paserati/pkg/checker"
+	"paserati/pkg/errors"
+	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
-	"paserati/pkg/types" // Added import for types
+	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
 
@@ -27,15 +29,15 @@ type LoopContext struct {
 type Compiler struct {
 	chunk              *vm.Chunk
 	regAlloc           *RegisterAllocator
-	currentSymbolTable *SymbolTable // Changed from symbolTable
-	enclosing          *Compiler    // Pointer to the enclosing compiler instance (nil for global)
-	freeSymbols        []*Symbol    // Symbols resolved in outer scopes (captured)
-	errors             []string
+	currentSymbolTable *SymbolTable
+	enclosing          *Compiler
+	freeSymbols        []*Symbol
+	errors             []errors.PaseratiError
 	lastExprReg        Register
 	lastExprRegValid   bool
 	loopContextStack   []*LoopContext
 	compilingFuncName  string
-	typeChecker        *checker.Checker // <<< NEW: Reference to the type checker instance
+	typeChecker        *checker.Checker
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -46,11 +48,11 @@ func NewCompiler() *Compiler {
 		currentSymbolTable: NewSymbolTable(),
 		enclosing:          nil,
 		freeSymbols:        []*Symbol{},
-		errors:             []string{},
+		errors:             []errors.PaseratiError{},
 		lastExprRegValid:   false,
 		loopContextStack:   make([]*LoopContext, 0),
 		compilingFuncName:  "<script>",
-		typeChecker:        nil, // Initialize as nil
+		typeChecker:        nil,
 	}
 }
 
@@ -63,78 +65,81 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		currentSymbolTable: NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
 		enclosing:          enclosingCompiler,
 		freeSymbols:        []*Symbol{},
-		errors:             []string{},
+		errors:             []errors.PaseratiError{},
 		loopContextStack:   make([]*LoopContext, 0),
 		compilingFuncName:  "",
-		typeChecker:        enclosingCompiler.typeChecker, // <<< Inherit checker reference
+		typeChecker:        enclosingCompiler.typeChecker,
 	}
 }
 
 // Compile traverses the AST, performs type checking, and generates bytecode.
 // Returns the generated chunk and any errors encountered (including type errors).
-func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []string) {
+func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError) {
 
 	// --- Type Checking Step ---
 	program, ok := node.(*parser.Program)
 	if !ok {
 		// Compiler currently expects the root node to be a Program.
-		// If not, it cannot type check. Return an immediate error.
-		// This might need adjustment if Compile is ever called on subtrees directly.
-		return nil, []string{"compiler error: Compile input must be *parser.Program for type checking"}
+		// If not, it cannot type check. Return an immediate internal compiler error.
+		// We create a placeholder token for the position.
+		// TODO: Find a better way to get position info if input isn't a Program.
+		placeholderToken := lexer.Token{Type: lexer.ILLEGAL, Literal: "", Line: 1, Column: 1, StartPos: 0, EndPos: 0}
+		compileErr := &errors.CompileError{
+			Position: errors.Position{
+				Line:     placeholderToken.Line,
+				Column:   placeholderToken.Column,
+				StartPos: placeholderToken.StartPos,
+				EndPos:   placeholderToken.EndPos,
+			},
+			Msg: "compiler error: Compile input must be *parser.Program for type checking",
+		}
+		// Append to errors list as well
+		c.errors = append(c.errors, compileErr)
+		return nil, c.errors
 	}
 
 	typeChecker := checker.NewChecker() // Create checker instance
 	typeErrors := typeChecker.Check(program)
 	if len(typeErrors) > 0 {
-		// Found type errors. Convert them to strings and return immediately.
-		errorStrings := make([]string, len(typeErrors))
-		for i, err := range typeErrors {
-			errorStrings[i] = err.Error() // Use the Error() method from TypeError
-		}
-		// Optionally append to existing compiler errors? For now, just return type errors.
-		return nil, errorStrings
+		// Found type errors. Return them immediately.
+		// Type errors are already []errors.PaseratiError from the checker.
+		return nil, typeErrors
 	}
-	c.typeChecker = typeChecker // <<< Assign checker to compiler field after successful check
+	c.typeChecker = typeChecker // Assign checker to compiler field after successful check
 	// --- End Type Checking Step ---
 
 	// --- Bytecode Compilation Step ---
-	// Reset is now implicit when a new Compiler is made for a function
-	// c.regAlloc.Reset()
-	// c.symbolTable = NewSymbolTable() // Reset symbol table for new compilation
-
-	// Type checking passed, proceed to compile the AST.
 	// Use the already type-checked program node.
 	err := c.compileNode(program)
 	if err != nil {
-		c.errors = append(c.errors, err.Error()) // Add the final compile error if compileNode returns one
+		// An error occurred during compilation. addError should have already been called
+		// when the error was generated lower down. The returned `err` is mainly for control flow.
+		// We don't need to append err.Error() here again.
 	}
 
-	// Combine any remaining *compiler* errors (should be rare if type checking is robust)
-	if len(c.errors) > 0 {
-		return c.chunk, c.errors
-	}
-
-	// Emit final return instruction.
-	// For top level, return last expression value if valid, otherwise undefined.
-	// For functions, always return undefined implicitly (explicit return handled earlier).
-	if c.enclosing == nil { // Top-level script
-		if c.lastExprRegValid {
-			c.emitReturn(c.lastExprReg, 0) // Use line 0 for implicit final return
+	// Emit final return instruction if no *compilation* errors occurred
+	// (Type errors were caught earlier and returned).
+	if len(c.errors) == 0 {
+		if c.enclosing == nil { // Top-level script
+			if c.lastExprRegValid {
+				c.emitReturn(c.lastExprReg, 0) // Use line 0 for implicit final return
+			} else {
+				c.emitOpCode(vm.OpReturnUndefined, 0) // Use line 0 for implicit final return
+			}
 		} else {
-			c.emitOpCode(vm.OpReturnUndefined, 0) // Use line 0 for implicit final return
+			// Inside a function, OpReturn or OpReturnUndefined should have been emitted.
+			// Add one just in case of missing return paths (though type checker might catch this).
+			c.emitOpCode(vm.OpReturnUndefined, 0)
 		}
-	} else {
-		// Inside a function, OpReturn or OpReturnUndefined should have been emitted by
-		// compileReturnStatement or compileFunctionLiteral's finalization.
-		// We still add one just in case there's a path without a return.
-		c.emitOpCode(vm.OpReturnUndefined, 0)
 	}
 
-	return c.chunk, nil // Return chunk and nil errors on success
+	// Return the chunk (even if errors occurred, it might be partially useful for debugging?)
+	// and the collected errors.
+	return c.chunk, c.errors
 }
 
 // compileNode dispatches compilation to the appropriate method based on node type.
-func (c *Compiler) compileNode(node parser.Node) error {
+func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	// Safety check for nil checker, although it should be set by Compile()
 	if c.typeChecker == nil && c.enclosing == nil { // Only panic if top-level compiler has no checker
 		panic("Compiler internal error: typeChecker is nil during compileNode")
@@ -243,7 +248,7 @@ func (c *Compiler) compileNode(node parser.Node) error {
 			// Anonymous function used as a statement - likely an error or useless code.
 			// For now, we could compile it but it won't be callable.
 			// Or return an error?
-			return fmt.Errorf("line %d: anonymous function used as statement", node.Token.Line)
+			return NewCompileError(node, "anonymous function used as statement")
 		}
 
 		if c.enclosing == nil {
@@ -299,7 +304,7 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		}
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
 		if !found {
-			return fmt.Errorf("line %d: undefined variable '%s'", node.Token.Line, node.Value)
+			return NewCompileError(node, fmt.Sprintf("undefined variable '%s'", node.Value))
 		}
 
 		// Check if the symbol is defined in an outer scope (a free variable)
@@ -316,14 +321,14 @@ func (c *Compiler) compileNode(node parser.Node) error {
 			// This requires adding it to freeSymbols and emitting OpLoadFree.
 			// The closure emission logic already handles the self-capture part
 			// when it sees a free var matching funcName.
-			freeVarIndex := c.addFreeSymbol(&symbolRef)
+			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
 			destReg := c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
 		} else if !isLocal {
 			// This is a regular free variable (defined in an outer scope)
-			freeVarIndex := c.addFreeSymbol(&symbolRef)
+			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
 			destReg := c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
@@ -387,7 +392,7 @@ func (c *Compiler) compileNode(node parser.Node) error {
 		objectStaticType := node.Object.GetComputedType()
 
 		if objectStaticType == nil {
-			return fmt.Errorf("compiler internal error: checker did not provide type for object at line %v", node.Object.TokenLiteral())
+			return NewCompileError(node, "compiler internal error: checker did not provide type for object")
 		}
 
 		// <<< Widen the retrieved static type >>>
@@ -404,16 +409,16 @@ func (c *Compiler) compileNode(node parser.Node) error {
 				return nil
 			} else {
 				// Type checker should prevent this, but add safety error
-				return fmt.Errorf("compiler error: type '%s' (widened from '%s') has no property 'length' at line %d", widenedObjectType.String(), objectStaticType.String(), node.Token.Line)
+				return NewCompileError(node, fmt.Sprintf("compiler error: type '%s' (widened from '%s') has no property 'length'", widenedObjectType.String(), objectStaticType.String()))
 			}
 		} else {
 			// TODO: Handle other properties later (OpGetProperty?)
-			return fmt.Errorf("compiler error: unsupported property '%s' at line %d", propertyName, node.Token.Line)
+			return NewCompileError(node, fmt.Sprintf("compiler error: unsupported property '%s' at line %d", propertyName, node.Token.Line))
 		}
 	// --- END NEW ---
 
 	default:
-		return fmt.Errorf("compilation not implemented for %T", node)
+		return NewCompileError(node, fmt.Sprintf("compilation not implemented for %T", node))
 	}
 	return nil // Return nil on success if no specific error occurred in this frame
 }
@@ -424,9 +429,9 @@ func (c *Compiler) compileNode(node parser.Node) error {
 // Also used temporarily for recursive function definition
 const nilRegister Register = 255 // Or another value guaranteed not to be used
 
-func (c *Compiler) compileLetStatement(node *parser.LetStatement) error {
+func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.PaseratiError {
 	var valueReg Register = nilRegister
-	var err error
+	var err errors.PaseratiError
 	isValueFunc := false // Flag to track if value is a function literal
 
 	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
@@ -473,11 +478,11 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) error {
 	return nil
 }
 
-func (c *Compiler) compileConstStatement(node *parser.ConstStatement) error {
+func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.PaseratiError {
 	if node.Value == nil { /* ... error ... */
 	}
 	var valueReg Register = nilRegister
-	var err error
+	var err errors.PaseratiError
 	isValueFunc := false // Flag
 
 	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
@@ -512,9 +517,9 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) error {
 	return nil
 }
 
-func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) error {
+func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) errors.PaseratiError {
 	if node.ReturnValue != nil {
-		var err error
+		var err errors.PaseratiError
 		// Check if the return value is a function literal itself
 		if funcLit, ok := node.ReturnValue.(*parser.FunctionLiteral); ok {
 			// Compile directly, bypassing the compileNode case for declarations.
@@ -539,7 +544,7 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) error {
 
 // --- Expression Compilation ---
 
-func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) error {
+func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) errors.PaseratiError {
 	// Compile the right operand first
 	err := c.compileNode(node.Right)
 	if err != nil {
@@ -557,14 +562,14 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) error 
 	case "-":
 		c.emitNegate(destReg, rightReg, node.Token.Line)
 	default:
-		return fmt.Errorf("line %d: unknown prefix operator '%s'", node.Token.Line, node.Operator)
+		return NewCompileError(node, fmt.Sprintf("unknown prefix operator '%s'", node.Operator))
 	}
 
 	// The result is now in destReg
 	return nil
 }
 
-func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
+func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.PaseratiError {
 	line := node.Token.Line // Use operator token line number
 
 	// --- Standard binary operators (arithmetic, comparison) ---
@@ -613,7 +618,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
 		case "!==":
 			c.emitStrictNotEqual(destReg, leftReg, rightReg, line)
 		default:
-			return fmt.Errorf("line %d: unknown standard infix operator '%s'", line, node.Operator)
+			return NewCompileError(node, fmt.Sprintf("unknown standard infix operator '%s'", node.Operator))
 		}
 		// Result is now in destReg (allocator current is destReg)
 		c.regAlloc.SetCurrent(destReg)
@@ -758,10 +763,10 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) error {
 	}
 
 	// Should be unreachable
-	return fmt.Errorf("line %d: logical/coalescing operator '%s' compilation fell through", line, node.Operator)
+	return NewCompileError(node, fmt.Sprintf("logical/coalescing operator '%s' compilation fell through", node.Operator))
 }
 
-func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint string) error {
+func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint string) errors.PaseratiError {
 	// 1. Create a new Compiler instance for the function body, linked to the current one
 	functionCompiler := newFunctionCompiler(c) // Pass `c` as the enclosing compiler
 
@@ -807,7 +812,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	if err != nil {
 		// Propagate errors
 		c.errors = append(c.errors, functionCompiler.errors...)
-		c.errors = append(c.errors, err.Error())
+		c.errors = append(c.errors, err)
 		// Proceed to create function/closure object even if body has errors?
 		// Let's continue for now, errors are collected.
 	}
@@ -887,7 +892,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			// The free variable is also a free variable in the enclosing scope.
 			// We need to capture it from the enclosing scope's upvalues.
 			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(&enclosingSymbol)                                                                                        // Use the same helper
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                  // Use the same helper
 			fmt.Printf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcName, freeSym.Name, enclosingFreeIndex) // DEBUG
 			c.emitByte(0)                                                                                                                                  // isLocal = false
 			c.emitByte(byte(enclosingFreeIndex))                                                                                                           // Index = upvalue index in enclosing scope
@@ -897,7 +902,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	return nil // Return nil even if there were body errors, errors are collected in c.errors
 }
 
-func (c *Compiler) compileCallExpression(node *parser.CallExpression) error {
+func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.PaseratiError {
 	// 1. Compile the expression being called (e.g., function name)
 	err := c.compileNode(node.Function)
 	if err != nil {
@@ -944,7 +949,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) error {
 	return nil
 }
 
-func (c *Compiler) compileIfExpression(node *parser.IfExpression) error {
+func (c *Compiler) compileIfExpression(node *parser.IfExpression) errors.PaseratiError {
 	// 1. Compile the condition
 	err := c.compileNode(node.Condition)
 	if err != nil {
@@ -992,7 +997,7 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression) error {
 }
 
 // compileTernaryExpression compiles condition ? consequence : alternative
-func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) error {
+func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) errors.PaseratiError {
 	// 1. Compile condition
 	err := c.compileNode(node.Condition)
 	if err != nil {
@@ -1050,7 +1055,7 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 }
 
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value
-func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) error {
+func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) errors.PaseratiError {
 	line := node.Token.Line
 
 	// Check if left-hand side is an index expression
@@ -1059,7 +1064,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 		// Operator must be simple assignment '=' for index assignment
 		if node.Operator != "=" {
-			return fmt.Errorf("line %d: invalid operator '%s' for index assignment, only '=' is supported", line, node.Operator)
+			return NewCompileError(node, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported", node.Operator))
 		}
 
 		// 1. Compile array expression
@@ -1098,13 +1103,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	// 1. Ensure left-hand side is an identifier (if not index expression)
 	ident, ok := node.Left.(*parser.Identifier)
 	if !ok {
-		return fmt.Errorf("line %d: invalid assignment target, expected identifier or index expression, got %T", line, node.Left)
+		return NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier or index expression, got %T", node.Left))
 	}
 
 	// 2. Resolve the identifier to find its storage location (register or upvalue)
 	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
 	if !found {
-		return fmt.Errorf("line %d: assignment to undeclared variable '%s'", line, ident.Value)
+		return NewCompileError(node, fmt.Sprintf("assignment to undeclared variable '%s'", ident.Value))
 	}
 
 	// 3. Determine target register and load current value if needed (for compound ops or upvalues)
@@ -1120,7 +1125,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	} else {
 		// Free variable (upvalue): Find its index.
 		isUpvalue = true
-		upvalueIndex = c.addFreeSymbol(&symbolRef)
+		upvalueIndex = c.addFreeSymbol(node, &symbolRef)
 		// Allocate a register to hold the current value loaded from the upvalue.
 		targetReg = c.regAlloc.Alloc()
 		// Emit OpLoadFree manually
@@ -1152,7 +1157,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		// but we want to overwrite it with the new valueReg before SetUpvalue.
 		c.emitMove(targetReg, valueReg, line)
 	default:
-		return fmt.Errorf("line %d: unsupported assignment operator '%s'", line, node.Operator)
+		return NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))
 	}
 	// Result of operation (or move) is now in targetReg
 
@@ -1169,7 +1174,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 // --- Loop Compilation (Updated) ---
 
-func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
+func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) errors.PaseratiError {
 	line := node.Token.Line
 
 	// --- Setup Loop Context ---
@@ -1186,7 +1191,7 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 	err := c.compileNode(node.Condition)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
-		return fmt.Errorf("error compiling while condition: %w", err)
+		return NewCompileError(node, "error compiling while condition").CausedBy(err)
 	}
 	conditionReg := c.regAlloc.Current()
 
@@ -1197,7 +1202,7 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 	err = c.compileNode(node.Body)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
-		return fmt.Errorf("error compiling while body: %w", err)
+		return NewCompileError(node, "error compiling while body").CausedBy(err)
 	}
 
 	// --- Jump Back To Start ---
@@ -1223,7 +1228,7 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 		jumpInstructionEndPos := continuePos + 1 + 2 // OpCode + 16bit offset
 		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
 		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
-			return fmt.Errorf("internal compiler error: continue jump offset %d exceeds 16-bit limit at line %d", targetOffset, node.Token.Line)
+			return NewCompileError(node, fmt.Sprintf("internal compiler error: continue jump offset %d exceeds 16-bit limit", targetOffset))
 		}
 		// Manually write the 16-bit offset into the placeholder jump instruction
 		c.chunk.Code[continuePos+1] = byte(int16(targetOffset) >> 8)   // High byte
@@ -1233,7 +1238,7 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) error {
 	return nil
 }
 
-func (c *Compiler) compileForStatement(node *parser.ForStatement) error {
+func (c *Compiler) compileForStatement(node *parser.ForStatement) errors.PaseratiError {
 	// No new scope for initializer, it shares the outer scope
 
 	// 1. Initializer
@@ -1324,9 +1329,9 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) error {
 
 // --- New: Break/Continue Compilation ---
 
-func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) error {
+func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) errors.PaseratiError {
 	if len(c.loopContextStack) == 0 {
-		return fmt.Errorf("line %d: break statement not within a loop", node.Token.Line)
+		return NewCompileError(node, fmt.Sprintf("break statement not within a loop"))
 	}
 
 	// Get current loop context (top of stack)
@@ -1341,9 +1346,9 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) error {
 	return nil
 }
 
-func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) error {
+func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) errors.PaseratiError {
 	if len(c.loopContextStack) == 0 {
-		return fmt.Errorf("line %d: continue statement not within a loop", node.Token.Line)
+		return NewCompileError(node, fmt.Sprintf("continue statement not within a loop"))
 	}
 
 	// Get current loop context (top of stack)
@@ -1505,7 +1510,7 @@ func (c *Compiler) emitLoadNewConstant(dest Register, val vm.Value, line int) {
 
 // addFreeSymbol adds a symbol identified as a free variable to the compiler's list.
 // It ensures the symbol is added only once and returns its index in the freeSymbols slice.
-func (c *Compiler) addFreeSymbol(symbol *Symbol) uint8 { // Assuming max 256 free vars for now
+func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // Assuming max 256 free vars for now
 	for i, free := range c.freeSymbols {
 		if free == symbol { // Pointer comparison should work if Resolve returns the same Symbol instance
 			return uint8(i)
@@ -1515,7 +1520,7 @@ func (c *Compiler) addFreeSymbol(symbol *Symbol) uint8 { // Assuming max 256 fre
 	if len(c.freeSymbols) >= 256 {
 		// Handle error: too many free variables
 		// For now, let's panic or add an error; proper error handling needed
-		c.errors = append(c.errors, "compiler: too many free variables in function")
+		c.errors = append(c.errors, NewCompileError(node, "compiler: too many free variables in function"))
 		return 255 // Indicate error state, maybe?
 	}
 	c.freeSymbols = append(c.freeSymbols, symbol)
@@ -1563,7 +1568,7 @@ func (c *Compiler) patchJump(placeholderPos int) {
 }
 
 // compileArrowFunctionLiteral compiles an arrow function literal expression.
-func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) error {
+func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) errors.PaseratiError {
 	// 1. Create a compiler for the function scope
 	funcCompiler := newFunctionCompiler(c)
 	funcCompiler.compilingFuncName = "<arrow>" // Set name for arrow functions
@@ -1582,20 +1587,20 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	case *parser.BlockStatement:
 		err := funcCompiler.compileNode(bodyNode)
 		if err != nil {
-			funcCompiler.errors = append(funcCompiler.errors, err.Error())
+			funcCompiler.errors = append(funcCompiler.errors, err)
 		}
 		implicitReturnNeeded = false // Block handles its own returns or falls through
 	case parser.Expression:
 		err := funcCompiler.compileNode(bodyNode)
 		if err != nil {
-			funcCompiler.errors = append(funcCompiler.errors, err.Error())
+			funcCompiler.errors = append(funcCompiler.errors, err)
 			returnReg = 0 // Indicate error or inability to get result reg
 		} else {
 			returnReg = funcCompiler.regAlloc.Current()
 		}
 		implicitReturnNeeded = true // Expression body needs implicit return
 	default:
-		funcCompiler.errors = append(funcCompiler.errors, fmt.Sprintf("invalid body type %T for arrow function", node.Body))
+		funcCompiler.errors = append(funcCompiler.errors, NewCompileError(node, fmt.Sprintf("invalid body type %T for arrow function", node.Body)))
 		implicitReturnNeeded = false
 	}
 	if implicitReturnNeeded {
@@ -1671,7 +1676,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			// The free variable is also a free variable in the enclosing scope.
 			// We need to capture it from the enclosing scope's upvalues.
 			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(&enclosingSymbol)                                                                                                              // Use the same helper
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                                        // Use the same helper
 			fmt.Printf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex) // DEBUG
 			c.emitByte(0)                                                                                                                                                        // isLocal = false
 			c.emitByte(byte(enclosingFreeIndex))                                                                                                                                 // Index = upvalue index in enclosing scope
@@ -1706,7 +1711,7 @@ func (c *Compiler) emitSetUpvalue(upvalueIndex uint8, srcReg Register, line int)
 
 // --- NEW: DoWhile Statement Compilation ---
 
-func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error {
+func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) errors.PaseratiError {
 	line := node.Token.Line
 
 	// 1. Mark Loop Start (before body)
@@ -1724,7 +1729,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error 
 	if err := c.compileNode(node.Body); err != nil {
 		// Pop context if body compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-		return fmt.Errorf("error compiling do-while body: %w", err)
+		return NewCompileError(node, "error compiling do-while body").CausedBy(err)
 	}
 
 	// 4. Mark Condition Position (for clarity, not used directly in jump calcs below)
@@ -1734,7 +1739,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error 
 	if err := c.compileNode(node.Condition); err != nil {
 		// Pop context if condition compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-		return fmt.Errorf("error compiling do-while condition: %w", err)
+		return NewCompileError(node, "error compiling do-while condition").CausedBy(err)
 	}
 	conditionReg := c.regAlloc.Current()
 
@@ -1748,7 +1753,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error 
 	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 + 1 // OpCode + Reg + 16bit offset
 	backOffset := loopStartPos - jumpBackInstructionEndPos
 	if backOffset > math.MaxInt16 || backOffset < math.MinInt16 {
-		return fmt.Errorf("internal compiler error: do-while loop jump offset %d exceeds 16-bit limit at line %d", backOffset, line)
+		return NewCompileError(node, fmt.Sprintf("internal compiler error: do-while loop jump offset %d exceeds 16-bit limit", backOffset))
 	}
 	c.emitOpCode(vm.OpJumpIfFalse, line)    // Use OpJumpIfFalse on inverted result
 	c.emitByte(byte(invertedConditionReg))  // Jump based on the inverted condition
@@ -1775,7 +1780,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error 
 		jumpInstructionEndPos := continuePos + 1 + 2 // OpJump OpCode + 16bit offset
 		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
 		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
-			return fmt.Errorf("internal compiler error: do-while continue jump offset %d exceeds 16-bit limit at line %d", targetOffset, line)
+			return NewCompileError(node, fmt.Sprintf("internal compiler error: do-while continue jump offset %d exceeds 16-bit limit", targetOffset))
 		}
 		// Manually write the 16-bit offset into the placeholder OpJump instruction
 		c.chunk.Code[continuePos+1] = byte(int16(targetOffset) >> 8)   // High byte
@@ -1787,19 +1792,19 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) error 
 
 // --- NEW: Update Expression Compilation ---
 
-func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error {
+func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors.PaseratiError {
 	line := node.Token.Line
 
 	// 1. Argument must be an identifier (parser should enforce, but check again)
 	ident, ok := node.Argument.(*parser.Identifier)
 	if !ok {
-		return fmt.Errorf("line %d: invalid target for %s: expected identifier, got %T", line, node.Operator, node.Argument)
+		return NewCompileError(node, fmt.Sprintf("invalid target for %s: expected identifier, got %T", node.Operator, node.Argument))
 	}
 
 	// 2. Resolve identifier and determine if local or upvalue
 	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
 	if !found {
-		return fmt.Errorf("line %d: applying %s to undeclared variable '%s'", line, node.Operator, ident.Value)
+		return NewCompileError(node, fmt.Sprintf("applying %s to undeclared variable '%s'", node.Operator, ident.Value))
 	}
 
 	var targetReg Register
@@ -1814,7 +1819,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error 
 	} else {
 		// Upvalue: Get its index and load current value into a temporary register.
 		isUpvalue = true
-		upvalueIndex = c.addFreeSymbol(&symbolRef)
+		upvalueIndex = c.addFreeSymbol(node, &symbolRef)
 		targetReg = c.regAlloc.Alloc()
 		c.emitOpCode(vm.OpLoadFree, line)
 		c.emitByte(byte(targetReg))
@@ -1873,10 +1878,10 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) error 
 }
 
 // --- NEW: Array/Index ---
-func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) error {
+func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) errors.PaseratiError {
 	elementCount := len(node.Elements)
 	if elementCount > 255 { // Check against OpMakeArray count operand size
-		return fmt.Errorf("line %d: array literal exceeds maximum size of 255 elements", node.Token.Line)
+		return NewCompileError(node, fmt.Sprintf("array literal exceeds maximum size of 255 elements"))
 	}
 
 	// 1. Compile elements and store their final registers
@@ -1930,7 +1935,7 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) error {
 	return nil
 }
 
-func (c *Compiler) compileIndexExpression(node *parser.IndexExpression) error {
+func (c *Compiler) compileIndexExpression(node *parser.IndexExpression) errors.PaseratiError {
 	// 1. Compile the expression being indexed (the array)
 	err := c.compileNode(node.Left)
 	if err != nil {
@@ -1966,4 +1971,118 @@ func (c *Compiler) emitGetLength(dest, src Register, line int) {
 	c.emitOpCode(vm.OpGetLength, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(src))
+}
+
+// --- Error Helper ---
+
+// addError creates a CompileError and appends it to the compiler's error list.
+func (c *Compiler) addError(node parser.Node, msg string) {
+	token := GetTokenFromNode(node)
+	compileErr := &errors.CompileError{
+		Position: errors.Position{
+			Line:     token.Line,
+			Column:   token.Column,
+			StartPos: token.StartPos,
+			EndPos:   token.EndPos,
+		},
+		Msg: msg,
+	}
+	c.errors = append(c.errors, compileErr)
+}
+
+func NewCompileError(node parser.Node, msg string) *errors.CompileError {
+	token := GetTokenFromNode(node)
+	return &errors.CompileError{
+		Position: errors.Position{
+			Line:     token.Line,
+			Column:   token.Column,
+			StartPos: token.StartPos,
+			EndPos:   token.EndPos,
+		},
+		Msg: msg,
+	}
+}
+
+// GetTokenFromNode attempts to extract the primary lexical token associated with an AST node.
+// TODO: Consolidate this with the one in checker/checker.go? Put it in ast?
+func GetTokenFromNode(node parser.Node) lexer.Token {
+	switch n := node.(type) {
+	// Statements
+	case *parser.LetStatement:
+		return n.Token
+	case *parser.ConstStatement:
+		return n.Token
+	case *parser.ReturnStatement:
+		return n.Token
+	case *parser.ExpressionStatement:
+		if n.Expression != nil {
+			return GetTokenFromNode(n.Expression) // Use expression's token
+		}
+		return n.Token // Fallback to statement token (often start of expression)
+	case *parser.BlockStatement:
+		return n.Token // '{'
+	case *parser.WhileStatement:
+		return n.Token // 'while'
+	case *parser.ForStatement:
+		return n.Token // 'for'
+	case *parser.DoWhileStatement:
+		return n.Token // 'do'
+	case *parser.BreakStatement:
+		return n.Token // 'break'
+	case *parser.ContinueStatement:
+		return n.Token // 'continue'
+	case *parser.TypeAliasStatement:
+		return n.Token // 'type'
+
+	// Expressions
+	case *parser.Identifier:
+		return n.Token
+	case *parser.NumberLiteral:
+		return n.Token
+	case *parser.StringLiteral:
+		return n.Token
+	case *parser.BooleanLiteral:
+		return n.Token
+	case *parser.NullLiteral:
+		return n.Token
+	case *parser.UndefinedLiteral:
+		return n.Token
+	case *parser.PrefixExpression:
+		return n.Token // Operator token
+	case *parser.InfixExpression:
+		return n.Token // Operator token
+	case *parser.IfExpression:
+		return n.Token // 'if' token
+	case *parser.FunctionLiteral:
+		return n.Token // 'function' token
+	case *parser.ArrowFunctionLiteral:
+		return n.Token // '=>' token
+	case *parser.CallExpression:
+		return n.Token // '(' token
+	case *parser.AssignmentExpression:
+		return n.Token // Assignment operator token
+	case *parser.UpdateExpression:
+		return n.Token // Update operator token
+	case *parser.TernaryExpression:
+		return n.Token // '?' token
+	case *parser.ArrayLiteral:
+		return n.Token // '[' token
+	case *parser.IndexExpression:
+		return n.Token // '[' token
+	case *parser.MemberExpression:
+		return n.Token // '.' token
+
+	// Program node doesn't have a single token, return a dummy?
+	case *parser.Program:
+		if len(n.Statements) > 0 {
+			return GetTokenFromNode(n.Statements[0]) // Use first statement's token
+		}
+		return lexer.Token{Type: lexer.ILLEGAL, Line: 1, Column: 1} // Dummy token
+
+	// Add other node types as needed
+	default:
+		fmt.Printf("Warning: GetTokenFromNode unhandled type: %T\n", n)
+		// Return a dummy token if type is unhandled
+		return lexer.Token{Type: lexer.ILLEGAL, Line: 1, Column: 1}
+	}
 }
