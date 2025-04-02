@@ -5,6 +5,7 @@ import (
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
 	"strconv"
+	"strings"
 )
 
 // --- Debug Flag ---
@@ -534,13 +535,61 @@ func (p *Parser) parseIdentifier() Expression {
 func (p *Parser) parseNumberLiteral() Expression {
 	lit := &NumberLiteral{Token: p.curToken}
 
-	value, err := strconv.ParseFloat(p.curToken.Literal, 64)
-	if err != nil {
-		msg := fmt.Sprintf("could not parse %q as float64", p.curToken.Literal)
-		p.addError(p.curToken, msg)
-		return nil
+	rawLiteral := p.curToken.Literal
+	base := 10
+	prefixLen := 0
+
+	isFloat := false
+
+	// Determine base and prefix length
+	if strings.HasPrefix(rawLiteral, "0x") || strings.HasPrefix(rawLiteral, "0X") {
+		base = 16
+		prefixLen = 2
+	} else if strings.HasPrefix(rawLiteral, "0b") || strings.HasPrefix(rawLiteral, "0B") {
+		base = 2
+		prefixLen = 2
+	} else if strings.HasPrefix(rawLiteral, "0o") || strings.HasPrefix(rawLiteral, "0O") {
+		base = 8
+		prefixLen = 2
+	} else if len(rawLiteral) > 1 && rawLiteral[0] == '0' && rawLiteral[1] >= '0' && rawLiteral[1] <= '7' {
+		// Handle legacy octal (e.g., 0777) - Check if still desired
+		// base = 8
+		// prefixLen = 1 // Or 0 if we treat it just as decimal
+		// For now, treat as decimal if no 0o prefix.
 	}
-	lit.Value = value
+
+	// Clean the literal: remove prefix and separators
+	numberPart := rawLiteral[prefixLen:]
+	cleanedLiteral := strings.ReplaceAll(numberPart, "_", "")
+
+	// Check if it looks like a float (contains ., e, or E) - only relevant for base 10
+	if base == 10 && (strings.Contains(cleanedLiteral, ".") || strings.ContainsAny(cleanedLiteral, "eE")) {
+		isFloat = true
+	}
+
+	// Attempt to parse
+	if isFloat {
+		value, err := strconv.ParseFloat(cleanedLiteral, 64)
+		if err != nil {
+			// This suggests the lexer allowed an invalid float format (e.g., "1.2.3", "1e-e")
+			msg := fmt.Sprintf("could not parse %q as float64: %v", rawLiteral, err)
+			p.addError(p.curToken, msg)
+			return nil
+		}
+		lit.Value = value
+	} else {
+		// Parse as integer first
+		value, err := strconv.ParseInt(cleanedLiteral, base, 64)
+		if err != nil {
+			// This suggests the lexer allowed invalid digits for the base or invalid format
+			msg := fmt.Sprintf("could not parse %q as int (base %d): %v", rawLiteral, base, err)
+			p.addError(p.curToken, msg)
+			return nil
+		}
+		// Store as float64 in the AST for simplicity/consistency
+		lit.Value = float64(value)
+	}
+
 	return lit
 }
 
