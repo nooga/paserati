@@ -800,13 +800,6 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle IfExpression ---
 		// 1. Check Condition
 		c.visit(node.Condition)
-		condType := c.GetComputedTypeOrAny(node.Condition) // Use checker's method
-		// Condition doesn't strictly *have* to be boolean in dynamically typed langs,
-		// but often desirable. Let's allow 'any' for now, could tighten later.
-		if condType != types.Any && condType != types.Boolean {
-			// Allow null/undefined? For now, let's be slightly stricter.
-			c.addError(node.Token.Line, fmt.Sprintf("if condition must be boolean or any, got %s", condType.String()))
-		}
 
 		// 2. Check Consequence block
 		c.visit(node.Consequence)
