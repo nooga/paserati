@@ -53,6 +53,7 @@ const (
 	POSTFIX     // X++ or X-- (Higher than prefix/call)
 	CALL        // myFunction(X)
 	INDEX       // array[index]
+	MEMBER      // object.property
 )
 
 // --- NEW: Type Precedence ---
@@ -84,6 +85,7 @@ var precedences = map[lexer.TokenType]int{
 	lexer.ASTERISK:        PRODUCT,
 	lexer.LPAREN:          CALL,
 	lexer.LBRACKET:        INDEX,
+	lexer.DOT:             MEMBER,
 	lexer.QUESTION:        TERNARY,
 	lexer.LOGICAL_AND:     LOGICAL_AND,
 	lexer.LOGICAL_OR:      LOGICAL_OR,
@@ -143,6 +145,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression) // Added x++
 	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression) // Added x--
 	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression)    // Added arr[idx]
+	p.registerInfix(lexer.DOT, p.parseMemberExpression)        // <<< Added registration
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -1465,5 +1468,32 @@ func (p *Parser) parseIndexExpression(left Expression) Expression {
 		return nil // Expected ']'
 	}
 
+	return exp
+}
+
+// --- NEW: parseMemberExpression function ---
+func (p *Parser) parseMemberExpression(left Expression) Expression {
+	// Current token should be DOT
+	exp := &MemberExpression{
+		Token:  p.curToken, // The '.' token
+		Object: left,
+	}
+
+	// Set precedence for parsing the property identifier
+	// Member access has higher precedence than most operators
+
+	if !p.expectPeek(lexer.IDENT) {
+		// If the token after '.' is not an identifier, it's a syntax error.
+		msg := fmt.Sprintf("line %d: expected identifier after '.', got %s", p.curToken.Line, p.curToken.Type)
+		p.errors = append(p.errors, msg)
+		return nil
+	}
+
+	// Construct the Identifier node for the property
+	propIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	exp.Property = propIdent
+
+	// We don't call parseExpression here because the right side MUST be an identifier.
+	// The precedence check in the main parseExpression loop handles chaining, e.g., a.b.c
 	return exp
 }

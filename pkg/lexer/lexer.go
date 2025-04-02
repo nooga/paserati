@@ -39,7 +39,9 @@ const (
 	EQ       TokenType = "=="
 	NOT_EQ   TokenType = "!="
 	LE       TokenType = "<="
-	GE       TokenType = ">=" // Added (assuming GT might become GE)
+	GE       TokenType = ">="  // Added (assuming GT might become GE)
+	DOT      TokenType = "."   // Added for member access
+	SPREAD   TokenType = "..." // Added for spread/rest
 
 	// Compound Assignment
 	PLUS_ASSIGN     TokenType = "+=" // Added
@@ -363,6 +365,23 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: COALESCE, Literal: literal, Line: l.line}
 		} else {
 			tok = newToken(QUESTION, l.ch, l.line) // Original ternary operator
+		}
+	case '.':
+		// Check for spread operator ...
+		if l.peekChar() == '.' {
+			firstDotPos := l.position
+			l.readChar() // Consume second dot
+			if l.peekChar() == '.' {
+				l.readChar() // Consume third dot
+				tok = Token{Type: SPREAD, Literal: "...", Line: l.line}
+			} else {
+				// Sequence like '..' is illegal. Go back to after the first dot.
+				l.SetPosition(firstDotPos + 1) // Reset to char after first dot
+				tok = newToken(DOT, '.', l.line)
+			}
+		} else {
+			// Just a single dot
+			tok = newToken(DOT, l.ch, l.line)
 		}
 	case 0: // EOF
 		tok.Literal = ""

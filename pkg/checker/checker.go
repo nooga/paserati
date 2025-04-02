@@ -1348,6 +1348,36 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.IndexExpression:
 		c.checkIndexExpression(node)
 
+	// --- NEW: Member Expression Type Checking ---
+	case *parser.MemberExpression:
+		// 1. Visit the object expression
+		c.visit(node.Object)
+		objectType := c.GetComputedTypeOrAny(node.Object) // Use checker's map helper
+
+		// 2. Get property name
+		propertyName := node.Property.Value
+
+		var resultType types.Type = nil
+		line := node.Token.Line
+
+		// 3. Check for allowed properties
+		switch objectType.(type) {
+		case *types.ArrayType, *types.Primitive:
+			_, isArray := objectType.(*types.ArrayType)
+			if (isArray || objectType == types.String) && propertyName == "length" {
+				resultType = types.Number
+			} else {
+				c.addError(line, fmt.Sprintf("property '%s' does not exist on type '%s'", propertyName, objectType.String()))
+				resultType = types.Any
+			}
+		default:
+			c.addError(line, fmt.Sprintf("type '%s' has no properties", objectType.String()))
+			resultType = types.Any
+		}
+
+		// 4. Set computed type on the MemberExpression node itself using checker's map
+		c.SetComputedType(node, resultType)
+
 	// --- Loop Statements (Control flow, check condition/body) ---
 	case *parser.WhileStatement:
 		c.visit(node.Condition)

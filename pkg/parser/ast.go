@@ -801,3 +801,28 @@ func (ie *IndexExpression) String() string {
 	}
 	return out.String()
 }
+
+// --- NEW: MemberExpression ---
+
+// MemberExpression represents accessing a property (e.g., object.property).
+type MemberExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The '.' token
+	Object         Expression  // The expression on the left (e.g., identifier, call result)
+	Property       *Identifier // The identifier on the right (the property name)
+}
+
+func (me *MemberExpression) expressionNode()      {}
+func (me *MemberExpression) TokenLiteral() string { return me.Token.Literal }
+func (me *MemberExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(me.Object.String())
+	out.WriteString(".")
+	out.WriteString(me.Property.String())
+	out.WriteString(")")
+	if me.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", me.ComputedType.String()))
+	}
+	return out.String()
+}

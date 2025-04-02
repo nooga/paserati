@@ -648,6 +648,31 @@ func (vm *VM) run() InterpretResult {
 
 		// --- End Array Opcodes ---
 
+		// --- NEW: Get Length Opcode ---
+		case OpGetLength:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+
+			srcVal := registers[srcReg]
+			var length float64 = -1 // Initialize to -1 to indicate error if type is wrong
+
+			switch srcVal.Type {
+			case TypeArray:
+				arr := AsArray(srcVal)
+				length = float64(len(arr.Elements))
+			case TypeString:
+				str := AsString(srcVal)
+				// Use rune count for string length to handle multi-byte chars correctly
+				length = float64(len(str))
+			default:
+				frame.ip = ip
+				return vm.runtimeError("Cannot get length of type '%v'", srcVal.Type)
+			}
+
+			registers[destReg] = Number(length)
+		// --- END NEW ---
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			return vm.runtimeError("Unknown opcode %d encountered.", opcode)
