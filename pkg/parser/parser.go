@@ -972,23 +972,39 @@ func (p *Parser) parseCallExpression(function Expression) Expression {
 func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 	list := []Expression{}
 
-	// Check for empty list: call()
+	// Check for empty list: call() or []
 	if p.peekTokenIs(end) {
-		p.nextToken() // Consume the end token (e.g., ')')
+		p.nextToken() // Consume the end token (e.g., ')' or ']')
 		return list
 	}
 
-	p.nextToken() // Consume '(' or ',' to get to the first expression
-	list = append(list, p.parseExpression(LOWEST))
+	p.nextToken() // Consume '(' or '[' to get to the first expression
+	expr := p.parseExpression(LOWEST)
+	if expr == nil {
+		return nil // Propagate error from parsing the first element
+	}
+	list = append(list, expr)
 
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // Consume ','
+
+		// --- Allow trailing comma ---
+		if p.peekTokenIs(end) {
+			p.nextToken() // Consume the end token
+			return list
+		}
+		// --- End Trailing Comma Handling ---
+
 		p.nextToken() // Consume the token starting the next expression
-		list = append(list, p.parseExpression(LOWEST))
+		expr = p.parseExpression(LOWEST)
+		if expr == nil {
+			return nil // Propagate error from parsing subsequent element
+		}
+		list = append(list, expr)
 	}
 
 	if !p.expectPeek(end) {
-		return nil // Expected the end token (e.g., ')')
+		return nil // Expected the end token (e.g., ')' or ']')
 	}
 
 	return list
