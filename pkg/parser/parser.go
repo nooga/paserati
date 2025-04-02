@@ -7,7 +7,7 @@ import (
 )
 
 // --- Debug Flag ---
-const debugParser = true
+const debugParser = false
 
 func debugPrint(format string, args ...interface{}) {
 	if debugParser {
@@ -98,6 +98,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.NULL, p.parseNullLiteral)
+	p.registerPrefix(lexer.UNDEFINED, p.parseUndefinedLiteral)
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)      // !true
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)     // -5
@@ -202,12 +203,11 @@ func (p *Parser) parseTypeExpression() Expression {
 	// object types ({k: T}), unions (T | U), intersections (T & U), etc.
 	debugPrint("parseTypeExpression: START, cur='%s'", p.curToken.Literal)
 
-	// Basic case: Assume it's an identifier for now.
-	if p.curTokenIs(lexer.IDENT) {
+	// Allow built-in type keywords (null, undefined) and general identifiers
+	if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.NULL) || p.curTokenIs(lexer.UNDEFINED) {
+		// Treat null and undefined tokens as Identifiers in this context
 		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		// We don't advance token here, caller should have positioned curToken correctly
-		// and will advance after this call returns.
-		debugPrint("parseTypeExpression: Parsed IDENT '%s'", ident.Value)
+		debugPrint("parseTypeExpression: Parsed IDENT/Keyword '%s'", ident.Value)
 		return ident
 	}
 
@@ -428,6 +428,10 @@ func (p *Parser) parseBooleanLiteral() Expression {
 
 func (p *Parser) parseNullLiteral() Expression {
 	return &NullLiteral{Token: p.curToken}
+}
+
+func (p *Parser) parseUndefinedLiteral() Expression {
+	return &UndefinedLiteral{Token: p.curToken}
 }
 
 func (p *Parser) parseFunctionLiteral() Expression {
