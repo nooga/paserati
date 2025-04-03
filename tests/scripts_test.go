@@ -124,6 +124,11 @@ func TestScripts(t *testing.T) {
 				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
 			}
 
+			// --- ADDED: Print Disassembly ---
+			// t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
+			// 	file.Name(), chunk.DisassembleChunk(file.Name()))
+			// --- END ADDED ---
+
 			// 4. Run VM
 			vmInstance := vm.NewVM()
 			// Remove stdout/stderr capture

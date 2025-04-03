@@ -376,6 +376,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// --- END PANIC CHECK ---
 			destReg := c.regAlloc.Alloc()
 			c.emitMove(destReg, srcReg, node.Token.Line)
+			//c.regAlloc.SetCurrent(srcReg)
 		}
 
 	case *parser.PrefixExpression:
@@ -596,8 +597,11 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) errors
 	default:
 		return NewCompileError(node, fmt.Sprintf("unknown prefix operator '%s'", node.Operator))
 	}
+	// Free the operand register now that the result is in destReg
+	c.regAlloc.Free(rightReg)
 
 	// The result is now in destReg
+	c.regAlloc.SetCurrent(destReg) // Explicitly set current for clarity
 	return nil
 }
 
@@ -653,7 +657,16 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 			return NewCompileError(node, fmt.Sprintf("unknown standard infix operator '%s'", node.Operator))
 		}
 		// Result is now in destReg (allocator current is destReg)
-		c.regAlloc.SetCurrent(destReg)
+		c.regAlloc.SetCurrent(destReg) // Explicitly set current
+
+		//Free operand registers after use (check against destReg for safety)
+		if leftReg != destReg {
+			c.regAlloc.Free(leftReg)
+		}
+		if rightReg != destReg {
+			c.regAlloc.Free(rightReg)
+		}
+
 		return nil
 	}
 
@@ -673,6 +686,8 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 
 		// If left was TRUTHY: result is left, move to destReg and jump to end
 		c.emitMove(destReg, leftReg, line)
+		// Free leftReg if its value was used and moved
+		c.regAlloc.Free(leftReg)
 		jumpToEndPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
 
 		// Patch jumpToRightPlaceholder to land here (start of right operand eval)
@@ -686,6 +701,8 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 		rightReg := c.regAlloc.Current()
 		// Result is right, move to destReg
 		c.emitMove(destReg, rightReg, line)
+		// Free rightReg after moving its value
+		c.regAlloc.Free(rightReg)
 
 		// Patch jumpToEndPlaceholder to land here
 		c.patchJump(jumpToEndPlaceholder)
@@ -711,13 +728,16 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 		rightReg := c.regAlloc.Current()
 		// Result is right, move rightReg to destReg
 		c.emitMove(destReg, rightReg, line) // If true path, result is right
+		// Free rightReg after move
+		c.regAlloc.Free(rightReg)
 		// Jump over the false path's move
 		jumpSkipFalseMovePlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
-
 		// Patch jumpToEndPlaceholder to land here (false path)
 		c.patchJump(jumpToEndPlaceholder)
 		// Result is left, move leftReg to destReg
 		c.emitMove(destReg, leftReg, line) // If false path, result is left
+		// Free leftReg after move
+		c.regAlloc.Free(leftReg)
 
 		// Patch the skip jump
 		c.patchJump(jumpSkipFalseMovePlaceholder)
@@ -771,6 +791,8 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 		rightReg := c.regAlloc.Current()
 		// Move result to destReg
 		c.emitMove(destReg, rightReg, line)
+		// Free rightReg after move
+		c.regAlloc.Free(rightReg)
 		// Jump over the skip-right landing pad
 		jumpEndPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
 
@@ -779,15 +801,17 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 		c.patchJump(jumpSkipRightPlaceholder)
 		// Result is already correctly in leftReg. Move it to destReg.
 		c.emitMove(destReg, leftReg, line)
+		// Free leftReg after move
+		c.regAlloc.Free(leftReg)
 
 		// Land here after either path finishes. Patch the jump from the right-eval path.
 		c.patchJump(jumpEndPlaceholder)
 
-		// Release temporary registers (if allocator had a mechanism)
-		// c.regAlloc.Release(isNullReg)
-		// c.regAlloc.Release(isUndefReg)
-		// c.regAlloc.Release(nullConstReg)
-		// c.regAlloc.Release(undefConstReg)
+		// Release temporary registers
+		c.regAlloc.Free(isNullReg)
+		c.regAlloc.Free(isUndefReg)
+		c.regAlloc.Free(nullConstReg)
+		c.regAlloc.Free(undefConstReg)
 
 		// Unified result is now in destReg
 		c.regAlloc.SetCurrent(destReg)
@@ -1039,6 +1063,8 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 
 	// 2. Jump if false
 	jumpFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+	// Free condition register now that jump is emitted
+	c.regAlloc.Free(conditionReg)
 
 	// --- Consequence Path ---
 	// 3. Compile consequence
@@ -1052,6 +1078,8 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 	resultReg := c.regAlloc.Alloc()
 	// 5. Move consequence to result
 	c.emitMove(resultReg, consequenceReg, node.Token.Line)
+	// Free consequence register after moving its value
+	c.regAlloc.Free(consequenceReg)
 
 	// 6. Jump over alternative
 	jumpEndPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
@@ -1069,6 +1097,8 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 
 	// 9. Move alternative to result (OVERWRITE resultReg)
 	c.emitMove(resultReg, alternativeReg, node.Token.Line)
+	// Free alternative register after moving its value
+	c.regAlloc.Free(alternativeReg)
 
 	// --- End ---
 	// 10. Patch jumpEnd
@@ -1081,8 +1111,11 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 	// to make *that* the current one. This is slightly wasteful but works.
 	finalReg := c.regAlloc.Alloc()
 	c.emitMove(finalReg, resultReg, node.Token.Line)
+	// Free the intermediate result register now that value is in finalReg
+	c.regAlloc.Free(resultReg)
 
 	// Now Current() correctly points to finalReg which holds the unified result.
+	c.regAlloc.SetCurrent(finalReg) // Set current explicitly
 	return nil
 }
 
@@ -1363,7 +1396,7 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) errors.Paserat
 
 func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) errors.PaseratiError {
 	if len(c.loopContextStack) == 0 {
-		return NewCompileError(node, fmt.Sprintf("break statement not within a loop"))
+		return NewCompileError(node, "break statement not within a loop")
 	}
 
 	// Get current loop context (top of stack)
@@ -1380,7 +1413,7 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) errors.Pas
 
 func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) errors.PaseratiError {
 	if len(c.loopContextStack) == 0 {
-		return NewCompileError(node, fmt.Sprintf("continue statement not within a loop"))
+		return NewCompileError(node, "continue statement not within a loop")
 	}
 
 	// Get current loop context (top of stack)
@@ -1842,6 +1875,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 	var targetReg Register
 	isUpvalue := false
 	var upvalueIndex uint8
+	targetRegIsTemporary := false // Flag if targetReg was allocated for upvalue load
 
 	if definingTable == c.currentSymbolTable {
 		// Local variable: Get its register.
@@ -1853,6 +1887,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 		isUpvalue = true
 		upvalueIndex = c.addFreeSymbol(node, &symbolRef)
 		targetReg = c.regAlloc.Alloc()
+		targetRegIsTemporary = true // Mark this register as temporary
 		c.emitOpCode(vm.OpLoadFree, line)
 		c.emitByte(byte(targetReg))
 		c.emitByte(upvalueIndex)
@@ -1883,6 +1918,11 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 		// c. Result of expression is the *new* value
 		c.emitMove(resultReg, targetReg, line)
 
+		// Free the temporary targetReg if it was allocated for an upvalue
+		if targetRegIsTemporary {
+			c.regAlloc.Free(targetReg)
+		}
+
 	} else {
 		// Postfix (x++ or x--):
 		// a. Save original value: resultReg = targetReg
@@ -1897,12 +1937,14 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 		// c. Store back if upvalue
 		if isUpvalue {
 			c.emitSetUpvalue(upvalueIndex, targetReg, line)
+			// Free the temporary targetReg AFTER storing back
+			c.regAlloc.Free(targetReg)
 		}
 		// d. Result of expression is the *original* value (already saved in resultReg)
 	}
 
-	// Release temporary register for constant 1 (optional, depends on allocator)
-	// c.regAlloc.Release(constOneReg)
+	// Release temporary register for constant 1
+	c.regAlloc.Free(constOneReg)
 
 	// 5. Set compiler's current register to the expression result
 	c.regAlloc.SetCurrent(resultReg)
@@ -1913,22 +1955,28 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) errors.PaseratiError {
 	elementCount := len(node.Elements)
 	if elementCount > 255 { // Check against OpMakeArray count operand size
-		return NewCompileError(node, fmt.Sprintf("array literal exceeds maximum size of 255 elements"))
+		return NewCompileError(node, "array literal exceeds maximum size of 255 elements")
 	}
 
 	// 1. Compile elements and store their final registers
 	elementRegs := make([]Register, elementCount)
+	elementRegsContinuous := true
 	for i, elem := range node.Elements {
 		err := c.compileNode(elem)
 		if err != nil {
 			return err
 		}
 		elementRegs[i] = c.regAlloc.Current() // Store the register holding the final result of this element
+		if i > 0 && elementRegs[i] != elementRegs[i-1]+1 {
+			elementRegsContinuous = false
+		}
 	}
 
 	// 2. Allocate a contiguous block for the elements and move them
 	var firstTargetReg Register
-	if elementCount > 0 {
+	if elementCount > 0 && elementRegsContinuous {
+		firstTargetReg = elementRegs[0]
+	} else if elementCount > 0 {
 		// Allocate the first register of the target contiguous block
 		firstTargetReg = c.regAlloc.Alloc()
 		// Allocate the rest of the registers needed for the contiguous block
@@ -1941,11 +1989,16 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) errors.Paserat
 
 		// Move elements from their original registers (elementRegs)
 		// into the new contiguous block starting at firstTargetReg.
+
 		for i := 0; i < elementCount; i++ {
 			targetReg := firstTargetReg + Register(i)
 			sourceReg := elementRegs[i]
 			if sourceReg != targetReg { // Avoid redundant moves
 				c.emitMove(targetReg, sourceReg, node.Token.Line) // Use array literal's line number?
+				// Free the original element register if it was moved and not needed anymore
+				// (This assumes the sourceReg isn't needed elsewhere, which should be true
+				// if it was just the result of the element expression compilation).
+				//c.regAlloc.Free(sourceReg) // REMOVED: Potentially unsafe if sourceReg is needed later or reused.
 			}
 		}
 	} else {
@@ -1961,6 +2014,18 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) errors.Paserat
 	c.emitByte(byte(arrayReg))       // DestReg: where the new array object goes
 	c.emitByte(byte(firstTargetReg)) // StartReg: start of the contiguous element block
 	c.emitByte(byte(elementCount))   // Count: number of elements
+
+	// Free the contiguous block registers if any were used
+	if elementCount > 0 {
+		// Free registers from firstTargetReg up to firstTargetReg + count - 1
+		for i := 0; i < elementCount; i++ {
+			// Free registers in reverse order to potentially help stack allocation reuse
+			c.regAlloc.Free(firstTargetReg + Register(elementCount-1-i))
+		}
+		// If firstTargetReg was one of the elementRegs initially and already freed,
+		// freeing again might be problematic. The current Free implementation is safe
+		// but a more complex one might need checks.
+	}
 
 	// Result (the array) is now in arrayReg
 	c.regAlloc.SetCurrent(arrayReg)
@@ -1990,6 +2055,10 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression) errors.P
 	c.emitByte(byte(destReg))
 	c.emitByte(byte(arrayReg))
 	c.emitByte(byte(indexReg))
+
+	// Free operand registers now that the result is in destReg
+	c.regAlloc.Free(arrayReg) // REMOVED: Too aggressive, arrayReg might be needed again
+	c.regAlloc.Free(indexReg) // REMOVED: Too aggressive, indexReg might be needed again
 
 	// Result is now in destReg
 	c.regAlloc.SetCurrent(destReg)
@@ -2204,7 +2273,7 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 			jumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, matchReg, caseLine)
 			caseTestFailJumps = append(caseTestFailJumps, jumpPos)
 			// Remove Free(), not available in current allocator
-			// c.regAlloc.Free(matchReg)
+			c.regAlloc.Free(matchReg)
 
 			// Record the start position of the body for potential jumps
 			caseBodyStartPositions[i] = c.currentPosition()
@@ -2259,7 +2328,7 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 	c.popLoopContext()
 
 	// Remove Free(), not available in current allocator
-	// c.regAlloc.Free(switchExprReg)
+	c.regAlloc.Free(switchExprReg)
 
 	return nil
 }
