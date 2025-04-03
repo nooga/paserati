@@ -11,6 +11,7 @@ type RegisterAllocator struct {
 	nextReg Register // Index of the next register to allocate
 	maxReg  Register // Highest register index allocated so far
 	// Could add a free list later for more complex allocation
+	freeRegs []Register // Stack of available registers to reuse
 
 	// New fields for tracking logical current/result register
 	currentReg Register
@@ -22,23 +23,34 @@ func NewRegisterAllocator() *RegisterAllocator {
 	return &RegisterAllocator{
 		nextReg:    0,
 		maxReg:     0,
-		currentReg: 0,     // Initialize
-		currentSet: false, // Initialize
+		freeRegs:   make([]Register, 0, 16), // Initialize with some capacity
+		currentReg: 0,                       // Initialize
+		currentSet: false,                   // Initialize
 	}
 }
 
 // Alloc allocates the next available register.
 func (ra *RegisterAllocator) Alloc() Register {
-	reg := ra.nextReg
-	if ra.nextReg < 255 { // Check before incrementing to avoid overflow wrap-around
-		ra.nextReg++
+	var reg Register
+	// Check free list first
+	if len(ra.freeRegs) > 0 {
+		// Pop from free list (stack behavior)
+		lastIdx := len(ra.freeRegs) - 1
+		reg = ra.freeRegs[lastIdx]
+		ra.freeRegs = ra.freeRegs[:lastIdx]
 	} else {
-		// Handle register exhaustion - Panic for now
-		panic("Compiler Error: Ran out of registers!")
-	}
+		// Allocate new register if free list is empty
+		reg = ra.nextReg
+		if ra.nextReg < 255 { // Check before incrementing to avoid overflow wrap-around
+			ra.nextReg++
+		} else {
+			// Handle register exhaustion - Panic for now
+			panic("Compiler Error: Ran out of registers!")
+		}
 
-	if reg > ra.maxReg {
-		ra.maxReg = reg
+		if reg > ra.maxReg {
+			ra.maxReg = reg
+		}
 	}
 
 	// Update logical current register on allocation
@@ -88,21 +100,19 @@ func (ra *RegisterAllocator) MaxRegs() Register {
 func (ra *RegisterAllocator) Reset() {
 	ra.nextReg = 0
 	ra.maxReg = 0
+	ra.freeRegs = ra.freeRegs[:0] // Clear free list (keeps allocated capacity)
 	ra.currentReg = 0
 	ra.currentSet = false
 }
 
-// --- Optional/Future ---
+// Free marks a register as available for reuse.
+func (ra *RegisterAllocator) Free(reg Register) {
+	// Optional: Could check if reg is already free or out of bounds
+	// For simplicity, we assume valid usage for now.
+	ra.freeRegs = append(ra.freeRegs, reg)
+}
 
-// Free could be used to mark a register as available again in more complex schemes.
-// func (ra *RegisterAllocator) Free(reg Register) {
-//     // For stack allocation, maybe decrement nextReg if reg was the last one?
-//     if reg == ra.nextReg - 1 {
-//         ra.nextReg--
-//         // Need to recalculate maxReg if we pop below it
-//     }
-//     // Or add to a free list
-// }
+// --- Optional/Future ---
 
 func (r Register) String() string {
 	return fmt.Sprintf("R%d", r)

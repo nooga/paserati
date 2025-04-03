@@ -168,12 +168,12 @@ func TestCompileExpressions(t *testing.T) {
 				vm.OpLoadConst, Register(1), uint16(1), // R1 = 10
 				vm.OpLoadConst, Register(2), uint16(2), // R2 = 2
 				vm.OpMultiply, Register(3), Register(1), Register(2), // R3 = R1 * R2 (20)
-				vm.OpAdd, Register(4), Register(0), Register(3), // R4 = R0 + R3 (25)
-				vm.OpLoadConst, Register(5), uint16(3), // R5 = 1 (const index 3)
-				vm.OpLoadConst, Register(6), uint16(4), // R6 = 1 (const index 4 - NO DEDUPE)
-				vm.OpDivide, Register(7), Register(5), Register(6), // R7 = R5 / R6 (1)
-				vm.OpSubtract, Register(8), Register(4), Register(7), // R8 = R4 - R7 (24)
-				vm.OpReturn, Register(8),
+				vm.OpAdd, Register(2), Register(0), Register(3), // R4 = R0 + R3 (25)
+				vm.OpLoadConst, Register(3), uint16(3), // R5 = 1 (const index 3)
+				vm.OpLoadConst, Register(0), uint16(4), // R6 = 1 (const index 4 - NO DEDUPE)
+				vm.OpDivide, Register(1), Register(3), Register(0), // R7 = R5 / R6 (1)
+				vm.OpSubtract, Register(0), Register(2), Register(1), // R8 = R4 - R7 (24)
+				vm.OpReturn, Register(0),
 			),
 		},
 		{
@@ -196,11 +196,11 @@ func TestCompileExpressions(t *testing.T) {
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5 (index 0)
 				vm.OpLoadConst, Register(1), uint16(1), // R1 = 5 (index 1 - NO DEDUPE)
 				vm.OpAdd, Register(2), Register(0), Register(1), // R2 = R0 + R1 (10)
-				vm.OpLoadConst, Register(3), uint16(2), // R3 = 2 (index 2)
-				vm.OpMultiply, Register(4), Register(2), Register(3), // R4 = R2 * R3 (20)
-				vm.OpLoadConst, Register(5), uint16(3), // R5 = 20 (index 3)
-				vm.OpEqual, Register(6), Register(4), Register(5), // R6 = R4 == R5 (true)
-				vm.OpReturn, Register(6),
+				vm.OpLoadConst, Register(1), uint16(2), // R3 = 2 (index 2)
+				vm.OpMultiply, Register(0), Register(2), Register(1), // R4 = R2 * R3 (20)
+				vm.OpLoadConst, Register(1), uint16(3), // R5 = 20 (index 3)
+				vm.OpEqual, Register(2), Register(0), Register(1), // R6 = R4 == R5 (true)
+				vm.OpReturn, Register(2),
 			),
 		},
 	}
@@ -880,8 +880,8 @@ func TestUpdateExpressions(t *testing.T) {
 				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments)
 				vm.OpMove, Register(2), Register(0), // R2 = R0 (result of ++x is new value)
 				// Symbol y = R2
-				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
-				vm.OpReturn, Register(3),
+				vm.OpMove, Register(1), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(1),
 				// vm.OpReturnUndefined, // Implicit final OpReturnUndefined NOT added when last stmt is expr
 			),
 		},
@@ -897,8 +897,8 @@ func TestUpdateExpressions(t *testing.T) {
 				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments using R1)
 				// Result of x++ is R2 (original value)
 				// Symbol y = R2
-				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
-				vm.OpReturn, Register(3),
+				vm.OpMove, Register(1), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(1),
 				// vm.OpReturnUndefined,
 			),
 		},
@@ -912,8 +912,8 @@ func TestUpdateExpressions(t *testing.T) {
 				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
 				vm.OpMove, Register(2), Register(0), // R2 = R0 (new value)
 				// Symbol y = R2
-				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
-				vm.OpReturn, Register(3),
+				vm.OpMove, Register(1), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(1),
 				// vm.OpReturnUndefined,
 			),
 		},
@@ -928,8 +928,8 @@ func TestUpdateExpressions(t *testing.T) {
 				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
 				// Result is R2
 				// Symbol y = R2
-				vm.OpMove, Register(3), Register(2), // R3 = R2 (load y)
-				vm.OpReturn, Register(3),
+				vm.OpMove, Register(1), Register(2), // R3 = R2 (load y)
+				vm.OpReturn, Register(1),
 				// vm.OpReturnUndefined,
 			),
 		},
