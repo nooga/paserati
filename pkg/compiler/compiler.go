@@ -25,6 +25,12 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
+const debugCompilerStats = true
+
+type CompilerStats struct {
+	BytesGenerated int
+}
+
 // Compiler transforms an AST into bytecode.
 type Compiler struct {
 	chunk              *vm.Chunk
@@ -38,6 +44,7 @@ type Compiler struct {
 	loopContextStack   []*LoopContext
 	compilingFuncName  string
 	typeChecker        *checker.Checker // Holds the checker instance
+	stats              *CompilerStats
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -53,6 +60,7 @@ func NewCompiler() *Compiler {
 		loopContextStack:   make([]*LoopContext, 0),
 		compilingFuncName:  "<script>",
 		typeChecker:        nil, // Initialized to nil, can be set externally
+		stats:              &CompilerStats{},
 	}
 }
 
@@ -75,6 +83,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		loopContextStack:   make([]*LoopContext, 0),
 		compilingFuncName:  "",
 		typeChecker:        enclosingCompiler.typeChecker, // Inherit checker from enclosing
+		stats:              enclosingCompiler.stats,
 	}
 }
 
@@ -143,6 +152,11 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			// Add one just in case of missing return paths (though type checker might catch this).
 			c.emitOpCode(vm.OpReturnUndefined, 0)
 		}
+	}
+
+	c.stats.BytesGenerated += len(c.chunk.Code)
+	if debugCompilerStats && c.enclosing == nil {
+		fmt.Printf("// Compiler bytes generated: %d\n", c.stats.BytesGenerated)
 	}
 
 	// Return the chunk (even if errors occurred, it might be partially useful for debugging?)
