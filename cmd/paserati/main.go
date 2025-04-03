@@ -41,9 +41,11 @@ func runFile(filename string) {
 // runRepl starts the Read-Eval-Print Loop.
 func runRepl() {
 	reader := bufio.NewReader(os.Stdin)
-	// machine := vm.NewVM() // No longer needed
 
-	fmt.Println("Paserati REPL (Ctrl+C to exit)")
+	// Create a persistent Paserati session for the REPL
+	paserati := driver.NewPaserati()
+
+	fmt.Println("Paserati REPL (Persistent Session) (Ctrl+C to exit)")
 
 	for {
 		fmt.Print("> ")
@@ -61,11 +63,14 @@ func runRepl() {
 			continue
 		}
 
-		// Use driver.RunString for each line.
-		// It handles compile, interpret, error display, and result printing.
-		_ = driver.RunString(line) // Ignore the bool return in REPL
+		// Run the input in the persistent session
+		value, errs := paserati.RunString(line)
+		_ = paserati.DisplayResult(line, value, errs) // Ignore the bool return in REPL
 
-		// --- Old REPL logic ---
+		// --- Old non-persistent implementation ---
+		// _ = driver.RunString(line) // Ignore the bool return in REPL
+
+		// --- Even older REPL logic ---
 		// // Compile the input line
 		// chunk, compileErrs := driver.CompileString(line)
 		// if compileErrs != nil {

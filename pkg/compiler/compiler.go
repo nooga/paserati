@@ -37,7 +37,7 @@ type Compiler struct {
 	lastExprRegValid   bool
 	loopContextStack   []*LoopContext
 	compilingFuncName  string
-	typeChecker        *checker.Checker
+	typeChecker        *checker.Checker // Holds the checker instance
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -52,8 +52,14 @@ func NewCompiler() *Compiler {
 		lastExprRegValid:   false,
 		loopContextStack:   make([]*LoopContext, 0),
 		compilingFuncName:  "<script>",
-		typeChecker:        nil,
+		typeChecker:        nil, // Initialized to nil, can be set externally
 	}
+}
+
+// SetChecker allows injecting an external checker instance.
+// This is used by the driver for REPL sessions.
+func (c *Compiler) SetChecker(checker *checker.Checker) {
+	c.typeChecker = checker
 }
 
 // newFunctionCompiler creates a compiler instance specifically for a function body.
@@ -68,11 +74,12 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		errors:             []errors.PaseratiError{},
 		loopContextStack:   make([]*LoopContext, 0),
 		compilingFuncName:  "",
-		typeChecker:        enclosingCompiler.typeChecker,
+		typeChecker:        enclosingCompiler.typeChecker, // Inherit checker from enclosing
 	}
 }
 
-// Compile traverses the AST, performs type checking, and generates bytecode.
+// Compile traverses the AST, performs type checking using its assigned checker,
+// and generates bytecode.
 // Returns the generated chunk and any errors encountered (including type errors).
 func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError) {
 
@@ -98,14 +105,19 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		return nil, c.errors
 	}
 
-	typeChecker := checker.NewChecker() // Create checker instance
-	typeErrors := typeChecker.Check(program)
+	// Use the assigned checker. If none was assigned (e.g., non-REPL), create one.
+	if c.typeChecker == nil {
+		c.typeChecker = checker.NewChecker()
+	}
+	// Perform the check using the (potentially persistent) checker.
+	// The checker modifies its own environment state.
+	typeErrors := c.typeChecker.Check(program)
 	if len(typeErrors) > 0 {
 		// Found type errors. Return them immediately.
 		// Type errors are already []errors.PaseratiError from the checker.
 		return nil, typeErrors
 	}
-	c.typeChecker = typeChecker // Assign checker to compiler field after successful check
+	// No need to re-assign c.typeChecker here, it was already set or created.
 	// --- End Type Checking Step ---
 
 	// --- Bytecode Compilation Step ---

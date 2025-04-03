@@ -64,54 +64,67 @@ func (vm *VM) Reset() {
 	// No need to clear registerStack explicitly, slots will be overwritten.
 }
 
-// Interpret starts executing the given chunk of bytecode in a new top-level frame.
-// Returns the final value (currently Undefined) and any runtime errors.
+// Interpret starts executing the given chunk of bytecode.
+// It sets up a new top-level frame for the chunk's execution
+// on top of the existing VM state.
+// It does NOT reset the VM state; call Reset() explicitly if needed.
+// Returns the final value produced by the chunk and any runtime errors.
 func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
-	vm.Reset()
+	// vm.Reset() // REMOVED: Reset should be handled externally for persistent sessions.
 
-	// Wrap the main script chunk in a dummy function and closure
-	mainFunc := &Function{Chunk: chunk, Name: "<script>", RegisterSize: RegFileSize} // Assume max regs for script
-	mainClosure := &Closure{Fn: mainFunc, Upvalues: []*Upvalue{}}                    // No upvalues for main
+	// Clear errors from previous interpretations within the same VM instance, if any.
+	vm.errors = vm.errors[:0]
 
-	// Allocate registers for the main script body/function
-	initialRegs := mainFunc.RegisterSize
-	if vm.nextRegSlot+initialRegs > len(vm.registerStack) {
-		// Manually create and add the stack overflow error
-		// TODO: Find a better way to get position info for this initial error.
-		placeholderToken := errors.Position{Line: 0, Column: 0, StartPos: 0, EndPos: 0}
+	// --- Sanity Check: Ensure enough stack space BEFORE pushing frame ---
+	// We need space for the new frame in frames array and registers in registerStack.
+	if vm.frameCount >= MaxFrames {
+		// Cannot add another frame.
+		placeholderToken := errors.Position{Line: 0, Column: 0} // TODO: Better position?
 		runtimeErr := &errors.RuntimeError{
 			Position: placeholderToken,
-			Msg:      "Register stack overflow (initial frame)",
+			Msg:      "Stack overflow (cannot push initial script frame)",
 		}
 		vm.errors = append(vm.errors, runtimeErr)
-		return Undefined(), vm.errors // Return Undefined and the error
+		return Undefined(), vm.errors
 	}
 
+	// Wrap the main script chunk in a dummy function and closure
+	// Use a reasonable default register size for the script body.
+	// TODO: Should the compiler determine the required registers for the top level?
+	scriptRegSize := RegFileSize // Default to max for now
+	mainFunc := &Function{Chunk: chunk, Name: "<script>", RegisterSize: scriptRegSize}
+	mainClosure := &Closure{Fn: mainFunc, Upvalues: []*Upvalue{}} // No upvalues for main script
+
+	// Check if enough space in the global register stack for this new frame
+	if vm.nextRegSlot+scriptRegSize > len(vm.registerStack) {
+		placeholderToken := errors.Position{Line: 0, Column: 0} // TODO: Better position?
+		runtimeErr := &errors.RuntimeError{
+			Position: placeholderToken,
+			Msg:      fmt.Sprintf("Register stack overflow (needed %d, available %d)", scriptRegSize, len(vm.registerStack)-vm.nextRegSlot),
+		}
+		vm.errors = append(vm.errors, runtimeErr)
+		return Undefined(), vm.errors
+	}
+
+	// --- Push the new frame ---
 	frame := &vm.frames[vm.frameCount] // Get pointer to the frame slot
 	frame.closure = mainClosure
 	frame.ip = 0
-	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+initialRegs]
-	vm.nextRegSlot += initialRegs
+	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
+	frame.targetRegister = 0 // Result of script isn't stored in caller's reg
+	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
 	// Run the VM
 	resultStatus, finalValue := vm.run() // Capture both status and value
-
-	// No longer need to read from registerStack[0]
-	// var finalValue Value
-	// if vm.nextRegSlot > 0 && result == InterpretOK {
-	// 	finalValue = vm.registerStack[0]
-	// } else {
-	// 	finalValue = Undefined()
-	// }
 
 	if resultStatus == InterpretRuntimeError {
 		// An error occurred, return the potentially partial value and the collected errors
 		return finalValue, vm.errors
 	} else {
 		// Execution finished without runtime error (InterpretOK)
-		// Return the final value returned by run() and empty errors slice
-		return finalValue, vm.errors // vm.errors should be empty here
+		// Return the final value returned by run() and empty errors slice (errors were cleared)
+		return finalValue, vm.errors // vm.errors should be empty here if InterpretOK
 	}
 }
 
