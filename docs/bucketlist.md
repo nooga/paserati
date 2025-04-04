@@ -32,8 +32,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Subtraction (`-`)
 - [x] Multiplication (`*`)
 - [x] Division (`/`)
-- [ ] Remainder (`%`)
-- [ ] Exponentiation (`**`)
+- [x] Remainder (`%`)
+- [x] Exponentiation (`**`)
 - [x] Increment (`++`) (prefix/postfix)
 - [x] Decrement (`--`) (prefix/postfix)
 - [x] Unary Negation (`-`)
@@ -73,8 +73,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Subtraction assignment (`-=`)
 - [x] Multiplication assignment (`*=`)
 - [x] Division assignment (`/=`)
-- [ ] Remainder assignment (`%=`)
-- [ ] Exponentiation assignment (`**=`)
+- [x] Remainder assignment (`%=`)
+- [x] Exponentiation assignment (`**=`)
 - [ ] Left shift assignment (`<<=`)
 - [ ] Right shift assignment (`>>=`)
 - [ ] Unsigned right shift assignment (`>>>=`)
@@ -97,9 +97,11 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Grouping Operator (`()`)
 - [x] Nullish Coalescing Operator (`??`)
 - [ ] Optional Chaining (`?.`)
-- [x] Spread Syntax (`...`) (Lexer token exists, not fully implemented in parser/compiler)
+- [ ] Spread Syntax (`...`) (Lexer token exists, not fully implemented in parser/compiler)
 - [ ] `yield` / `yield*` (Generators)
 - [ ] `await` (Async/Await)
+- [ ] Destructuring Assignment
+- [ ] Destructuring in function parameters
 
 ## Control Flow
 

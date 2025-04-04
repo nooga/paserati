@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"paserati/pkg/errors"
 	"unsafe"
@@ -234,7 +235,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
 			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
-			OpGreater, OpLess, OpLessEqual:
+			OpGreater, OpLess, OpLessEqual,
+			OpRemainder, OpExponent:
 			destReg := code[ip]
 			leftReg := code[ip+1]
 			rightReg := code[ip+2]
@@ -283,6 +285,30 @@ func (vm *VM) run() (InterpretResult, Value) {
 					}
 					registers[destReg] = Number(leftNum / rightNum)
 				}
+			case OpRemainder:
+				if !IsNumber(leftVal) || !IsNumber(rightVal) {
+					frame.ip = ip
+					status := vm.runtimeError("Operands must be numbers for %%.")
+					return status, Undefined()
+				}
+				leftNum := AsNumber(leftVal)
+				rightNum := AsNumber(rightVal)
+				if rightNum == 0 {
+					frame.ip = ip
+					status := vm.runtimeError("Division by zero (in remainder operation).")
+					return status, Undefined()
+				}
+				registers[destReg] = Number(math.Mod(leftNum, rightNum))
+
+			case OpExponent:
+				if !IsNumber(leftVal) || !IsNumber(rightVal) {
+					frame.ip = ip
+					status := vm.runtimeError("Operands must be numbers for **.")
+					return status, Undefined()
+				}
+				leftNum := AsNumber(leftVal)
+				rightNum := AsNumber(rightVal)
+				registers[destReg] = Number(math.Pow(leftNum, rightNum))
 			case OpEqual, OpNotEqual:
 				// Use a helper for equality check (handles type differences)
 				isEqual := valuesEqual(leftVal, rightVal)

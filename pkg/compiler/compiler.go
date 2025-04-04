@@ -633,6 +633,12 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 			c.emitMultiply(destReg, leftReg, rightReg, line)
 		case "/":
 			c.emitDivide(destReg, leftReg, rightReg, line)
+		// --- NEW: Handle % and ** ---
+		case "%": // Use string literal for operator
+			c.emitRemainder(destReg, leftReg, rightReg, line)
+		case "**": // Use string literal for operator
+			c.emitExponent(destReg, leftReg, rightReg, line)
+		// --- END NEW ---
 		case "<=":
 			c.emitLessEqual(destReg, leftReg, rightReg, line)
 		case ">=":
@@ -1216,6 +1222,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		c.emitMultiply(targetReg, targetReg, valueReg, line) // target = target * value
 	case "/=":
 		c.emitDivide(targetReg, targetReg, valueReg, line) // target = target / value
+	case "%=":
+		c.emitRemainder(targetReg, targetReg, valueReg, line) // target = target % value
+	case "**=":
+		c.emitExponent(targetReg, targetReg, valueReg, line) // target = target ** value
 	case "=":
 		// Simple assignment: Move RHS value into target register.
 		// If it was an upvalue, targetReg holds the *loaded* current value,
@@ -2368,3 +2378,22 @@ func (c *Compiler) currentLoopContext() *LoopContext {
 func (c *Compiler) currentPosition() int {
 	return len(c.chunk.Code)
 }
+
+// --- NEW: emitRemainder and emitExponent ---
+func (c *Compiler) emitRemainder(dest, left, right Register, line int) {
+	// REMOVED: c.stats.BytesGenerated += 4
+	c.emitOpCode(vm.OpRemainder, line) // Fixed: Use emitOpCode
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+func (c *Compiler) emitExponent(dest, left, right Register, line int) {
+	// REMOVED: c.stats.BytesGenerated += 4
+	c.emitOpCode(vm.OpExponent, line) // Fixed: Use emitOpCode
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+// --- END NEW ---
