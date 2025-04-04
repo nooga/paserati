@@ -270,8 +270,8 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 	case lexer.TRUE, lexer.FALSE:
 		leftExp = p.parseBooleanLiteral()
 	// --- End Literal Types ---
-	// TODO: Add cases for parsing array types `T[]`, function types `(...) => T`, object types `{...}` here.
-	// case lexer.LBRACKET: leftExp = p.parseArrayTypeExpression()
+	case lexer.LPAREN: // Added: Handle function type starting with (
+		leftExp = p.parseFunctionTypeExpression()
 	default:
 		// Error: Expected a type identifier, array, function, or object type start
 		msg := fmt.Sprintf("unexpected token %s (%q) at start of type annotation",
@@ -280,6 +280,13 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 		debugPrint("parseTypeExpressionRecursive: ERROR - %s", msg)
 		return nil
 	}
+
+	// <<< ADDED: Check if prefix parsing failed >>>
+	if leftExp == nil {
+		debugPrint("parseTypeExpressionRecursive: prefix parse returned nil for token %s", p.curToken.Literal)
+		return nil
+	}
+
 	debugPrint("parseTypeExpressionRecursive: Parsed prefix type %T ('%s')", leftExp, leftExp.String())
 
 	// Look for infix type operators (like '|')
@@ -309,6 +316,92 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 	}
 
 	return leftExp
+}
+
+// --- NEW: Helper for parsing function types like () => T or (A, B) => T ---
+func (p *Parser) parseFunctionTypeExpression() Expression {
+	funcType := &FunctionTypeExpression{Token: p.curToken} // '(' token
+
+	var parseErr error
+	funcType.Parameters, parseErr = p.parseFunctionTypeParameterList()
+	if parseErr != nil {
+		// Error already added by helper
+		return nil
+	}
+
+	// Expect '=>' after parameter list
+	if !p.expectPeek(lexer.ARROW) {
+		return nil // Expected ' => '
+	}
+
+	p.nextToken() // Consume ' => ', move to the return type
+	funcType.ReturnType = p.parseTypeExpression()
+	if funcType.ReturnType == nil {
+		return nil // Error parsing return type
+	}
+
+	return funcType
+}
+
+// --- NEW: Helper for parsing function type parameter list: (), (T1), (name: T1, T2) ---
+// Expects current token to be '('. Consumes up to and including ')'.
+func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
+	params := []Expression{}
+
+	if !p.curTokenIs(lexer.LPAREN) {
+		// Should not happen if called correctly
+		msg := fmt.Sprintf("internal parser error: parseFunctionTypeParameterList called without LPAREN, got %s", p.curToken.Type)
+		p.addError(p.curToken, msg)
+		return nil, fmt.Errorf(msg)
+	}
+
+	// Handle empty parameter list: () => ...
+	if p.peekTokenIs(lexer.RPAREN) {
+		p.nextToken() // Consume ')'
+		return params, nil
+	}
+
+	// Parse first parameter type
+	p.nextToken() // Consume '('
+
+	// --- MODIFIED: Handle optional parameter name ---
+	if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume IDENT (parameter name, ignored for type)
+		p.nextToken() // Consume ':', move to the actual type
+	} // Now curToken should be the start of the type expression
+	// --- END MODIFICATION ---
+
+	paramType := p.parseTypeExpression()
+	if paramType == nil {
+		return nil, fmt.Errorf("failed to parse first function type parameter")
+	}
+	params = append(params, paramType)
+
+	// Parse subsequent parameter types
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // Consume ','
+		p.nextToken() // Move to next token (could be IDENT or start of type)
+
+		// --- MODIFIED: Handle optional parameter name ---
+		if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume IDENT
+			p.nextToken() // Consume ':', move to the actual type
+		} // Now curToken should be the start of the type expression
+		// --- END MODIFICATION ---
+
+		paramType := p.parseTypeExpression()
+		if paramType == nil {
+			return nil, fmt.Errorf("failed to parse subsequent function type parameter")
+		}
+		params = append(params, paramType)
+	}
+
+	// Expect closing parenthesis
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil, fmt.Errorf("missing closing parenthesis in function type parameter list")
+	}
+
+	return params, nil
 }
 
 // --- NEW: Helper for infix union type parsing ---
