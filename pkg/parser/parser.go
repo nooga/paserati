@@ -9,7 +9,7 @@ import (
 )
 
 // --- Debug Flag ---
-const debugParser = false
+const debugParser = true
 
 func debugPrint(format string, args ...interface{}) {
 	if debugParser {
@@ -27,9 +27,13 @@ type Parser struct {
 	curToken  lexer.Token
 	peekToken lexer.Token
 
-	// Pratt parser needs prefix and infix parse functions maps
+	// Pratt parser for VALUE expressions
 	prefixParseFns map[lexer.TokenType]prefixParseFn
 	infixParseFns  map[lexer.TokenType]infixParseFn
+
+	// --- NEW: Pratt parser for TYPE expressions ---
+	typePrefixParseFns map[lexer.TokenType]prefixParseFn // Handles starts of types (e.g., number, string, ident, (), [])
+	typeInfixParseFns  map[lexer.TokenType]infixParseFn  // Handles type operators (e.g., |, &)
 }
 
 // Parsing functions types for Pratt parser
@@ -38,27 +42,29 @@ type (
 	infixParseFn  func(Expression) Expression // Arg is the left side expression
 )
 
-// Precedence levels for operators
+// Precedence levels for VALUE operators
 const (
 	_ int = iota
 	LOWEST
-	ASSIGNMENT  // =
+	ASSIGNMENT  // =, +=, -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>=, &&=, ||=, ??=
 	TERNARY     // ?:
-	COALESCE    // ?? (Added)
-	LOGICAL_OR  // || (Added)
-	LOGICAL_AND // && (Added)
+	COALESCE    // ??
+	LOGICAL_OR  // ||
+	LOGICAL_AND // &&
+	BITWISE_OR  // |  (Lower than XOR)
+	BITWISE_XOR // ^  (Lower than AND)
+	BITWISE_AND // &  (Lower than Equality)
 	EQUALS      // ==, !=, ===, !==
-	LESSGREATER // > or < or <= or >=
+	LESSGREATER // >, <, >=, <=
+	SHIFT       // <<, >>, >>> (Lower than Add/Sub)
 	SUM         // + or -
-	PRODUCT     // * or /
-	PREFIX      // -X or !X or ++X or --X
-	POSTFIX     // X++ or X-- (Higher than prefix/call)
+	PRODUCT     // * or / or %
+	POWER       // ** (Right-associative handled in parseInfix)
+	PREFIX      // -X or !X or ++X or --X or ~X
+	POSTFIX     // X++ or X--
 	CALL        // myFunction(X)
 	INDEX       // array[index]
 	MEMBER      // object.property
-
-	// --- NEW: Precedence for exponentiation ---
-	POWER // **
 )
 
 // --- NEW: Type Precedence ---
@@ -67,44 +73,85 @@ const (
 	TYPE_LOWEST
 	TYPE_UNION // |
 	TYPE_ARRAY // [] (Higher precedence than union)
+	// Potentially TYPE_INTERSECTION (&) later
 )
 
-// Precedences map for operator tokens
+// Precedences map for VALUE operator tokens
 var precedences = map[lexer.TokenType]int{
-	lexer.ASSIGN:          ASSIGNMENT,
-	lexer.PLUS_ASSIGN:     ASSIGNMENT,
-	lexer.MINUS_ASSIGN:    ASSIGNMENT,
-	lexer.ASTERISK_ASSIGN: ASSIGNMENT,
-	lexer.SLASH_ASSIGN:    ASSIGNMENT,
-	lexer.EQ:              EQUALS,
-	lexer.NOT_EQ:          EQUALS,
-	lexer.STRICT_EQ:       EQUALS,
-	lexer.STRICT_NOT_EQ:   EQUALS,
-	lexer.LT:              LESSGREATER,
-	lexer.GT:              LESSGREATER,
-	lexer.LE:              LESSGREATER,
-	lexer.GE:              LESSGREATER,
-	lexer.PLUS:            SUM,
-	lexer.MINUS:           SUM,
-	lexer.SLASH:           PRODUCT,
-	lexer.ASTERISK:        PRODUCT,
-	lexer.LPAREN:          CALL,
-	lexer.LBRACKET:        INDEX,
-	lexer.DOT:             MEMBER,
-	lexer.QUESTION:        TERNARY,
-	lexer.LOGICAL_AND:     LOGICAL_AND,
-	lexer.LOGICAL_OR:      LOGICAL_OR,
-	lexer.COALESCE:        COALESCE,
-	lexer.INC:             POSTFIX,
-	lexer.DEC:             POSTFIX,
+	// Assignment (Lowest operational precedence)
+	lexer.ASSIGN:                      ASSIGNMENT,
+	lexer.PLUS_ASSIGN:                 ASSIGNMENT,
+	lexer.MINUS_ASSIGN:                ASSIGNMENT,
+	lexer.ASTERISK_ASSIGN:             ASSIGNMENT,
+	lexer.SLASH_ASSIGN:                ASSIGNMENT,
+	lexer.REMAINDER_ASSIGN:            ASSIGNMENT,
+	lexer.EXPONENT_ASSIGN:             ASSIGNMENT,
+	lexer.BITWISE_AND_ASSIGN:          ASSIGNMENT, // New
+	lexer.BITWISE_OR_ASSIGN:           ASSIGNMENT, // New
+	lexer.BITWISE_XOR_ASSIGN:          ASSIGNMENT, // New
+	lexer.LEFT_SHIFT_ASSIGN:           ASSIGNMENT, // New
+	lexer.RIGHT_SHIFT_ASSIGN:          ASSIGNMENT, // New
+	lexer.UNSIGNED_RIGHT_SHIFT_ASSIGN: ASSIGNMENT, // New
+	lexer.LOGICAL_AND_ASSIGN:          ASSIGNMENT, // New
+	lexer.LOGICAL_OR_ASSIGN:           ASSIGNMENT, // New
+	lexer.COALESCE_ASSIGN:             ASSIGNMENT, // New
 
-	// --- NEW: Add % and ** precedences ---
-	lexer.REMAINDER: PRODUCT, // % has same precedence as *, /
-	lexer.EXPONENT:  POWER,   // ** has higher precedence than *, /
+	// Ternary, Logical, Coalescing
+	lexer.QUESTION:    TERNARY,
+	lexer.COALESCE:    COALESCE,
+	lexer.LOGICAL_OR:  LOGICAL_OR,
+	lexer.LOGICAL_AND: LOGICAL_AND,
 
-	// --- NEW: Add %= and **= precedences ---
-	lexer.REMAINDER_ASSIGN: ASSIGNMENT,
-	lexer.EXPONENT_ASSIGN:  ASSIGNMENT,
+	// Bitwise (Order: | < ^ < &)
+	lexer.PIPE:        BITWISE_OR,  // Treat type union | at same level as bitwise | for now
+	lexer.BITWISE_XOR: BITWISE_XOR, // New
+	lexer.BITWISE_AND: BITWISE_AND, // New
+
+	// Equality
+	lexer.EQ:            EQUALS,
+	lexer.NOT_EQ:        EQUALS,
+	lexer.STRICT_EQ:     EQUALS,
+	lexer.STRICT_NOT_EQ: EQUALS,
+
+	// Comparison
+	lexer.LT: LESSGREATER,
+	lexer.GT: LESSGREATER,
+	lexer.LE: LESSGREATER,
+	lexer.GE: LESSGREATER,
+
+	// Shift
+	lexer.LEFT_SHIFT:           SHIFT, // New
+	lexer.RIGHT_SHIFT:          SHIFT, // New
+	lexer.UNSIGNED_RIGHT_SHIFT: SHIFT, // New
+
+	// Arithmetic
+	lexer.PLUS:      SUM,
+	lexer.MINUS:     SUM,
+	lexer.SLASH:     PRODUCT,
+	lexer.ASTERISK:  PRODUCT,
+	lexer.REMAINDER: PRODUCT, // Existing
+	lexer.EXPONENT:  POWER,   // Existing (Right-associative handled in infix parsing)
+
+	// Prefix/Postfix (Handled by registration, not just precedence map)
+	// lexer.BANG does not need precedence here (uses PREFIX in parsePrefix)
+	// lexer.BITWISE_NOT does not need precedence here (uses PREFIX in parsePrefix)
+	// lexer.INC prefix/postfix handled by registration
+	// lexer.DEC prefix/postfix handled by registration
+
+	// Call, Index, Member Access
+	lexer.LPAREN:   CALL,
+	lexer.LBRACKET: INDEX,
+	lexer.DOT:      MEMBER,
+
+	// Postfix operators need precedence for the parseExpression loop termination condition
+	lexer.INC: POSTFIX,
+	lexer.DEC: POSTFIX,
+}
+
+// --- NEW: Precedences map for TYPE operator tokens ---
+var typePrecedences = map[lexer.TokenType]int{
+	lexer.PIPE:     TYPE_UNION,
+	lexer.LBRACKET: TYPE_ARRAY,
 }
 
 // NewParser creates a new Parser.
@@ -114,29 +161,40 @@ func NewParser(l *lexer.Lexer) *Parser {
 		errors: []errors.PaseratiError{},
 	}
 
-	// Initialize Pratt parser maps
+	// Initialize Pratt parser maps for VALUE expressions
 	p.prefixParseFns = make(map[lexer.TokenType]prefixParseFn)
+	p.infixParseFns = make(map[lexer.TokenType]infixParseFn)
+
+	// --- NEW: Initialize Pratt parser maps for TYPE expressions ---
+	p.typePrefixParseFns = make(map[lexer.TokenType]prefixParseFn)
+	p.typeInfixParseFns = make(map[lexer.TokenType]infixParseFn)
+
+	// --- Register VALUE Prefix Functions ---
 	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
 	p.registerPrefix(lexer.NUMBER, p.parseNumberLiteral)
 	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerPrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.NULL, p.parseNullLiteral)
-	p.registerPrefix(lexer.UNDEFINED, p.parseUndefinedLiteral)
+	p.registerPrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // Keep for value context
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
-	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)      // !true
-	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)     // -5
-	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression) // Added ++x
-	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression) // Added --x
-	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)   // (5 + 5)
-	p.registerPrefix(lexer.IF, p.parseIfExpression)            // if (condition) { ... }
-	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral)      // Added [1, 2]
+	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
+	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
+	p.registerPrefix(lexer.BITWISE_NOT, p.parsePrefixExpression)
+	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
+	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
+	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
+	p.registerPrefix(lexer.IF, p.parseIfExpression)
+	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
 
-	p.infixParseFns = make(map[lexer.TokenType]infixParseFn)
+	// --- Register VALUE Infix Functions ---
+	// Arithmetic & Comparison/Logical
 	p.registerInfix(lexer.PLUS, p.parseInfixExpression)
 	p.registerInfix(lexer.MINUS, p.parseInfixExpression)
 	p.registerInfix(lexer.SLASH, p.parseInfixExpression)
 	p.registerInfix(lexer.ASTERISK, p.parseInfixExpression)
+	p.registerInfix(lexer.REMAINDER, p.parseInfixExpression)
+	p.registerInfix(lexer.EXPONENT, p.parseInfixExpression)
 	p.registerInfix(lexer.EQ, p.parseInfixExpression)
 	p.registerInfix(lexer.NOT_EQ, p.parseInfixExpression)
 	p.registerInfix(lexer.STRICT_EQ, p.parseInfixExpression)
@@ -145,8 +203,22 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.GT, p.parseInfixExpression)
 	p.registerInfix(lexer.LE, p.parseInfixExpression)
 	p.registerInfix(lexer.GE, p.parseInfixExpression)
-	p.registerInfix(lexer.LPAREN, p.parseCallExpression)
+	p.registerInfix(lexer.LOGICAL_AND, p.parseInfixExpression)
+	p.registerInfix(lexer.LOGICAL_OR, p.parseInfixExpression)
+	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)
+	// Bitwise and Shift
+	p.registerInfix(lexer.BITWISE_AND, p.parseInfixExpression)
+	p.registerInfix(lexer.PIPE, p.parseInfixExpression) // VALUE context: Treat '|' as BITWISE_OR
+	p.registerInfix(lexer.BITWISE_XOR, p.parseInfixExpression)
+	p.registerInfix(lexer.LEFT_SHIFT, p.parseInfixExpression)
+	p.registerInfix(lexer.RIGHT_SHIFT, p.parseInfixExpression)
+	p.registerInfix(lexer.UNSIGNED_RIGHT_SHIFT, p.parseInfixExpression)
+	// Call, Index, Member, Ternary
+	p.registerInfix(lexer.LPAREN, p.parseCallExpression)    // Value context: function call
+	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression) // Value context: array/member index
+	p.registerInfix(lexer.DOT, p.parseMemberExpression)
 	p.registerInfix(lexer.QUESTION, p.parseTernaryExpression)
+	// Assignment Operators
 	p.registerInfix(lexer.ASSIGN, p.parseAssignmentExpression)
 	p.registerInfix(lexer.PLUS_ASSIGN, p.parseAssignmentExpression)
 	p.registerInfix(lexer.MINUS_ASSIGN, p.parseAssignmentExpression)
@@ -154,15 +226,36 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.SLASH_ASSIGN, p.parseAssignmentExpression)
 	p.registerInfix(lexer.REMAINDER_ASSIGN, p.parseAssignmentExpression)
 	p.registerInfix(lexer.EXPONENT_ASSIGN, p.parseAssignmentExpression)
-	p.registerInfix(lexer.LOGICAL_AND, p.parseInfixExpression)
-	p.registerInfix(lexer.LOGICAL_OR, p.parseInfixExpression)
-	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)
-	p.registerInfix(lexer.REMAINDER, p.parseInfixExpression)
-	p.registerInfix(lexer.EXPONENT, p.parseInfixExpression)
-	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression) // Added x++
-	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression) // Added x--
-	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression)    // Added arr[idx]
-	p.registerInfix(lexer.DOT, p.parseMemberExpression)        // <<< Added registration
+	p.registerInfix(lexer.BITWISE_AND_ASSIGN, p.parseAssignmentExpression)          // &= (New)
+	p.registerInfix(lexer.BITWISE_OR_ASSIGN, p.parseAssignmentExpression)           // |= (New)
+	p.registerInfix(lexer.BITWISE_XOR_ASSIGN, p.parseAssignmentExpression)          // ^= (New)
+	p.registerInfix(lexer.LEFT_SHIFT_ASSIGN, p.parseAssignmentExpression)           // <<= (New)
+	p.registerInfix(lexer.RIGHT_SHIFT_ASSIGN, p.parseAssignmentExpression)          // >>= (New)
+	p.registerInfix(lexer.UNSIGNED_RIGHT_SHIFT_ASSIGN, p.parseAssignmentExpression) // >>>= (New)
+	p.registerInfix(lexer.LOGICAL_AND_ASSIGN, p.parseAssignmentExpression)          // &&= (New)
+	p.registerInfix(lexer.LOGICAL_OR_ASSIGN, p.parseAssignmentExpression)           // ||= (New)
+	p.registerInfix(lexer.COALESCE_ASSIGN, p.parseAssignmentExpression)             // ??= (New)
+
+	// Postfix Update Operators
+	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression)
+	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression)
+
+	// --- Register TYPE Prefix Functions ---
+	// --- MODIFIED: Use parseTypeIdentifier for simple type names ---
+	p.registerTypePrefix(lexer.IDENT, p.parseTypeIdentifier)       // Basic types like 'number', 'string', custom types
+	p.registerTypePrefix(lexer.NULL, p.parseNullLiteral)           // 'null' type
+	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // 'undefined' type
+	// Literal types
+	p.registerTypePrefix(lexer.STRING, p.parseStringLiteral)
+	p.registerTypePrefix(lexer.NUMBER, p.parseNumberLiteral)
+	p.registerTypePrefix(lexer.TRUE, p.parseBooleanLiteral)
+	p.registerTypePrefix(lexer.FALSE, p.parseBooleanLiteral)
+	// Function types
+	p.registerTypePrefix(lexer.LPAREN, p.parseFunctionTypeExpression) // Starts with '(', e.g., '() => number'
+
+	// --- Register TYPE Infix Functions ---
+	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)     // TYPE context: '|' is union
+	p.registerTypeInfix(lexer.LBRACKET, p.parseArrayTypeExpression) // TYPE context: 'T[]'
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -261,80 +354,69 @@ func (p *Parser) parseTypeAliasStatement() *TypeAliasStatement {
 	return stmt
 }
 
-// --- NEW: Type Expression Parsing (Placeholder) ---
+// --- NEW: Type Expression Parsing ---
 
 // parseTypeExpression parses a type annotation, potentially including union types.
 func (p *Parser) parseTypeExpression() Expression {
+	// Start parsing with the lowest type precedence
 	return p.parseTypeExpressionRecursive(TYPE_LOWEST)
 }
 
 // parseTypeExpressionRecursive handles precedence for type operators.
+// Uses typePrefixParseFns and typeInfixParseFns.
 func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 	debugPrint("parseTypeExpressionRecursive(prec=%d): START, cur='%s'", precedence, p.curToken.Literal)
 
-	// Parse the initial type (prefix part)
-	var leftExp Expression
-	switch p.curToken.Type {
-	case lexer.IDENT, lexer.NULL, lexer.UNDEFINED:
-		leftExp = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	// --- NEW: Handle Literal Types ---
-	case lexer.STRING:
-		leftExp = p.parseStringLiteral()
-	case lexer.NUMBER:
-		leftExp = p.parseNumberLiteral()
-	case lexer.TRUE, lexer.FALSE:
-		leftExp = p.parseBooleanLiteral()
-	// --- End Literal Types ---
-	case lexer.LPAREN: // Added: Handle function type starting with (
-		leftExp = p.parseFunctionTypeExpression()
-	default:
-		// Error: Expected a type identifier, array, function, or object type start
+	// --- MODIFIED: Use typePrefixParseFns ---
+	prefix := p.typePrefixParseFns[p.curToken.Type]
+	if prefix == nil {
+		// Error: No function found to start parsing this token as a type
 		msg := fmt.Sprintf("unexpected token %s (%q) at start of type annotation",
 			p.curToken.Type, p.curToken.Literal)
 		p.addError(p.curToken, msg)
 		debugPrint("parseTypeExpressionRecursive: ERROR - %s", msg)
 		return nil
 	}
+	leftExp := prefix()
 
-	// <<< ADDED: Check if prefix parsing failed >>>
 	if leftExp == nil {
-		debugPrint("parseTypeExpressionRecursive: prefix parse returned nil for token %s", p.curToken.Literal)
-		return nil
+		debugPrint("parseTypeExpressionRecursive: type prefix parse returned nil for token %s", p.curToken.Literal)
+		return nil // Prefix parsing failed
 	}
 
 	debugPrint("parseTypeExpressionRecursive: Parsed prefix type %T ('%s')", leftExp, leftExp.String())
 
-	// Look for infix type operators (like '|')
+	// --- MODIFIED: Loop using peekTypePrecedence and typeInfixParseFns ---
 	for precedence < p.peekTypePrecedence() {
 		peekType := p.peekToken.Type
-		debugPrint("parseTypeExpressionRecursive: Found infix type operator '%s'", peekType)
-
-		switch peekType {
-		case lexer.PIPE:
-			p.nextToken() // Consume '|'
-			leftExp = p.parseUnionTypeExpression(leftExp)
-			if leftExp == nil {
-				return nil // Error during union parsing
-			}
-		case lexer.LBRACKET: // Handle T[] syntax
-			p.nextToken()                                 // Consume '['
-			leftExp = p.parseArrayTypeExpression(leftExp) // Need to implement this
-			if leftExp == nil {
-				return nil // Error during array type parsing
-			}
-		// TODO: Add cases for other potential infix type operators (e.g., '&' for intersection)
-		default:
-			// No infix operator found or lower precedence
+		infix := p.typeInfixParseFns[peekType] // Look in the TYPE infix map
+		if infix == nil {
+			// No infix type operator found or lower precedence for the peek token
+			debugPrint("parseTypeExpressionRecursive: No TYPE infix for peek='%s', returning leftExp=%T", p.peekToken.Literal, leftExp)
 			return leftExp
 		}
-		debugPrint("parseTypeExpressionRecursive: After infix, leftExp=%T ('%s')", leftExp, leftExp.String())
+
+		debugPrint("parseTypeExpressionRecursive: Found TYPE infix for peek='%s' (%s), type precedence=%d", p.peekToken.Literal, peekType, p.peekTypePrecedence())
+		p.nextToken() // Consume the type operator token (e.g., '|' or '[')
+		debugPrint("parseTypeExpressionRecursive: After infix nextToken(), cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
+
+		leftExp = infix(leftExp) // Call the specific type infix function (e.g., parseUnionTypeExpression)
+
+		if leftExp == nil {
+			debugPrint("parseTypeExpressionRecursive: TYPE infix function returned nil")
+			return nil // Infix parsing failed
+		}
+		debugPrint("parseTypeExpressionRecursive: After TYPE infix call, leftExp=%T, cur='%s', peek='%s'", leftExp, p.curToken.Literal, p.peekToken.Literal)
 	}
 
+	debugPrint("parseTypeExpressionRecursive(prec=%d): loop end, returning leftExp=%T", precedence, leftExp)
 	return leftExp
 }
 
 // --- NEW: Helper for parsing function types like () => T or (A, B) => T ---
+// parseFunctionTypeExpression should already call parseTypeExpression, which now uses the recursive helper correctly.
 func (p *Parser) parseFunctionTypeExpression() Expression {
+	// ... existing implementation looks okay, relies on parseTypeExpression calls ...
 	funcType := &FunctionTypeExpression{Token: p.curToken} // '(' token
 
 	var parseErr error
@@ -349,8 +431,8 @@ func (p *Parser) parseFunctionTypeExpression() Expression {
 		return nil // Expected ' => '
 	}
 
-	p.nextToken() // Consume ' => ', move to the return type
-	funcType.ReturnType = p.parseTypeExpression()
+	p.nextToken()                                 // Consume ' => ', move to the return type
+	funcType.ReturnType = p.parseTypeExpression() // This call will use the updated recursive function
 	if funcType.ReturnType == nil {
 		return nil // Error parsing return type
 	}
@@ -359,8 +441,9 @@ func (p *Parser) parseFunctionTypeExpression() Expression {
 }
 
 // --- NEW: Helper for parsing function type parameter list: (), (T1), (name: T1, T2) ---
-// Expects current token to be '('. Consumes up to and including ')'.
+// This function should also correctly use parseTypeExpression internally.
 func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
+	// ... existing implementation looks okay, relies on parseTypeExpression calls ...
 	params := []Expression{}
 
 	if !p.curTokenIs(lexer.LPAREN) {
@@ -386,7 +469,7 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
 	} // Now curToken should be the start of the type expression
 	// --- END MODIFICATION ---
 
-	paramType := p.parseTypeExpression()
+	paramType := p.parseTypeExpression() // This call will use the updated recursive function
 	if paramType == nil {
 		return nil, fmt.Errorf("failed to parse first function type parameter")
 	}
@@ -404,7 +487,7 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
 		} // Now curToken should be the start of the type expression
 		// --- END MODIFICATION ---
 
-		paramType := p.parseTypeExpression()
+		paramType := p.parseTypeExpression() // This call will use the updated recursive function
 		if paramType == nil {
 			return nil, fmt.Errorf("failed to parse subsequent function type parameter")
 		}
@@ -420,14 +503,17 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
 }
 
 // --- NEW: Helper for infix union type parsing ---
+// This function should also correctly use parseTypeExpressionRecursive internally.
 func (p *Parser) parseUnionTypeExpression(left Expression) Expression {
+	// ... existing implementation looks okay ...
 	unionExp := &UnionTypeExpression{
 		Token: p.curToken, // The '|' token
 		Left:  left,
 	}
+	// Use the precedence of the UNION operator itself for the recursive call
 	precedence := TYPE_UNION
-	p.nextToken() // Consume the token starting the right-hand side type
-	unionExp.Right = p.parseTypeExpressionRecursive(precedence)
+	p.nextToken()                                               // Consume the token starting the right-hand side type
+	unionExp.Right = p.parseTypeExpressionRecursive(precedence) // Recursive call uses type precedence
 	if unionExp.Right == nil {
 		return nil // Error parsing right side
 	}
@@ -436,19 +522,17 @@ func (p *Parser) parseUnionTypeExpression(left Expression) Expression {
 
 // --- NEW: Precedence helper for type operators ---
 func (p *Parser) peekTypePrecedence() int {
-	switch p.peekToken.Type {
-	case lexer.PIPE:
-		return TYPE_UNION
-	case lexer.LBRACKET: // For T[] syntax
-		return TYPE_ARRAY
-	// TODO: Add other type operators (e.g., lexer.AMPERSAND for TYPE_INTERSECTION)
-	default:
-		return TYPE_LOWEST
+	// Look in the type precedences map
+	if prec, ok := typePrecedences[p.peekToken.Type]; ok {
+		return prec
 	}
+	return TYPE_LOWEST
 }
 
 // --- NEW: Helper for infix array type parsing T[] ---
+// This function does not need recursion.
 func (p *Parser) parseArrayTypeExpression(elementType Expression) Expression {
+	// ... existing implementation looks okay ...
 	arrayTypeExp := &ArrayTypeExpression{
 		Token:       p.curToken, // The '[' token
 		ElementType: elementType,
@@ -620,25 +704,23 @@ func (p *Parser) parseExpression(precedence int) Expression {
 
 func (p *Parser) parseIdentifier() Expression {
 	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	debugPrint("parseIdentifier: cur='%s', peek='%s' (%s)", p.curToken.Literal, p.peekToken.Literal, p.peekToken.Type)
+	debugPrint("parseIdentifier (VALUE context): cur='%s', peek='%s' (%s)", p.curToken.Literal, p.peekToken.Literal, p.peekToken.Type)
 
+	// Check ONLY for shorthand arrow function `ident => body` in VALUE context
 	if p.peekTokenIs(lexer.ARROW) {
-		debugPrint("parseIdentifier: Found '=>' after identifier '%s'", ident.Value)
-		// This handles the case like: x => ...
-		// Here 'x' is the single parameter.
+		debugPrint("parseIdentifier (VALUE context): Found '=>' after identifier '%s'", ident.Value)
 		p.nextToken() // Consume the identifier token (which is curToken)
-		debugPrint("parseIdentifier: Consumed IDENT, cur is now '%s' (%s)", p.curToken.Literal, p.curToken.Type)
-
-		// --- FIX: Create Parameter node for shorthand arrow function ---
+		debugPrint("parseIdentifier (VALUE context): Consumed IDENT, cur is now '%s' (%s)", p.curToken.Literal, p.curToken.Type)
 		param := &Parameter{
 			Token:          ident.Token,
 			Name:           ident,
 			TypeAnnotation: nil, // No type annotation in this shorthand syntax
 		}
+		// parseArrowFunctionBodyAndFinish expects curToken to be '=>'
 		return p.parseArrowFunctionBodyAndFinish([]*Parameter{param}, nil)
 	}
 
-	debugPrint("parseIdentifier: Just identifier '%s', returning.", ident.Value)
+	debugPrint("parseIdentifier (VALUE context): Just identifier '%s', returning.", ident.Value)
 	return ident
 }
 
@@ -885,6 +967,15 @@ func (p *Parser) registerInfix(tokenType lexer.TokenType, fn infixParseFn) {
 	p.infixParseFns[tokenType] = fn
 }
 
+// --- NEW: Helper methods for TYPE parsing functions ---
+func (p *Parser) registerTypePrefix(tokenType lexer.TokenType, fn prefixParseFn) {
+	p.typePrefixParseFns[tokenType] = fn
+}
+
+func (p *Parser) registerTypeInfix(tokenType lexer.TokenType, fn infixParseFn) {
+	p.typeInfixParseFns[tokenType] = fn
+}
+
 func (p *Parser) curTokenIs(t lexer.TokenType) bool {
 	return p.curToken.Type == t
 }
@@ -962,42 +1053,61 @@ func (p *Parser) parseGroupedExpression() Expression {
 		debugPrint("parseGroupedExpression: Attempting arrow param parse...")
 		params := p.parseParameterList() // Consumes up to and including ')'
 
+		// Case 1: Arrow function with params, NO return type annotation: (a, b) => body
 		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found '=>' next.", params)
-			p.nextToken() // Consume '=>', curToken is now '=>'
-			debugPrint("parseGroupedExpression: Consumed '=>', cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
-			p.errors = p.errors[:startErrors]
-			return p.parseArrowFunctionBodyAndFinish(params, nil)
+			p.nextToken() // Consume ')', Now curToken is '=>'
+			debugPrint("parseGroupedExpression: Consumed ')', cur is now '=>'")
+			p.errors = p.errors[:startErrors]                     // Clear errors from backtrack attempt
+			return p.parseArrowFunctionBodyAndFinish(params, nil) // No return type annotation
+
+			// Case 2: Arrow function with params AND return type annotation: (a: T, b: U): R => body
 		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found ':' next.", params)
 			p.nextToken() // Consume ':', curToken is now ':'
-			p.nextToken() // Consume the token starting the type expression
+			p.nextToken() // Consume the token starting the type expression, cur is start of type (e.g., 'number')
 			debugPrint("parseGroupedExpression: Consumed ':', cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
-			p.errors = p.errors[:startErrors]
+			p.errors = p.errors[:startErrors] // Clear errors from backtrack attempt
 
-			returnTypeAnnotation := p.parseTypeExpression()
+			returnTypeAnnotation := p.parseTypeExpression() // Consumes type, cur is last token of type (e.g., 'number')
 
 			if returnTypeAnnotation == nil {
+				return nil // Propagate error from type parsing
+			}
+			// AFTER parseTypeExpression, curToken is the *last* token of the type annotation.
+			debugPrint("parseGroupedExpression: Parsed return type annotation %T. cur='%s', peek='%s'", returnTypeAnnotation, p.curToken.Literal, p.peekToken.Literal)
+
+			// Check if the token *after* the type annotation is '=>'
+			if !p.peekTokenIs(lexer.ARROW) {
+				msg := fmt.Sprintf("expected '=>' after return type annotation, got %s", p.peekToken.Type)
+				p.addError(p.peekToken, msg)
+				debugPrint("parseGroupedExpression: Error - %s", msg)
 				return nil
-			} // Propagate error
+			}
 
-			p.nextToken() // Consume the token ending the type expression
-			debugPrint("parseGroupedExpression: Consumed type expression, cur='%s' (%s)", p.curToken.Literal, p.curToken.Type)
+			// Consume the last token of the type expression (which is curToken).
+			// This makes '=>' the new curToken.
+			p.nextToken()
+			debugPrint("parseGroupedExpression: Consumed type expr end, cur is now '=>'")
 
+			// Pass the correctly parsed returnTypeAnnotation.
+			// parseArrowFunctionBodyAndFinish expects curToken to be '=>'.
 			return p.parseArrowFunctionBodyAndFinish(params, returnTypeAnnotation)
+
 		} else {
-			debugPrint("parseGroupedExpression: Failed arrow param parse (params=%v, cur='%s', peek='%s') or no '=>', backtracking...", params, p.curToken.Literal, p.peekToken.Type)
+			// Not an arrow function (or parseParameterList failed), backtrack.
+			debugPrint("parseGroupedExpression: Failed arrow param parse (params=%v, cur='%s', peek='%s') or no '=>' or ':', backtracking...", params, p.curToken.Literal, p.peekToken.Type)
 			// --- PRECISE BACKTRACK ---
 			p.l.SetPosition(startPos) // Reset lexer position
 			p.curToken = startCur     // Restore original curToken
 			p.peekToken = startPeek   // Restore original peekToken
-			// DO NOT call nextToken() here, state should be exactly as before the attempt.
-			// The subsequent code expects curToken to be the starting '('.
 			p.errors = p.errors[:startErrors]
 			debugPrint("parseGroupedExpression: Precise Backtrack complete. cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+			// Fall through to parse as regular grouped expression
 		}
 	} else {
 		debugPrint("parseGroupedExpression: Not starting with '(', cannot be parenthesized arrow params.")
+		// Fall through to parse as regular grouped expression
 	}
 
 	// --- If not arrow function, parse as regular Grouped Expression ---
@@ -1010,8 +1120,8 @@ func (p *Parser) parseGroupedExpression() Expression {
 	debugPrint("parseGroupedExpression: Consumed '(', cur='%s'", p.curToken.Literal)
 	exp := p.parseExpression(LOWEST)
 	if exp == nil {
-		return nil
-	} // Propagate error from inner expression
+		return nil // Propagate error from inner expression
+	}
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil // Missing closing parenthesis
 	}
@@ -1820,4 +1930,17 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 	// The token that terminated the loop (CASE, DEFAULT, RBRACE, or EOF) is the current token.
 	// We leave it for the outer loop (parseSwitchStatement) to handle.
 	return caseClause
+}
+
+// --- NEW: parseTypeIdentifier used for simple type names ---
+// This function ONLY parses an identifier and returns it. It does not check for '=>'.
+func (p *Parser) parseTypeIdentifier() Expression {
+	debugPrint("parseTypeIdentifier: cur='%s'", p.curToken.Literal)
+	if !p.curTokenIs(lexer.IDENT) {
+		// Should not happen if registered correctly
+		msg := fmt.Sprintf("internal error: parseTypeIdentifier called on non-IDENT token %s", p.curToken.Type)
+		p.addError(p.curToken, msg)
+		return nil
+	}
+	return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 }
