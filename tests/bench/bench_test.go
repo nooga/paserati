@@ -33,7 +33,7 @@ func compileFile(tb testing.TB, filename string) *vm.Chunk {
 func BenchmarkFibPlaceholderRun(b *testing.B) {
 	// Compile once outside the loop.
 	// Use the correct filename provided by the user.
-	chunk := compileFile(b, "fib.ts")
+	chunk := compileFile(b, "factorial.ts")
 	vmInstance := vm.NewVM()
 
 	// Redirect stdout during benchmark to avoid polluting output
