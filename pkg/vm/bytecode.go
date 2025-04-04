@@ -69,6 +69,16 @@ const (
 
 	// Add comparison operators as needed
 	// OpLessEqual // Rx Ry Rz: Rx = (Ry <= Rz)
+
+	// --- NEW: Bitwise & Shift ---
+	OpBitwiseNot         OpCode = 33 // Rx Ry: Rx = ~Ry
+	OpBitwiseAnd         OpCode = 34 // Rx Ry Rz: Rx = Ry & Rz
+	OpBitwiseOr          OpCode = 35 // Rx Ry Rz: Rx = Ry | Rz
+	OpBitwiseXor         OpCode = 36 // Rx Ry Rz: Rx = Ry ^ Rz
+	OpShiftLeft          OpCode = 37 // Rx Ry Rz: Rx = Ry << Rz
+	OpShiftRight         OpCode = 38 // Rx Ry Rz: Rx = Ry >> Rz (Arithmetic Shift)
+	OpUnsignedShiftRight OpCode = 39 // Rx Ry Rz: Rx = Ry >>> Rz (Logical Shift)
+	// --- END NEW ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -140,6 +150,20 @@ func (op OpCode) String() string {
 		return "OpSetIndex"
 	case OpGetLength:
 		return "OpGetLength"
+	case OpBitwiseNot:
+		return "OpBitwiseNot"
+	case OpBitwiseAnd:
+		return "OpBitwiseAnd"
+	case OpBitwiseOr:
+		return "OpBitwiseOr"
+	case OpBitwiseXor:
+		return "OpBitwiseXor"
+	case OpShiftLeft:
+		return "OpShiftLeft"
+	case OpShiftRight:
+		return "OpShiftRight"
+	case OpUnsignedShiftRight:
+		return "OpUnsignedShiftRight"
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}
