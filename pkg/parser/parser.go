@@ -1464,14 +1464,15 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	case *Identifier:
 		validLHS = true
 	case *IndexExpression:
-		// Allow simple assignment (=) for index expressions
-		if expr.Operator == "=" {
-			validLHS = true
-		} else {
-			msg := fmt.Sprintf("operator %s cannot be applied to index expression", expr.Operator)
-			p.addError(expr.Token, msg)
-			return nil
-		}
+		// // Allow simple assignment (=) for index expressions
+		// if expr.Operator == "=" {
+		// 	validLHS = true
+		// } else {
+		// 	msg := fmt.Sprintf("operator %s cannot be applied to index expression", expr.Operator)
+		// 	p.addError(expr.Token, msg)
+		// 	return nil
+		// }
+		validLHS = true
 		// TODO: Add case for MemberExpression later
 	case *MemberExpression:
 		validLHS = true

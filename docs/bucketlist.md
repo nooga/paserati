@@ -58,13 +58,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 ### Bitwise
 
-- [ ] Bitwise AND (`&`)
-- [ ] Bitwise OR (`|`) (Note: Lexer uses `|` for Type Union)
-- [ ] Bitwise XOR (`^`)
-- [ ] Bitwise NOT (`~`)
-- [ ] Left Shift (`<<`)
-- [ ] Right Shift (`>>`)
-- [ ] Unsigned Right Shift (`>>>`)
+- [x] Bitwise AND (`&`)
+- [x] Bitwise OR (`|`) (Note: Lexer uses `|` for Type Union)
+- [x] Bitwise XOR (`^`)
+- [x] Bitwise NOT (`~`)
+- [x] Left Shift (`<<`)
+- [x] Right Shift (`>>`)
+- [x] Unsigned Right Shift (`>>>`)
 
 ### Assignment
 
@@ -75,15 +75,15 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Division assignment (`/=`)
 - [x] Remainder assignment (`%=`)
 - [x] Exponentiation assignment (`**=`)
-- [ ] Left shift assignment (`<<=`)
-- [ ] Right shift assignment (`>>=`)
-- [ ] Unsigned right shift assignment (`>>>=`)
-- [ ] Bitwise AND assignment (`&=`)
-- [ ] Bitwise XOR assignment (`^=`)
-- [ ] Bitwise OR assignment (`|=`)
-- [ ] Logical AND assignment (`&&=`)
-- [ ] Logical OR assignment (`||=`)
-- [ ] Nullish coalescing assignment (`??=`)
+- [x] Left shift assignment (`<<=`)
+- [x] Right shift assignment (`>>=`)
+- [x] Unsigned right shift assignment (`>>>=`)
+- [x] Bitwise AND assignment (`&=`)
+- [x] Bitwise XOR assignment (`^=`)
+- [x] Bitwise OR assignment (`|=`)
+- [x] Logical AND assignment (`&&=`)
+- [x] Logical OR assignment (`||=`)
+- [x] Nullish coalescing assignment (`??=`)
 
 ### Misc
 
