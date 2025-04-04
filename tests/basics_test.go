@@ -277,6 +277,14 @@ func TestOperatorsAndLiterals(t *testing.T) {
         x + inc(); // 12 + 12 (x becomes 13)
         `, expect: "24",
 		},
+
+		// --- Const Assignment Test ---
+		{
+			name:               "ConstReassignError",
+			input:              "const x = 10; x = 20;",
+			expect:             "cannot assign to constant variable 'x'",
+			expectCompileError: true,
+		},
 	}
 
 	for _, tc := range testCases {

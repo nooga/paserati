@@ -17,9 +17,15 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
+// --- NEW: Symbol Information ---
+type SymbolInfo struct {
+	Type    types.Type
+	IsConst bool
+}
+
 // Environment manages type information within scopes.
 type Environment struct {
-	symbols     map[string]types.Type // Stores type bindings for variables/constants
+	symbols     map[string]SymbolInfo // UPDATED: Stores SymbolInfo (type + const status)
 	typeAliases map[string]types.Type // Stores resolved types for type aliases
 	outer       *Environment          // Pointer to the enclosing environment
 }
@@ -27,7 +33,7 @@ type Environment struct {
 // NewEnvironment creates a new top-level type environment.
 func NewEnvironment() *Environment {
 	return &Environment{
-		symbols:     make(map[string]types.Type),
+		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases: make(map[string]types.Type), // Initialize
 		outer:       nil,
 	}
@@ -36,15 +42,39 @@ func NewEnvironment() *Environment {
 // NewEnclosedEnvironment creates a new environment nested within an outer one.
 func NewEnclosedEnvironment(outer *Environment) *Environment {
 	return &Environment{
-		symbols:     make(map[string]types.Type),
+		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases: make(map[string]types.Type), // Initialize
 		outer:       outer,
 	}
 }
 
-// Define adds a new *variable* type binding to the current environment scope.
-func (e *Environment) Define(name string, typ types.Type) bool {
-	e.symbols[name] = typ
+// Define adds a new *variable* type binding and its const status to the current environment scope.
+// Returns false if the name conflicts with an existing variable/const in this scope.
+func (e *Environment) Define(name string, typ types.Type, isConst bool) bool {
+	// Check for conflict with existing variable/constant in this scope
+	if _, exists := e.symbols[name]; exists {
+		return false // Name already taken by a variable/const
+	}
+	// Check for conflict with existing type alias in this scope
+	if _, exists := e.typeAliases[name]; exists {
+		return false // Name already taken by a type alias
+	}
+	e.symbols[name] = SymbolInfo{Type: typ, IsConst: isConst}
+	return true
+}
+
+// --- NEW: Update method ---
+
+// Update modifies the type of an *existing* variable symbol in the current environment scope.
+// It does NOT change the IsConst status.
+// Returns true if the symbol was found and updated, false otherwise.
+func (e *Environment) Update(name string, typ types.Type) bool {
+	info, exists := e.symbols[name]
+	if !exists {
+		return false // Symbol not found in this scope
+	}
+	// Update the type, keep the original IsConst status
+	e.symbols[name] = SymbolInfo{Type: typ, IsConst: info.IsConst}
 	return true
 }
 
@@ -64,7 +94,8 @@ func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
 }
 
 // Resolve looks up a *variable* name in the current environment and its outer scopes.
-func (e *Environment) Resolve(name string) (types.Type, bool) {
+// Returns the type, whether it's constant, and true if found. Otherwise returns nil, false, false.
+func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found bool) {
 	// --- DEBUG ---
 	if checkerDebug {
 		debugPrintf("// [Env Resolve] env=%p, name='%s', outer=%p\n", e, name, e.outer) // Log entry
@@ -72,31 +103,31 @@ func (e *Environment) Resolve(name string) (types.Type, bool) {
 	if e == nil {
 		debugPrintf("// [Env Resolve] ERROR: Attempted to resolve '%s' on nil environment!\n", name)
 		// Prevent panic, but this indicates a bug elsewhere.
-		return nil, false
+		return nil, false, false
 	}
 	if e.symbols == nil {
 		debugPrintf("// [Env Resolve] ERROR: env %p has nil symbols map!\n", e)
 		// Prevent panic, indicate bug.
-		return nil, false
+		return nil, false, false
 	}
 	// --- END DEBUG ---
 
 	// Check current scope first
-	typ, ok := e.symbols[name]
+	info, ok := e.symbols[name]
 	if ok {
 		debugPrintf("// [Env Resolve] Found '%s' in env %p\n", name, e) // DEBUG
-		return typ, true
+		return info.Type, info.IsConst, true                            // Return type, const status, and found=true
 	}
 
 	// If not found and there's an outer scope, check there recursively
 	if e.outer != nil {
 		debugPrintf("// [Env Resolve] '%s' not in env %p, checking outer %p...\n", name, e, e.outer) // DEBUG
-		return e.outer.Resolve(name)
+		return e.outer.Resolve(name)                                                                 // Propagate results from outer scope
 	}
 
 	// Not found in any scope
 	debugPrintf("// [Env Resolve] '%s' not found in env %p (no outer)\n", name, e) // DEBUG
-	return nil, false
+	return nil, false, false                                                       // Return nil type, isConst=false, found=false
 }
 
 // ResolveType looks up a *type name* (could be alias or primitive) in the current environment and its outer scopes.
@@ -499,7 +530,7 @@ func (c *Checker) visit(node parser.Node) {
 		if tempType == nil {
 			tempType = types.Any // Fallback to Any
 		}
-		if !c.env.Define(node.Name.Value, tempType) {
+		if !c.env.Define(node.Name.Value, tempType, false) {
 			// If Define fails here, it's a true redeclaration error.
 			c.addError(node.Name, fmt.Sprintf("variable '%s' already declared in this scope", node.Name.Value))
 		}
@@ -559,14 +590,17 @@ func (c *Checker) visit(node parser.Node) {
 		// 4. UPDATE variable type in the current environment with the final type
 		// We use Define again which will overwrite the temporary type.
 		// --- DEBUG: Check types before and after update ---
-		currentType, _ := c.env.Resolve(node.Name.Value)
+		currentType, _, _ := c.env.Resolve(node.Name.Value)
 		debugPrintf("// [Checker LetStmt] Updating '%s'. Current type: %s, Final type: %s\n", node.Name.Value, currentType.String(), finalVariableType.String())
 		// --- END DEBUG ---
-		if !c.env.Define(node.Name.Value, finalVariableType) { // Use finalVariableType
-			debugPrintf("// [Checker LetStmt] WARNING: Re-Define failed unexpectedly for '%s'\n", node.Name.Value)
+		if !c.env.Update(node.Name.Value, finalVariableType) { // Use finalVariableType
+			debugPrintf("// [Checker LetStmt] WARNING: Update failed unexpectedly for '%s'\n", node.Name.Value)
+			// This might indicate the symbol wasn't found, which shouldn't happen here
+			// If it truly needs to be defined (e.g., recursive case refinement needed?),
+			// we might need more complex logic, but Update should work for simple inference.
 		}
 		// --- DEBUG: Check type after update ---
-		updatedType, _ := c.env.Resolve(node.Name.Value)
+		updatedType, _, _ := c.env.Resolve(node.Name.Value)
 		debugPrintf("// [Checker LetStmt] Updated '%s'. Type after update: %s\n", node.Name.Value, updatedType.String())
 		// --- END DEBUG ---
 
@@ -630,7 +664,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		// 4. Define variable in the current environment
-		if !c.env.Define(node.Name.Value, finalType) {
+		if !c.env.Define(node.Name.Value, finalType, true) {
 			c.addError(node.Name, fmt.Sprintf("constant '%s' already declared in this scope", node.Name.Value))
 		}
 		// Set computed type on the Name Identifier node itself
@@ -741,7 +775,7 @@ func (c *Checker) visit(node parser.Node) {
 		// 	return
 		// }
 
-		typ, found := c.env.Resolve(node.Value) // Use node.Value directly
+		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
 		if !found {
 			debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
 			c.addError(node, fmt.Sprintf("undefined variable: %s", node.Value))
@@ -759,6 +793,10 @@ func (c *Checker) visit(node parser.Node) {
 			// --- DEBUG: Explicit panic before return ---
 			// panic(fmt.Sprintf("Intentional panic after setting type for Identifier '%s'", node.Value))
 			// --- END DEBUG ---
+
+			// <<< ADD CONST CHECK FOR IDENTIFIER NODE >>>
+			// Store the const status on the identifier node itself for later use in assignment checks.
+			node.IsConstant = isConst // Re-enabled
 		}
 
 	case *parser.PrefixExpression:
@@ -993,7 +1031,7 @@ func (c *Checker) visit(node parser.Node) {
 		funcEnv := NewEnclosedEnvironment(originalEnv)
 		c.env = funcEnv
 		for i, nameNode := range paramNames {
-			if !funcEnv.Define(nameNode.Value, paramTypes[i]) {
+			if !funcEnv.Define(nameNode.Value, paramTypes[i], false) {
 				// This shouldn't happen if parser prevents duplicate param names
 				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
 			}
@@ -1006,7 +1044,7 @@ func (c *Checker) visit(node parser.Node) {
 				ParameterTypes: paramTypes,         // We know param types already
 				ReturnType:     expectedReturnType, // Use explicit annotation if present, else nil
 			}
-			if !funcEnv.Define(node.Name.Value, initialFuncType) {
+			if !funcEnv.Define(node.Name.Value, initialFuncType, false) {
 				// This might happen if a param has the same name as the function
 				c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared in this scope (parameter or function name conflict)", node.Name.Value))
 			}
@@ -1074,7 +1112,7 @@ func (c *Checker) visit(node parser.Node) {
 				panic("Checker originalEnv is nil before defining named func!")
 			}
 			// --- END DEBUG ---
-			if !originalEnv.Define(node.Name.Value, funcType) { // Use the final funcType here
+			if !originalEnv.Define(node.Name.Value, funcType, false) { // Use the final funcType here
 				c.addError(node.Name, fmt.Sprintf("function '%s' already declared in this scope", node.Name.Value))
 			}
 		}
@@ -1134,7 +1172,7 @@ func (c *Checker) visit(node parser.Node) {
 		funcEnv := NewEnclosedEnvironment(originalEnv)
 		c.env = funcEnv
 		for i, nameNode := range paramNames {
-			if !funcEnv.Define(nameNode.Value, paramTypes[i]) {
+			if !funcEnv.Define(nameNode.Value, paramTypes[i], false) {
 				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
 			}
 		}
@@ -1346,6 +1384,19 @@ func (c *Checker) visit(node parser.Node) {
 		c.visit(node.Left)
 		lhsType := node.Left.GetComputedType() // Assume it was found (handled by identifier visit)
 
+		// <<< NEW: Check if LHS is const >>>
+		if identLHS, ok := node.Left.(*parser.Identifier); ok {
+			// debugPrintf("// [Checker Assign] Checking const status for LHS: %s\\n", identLHS.Value) // REMOVED DEBUG
+			_, isConst, found := c.env.Resolve(identLHS.Value) // Resolve again to get const status
+			// debugPrintf("// [Checker Assign] Resolve result: isConst=%v, found=%v\\n", isConst, found)      // REMOVED DEBUG
+			if found && isConst {
+				// debugPrintf("// [Checker Assign] Adding const assignment error for %s\\n", identLHS.Value) // REMOVED DEBUG
+				c.addError(node.Left, fmt.Sprintf("cannot assign to constant variable '%s'", identLHS.Value))
+				// Don't return, still check RHS type and set overall type
+			}
+		}
+		// <<< END CONST CHECK >>>
+
 		// Visit RHS value
 		c.visit(node.Value)
 		rhsType := node.Value.GetComputedType()
@@ -1402,10 +1453,22 @@ func (c *Checker) visit(node parser.Node) {
 		c.visit(node.Condition)
 
 	case *parser.ForStatement:
+		// --- UPDATED: Handle For Statement Scope ---
+		// 1. Create a new enclosed environment for the loop
+		originalEnv := c.env
+		loopEnv := NewEnclosedEnvironment(originalEnv)
+		c.env = loopEnv
+		debugPrintf("// [Checker ForStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
+
+		// 2. Visit parts within the loop scope
 		c.visit(node.Initializer)
 		c.visit(node.Condition)
 		c.visit(node.Update)
 		c.visit(node.Body)
+
+		// 3. Restore the outer environment
+		c.env = originalEnv
+		debugPrintf("// [Checker ForStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
 
 	// --- Loop Control (No specific type checking needed?) ---
 	case *parser.BreakStatement:

@@ -178,11 +178,12 @@ func (es *ExpressionStatement) String() string {
 
 // --- Expression Nodes ---
 
-// Identifier represents an identifier (variable name, function name, type name).
+// Identifier represents an identifier in the source code.
 type Identifier struct {
-	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.IDENT token
-	Value          string      // The name of the identifier
+	BaseExpression // Embed base for ComputedType
+	Token          lexer.Token
+	Value          string // The name of the identifier
+	IsConstant     bool   // Populated by Type Checker
 }
 
 func (i *Identifier) expressionNode()      {}
