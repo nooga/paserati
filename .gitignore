@@ -24,3 +24,5 @@ go.work
 *.swo 
 pkg/.DS_Store
 paserati
+
+*.baseline
