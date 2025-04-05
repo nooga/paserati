@@ -124,34 +124,14 @@ func TestScripts(t *testing.T) {
 				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
 			}
 
-			// --- ADDED: Print Disassembly ---
-			// t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
-			// 	file.Name(), chunk.DisassembleChunk(file.Name()))
-			// --- END ADDED ---
+			if true {
+				t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
+					file.Name(), chunk.DisassembleChunk(file.Name()))
+			}
 
 			// 4. Run VM
 			vmInstance := vm.NewVM()
-			// Remove stdout/stderr capture
-			// oldStdout := os.Stdout
-			// r, w, _ := os.Pipe()
-			// os.Stdout = w
-			// oldStderr := os.Stderr
-			// rErr, wErr, _ := os.Pipe()
-			// os.Stderr = wErr
-
 			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
-
-			// Remove stdout/stderr restoration and reading
-			// w.Close()
-			// os.Stdout = oldStdout
-			// wErr.Close()
-			// os.Stderr = oldStderr
-			// var vmStdout bytes.Buffer
-			// _, _ = vmStdout.ReadFrom(r)
-			// actualOutput := strings.TrimSpace(vmStdout.String())
-			// var vmStderr bytes.Buffer
-			// _, _ = vmStderr.ReadFrom(rErr)
-			// actualRuntimeError := strings.TrimSpace(vmStderr.String())
 
 			// 5. Check Runtime Results
 			switch expectation.ResultType {
