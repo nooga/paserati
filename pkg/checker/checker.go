@@ -9,7 +9,7 @@ import (
 	"paserati/pkg/vm"
 )
 
-const checkerDebug = false
+const checkerDebug = true
 
 func debugPrintf(format string, args ...interface{}) {
 	if checkerDebug {
@@ -922,6 +922,7 @@ func (c *Checker) visit(node parser.Node) {
 		isAnyOperand := widenedLeftType == types.Any || widenedRightType == types.Any
 
 		if widenedLeftType != nil && widenedRightType != nil { // Proceed only if operand types are known
+			debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
 			switch node.Operator {
 			case "+":
 				if isAnyOperand {
@@ -947,6 +948,18 @@ func (c *Checker) visit(node parser.Node) {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
+			// --- NEW: Handle % and ** type checking ---
+			case "%", "**": // Ensure both % and ** are listed here
+				debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
+				if isAnyOperand {
+					resultType = types.Any
+				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
+					resultType = types.Number
+				} else {
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					// Keep resultType = types.Any
+				}
+			// --- END NEW ---
 			case "<", ">", "<=", ">=":
 				if isAnyOperand {
 					resultType = types.Any // Comparison with any results in any? Or boolean? Let's try Any first.
@@ -981,6 +994,7 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				}
 			default:
+				debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
 				c.addError(node.Right, fmt.Sprintf("unsupported infix operator: %s", node.Operator))
 			}
 		} // else: Error already reported during operand check or types were nil

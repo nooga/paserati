@@ -53,6 +53,14 @@ const (
 	ASTERISK_ASSIGN TokenType = "*=" // Added
 	SLASH_ASSIGN    TokenType = "/=" // Added
 
+	// --- NEW: Remainder/Exponent Operators ---
+	REMAINDER TokenType = "%"
+	EXPONENT  TokenType = "**"
+
+	// --- NEW: Remainder/Exponent Assign ---
+	REMAINDER_ASSIGN TokenType = "%="
+	EXPONENT_ASSIGN  TokenType = "**="
+
 	// Increment/Decrement
 	INC TokenType = "++" // Added
 	DEC TokenType = "--" // Added
@@ -300,14 +308,34 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: MINUS, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '*':
-		if l.peekChar() == '=' { // Check for *=
-			l.readChar()                                // Consume '='
-			literal := l.input[startPos : l.position+1] // Read the actual '*='
-			l.readChar()                                // Advance past '='
+		if l.peekChar() == '*' { // Potential ** or **=
+			// Look two chars ahead for '='
+			secondCharPos := l.readPosition + 1
+			var thirdChar byte = 0
+			if secondCharPos < len(l.input) {
+				thirdChar = l.input[secondCharPos]
+			}
+
+			if thirdChar == '=' { // Check for **=
+				l.readChar()                                // Consume second *
+				l.readChar()                                // Consume =
+				literal := l.input[startPos : l.position+1] // Read "**="
+				l.readChar()                                // Advance past =
+				tok = Token{Type: EXPONENT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // Just **
+				l.readChar()                                // Consume second *
+				literal := l.input[startPos : l.position+1] // Read "**"
+				l.readChar()                                // Advance past second *
+				tok = Token{Type: EXPONENT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
+		} else if l.peekChar() == '=' { // Check for *=
+			l.readChar()                                // Consume =
+			literal := l.input[startPos : l.position+1] // Read "*="
+			l.readChar()                                // Advance past =
 			tok = Token{Type: ASTERISK_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else {
-			literal := string(l.ch) // Just '*'
-			l.readChar()            // Advance past '*'
+		} else { // Just *
+			literal := string(l.ch) // Read "*"
+			l.readChar()            // Advance past *
 			tok = Token{Type: ASTERISK, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '/':
@@ -471,6 +499,17 @@ func (l *Lexer) NextToken() Token {
 			literal := string(l.ch)
 			l.readChar()
 			tok = Token{Type: DOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		}
+	case '%':
+		if l.peekChar() == '=' { // Check for %=
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read "%="
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: REMAINDER_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		} else {
+			literal := string(l.ch) // Just '%'
+			l.readChar()            // Advance past '%'
+			tok = Token{Type: REMAINDER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case 0: // EOF
 		tok = Token{Type: EOF, Literal: "", Line: startLine, Column: startCol, StartPos: startPos, EndPos: startPos}

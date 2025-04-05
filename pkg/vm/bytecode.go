@@ -42,6 +42,10 @@ const (
 	OpLessEqual      OpCode = 18 // Rx Ry Rz: Rx = (Ry <= Rz)
 	// Add GreaterEqual later if needed
 
+	// --- NEW: Remainder and Exponent Opcodes ---
+	OpRemainder OpCode = 31 // Rx Ry Rz: Rx = Ry % Rz (Assuming next available number)
+	OpExponent  OpCode = 32 // Rx Ry Rz: Rx = Ry ** Rz (Assuming next available number)
+
 	// Function/Call related
 	OpCall   OpCode = 19 // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
 	OpReturn OpCode = 20 // Rx: Return value from register Rx.
@@ -124,6 +128,10 @@ func (op OpCode) String() string {
 		return "OpJump"
 	case OpLessEqual:
 		return "OpLessEqual"
+	case OpRemainder:
+		return "OpRemainder"
+	case OpExponent:
+		return "OpExponent"
 	case OpMakeArray:
 		return "OpMakeArray"
 	case OpGetIndex:

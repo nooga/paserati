@@ -285,6 +285,105 @@ func TestOperatorsAndLiterals(t *testing.T) {
 			expect:             "cannot assign to constant variable 'x'",
 			expectCompileError: true,
 		},
+
+		// --- NEW: Remainder Operator (%) ---
+		{
+			name:   "Remainder Simple",
+			input:  "10 % 3;",
+			expect: "1",
+		},
+		{
+			name:   "Remainder Zero",
+			input:  "5 % 5;",
+			expect: "0",
+		},
+		{
+			name:   "Remainder Float", // JS % is remainder, not modulo
+			input:  "5.5 % 2;",
+			expect: "1.5",
+		},
+		{
+			name:   "Remainder Negative",
+			input:  "-10 % 3;",
+			expect: "-1",
+		},
+		{
+			name:    "Remainder By Zero",
+			input:   "10 % 0;",
+			expect:  "Division by zero (in remainder operation)",
+			isError: true,
+		},
+		{
+			name:   "Remainder Precedence",
+			input:  "5 + 10 % 4;", // 10 % 4 = 2, 5 + 2 = 7
+			expect: "7",
+		},
+
+		// --- NEW: Exponentiation Operator (**) ---
+		{
+			name:   "Exponent Simple",
+			input:  "2 ** 3;",
+			expect: "8",
+		},
+		{
+			name:   "Exponent Fractional",
+			input:  "4 ** 0.5;",
+			expect: "2",
+		},
+		{
+			name:   "Exponent Zero",
+			input:  "10 ** 0;",
+			expect: "1",
+		},
+		{
+			name:   "Exponent One",
+			input:  "10 ** 1;",
+			expect: "10",
+		},
+		{
+			name:   "Exponent Negative Base", // (-2)**2 = 4
+			input:  "(-2) ** 2;",
+			expect: "4",
+		},
+		{
+			name:   "Exponent Negative Base Odd", // (-2)**3 = -8
+			input:  "(-2) ** 3;",
+			expect: "-8",
+		},
+		{
+			name:   "Exponent Negative Exponent", // 2 ** -1 = 0.5
+			input:  "2 ** -1;",
+			expect: "0.5",
+		},
+		{
+			name:   "Exponent Precedence Left", // (2**3) * 4 = 8 * 4 = 32
+			input:  "2 ** 3 * 4;",
+			expect: "32",
+		},
+		{
+			name:   "Exponent Precedence Right", // 4 * 2**3 = 4 * 8 = 32
+			input:  "4 * 2 ** 3;",
+			expect: "32",
+		},
+		{
+			name:   "Exponent Associativity", // 2**(3**2) = 2**9 = 512 (Right-associative like JS/Python)
+			input:  "2 ** 3 ** 2;",
+			expect: "512",
+		},
+
+		// --- NEW: Remainder Assignment (%=) ---
+		{
+			name:   "CompAssign Remainder",
+			input:  "let x = 10; x %= 4; x;", // 10 % 4 = 2
+			expect: "2",
+		},
+
+		// --- NEW: Exponent Assignment (**=) ---
+		{
+			name:   "CompAssign Exponent",
+			input:  "let y = 3; y **= 3; y;", // 3 ** 3 = 27
+			expect: "27",
+		},
 	}
 
 	for _, tc := range testCases {

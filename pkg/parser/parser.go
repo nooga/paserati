@@ -56,6 +56,9 @@ const (
 	CALL        // myFunction(X)
 	INDEX       // array[index]
 	MEMBER      // object.property
+
+	// --- NEW: Precedence for exponentiation ---
+	POWER // **
 )
 
 // --- NEW: Type Precedence ---
@@ -94,6 +97,14 @@ var precedences = map[lexer.TokenType]int{
 	lexer.COALESCE:        COALESCE,
 	lexer.INC:             POSTFIX,
 	lexer.DEC:             POSTFIX,
+
+	// --- NEW: Add % and ** precedences ---
+	lexer.REMAINDER: PRODUCT, // % has same precedence as *, /
+	lexer.EXPONENT:  POWER,   // ** has higher precedence than *, /
+
+	// --- NEW: Add %= and **= precedences ---
+	lexer.REMAINDER_ASSIGN: ASSIGNMENT,
+	lexer.EXPONENT_ASSIGN:  ASSIGNMENT,
 }
 
 // NewParser creates a new Parser.
@@ -141,9 +152,13 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.MINUS_ASSIGN, p.parseAssignmentExpression)
 	p.registerInfix(lexer.ASTERISK_ASSIGN, p.parseAssignmentExpression)
 	p.registerInfix(lexer.SLASH_ASSIGN, p.parseAssignmentExpression)
+	p.registerInfix(lexer.REMAINDER_ASSIGN, p.parseAssignmentExpression)
+	p.registerInfix(lexer.EXPONENT_ASSIGN, p.parseAssignmentExpression)
 	p.registerInfix(lexer.LOGICAL_AND, p.parseInfixExpression)
 	p.registerInfix(lexer.LOGICAL_OR, p.parseInfixExpression)
 	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)
+	p.registerInfix(lexer.REMAINDER, p.parseInfixExpression)
+	p.registerInfix(lexer.EXPONENT, p.parseInfixExpression)
 	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression) // Added x++
 	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression) // Added x--
 	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression)    // Added arr[idx]
@@ -352,7 +367,7 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
 		// Should not happen if called correctly
 		msg := fmt.Sprintf("internal parser error: parseFunctionTypeParameterList called without LPAREN, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
-		return nil, fmt.Errorf(msg)
+		return nil, fmt.Errorf("%s", msg)
 	}
 
 	// Handle empty parameter list: () => ...
@@ -1105,16 +1120,29 @@ func (p *Parser) parseIfExpression() Expression {
 
 // parseInfixExpression handles expressions like left op right
 func (p *Parser) parseInfixExpression(left Expression) Expression {
+	debugPrint("parseInfixExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
 	expression := &InfixExpression{
 		Token:    p.curToken, // The operator token
 		Operator: p.curToken.Literal,
 		Left:     left,
 	}
 
+	// --- Associativity Fix ---
 	precedence := p.curPrecedence()
+	if expression.Token.Type == lexer.EXPONENT { // Check the actual operator token type
+		precedence-- // For right-associative **, parse right-hand side with lower precedence
+		debugPrint("parseInfixExpression: Right-associative '%s', parsing right with precedence %d", expression.Operator, precedence)
+	} else {
+		debugPrint("parseInfixExpression: Left-associative '%s', parsing right with precedence %d", expression.Operator, precedence)
+	}
 	p.nextToken()                                    // Consume the operator
-	expression.Right = p.parseExpression(precedence) // Parse the right operand
+	expression.Right = p.parseExpression(precedence) // Parse the right operand with potentially adjusted precedence
 
+	if expression.Right == nil {
+		debugPrint("parseInfixExpression: Right expression was nil, returning nil.")
+		return nil // Error occurred parsing right side
+	}
+	debugPrint("parseInfixExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
 	return expression
 }
 
