@@ -455,48 +455,27 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	// --- NEW: Array/Index ---
 	case *parser.ArrayLiteral:
 		return c.compileArrayLiteral(node)
+	case *parser.ObjectLiteral: // <<< NEW
+		return c.compileObjectLiteral(node)
 	case *parser.IndexExpression:
 		return c.compileIndexExpression(node)
-	// --- End Array/Index ---
+		// --- End Array/Index ---
 
-	// --- NEW: Member Expression ---
+		// --- Member Expression ---
 	case *parser.MemberExpression:
-		// 1. Compile the object part
-		err := c.compileNode(node.Object)
-		if err != nil {
-			return err
-		}
-		objectReg := c.regAlloc.Current() // Register holding the object
-
-		// 2. Check property name and object type using the checker's results
-		propertyName := node.Property.Value
-		objectStaticType := node.Object.GetComputedType()
-
-		if objectStaticType == nil {
-			return NewCompileError(node, "compiler internal error: checker did not provide type for object")
-		}
-
-		// <<< Widen the retrieved static type >>>
-		widenedObjectType := types.GetWidenedType(objectStaticType)
-
-		if propertyName == "length" {
-			// Check if the *widened* static type allows .length
-			_, isArray := widenedObjectType.(*types.ArrayType)
-			if isArray || widenedObjectType == types.String {
-				// 3. Emit OpGetLength
-				destReg := c.regAlloc.Alloc()
-				c.emitGetLength(destReg, objectReg, node.Token.Line)
-				c.regAlloc.SetCurrent(destReg) // Result is now in destReg
-				return nil
-			} else {
-				// Type checker should prevent this, but add safety error
-				return NewCompileError(node, fmt.Sprintf("compiler error: type '%s' (widened from '%s') has no property 'length'", widenedObjectType.String(), objectStaticType.String()))
+		// <<< UPDATED: Call the new helper function >>>
+		err := c.compileMemberExpression(node)
+		if err == nil {
+			// If successful, the result register is already set by compileMemberExpression
+			// We just need to update the lastExpr tracking for top-level scripts
+			if c.enclosing == nil {
+				c.lastExprReg = c.regAlloc.Current()
+				c.lastExprRegValid = true
+				debugPrintf("// DEBUG MemberExpr (Top Level): Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg)
 			}
-		} else {
-			// TODO: Handle other properties later (OpGetProperty?)
-			return NewCompileError(node, fmt.Sprintf("compiler error: unsupported property '%s' at line %d", propertyName, node.Token.Line))
 		}
-	// --- END NEW ---
+		return err // Return any error encountered during compilation
+		// --- END Member Expression ---
 
 	default:
 		// Add check here? If type is FunctionLiteral and wasn't caught above, it's an error.
@@ -2002,35 +1981,63 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral) errors.Paserat
 }
 
 func (c *Compiler) compileIndexExpression(node *parser.IndexExpression) errors.PaseratiError {
-	// 1. Compile the expression being indexed (the array)
+	line := GetTokenFromNode(node).Line                                  // Use '[' token line
+	debugPrintf(">>> Enter compileIndexExpression: %s\n", node.String()) // <<< DEBUG ENTRY
+
+	// 1. Compile the expression being indexed (the base: array/object/string)
+	debugPrintf("--- Compiling Base: %s\n", node.Left.String()) // <<< DEBUG
 	err := c.compileNode(node.Left)
 	if err != nil {
-		return err
+		debugPrintf("<<< Exit compileIndexExpression (Error compiling base)\n") // <<< DEBUG EXIT
+		return NewCompileError(node.Left, "error compiling base of index expression").CausedBy(err)
 	}
-	arrayReg := c.regAlloc.Current()
+	// <<< DEBUG BASE RESULT >>>
+	baseRegFromState := c.lastExprReg
+	baseRegFromCurrent := c.regAlloc.Current()
+	debugPrintf("--- Base Compiled. lastExprReg: %s, lastExprRegValid: %t, regAlloc.Current(): %s\n", baseRegFromState, c.lastExprRegValid, baseRegFromCurrent)
+	// --- Temporarily use Current() as per existing code for testing ---
+	arrayReg := c.regAlloc.Current()                                  // Keep existing logic for now
+	debugPrintf("--- Using arrayReg = %s (from Current)\n", arrayReg) // <<< DEBUG WHICH REGISTER IS CHOSEN
 
 	// 2. Compile the index expression
+	debugPrintf("--- Compiling Index: %s\n", node.Index.String()) // <<< DEBUG
 	err = c.compileNode(node.Index)
 	if err != nil {
-		return err
+		debugPrintf("<<< Exit compileIndexExpression (Error compiling index)\n") // <<< DEBUG EXIT
+		// Note: Need to consider freeing baseReg here if it was allocated and valid
+		return NewCompileError(node.Index, "error compiling index part of index expression").CausedBy(err)
 	}
-	indexReg := c.regAlloc.Current()
+	// <<< DEBUG INDEX RESULT >>>
+	indexRegFromState := c.lastExprReg
+	indexRegFromCurrent := c.regAlloc.Current()
+	debugPrintf("--- Index Compiled. lastExprReg: %s, lastExprRegValid: %t, regAlloc.Current(): %s\n", indexRegFromState, c.lastExprRegValid, indexRegFromCurrent)
+	// --- Temporarily use Current() as per existing code for testing ---
+	indexReg := c.regAlloc.Current()                                  // Keep existing logic for now
+	debugPrintf("--- Using indexReg = %s (from Current)\n", indexReg) // <<< DEBUG WHICH REGISTER IS CHOSEN
 
 	// 3. Allocate register for the result
 	destReg := c.regAlloc.Alloc()
+	debugPrintf("--- Allocated destReg = %s\n", destReg) // <<< DEBUG DEST REG
 
 	// 4. Emit OpGetIndex
-	c.emitOpCode(vm.OpGetIndex, node.Token.Line) // Use '[' token line
+	debugPrintf("--- Emitting OpGetIndex %s, %s, %s (Dest, Base, Index)\n", destReg, arrayReg, indexReg) // <<< DEBUG EMIT
+	c.emitOpCode(vm.OpGetIndex, line)
 	c.emitByte(byte(destReg))
-	c.emitByte(byte(arrayReg))
-	c.emitByte(byte(indexReg))
+	c.emitByte(byte(arrayReg)) // Using potentially wrong base register
+	c.emitByte(byte(indexReg)) // Using potentially wrong index register
 
-	// Free operand registers now that the result is in destReg
-	c.regAlloc.Free(arrayReg) // REMOVED: Too aggressive, arrayReg might be needed again
-	c.regAlloc.Free(indexReg) // REMOVED: Too aggressive, indexReg might be needed again
+	// Free operand registers (REMOVED in original code - keep removed for now)
+	// c.regAlloc.Free(arrayReg)
+	// c.regAlloc.Free(indexReg)
 
 	// Result is now in destReg
-	c.regAlloc.SetCurrent(destReg)
+	c.regAlloc.SetCurrent(destReg) // Existing logic might rely on this?
+
+	// --- Missing state update for the overall expression ---
+	// c.lastExprReg = destReg
+	// c.lastExprRegValid = true
+
+	debugPrintf("<<< Exit compileIndexExpression (Success)\n") // <<< DEBUG EXIT
 	return nil
 }
 
@@ -2137,6 +2144,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token // '?' token
 	case *parser.ArrayLiteral:
 		return n.Token // '[' token
+	case *parser.ObjectLiteral:
+		return n.Token // '{' token
 	case *parser.IndexExpression:
 		return n.Token // '[' token
 	case *parser.MemberExpression:
@@ -2302,6 +2311,63 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 	return nil
 }
 
+// --- REVISED: compileObjectLiteral (One-by-One Property Set) ---
+func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral) errors.PaseratiError {
+	debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
+	line := GetTokenFromNode(node).Line
+
+	// 1. Create an empty object
+	objReg := c.regAlloc.Alloc()
+	c.emitMakeEmptyObject(objReg, line)
+
+	// 2. Set properties one by one
+	for _, prop := range node.Properties {
+		// Compile Key (must evaluate to string constant for OpSetProp in Phase 1)
+		var keyConstIdx uint16 = 0xFFFF // Invalid index marker
+		switch keyNode := prop.Key.(type) {
+		case *parser.Identifier:
+			keyStr := keyNode.Value
+			keyConstIdx = c.chunk.AddConstant(vm.String(keyStr))
+		case *parser.StringLiteral:
+			keyStr := keyNode.Value
+			keyConstIdx = c.chunk.AddConstant(vm.String(keyStr))
+		case *parser.NumberLiteral: // Allow number literal keys, convert to string
+			keyStr := keyNode.TokenLiteral()
+			keyConstIdx = c.chunk.AddConstant(vm.String(keyStr))
+		default:
+			// TODO: Handle computed keys [expr]. For Phase 1, only Ident/String/Number keys.
+			// Computed keys would require compiling the expression, ensuring it's a string/number,
+			// and potentially a different OpSetComputedProp or dynamic lookup within OpSetProp.
+			return NewCompileError(prop.Key, fmt.Sprintf("compiler only supports identifier, string, or number literal keys in object literals (Phase 1), got %T", prop.Key))
+		}
+
+		// Compile Value into a temporary register
+		err := c.compileNode(prop.Value)
+		if err != nil {
+			return err
+		}
+		// if !c.lastExprRegValid {
+		// 	return NewCompileError(prop.Value, "expected expression for object property value")
+		// }
+		valueReg := c.regAlloc.Current() // Register holding the compiled value
+		debugPrintf("--- OL Value Compiled. lastExprReg: %s, lastExprRegValid: %t, regAlloc.Current(): %s\n", valueReg, c.lastExprRegValid, c.regAlloc.Current())
+
+		// Emit OpSetProp: objReg[keyConstIdx] = valueReg
+		c.emitSetProp(objReg, valueReg, keyConstIdx, line)
+
+		// Free the temporary value register if it's safe to do so
+		// (Depends on how regAlloc and expression compilation manage registers.
+		// Assuming lastExprReg is available for freeing after use here).
+		c.regAlloc.Free(valueReg) // Free the register used for the value
+	}
+
+	// The object is fully constructed in objReg
+	c.regAlloc.SetCurrent(objReg)
+	c.lastExprReg = objReg
+	c.lastExprRegValid = true
+	return nil
+}
+
 // --- NEW: Loop Context Helpers ---
 
 // pushLoopContext adds a new loop context to the stack.
@@ -2407,4 +2473,93 @@ func (c *Compiler) emitUnsignedShiftRight(dest, left, right Register, line int) 
 	c.emitByte(byte(right))
 }
 
-// --- END NEW ---
+// emitMakeEmptyObject emits OpMakeEmptyObject DestReg
+func (c *Compiler) emitMakeEmptyObject(dest Register, line int) {
+	c.emitOpCode(vm.OpMakeEmptyObject, line) // Use the placeholder opcode
+	c.emitByte(byte(dest))
+}
+
+// emitGetProp emits OpGetProp DestReg, ObjReg, NameConstIdx(Uint16)
+func (c *Compiler) emitGetProp(dest, obj Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpGetProp, line) // Use the placeholder opcode
+	c.emitByte(byte(dest))
+	c.emitByte(byte(obj))
+	c.emitUint16(nameConstIdx)
+}
+
+// emitSetProp emits OpSetProp ObjReg, ValueReg, NameConstIdx(Uint16)
+// Note: The order ObjReg, ValueReg, NameIdx seems reasonable for VM stack manipulation.
+func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpSetProp, line) // Use the placeholder opcode
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
+// --- END REVISED/NEW ---
+
+// compileMemberExpression compiles expressions like obj.prop or obj['prop'] (latter is future work)
+func (c *Compiler) compileMemberExpression(node *parser.MemberExpression) errors.PaseratiError {
+	// 1. Compile the object part
+	err := c.compileNode(node.Object)
+	if err != nil {
+		return NewCompileError(node.Object, "error compiling object part of member expression").CausedBy(err)
+	}
+	objectReg := c.regAlloc.Current() // Register holding the object
+
+	// 2. Get Property Name (Assume Identifier for now: obj.prop)
+	propIdent := node.Property
+	// if !ok {
+	// 	// TODO: Handle computed member access obj[expr] later.
+	// 	return NewCompileError(node.Property, "compiler only supports identifier properties for member access (e.g., obj.prop)")
+	// }
+	propertyName := propIdent.Value
+
+	// 3. <<< NEW: Special case for .length >>>
+	if propertyName == "length" {
+		// Check the static type provided by the checker
+		objectStaticType := node.Object.GetComputedType()
+		if objectStaticType == nil {
+			// This might happen if type checking failed earlier, but Compile should have caught it.
+			// Still, good to have a safeguard.
+			return NewCompileError(node.Object, "compiler internal error: checker did not provide type for object in member expression")
+		}
+
+		// Widen the type to handle cases like `string | null` having `.length`
+		widenedObjectType := types.GetWidenedType(objectStaticType)
+
+		// Check if the widened type supports .length
+		_, isArray := widenedObjectType.(*types.ArrayType)
+		if isArray || widenedObjectType == types.String {
+			// Emit specialized OpGetLength
+			destReg := c.regAlloc.Alloc()
+			c.emitGetLength(destReg, objectReg, node.Token.Line)
+			c.regAlloc.SetCurrent(destReg) // Result is now in destReg
+			// Free objectReg? Maybe not needed if GetLength copies or doesn't invalidate.
+			// c.regAlloc.Free(objectReg)
+			return nil // Handled by OpGetLength
+		}
+		// If type doesn't support .length, fall through to generic OpGetProp
+		// The type checker *should* have caught this, but OpGetProp will likely return undefined/error at runtime.
+		debugPrintf("// DEBUG CompileMember: .length requested on non-array/string type %s (widened from %s). Falling through to OpGetProp.\n",
+			widenedObjectType.String(), objectStaticType.String())
+	}
+	// --- END Special case for .length ---
+
+	// 4. Add property name string to constant pool (for generic OpGetProp)
+	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+
+	// 5. Allocate destination register for the result
+	destReg := c.regAlloc.Alloc()
+
+	// 6. Emit OpGetProp (Generic case)
+	c.emitGetProp(destReg, objectReg, nameConstIdx, node.Token.Line) // Use '.' token line
+
+	// Free the object register? Maybe not, it might be needed later.
+	// c.regAlloc.Free(objectReg)
+
+	// Result is now in destReg
+	c.regAlloc.SetCurrent(destReg) // Set current register
+	// Note: We don't need to set lastExprReg/Valid here, as compileNode will handle it.
+	return nil
+}

@@ -5,6 +5,8 @@ import (
 	"math"
 	"os"
 	"paserati/pkg/errors"
+	"strconv"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -657,92 +659,138 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 		case OpGetIndex:
 			destReg := code[ip]
-			arrayReg := code[ip+1]
+			baseReg := code[ip+1] // Renamed from arrayReg for clarity
 			indexReg := code[ip+2]
 			ip += 3
 
-			arrayVal := registers[arrayReg]
+			baseVal := registers[baseReg]
 			indexVal := registers[indexReg]
 
-			if !IsArray(arrayVal) {
+			// --- MODIFIED: Handle Array, Object, String ---
+			switch baseVal.Type {
+			case TypeArray:
+				if !IsNumber(indexVal) {
+					frame.ip = ip
+					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
+					return status, Undefined()
+				}
+				arr := AsArray(baseVal)
+				idx := int(AsNumber(indexVal))
+				if idx < 0 || idx >= len(arr.Elements) {
+					registers[destReg] = Undefined() // Out of bounds -> undefined
+				} else {
+					registers[destReg] = arr.Elements[idx]
+				}
+
+			case TypeObject: // <<< NEW
+				obj := AsObject(baseVal)
+				var key string
+				switch indexVal.Type {
+				case TypeString:
+					key = AsString(indexVal)
+				case TypeNumber:
+					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
+					// Or: key = fmt.Sprintf("%v", AsNumber(indexVal))
+				default:
+					frame.ip = ip
+					status := vm.runtimeError("Object index must be a string or number, got '%v'", indexVal.Type)
+					return status, Undefined()
+				}
+				propValue, ok := obj.Properties[key]
+				if !ok {
+					registers[destReg] = Undefined() // Property not found -> undefined
+				} else {
+					registers[destReg] = propValue
+				}
+
+			case TypeString: // <<< NEW (or ensure existing logic is here)
+				if !IsNumber(indexVal) {
+					frame.ip = ip
+					status := vm.runtimeError("String index must be a number, got '%v'", indexVal.Type)
+					return status, Undefined()
+				}
+				str := AsString(baseVal)
+				idx := int(AsNumber(indexVal))
+				runes := []rune(str)
+				if idx < 0 || idx >= len(runes) {
+					registers[destReg] = Undefined() // Out of bounds -> undefined
+				} else {
+					registers[destReg] = String(string(runes[idx])) // Return char as string
+				}
+
+			default:
 				frame.ip = ip
-				status := vm.runtimeError("Cannot index non-array type '%v'", arrayVal.Type)
+				status := vm.runtimeError("Cannot index non-array/object/string type '%v' at IP %d", baseVal.Type, ip)
 				return status, Undefined()
 			}
-			if !IsNumber(indexVal) {
-				frame.ip = ip
-				status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
-				return status, Undefined()
-			}
-
-			arr := AsArray(arrayVal)
-			idx := int(AsNumber(indexVal)) // TODO: Handle non-integer indices?
-
-			// Bounds check
-			if idx < 0 || idx >= len(arr.Elements) {
-				frame.ip = ip
-				// Return undefined for out-of-bounds access, like JS?
-				// Or throw runtime error? Let's return undefined for now.
-				registers[destReg] = Undefined()
-			} else {
-				registers[destReg] = arr.Elements[idx]
-			}
+			// --- END MODIFICATION ---
 
 		case OpSetIndex:
-			arrayReg := code[ip]
+			baseReg := code[ip] // Renamed from arrayReg
 			indexReg := code[ip+1]
 			valueReg := code[ip+2]
 			ip += 3
 
-			arrayVal := registers[arrayReg]
+			baseVal := registers[baseReg]
 			indexVal := registers[indexReg]
 			valueVal := registers[valueReg]
 
-			if !IsArray(arrayVal) {
-				frame.ip = ip
-				status := vm.runtimeError("Cannot set index on non-array type '%v'", arrayVal.Type)
-				return status, Undefined()
-			}
-			if !IsNumber(indexVal) {
-				frame.ip = ip
-				status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
-				return status, Undefined()
-			}
-
-			arr := AsArray(arrayVal)
-			idx := int(AsNumber(indexVal)) // TODO: Handle non-integer indices? Handle potential float truncation?
-
-			// --- NEW: Handle Array Expansion ---
-			if idx < 0 {
-				frame.ip = ip
-				// Negative indices are invalid
-				status := vm.runtimeError("Array index cannot be negative, got %d", idx)
-				return status, Undefined()
-			} else if idx < len(arr.Elements) {
-				// Index is within current bounds: Overwrite existing element
-				arr.Elements[idx] = valueVal
-			} else if idx == len(arr.Elements) {
-				// Index is exactly at the end: Append the new element
-				arr.Elements = append(arr.Elements, valueVal)
-			} else { // idx > len(arr.Elements)
-				// Index is beyond the end: Expand array and then append
-				neededCapacity := idx + 1
-				if cap(arr.Elements) < neededCapacity {
-					// Reallocate with enough capacity if needed
-					newElements := make([]Value, len(arr.Elements), neededCapacity)
-					copy(newElements, arr.Elements)
-					arr.Elements = newElements
+			// --- MODIFIED: Handle Array and Object ---
+			switch baseVal.Type {
+			case TypeArray:
+				if !IsNumber(indexVal) {
+					frame.ip = ip
+					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
+					return status, Undefined()
 				}
-				// Fill the gap with Undefined values
-				for i := len(arr.Elements); i < idx; i++ {
-					arr.Elements = append(arr.Elements, Undefined())
-				}
-				// Append the actual value at the target index
-				arr.Elements = append(arr.Elements, valueVal)
-			}
-			// --- END NEW ---
 
-			// OpSetIndex itself doesn't produce a result register, the assignment expression does (valueReg)
+				arr := AsArray(baseVal)
+				idx := int(AsNumber(indexVal))
+
+				// Handle Array Expansion (keep existing logic)
+				if idx < 0 {
+					frame.ip = ip
+					status := vm.runtimeError("Array index cannot be negative, got %d", idx)
+					return status, Undefined()
+				} else if idx < len(arr.Elements) {
+					arr.Elements[idx] = valueVal
+				} else if idx == len(arr.Elements) {
+					arr.Elements = append(arr.Elements, valueVal)
+				} else {
+					neededCapacity := idx + 1
+					if cap(arr.Elements) < neededCapacity {
+						newElements := make([]Value, len(arr.Elements), neededCapacity)
+						copy(newElements, arr.Elements)
+						arr.Elements = newElements
+					}
+					for i := len(arr.Elements); i < idx; i++ {
+						arr.Elements = append(arr.Elements, Undefined())
+					}
+					arr.Elements = append(arr.Elements, valueVal)
+				}
+
+			case TypeObject: // <<< NEW
+				obj := AsObject(baseVal)
+				var key string
+				switch indexVal.Type {
+				case TypeString:
+					key = AsString(indexVal)
+				case TypeNumber:
+					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
+				default:
+					frame.ip = ip
+					status := vm.runtimeError("Object index must be a string or number, got '%v'", indexVal.Type)
+					return status, Undefined()
+				}
+				// Set the property on the object's map
+				obj.Properties[key] = valueVal
+
+			default:
+				frame.ip = ip
+				status := vm.runtimeError("Cannot set index on non-array/object type '%v'", baseVal.Type)
+				return status, Undefined()
+			}
+			// --- END MODIFICATION ---
 
 		// --- End Array Opcodes ---
 
@@ -853,6 +901,119 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// No need to assign to 'result' variable here
 			}
 			// No shared assignment needed here anymore
+
+		// --- NEW: Object Opcodes ---
+		case OpMakeEmptyObject:
+			destReg := code[ip]
+			ip++
+			// Create a new empty object value
+			registers[destReg] = ObjectV(&Object{Properties: make(map[string]Value)}) // Use constructor
+
+		case OpGetProp:
+			destReg := code[ip]
+			objReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get object and property name values
+			objVal := registers[objReg]
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
+				return status, Undefined()
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) { // Compiler should ensure this
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
+				return status, Undefined()
+			}
+			propName := AsString(nameVal)
+
+			// --- Special handling for .length ---
+			// Check the *original* value type before checking if it's an Object type
+			if propName == "length" {
+				switch objVal.Type {
+				case TypeArray:
+					arr := AsArray(objVal)
+					registers[destReg] = Number(float64(len(arr.Elements)))
+					continue // Skip general object lookup
+				case TypeString:
+					str := AsString(objVal)
+					// Use rune count for correct length of multi-byte strings
+					registers[destReg] = Number(float64(utf8.RuneCountInString(str)))
+					continue // Skip general object lookup
+				}
+				// If not Array or String, fall through to general object property lookup
+			}
+
+			// General property lookup
+			if !IsObject(objVal) {
+				frame.ip = ip
+				// Attempting to get property on non-object (and not handled .length)
+				// In JS, this often results in undefined or error depending on base type (e.g. null/undefined)
+				// Let's return undefined for now.
+				registers[destReg] = Undefined()
+				// Alternatively, throw error:
+				// status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.Type)
+				// return status, Undefined()
+				continue // Skip rest of logic for this case
+			}
+
+			obj := AsObject(objVal)
+			value, ok := obj.Properties[propName]
+			if ok {
+				registers[destReg] = value
+			} else {
+				// Property not found on object
+				registers[destReg] = Undefined()
+			}
+
+		case OpSetProp:
+			objReg := code[ip]   // Register holding the object
+			valReg := code[ip+1] // Register holding the value to set
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get object, property name, and value
+			objVal := registers[objReg]
+			valueToSet := registers[valReg]
+
+			// Check if the base is actually an object
+			if !IsObject(objVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot set property on non-object type '%v'", objVal.Type)
+				return status, Undefined() // Error: Cannot set property on non-object
+			}
+
+			// Get property name from constants
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
+				return status, Undefined()
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) { // Compiler should ensure this
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
+				return status, Undefined()
+			}
+			propName := AsString(nameVal)
+
+			// Get the underlying object map
+			obj := AsObject(objVal)
+			// Set the property
+			obj.Properties[propName] = valueToSet
+
+			// OpSetProp itself doesn't modify destReg. The assignment expression result
+			// (the value that was set) is already available in registers[valReg]
+			// and handled by the compiler's assignment logic.
+
+		// --- END Object Opcodes ---
 
 		default:
 			frame.ip = ip // Save IP before erroring

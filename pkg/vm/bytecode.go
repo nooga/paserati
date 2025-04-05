@@ -79,6 +79,12 @@ const (
 	OpShiftRight         OpCode = 38 // Rx Ry Rz: Rx = Ry >> Rz (Arithmetic Shift)
 	OpUnsignedShiftRight OpCode = 39 // Rx Ry Rz: Rx = Ry >>> Rz (Logical Shift)
 	// --- END NEW ---
+
+	// --- NEW: Object Operations ---
+	OpMakeEmptyObject OpCode = 40 // Rx: Creates an empty object in Rx
+	OpGetProp         OpCode = 41 // Rx Ry NameIdx(16bit): Rx = Ry[NameIdx]
+	OpSetProp         OpCode = 42 // Rx Ry NameIdx(16bit): Rx[NameIdx] = Ry (Object in Rx, Value in Ry)
+	// --- END NEW ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -164,6 +170,16 @@ func (op OpCode) String() string {
 		return "OpShiftRight"
 	case OpUnsignedShiftRight:
 		return "OpUnsignedShiftRight"
+
+	// --- NEW Object Op Cases ---
+	case OpMakeEmptyObject:
+		return "OpMakeEmptyObject"
+	case OpGetProp:
+		return "OpGetProp"
+	case OpSetProp:
+		return "OpSetProp"
+	// --- END NEW ---
+
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}
@@ -258,16 +274,16 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	switch instruction {
 	case OpLoadConst:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
-	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn:
+	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
-	case OpNegate, OpNot, OpBitwiseNot: // Added OpBitwiseNot here
+	case OpNegate, OpNot, OpBitwiseNot, OpGetLength:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
-	case OpMove: // Kept separate for clarity if needed later
+	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual,
-		OpRemainder, OpExponent, // Added Remainder, Exponent
-		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor, // Added Bitwise ops
-		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight: // Added Shift ops
+		OpRemainder, OpExponent,
+		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
+		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight:
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz
 
 	case OpCall:
@@ -298,9 +314,12 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpSetIndex:
 		return c.setIndexInstruction(builder, instruction.String(), offset)
 
-	// Length Operation
-	case OpGetLength: // Assuming Rx, Ry format
-		return c.registerRegisterInstruction(builder, instruction.String(), offset)
+	// --- NEW: Object Operations Disassembly ---
+	case OpGetProp:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpSetProp:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	// --- END NEW ---
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))
@@ -599,4 +618,52 @@ func (c *Chunk) setIndexInstruction(builder *strings.Builder, name string, offse
 	valueReg := c.Code[offset+3]
 	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d\n", name, arrayReg, indexReg, valueReg))
 	return offset + 4 // Opcode + 3 register bytes
+}
+
+// registerRegisterConstantInstruction handles OpCode Rx, Ry, ConstIdx(16bit)
+// Used for OpGetProp, OpSetProp
+func (c *Chunk) registerRegisterConstantInstruction(builder *strings.Builder, name string, offset int, constName string) int {
+	// Opcode + Rx + Ry + ConstIdx(2 bytes) = 5 bytes total
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		// Determine how many bytes we actually read before failing
+		if offset+3 < len(c.Code) {
+			return offset + 4
+		}
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+
+	regX := c.Code[offset+1]
+	regY := c.Code[offset+2]
+	constantIndex := uint16(c.Code[offset+3])<<8 | uint16(c.Code[offset+4])
+
+	constantValueStr := "invalid const idx"
+	if int(constantIndex) < len(c.Constants) {
+		constantValue := c.Constants[constantIndex]
+		// Optionally add type check if needed (e.g., ensure it's a string for property names)
+		constantValueStr = fmt.Sprintf("'%v'", constantValue)
+	}
+
+	// Adjust format based on whether Rx or Ry is the object/destination
+	// OpGetProp: Rx = Ry[NameIdx]
+	// OpSetProp: Rx[NameIdx] = Ry
+	if name == "OpGetProp" {
+		builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constantIndex, constantValueStr))
+	} else if name == "OpSetProp" {
+		builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constantIndex, constantValueStr))
+		// Note: The order Rx, Ry might be confusing for SetProp (ObjReg, ValueReg).
+		// We might want to reverse the register printing or add comments in the disassembler output.
+		// Let's keep it consistent with emit for now: emitSetProp(obj, val, idx) -> OpSetProp Rx, Ry, Idx
+	} else {
+		// Default format if reused for other opcodes
+		builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constantIndex, constantValueStr))
+	}
+
+	return offset + 5 // Opcode + RegX + RegY + ConstIdx(2)
 }

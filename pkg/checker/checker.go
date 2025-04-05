@@ -1428,7 +1428,7 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.AssignmentExpression:
 		// Visit LHS (Identifier, IndexExpr, MemberExpr)
 		c.visit(node.Left)
-		lhsType := node.Left.GetComputedType() // Assume it was found (handled by identifier/index/member visit)
+		lhsType := node.Left.GetComputedType()
 		if lhsType == nil {
 			lhsType = types.Any
 		} // Handle nil from error
@@ -1441,13 +1441,13 @@ func (c *Checker) visit(node parser.Node) {
 		} // Handle nil from error
 
 		// Widen types for operator checks
-		widenedLhsType := types.GetWidenedType(lhsType)
+		widenedLhsType := types.GetWidenedType(lhsType) // Needed for operator checks AND assignability target
 		widenedRhsType := types.GetWidenedType(rhsType)
 		isAnyLhs := widenedLhsType == types.Any
 		isAnyRhs := widenedRhsType == types.Any
 
 		// Operator-Specific Pre-Checks
-		validOperands := true // Assume valid initially
+		validOperands := true
 		switch node.Operator {
 		// Arithmetic Compound Assignments (Check if LHS/RHS are numeric)
 		case "+=", "-=", "*=", "/=", "%=", "**=":
@@ -1480,63 +1480,76 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Logical/Coalesce Compound Assignments (No extra numeric checks needed)
 		case "&&=", "||=", "??=":
-			// These depend on truthiness/nullishness and general assignability,
-			// no specific 'number' requirement for the operation itself.
-			// Special handling for ??= assignability check below.
-			break
+			break // Handled by assignability check below
 
 		case "=":
 			// Simple assignment, no extra operator checks needed here.
 			break
 
 		default:
-			// Should not happen if parser/lexer are correct
 			c.addError(node, fmt.Sprintf("internal checker error: unhandled assignment operator %s", node.Operator))
 			validOperands = false
 		}
-		// <<< END Operator-Specific Pre-Checks >>>
 
 		// --- Check LHS const status ---
-		// (Do this regardless of operand validity to catch const errors early)
+		// ... (keep existing const check) ...
 		if identLHS, ok := node.Left.(*parser.Identifier); ok {
 			_, isConst, found := c.env.Resolve(identLHS.Value)
 			if found && isConst {
 				c.addError(node.Left, fmt.Sprintf("cannot assign to constant variable '%s'", identLHS.Value))
-				// Continue checking RHS type and assignability for completeness
+				// Still proceed to check assignability for more errors
 			}
 		}
-		// TODO: Add check for assigning to member expression property if needed (is property readonly?)
+		// TODO: Check if MemberExpression LHS refers to a const property?
 
 		// --- Final Assignability Check ---
-		// Check if the RHS type can be assigned to the LHS type.
-		if validOperands { // Only perform detailed check if operands were potentially valid for the operator
-
-			// Perform the check for all operators.
-			if !c.isAssignable(rhsType, lhsType) {
-				// <<< NEW: Special case for ??= with null/undefined LHS >>>
-				allowAssignment := false
-				if node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
-					// Allow assignment if LHS is null/undefined, regardless of RHS type's
-					// strict assignability to JUST null/undefined. The effective type
-					// after assignment would be widened.
-					allowAssignment = true
-				}
-				// <<< END NEW >>>
-
-				if !allowAssignment { // If not the special case, report the error
-					leftDesc := "variable"
-					if ident, ok := node.Left.(*parser.Identifier); ok {
-						leftDesc = fmt.Sprintf("variable '%s'", ident.Value)
+		if validOperands {
+			// <<< USE WIDENED LHS TYPE AS TARGET for assignability check >>>
+			targetType := widenedLhsType
+			// For simple identifiers, if a declared type exists, we should respect that *exact* type
+			// instead of widening it for the target check.
+			if identLHS, isIdent := node.Left.(*parser.Identifier); isIdent {
+				resolvedType, _, found := c.env.Resolve(identLHS.Value)
+				// Check if the *original* lhsType came directly from a declared type (annotation)
+				// This is tricky to track perfectly. A simpler heuristic: if the original lhsType
+				// isn't a literal type, maybe it came from an annotation or inference, so respect it.
+				if found && resolvedType != nil {
+					// If the resolved type is NOT a literal type, prefer it over the widened type.
+					// This preserves stricter checking for annotated variables.
+					if _, isLiteral := resolvedType.(*types.LiteralType); !isLiteral {
+						targetType = resolvedType
 					}
-					c.addError(node.Value, fmt.Sprintf("type '%s' is not assignable to %s of type '%s'", rhsType.String(), leftDesc, lhsType.String()))
 				}
 			}
 
-		} // else: Don't perform the final assignability check if operands were invalid for the op.
+			if !c.isAssignable(rhsType, targetType) { // <<< Use targetType (usually widened LHS)
+				// Special case for ??= handled within isAssignable now?
+				// Let's keep the explicit check here for clarity just for ??=
+				allowAssignment := false
+				if node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
+					// Allow ??= if LHS is null/undefined, check if RHS assignable to WIDENED LHS
+					if c.isAssignable(rhsType, widenedLhsType) { // Check assignability to widened target
+						allowAssignment = true
+					}
+					// If RHS is not assignable even to widened LHS, error will be reported below
+				}
+
+				if !allowAssignment {
+					leftDesc := "location"
+					if ident, ok := node.Left.(*parser.Identifier); ok {
+						leftDesc = fmt.Sprintf("variable '%s'", ident.Value)
+					} else if _, ok := node.Left.(*parser.MemberExpression); ok {
+						leftDesc = "property"
+					} else if _, ok := node.Left.(*parser.IndexExpression); ok {
+						leftDesc = "element"
+					}
+					// Report error comparing RHS to the potentially stricter targetType
+					c.addError(node.Value, fmt.Sprintf("type '%s' is not assignable to %s of type '%s'", rhsType.String(), leftDesc, targetType.String()))
+				}
+			}
+		}
 
 		// Set computed type for the overall assignment expression (evaluates to RHS value)
-		// TODO: For ??=, the computed type should probably be the union of lhsType and rhsType?
-		// For now, RHS is simpler.
 		node.SetComputedType(rhsType)
 
 	case *parser.UpdateExpression:
@@ -1565,6 +1578,8 @@ func (c *Checker) visit(node parser.Node) {
 	// --- NEW: Array/Index Type Checking ---
 	case *parser.ArrayLiteral:
 		c.checkArrayLiteral(node)
+	case *parser.ObjectLiteral: // <<< ADD THIS CASE
+		c.checkObjectLiteral(node)
 	case *parser.IndexExpression:
 		c.checkIndexExpression(node)
 
@@ -1683,6 +1698,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token
 	case *parser.UndefinedLiteral:
 		return n.Token
+	case *parser.ObjectLiteral: // <<< ADD THIS
+		return n.Token // The '{' token
 	case *parser.FunctionLiteral:
 		return n.Token // The 'function' token
 	case *parser.ArrowFunctionLiteral:
@@ -1801,10 +1818,44 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			}
 		}
 
-	// TODO: Add case for ObjectType (index should be string or number?)
-	// case *types.ObjectType:
-	// ... check indexType (string/number) ...
-	// ... determine result type based on object properties or index signature ...
+	case *types.ObjectType: // <<< NEW CASE
+		// Base is ObjectType
+		// Index must be string or number (or any)
+		isIndexStringLiteral := false
+		var indexStringValue string
+		if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.Type == vm.TypeString {
+			isIndexStringLiteral = true
+			indexStringValue = vm.AsString(litIndex.Value)
+		}
+
+		widenedIndexType := types.GetWidenedType(indexType)
+
+		if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Any {
+			if isIndexStringLiteral {
+				// Index is a specific string literal, look it up directly
+				propType, exists := base.Properties[indexStringValue]
+				if exists {
+					if propType == nil { // Safety check
+						resultType = types.Never
+						c.addError(node.Index, fmt.Sprintf("internal checker error: property '%s' has nil type", indexStringValue))
+					} else {
+						resultType = propType
+					}
+				} else {
+					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, base.String()))
+					// resultType remains Error
+				}
+			} else {
+				// Index is a general string/number/any - cannot determine specific property type.
+				// TODO: Support index signatures later?
+				// For now, result is 'any' as we don't know which property is accessed.
+				resultType = types.Any
+			}
+		} else {
+			// Invalid index type for object
+			c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', or 'any', got '%s'", indexType.String()))
+			// resultType remains Error
+		}
 
 	case *types.Primitive:
 		// Allow indexing on strings?
@@ -1833,57 +1884,72 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 // Helper function
 func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
+	// 1. Visit the object part
 	c.visit(node.Object)
-	objectType := node.Object.GetComputedType() // <<< USE NODE METHOD
+	objectType := node.Object.GetComputedType()
 	if objectType == nil {
+		// If visiting the object failed, checker should have added error.
+		// Set objectType to Any to prevent cascading nil errors here.
 		objectType = types.Any
-	} // Handle nil
+	}
 
+	// 2. Get the property name (Property is always an Identifier in MemberExpression)
+	propertyName := node.Property.Value // node.Property is *parser.Identifier
+
+	// 3. Widen the object type for checks
 	widenedObjectType := types.GetWidenedType(objectType)
-	propertyName := node.Property.Value // Property is always an Identifier
-	var resultType types.Type = nil     // Initialize to nil, indicating property not found yet
 
-	// Handle primitive types first by comparing against exported variables
-	if widenedObjectType == types.String {
+	var resultType types.Type = types.Never // Default to Never if property not found/invalid access
+
+	// 4. Handle different base types
+	if widenedObjectType == types.Any {
+		resultType = types.Any // Property access on 'any' results in 'any'
+	} else if widenedObjectType == types.String {
 		if propertyName == "length" {
 			resultType = types.Number // string.length is number
 		} else {
 			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
-			resultType = types.Any
+			// resultType remains types.Error
 		}
-	} else if widenedObjectType == types.Any {
-		resultType = types.Any // Property access on 'any' results in 'any'
 	} else {
-		// Handle non-primitive types (structs) using a type switch
+		// Use a type switch for struct-based types
 		switch obj := widenedObjectType.(type) {
 		case *types.ArrayType:
 			if propertyName == "length" {
 				resultType = types.Number // Array.length is number
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'array'", propertyName))
-				resultType = types.Any
+				// TODO: Add array methods later? (e.g., .push)
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+				// resultType remains types.Error
 			}
-		case *types.ObjectType:
-			// TODO: Check object properties/methods
-			c.addError(node.Property, fmt.Sprintf("property access on object types not implemented yet"))
-			resultType = types.Any
-		// Add cases for other struct-based types here if needed
+		case *types.ObjectType: // <<< MODIFIED CASE
+			// Look for the property in the object's fields
+			fieldType, exists := obj.Properties[propertyName]
+			if exists {
+				// Property found
+				if fieldType == nil { // Should ideally not happen if checker populates correctly
+					c.addError(node.Property, fmt.Sprintf("internal checker error: property '%s' has nil type in ObjectType", propertyName))
+					resultType = types.Never
+				} else {
+					resultType = fieldType
+				}
+			} else {
+				// Property not found
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+				// resultType remains types.Error
+			}
+		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
-			c.addError(node.Property, fmt.Sprintf("property access is not supported on type %s", obj.String()))
-			resultType = types.Any
+			// e.g., trying to access property on number, boolean, null, undefined
+			c.addError(node.Object, fmt.Sprintf("property access is not supported on type %s", widenedObjectType.String()))
+			// resultType remains types.Error
 		}
 	}
 
-	if resultType == nil {
-		// This fallback should ideally not be reached if all types are handled above.
-		// It might indicate an unhandled primitive or struct type.
-		c.addError(node.Property, fmt.Sprintf("internal error: property '%s' check failed for type %s", propertyName, widenedObjectType.String()))
-		resultType = types.Any
-	}
-
-	// <<< USE NODE METHOD >>>
+	// 5. Set the computed type on the MemberExpression node itself
 	node.SetComputedType(resultType)
+	debugPrintf("// [Checker MemberExpr] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
 }
 
 // --- NEW: Switch Statement Check ---
@@ -1942,4 +2008,57 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 
 	// Switch statements don't produce a value themselves
 	// node.SetComputedType(types.Void) // Remove this line
+}
+
+// ... (after checkIndexExpression) ...
+
+// checkObjectLiteral checks the type of an object literal expression.
+func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
+	fields := make(map[string]types.Type)
+	seenKeys := make(map[string]bool)
+
+	for _, prop := range node.Properties {
+		var keyName string
+		switch key := prop.Key.(type) {
+		case *parser.Identifier:
+			keyName = key.Value
+		case *parser.StringLiteral:
+			keyName = key.Value
+		case *parser.NumberLiteral: // Allow number literals as keys, convert to string
+			// Note: JavaScript converts number keys to strings internally
+			keyName = fmt.Sprintf("%v", key.Value) // Simple conversion
+		default:
+			c.addError(prop.Key, "object key must be an identifier, string, or number literal")
+			continue // Skip this property if key type is invalid
+		}
+
+		// Check for duplicate keys
+		if seenKeys[keyName] {
+			c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+			// Continue checking value type anyway? Yes, to catch more errors.
+		}
+		seenKeys[keyName] = true
+
+		// Visit the value to determine its type
+		c.visit(prop.Value)
+		valueType := prop.Value.GetComputedType()
+		if valueType == nil {
+			// If visiting the value failed, checker should have added error.
+			// Default to Any to prevent cascading nil errors.
+			valueType = types.Any
+		}
+
+		// Store the resolved type (use widened type for consistency?)
+		// Let's use the direct type for now, widening happens on access/assignment.
+		fields[keyName] = valueType
+		// Set type on property node itself? Optional, maybe not needed.
+		// prop.ComputedType = valueType
+	}
+
+	// Create the ObjectType
+	objType := &types.ObjectType{Properties: fields}
+
+	// Set the computed type for the ObjectLiteral node itself
+	node.SetComputedType(objType)
+	debugPrintf("// [Checker ObjectLit] Computed type: %s\n", objType.String())
 }

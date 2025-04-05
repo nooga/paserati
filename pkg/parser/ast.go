@@ -922,3 +922,54 @@ func (fte *FunctionTypeExpression) GetComputedType() types.Type { return nil }
 // ----------------------------------------------------------------------------
 // END Type Expressions
 // ----------------------------------------------------------------------------
+
+// --- NEW: ObjectProperty (Helper for ObjectLiteral) ---
+// Represents a single key-value pair within an object literal.
+type ObjectProperty struct {
+	Key   Expression
+	Value Expression
+}
+
+// String() for ObjectProperty (optional, but helpful for debugging)
+func (op *ObjectProperty) String() string {
+	keyStr := ""
+	if op.Key != nil {
+		keyStr = op.Key.String()
+	}
+	valStr := ""
+	if op.Value != nil {
+		valStr = op.Value.String()
+	}
+	return fmt.Sprintf("%s: %s", keyStr, valStr)
+}
+
+// --- END NEW ---
+
+// ObjectLiteral represents an object literal expression (e.g., { key: value, "str_key": 1 }).
+type ObjectLiteral struct {
+	BaseExpression             // Embed base for ComputedType (e.g., types.ObjectType)
+	Token          lexer.Token // The '{' token
+	// --- MODIFIED: Use slice instead of map to preserve order ---
+	Properties []*ObjectProperty
+}
+
+func (ol *ObjectLiteral) expressionNode()      {}
+func (ol *ObjectLiteral) TokenLiteral() string { return ol.Token.Literal }
+func (ol *ObjectLiteral) String() string {
+	var out bytes.Buffer
+	propStrings := []string{}
+	// --- MODIFIED: Iterate over slice ---
+	for _, prop := range ol.Properties {
+		propStrings = append(propStrings, prop.String())
+	}
+
+	out.WriteString("{")
+	out.WriteString(strings.Join(propStrings, ", "))
+	out.WriteString("}")
+	if ol.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ol.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// --- END NEW: ObjectLiteral ---

@@ -8,7 +8,7 @@ import (
 	"paserati/pkg/vm"
 )
 
-// compileAssignmentExpression compiles identifier = value OR indexExpr = value
+// compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
 func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) errors.PaseratiError {
 	line := node.Token.Line
 
@@ -19,7 +19,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	const (
 		lhsIsIdentifier lhsInfoType = iota
 		lhsIsIndexExpr
-		// lhsIsMemberExpr // Placeholder for future
+		lhsIsMemberExpr // <<< NEW
 	)
 	var lhsType lhsInfoType
 	var identInfo struct { // Info needed to store back to identifier
@@ -30,6 +30,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register
 		indexReg Register
+	}
+	var memberInfo struct { // <<< NEW: Info needed for member expr
+		objectReg    Register
+		nameConstIdx uint16
 	}
 
 	// ... (existing switch lhsNode := node.Left.(type) block remains unchanged) ...
@@ -87,12 +91,40 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		c.emitByte(byte(indexInfo.indexReg))
 		// Keep arrayReg and indexReg allocated for the potential SetIndex later
 
+	case *parser.MemberExpression: // <<< NEW CASE
+		lhsType = lhsIsMemberExpr
+		// Compile the object expression
+		err := c.compileNode(lhsNode.Object)
+		if err != nil {
+			return err
+		}
+		memberInfo.objectReg = c.regAlloc.Current()
+
+		// For now, assume property is an Identifier (obj.prop)
+		propIdent := lhsNode.Property
+		// if !ok {
+		// 	// TODO: Handle computed properties later (obj[expr] = ...)
+		// 	return NewCompileError(lhsNode.Property, "compiler only supports identifier properties for assignment (e.g., obj.prop = ...)")
+		// }
+		propName := propIdent.Value
+		memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+
+		// If compound or logical assignment, load the current property value
+		if node.Operator != "=" {
+			currentValueReg = c.regAlloc.Alloc()
+			c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+		} else {
+			// For simple assignment '=', we don't need the current value
+			currentValueReg = nilRegister // Indicate not loaded (relevant for freeing later perhaps)
+		}
+		// Keep objectReg allocated for the potential SetProp later
+
 	// case *parser.MemberExpression: // TODO: Add later
 	// 	lhsType = lhsIsMemberExpr
 	// 	// ... compile object, load property value, store info ...
 
 	default:
-		return NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier or index expression, got %T", node.Left))
+		return NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier, index expression, or member expression, got %T", node.Left))
 	}
 	// --- End Refactored LHS Handling ---
 
@@ -339,21 +371,39 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitSetUpvalue(identInfo.upvalueIndex, storeOpTargetReg, line)
 			} else {
 				if storeOpTargetReg != identInfo.targetReg {
-					debugPrintf("// DEBUG Assign Store: Emitting Move R%d <- R%d\n", identInfo.targetReg, storeOpTargetReg)
+					debugPrintf("// DEBUG Assign Store Ident: Emitting Move R%d <- R%d\n", identInfo.targetReg, storeOpTargetReg)
 					c.emitMove(identInfo.targetReg, storeOpTargetReg, line)
 				} else {
-					debugPrintf("// DEBUG Assign Store: Skipping Move R%d <- R%d (already inplace)\n", identInfo.targetReg, storeOpTargetReg)
+					debugPrintf("// DEBUG Assign Store Ident: Skipping Move R%d <- R%d (already inplace)\n", identInfo.targetReg, storeOpTargetReg)
 				}
 			}
 		case lhsIsIndexExpr:
-			debugPrintf("// DEBUG Assign Store: Emitting SetIndex [%d][%d] = R%d\n", indexInfo.arrayReg, indexInfo.indexReg, storeOpTargetReg)
+			debugPrintf("// DEBUG Assign Store Index: Emitting SetIndex [%d][%d] = R%d\n", indexInfo.arrayReg, indexInfo.indexReg, storeOpTargetReg)
 			c.emitOpCode(vm.OpSetIndex, line)
 			c.emitByte(byte(indexInfo.arrayReg))
 			c.emitByte(byte(indexInfo.indexReg))
 			c.emitByte(byte(storeOpTargetReg))
+			// Free array and index registers after storing
+			c.regAlloc.Free(indexInfo.arrayReg)
+			c.regAlloc.Free(indexInfo.indexReg)
+		case lhsIsMemberExpr: // <<< NEW CASE
+			debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, storeOpTargetReg)
+			// Emit OpSetProp: objReg[keyConstIdx] = valueReg
+			c.emitSetProp(memberInfo.objectReg, storeOpTargetReg, memberInfo.nameConstIdx, line)
+			// Free object register after storing
+			c.regAlloc.Free(memberInfo.objectReg)
 		}
 	} else {
 		debugPrintf("// DEBUG Assign Store: Skipped store operation (needsStore=false)\n")
+		// If we skipped the store, we might still need to free LHS registers
+		// (especially for index/member expressions whose parts were compiled)
+		switch lhsType {
+		case lhsIsIndexExpr:
+			c.regAlloc.Free(indexInfo.arrayReg)
+			c.regAlloc.Free(indexInfo.indexReg)
+		case lhsIsMemberExpr:
+			c.regAlloc.Free(memberInfo.objectReg)
+		}
 	}
 
 	// --- Final Merge Point & Patching ---

@@ -1,0 +1,242 @@
+## Phased implementation plan
+
+
+Okay, that's a sensible approach. Let's build this incrementally. Here's a plan, starting with the basics and layering complexity:
+
+**Phase 1: Basic Syntax & Map-Based VM Implementation**
+
+*   **Goal:** Handle `{ key: value }` literals and `object.property` access/assignment using a simple map in the VM. No shapes, no ICs yet.
+*   **Steps:**
+    1.  **Parser (`parser/`):**
+        *   Define `ObjectLiteral` AST node (e.g., `Token: '{', Properties: map[Expression]Expression`). Handle identifier keys vs. string keys.
+        *   Define `MemberExpression` AST node (e.g., `Object: Expression, Property: Identifier`).
+    2.  **VM Values (`pkg/vm/value.go`):**
+        *   Add `TypeObject` to `ValueType`.
+        *   Add a simple `Object` struct: `type Object struct { Properties map[string]Value }`
+        *   Add `ObjectV(obj *Object) Value`, `IsObject(v Value) bool`, `AsObject(v Value) *Object` helpers.
+        *   Update `Value.String()` to handle `TypeObject`.
+    3.  **Compiler (`pkg/compiler/compiler.go`):**
+        *   Implement `compileObjectLiteral`:
+            *   For each property, compile the key (if it's an expression, else use identifier string) and the value. Store key strings as constants.
+            *   Emit a new opcode `OpMakeObject <numProperties>` which expects `numProperties * 2` values (key, value, key, value...) on the stack.
+        *   Implement `compileMemberExpression` (for reads):
+            *   Compile the `Object` expression (pushes object onto stack).
+            *   Store the `Property` identifier name as a constant.
+            *   Emit `OpGetProp <nameConstIndex>` (pushes property name constant onto stack). The opcode will consume the object and name, pushing the result.
+        *   Implement assignment to `MemberExpression` (e.g., `obj.prop = value` in `compileAssignmentExpression`):
+            *   Compile the `Object` expression (object on stack).
+            *   Compile the `value` expression (value on stack).
+            *   Store the `Property` identifier name as a constant.
+            *   Emit `OpSetProp <nameConstIndex>` (pushes property name constant onto stack). The opcode consumes object, value, and name. Result of assignment is the assigned value.
+    4.  **VM Opcodes & Execution (`pkg/vm/vm.go`, `pkg/vm/opcode.go`):**
+        *   Define `OpMakeObject`, `OpGetProp`, `OpSetProp`.
+        *   Implement VM handlers:
+            *   `OpMakeObject`: Pop `numProperties * 2` values, create the `map[string]Value`, build the `*Object`, push `ObjectV(obj)`.
+            *   `OpGetProp`: Pop name string, pop object value. Check type is `Object`. Perform map lookup. Push result or `Undefined()`. Handle non-object error.
+            *   `OpSetProp`: Pop name string, pop value, pop object value. Check type is `Object`. Update map. Push the *value* back onto the stack (result of assignment). Handle non-object error.
+    5.  **Checker (Minimal) (`pkg/checker/checker.go`, `pkg/types/types.go`):**
+        *   Add a basic `types.ObjectType` (maybe just a marker struct).
+        *   In `visit(ObjectLiteral)`: Visit keys/values. Set computed type to `types.ObjectType`.
+        *   In `visit(MemberExpression)`: Visit object/property. Set computed type to `types.Any` for now.
+        *   In `visit(AssignmentExpression)` for member assigns: Visit LHS/RHS. Set computed type to RHS type.
+
+*   **Outcome:** Can parse, compile, and run code involving basic object creation (`{a: 1}`) and property access/assignment (`obj.a`, `obj.a = 2`), albeit slowly due to map lookups.
+
+**Phase 2: Introduce Shapes (No ICs, No Static Info Yet)**
+
+*   **Goal:** Replace the VM's map-based object with the `[]Value` + `*Shape` model. Implement basic shape transitions.
+*   **Steps:**
+    1.  **VM Values/Shapes (`pkg/vm/value.go`, `pkg/vm/shape.go`?):**
+        *   Define `Shape` struct: `propertyMap map[string]int`, `transitions map[string]*Shape` (initially).
+        *   Refactor `vm.Object` struct: `Values []vm.Value`, `Shape *Shape`.
+        *   Implement a simple VM-level shape cache/manager if needed (to reuse Shapes).
+    2.  **VM Execution (`pkg/vm/vm.go`):**
+        *   Rewrite `OpMakeObject`: Determine the initial shape based on properties provided. Allocate `Object.Values`. Find/create the `Shape` and assign it.
+        *   Rewrite `OpGetProp`: Get object's `Shape`. Lookup property name in `Shape.propertyMap`. If found, use index to get value from `Object.Values`. If not found, return `Undefined()` (defer prototype chain).
+        *   Rewrite `OpSetProp`:
+            *   Get object's `Shape`. Lookup property name in `Shape.propertyMap`.
+            *   If found (existing property): Update `Object.Values[index]`.
+            *   If not found (new property): Check `Shape.transitions`.
+                *   If transition exists: Update `Object.Shape` to the target shape, append value to `Object.Values`.
+                *   If transition doesn't exist: Create new `Shape`, update old `Shape.transitions`, update `Object.Shape`, append value. (This is the complex part).
+
+*   **Outcome:** Objects use the more performant slice representation internally. Property access is faster *if the shape lookup is fast*, but still involves map lookups within the Shape. Shape transitions work.
+
+**Phase 3: Checker Integration for Object Types**
+
+*   **Goal:** Enable the checker to understand and verify object types structurally.
+*   **Steps:**
+    1.  **Type System (`pkg/types/types.go`):**
+        *   Flesh out `ObjectType`. Store properties with their types (e.g., `Properties []struct{ Name string; Type Type }` to maintain order).
+    2.  **Checker (`pkg/checker/checker.go`):**
+        *   Implement detailed checking for `ObjectLiteral`: Infer `ObjectType`, check against annotated types.
+        *   Implement `checkMemberExpression`: Use the `ObjectType` of the base object to find the property type. Report errors for unknown properties.
+        *   Implement assignment checks (`obj.prop = val`) using `isAssignable`.
+
+*   **Outcome:** Static type checking for object properties and assignments works.
+
+**(Subsequent Phases - As Discussed Previously)**
+
+*   **Phase 4:** Compiler emits static shape info & `Imm` opcodes.
+*   **Phase 5:** VM handles static shapes & `Imm` opcodes.
+*   **Phase 6:** VM implements Inline Caching for `OpGetProp`/`OpSetProp`.
+*   **Phase 7:** Implement Prototypes.
+*   **Phase 8:** Implement Classes.
+
+This phased approach lets you tackle the syntax first, then the core VM representation change, then static checking, and finally the advanced VM optimizations. Let me know when you're ready to start on Phase 1!
+
+
+## Planning Notes 
+
+Okay, let's dive into implementing performant objects. Your core idea is definitely on the right track and aligns well with how high-performance JavaScript engines tackle this. The `[]Value` slice + Shape pointer + Prototype pointer model is essentially the foundation of "Hidden Classes" (V8) or "Shapes" (SpiderMonkey, JSC), which are crucial for optimizing property access.
+
+Here’s a breakdown of the concepts and how they fit into Paserati:
+
+**1. The Core VM Representation (`value.go`, `vm.go`)**
+
+*   **`TypeObject`:** We'll need a new `vm.ValueType`.
+*   **`vm.Object` Struct:**
+    *   `Values []vm.Value`: Stores the actual property values. The order is defined by the `Shape`.
+    *   `Shape *Shape`: Pointer to the object's current shape. **This is the key.**
+    *   `Prototype *Object`: Pointer to the prototype object (or `nil`).
+    *   *(Optional)* `elements []vm.Value` / `map[uint64]vm.Value`: For indexed properties (numeric keys), often handled separately from named properties for performance. Let's defer this optimization for now and focus on named properties.
+*   **`Shape` Struct (Managed by the VM):**
+    *   `propertyMap map[string]int`: Maps property names to their index within the `Object.Values` slice for *this specific shape*.
+    *   `transitions map[string]*Shape`: Caches transitions to new shapes when a property is added. E.g., if you add property "z" to an object with shape `S1 {x:0, y:1}`, this map might contain `"z": S2`, where `S2` is the shape `{x:0, y:1, z:2}`.
+    *   *(Optional)* `parent *Shape`: Pointer to the previous shape in a transition chain.
+    *   *(Optional)* `isStatic bool`: A flag indicating if this shape corresponds to a layout fully determined by the compiler.
+    *   *(Optional)* `Type *types.ObjectType`: Link back to the static type information if available.
+
+**2. How Shapes Enable Fast Access (VM Runtime)**
+
+*   **Property Addition:** When you add a property (e.g., `obj.z = 10`) to an object that doesn't have it:
+    1.  Check the current `obj.Shape.transitions` for `"z"`.
+    2.  If found, transition `obj.Shape` to the cached next shape (`S2`), append the value (`10`) to `obj.Values`.
+    3.  If not found, create a *new* shape (`S2`) by copying `S1.propertyMap`, adding `"z": newIndex`, update `S1.transitions["z"] = S2`, transition `obj.Shape` to `S2`, and append the value.
+*   **Property Access (`obj.y`):**
+    1.  Get `obj.Shape`.
+    2.  Look up `"y"` in `obj.Shape.propertyMap`.
+    3.  If found, get the index (e.g., `1`). Access `obj.Values[1]`. **This is fast!**
+    4.  If not found, check the `obj.Prototype` chain (standard JS behavior).
+*   **Inline Caching (IC) - The Real Speed Boost:**
+    *   The generic `OpGetProp`/`OpSetProp` bytecode handlers in the VM get augmented.
+    *   Each `OpGetProp "y"` site in the bytecode gets associated runtime cache data.
+    *   **First execution:** Does the full lookup (Shape map -> index/prototype chain). If successful, it *caches* the object's Shape and the resulting index/offset *at the instruction site*. State: MONOMORPHIC.
+    *   **Subsequent executions:**
+        *   Check if the current `obj.Shape` *matches* the cached shape.
+        *   If YES (cache hit): Directly use the cached index to access `obj.Values[index]`. **Super fast path.**
+        *   If NO (cache miss):
+            *   Maybe the object now has a *different* shape that's also valid for "y"? If so, update the cache to handle *both* shapes (State: POLYMORPHIC - slower than mono, faster than full lookup).
+            *   If it's many different shapes, transition to MEGAMORPHIC (basically back to full lookup).
+            *   If "y" is now found differently (e.g., on prototype), update cache.
+            *   Perform the full lookup for this time.
+
+**3. Compiler's Role (`compiler.go`, `checker.go`, `types.go`)**
+
+*   **Parsing (`parser.go`):** Need `ObjectLiteral` (keys can be identifiers or strings) and `MemberExpression` (`object.property`) AST nodes. `IndexExpression` might need updating if we allow `obj["prop"]`.
+*   **Type System (`types.go`):**
+    *   Need a robust `ObjectType` (or `InterfaceType`). Can store `map[string]PropertyInfo` where `PropertyInfo` includes `Type` and potentially `IsReadOnly`.
+    *   Needs to support defining object types/interfaces.
+*   **Checker (`checker.go`):**
+    *   Type check object literals against expected types (if annotated).
+    *   Infer types for object literals. Store the inferred `types.ObjectType` on the AST node.
+    *   For `MemberExpression` (`obj.prop`):
+        *   Check if `obj` has a known `ObjectType`.
+        *   If yes, check if `prop` exists on that type. If yes, the result type is the property's type. If no, error (unless index signature exists).
+        *   If `obj` is `any`, result is `any`.
+        *   Store the resulting type on the `MemberExpression` node.
+    *   Handle assignments (`obj.prop = value`) checking type compatibility and potential readonly errors.
+*   **Compiler (`compiler.go`):**
+    *   **`OpMakeObject`:** Emit code to create a new `vm.Object`, potentially initializing it with a starting shape based on the literal's known properties.
+    *   **`OpGetProp name` / `OpSetProp name`:** These are the *standard* opcodes that the VM will use ICs for. The compiler emits these when the exact offset isn't statically known (most common case). The `name` is likely stored as a constant.
+    *   **`OpGetPropImm offset` / `OpSetPropImm offset`:** **This is where your static optimization comes in.** If the checker *guarantees* the object's type/shape at a specific point and the compiler can determine the fixed `offset` for a property, it can emit these immediate opcodes. The VM handler for these *bypasses* the Shape check and IC logic entirely, directly accessing `obj.Values[offset]`. This requires:
+        *   The checker providing reliable type information to the compiler.
+        *   The compiler mapping the static `types.ObjectType` property layout to the runtime `Shape` index layout (they need to be consistent or mappable).
+
+**Addressing Your Specific Points:**
+
+*   **Performance:** Yes, this Shape/IC approach is the standard for performant dynamic object models. The fast path (monomorphic IC hit or `Imm` opcode) is extremely quick.
+*   **Static vs. Dynamic Shapes:** Exactly. The VM manages shapes dynamically based on runtime behavior. The compiler leverages static type info (from the checker) to *predict* shapes or, in the best case, determine a fixed layout allowing `Imm` opcodes. Most objects will likely use dynamic shapes + ICs, but optimizing known structures with `Imm` is a valuable performance win.
+*   **Your Proposed Representation:** `[]Value` + `*Shape` + `*Prototype` is the right core structure for the VM's `Object`.
+
+**Implementation Strategy:**
+
+1.  **Parser & Basic VM:** Implement `ObjectLiteral`, `MemberExpression` parsing. Add `TypeObject`, basic `vm.Object` (maybe map-based initially *or* `[]Value` + simple Shape), and basic `OpMakeObject`, `OpGetProp`/`SetProp` (map lookup in VM). Get basic functionality working.
+2.  **Checker Integration:** Add `types.ObjectType`. Implement checking for literals and member access in `checker.go`. Pass basic type info.
+3.  **Shapes & ICs in VM:** Refactor VM `Object` to use `[]Value` + `*Shape`. Implement the `Shape` struct, transitions, and the Inline Caching logic within `OpGetProp`/`SetProp` handlers. This is the most complex VM part.
+4.  **Compiler Optimization (`Imm` Opcodes):** Enhance the compiler to read checker info. If a static shape/offset is known, emit `OpGetPropImm`/`SetPropImm`. Add handlers for these in the VM.
+5.  **Prototypes:** Implement the prototype chain lookup in the `OpGetProp` miss path.
+
+This is a significant undertaking, but breaking it down makes it manageable. Starting with the basic parsing and map-based VM implementation allows you to get objects working, then layer on the Shape/IC performance optimizations. The final step is leveraging the checker for the `Imm` opcode optimization.
+
+----
+
+
+You're absolutely right. The fact that we're compiling TypeScript, not just JavaScript, is a significant advantage here. `interface` and `class` definitions give the compiler a wealth of static information that we can leverage for much better performance than a purely dynamic system.
+
+Let's refine the object model incorporating this:
+
+**1. Static vs. Dynamic Shapes (Compiler & VM)**
+
+*   **Static Shape (`compiler`/`checker`):** When the checker processes a `class` or `interface`, the compiler can create a representation of its *intended* shape. This includes property names, their *order* (crucial for indexing the `[]Value`), and their static types. Let's call this `StaticShapeInfo`. This lives in the compiler/checker world.
+*   **Runtime Shape (`vm`):** The `Shape` struct in the VM remains largely as discussed (`propertyMap`, `transitions`, etc.). However, it can gain a field: `staticInfoID uint` (or similar). This ID links a runtime `Shape` back to the `StaticShapeInfo` the compiler generated, if applicable. Shapes created purely dynamically at runtime wouldn't have this ID set.
+*   **VM Shape Cache:** The VM maintains a cache of runtime `Shape` objects. When the compiler provides a `staticInfoID`, the VM can look up or create the corresponding runtime `Shape`.
+
+**2. Leveraging Class/Interface Info**
+
+*   **`OpMakeObject <staticInfoID>` (Compiler -> VM):**
+    *   When compiling `new MyClass()` or `let obj: MyInterface = { ... }`, the compiler determines the `StaticShapeInfo` ID for `MyClass` or `MyInterface`.
+    *   It emits an enhanced `OpMakeObject` instruction that includes this ID.
+    *   The VM's `OpMakeObject` handler uses the ID to find/create the *initial* runtime `Shape` for the object, pre-populating the `propertyMap` based on the static definition. The `Object.Values` slice is allocated with the correct size. This avoids the piecemeal property additions and shape transitions for the initial known properties.
+*   **`OpGetPropImm <offset>` / `OpSetPropImm <offset>` (Compiler Optimization):**
+    *   This becomes much more powerful. If the checker verifies `obj` is of type `MyClass` (and hasn't been dynamically altered in a way the checker can't track), the compiler looks up `prop` in the `StaticShapeInfo` for `MyClass` to get its predefined `offset`.
+    *   It then confidently emits `OpGetPropImm`/`SetPropImm` with that offset.
+    *   The VM handlers for these *completely bypass* shape lookups and ICs, directly accessing `obj.Values[offset]`. This is the fastest path.
+*   **`OpGetProp <nameConstIdx>` / `OpSetProp <nameConstIdx>` (Dynamic Fallback & ICs):**
+    *   These are still necessary for:
+        *   Accessing properties on objects typed as `any`.
+        *   Accessing properties added dynamically at runtime (causing a shape transition away from the initial static shape).
+        *   Cases where the checker cannot guarantee the object's exact type/shape at a given point.
+    *   The VM uses Inline Caching (ICs) on these instruction sites, caching the *runtime* `Shape` and offset. If an object started with a static shape but transitioned, the IC will adapt.
+
+**3. Implementation Details (`value.go`, `vm.go`, `types.go`, etc.)**
+
+*   **`vm.Object`:** Structure remains `Values []vm.Value`, `Shape *Shape`, `Prototype *Object`.
+*   **`vm.Shape`:** Adds `staticInfoID uint` (or similar). `propertyMap` maps name to index. `transitions` maps name to next `Shape`.
+*   **`types.go`:**
+    *   `ObjectType` needs to store property names, types, and *order/offset*. A `[]struct{ Name string; Type Type }` might be better than a map if order is critical for mapping to `StaticShapeInfo`.
+    *   `ClassType` could embed/reference an `ObjectType` for instance shape, plus store info about constructor, static members, superclass.
+*   **Compiler:** Needs a registry to manage `StaticShapeInfo` and assign IDs. It needs to translate between the `types.ObjectType` definition and the `StaticShapeInfo` layout.
+*   **VM:** Needs a registry/cache for runtime `Shape` objects, keyed potentially by `staticInfoID` or by transitions.
+
+**Benefits of this TypeScript-Aware Approach:**
+
+1.  **Faster Initialization:** `OpMakeObject <staticInfoID>` avoids runtime lookups/transitions for known properties.
+2.  **Optimized Access:** `OpGetPropImm`/`SetPropImm` provide near-static access speed for properties on objects with known static types.
+3.  **Graceful Degradation:** The dynamic Shape/IC mechanism still handles `any` types and runtime modifications correctly, falling back gracefully when static information isn't available or applicable.
+
+Your original idea of `[]Value` + Shape + Prototype is sound, and layering the static information from TypeScript interfaces/classes onto it primarily benefits the **compiler** by allowing it to generate more optimized bytecode (`OpMakeObject <id>`, `Op...Imm <offset>`), which the **VM** can then execute extremely efficiently. The dynamic shape mechanism acts as the robust fallback.
+
+---
+
+
+Yes, absolutely. The approach we've outlined (runtime Shapes/Hidden Classes + Inline Caching, augmented by compiler-driven static shape information and immediate offset opcodes for TypeScript `interface`/`class`) **should be decently performant**, and has the potential to be *very* performant.
+
+Here's why:
+
+1.  **Proven Technique:** This model (Shapes/Hidden Classes + ICs) is the cornerstone of how high-performance JavaScript engines (V8, SpiderMonkey, JavaScriptCore) optimize dynamic object property access. You're implementing a well-established, industry-standard optimization.
+2.  **Fast Path for Static Types:** The key advantage of compiling TypeScript is leveraging the static type information. The `OpGetPropImm`/`OpSetPropImm` path, where the compiler guarantees the object's shape and directly embeds the property offset, bypasses *all* runtime lookups (no shape check, no IC check). This is nearly as fast as accessing a field in a statically compiled language's struct. This path should be hit frequently in well-typed TS code.
+3.  **Efficient Dynamic Path:** For cases where the type isn't statically known (`any`) or the object's shape has changed dynamically, the Inline Caching mechanism provides a very fast path for monomorphic (object usually has the same shape at that code location) and reasonably fast path for polymorphic cases. It avoids repeated expensive lookups.
+4.  **Memory Efficiency:** Sharing `Shape` objects among objects with the same structure significantly reduces memory overhead compared to storing property names (or a map) in every single object instance.
+5.  **Significant Improvement over Naive Methods:** It will be orders of magnitude faster than implementing objects using simple hash maps (`map[string]Value`) for property storage and lookup within the VM.
+
+**Caveats & Where Performance Depends:**
+
+*   **IC Implementation Quality:** The effectiveness of the Inline Caching (how well it handles monomorphic, polymorphic, and megamorphic states, and cache misses) is crucial for the dynamic path's performance.
+*   **Shape Transition Cost:** Creating new shapes and transitioning objects between them has a cost. Code that frequently adds/deletes properties in unpredictable ways will be slower (as it is in all JS engines). Well-structured code benefits most.
+*   **Compiler/Checker Accuracy:** The performance benefit of the `Imm` opcodes relies on the checker accurately determining types and the compiler correctly mapping static types to runtime shape offsets.
+*   **Other VM Factors:** Overall performance also depends heavily on other VM aspects like function call overhead, garbage collection efficiency, loop execution speed, etc.
+
+**Conclusion:**
+
+You are on the right track using a standard, high-performance object model strategy. The integration with TypeScript's static types gives you a significant edge, allowing for a best-of-both-worlds approach: extremely fast access when types are known statically, and a proven, efficient dynamic mechanism (ICs) as a fallback. While it won't instantly match heavily optimized engines like V8 (which add JIT compilation and many other complex optimizations), it's the correct *architectural foundation* to achieve very good, "decently performant" object operations for your Paserati VM.
