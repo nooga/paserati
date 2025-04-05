@@ -20,10 +20,11 @@ type Expectation struct {
 }
 
 // parseExpectation extracts the expectation from the script's comments.
-// Looks for lines like: // expect: value
+// Looks for lines like:
 //
-//	// expect_runtime_error: message
-//	// expect_compile_error: message
+//	    // expect: value
+//		// expect_runtime_error: message
+//		// expect_compile_error: message
 func parseExpectation(scriptContent string) (*Expectation, error) {
 	scanner := bufio.NewScanner(strings.NewReader(scriptContent))
 	expectRegex := regexp.MustCompile(`^//\s*(expect(?:_runtime_error|_compile_error)?):\s*(.*)`) // More robust regex
@@ -124,7 +125,7 @@ func TestScripts(t *testing.T) {
 				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
 			}
 
-			if true {
+			if false {
 				t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
 					file.Name(), chunk.DisassembleChunk(file.Name()))
 			}

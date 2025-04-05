@@ -156,7 +156,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		rhsValueReg = c.regAlloc.Current()
 		storeOpTargetReg = rhsValueReg // Result is RHS
 		needsStore = true              // Store IS needed
-		fmt.Printf("// DEBUG Assign Logical RHS: Evaluated RHS. rhsValueReg=R%d, storeOpTargetReg=R%d, needsStore=%v\n", rhsValueReg, storeOpTargetReg, needsStore)
+		debugPrintf("// DEBUG Assign Logical RHS: Evaluated RHS. rhsValueReg=R%d, storeOpTargetReg=R%d, needsStore=%v\n", rhsValueReg, storeOpTargetReg, needsStore)
 		// Jump unconditionally past the merge/short-circuit logic block
 		jumpPastMerge := c.emitPlaceholderJump(vm.OpJump, 0, line)
 
@@ -168,11 +168,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		if !evaluatedRhs { // This block is now only reachable via short-circuit
 			storeOpTargetReg = currentValueReg // Result is original LHS value
 			needsStore = false                 // Store is NOT needed
-			fmt.Printf("// DEBUG Assign Logical ShortCircuit: Path taken. currentValueReg=R%d, storeOpTargetReg set to R%d, needsStore=%v\n", currentValueReg, storeOpTargetReg, needsStore)
+			debugPrintf("// DEBUG Assign Logical ShortCircuit: Path taken. currentValueReg=R%d, storeOpTargetReg set to R%d, needsStore=%v\n", currentValueReg, storeOpTargetReg, needsStore)
 			// If store is not needed, we MUST jump past the store block
 			jumpPastStore = c.emitPlaceholderJump(vm.OpJump, 0, line) // Jump past store
 		}
-		fmt.Printf("// DEBUG Assign Logical End: Final decision. storeOpTargetReg=R%d, needsStore=%v\n", storeOpTargetReg, needsStore)
+		debugPrintf("// DEBUG Assign Logical End: Final decision. storeOpTargetReg=R%d, needsStore=%v\n", storeOpTargetReg, needsStore)
 
 		// Free RHS reg if evaluated and not needed for store (maybe?)
 		if evaluatedRhs && rhsValueReg != storeOpTargetReg {
@@ -339,21 +339,21 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitSetUpvalue(identInfo.upvalueIndex, storeOpTargetReg, line)
 			} else {
 				if storeOpTargetReg != identInfo.targetReg {
-					fmt.Printf("// DEBUG Assign Store: Emitting Move R%d <- R%d\n", identInfo.targetReg, storeOpTargetReg)
+					debugPrintf("// DEBUG Assign Store: Emitting Move R%d <- R%d\n", identInfo.targetReg, storeOpTargetReg)
 					c.emitMove(identInfo.targetReg, storeOpTargetReg, line)
 				} else {
-					fmt.Printf("// DEBUG Assign Store: Skipping Move R%d <- R%d (already inplace)\n", identInfo.targetReg, storeOpTargetReg)
+					debugPrintf("// DEBUG Assign Store: Skipping Move R%d <- R%d (already inplace)\n", identInfo.targetReg, storeOpTargetReg)
 				}
 			}
 		case lhsIsIndexExpr:
-			fmt.Printf("// DEBUG Assign Store: Emitting SetIndex [%d][%d] = R%d\n", indexInfo.arrayReg, indexInfo.indexReg, storeOpTargetReg)
+			debugPrintf("// DEBUG Assign Store: Emitting SetIndex [%d][%d] = R%d\n", indexInfo.arrayReg, indexInfo.indexReg, storeOpTargetReg)
 			c.emitOpCode(vm.OpSetIndex, line)
 			c.emitByte(byte(indexInfo.arrayReg))
 			c.emitByte(byte(indexInfo.indexReg))
 			c.emitByte(byte(storeOpTargetReg))
 		}
 	} else {
-		fmt.Printf("// DEBUG Assign Store: Skipped store operation (needsStore=false)\n")
+		debugPrintf("// DEBUG Assign Store: Skipped store operation (needsStore=false)\n")
 	}
 
 	// --- Final Merge Point & Patching ---
