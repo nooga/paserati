@@ -142,10 +142,13 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// (Type errors were caught earlier and returned).
 	if len(c.errors) == 0 {
 		if c.enclosing == nil { // Top-level script
+			// <<< ADD DEBUG PRINT HERE >>>
+			fmt.Printf("// DEBUG Compile End: Final Return Check. lastExprRegValid: %v, lastExprReg: R%d\n", c.lastExprRegValid, c.lastExprReg)
 			if c.lastExprRegValid {
 				c.emitReturn(c.lastExprReg, 0) // Use line 0 for implicit final return
 			} else {
-				c.emitOpCode(vm.OpReturnUndefined, 0) // Use line 0 for implicit final return
+				fmt.Printf("// DEBUG Compile End: Emitting OpReturnUndefined because lastExprRegValid is false.\n") // <<< ADDED
+				c.emitOpCode(vm.OpReturnUndefined, 0)                                                               // Use line 0 for implicit final return
 			}
 		} else {
 			// Inside a function, OpReturn or OpReturnUndefined should have been emitted.
@@ -174,14 +177,24 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	switch node := node.(type) {
 	case *parser.Program:
 		if c.enclosing == nil {
-			c.lastExprRegValid = false // Reset for the program start
+			fmt.Printf("// DEBUG Program Start: Resetting lastExprRegValid.\n") // <<< ADDED
+			c.lastExprRegValid = false                                          // Reset for the program start
 		}
-		for _, stmt := range node.Statements {
+		fmt.Printf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
+		for i, stmt := range node.Statements {
+			fmt.Printf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
 			err := c.compileNode(stmt)
 			if err != nil {
-				return err // Propagate errors up
+				fmt.Printf("// DEBUG Program: Error compiling statement %d: %v\n", i, err) // <<< ADDED
+				return err                                                                 // Propagate errors up
 			}
+			// <<< ADDED vvv
+			if c.enclosing == nil {
+				fmt.Printf("// DEBUG Program: After compiling statement %d (%T). lastExprRegValid: %v, lastExprReg: R%d\n", i, stmt, c.lastExprRegValid, c.lastExprReg)
+			}
+			// <<< ADDED ^^^
 		}
+		fmt.Printf("// DEBUG Program: Finished statement loop.\n") // <<< ADDED
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
@@ -208,43 +221,54 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		return nil
 
 	case *parser.ExpressionStatement:
+		fmt.Printf("// DEBUG ExprStmt: Compiling expression %T.\n", node.Expression) // <<< ADDED
 		err := c.compileNode(node.Expression)
 		if err != nil {
 			return err
 		}
 		if c.enclosing == nil { // If at top level, track this as potential final value
-			c.lastExprReg = c.regAlloc.Current()
+			currentReg := c.regAlloc.Current()                                                              // <<< ADDED
+			fmt.Printf("// DEBUG ExprStmt: Top Level. CurrentReg: R%d. Setting lastExprReg.\n", currentReg) // <<< ADDED
+			c.lastExprReg = currentReg                                                                      // <<< MODIFIED (was c.regAlloc.Current())
 			c.lastExprRegValid = true
-		}
+			fmt.Printf("// DEBUG ExprStmt: Top Level. Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg) // <<< ADDED
+		} else { // <<< ADDED vvv
+			fmt.Printf("// DEBUG ExprStmt: Not Top Level. lastExprRegValid remains unchanged.\n")
+		} // <<< ADDED ^^^
 		// Result register is left allocated, potentially unused otherwise.
 		// TODO: Consider freeing registers?
 
 	case *parser.LetStatement:
 		if c.enclosing == nil {
-			c.lastExprRegValid = false // Declarations don't provide final value
+			fmt.Printf("// DEBUG LetStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			c.lastExprRegValid = false                                                   // Declarations don't provide final value
 		}
 		return c.compileLetStatement(node)
 
 	case *parser.ConstStatement:
 		if c.enclosing == nil {
-			c.lastExprRegValid = false // Declarations don't provide final value
+			fmt.Printf("// DEBUG ConstStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			c.lastExprRegValid = false                                                     // Declarations don't provide final value
 		}
 		return c.compileConstStatement(node)
 
-	case *parser.ReturnStatement:
+	case *parser.ReturnStatement: // Although less relevant for top-level script return
 		if c.enclosing == nil {
-			c.lastExprRegValid = false // Explicit return overrides implicit
+			fmt.Printf("// DEBUG ReturnStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			c.lastExprRegValid = false                                                      // Explicit return overrides implicit
 		}
 		return c.compileReturnStatement(node)
 
 	case *parser.WhileStatement:
 		if c.enclosing == nil {
+			fmt.Printf("// DEBUG WhileStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false
 		}
 		return c.compileWhileStatement(node)
 
 	case *parser.ForStatement:
 		if c.enclosing == nil {
+			fmt.Printf("// DEBUG ForStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false
 		}
 		return c.compileForStatement(node)
@@ -329,7 +353,6 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		c.emitLoadUndefined(destReg, node.Token.Line)
 
 	case *parser.Identifier:
-		// Use currentSymbolTable for resolution
 		scopeName := "Function"
 		if c.currentSymbolTable.Outer == nil {
 			scopeName = "Global"
@@ -338,8 +361,6 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		if !found {
 			return NewCompileError(node, fmt.Sprintf("undefined variable '%s'", node.Value))
 		}
-
-		// Check if the symbol is defined in an outer scope (a free variable)
 		isLocal := definingTable == c.currentSymbolTable
 
 		// --- NEW RECURSION CHECK --- // Revised Check
@@ -368,15 +389,16 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		} else {
 			// This is a standard local or global variable (handled by current stack frame)
 			srcReg := symbolRef.Register
-			// --- PANIC CHECK --- Check if srcReg is the nilRegister unexpectedly
+			// <<< ADDED LOGGING >>> vvv
+			fmt.Printf("// DEBUG Identifier '%s': Resolved to isLocal=%v, srcReg=R%d\n", node.Value, isLocal, srcReg)
 			if srcReg == nilRegister {
-				// This panic should now be unreachable if the logic is correct
 				panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
 			}
-			// --- END PANIC CHECK ---
+			// <<< END LOGGING >>>
 			destReg := c.regAlloc.Alloc()
+			fmt.Printf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, destReg, srcReg)
 			c.emitMove(destReg, srcReg, node.Token.Line)
-			//c.regAlloc.SetCurrent(srcReg)
+			c.regAlloc.SetCurrent(destReg)
 		}
 
 	case *parser.PrefixExpression:
@@ -1143,284 +1165,6 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression) erro
 
 	// Now Current() correctly points to finalReg which holds the unified result.
 	c.regAlloc.SetCurrent(finalReg) // Set current explicitly
-	return nil
-}
-
-// compileAssignmentExpression compiles identifier = value OR indexExpr = value
-func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) errors.PaseratiError {
-	line := node.Token.Line
-
-	// Check if left-hand side is an index expression
-	if indexExpr, isIndexExpr := node.Left.(*parser.IndexExpression); isIndexExpr {
-		// --- Handle arr[idx] = value ---
-
-		// Operator must be simple assignment '=' for index assignment
-		// TODO: Support compound assignment for index expressions?
-		// e.g., arr[i] += 1 -> Load arr[i], load 1, add, store arr[i]
-		if node.Operator != "=" {
-			return NewCompileError(node, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported currently", node.Operator))
-		}
-
-		// 1. Compile array expression
-		err := c.compileNode(indexExpr.Left)
-		if err != nil {
-			return err
-		}
-		arrayReg := c.regAlloc.Current()
-
-		// 2. Compile index expression
-		err = c.compileNode(indexExpr.Index)
-		if err != nil {
-			return err
-		}
-		indexReg := c.regAlloc.Current()
-
-		// 3. Compile the value expression (RHS)
-		err = c.compileNode(node.Value)
-		if err != nil {
-			return err
-		}
-		valueReg := c.regAlloc.Current()
-
-		// 4. Emit OpSetIndex
-		c.emitOpCode(vm.OpSetIndex, node.Token.Line) // Use '=' token line
-		c.emitByte(byte(arrayReg))
-		c.emitByte(byte(indexReg))
-		c.emitByte(byte(valueReg))
-
-		// 5. Assignment expression evaluates to the assigned value (RHS)
-		c.regAlloc.SetCurrent(valueReg)
-		return nil
-	}
-
-	// --- Existing logic for identifier assignment ---
-	// 1. Ensure left-hand side is an identifier (if not index expression)
-	ident, ok := node.Left.(*parser.Identifier)
-	if !ok {
-		// TODO: Add member expression assignment (obj.prop = value)
-		return NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier or index expression, got %T", node.Left))
-	}
-
-	// 2. Resolve the identifier to find its storage location (register or upvalue)
-	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
-	if !found {
-		return NewCompileError(node, fmt.Sprintf("assignment to undeclared variable '%s'", ident.Value))
-	}
-
-	// 3. Determine target register and load current value if needed (for compound ops or upvalues)
-	var targetReg Register
-	isUpvalue := false
-	var upvalueIndex uint8
-
-	if definingTable == c.currentSymbolTable {
-		// Local variable: Get its assigned register.
-		targetReg = symbolRef.Register
-		// If it's a compound assignment, the existing value in targetReg is used directly.
-		// If it's simple assignment '=', targetReg will be overwritten later.
-	} else {
-		// Free variable (upvalue): Find its index.
-		isUpvalue = true
-		upvalueIndex = c.addFreeSymbol(node, &symbolRef)
-		// Allocate a register to hold the current value loaded from the upvalue.
-		targetReg = c.regAlloc.Alloc()
-		// Emit OpLoadFree manually
-		c.emitOpCode(vm.OpLoadFree, line)
-		c.emitByte(byte(targetReg)) // Destination register
-		c.emitByte(upvalueIndex)    // Upvalue index
-	}
-	// If targetReg is still nilRegister here, it's an internal error
-	if targetReg == nilRegister && node.Operator != "=" {
-		panic(fmt.Sprintf("Internal compiler error: targetReg is nilRegister before compound assignment for '%s'", ident.Value))
-	}
-
-	// --- Logical Assignment Short-Circuiting (Needs specific handling BEFORE compiling RHS) ---
-	// We handle these operators separately because they don't always evaluate the RHS.
-	if node.Operator == "&&=" || node.Operator == "||=" || node.Operator == "??=" {
-		return c.compileLogicalAssignmentExpression(node, ident, targetReg, isUpvalue, upvalueIndex)
-	}
-	// --- End Logical Assignment ---
-
-	// 4. Compile the value expression (right-hand side) for NON-LOGICAL assignments
-	err := c.compileNode(node.Value)
-	if err != nil {
-		return err
-	}
-	valueReg := c.regAlloc.Current() // RHS Value is in this register
-
-	// 5. Perform operation if compound assignment, or move for simple assignment
-	switch node.Operator {
-	// Arithmetic
-	case "+=":
-		c.emitAdd(targetReg, targetReg, valueReg, line) // target = target + value
-	case "-=":
-		c.emitSubtract(targetReg, targetReg, valueReg, line) // target = target - value
-	case "*=":
-		c.emitMultiply(targetReg, targetReg, valueReg, line) // target = target * value
-	case "/=":
-		c.emitDivide(targetReg, targetReg, valueReg, line) // target = target / value
-	case "%=":
-		c.emitRemainder(targetReg, targetReg, valueReg, line) // target = target % value
-	case "**=":
-		c.emitExponent(targetReg, targetReg, valueReg, line) // target = target ** value
-
-	// --- NEW: Bitwise / Shift ---
-	case "&=":
-		c.emitBitwiseAnd(targetReg, targetReg, valueReg, line)
-	case "|=":
-		c.emitBitwiseOr(targetReg, targetReg, valueReg, line)
-	case "^=":
-		c.emitBitwiseXor(targetReg, targetReg, valueReg, line)
-	case "<<=":
-		c.emitShiftLeft(targetReg, targetReg, valueReg, line)
-	case ">>=":
-		c.emitShiftRight(targetReg, targetReg, valueReg, line)
-	case ">>>=":
-		c.emitUnsignedShiftRight(targetReg, targetReg, valueReg, line)
-	// --- END NEW ---
-
-	case "=":
-		// Simple assignment: Move RHS value into target register.
-		// If it was an upvalue, targetReg holds the *loaded* current value,
-		// but we want to overwrite it with the new valueReg before SetUpvalue.
-		c.emitMove(targetReg, valueReg, line)
-
-	// Logical operators handled separately above
-	// case "&&=", "||=", "??=":
-	// 	  // Should not be reached due to check above
-
-	default:
-		return NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))
-	}
-	// Result of operation (or move) is now in targetReg
-
-	// 6. Store result back if it was an upvalue
-	if isUpvalue {
-		c.emitSetUpvalue(upvalueIndex, targetReg, line)
-	}
-
-	// 7. Assignment expression evaluates to the assigned value (now in targetReg).
-	c.regAlloc.SetCurrent(targetReg)
-
-	// Free the RHS value register if it's different from the target
-	if valueReg != targetReg {
-		c.regAlloc.Free(valueReg)
-	}
-	// If targetReg was allocated temporarily for an upvalue load, and this *wasn't*
-	// simple assignment '=', we might need to free it? No, targetReg now holds the
-	// result which is the value of the expression.
-
-	return nil
-}
-
-// compileLogicalAssignmentExpression handles '&&=', '||=', '??='
-// This is separated because the RHS is only evaluated conditionally.
-func (c *Compiler) compileLogicalAssignmentExpression(
-	node *parser.AssignmentExpression,
-	ident *parser.Identifier, // The LHS identifier
-	targetReg Register, // Register holding current value of LHS (or allocated for upvalue)
-	isUpvalue bool,
-	upvalueIndex uint8,
-) errors.PaseratiError {
-
-	line := node.Token.Line
-	var jumpToEndPlaceholder int = -1 // Initialize to indicate not set yet
-	var jumpPastEndPlaceholder int = -1
-
-	switch node.Operator {
-	case "&&=": // targetReg = targetReg && value
-		// If targetReg is FALSEY, the result is targetReg, jump to end.
-		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, targetReg, line)
-		// If TRUTHY, fall through to evaluate RHS.
-
-	case "||=": // targetReg = targetReg || value
-		// If targetReg is TRUTHY, the result is targetReg, jump to end.
-		tempNotReg := c.regAlloc.Alloc()
-		c.emitNot(tempNotReg, targetReg, line)                                           // Invert condition
-		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, tempNotReg, line) // Jump if inverted is false (original was true)
-		c.regAlloc.Free(tempNotReg)
-		// If FALSEY, fall through to evaluate RHS.
-
-	case "??=": // targetReg = targetReg ?? value
-		isNullReg := c.regAlloc.Alloc()
-		isUndefReg := c.regAlloc.Alloc()
-		nullConstReg := c.regAlloc.Alloc()
-		undefConstReg := c.regAlloc.Alloc()
-
-		c.emitLoadNewConstant(nullConstReg, vm.Null(), line)
-		c.emitLoadNewConstant(undefConstReg, vm.Undefined(), line)
-
-		// Check if targetReg == null
-		c.emitStrictEqual(isNullReg, targetReg, nullConstReg, line)
-		// If NOT null (isNullReg is false), jump to check undefined
-		jumpCheckUndef := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullReg, line)
-
-		// If IS null (didn't jump), jump unconditionally to the RHS evaluation path
-		jumpEvalRight := c.emitPlaceholderJump(vm.OpJump, 0, line)
-
-		// Land here if NOT null. Patch jumpCheckUndef.
-		c.patchJump(jumpCheckUndef)
-		// Check if targetReg == undefined
-		c.emitStrictEqual(isUndefReg, targetReg, undefConstReg, line)
-		// If NOT undefined (and not null), jump to the end path (skip RHS eval)
-		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, isUndefReg, line) // Jump if isUndefReg is FALSE
-
-		// Land here if IS undefined (didn't jump). Also patch the jump from the null path.
-		c.patchJump(jumpEvalRight)
-		// Now fall through to the RHS evaluation path.
-
-		// Free constant registers now they've been used for jumps
-		c.regAlloc.Free(isNullReg)
-		c.regAlloc.Free(isUndefReg)
-		c.regAlloc.Free(nullConstReg)
-		c.regAlloc.Free(undefConstReg)
-		// Fall through to evaluate RHS because targetReg was nullish.
-
-	default: // Should not happen
-		panic("compileLogicalAssignmentExpression called with non-logical operator")
-	}
-
-	// --- Evaluate RHS and Assign ---
-	// This code block is only reached if the short-circuit condition was NOT met.
-	err := c.compileNode(node.Value)
-	if err != nil {
-		return err
-	}
-	valueReg := c.regAlloc.Current() // RHS value is here
-
-	// Move the evaluated RHS value into the target register
-	c.emitMove(targetReg, valueReg, line)
-
-	// Store back if it was an upvalue
-	if isUpvalue {
-		c.emitSetUpvalue(upvalueIndex, targetReg, line)
-	}
-
-	// Free the value register if different
-	if valueReg != targetReg {
-		c.regAlloc.Free(valueReg)
-	}
-
-	// If we evaluated the RHS, we need to jump over the final end patch target
-	jumpPastEndPlaceholder = c.emitPlaceholderJump(vm.OpJump, 0, line)
-
-	// --- End Path ---
-	// Land here if the short-circuit jump (jumpToEndPlaceholder) was taken. Patch it.
-	if jumpToEndPlaceholder != -1 { // Ensure the jump was actually created (e.g. not for ??= null path)
-		c.patchJump(jumpToEndPlaceholder)
-		// If we jumped here, the original value in targetReg is the result. No move needed.
-	}
-
-	// Land here after either path finishes. Patch the jump from the RHS path.
-	if jumpPastEndPlaceholder != -1 { // Ensure the jump was created
-		c.patchJump(jumpPastEndPlaceholder)
-	}
-
-	// The final result of the expression is the value in targetReg.
-	c.regAlloc.SetCurrent(targetReg)
-
-	// If targetReg was allocated temporarily for an upvalue load, and we took the
-	// short-circuit path, we need to free it here? No, it holds the result.
-
 	return nil
 }
 

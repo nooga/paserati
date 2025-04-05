@@ -248,15 +248,26 @@ func (c *Chunk) DisassembleChunk(name string) string {
 func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int {
 	builder.WriteString(fmt.Sprintf("%04d      ", offset))
 
+	// Safety check for empty code or offset out of bounds
+	if offset >= len(c.Code) {
+		builder.WriteString("Attempt to disassemble beyond code boundary\n")
+		return offset + 1 // Avoid infinite loop if offset is already bad
+	}
+
 	instruction := OpCode(c.Code[offset])
 	switch instruction {
 	case OpLoadConst:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
 	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
-	case OpNegate, OpNot, OpMove:
+	case OpNegate, OpNot, OpBitwiseNot: // Added OpBitwiseNot here
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
-	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual:
+	case OpMove: // Kept separate for clarity if needed later
+		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
+	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual,
+		OpRemainder, OpExponent, // Added Remainder, Exponent
+		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor, // Added Bitwise ops
+		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight: // Added Shift ops
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz
 
 	case OpCall:
@@ -287,9 +298,13 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpSetIndex:
 		return c.setIndexInstruction(builder, instruction.String(), offset)
 
+	// Length Operation
+	case OpGetLength: // Assuming Rx, Ry format
+		return c.registerRegisterInstruction(builder, instruction.String(), offset)
+
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))
-		return offset + 1
+		return offset + 1 // Advance by 1 for unknown opcodes
 	}
 }
 
