@@ -142,3 +142,52 @@ let next = null;`
 		}
 	}
 }
+
+func TestSpecificOperatorLexing(t *testing.T) {
+	input := `* *= ** **= > >= >> >>= >>> >>>= & &= | |= || ||= ?? ??= ? <= << <<=`
+
+	tests := []struct {
+		expectedType    TokenType
+		expectedLiteral string
+	}{
+		{ASTERISK, "*"},
+		{ASTERISK_ASSIGN, "*="},
+		{EXPONENT, "**"},
+		{EXPONENT_ASSIGN, "**="},
+		{GT, ">"},
+		{GE, ">="},
+		{RIGHT_SHIFT, ">>"},
+		{RIGHT_SHIFT_ASSIGN, ">>="},
+		{UNSIGNED_RIGHT_SHIFT, ">>>"},
+		{UNSIGNED_RIGHT_SHIFT_ASSIGN, ">>>="},
+		{BITWISE_AND, "&"},
+		{BITWISE_AND_ASSIGN, "&="},
+		{PIPE, "|"}, // Assuming PIPE for single |
+		{BITWISE_OR_ASSIGN, "|="},
+		{LOGICAL_OR, "||"},
+		{LOGICAL_OR_ASSIGN, "||="},
+		{COALESCE, "??"},
+		{COALESCE_ASSIGN, "??="},
+		{QUESTION, "?"},
+		{LE, "<="},
+		{LEFT_SHIFT, "<<"},
+		{LEFT_SHIFT_ASSIGN, "<<="},
+		{EOF, ""},
+	}
+
+	l := NewLexer(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.expectedType {
+			t.Errorf("tests[%d] - tokentype wrong. expected=%q (%s), got=%q (%s)",
+				i, tt.expectedType, tt.expectedLiteral, tok.Type, tok.Literal)
+		}
+
+		if tok.Literal != tt.expectedLiteral {
+			t.Errorf("tests[%d] - literal wrong. expected=%q, got=%q (type: %q)",
+				i, tt.expectedLiteral, tok.Literal, tok.Type)
+		}
+	}
+}

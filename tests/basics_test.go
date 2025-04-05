@@ -384,6 +384,37 @@ func TestOperatorsAndLiterals(t *testing.T) {
 			input:  "let y = 3; y **= 3; y;", // 3 ** 3 = 27
 			expect: "27",
 		},
+
+		// --- NEW: Bitwise Operators ---
+		{name: "BitwiseAND", input: "6 & 3;", expect: "2"},                        // 110 & 011 = 010
+		{name: "BitwiseOR", input: "6 | 3;", expect: "7"},                         // 110 | 011 = 111
+		{name: "BitwiseXOR", input: "6 ^ 3;", expect: "5"},                        // 110 ^ 011 = 101
+		{name: "BitwiseNOT", input: "~5;", expect: "-6"},                          // ~0...0101 = 1...1010 (Two's complement)
+		{name: "LeftShift", input: "3 << 2;", expect: "12"},                       // 011 << 2 = 1100
+		{name: "RightShift", input: "12 >> 1;", expect: "6"},                      // 1100 >> 1 = 0110 (Signed right shift)
+		{name: "RightShiftNeg", input: "-8 >> 1;", expect: "-4"},                  // Signed right shift for negative
+		{name: "UnsignedRightShift", input: "12 >>> 1;", expect: "6"},             // Need compiler/VM support
+		{name: "UnsignedRightShiftNeg", input: "-8 >>> 1;", expect: "2147483644"}, // Assuming 32-bit int
+
+		// --- NEW: Bitwise Assignment Operators ---
+		{name: "CompAssign BitwiseAND", input: "let a = 6; a &= 3; a;", expect: "2"},
+		{name: "CompAssign BitwiseOR", input: "let b = 6; b |= 3; b;", expect: "7"},
+		{name: "CompAssign BitwiseXOR", input: "let c = 6; c ^= 3; c;", expect: "5"},
+		{name: "CompAssign LeftShift", input: "let d = 3; d <<= 2; d;", expect: "12"},
+		{name: "CompAssign RightShift", input: "let e = 12; e >>= 1; e;", expect: "6"},
+		// {name: "CompAssign UnsignedRightShift", input: "let f = 12; f >>>= 1; f;", expect: "6"}, // Need compiler/VM support
+
+		// --- NEW: Logical Assignment Operators ---
+		{name: "CompAssign LogicalAND True", input: "let g = true; g &&= false; g;", expect: "false"},
+		{name: "CompAssign LogicalAND False", input: "let h = false; h &&= true; h;", expect: "false"},            // Short circuits
+		{name: "CompAssign LogicalAND ShortCircuit", input: "let hh = false; hh &&= (1/0); hh;", expect: "false"}, // Short circuits
+		{name: "CompAssign LogicalOR True", input: "let i = true; i ||= false; i;", expect: "true"},               // Short circuits
+		{name: "CompAssign LogicalOR False", input: "let j = false; j ||= true; j;", expect: "true"},
+		{name: "CompAssign LogicalOR ShortCircuit", input: "let jj = true; jj ||= (1/0); jj;", expect: "true"}, // Short circuits
+		{name: "CompAssign Coalesce Null", input: "let k = null; k ??= 10; k;", expect: "10"},
+		{name: "CompAssign Coalesce Undefined", input: "let l; l ??= 20; l;", expect: "20"},
+		{name: "CompAssign Coalesce Value", input: "let m = 5; m ??= 30; m;", expect: "5"},              // Does not assign
+		{name: "CompAssign Coalesce ShortCircuit", input: "let mm = 1; mm ??= (1/0); mm;", expect: "1"}, // Short circuits
 	}
 
 	for _, tc := range testCases {

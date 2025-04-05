@@ -65,8 +65,30 @@ const (
 	INC TokenType = "++" // Added
 	DEC TokenType = "--" // Added
 
+	// --- NEW: Bitwise Operators ---
+	BITWISE_AND          TokenType = "&"
+	BITWISE_OR           TokenType = "|" // Note: This might conflict with PIPE for Union Types if not handled carefully
+	BITWISE_XOR          TokenType = "^"
+	BITWISE_NOT          TokenType = "~"
+	LEFT_SHIFT           TokenType = "<<"
+	RIGHT_SHIFT          TokenType = ">>"
+	UNSIGNED_RIGHT_SHIFT TokenType = ">>>"
+
+	// --- NEW: Bitwise Assignment ---
+	BITWISE_AND_ASSIGN          TokenType = "&="
+	BITWISE_OR_ASSIGN           TokenType = "|="
+	BITWISE_XOR_ASSIGN          TokenType = "^="
+	LEFT_SHIFT_ASSIGN           TokenType = "<<="
+	RIGHT_SHIFT_ASSIGN          TokenType = ">>="
+	UNSIGNED_RIGHT_SHIFT_ASSIGN TokenType = ">>>="
+
+	// --- NEW: Logical Assignment ---
+	LOGICAL_AND_ASSIGN TokenType = "&&="
+	LOGICAL_OR_ASSIGN  TokenType = "||="
+	COALESCE_ASSIGN    TokenType = "??="
+
 	// Type Operator
-	PIPE TokenType = "|" // Added for Union Types
+	PIPE TokenType = "|" // Added for Union Types - Retain for clarity, but NextToken needs careful handling
 
 	// Delimiters
 	COMMA     TokenType = ","
@@ -362,47 +384,128 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: SLASH, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '&':
-		if l.peekChar() == '&' { // Check for &&
-			l.readChar()                                // Consume second '&'
-			literal := l.input[startPos : l.position+1] // Read the actual '&&'
-			l.readChar()                                // Advance past '&'
-			tok = Token{Type: LOGICAL_AND, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else {
-			// Single '&' is illegal for now
-			literal := string(l.ch)
-			l.readChar()
-			tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		peek := l.peekChar()
+		if peek == '&' { // Logical AND or Logical AND Assignment
+			l.readChar()             // Consume second '&'
+			if l.peekChar() == '=' { // Check for &&=
+				l.readChar()                                // Consume '='
+				literal := l.input[startPos : l.position+1] // Read "&&="
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: LOGICAL_AND_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // Just &&
+				literal := l.input[startPos : l.position+1] // Read "&&"
+				l.readChar()                                // Advance past second '&'
+				tok = Token{Type: LOGICAL_AND, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
+		} else if peek == '=' { // Bitwise AND Assignment &=
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read "&="
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: BITWISE_AND_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		} else { // Bitwise AND &
+			literal := string(l.ch) // Read "&"
+			l.readChar()            // Advance past '&'
+			tok = Token{Type: BITWISE_AND, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '|':
-		if l.peekChar() == '|' { // Check for ||
-			l.readChar()                                // Consume second '|'
-			literal := l.input[startPos : l.position+1] // Read the actual '||'
-			l.readChar()                                // Advance past '|'
-			tok = Token{Type: LOGICAL_OR, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else {
-			// Single '|' is Union Type
+		peek := l.peekChar()
+		if peek == '|' { // Logical OR or Logical OR Assignment
+			l.readChar()             // Consume second '|'
+			if l.peekChar() == '=' { // Check for ||=
+				l.readChar()                                // Consume '='
+				literal := l.input[startPos : l.position+1] // Read "||="
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: LOGICAL_OR_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // Just ||
+				literal := l.input[startPos : l.position+1] // Read "||"
+				l.readChar()                                // Advance past second '|'
+				tok = Token{Type: LOGICAL_OR, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
+		} else if peek == '=' { // Bitwise OR Assignment |=
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read "|="
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: BITWISE_OR_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		} else { // Single '|' is Union Type / Bitwise OR (Let's prioritize Union for now, maybe reconsider if needed)
 			literal := string(l.ch)
 			l.readChar()
+			// For now, assume PIPE for type context. If needed later, parser context can disambiguate.
 			tok = Token{Type: PIPE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			// Alternative: tok = Token{Type: BITWISE_OR, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
+	case '^':
+		if l.peekChar() == '=' { // Bitwise XOR Assignment ^=
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read "^="
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: BITWISE_XOR_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		} else { // Bitwise XOR ^
+			literal := string(l.ch) // Read "^"
+			l.readChar()            // Advance past '^'
+			tok = Token{Type: BITWISE_XOR, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		}
+	case '~': // Bitwise NOT ~
+		literal := string(l.ch) // Read "~"
+		l.readChar()            // Advance past '~'
+		tok = Token{Type: BITWISE_NOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+
 	case '<':
-		if l.peekChar() == '=' {
+		peek := l.peekChar()
+		if peek == '=' { // Less than or equal <=
 			l.readChar()                                // Consume '='
 			literal := l.input[startPos : l.position+1] // Read the actual '<='
 			l.readChar()                                // Advance past '='
 			tok = Token{Type: LE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else {
+		} else if peek == '<' { // Left shift << or Left shift assignment <<=
+			l.readChar()             // Consume second '<'
+			if l.peekChar() == '=' { // Check for <<=
+				l.readChar()                                // Consume '='
+				literal := l.input[startPos : l.position+1] // Read "<<="
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: LEFT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // Just <<
+				literal := l.input[startPos : l.position+1] // Read "<<"
+				l.readChar()                                // Advance past second '<'
+				tok = Token{Type: LEFT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
+		} else { // Just Less than <
 			literal := string(l.ch) // Just '<'
 			l.readChar()            // Advance past '<'
 			tok = Token{Type: LT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '>':
-		if l.peekChar() == '=' {
+		peek := l.peekChar()
+		if peek == '=' { // Greater than or equal >=
 			l.readChar()                                // Consume '='
 			literal := l.input[startPos : l.position+1] // Read the actual '>='
 			l.readChar()                                // Advance past '='
 			tok = Token{Type: GE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else {
+		} else if peek == '>' { // Right shift >>, Unsigned right shift >>>, or assignments
+			l.readChar() // Consume second '>'
+			peek2 := l.peekChar()
+			if peek2 == '>' { // Potential >>> or >>>=
+				l.readChar()             // Consume third '>'
+				if l.peekChar() == '=' { // Check for >>>=
+					l.readChar()                                // Consume '='
+					literal := l.input[startPos : l.position+1] // Read ">>>="
+					l.readChar()                                // Advance past '='
+					tok = Token{Type: UNSIGNED_RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				} else { // Just >>>
+					literal := l.input[startPos : l.position+1] // Read ">>>"
+					l.readChar()                                // Advance past third '>'
+					tok = Token{Type: UNSIGNED_RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				}
+			} else if peek2 == '=' { // Check for >>=
+				l.readChar()                                // Consume '='
+				literal := l.input[startPos : l.position+1] // Read ">>="
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // Just >>
+				literal := l.input[startPos : l.position+1] // Read ">>"
+				l.readChar()                                // Advance past second '>'
+				tok = Token{Type: RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
+		} else { // Just Greater than >
 			literal := string(l.ch) // Just '>'
 			l.readChar()            // Advance past '>'
 			tok = Token{Type: GT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
@@ -462,13 +565,20 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: STRING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		}
 	case '?':
-		if l.peekChar() == '?' { // Check for ??
-			l.readChar()                                // Consume second '?'
-			literal := l.input[startPos : l.position+1] // Read the actual '??'
-			l.readChar()                                // Advance past '?'
-			tok = Token{Type: COALESCE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else {
-			// Original ternary operator
+		peek := l.peekChar()
+		if peek == '?' { // Nullish Coalescing ?? or Assignment ??=
+			l.readChar()             // Consume second '?'
+			if l.peekChar() == '=' { // Check for ??=
+				l.readChar()                                // Consume '='
+				literal := l.input[startPos : l.position+1] // Read "??="
+				l.readChar()                                // Advance past '='
+				tok = Token{Type: COALESCE_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // Just ??
+				literal := l.input[startPos : l.position+1] // Read "??"
+				l.readChar()                                // Advance past second '?'
+				tok = Token{Type: COALESCE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
+		} else { // Original ternary operator ?
 			literal := string(l.ch)
 			l.readChar()
 			tok = Token{Type: QUESTION, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
