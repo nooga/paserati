@@ -843,7 +843,7 @@ func (c *Checker) visit(node parser.Node) {
 			node.SetComputedType(types.Any) // Set to Any on error?
 		} else {
 			// --- DEBUG: Log raw type value immediately after resolve ---
-			// fmt.Printf("// [Checker Debug] Identifier: Resolved type for '%s': Ptr=%p, Value=%#v\n", node.Value, typ, typ) // Re-commented
+			// debugPrintf("// [Checker Debug] Identifier: Resolved type for '%s': Ptr=%p, Value=%#v\n", node.Value, typ, typ) // Re-commented
 			// --- END DEBUG ---
 
 			debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String()) // DEBUG - Uncommented
@@ -1722,7 +1722,7 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 	if aliasedType == nil {
 		// Error already added by resolveTypeAnnotation or invalid type expr
 		// We could add another error here, but maybe redundant.
-		// fmt.Printf("// [Checker TypeAlias] Failed to resolve type for alias '%s'\n", node.Name.Value)
+		// debugPrintf("// [Checker TypeAlias] Failed to resolve type for alias '%s'\n", node.Name.Value)
 		return // Cannot define alias if type resolution failed
 	}
 
@@ -1769,7 +1769,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	// Set the computed type for the ArrayLiteral node itself
 	node.SetComputedType(arrayType)
 
-	fmt.Printf("// [Checker ArrayLit] Computed type: %s\n", arrayType.String())
+	debugPrintf("// [Checker ArrayLit] Computed type: %s\n", arrayType.String())
 }
 
 // --- NEW: Index Expression Check ---
@@ -1828,7 +1828,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 	// Set computed type on the IndexExpression node
 	node.SetComputedType(resultType)
-	fmt.Printf("// [Checker IndexExpr] Computed type: %s\n", resultType.String())
+	debugPrintf("// [Checker IndexExpr] Computed type: %s\n", resultType.String())
 }
 
 // Helper function

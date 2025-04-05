@@ -25,7 +25,14 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompilerStats = true
+const debugCompiler = false
+const debugCompilerStats = false
+
+func debugPrintf(format string, args ...interface{}) {
+	if debugCompiler {
+		fmt.Printf(format, args...)
+	}
+}
 
 type CompilerStats struct {
 	BytesGenerated int
@@ -143,12 +150,12 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	if len(c.errors) == 0 {
 		if c.enclosing == nil { // Top-level script
 			// <<< ADD DEBUG PRINT HERE >>>
-			fmt.Printf("// DEBUG Compile End: Final Return Check. lastExprRegValid: %v, lastExprReg: R%d\n", c.lastExprRegValid, c.lastExprReg)
+			debugPrintf("// DEBUG Compile End: Final Return Check. lastExprRegValid: %v, lastExprReg: R%d\n", c.lastExprRegValid, c.lastExprReg)
 			if c.lastExprRegValid {
 				c.emitReturn(c.lastExprReg, 0) // Use line 0 for implicit final return
 			} else {
-				fmt.Printf("// DEBUG Compile End: Emitting OpReturnUndefined because lastExprRegValid is false.\n") // <<< ADDED
-				c.emitOpCode(vm.OpReturnUndefined, 0)                                                               // Use line 0 for implicit final return
+				debugPrintf("// DEBUG Compile End: Emitting OpReturnUndefined because lastExprRegValid is false.\n") // <<< ADDED
+				c.emitOpCode(vm.OpReturnUndefined, 0)                                                                // Use line 0 for implicit final return
 			}
 		} else {
 			// Inside a function, OpReturn or OpReturnUndefined should have been emitted.
@@ -177,24 +184,41 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	switch node := node.(type) {
 	case *parser.Program:
 		if c.enclosing == nil {
-			fmt.Printf("// DEBUG Program Start: Resetting lastExprRegValid.\n") // <<< ADDED
-			c.lastExprRegValid = false                                          // Reset for the program start
+			debugPrintf("// DEBUG Program Start: Resetting lastExprRegValid.\n") // <<< ADDED
+			c.lastExprRegValid = false                                           // Reset for the program start
 		}
-		fmt.Printf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
+		debugPrintf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
 		for i, stmt := range node.Statements {
-			fmt.Printf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
+			debugPrintf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
 			err := c.compileNode(stmt)
 			if err != nil {
-				fmt.Printf("// DEBUG Program: Error compiling statement %d: %v\n", i, err) // <<< ADDED
-				return err                                                                 // Propagate errors up
+				debugPrintf("// DEBUG Program: Error compiling statement %d: %v\n", i, err) // <<< ADDED
+				return err                                                                  // Propagate errors up
 			}
 			// <<< ADDED vvv
 			if c.enclosing == nil {
-				fmt.Printf("// DEBUG Program: After compiling statement %d (%T). lastExprRegValid: %v, lastExprReg: R%d\n", i, stmt, c.lastExprRegValid, c.lastExprReg)
+				debugPrintf("// DEBUG Program: After compiling statement %d (%T). lastExprRegValid: %v, lastExprReg: R%d\n", i, stmt, c.lastExprRegValid, c.lastExprReg)
 			}
 			// <<< ADDED ^^^
 		}
-		fmt.Printf("// DEBUG Program: Finished statement loop.\n") // <<< ADDED
+		debugPrintf("// DEBUG Program: Finished statement loop.\n") // <<< ADDED
+		return nil                                                  // ADDED: Explicit return for Program case
+
+	// --- NEW: Handle Function Literal as an EXPRESSION first ---
+	// This handles anonymous/named functions used in assignments, arguments, etc.
+	case *parser.FunctionLiteral:
+		debugPrintf("// DEBUG Node-FunctionLiteral: Compiling function literal used as expression.\n")
+		// Determine hint: empty for anonymous, Name.Value if named (though named exprs are rare)
+		hint := ""
+		if node.Name != nil {
+			hint = node.Name.Value
+		}
+		err := c.compileFunctionLiteral(node, hint) // Directly compile it
+		if err != nil {
+			return err
+		}
+		// lastExprReg/Valid are set correctly by compileFunctionLiteral
+		return nil
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
@@ -214,6 +238,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// Let's assume block statements themselves don't provide the final script value.
 			c.lastExprRegValid = originalLastExprValid
 		}
+		return nil // ADDED: Explicit return
 
 	// --- Statements ---
 	case *parser.TypeAliasStatement: // Added
@@ -221,54 +246,80 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		return nil
 
 	case *parser.ExpressionStatement:
-		fmt.Printf("// DEBUG ExprStmt: Compiling expression %T.\n", node.Expression) // <<< ADDED
+		debugPrintf("// DEBUG ExprStmt: Compiling expression %T.\n", node.Expression)
+
+		// Check specifically for NAMED function literals used as standalone statements.
+		// Anonymous ones are handled by the case *parser.FunctionLiteral above now.
+		if funcLit, ok := node.Expression.(*parser.FunctionLiteral); ok && funcLit.Name != nil {
+			debugPrintf("// DEBUG ExprStmt: Handling NAMED function declaration '%s' as statement.\n", funcLit.Name.Value)
+			// --- Handle named function recursion ---
+			// 1. Define the function name temporarily.
+			c.currentSymbolTable.Define(funcLit.Name.Value, nilRegister)
+			// 2. Compile the function literal body. Pass name as hint.
+			err := c.compileFunctionLiteral(funcLit, funcLit.Name.Value) // Use its own name as hint
+			if err != nil {
+				return err
+			}
+			valueReg := c.regAlloc.Current()
+			// 3. Update the symbol table entry.
+			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, valueReg)
+			// Function declarations don't produce a value for the script result
+			if c.enclosing == nil {
+				c.lastExprRegValid = false
+			}
+			return nil // Handled
+		}
+
+		// Original ExpressionStatement logic for other expressions
+		debugPrintf("// DEBUG ExprStmt: Compiling non-func-decl expression %T.\n", node.Expression)
 		err := c.compileNode(node.Expression)
 		if err != nil {
 			return err
 		}
 		if c.enclosing == nil { // If at top level, track this as potential final value
-			currentReg := c.regAlloc.Current()                                                              // <<< ADDED
-			fmt.Printf("// DEBUG ExprStmt: Top Level. CurrentReg: R%d. Setting lastExprReg.\n", currentReg) // <<< ADDED
-			c.lastExprReg = currentReg                                                                      // <<< MODIFIED (was c.regAlloc.Current())
+			currentReg := c.regAlloc.Current()                                                               // <<< ADDED
+			debugPrintf("// DEBUG ExprStmt: Top Level. CurrentReg: R%d. Setting lastExprReg.\n", currentReg) // <<< ADDED
+			c.lastExprReg = currentReg                                                                       // <<< MODIFIED (was c.regAlloc.Current())
 			c.lastExprRegValid = true
-			fmt.Printf("// DEBUG ExprStmt: Top Level. Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg) // <<< ADDED
+			debugPrintf("// DEBUG ExprStmt: Top Level. Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg) // <<< ADDED
 		} else { // <<< ADDED vvv
-			fmt.Printf("// DEBUG ExprStmt: Not Top Level. lastExprRegValid remains unchanged.\n")
+			debugPrintf("// DEBUG ExprStmt: Not Top Level. lastExprRegValid remains unchanged.\n")
 		} // <<< ADDED ^^^
 		// Result register is left allocated, potentially unused otherwise.
 		// TODO: Consider freeing registers?
+		return nil // ADDED: Explicit return
 
 	case *parser.LetStatement:
 		if c.enclosing == nil {
-			fmt.Printf("// DEBUG LetStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false                                                   // Declarations don't provide final value
+			debugPrintf("// DEBUG LetStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			c.lastExprRegValid = false                                                    // Declarations don't provide final value
 		}
 		return c.compileLetStatement(node)
 
 	case *parser.ConstStatement:
 		if c.enclosing == nil {
-			fmt.Printf("// DEBUG ConstStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false                                                     // Declarations don't provide final value
+			debugPrintf("// DEBUG ConstStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			c.lastExprRegValid = false                                                      // Declarations don't provide final value
 		}
 		return c.compileConstStatement(node)
 
 	case *parser.ReturnStatement: // Although less relevant for top-level script return
 		if c.enclosing == nil {
-			fmt.Printf("// DEBUG ReturnStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false                                                      // Explicit return overrides implicit
+			debugPrintf("// DEBUG ReturnStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			c.lastExprRegValid = false                                                       // Explicit return overrides implicit
 		}
 		return c.compileReturnStatement(node)
 
 	case *parser.WhileStatement:
 		if c.enclosing == nil {
-			fmt.Printf("// DEBUG WhileStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			debugPrintf("// DEBUG WhileStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false
 		}
 		return c.compileWhileStatement(node)
 
 	case *parser.ForStatement:
 		if c.enclosing == nil {
-			fmt.Printf("// DEBUG ForStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
+			debugPrintf("// DEBUG ForStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false
 		}
 		return c.compileForStatement(node)
@@ -297,44 +348,16 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		}
 		return c.compileSwitchStatement(node)
 
-	case *parser.FunctionLiteral: // Handle Function *Declarations* (when used as a statement)
-		// This handles `function foo() {}` syntax at the statement level.
-		// Function literals used in expressions (e.g., assignments) are handled below.
-		if node.Name == nil {
-			// Anonymous function used as a statement - likely an error or useless code.
-			// For now, we could compile it but it won't be callable.
-			// Or return an error?
-			return NewCompileError(node, "anonymous function used as statement")
-		}
-
-		if c.enclosing == nil {
-			c.lastExprRegValid = false // Function declarations don't produce a value
-		}
-
-		// --- Handle named function recursion ---
-		// 1. Define the function name temporarily.
-		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
-
-		// 2. Compile the function literal body.
-		//    Pass the variable name (f) as the hint for the function object's name
-		//    if the function literal itself is anonymous.
-		err := c.compileFunctionLiteral(node, node.Name.Value) // Pass name as hint
-		if err != nil {
-			return err
-		}
-		valueReg := c.regAlloc.Current() // Register holding the closure
-
-		// 3. Update the symbol table entry.
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, valueReg)
-
-	// --- Expressions ---
+	// --- Expressions (excluding FunctionLiteral which is handled above) ---
 	case *parser.NumberLiteral:
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNewConstant(destReg, vm.Number(node.Value), node.Token.Line)
+		return nil // ADDED: Explicit return
 
 	case *parser.StringLiteral:
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNewConstant(destReg, vm.String(node.Value), node.Token.Line)
+		return nil // ADDED: Explicit return
 
 	case *parser.BooleanLiteral:
 		destReg := c.regAlloc.Alloc()
@@ -343,14 +366,17 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		} else {
 			c.emitLoadFalse(destReg, node.Token.Line)
 		}
+		return nil // ADDED: Explicit return
 
 	case *parser.NullLiteral:
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNull(destReg, node.Token.Line)
+		return nil // ADDED: Explicit return
 
 	case *parser.UndefinedLiteral: // Added
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadUndefined(destReg, node.Token.Line)
+		return nil // ADDED: Explicit return
 
 	case *parser.Identifier:
 		scopeName := "Function"
@@ -390,16 +416,17 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// This is a standard local or global variable (handled by current stack frame)
 			srcReg := symbolRef.Register
 			// <<< ADDED LOGGING >>> vvv
-			fmt.Printf("// DEBUG Identifier '%s': Resolved to isLocal=%v, srcReg=R%d\n", node.Value, isLocal, srcReg)
+			debugPrintf("// DEBUG Identifier '%s': Resolved to isLocal=%v, srcReg=R%d\n", node.Value, isLocal, srcReg)
 			if srcReg == nilRegister {
 				panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
 			}
 			// <<< END LOGGING >>>
 			destReg := c.regAlloc.Alloc()
-			fmt.Printf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, destReg, srcReg)
+			debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, destReg, srcReg)
 			c.emitMove(destReg, srcReg, node.Token.Line)
 			c.regAlloc.SetCurrent(destReg)
 		}
+		return nil // ADDED: Explicit return
 
 	case *parser.PrefixExpression:
 		return c.compilePrefixExpression(node)
@@ -407,8 +434,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	case *parser.InfixExpression:
 		return c.compileInfixExpression(node)
 
-	case *parser.ArrowFunctionLiteral:
-		// Arrow functions are always anonymous expressions
+	case *parser.ArrowFunctionLiteral: // Keep this separate
 		return c.compileArrowFunctionLiteral(node)
 
 	case *parser.CallExpression:
@@ -473,9 +499,13 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	// --- END NEW ---
 
 	default:
+		// Add check here? If type is FunctionLiteral and wasn't caught above, it's an error.
+		if _, ok := node.(*parser.FunctionLiteral); ok {
+			return NewCompileError(node, "compiler internal error: FunctionLiteral fell through switch")
+		}
 		return NewCompileError(node, fmt.Sprintf("compilation not implemented for %T", node))
 	}
-	return nil // Return nil on success if no specific error occurred in this frame
+	// REMOVED: unreachable return nil // Return nil on success if no specific error occurred in this frame
 }
 
 // --- Statement Compilation ---
@@ -955,8 +985,8 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	constIdx := c.chunk.AddConstant(funcValue) // Index of the function proto in outer chunk
 
 	// 7. Emit OpClosure in the *outer* chunk.
-	destReg := c.regAlloc.Alloc()                                             // Register for the resulting closure object in the outer scope
-	fmt.Printf("// [Closure %s] Allocated destReg: R%d\n", funcName, destReg) // DEBUG
+	destReg := c.regAlloc.Alloc()                                              // Register for the resulting closure object in the outer scope
+	debugPrintf("// [Closure %s] Allocated destReg: R%d\n", funcName, destReg) // DEBUG
 	c.emitOpCode(vm.OpClosure, node.Token.Line)
 	c.emitByte(byte(destReg))
 	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
@@ -964,17 +994,17 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 	// Emit operands for each upvalue
 	for i, freeSym := range freeSymbols {
-		fmt.Printf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcName, i, freeSym.Name, freeSym.Register, funcNameForLookup) // DEBUG
+		debugPrintf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcName, i, freeSym.Name, freeSym.Register, funcNameForLookup) // DEBUG
 
 		// --- Check for self-capture first (Simplified Check) ---
 		// If a free symbol has nilRegister, it MUST be the temporary one
 		// added for recursion resolution. It signifies self-capture.
 		if freeSym.Register == nilRegister {
 			// This is the special self-capture case identified during body compilation.
-			fmt.Printf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcName, freeSym.Name, destReg) // DEBUG
-			c.emitByte(1)                                                                                                                                   // isLocal = true (capture from the stack where the closure will be placed)
-			c.emitByte(byte(destReg))                                                                                                                       // Index = the destination register of OpClosure
-			continue                                                                                                                                        // Skip the normal lookup below
+			debugPrintf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcName, freeSym.Name, destReg) // DEBUG
+			c.emitByte(1)                                                                                                                                    // isLocal = true (capture from the stack where the closure will be placed)
+			c.emitByte(byte(destReg))                                                                                                                        // Index = the destination register of OpClosure
+			continue                                                                                                                                         // Skip the normal lookup below
 		}
 		// --- END Check ---
 
@@ -988,7 +1018,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		}
 
 		if enclosingTable == c.currentSymbolTable {
-			fmt.Printf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcName, freeSym.Name, enclosingSymbol.Register) // DEBUG
+			debugPrintf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcName, freeSym.Name, enclosingSymbol.Register) // DEBUG
 			// The free variable is local in the *direct* enclosing scope.
 			c.emitByte(1) // isLocal = true
 			// Capture the value from the enclosing scope's actual register
@@ -997,12 +1027,16 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			// The free variable is also a free variable in the enclosing scope.
 			// We need to capture it from the enclosing scope's upvalues.
 			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                  // Use the same helper
-			fmt.Printf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcName, freeSym.Name, enclosingFreeIndex) // DEBUG
-			c.emitByte(0)                                                                                                                                  // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex))                                                                                                           // Index = upvalue index in enclosing scope
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                   // Use the same helper
+			debugPrintf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcName, freeSym.Name, enclosingFreeIndex) // DEBUG
+			c.emitByte(0)                                                                                                                                   // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex))                                                                                                            // Index = upvalue index in enclosing scope
 		}
 	}
+
+	// 8. Set the result register for the caller
+	c.lastExprReg = destReg
+	c.lastExprRegValid = true
 
 	return nil // Return nil even if there were body errors, errors are collected in c.errors
 }
@@ -1630,8 +1664,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c)
-	destReg := c.regAlloc.Alloc()                                                                   // Register for the resulting closure object in the outer scope
-	fmt.Printf("// [Closure %s] Allocated destReg: R%d\n", funcCompiler.compilingFuncName, destReg) // DEBUG
+	destReg := c.regAlloc.Alloc()                                                                    // Register for the resulting closure object in the outer scope
+	debugPrintf("// [Closure %s] Allocated destReg: R%d\n", funcCompiler.compilingFuncName, destReg) // DEBUG
 	c.emitOpCode(vm.OpClosure, node.Token.Line)
 	c.emitByte(byte(destReg))
 	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
@@ -1639,17 +1673,17 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 	// Emit operands for each upvalue
 	for i, freeSym := range freeSymbols {
-		fmt.Printf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcCompiler.compilingFuncName, i, freeSym.Name, freeSym.Register, funcCompiler.compilingFuncName) // DEBUG
+		debugPrintf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcCompiler.compilingFuncName, i, freeSym.Name, freeSym.Register, funcCompiler.compilingFuncName) // DEBUG
 
 		// --- Check for self-capture first (Simplified Check) ---
 		// If a free symbol has nilRegister, it MUST be the temporary one
 		// added for recursion resolution. It signifies self-capture.
 		if freeSym.Register == nilRegister {
 			// This is the special self-capture case identified during body compilation.
-			fmt.Printf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, destReg) // DEBUG
-			c.emitByte(1)                                                                                                                                                         // isLocal = true (capture from the stack where the closure will be placed)
-			c.emitByte(byte(destReg))                                                                                                                                             // Index = the destination register of OpClosure
-			continue                                                                                                                                                              // Skip the normal lookup below
+			debugPrintf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, destReg) // DEBUG
+			c.emitByte(1)                                                                                                                                                          // isLocal = true (capture from the stack where the closure will be placed)
+			c.emitByte(byte(destReg))                                                                                                                                              // Index = the destination register of OpClosure
+			continue                                                                                                                                                               // Skip the normal lookup below
 		}
 		// --- END Check ---
 
@@ -1663,7 +1697,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		}
 
 		if enclosingTable == c.currentSymbolTable {
-			fmt.Printf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register) // DEBUG
+			debugPrintf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register) // DEBUG
 			// The free variable is local in the *direct* enclosing scope.
 			c.emitByte(1) // isLocal = true
 			// Capture the value from the enclosing scope's actual register
@@ -1672,14 +1706,18 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			// The free variable is also a free variable in the enclosing scope.
 			// We need to capture it from the enclosing scope's upvalues.
 			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                                        // Use the same helper
-			fmt.Printf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex) // DEBUG
-			c.emitByte(0)                                                                                                                                                        // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex))                                                                                                                                 // Index = upvalue index in enclosing scope
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                                         // Use the same helper
+			debugPrintf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex) // DEBUG
+			c.emitByte(0)                                                                                                                                                         // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex))                                                                                                                                  // Index = upvalue index in enclosing scope
 		}
 	}
 
-	return nil // Return nil even if errors occurred; they are collected in c.errors
+	// 8. Set the result register for the caller
+	c.lastExprReg = destReg
+	c.lastExprRegValid = true
+
+	return nil // Return nil even if there were body errors, errors are collected in c.errors
 }
 
 // Added Helper
