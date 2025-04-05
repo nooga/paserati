@@ -9,7 +9,7 @@ import (
 	"paserati/pkg/vm"
 )
 
-const checkerDebug = true
+const checkerDebug = false
 
 func debugPrintf(format string, args ...interface{}) {
 	if checkerDebug {
@@ -866,24 +866,33 @@ func (c *Checker) visit(node parser.Node) {
 		var resultType types.Type = types.Any // Default to Any on error
 
 		if rightType != nil { // Proceed only if operand type is known
-			// <<< FIX: Use widened type for checks >>>
 			widenedRightType := types.GetWidenedType(rightType)
 			switch node.Operator {
 			case "-":
-				// --- NEW: Allow if operand is 'any' ---
 				if widenedRightType == types.Any {
 					resultType = types.Any
 				} else if widenedRightType == types.Number {
 					resultType = types.Number
 				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
+					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
 			case "!":
-				// Logical NOT can be applied to any type (implicitly converts to boolean)
 				resultType = types.Boolean
+			// --- NEW: Handle Bitwise NOT (~) ---
+			case "~":
+				if widenedRightType == types.Any {
+					resultType = types.Any // Bitwise NOT on 'any' results in 'any'? Or number? Let's stick with number like other bitwise ops.
+					resultType = types.Number
+				} else if widenedRightType == types.Number {
+					resultType = types.Number // Result of ~number is number
+				} else {
+					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
+					// Keep resultType = types.Any (default)
+				}
+			// --- END NEW ---
 			default:
-				c.addError(node.Right, fmt.Sprintf("unsupported prefix operator: %s", node.Operator))
+				c.addError(node, fmt.Sprintf("unsupported prefix operator: %s", node.Operator))
 			}
 		} // else: Error might have occurred visiting operand, or type is nil.
 		node.SetComputedType(resultType)
@@ -892,11 +901,9 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle InfixExpression ---
 		c.visit(node.Left)
 		c.visit(node.Right)
-		// <<< Use node's GetComputedType method >>>
 		leftType := node.Left.GetComputedType()
 		rightType := node.Right.GetComputedType()
 
-		// <<< Handle nil types early >>>
 		if leftType == nil {
 			leftType = types.Any
 		}
@@ -904,24 +911,19 @@ func (c *Checker) visit(node parser.Node) {
 			rightType = types.Any
 		}
 
-		// <<< Widen operand types >>>
 		widenedLeftType := types.GetWidenedType(leftType)
 		widenedRightType := types.GetWidenedType(rightType)
 
-		// <<< NEW DEBUG >>>
 		debugPrintf("// [Checker Infix Pre-Check] Left : %T (%v)\n", leftType, leftType)
 		debugPrintf("// [Checker Infix Pre-Check] Right: %T (%v)\n", rightType, rightType)
 		debugPrintf("// [Checker Infix Pre-Check] Widened Left : %T (%v)\n", widenedLeftType, widenedLeftType)
 		debugPrintf("// [Checker Infix Pre-Check] Widened Right: %T (%v)\n", widenedRightType, widenedRightType)
 		debugPrintf("// [Checker Infix Pre-Check] Check Condition: %v\n", widenedLeftType != nil && widenedRightType != nil)
-		// <<< END NEW DEBUG >>>
 
 		var resultType types.Type = types.Any // Default to Any on error
-
-		// --- NEW: Allow operations if any operand is 'any' ---
 		isAnyOperand := widenedLeftType == types.Any || widenedRightType == types.Any
 
-		if widenedLeftType != nil && widenedRightType != nil { // Proceed only if operand types are known
+		if widenedLeftType != nil && widenedRightType != nil {
 			debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
 			switch node.Operator {
 			case "+":
@@ -960,6 +962,24 @@ func (c *Checker) visit(node parser.Node) {
 					// Keep resultType = types.Any
 				}
 			// --- END NEW ---
+
+			// --- NEW: Handle Bitwise/Shift Operators ---
+			case "&", "|", "^", "<<", ">>", ">>>":
+				if isAnyOperand {
+					// If either operand is 'any', the result is likely 'number'
+					// as these ops coerce non-numbers in JS (often to 0 or NaN).
+					// Let's assume 'number' is the most probable outcome type.
+					resultType = types.Number
+				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
+					// Both operands are numbers, result is number.
+					resultType = types.Number
+				} else {
+					// Operands are not numbers (and not 'any'). This is a type error.
+					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					// Keep resultType = types.Any (default)
+				}
+			// --- END NEW ---
+
 			case "<", ">", "<=", ">=":
 				if isAnyOperand {
 					resultType = types.Any // Comparison with any results in any? Or boolean? Let's try Any first.
@@ -999,9 +1019,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		} // else: Error already reported during operand check or types were nil
 
-		// <<< DEBUG: Print determined type before storing >>>
 		debugPrintf("// [Checker Infix] Node: %p (%s), Determined ResultType: %T (%v)\n", node, node.Operator, resultType, resultType)
-
 		node.SetComputedType(resultType)
 
 	case *parser.IfExpression:
@@ -1408,80 +1426,117 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(funcType.ReturnType)
 
 	case *parser.AssignmentExpression:
-		// TODO: Handle AssignmentExpression
-		if indexExpr, isIndexExpr := node.Left.(*parser.IndexExpression); isIndexExpr {
-			// --- Handle arr[idx] = value ---
-			if node.Operator != "=" {
-				c.addError(node.Value, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported", node.Operator))
-				node.SetComputedType(types.Any) // Set error type
-				return
-			}
-
-			// Visit the parts to get their types
-			c.visit(indexExpr.Left)  // Visit the array part: computes array type
-			c.visit(indexExpr.Index) // Visit the index part: checks index type
-			c.visit(node.Value)      // Visit the RHS value: computes value type
-
-			// Get the types computed by the visits above
-			arrayType := indexExpr.Left.GetComputedType()
-			indexType := indexExpr.Index.GetComputedType()
-			valueType := node.Value.GetComputedType()
-
-			// Determine the expected element type from the array type
-			var expectedElementType types.Type = types.Any
-			if arrT, ok := arrayType.(*types.ArrayType); ok {
-				if arrT.ElementType != nil {
-					expectedElementType = arrT.ElementType
-				}
-			} // TODO: Handle assignment to string index? Other indexable types?
-
-			// Check if index is number (already checked within checkIndexExpression, but maybe check again?)
-			if !c.isAssignable(indexType, types.Number) {
-				// Error already added by checkIndexExpression if called via visit(indexExpr)
-				// c.addError(line, fmt.Sprintf("array index must be number, got %s", indexType.String()))
-			}
-
-			// --- CHECK ASSIGNMENT ---
-			if !c.isAssignable(valueType, expectedElementType) {
-				// Use line number from the value node if possible
-				c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to array element of type '%s'", valueType.String(), expectedElementType.String()))
-			}
-			// --- END CHECK ---
-
-			// Assignment expression evaluates to the assigned value
-			node.SetComputedType(valueType)
-			return
-		}
-
-		// --- Existing Identifier Assignment ---
-		// Visit LHS identifier
+		// Visit LHS (Identifier, IndexExpr, MemberExpr)
 		c.visit(node.Left)
-		lhsType := node.Left.GetComputedType() // Assume it was found (handled by identifier visit)
-
-		// <<< NEW: Check if LHS is const >>>
-		if identLHS, ok := node.Left.(*parser.Identifier); ok {
-			// debugPrintf("// [Checker Assign] Checking const status for LHS: %s\\n", identLHS.Value) // REMOVED DEBUG
-			_, isConst, found := c.env.Resolve(identLHS.Value) // Resolve again to get const status
-			// debugPrintf("// [Checker Assign] Resolve result: isConst=%v, found=%v\\n", isConst, found)      // REMOVED DEBUG
-			if found && isConst {
-				// debugPrintf("// [Checker Assign] Adding const assignment error for %s\\n", identLHS.Value) // REMOVED DEBUG
-				c.addError(node.Left, fmt.Sprintf("cannot assign to constant variable '%s'", identLHS.Value))
-				// Don't return, still check RHS type and set overall type
-			}
-		}
-		// <<< END CONST CHECK >>>
+		lhsType := node.Left.GetComputedType() // Assume it was found (handled by identifier/index/member visit)
+		if lhsType == nil {
+			lhsType = types.Any
+		} // Handle nil from error
 
 		// Visit RHS value
 		c.visit(node.Value)
 		rhsType := node.Value.GetComputedType()
+		if rhsType == nil {
+			rhsType = types.Any
+		} // Handle nil from error
 
-		// Check assignability
-		if lhsType != nil && !c.isAssignable(rhsType, lhsType) {
-			leftIdent := node.Left.(*parser.Identifier) // Assume it's an identifier here
-			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", rhsType.String(), leftIdent.Value, lhsType.String()))
+		// Widen types for operator checks
+		widenedLhsType := types.GetWidenedType(lhsType)
+		widenedRhsType := types.GetWidenedType(rhsType)
+		isAnyLhs := widenedLhsType == types.Any
+		isAnyRhs := widenedRhsType == types.Any
+
+		// Operator-Specific Pre-Checks
+		validOperands := true // Assume valid initially
+		switch node.Operator {
+		// Arithmetic Compound Assignments (Check if LHS/RHS are numeric)
+		case "+=", "-=", "*=", "/=", "%=", "**=":
+			if !isAnyLhs && widenedLhsType != types.Number {
+				// Exception: Allow string += any
+				if !(node.Operator == "+=" && widenedLhsType == types.String) {
+					c.addError(node.Left, fmt.Sprintf("operator '%s' requires LHS operand of type 'number' or 'any', got '%s'", node.Operator, widenedLhsType.String()))
+					validOperands = false
+				}
+			}
+			if !isAnyRhs && widenedRhsType != types.Number {
+				// Exception: Allow string += any or number += string
+				if !(node.Operator == "+=" && (widenedLhsType == types.String || widenedRhsType == types.String || isAnyRhs)) { // Adjusted check for RHS in +=
+					c.addError(node.Value, fmt.Sprintf("operator '%s' requires RHS operand of type 'number', 'string' (if LHS is string), or 'any', got '%s'", node.Operator, widenedRhsType.String()))
+					validOperands = false
+				}
+			}
+			// Note: += specifically allows string concatenation, checks adjusted slightly.
+
+		// Bitwise/Shift Compound Assignments (Require numeric operands)
+		case "&=", "|=", "^=", "<<=", ">>=", ">>>=":
+			if !isAnyLhs && widenedLhsType != types.Number {
+				c.addError(node.Left, fmt.Sprintf("operator '%s' requires LHS operand of type 'number' or 'any', got '%s'", node.Operator, widenedLhsType.String()))
+				validOperands = false
+			}
+			if !isAnyRhs && widenedRhsType != types.Number {
+				c.addError(node.Value, fmt.Sprintf("operator '%s' requires RHS operand of type 'number' or 'any', got '%s'", node.Operator, widenedRhsType.String()))
+				validOperands = false
+			}
+
+		// Logical/Coalesce Compound Assignments (No extra numeric checks needed)
+		case "&&=", "||=", "??=":
+			// These depend on truthiness/nullishness and general assignability,
+			// no specific 'number' requirement for the operation itself.
+			// Special handling for ??= assignability check below.
+			break
+
+		case "=":
+			// Simple assignment, no extra operator checks needed here.
+			break
+
+		default:
+			// Should not happen if parser/lexer are correct
+			c.addError(node, fmt.Sprintf("internal checker error: unhandled assignment operator %s", node.Operator))
+			validOperands = false
 		}
+		// <<< END Operator-Specific Pre-Checks >>>
 
-		// Set computed type for the assignment expression (value assigned)
+		// --- Check LHS const status ---
+		// (Do this regardless of operand validity to catch const errors early)
+		if identLHS, ok := node.Left.(*parser.Identifier); ok {
+			_, isConst, found := c.env.Resolve(identLHS.Value)
+			if found && isConst {
+				c.addError(node.Left, fmt.Sprintf("cannot assign to constant variable '%s'", identLHS.Value))
+				// Continue checking RHS type and assignability for completeness
+			}
+		}
+		// TODO: Add check for assigning to member expression property if needed (is property readonly?)
+
+		// --- Final Assignability Check ---
+		// Check if the RHS type can be assigned to the LHS type.
+		if validOperands { // Only perform detailed check if operands were potentially valid for the operator
+
+			// Perform the check for all operators.
+			if !c.isAssignable(rhsType, lhsType) {
+				// <<< NEW: Special case for ??= with null/undefined LHS >>>
+				allowAssignment := false
+				if node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
+					// Allow assignment if LHS is null/undefined, regardless of RHS type's
+					// strict assignability to JUST null/undefined. The effective type
+					// after assignment would be widened.
+					allowAssignment = true
+				}
+				// <<< END NEW >>>
+
+				if !allowAssignment { // If not the special case, report the error
+					leftDesc := "variable"
+					if ident, ok := node.Left.(*parser.Identifier); ok {
+						leftDesc = fmt.Sprintf("variable '%s'", ident.Value)
+					}
+					c.addError(node.Value, fmt.Sprintf("type '%s' is not assignable to %s of type '%s'", rhsType.String(), leftDesc, lhsType.String()))
+				}
+			}
+
+		} // else: Don't perform the final assignability check if operands were invalid for the op.
+
+		// Set computed type for the overall assignment expression (evaluates to RHS value)
+		// TODO: For ??=, the computed type should probably be the union of lhsType and rhsType?
+		// For now, RHS is simpler.
 		node.SetComputedType(rhsType)
 
 	case *parser.UpdateExpression:

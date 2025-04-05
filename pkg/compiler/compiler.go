@@ -594,6 +594,10 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) errors
 		c.emitNot(destReg, rightReg, node.Token.Line)
 	case "-":
 		c.emitNegate(destReg, rightReg, node.Token.Line)
+	// --- NEW ---
+	case "~":
+		c.emitBitwiseNot(destReg, rightReg, node.Token.Line)
+	// --- END NEW ---
 	default:
 		return NewCompileError(node, fmt.Sprintf("unknown prefix operator '%s'", node.Operator))
 	}
@@ -608,7 +612,7 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) errors
 func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.PaseratiError {
 	line := node.Token.Line // Use operator token line number
 
-	// --- Standard binary operators (arithmetic, comparison) ---
+	// --- Standard binary operators (arithmetic, comparison, bitwise, shift) ---
 	if node.Operator != "&&" && node.Operator != "||" && node.Operator != "??" {
 		err := c.compileNode(node.Left)
 		if err != nil {
@@ -625,6 +629,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 		destReg := c.regAlloc.Alloc() // Allocate dest register *before* emitting op
 
 		switch node.Operator {
+		// Arithmetic
 		case "+":
 			c.emitAdd(destReg, leftReg, rightReg, line)
 		case "-":
@@ -633,12 +638,12 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 			c.emitMultiply(destReg, leftReg, rightReg, line)
 		case "/":
 			c.emitDivide(destReg, leftReg, rightReg, line)
-		// --- NEW: Handle % and ** ---
-		case "%": // Use string literal for operator
+		case "%":
 			c.emitRemainder(destReg, leftReg, rightReg, line)
-		case "**": // Use string literal for operator
+		case "**":
 			c.emitExponent(destReg, leftReg, rightReg, line)
-		// --- END NEW ---
+
+		// Comparison
 		case "<=":
 			c.emitLessEqual(destReg, leftReg, rightReg, line)
 		case ">=":
@@ -646,7 +651,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 			tempReg := c.regAlloc.Alloc() // Temp register for (left < right)
 			c.emitLess(tempReg, leftReg, rightReg, line)
 			c.emitNot(destReg, tempReg, line) // destReg = !(tempReg)
-			// Allocator should ideally handle freeing tempReg if needed, or maybe release manually?
+			c.regAlloc.Free(tempReg)          // Free the intermediate temp register
 		case "==":
 			c.emitEqual(destReg, leftReg, rightReg, line)
 		case "!=":
@@ -659,6 +664,22 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 			c.emitStrictEqual(destReg, leftReg, rightReg, line)
 		case "!==":
 			c.emitStrictNotEqual(destReg, leftReg, rightReg, line)
+
+		// --- NEW: Bitwise & Shift ---
+		case "&":
+			c.emitBitwiseAnd(destReg, leftReg, rightReg, line)
+		case "|":
+			c.emitBitwiseOr(destReg, leftReg, rightReg, line)
+		case "^":
+			c.emitBitwiseXor(destReg, leftReg, rightReg, line)
+		case "<<":
+			c.emitShiftLeft(destReg, leftReg, rightReg, line)
+		case ">>":
+			c.emitShiftRight(destReg, leftReg, rightReg, line)
+		case ">>>":
+			c.emitUnsignedShiftRight(destReg, leftReg, rightReg, line)
+		// --- END NEW ---
+
 		default:
 			return NewCompileError(node, fmt.Sprintf("unknown standard infix operator '%s'", node.Operator))
 		}
@@ -1134,8 +1155,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		// --- Handle arr[idx] = value ---
 
 		// Operator must be simple assignment '=' for index assignment
+		// TODO: Support compound assignment for index expressions?
+		// e.g., arr[i] += 1 -> Load arr[i], load 1, add, store arr[i]
 		if node.Operator != "=" {
-			return NewCompileError(node, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported", node.Operator))
+			return NewCompileError(node, fmt.Sprintf("invalid operator '%s' for index assignment, only '=' is supported currently", node.Operator))
 		}
 
 		// 1. Compile array expression
@@ -1174,6 +1197,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	// 1. Ensure left-hand side is an identifier (if not index expression)
 	ident, ok := node.Left.(*parser.Identifier)
 	if !ok {
+		// TODO: Add member expression assignment (obj.prop = value)
 		return NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier or index expression, got %T", node.Left))
 	}
 
@@ -1204,8 +1228,19 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		c.emitByte(byte(targetReg)) // Destination register
 		c.emitByte(upvalueIndex)    // Upvalue index
 	}
+	// If targetReg is still nilRegister here, it's an internal error
+	if targetReg == nilRegister && node.Operator != "=" {
+		panic(fmt.Sprintf("Internal compiler error: targetReg is nilRegister before compound assignment for '%s'", ident.Value))
+	}
 
-	// 4. Compile the value expression (right-hand side)
+	// --- Logical Assignment Short-Circuiting (Needs specific handling BEFORE compiling RHS) ---
+	// We handle these operators separately because they don't always evaluate the RHS.
+	if node.Operator == "&&=" || node.Operator == "||=" || node.Operator == "??=" {
+		return c.compileLogicalAssignmentExpression(node, ident, targetReg, isUpvalue, upvalueIndex)
+	}
+	// --- End Logical Assignment ---
+
+	// 4. Compile the value expression (right-hand side) for NON-LOGICAL assignments
 	err := c.compileNode(node.Value)
 	if err != nil {
 		return err
@@ -1214,6 +1249,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 	// 5. Perform operation if compound assignment, or move for simple assignment
 	switch node.Operator {
+	// Arithmetic
 	case "+=":
 		c.emitAdd(targetReg, targetReg, valueReg, line) // target = target + value
 	case "-=":
@@ -1226,11 +1262,32 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		c.emitRemainder(targetReg, targetReg, valueReg, line) // target = target % value
 	case "**=":
 		c.emitExponent(targetReg, targetReg, valueReg, line) // target = target ** value
+
+	// --- NEW: Bitwise / Shift ---
+	case "&=":
+		c.emitBitwiseAnd(targetReg, targetReg, valueReg, line)
+	case "|=":
+		c.emitBitwiseOr(targetReg, targetReg, valueReg, line)
+	case "^=":
+		c.emitBitwiseXor(targetReg, targetReg, valueReg, line)
+	case "<<=":
+		c.emitShiftLeft(targetReg, targetReg, valueReg, line)
+	case ">>=":
+		c.emitShiftRight(targetReg, targetReg, valueReg, line)
+	case ">>>=":
+		c.emitUnsignedShiftRight(targetReg, targetReg, valueReg, line)
+	// --- END NEW ---
+
 	case "=":
 		// Simple assignment: Move RHS value into target register.
 		// If it was an upvalue, targetReg holds the *loaded* current value,
 		// but we want to overwrite it with the new valueReg before SetUpvalue.
 		c.emitMove(targetReg, valueReg, line)
+
+	// Logical operators handled separately above
+	// case "&&=", "||=", "??=":
+	// 	  // Should not be reached due to check above
+
 	default:
 		return NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))
 	}
@@ -1243,6 +1300,126 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 	// 7. Assignment expression evaluates to the assigned value (now in targetReg).
 	c.regAlloc.SetCurrent(targetReg)
+
+	// Free the RHS value register if it's different from the target
+	if valueReg != targetReg {
+		c.regAlloc.Free(valueReg)
+	}
+	// If targetReg was allocated temporarily for an upvalue load, and this *wasn't*
+	// simple assignment '=', we might need to free it? No, targetReg now holds the
+	// result which is the value of the expression.
+
+	return nil
+}
+
+// compileLogicalAssignmentExpression handles '&&=', '||=', '??='
+// This is separated because the RHS is only evaluated conditionally.
+func (c *Compiler) compileLogicalAssignmentExpression(
+	node *parser.AssignmentExpression,
+	ident *parser.Identifier, // The LHS identifier
+	targetReg Register, // Register holding current value of LHS (or allocated for upvalue)
+	isUpvalue bool,
+	upvalueIndex uint8,
+) errors.PaseratiError {
+
+	line := node.Token.Line
+	var jumpToEndPlaceholder int = -1 // Initialize to indicate not set yet
+	var jumpPastEndPlaceholder int = -1
+
+	switch node.Operator {
+	case "&&=": // targetReg = targetReg && value
+		// If targetReg is FALSEY, the result is targetReg, jump to end.
+		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, targetReg, line)
+		// If TRUTHY, fall through to evaluate RHS.
+
+	case "||=": // targetReg = targetReg || value
+		// If targetReg is TRUTHY, the result is targetReg, jump to end.
+		tempNotReg := c.regAlloc.Alloc()
+		c.emitNot(tempNotReg, targetReg, line)                                           // Invert condition
+		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, tempNotReg, line) // Jump if inverted is false (original was true)
+		c.regAlloc.Free(tempNotReg)
+		// If FALSEY, fall through to evaluate RHS.
+
+	case "??=": // targetReg = targetReg ?? value
+		isNullReg := c.regAlloc.Alloc()
+		isUndefReg := c.regAlloc.Alloc()
+		nullConstReg := c.regAlloc.Alloc()
+		undefConstReg := c.regAlloc.Alloc()
+
+		c.emitLoadNewConstant(nullConstReg, vm.Null(), line)
+		c.emitLoadNewConstant(undefConstReg, vm.Undefined(), line)
+
+		// Check if targetReg == null
+		c.emitStrictEqual(isNullReg, targetReg, nullConstReg, line)
+		// If NOT null (isNullReg is false), jump to check undefined
+		jumpCheckUndef := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullReg, line)
+
+		// If IS null (didn't jump), jump unconditionally to the RHS evaluation path
+		jumpEvalRight := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+		// Land here if NOT null. Patch jumpCheckUndef.
+		c.patchJump(jumpCheckUndef)
+		// Check if targetReg == undefined
+		c.emitStrictEqual(isUndefReg, targetReg, undefConstReg, line)
+		// If NOT undefined (and not null), jump to the end path (skip RHS eval)
+		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, isUndefReg, line) // Jump if isUndefReg is FALSE
+
+		// Land here if IS undefined (didn't jump). Also patch the jump from the null path.
+		c.patchJump(jumpEvalRight)
+		// Now fall through to the RHS evaluation path.
+
+		// Free constant registers now they've been used for jumps
+		c.regAlloc.Free(isNullReg)
+		c.regAlloc.Free(isUndefReg)
+		c.regAlloc.Free(nullConstReg)
+		c.regAlloc.Free(undefConstReg)
+		// Fall through to evaluate RHS because targetReg was nullish.
+
+	default: // Should not happen
+		panic("compileLogicalAssignmentExpression called with non-logical operator")
+	}
+
+	// --- Evaluate RHS and Assign ---
+	// This code block is only reached if the short-circuit condition was NOT met.
+	err := c.compileNode(node.Value)
+	if err != nil {
+		return err
+	}
+	valueReg := c.regAlloc.Current() // RHS value is here
+
+	// Move the evaluated RHS value into the target register
+	c.emitMove(targetReg, valueReg, line)
+
+	// Store back if it was an upvalue
+	if isUpvalue {
+		c.emitSetUpvalue(upvalueIndex, targetReg, line)
+	}
+
+	// Free the value register if different
+	if valueReg != targetReg {
+		c.regAlloc.Free(valueReg)
+	}
+
+	// If we evaluated the RHS, we need to jump over the final end patch target
+	jumpPastEndPlaceholder = c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+	// --- End Path ---
+	// Land here if the short-circuit jump (jumpToEndPlaceholder) was taken. Patch it.
+	if jumpToEndPlaceholder != -1 { // Ensure the jump was actually created (e.g. not for ??= null path)
+		c.patchJump(jumpToEndPlaceholder)
+		// If we jumped here, the original value in targetReg is the result. No move needed.
+	}
+
+	// Land here after either path finishes. Patch the jump from the RHS path.
+	if jumpPastEndPlaceholder != -1 { // Ensure the jump was created
+		c.patchJump(jumpPastEndPlaceholder)
+	}
+
+	// The final result of the expression is the value in targetReg.
+	c.regAlloc.SetCurrent(targetReg)
+
+	// If targetReg was allocated temporarily for an upvalue load, and we took the
+	// short-circuit path, we need to free it here? No, it holds the result.
 
 	return nil
 }
@@ -2391,6 +2568,58 @@ func (c *Compiler) emitRemainder(dest, left, right Register, line int) {
 func (c *Compiler) emitExponent(dest, left, right Register, line int) {
 	// REMOVED: c.stats.BytesGenerated += 4
 	c.emitOpCode(vm.OpExponent, line) // Fixed: Use emitOpCode
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+// --- END NEW ---
+
+// --- NEW: Bitwise/Shift Emit Helpers ---
+
+func (c *Compiler) emitBitwiseNot(dest, src Register, line int) {
+	c.emitOpCode(vm.OpBitwiseNot, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
+func (c *Compiler) emitBitwiseAnd(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpBitwiseAnd, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+func (c *Compiler) emitBitwiseOr(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpBitwiseOr, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+func (c *Compiler) emitBitwiseXor(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpBitwiseXor, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+func (c *Compiler) emitShiftLeft(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpShiftLeft, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+func (c *Compiler) emitShiftRight(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpShiftRight, line) // Arithmetic shift
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
+func (c *Compiler) emitUnsignedShiftRight(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpUnsignedShiftRight, line) // Logical shift
 	c.emitByte(byte(dest))
 	c.emitByte(byte(left))
 	c.emitByte(byte(right))

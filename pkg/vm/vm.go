@@ -772,6 +772,88 @@ func (vm *VM) run() (InterpretResult, Value) {
 			registers[destReg] = Number(length)
 		// --- END NEW ---
 
+		// --- NEW: Bitwise & Shift ---
+		case OpBitwiseNot:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			srcVal := registers[srcReg]
+
+			if !IsNumber(srcVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Operand must be a number for bitwise NOT (~).")
+				return status, Undefined()
+			}
+			// Convert to int64 for bitwise op, then back to Number
+			// Note: JS typically operates on 32-bit integers. We use 64-bit here.
+			srcInt := int64(AsNumber(srcVal))
+			result := ^srcInt
+			registers[destReg] = Number(float64(result))
+
+		case OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
+			OpShiftLeft, OpShiftRight, OpUnsignedShiftRight:
+			destReg := code[ip]
+			leftReg := code[ip+1]
+			rightReg := code[ip+2]
+			ip += 3
+			leftVal := registers[leftReg]
+			rightVal := registers[rightReg]
+
+			if !IsNumber(leftVal) || !IsNumber(rightVal) {
+				frame.ip = ip
+				opStr := ""
+				switch opcode {
+				case OpBitwiseAnd:
+					opStr = "&"
+				case OpBitwiseOr:
+					opStr = "|"
+				case OpBitwiseXor:
+					opStr = "^"
+				case OpShiftLeft:
+					opStr = "<<"
+				case OpShiftRight:
+					opStr = ">>"
+				case OpUnsignedShiftRight:
+					opStr = ">>>"
+				}
+				status := vm.runtimeError("Operands must be numbers for bitwise/shift operator '%s'.", opStr)
+				return status, Undefined()
+			}
+
+			// Convert to integers. Use uint64 for shifts involving unsigned right shift.
+			leftInt := int64(AsNumber(leftVal))
+			rightInt := int64(AsNumber(rightVal))
+			var result int64 // Keep result var for cases that use it
+
+			switch opcode {
+			case OpBitwiseAnd:
+				result = leftInt & rightInt
+				registers[destReg] = Number(float64(result)) // Store result
+			case OpBitwiseOr:
+				result = leftInt | rightInt
+				registers[destReg] = Number(float64(result)) // Store result
+			case OpBitwiseXor:
+				result = leftInt ^ rightInt
+				registers[destReg] = Number(float64(result)) // Store result
+			case OpShiftLeft:
+				shiftAmount := uint64(rightInt) & 63 // Cap to 64 bits
+				result = leftInt << shiftAmount
+				registers[destReg] = Number(float64(result)) // Store result
+			case OpShiftRight: // Arithmetic shift (preserves sign)
+				shiftAmount := uint64(rightInt) & 63
+				result = leftInt >> shiftAmount
+				registers[destReg] = Number(float64(result)) // Store result
+			case OpUnsignedShiftRight: // Logical shift (zero-fills)
+				// Convert left operand to uint32 first to mimic JS >>> behavior
+				leftUint32 := uint32(AsNumber(leftVal)) // Corrected: Use AsNumber(leftVal)
+				shiftAmount := uint64(rightInt) & 31    // JS uses lower 5 bits for 32-bit shift count
+				unsignedResult := leftUint32 >> shiftAmount
+				// Result is converted back to Number (float64)
+				registers[destReg] = Number(float64(unsignedResult)) // Store the uint32 result directly as Number
+				// No need to assign to 'result' variable here
+			}
+			// No shared assignment needed here anymore
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)

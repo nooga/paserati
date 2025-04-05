@@ -750,56 +750,51 @@ func TestCompoundAssignments(t *testing.T) {
 		expectedInstructions []byte
 	}{
 		{
-			name:  "Add Assign Local",
-			input: "let x = 5; x += 3; x;",
-			// Expected: Load 5->R0, Def x=R0. Load 3->R1. OpAdd R0,R0,R1. Load x->R2. Ret R2.
+			name:              "Add Assign Local",
+			input:             "let x = 5; x += 3; x;",
 			expectedConstants: []vm.Value{vm.Number(5), vm.Number(3)},
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
 				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
 				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x = x + 3)
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (load x)
-				vm.OpReturn, Register(2), // Return R2
-				// Implicit final OpReturnUndefined NOT added when last stmt is expr
+				vm.OpMove, Register(1), Register(0), // R1 = R0 (load x)
+				vm.OpReturn, Register(1), // Return R1
 			),
 		},
 		{
-			name:  "Subtract Assign Local",
-			input: "let y = 10; y -= 4; y;",
-			// Expected: Load 10->R0, Def y=R0. Load 4->R1. OpSub R0,R0,R1. Load y->R2. Ret R2.
+			name:              "Subtract Assign Local",
+			input:             "let y = 10; y -= 4; y;",
 			expectedConstants: []vm.Value{vm.Number(10), vm.Number(4)},
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 10
 				vm.OpLoadConst, Register(1), uint16(1), // R1 = 4
 				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (load y)
-				vm.OpReturn, Register(2),
+				vm.OpMove, Register(1), Register(0), // R1 = R0 (load y)
+				vm.OpReturn, Register(1), // Return R1
 			),
 		},
 		{
-			name:  "Multiply Assign Local",
-			input: "let z = 2; z *= 6; z;",
-			// Expected: Load 2->R0, Def z=R0. Load 6->R1. OpMul R0,R0,R1. Load z->R2. Ret R2.
+			name:              "Multiply Assign Local",
+			input:             "let z = 2; z *= 6; z;",
 			expectedConstants: []vm.Value{vm.Number(2), vm.Number(6)},
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 2
 				vm.OpLoadConst, Register(1), uint16(1), // R1 = 6
 				vm.OpMultiply, Register(0), Register(0), Register(1), // R0 = R0 * R1
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (load z)
-				vm.OpReturn, Register(2),
+				vm.OpMove, Register(1), Register(0), // R1 = R0 (load z)
+				vm.OpReturn, Register(1), // Return R1
 			),
 		},
 		{
-			name:  "Divide Assign Local",
-			input: "let w = 12; w /= 3; w;",
-			// Expected: Load 12->R0, Def w=R0. Load 3->R1. OpDiv R0,R0,R1. Load w->R2. Ret R2.
+			name:              "Divide Assign Local",
+			input:             "let w = 12; w /= 3; w;",
 			expectedConstants: []vm.Value{vm.Number(12), vm.Number(3)},
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 12
 				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
 				vm.OpDivide, Register(0), Register(0), Register(1), // R0 = R0 / R1
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (load w)
-				vm.OpReturn, Register(2),
+				vm.OpMove, Register(1), Register(0), // R1 = R0 (load w)
+				vm.OpReturn, Register(1), // Return R1
 			),
 		},
 		// TODO: Add tests for compound assignment with upvalues later?
