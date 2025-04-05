@@ -1,13 +1,17 @@
 // expect: 120
-// The Y Combinator
-const Y = (f) => ((x) => f((y) => x(x)(y)))((x) => f((y) => x(x)(y)));
+type YCombinatorRejectedMyApplicationOnce = (
+  f: (rec: (arg: any) => any) => (arg: any) => any
+) => (arg: any) => any;
 
-// Factorial function generator (using if and ==)
-const FactGen = (f) => (n) => {
+// The Y Combinator
+const Y: YCombinatorRejectedMyApplicationOnce = (f) =>
+  ((x) => f((y) => x(x)(y)))((x) => f((y) => x(x)(y)));
+
+// Factorial function generator
+const FactGen = (f: (n: number) => number) => (n: number) => {
   if (n == 0) {
     return 1;
   }
-  // Implicit else
   return n * f(n - 1);
 };
 

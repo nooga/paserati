@@ -15,6 +15,7 @@ type matrixTestCase struct {
 	expect             string // Expected output OR expected error substring
 	isError            bool   // True if expect is a runtime error substring
 	expectCompileError bool   // True if expect is a compile error substring
+	disassemble        bool   // True if disassembly should be logged
 }
 
 func TestOperatorsAndLiterals(t *testing.T) {
@@ -406,15 +407,15 @@ func TestOperatorsAndLiterals(t *testing.T) {
 
 		// --- NEW: Logical Assignment Operators ---
 		{name: "CompAssign LogicalAND True", input: "let g = true; g &&= false; g;", expect: "false"},
-		{name: "CompAssign LogicalAND False", input: "let h = false; h &&= true; h;", expect: "false"},            // Short circuits
-		{name: "CompAssign LogicalAND ShortCircuit", input: "let hh = false; hh &&= false; hh;", expect: "false"}, // Short circuits, RHS changed to boolean
-		{name: "CompAssign LogicalOR True", input: "let i = true; i ||= false; i;", expect: "true"},               // Short circuits
+		{name: "CompAssign LogicalAND False", input: "let h = false; h &&= true; h;", expect: "false", disassemble: true},            // Short circuits
+		{name: "CompAssign LogicalAND ShortCircuit", input: "let hh = false; hh &&= false; hh;", expect: "false", disassemble: true}, // Short circuits, RHS changed to boolean
+		{name: "CompAssign LogicalOR True", input: "let i = true; i ||= false; i;", expect: "true", disassemble: true},               // Short circuits
 		{name: "CompAssign LogicalOR False", input: "let j = false; j ||= true; j;", expect: "true"},
-		{name: "CompAssign LogicalOR ShortCircuit", input: "let jj = true; jj ||= true; jj;", expect: "true"}, // Short circuits, RHS changed to boolean
+		{name: "CompAssign LogicalOR ShortCircuit", input: "let jj = true; jj ||= true; jj;", expect: "true", disassemble: true}, // Short circuits, RHS changed to boolean
 		{name: "CompAssign Coalesce Null", input: "let k = null; k ??= 10; k;", expect: "10"},
 		{name: "CompAssign Coalesce Undefined", input: "let l; l ??= 20; l;", expect: "20"},
-		{name: "CompAssign Coalesce Value", input: "let m = 5; m ??= 30; m;", expect: "5"},              // Does not assign
-		{name: "CompAssign Coalesce ShortCircuit", input: "let mm = 1; mm ??= (1/0); mm;", expect: "1"}, // Short circuits
+		{name: "CompAssign Coalesce Value", input: "let m = 5; m ??= 30; m;", expect: "5", disassemble: true},              // Does not assign
+		{name: "CompAssign Coalesce ShortCircuit", input: "let mm = 1; mm ??= (1/0); mm;", expect: "1", disassemble: true}, // Short circuits
 	}
 
 	for _, tc := range testCases {
@@ -489,6 +490,11 @@ func TestOperatorsAndLiterals(t *testing.T) {
 					if actualOutput != tc.expect {
 						t.Errorf("Expected output %q, but got %q", tc.expect, actualOutput)
 					}
+				}
+
+				if tc.disassemble {
+					t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
+						inputSrc, chunk.DisassembleChunk(inputSrc))
 				}
 			}
 		})
