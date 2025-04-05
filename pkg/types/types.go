@@ -121,7 +121,14 @@ type UnionType struct {
 }
 
 func (ut *UnionType) String() string {
-	return "UnionType NYI"
+	typesStr := ""
+	for i, t := range ut.Types {
+		if i > 0 {
+			typesStr += " | "
+		}
+		typesStr += t.String()
+	}
+	return typesStr
 }
 func (ut *UnionType) typeNode() {}
 

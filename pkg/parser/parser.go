@@ -1958,41 +1958,51 @@ func (p *Parser) parseObjectLiteral() Expression {
 		p.nextToken() // Consume '{' or ',' to get to the key
 
 		var key Expression
-		// Handle Keys (Identifier, String, Computed)
+		// --- MODIFIED: Handle Keys (Identifier, String, NUMBER, Computed) ---
 		if p.curTokenIs(lexer.IDENT) {
 			key = p.parseIdentifier()
 		} else if p.curTokenIs(lexer.STRING) {
 			key = p.parseStringLiteral()
-		} else if p.curTokenIs(lexer.LBRACKET) {
+		} else if p.curTokenIs(lexer.NUMBER) { // <<< ADD NUMBER CASE
+			key = p.parseNumberLiteral()
+		} else if p.curTokenIs(lexer.LBRACKET) { // Computed properties
 			p.nextToken() // Consume '['
 			key = p.parseExpression(LOWEST)
 			if key == nil {
-				return nil
+				return nil // Error parsing expression inside []
 			}
 			if !p.expectPeek(lexer.RBRACKET) {
-				return nil
+				return nil // Missing closing ']'
 			}
+			// After expectPeek, curToken is RBRACKET. parseExpression below needs the next token.
+			// We need to be careful here, as the COLON is expected *next*.
 		} else {
-			msg := fmt.Sprintf("invalid object literal key: expected identifier, string, or '[', got %s", p.curToken.Type)
+			// <<< UPDATE ERROR MESSAGE >>>
+			msg := fmt.Sprintf("invalid object literal key: expected identifier, string, number, or '[', got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			return nil
 		}
+		// --- END MODIFICATION ---
 
 		if key == nil {
+			// Error should have been added by the respective parse function
 			return nil
 		} // Error parsing key
 
+		// Check for Colon *after* parsing the key (including potential closing ']')
 		if !p.expectPeek(lexer.COLON) {
-			return nil
-		} // Expected ':'
+			return nil // Expected ':'
+		}
+		// p.curToken is now COLON
 
-		p.nextToken() // Consume ':'
+		p.nextToken() // Consume ':' to get to the start of the value
+
 		value := p.parseExpression(LOWEST)
 		if value == nil {
 			return nil
 		} // Error parsing value
 
-		// --- MODIFIED: Append to slice ---
+		// Append the property
 		objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
 
 		// Expect ',' or '}'
@@ -2005,8 +2015,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 		if p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // Consume ','
 			if p.peekTokenIs(lexer.RBRACE) {
-				break
-			} // Allow trailing comma
+				break // Allow trailing comma
+			}
+			// If not RBRACE after comma, loop will call nextToken again
 		}
 	}
 
