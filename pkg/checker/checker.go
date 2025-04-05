@@ -284,15 +284,37 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		return types.Undefined
 	// --- End Literal Type Nodes ---
 
-	// TODO: Add cases for other complex type expressions (Array, Function, Object)
-	// case *parser.ArrayTypeExpression: ...
-	// case *parser.FunctionTypeExpression: ...
+	// --- NEW: Handle FunctionTypeExpression --- <<<
+	case *parser.FunctionTypeExpression:
+		return c.resolveFunctionTypeSignature(node)
 
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
 		return nil // Indicate error
 	}
+}
+
+// --- NEW: Helper to resolve FunctionTypeExpression nodes ---
+func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpression) types.Type {
+	paramTypes := []types.Type{}
+	for _, paramNode := range node.Parameters {
+		paramType := c.resolveTypeAnnotation(paramNode)
+		if paramType == nil {
+			// Error should have been added by resolveTypeAnnotation
+			return nil // Indicate error by returning nil
+		}
+		paramTypes = append(paramTypes, paramType)
+	}
+
+	returnType := c.resolveTypeAnnotation(node.ReturnType)
+	if returnType == nil {
+		// Error should have been added by resolveTypeAnnotation
+		return nil // Indicate error by returning nil
+	}
+
+	// Construct the internal FunctionType representation
+	return &types.FunctionType{ParameterTypes: paramTypes, ReturnType: returnType}
 }
 
 // isAssignable checks if a value of type `source` can be assigned to a variable
@@ -448,6 +470,44 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 	}
 
 	// --- End Array Type Handling ---
+
+	// --- NEW: Function Type Assignability ---
+	sourceFunc, sourceIsFunc := source.(*types.FunctionType)
+	targetFunc, targetIsFunc := target.(*types.FunctionType)
+
+	if targetIsFunc {
+		if sourceIsFunc {
+			// Assigning Function to Function
+
+			// Check Arity
+			if len(sourceFunc.ParameterTypes) != len(targetFunc.ParameterTypes) {
+				return false // Arity mismatch
+			}
+
+			// Check Parameter Types (Contravariance - target param assignable to source param)
+			// For simplicity now, let's check invariance: source param assignable to target param
+			for i, targetParamType := range targetFunc.ParameterTypes {
+				sourceParamType := sourceFunc.ParameterTypes[i]
+				// if !c.isAssignable(targetParamType, sourceParamType) { // Contravariant check
+				if !c.isAssignable(sourceParamType, targetParamType) { // Invariant check (simpler)
+					return false // Parameter type mismatch
+				}
+			}
+
+			// Check Return Type (Covariance - source return assignable to target return)
+			if !c.isAssignable(sourceFunc.ReturnType, targetFunc.ReturnType) {
+				return false // Return type mismatch
+			}
+
+			// All checks passed
+			return true
+		} else {
+			// Assigning Non-Function to Function Target: Generally false
+			// (Unless source is Any/Unknown/Never, handled earlier)
+			return false
+		}
+	}
+	// --- End Function Type Handling ---
 
 	// TODO: Handle null/undefined assignability based on strict flags later.
 	// For now, let's be strict unless target is Any/Unknown/Union.

@@ -885,3 +885,40 @@ func (ss *SwitchStatement) String() string {
 	out.WriteString("}")
 	return out.String()
 }
+
+// ----------------------------------------------------------------------------
+// Type Expressions (Used in Type Annotations and Type Aliases)
+// ----------------------------------------------------------------------------
+
+// FunctionTypeExpression represents a type like (number, string) => boolean
+type FunctionTypeExpression struct {
+	BaseExpression              // Embed base for ComputedType (Function type)
+	Token          lexer.Token  // The '(' token starting the parameter list
+	Parameters     []Expression // Slice of Expression nodes representing parameter types
+	ReturnType     Expression   // Expression node for the return type
+}
+
+func (fte *FunctionTypeExpression) expressionNode()      {}
+func (fte *FunctionTypeExpression) TokenLiteral() string { return fte.Token.Literal }
+func (fte *FunctionTypeExpression) String() string {
+	var out bytes.Buffer
+	params := []string{}
+	for _, p := range fte.Parameters {
+		params = append(params, p.String())
+	}
+
+	out.WriteString("(")
+	out.WriteString(strings.Join(params, ", "))
+	out.WriteString(") => ")
+	out.WriteString(fte.ReturnType.String())
+
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface (placeholder)
+// The actual type is determined during type checking.
+func (fte *FunctionTypeExpression) GetComputedType() types.Type { return nil }
+
+// ----------------------------------------------------------------------------
+// END Type Expressions
+// ----------------------------------------------------------------------------
