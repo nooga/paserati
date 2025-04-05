@@ -66,8 +66,8 @@ const (
 	DEC TokenType = "--" // Added
 
 	// --- NEW: Bitwise Operators ---
-	BITWISE_AND          TokenType = "&"
-	BITWISE_OR           TokenType = "|" // Note: This might conflict with PIPE for Union Types if not handled carefully
+	BITWISE_AND TokenType = "&"
+	// BITWISE_OR           TokenType = "|" // Note: This might conflict with PIPE for Union Types if not handled carefully
 	BITWISE_XOR          TokenType = "^"
 	BITWISE_NOT          TokenType = "~"
 	LEFT_SHIFT           TokenType = "<<"
