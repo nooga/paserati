@@ -186,6 +186,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
 	p.registerPrefix(lexer.IF, p.parseIfExpression)
 	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
+	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)  // <<< NEW: Register Object Literal Parsing
 
 	// --- Register VALUE Infix Functions ---
 	// Arithmetic & Comparison/Logical
@@ -1944,4 +1945,74 @@ func (p *Parser) parseTypeIdentifier() Expression {
 		return nil
 	}
 	return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+}
+
+func (p *Parser) parseObjectLiteral() Expression {
+	objLit := &ObjectLiteral{
+		Token: p.curToken, // The '{' token
+		// --- MODIFIED: Initialize slice ---
+		Properties: []*ObjectProperty{},
+	}
+
+	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
+		p.nextToken() // Consume '{' or ',' to get to the key
+
+		var key Expression
+		// Handle Keys (Identifier, String, Computed)
+		if p.curTokenIs(lexer.IDENT) {
+			key = p.parseIdentifier()
+		} else if p.curTokenIs(lexer.STRING) {
+			key = p.parseStringLiteral()
+		} else if p.curTokenIs(lexer.LBRACKET) {
+			p.nextToken() // Consume '['
+			key = p.parseExpression(LOWEST)
+			if key == nil {
+				return nil
+			}
+			if !p.expectPeek(lexer.RBRACKET) {
+				return nil
+			}
+		} else {
+			msg := fmt.Sprintf("invalid object literal key: expected identifier, string, or '[', got %s", p.curToken.Type)
+			p.addError(p.curToken, msg)
+			return nil
+		}
+
+		if key == nil {
+			return nil
+		} // Error parsing key
+
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		} // Expected ':'
+
+		p.nextToken() // Consume ':'
+		value := p.parseExpression(LOWEST)
+		if value == nil {
+			return nil
+		} // Error parsing value
+
+		// --- MODIFIED: Append to slice ---
+		objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
+
+		// Expect ',' or '}'
+		if !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.COMMA) {
+			msg := fmt.Sprintf("expected ',' or '}' after object property value, got %s", p.peekToken.Type)
+			p.addError(p.peekToken, msg)
+			return nil
+		}
+
+		if p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			if p.peekTokenIs(lexer.RBRACE) {
+				break
+			} // Allow trailing comma
+		}
+	}
+
+	if !p.expectPeek(lexer.RBRACE) {
+		return nil
+	} // Missing '}'
+
+	return objLit
 }

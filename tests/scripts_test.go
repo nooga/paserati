@@ -13,6 +13,8 @@ import (
 	// Add
 )
 
+const scriptsDebug = false
+
 // Expectation represents the expected outcome of a script.
 type Expectation struct {
 	ResultType string // "value", "runtime_error", "compile_error"
@@ -125,7 +127,7 @@ func TestScripts(t *testing.T) {
 				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
 			}
 
-			if false {
+			if scriptsDebug {
 				t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
 					file.Name(), chunk.DisassembleChunk(file.Name()))
 			}

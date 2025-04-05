@@ -19,7 +19,7 @@ const (
 	TypeFunction // Represents *Function
 	TypeClosure  // Represents *Closure
 	TypeArray    // Represents *Array (Added)
-	// Add TypeObject later
+	TypeObject   // Represents *Object (NEW)
 )
 
 // Function represents a compiled function.
@@ -31,6 +31,13 @@ type Function struct {
 	RegisterSize int    // Number of registers needed for this function's frame
 	// TODO: Add UpvalueCount later for closures
 }
+
+// --- NEW: Object Struct (Phase 1: Map-based) ---
+type Object struct {
+	Properties map[string]Value // Simple map for properties in Phase 1
+}
+
+// --- END NEW ---
 
 // Value represents a value in the VM.
 // We use a tagged union approach for performance.
@@ -45,8 +52,7 @@ type Value struct {
 		fn      *Function // Direct pointer for functions
 		closure *Closure  // Direct pointer for closures
 		arr     *Array    // Direct pointer for arrays (Added)
-		// obj     interface{} // Keep for other potential object types? Or remove if only Fn/Closure?
-		// For now, removing obj, assuming only these complex types for now.
+		obj     *Object   // Direct pointer for objects (NEW)
 	}
 }
 
@@ -116,6 +122,18 @@ func ClosureV(closure *Closure) Value {
 	return v
 }
 
+// --- NEW: Object Constructor ---
+func ObjectV(obj *Object) Value {
+	if obj == nil {
+		panic("Attempted to create Value from nil Object pointer")
+	}
+	v := Value{Type: TypeObject}
+	v.as.obj = obj
+	return v
+}
+
+// --- END NEW ---
+
 // Type Checkers
 
 func IsUndefined(v Value) bool {
@@ -145,6 +163,13 @@ func IsFunction(v Value) bool {
 func IsClosure(v Value) bool {
 	return v.Type == TypeClosure
 }
+
+// --- NEW: Object Type Checker ---
+func IsObject(v Value) bool {
+	return v.Type == TypeObject
+}
+
+// --- END NEW ---
 
 // Accessors (with type checking)
 
@@ -185,6 +210,16 @@ func AsClosure(v Value) *Closure {
 	return v.as.closure
 }
 
+// --- NEW: Object Accessor ---
+func AsObject(v Value) *Object {
+	if !IsObject(v) {
+		panic("value is not an object")
+	}
+	return v.as.obj
+}
+
+// --- END NEW ---
+
 // String representation for debugging/printing
 
 func (v Value) String() string {
@@ -203,6 +238,7 @@ func (v Value) String() string {
 		}
 		return strconv.FormatFloat(num, 'f', -1, 64)
 	case TypeString:
+		// Represent strings more explicitly for debugging object keys
 		return v.as.str
 	case TypeFunction:
 		fn := v.as.fn // No assertion needed
@@ -230,6 +266,26 @@ func (v Value) String() string {
 		}
 		builder.WriteString("]")
 		return builder.String()
+	// --- NEW: Object String Representation ---
+	case TypeObject:
+		obj := v.as.obj
+		var builder strings.Builder
+		builder.WriteString("{")
+		count := 0
+		for key, val := range obj.Properties {
+			if count > 0 {
+				builder.WriteString(", ")
+			}
+			// Ensure keys are represented as quoted strings if they contain spaces or special chars,
+			// although map keys are strings here anyway.
+			builder.WriteString(strconv.Quote(key))
+			builder.WriteString(": ")
+			builder.WriteString(val.String()) // Recursively call String()
+			count++
+		}
+		builder.WriteString("}")
+		return builder.String()
+	// --- END NEW ---
 	default:
 		return fmt.Sprintf("Unknown ValueType: %d", v.Type)
 	}
@@ -268,8 +324,8 @@ func isFalsey(v Value) bool {
 		return AsNumber(v) == 0
 	case TypeString:
 		return AsString(v) == ""
-	default:
-		return false
+	default: // Including TypeObject, TypeFunction, TypeClosure, TypeArray
+		return false // Objects, functions, arrays are generally truthy
 	}
 }
 
@@ -277,6 +333,7 @@ func isFalsey(v Value) bool {
 // Handles different types appropriately (e.g., number vs string comparison is false).
 func valuesEqual(a, b Value) bool {
 	if a.Type != b.Type {
+		// --- Phase 1: Strict type equality ---
 		return false // Different types are never equal
 	}
 	switch a.Type {
@@ -299,6 +356,11 @@ func valuesEqual(a, b Value) bool {
 	case TypeArray:
 		// Array equality is by reference
 		return AsArray(a) == AsArray(b)
+	// --- NEW: Object Equality ---
+	case TypeObject:
+		// Object equality is by reference
+		return AsObject(a) == AsObject(b)
+	// --- END NEW ---
 	default:
 		return false // Should not happen
 	}
