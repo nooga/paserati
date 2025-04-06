@@ -952,14 +952,15 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// General property lookup
 			if !IsObject(objVal) {
 				frame.ip = ip
-				// Attempting to get property on non-object (and not handled .length)
-				// In JS, this often results in undefined or error depending on base type (e.g. null/undefined)
-				// Let's return undefined for now.
-				registers[destReg] = Undefined()
-				// Alternatively, throw error:
-				// status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.Type)
-				// return status, Undefined()
-				continue // Skip rest of logic for this case
+				// Check for null/undefined specifically for a better error message
+				if objVal.Type == TypeNull || objVal.Type == TypeUndefined {
+					status := vm.runtimeError("Cannot read property '%s' of %s", propName, objVal.TypeName())
+					return status, Undefined()
+				} else {
+					// Or a generic error for other non-objects
+					status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())
+					return status, Undefined()
+				}
 			}
 
 			obj := AsObject(objVal)

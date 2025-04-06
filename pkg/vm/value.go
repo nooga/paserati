@@ -291,6 +291,31 @@ func (v Value) String() string {
 	}
 }
 
+func (v Value) TypeName() string {
+	switch v.Type {
+	case TypeUndefined:
+		return "undefined"
+	case TypeNull:
+		return "null"
+	case TypeBool:
+		return "boolean"
+	case TypeNumber:
+		return "number"
+	case TypeString:
+		return "string"
+	case TypeFunction:
+		return "function"
+	case TypeClosure:
+		return "closure"
+	case TypeArray:
+		return "array"
+	case TypeObject:
+		return "object"
+	default:
+		return fmt.Sprintf("<unknown type: %d>", v.Type)
+	}
+}
+
 // Upvalue represents a variable captured by a closure.
 type Upvalue struct {
 	Location *Value // Pointer to stack slot (if open) OR nil (if closed)
