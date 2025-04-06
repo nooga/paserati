@@ -1757,27 +1757,62 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 
 // --- NEW: Array Literal Check ---
 
+// --- ADD THIS HELPER FUNCTION ---
+// (Place it somewhere before checkArrayLiteral)
+
+// deeplyWidenObjectType creates a new ObjectType where literal property types are widened.
+// Returns the original type if it's not an ObjectType.
+func deeplyWidenType(t types.Type) types.Type {
+	// Widen top-level literals first
+	widenedT := types.GetWidenedType(t)
+
+	// If it's an object after top-level widening, widen its properties
+	if objType, ok := widenedT.(*types.ObjectType); ok {
+		newFields := make(map[string]types.Type, len(objType.Properties))
+		for name, propType := range objType.Properties {
+			// Recursively deeply widen property types? For now, just one level.
+			newFields[name] = types.GetWidenedType(propType)
+		}
+		return &types.ObjectType{Properties: newFields}
+	}
+
+	// If it was an array, maybe deeply widen its element type?
+	if arrType, ok := widenedT.(*types.ArrayType); ok {
+		// Avoid infinite recursion for recursive types: Check if elem type is same as t?
+		// For now, let's not recurse into arrays here, only objects.
+		// return &types.ArrayType{ElementType: deeplyWidenType(arrType.ElementType)}
+		return arrType // Return array type as is for now
+	}
+
+	// Return the (potentially top-level widened) type if not an object
+	return widenedT
+}
+
+// --- MODIFY checkArrayLiteral ---
 func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
-	elementTypes := []types.Type{}
+	generalizedElementTypes := []types.Type{} // Store generalized types
 	for _, elemNode := range node.Elements {
 		c.visit(elemNode) // Visit element to compute its type
 		elemType := elemNode.GetComputedType()
-		// --- Widen literal types ---
-		widenedElemType := types.GetWidenedType(elemType)
-		elementTypes = append(elementTypes, widenedElemType)
+		if elemType == nil {
+			elemType = types.Any
+		} // Handle error
+
+		// --- Use deeplyWidenType on each element ---
+		generalizedType := deeplyWidenType(elemType)
+		// --- End Deep Widen ---
+
+		generalizedElementTypes = append(generalizedElementTypes, generalizedType)
 	}
 
-	// Determine the element type for the array.
-	// For now, let's create a union of all element types.
-	// TODO: A stricter checker might require homogenous arrays or infer `any[]`.
+	// Determine the element type for the array using the GENERALIZED types.
 	var finalElementType types.Type
-	if len(elementTypes) == 0 {
-		// Empty array literal - infer type `unknown[]` or `any[]`?
-		// Let's use `unknown` as it's slightly safer than `any`.
+	if len(generalizedElementTypes) == 0 {
 		finalElementType = types.Unknown
 	} else {
-		// Use NewUnionType to flatten/uniquify element types
-		finalElementType = types.NewUnionType(elementTypes...)
+		// Use NewUnionType to flatten/uniquify GENERALIZED element types
+		finalElementType = types.NewUnionType(generalizedElementTypes...)
+		// NewUnionType should simplify if all generalized types are identical
 	}
 
 	// Create the ArrayType
@@ -1786,7 +1821,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	// Set the computed type for the ArrayLiteral node itself
 	node.SetComputedType(arrayType)
 
-	debugPrintf("// [Checker ArrayLit] Computed type: %s\n", arrayType.String())
+	debugPrintf("// [Checker ArrayLit] Computed ElementType: %s, Full ArrayType: %s\n", finalElementType.String(), arrayType.String())
 }
 
 // --- NEW: Index Expression Check ---

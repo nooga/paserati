@@ -1,4 +1,4 @@
-// expect: 600
+// expect: 1100
 
 let obj = {
   functions: [
@@ -13,7 +13,7 @@ let obj = {
 
 let result = 0;
 
-for (let i = 0; i <= obj.functions.length; i++) {
+for (let i = 0; i < obj.functions.length; i++) {
   result += obj.functions[i].body(result);
 }
 

@@ -19,7 +19,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `null` Literal
 - [x] `undefined` Literal (as value and uninitialized state)
 - [x] Array Literals (`[]`)
-- [ ] Object Literals (`{}`)
+- [x] Object Literals (`{}`)
 - [ ] Regular Expression Literals (`/abc/`)
 - [ ] Template Literals (backticks, `${}`)
 - [ ] BigInt Literals (`100n`)
@@ -148,8 +148,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [ ] Array Methods (`.push`, `.pop`, `.map`, etc.)
 - [ ] Objects
   - [ ] Creation (`{}`)
-  - [x] Property Access (`.`, `[]`) (Parser/Lexer support `.` , Checker/Compiler basic support)
-  - [x] Property Assignment (Parser/Checker basic support)
+  - [x] Property Access (`.`, `[]`)
+  - [x] Property Assignment
   - [ ] Methods
 - [ ] `Math` Object
 - [ ] `Date` Object
@@ -167,7 +167,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `any` Type (Implicitly used in checker)
 - [x] `void` Type (Checker return type inference)
 - [ ] `unknown` Type
-- [ ] `never` Type
+- [x] `never` Type
 - [x] Array Types (`T[]`) (Parser/Checker support)
 - [ ] Tuple Types (`[string, number]`)
 - [ ] Enum Types (`enum Color { Red, Green }`)
