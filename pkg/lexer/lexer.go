@@ -137,6 +137,7 @@ const (
 var keywords = map[string]TokenType{
 	"function":  FUNCTION,
 	"let":       LET,
+	"var":       LET, // Make it behave like let for now
 	"const":     CONST,
 	"true":      TRUE,
 	"false":     FALSE,
@@ -822,6 +823,16 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 				builder.WriteByte('\t')
 			case 'r':
 				builder.WriteByte('\r')
+			case '\n':
+				// Escaped newline: Already consumed by readChar before the switch.
+				// Line count was updated. Do nothing else.
+			case '\r':
+				// Escaped carriage return: Already consumed by readChar before the switch.
+				// Check for a subsequent LF in CRLF sequence.
+				if l.peekChar() == '\n' {
+					l.readChar() // Consume the LF
+				}
+				// Do nothing else.
 			case '\\':
 				builder.WriteByte('\\')
 			case quote: // Handle escaped quote (' or ")

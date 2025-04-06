@@ -49,7 +49,8 @@ func (be *BaseExpression) expressionNode() {} // Implement dummy method
 
 // Program is the root node of the AST.
 type Program struct {
-	Statements []Statement
+	Statements          []Statement
+	HoistedDeclarations map[string]Expression // Changed: Store hoisted Expression (e.g., FunctionLiteral)
 }
 
 func (p *Program) TokenLiteral() string {
@@ -414,8 +415,9 @@ func (afl *ArrowFunctionLiteral) String() string {
 // BlockStatement represents a sequence of statements enclosed in braces.
 // { <statement1>; <statement2>; ... }
 type BlockStatement struct {
-	Token      lexer.Token // The { token
-	Statements []Statement
+	Token               lexer.Token // The { token
+	Statements          []Statement
+	HoistedDeclarations map[string]Expression // Changed: Store hoisted Expression within this block
 }
 
 func (bs *BlockStatement) statementNode()       {} // Can act as a statement

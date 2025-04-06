@@ -281,11 +281,27 @@ func (p *Parser) nextToken() {
 func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program := &Program{}
 	program.Statements = []Statement{}
+	program.HoistedDeclarations = make(map[string]Expression) // Initialize map with Expression
 
 	for p.curToken.Type != lexer.EOF {
 		stmt := p.parseStatement()
 		if stmt != nil {
 			program.Statements = append(program.Statements, stmt)
+
+			// --- Hoisting Check ---
+			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
+			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt {
+				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+					if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
+						// Function with this name already hoisted
+						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration: %s", funcLit.Name.Value)) // Use Token
+					} else {
+						program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
+					}
+				}
+			}
+			// --- End Hoisting Check ---
+
 		}
 		if p.curToken.Type != lexer.EOF {
 			p.nextToken()
@@ -924,6 +940,7 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 func (p *Parser) parseBlockStatement() *BlockStatement {
 	block := &BlockStatement{Token: p.curToken} // The '{' token
 	block.Statements = []Statement{}
+	block.HoistedDeclarations = make(map[string]Expression) // Initialize map with Expression
 
 	p.nextToken() // Consume '{'
 
@@ -931,6 +948,20 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 		stmt := p.parseStatement()
 		if stmt != nil {
 			block.Statements = append(block.Statements, stmt)
+
+			// --- Hoisting Check ---
+			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
+			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt {
+				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+					if _, exists := block.HoistedDeclarations[funcLit.Name.Value]; exists {
+						// Function with this name already hoisted in this block
+						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in block: %s", funcLit.Name.Value)) // Use Token
+					} else {
+						block.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
+					}
+				}
+			}
+			// --- End Hoisting Check ---
 		}
 		p.nextToken()
 	}
