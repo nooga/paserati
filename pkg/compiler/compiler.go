@@ -137,6 +137,56 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// --- End Type Checking Step ---
 
 	// --- Bytecode Compilation Step ---
+	c.chunk = vm.NewChunk()
+	c.regAlloc = NewRegisterAllocator()
+	c.currentSymbolTable = NewSymbolTable()
+
+	// --- Global Symbol Table Initialization (if needed) ---
+	// c.defineBuiltinGlobals() // TODO: Define built-ins if any
+
+	// --- Compile Hoisted Global Functions FIRST ---
+	if program.HoistedDeclarations != nil {
+		debugPrintf("[Compile] Processing %d hoisted global declarations...\n", len(program.HoistedDeclarations))
+		for name, hoistedNode := range program.HoistedDeclarations {
+			funcLit, ok := hoistedNode.(*parser.FunctionLiteral)
+			if !ok {
+				// Should not happen if checker/parser worked correctly
+				debugPrintf("[Compile Hoisting] ERROR: Hoisted node for '%s' is not FunctionLiteral (%T)\n", name, hoistedNode)
+				continue
+			}
+
+			// 1. Compile the function literal (creates chunk & function object)
+			// We will modify compileFunctionLiteral later to return the constant index.
+			// For now, this call compiles the function but we don't capture the index yet.
+			funcConstIndex, _, err := c.compileFunctionLiteral(funcLit, name) // Assign freeSymbols to blank identifier _
+			if err != nil {
+				// Error during function compilation, already added to c.errors by sub-compiler
+				debugPrintf("[Compile Hoisting] ERROR compiling hoisted func '%s': %v\n", name, err)
+				continue // Skip defining this function
+			}
+
+			// For global functions, freeSymbols should be empty, so we pass nil for now.
+			var globalFreeSymbols []*Symbol = nil // Explicitly nil for globals
+			// 2. Create the Closure
+			closureReg := c.regAlloc.Alloc()                                      // Allocate register for the closure object
+			c.emitClosure(closureReg, funcConstIndex, funcLit, globalFreeSymbols) // Use emitClosure
+
+			// 3. Define the global symbol
+			symbol := c.currentSymbolTable.Define(name, closureReg) // Define the symbol globally
+
+			// Note: Define currently doesn't return a 'defined' flag. Assume no redefinition for globals for now.
+			// Need to enhance SymbolTable later if strict checking is needed here.
+			debugPrintf("[Compile Hoisting] Defined global func '%s' (Symbol: %v) in R%d\n", name, symbol, closureReg)
+
+			// No need to emit OpSetGlobal. The closure is created and its register
+			// is associated with the symbol. Runtime lookup finds it via symbol table.
+
+			// Invalidate lastExprReg, as the hoisted function definition itself isn't the result.
+			c.lastExprRegValid = false
+		}
+	}
+	// --- END Hoisted Global Function Processing ---
+
 	// Use the already type-checked program node.
 	err := c.compileNode(program)
 	if err != nil {
@@ -207,18 +257,25 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	// --- NEW: Handle Function Literal as an EXPRESSION first ---
 	// This handles anonymous/named functions used in assignments, arguments, etc.
 	case *parser.FunctionLiteral:
-		debugPrintf("// DEBUG Node-FunctionLiteral: Compiling function literal used as expression.\n")
+		debugPrintf("// DEBUG Node-FunctionLiteral: Compiling function literal used as expression '%s'.\n", node.Name) // <<< DEBUG
 		// Determine hint: empty for anonymous, Name.Value if named (though named exprs are rare)
 		hint := ""
 		if node.Name != nil {
 			hint = node.Name.Value
 		}
-		err := c.compileFunctionLiteral(node, hint) // Directly compile it
+		// <<< MODIFY Call Site >>>
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(node, hint)
 		if err != nil {
-			return err
+			// Error already added to c.errors by compileFunctionLiteral
+			return nil // Return nil error here, main error is tracked
 		}
-		// lastExprReg/Valid are set correctly by compileFunctionLiteral
-		return nil
+
+		// Allocate register for the closure and emit OpClosure
+		closureReg := c.regAlloc.Alloc()
+		c.emitClosure(closureReg, funcConstIndex, node, freeSymbols) // <<< Call emitClosure
+
+		// emitClosure now handles setting lastExprReg/Valid correctly.
+		return nil // <<< Return nil error
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
@@ -255,14 +312,22 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// --- Handle named function recursion ---
 			// 1. Define the function name temporarily.
 			c.currentSymbolTable.Define(funcLit.Name.Value, nilRegister)
+
 			// 2. Compile the function literal body. Pass name as hint.
-			err := c.compileFunctionLiteral(funcLit, funcLit.Name.Value) // Use its own name as hint
+			// <<< MODIFY Call Site >>>
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, funcLit.Name.Value) // Use its own name as hint
 			if err != nil {
-				return err
+				// Error already added to c.errors by compileFunctionLiteral
+				return nil // Return nil error here, main error is tracked
 			}
-			valueReg := c.regAlloc.Current()
-			// 3. Update the symbol table entry.
-			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, valueReg)
+
+			// 3. Create the closure object in a register
+			closureReg := c.regAlloc.Alloc()
+			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
+
+			// 4. Update the symbol table entry with the register holding the closure.
+			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, closureReg) // <<< Use closureReg
+
 			// Function declarations don't produce a value for the script result
 			if c.enclosing == nil {
 				c.lastExprRegValid = false
@@ -508,14 +573,21 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		// 2. Compile the function literal body.
 		//    Pass the variable name (f) as the hint for the function object's name
 		//    if the function literal itself is anonymous.
-		err = c.compileFunctionLiteral(funcLit, node.Name.Value)
+		// <<< MODIFY Call Site >>>
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
-			return err
+			// Error already added to c.errors by compileFunctionLiteral
+			return nil // Return nil error here, main error is tracked
 		}
-		valueReg = c.regAlloc.Current() // Register holding the closure
+		// 3. Create the closure object
+		closureReg := c.regAlloc.Alloc()
+		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
 
-		// 3. Update the symbol table entry for the *variable name (f)*.
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, valueReg)
+		// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg) // <<< Use closureReg
+
+		// The variable's value (the closure) is now set.
+		// We don't need to assign to valueReg anymore for this path.
 
 	} else if node.Value != nil {
 		// Compile other value types normally
@@ -527,7 +599,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 	} // else: node.Value is nil (implicit undefined handled below)
 
 	// Handle implicit undefined (`let x;`)
-	if valueReg == nilRegister {
+	if valueReg == nilRegister && !isValueFunc { // <<< Check !isValueFunc
 		undefReg := c.regAlloc.Alloc()
 		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 		valueReg = undefReg
@@ -535,7 +607,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		c.currentSymbolTable.Define(node.Name.Value, valueReg)
 	} else if !isValueFunc {
 		// Define symbol ONLY for non-function values.
-		// Function assignments were handled above.
+		// Function assignments were handled above by UpdateRegister.
 		c.currentSymbolTable.Define(node.Name.Value, valueReg)
 	}
 
@@ -543,7 +615,9 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 }
 
 func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.PaseratiError {
-	if node.Value == nil { /* ... error ... */
+	if node.Value == nil {
+		// Parser should prevent this, but defensive check
+		return NewCompileError(node.Name, "const declarations require an initializer")
 	}
 	var valueReg Register = nilRegister
 	var err errors.PaseratiError
@@ -556,14 +630,22 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
 		// 2. Compile the function literal body, passing const name as hint.
-		err = c.compileFunctionLiteral(funcLit, node.Name.Value)
+		// <<< MODIFY Call Site >>>
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
-			return err
+			// Error already added to c.errors by compileFunctionLiteral
+			return nil // Return nil error here, main error is tracked
 		}
-		valueReg = c.regAlloc.Current()
+		// 3. Create the closure object
+		closureReg := c.regAlloc.Alloc()
+		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
 
-		// 3. Update the temporary definition for the *const name (f)*.
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, valueReg)
+		// 4. Update the temporary definition for the *const name (f)* with the closure register.
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg) // <<< Use closureReg
+
+		// The constant's value (the closure) is now set.
+		// We don't need to assign to valueReg anymore for this path.
+
 	} else {
 		// Compile other value types normally
 		err = c.compileNode(node.Value)
@@ -574,8 +656,9 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 	}
 
 	// Define symbol ONLY for non-function values.
-	// Const function assignments were handled above.
+	// Const function assignments were handled above by UpdateRegister.
 	if !isValueFunc {
+		// For non-functions, Define associates the name with the final value register.
 		c.currentSymbolTable.Define(node.Name.Value, valueReg)
 	}
 	return nil
@@ -584,21 +667,39 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) errors.PaseratiError {
 	if node.ReturnValue != nil {
 		var err errors.PaseratiError
+		var returnReg Register
 		// Check if the return value is a function literal itself
 		if funcLit, ok := node.ReturnValue.(*parser.FunctionLiteral); ok {
 			// Compile directly, bypassing the compileNode case for declarations.
 			// Pass empty hint as it's an anonymous function expression here.
-			err = c.compileFunctionLiteral(funcLit, "")
+			// <<< MODIFY Call Site >>>
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, "")
+			if err != nil {
+				// Error already added to c.errors by compileFunctionLiteral
+				return nil // Return nil error here, main error is tracked
+			}
+			// Create the closure object
+			closureReg := c.regAlloc.Alloc()
+			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
+			returnReg = closureReg                                          // <<< Closure is the value to return
+
 		} else {
 			// Compile other expression types normally via compileNode
 			err = c.compileNode(node.ReturnValue)
+			if err != nil {
+				return err
+			}
+			returnReg = c.regAlloc.Current() // Value to return is in the last allocated reg
 		}
 
+		// Error check should cover both paths now
 		if err != nil {
+			// This check might be redundant if errors are handled correctly above,
+			// but keep for safety unless proven otherwise.
 			return err
 		}
-		returnReg := c.regAlloc.Current() // Value to return is in the last allocated reg
-		c.emitReturn(returnReg, node.Token.Line)
+		// Emit return using the register holding the final value (closure or other expression result)
+		c.emitReturn(returnReg, node.Token.Line) // <<< Use potentially updated returnReg
 	} else {
 		// Return undefined implicitly using the optimized opcode
 		c.emitOpCode(vm.OpReturnUndefined, node.Token.Line)
@@ -880,10 +981,12 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 	return NewCompileError(node, fmt.Sprintf("logical/coalescing operator '%s' compilation fell through", node.Operator))
 }
 
-func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint string) errors.PaseratiError {
+// --- Modify signature again to return (uint16, []*Symbol, errors.PaseratiError) ---
+func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
 	// 1. Create a new Compiler instance for the function body, linked to the current one
-	functionCompiler := newFunctionCompiler(c) // Pass `c` as the enclosing compiler
+	functionCompiler := newFunctionCompiler(c) // <<< Keep this instance variable
 
+	// ... (rest of the function setup: determine name, define inner name, define params) ...
 	// --- Determine and set the function name being compiled ---
 	var determinedFuncName string
 	if nameHint != "" {
@@ -901,14 +1004,10 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	if node.Name != nil {
 		funcNameForLookup = node.Name.Value
 		// Define the function's own name within its scope temporarily
-		// This allows the name to be resolved locally during body compilation.
-		// It will be treated as a free variable pointing to the closure itself.
 		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
 	} else if nameHint != "" {
 		// If anonymous but assigned (e.g., let f = function() { f(); }),
-		// use the hint name for potential recursive calls.
 		funcNameForLookup = nameHint
-		// Define the hint name within the function's scope temporarily.
 		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
 	}
 	// --- END NEW ---
@@ -916,108 +1015,53 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	// 2. Define parameters in the function compiler's *enclosed* scope
 	for _, param := range node.Parameters {
 		reg := functionCompiler.regAlloc.Alloc()
-		// --- FIX: Access Name field ---
 		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
 	}
 
 	// 3. Compile the body using the function compiler
-	// This will populate functionCompiler.freeSymbols
 	err := functionCompiler.compileNode(node.Body)
 	if err != nil {
-		// Propagate errors
-		c.errors = append(c.errors, functionCompiler.errors...)
-		c.errors = append(c.errors, err)
-		// Proceed to create function/closure object even if body has errors?
-		// Let's continue for now, errors are collected.
+		// Propagate errors (already appended to c.errors by sub-compiler)
+		// Proceed to create function object even if body has errors? Continue for now.
 	}
 
 	// 4. Finalize function chunk (add implicit return to the function's chunk)
-	functionCompiler.emitFinalReturn(node.Body.Token.Line)
+	functionCompiler.emitFinalReturn(node.Body.Token.Line) // Use body's end token? Or func literal token?
 	functionChunk := functionCompiler.chunk
-	freeSymbols := functionCompiler.freeSymbols // Get the list of identified free variables
+	// <<< Get freeSymbols from the functionCompiler instance >>>
+	freeSymbols := functionCompiler.freeSymbols
 	// Collect any additional errors from the sub-compilation
 	if len(functionCompiler.errors) > 0 {
 		c.errors = append(c.errors, functionCompiler.errors...)
 	}
-
-	// Get required register count from the function's allocator
 	regSize := functionCompiler.regAlloc.MaxRegs()
 
 	// 5. Create the bytecode.Function object
+	// ... (determine funcName as before) ...
 	var funcName string
-	if nameHint != "" { // Prioritize hint from let/const assignment
+	if nameHint != "" {
 		funcName = nameHint
-	} else if node.Name != nil { // Fallback to name from function keyword syntax
+	} else if node.Name != nil {
 		funcName = node.Name.Value
 	} else {
-		funcName = "<anonymous>" // Default for anonymous literals not assigned
+		funcName = "<anonymous>"
 	}
 	funcObj := vm.Function{
 		Arity:        len(node.Parameters),
 		Chunk:        functionChunk,
-		Name:         funcName, // Use determined name
+		Name:         funcName,
 		RegisterSize: int(regSize),
 	}
 
 	// 6. Add the function object to the *outer* compiler's constant pool.
-	funcValue := vm.NewFunction(&funcObj)      // Still use value.Function for the raw compiled code
-	constIdx := c.chunk.AddConstant(funcValue) // Index of the function proto in outer chunk
+	funcValue := vm.NewFunction(&funcObj)
+	constIdx := c.chunk.AddConstant(funcValue)
 
-	// 7. Emit OpClosure in the *outer* chunk.
-	destReg := c.regAlloc.Alloc()                                              // Register for the resulting closure object in the outer scope
-	debugPrintf("// [Closure %s] Allocated destReg: R%d\n", funcName, destReg) // DEBUG
-	c.emitOpCode(vm.OpClosure, node.Token.Line)
-	c.emitByte(byte(destReg))
-	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
-	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
+	// <<< REMOVE OpClosure EMISSION FROM HERE (should already be removed) >>>
 
-	// Emit operands for each upvalue
-	for i, freeSym := range freeSymbols {
-		debugPrintf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcName, i, freeSym.Name, freeSym.Register, funcNameForLookup) // DEBUG
-
-		// --- Check for self-capture first (Simplified Check) ---
-		// If a free symbol has nilRegister, it MUST be the temporary one
-		// added for recursion resolution. It signifies self-capture.
-		if freeSym.Register == nilRegister {
-			// This is the special self-capture case identified during body compilation.
-			debugPrintf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcName, freeSym.Name, destReg) // DEBUG
-			c.emitByte(1)                                                                                                                                    // isLocal = true (capture from the stack where the closure will be placed)
-			c.emitByte(byte(destReg))                                                                                                                        // Index = the destination register of OpClosure
-			continue                                                                                                                                         // Skip the normal lookup below
-		}
-		// --- END Check ---
-
-		// Resolve the symbol again in the *enclosing* compiler's context
-		// (This part should now only run for *non-recursive* free variables)
-		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
-		if !found {
-			// This should theoretically not happen if it was resolved during body compilation
-			// but handle defensively.
-			panic(fmt.Sprintf("compiler internal error: free variable %s not found in enclosing scope during closure creation", freeSym.Name))
-		}
-
-		if enclosingTable == c.currentSymbolTable {
-			debugPrintf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcName, freeSym.Name, enclosingSymbol.Register) // DEBUG
-			// The free variable is local in the *direct* enclosing scope.
-			c.emitByte(1) // isLocal = true
-			// Capture the value from the enclosing scope's actual register
-			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
-		} else {
-			// The free variable is also a free variable in the enclosing scope.
-			// We need to capture it from the enclosing scope's upvalues.
-			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                   // Use the same helper
-			debugPrintf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcName, freeSym.Name, enclosingFreeIndex) // DEBUG
-			c.emitByte(0)                                                                                                                                   // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex))                                                                                                            // Index = upvalue index in enclosing scope
-		}
-	}
-
-	// 8. Set the result register for the caller
-	c.lastExprReg = destReg
-	c.lastExprRegValid = true
-
-	return nil // Return nil even if there were body errors, errors are collected in c.errors
+	// --- Return the constant index, the free symbols, and nil error ---
+	// Accumulated errors are in c.errors.
+	return constIdx, freeSymbols, nil // <<< MODIFY return statement
 }
 
 func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.PaseratiError {
@@ -1372,151 +1416,6 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) erro
 	return nil
 }
 
-// --- Bytecode Emission Helpers ---
-
-func (c *Compiler) emitOpCode(op vm.OpCode, line int) {
-	c.chunk.WriteOpCode(op, line)
-}
-
-func (c *Compiler) emitByte(b byte) {
-	c.chunk.WriteByte(b)
-}
-
-func (c *Compiler) emitUint16(val uint16) {
-	c.chunk.WriteUint16(val)
-}
-
-func (c *Compiler) emitLoadConstant(dest Register, constIdx uint16, line int) {
-	c.emitOpCode(vm.OpLoadConst, line)
-	c.emitByte(byte(dest))
-	c.emitUint16(constIdx)
-}
-
-func (c *Compiler) emitLoadNull(dest Register, line int) {
-	c.emitOpCode(vm.OpLoadNull, line)
-	c.emitByte(byte(dest))
-}
-
-func (c *Compiler) emitLoadUndefined(dest Register, line int) {
-	c.emitOpCode(vm.OpLoadUndefined, line)
-	c.emitByte(byte(dest))
-}
-
-func (c *Compiler) emitLoadTrue(dest Register, line int) {
-	c.emitOpCode(vm.OpLoadTrue, line)
-	c.emitByte(byte(dest))
-}
-
-func (c *Compiler) emitLoadFalse(dest Register, line int) {
-	c.emitOpCode(vm.OpLoadFalse, line)
-	c.emitByte(byte(dest))
-}
-
-func (c *Compiler) emitMove(dest, src Register, line int) {
-	c.emitOpCode(vm.OpMove, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(src))
-}
-
-func (c *Compiler) emitReturn(src Register, line int) {
-	c.emitOpCode(vm.OpReturn, line)
-	c.emitByte(byte(src))
-}
-
-func (c *Compiler) emitNegate(dest, src Register, line int) {
-	c.emitOpCode(vm.OpNegate, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(src))
-}
-
-func (c *Compiler) emitNot(dest, src Register, line int) {
-	c.emitOpCode(vm.OpNot, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(src))
-}
-
-func (c *Compiler) emitAdd(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpAdd, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitSubtract(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpSubtract, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitMultiply(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpMultiply, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitDivide(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpDivide, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitEqual(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpEqual, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitNotEqual(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpNotEqual, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitGreater(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpGreater, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitLess(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpLess, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitLessEqual(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpLessEqual, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
-	c.emitOpCode(vm.OpCall, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(funcReg))
-	c.emitByte(argCount)
-}
-
-// emitFinalReturn adds the final OpReturnUndefined instruction.
-func (c *Compiler) emitFinalReturn(line int) {
-	// No need to load undefined first
-	c.emitOpCode(vm.OpReturnUndefined, line)
-}
-
-// Overload or new function to handle adding constant and emitting load
-func (c *Compiler) emitLoadNewConstant(dest Register, val vm.Value, line int) {
-	constIdx := c.chunk.AddConstant(val)
-	c.emitLoadConstant(dest, constIdx, line)
-}
-
 // addFreeSymbol adds a symbol identified as a free variable to the compiler's list.
 // It ensures the symbol is added only once and returns its index in the freeSymbols slice.
 func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // Assuming max 256 free vars for now
@@ -1697,29 +1596,6 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	c.lastExprRegValid = true
 
 	return nil // Return nil even if there were body errors, errors are collected in c.errors
-}
-
-// Added Helper
-func (c *Compiler) emitStrictEqual(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpStrictEqual, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-// Added Helper
-func (c *Compiler) emitStrictNotEqual(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpStrictNotEqual, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-// Added helper for OpSetUpvalue
-func (c *Compiler) emitSetUpvalue(upvalueIndex uint8, srcReg Register, line int) {
-	c.emitOpCode(vm.OpSetUpvalue, line)
-	c.emitByte(byte(upvalueIndex))
-	c.emitByte(byte(srcReg))
 }
 
 // --- NEW: DoWhile Statement Compilation ---
@@ -2042,13 +1918,6 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression) errors.P
 }
 
 // --- End Array/Index ---
-
-// --- NEW: emitGetLength ---
-func (c *Compiler) emitGetLength(dest, src Register, line int) {
-	c.emitOpCode(vm.OpGetLength, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(src))
-}
 
 // --- Error Helper ---
 
@@ -2404,100 +2273,6 @@ func (c *Compiler) currentPosition() int {
 	return len(c.chunk.Code)
 }
 
-// --- NEW: emitRemainder and emitExponent ---
-func (c *Compiler) emitRemainder(dest, left, right Register, line int) {
-	// REMOVED: c.stats.BytesGenerated += 4
-	c.emitOpCode(vm.OpRemainder, line) // Fixed: Use emitOpCode
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitExponent(dest, left, right Register, line int) {
-	// REMOVED: c.stats.BytesGenerated += 4
-	c.emitOpCode(vm.OpExponent, line) // Fixed: Use emitOpCode
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-// --- END NEW ---
-
-// --- NEW: Bitwise/Shift Emit Helpers ---
-
-func (c *Compiler) emitBitwiseNot(dest, src Register, line int) {
-	c.emitOpCode(vm.OpBitwiseNot, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(src))
-}
-
-func (c *Compiler) emitBitwiseAnd(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpBitwiseAnd, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitBitwiseOr(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpBitwiseOr, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitBitwiseXor(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpBitwiseXor, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitShiftLeft(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpShiftLeft, line)
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitShiftRight(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpShiftRight, line) // Arithmetic shift
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-func (c *Compiler) emitUnsignedShiftRight(dest, left, right Register, line int) {
-	c.emitOpCode(vm.OpUnsignedShiftRight, line) // Logical shift
-	c.emitByte(byte(dest))
-	c.emitByte(byte(left))
-	c.emitByte(byte(right))
-}
-
-// emitMakeEmptyObject emits OpMakeEmptyObject DestReg
-func (c *Compiler) emitMakeEmptyObject(dest Register, line int) {
-	c.emitOpCode(vm.OpMakeEmptyObject, line) // Use the placeholder opcode
-	c.emitByte(byte(dest))
-}
-
-// emitGetProp emits OpGetProp DestReg, ObjReg, NameConstIdx(Uint16)
-func (c *Compiler) emitGetProp(dest, obj Register, nameConstIdx uint16, line int) {
-	c.emitOpCode(vm.OpGetProp, line) // Use the placeholder opcode
-	c.emitByte(byte(dest))
-	c.emitByte(byte(obj))
-	c.emitUint16(nameConstIdx)
-}
-
-// emitSetProp emits OpSetProp ObjReg, ValueReg, NameConstIdx(Uint16)
-// Note: The order ObjReg, ValueReg, NameIdx seems reasonable for VM stack manipulation.
-func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int) {
-	c.emitOpCode(vm.OpSetProp, line) // Use the placeholder opcode
-	c.emitByte(byte(obj))
-	c.emitByte(byte(val))
-	c.emitUint16(nameConstIdx)
-}
-
-// --- END REVISED/NEW ---
-
 // compileMemberExpression compiles expressions like obj.prop or obj['prop'] (latter is future work)
 func (c *Compiler) compileMemberExpression(node *parser.MemberExpression) errors.PaseratiError {
 	// 1. Compile the object part
@@ -2562,4 +2337,68 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression) errors
 	c.regAlloc.SetCurrent(destReg) // Set current register
 	// Note: We don't need to set lastExprReg/Valid here, as compileNode will handle it.
 	return nil
+}
+
+// emitClosure emits the OpClosure instruction and its operands.
+// It handles resolving free variables from the *enclosing* scope (c)
+// based on the freeSymbols list collected during the function body's compilation.
+func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *parser.FunctionLiteral, freeSymbols []*Symbol) {
+	line := node.Token.Line // Use function literal token line
+
+	c.emitOpCode(vm.OpClosure, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(funcConstIndex)       // Operand 1: Constant index of the function blueprint
+	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
+
+	// Determine the name used for potential self-recursion lookup within the function body.
+	// This logic mirrors the one used inside compileFunctionLiteral when setting up the inner scope.
+	var funcNameForLookup string
+	if node.Name != nil {
+		funcNameForLookup = node.Name.Value
+	} // Note: We don't need the nameHint here as freeSymbols already reflects captures based on the inner scope setup.
+
+	// Emit operands for each upvalue
+	for i, freeSym := range freeSymbols {
+		debugPrintf("// [emitClosure %s] Emitting upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register) // DEBUG
+
+		// --- Check for self-capture first ---
+		// If a free symbol has nilRegister, it MUST be the temporary one
+		// added for recursion resolution inside compileFunctionLiteral. It signifies self-capture.
+		if freeSym.Register == nilRegister {
+			debugPrintf("// [emitClosure SelfCapture] Symbol '%s' is self-reference. Emitting isLocal=1, index=destReg=R%d\n", freeSym.Name, destReg) // DEBUG
+			c.emitByte(1)                                                                                                                             // isLocal = true (capture from the stack where the closure *will be* placed)
+			c.emitByte(byte(destReg))                                                                                                                 // Index = the destination register of OpClosure itself
+			continue                                                                                                                                  // Skip the normal lookup below
+		}
+		// --- END Check ---
+
+		// Resolve the symbol again in the *enclosing* compiler's context (c)
+		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
+		if !found {
+			// This should theoretically not happen if freeSym was correctly identified.
+			panic(fmt.Sprintf("compiler internal error: free variable '%s' not found in enclosing scope during closure emission", freeSym.Name))
+		}
+
+		if enclosingTable == c.currentSymbolTable {
+			// The free variable is local in the *direct* enclosing scope (c).
+			debugPrintf("// [emitClosure Upvalue] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register) // DEBUG
+			c.emitByte(1)                                                                                                                                    // isLocal = true
+			// Capture the value from the enclosing scope's actual register
+			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+		} else {
+			// The free variable is also a free variable in the *enclosing* scope (c).
+			// It needs to be captured from the enclosing scope's upvalues.
+			// Find its index within the *enclosing* compiler's (c) freeSymbols list.
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                             // Use the same helper in the enclosing compiler
+			debugPrintf("// [emitClosure Upvalue] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex) // DEBUG
+			c.emitByte(0)                                                                                                                             // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex))                                                                                                      // Index = upvalue index in enclosing scope
+		}
+	}
+
+	// Set the compiler's current register state to reflect the closure object
+	c.regAlloc.SetCurrent(destReg)
+	c.lastExprReg = destReg
+	c.lastExprRegValid = true
+	debugPrintf("// [emitClosure %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
 }

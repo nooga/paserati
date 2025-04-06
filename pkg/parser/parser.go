@@ -321,6 +321,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseLetStatement()
 	case lexer.CONST:
 		return p.parseConstStatement()
+	case lexer.VAR: // Added case
+		return p.parseVarStatement()
 	case lexer.RETURN:
 		return p.parseReturnStatement()
 	case lexer.WHILE:
@@ -629,6 +631,44 @@ func (p *Parser) parseConstStatement() *ConstStatement {
 	p.nextToken() // Consume '='
 
 	stmt.Value = p.parseExpression(LOWEST)
+
+	// Optional semicolon - Consume it here
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+func (p *Parser) parseVarStatement() *VarStatement {
+	stmt := &VarStatement{Token: p.curToken}
+
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+
+	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	// Optional Type Annotation
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Consume token starting the type expression
+		stmt.TypeAnnotation = p.parseTypeExpression()
+		if stmt.TypeAnnotation == nil {
+			return nil
+		}
+	} else {
+		stmt.TypeAnnotation = nil // No type annotation provided
+	}
+
+	// Allow omitting = value, defaulting to undefined
+	if p.peekTokenIs(lexer.ASSIGN) {
+		p.nextToken() // Consume '='
+		p.nextToken() // Consume token starting the expression
+		stmt.Value = p.parseExpression(LOWEST)
+	} else {
+		stmt.Value = nil // No initializer provided, implies undefined
+	}
 
 	// Optional semicolon - Consume it here
 	if p.peekTokenIs(lexer.SEMICOLON) {
@@ -1223,17 +1263,17 @@ func (p *Parser) parseIfExpression() Expression {
 			alternativeBlock := p.parseBlockStatement()
 
 			// --- DEBUG: Log state of block BEFORE assignment ---
-			fmt.Printf("// [Parser IfExpr] Assigning Alternative: BlockPtr=%p", alternativeBlock)
+			debugPrint("// [Parser IfExpr] Assigning Alternative: BlockPtr=%p", alternativeBlock)
 			if alternativeBlock != nil {
 				statementsPtr := &alternativeBlock.Statements // Get pointer to the slice header
-				fmt.Printf(", StmtSliceHeaderPtr=%p", statementsPtr)
+				debugPrint(", StmtSliceHeaderPtr=%p", statementsPtr)
 				if alternativeBlock.Statements == nil {
-					fmt.Printf(", Statements=nil\n")
+					debugPrint(", Statements=nil\n")
 				} else {
-					fmt.Printf(", Statements.Len=%d\n", len(alternativeBlock.Statements))
+					debugPrint(", Statements.Len=%d\n", len(alternativeBlock.Statements))
 				}
 			} else {
-				fmt.Printf(", Block=nil\n")
+				debugPrint(", Block=nil\n")
 			}
 			// --- END DEBUG ---
 

@@ -106,6 +106,43 @@ func (ls *LetStatement) String() string {
 	return out.String()
 }
 
+// VarStatement represents a `var` variable declaration.
+// var <Name> : <TypeAnnotation> = <Value>;
+// Structurally identical to LetStatement, but semantically different (hoisting).
+type VarStatement struct {
+	Token          lexer.Token // The lexer.VAR token
+	Name           *Identifier // The variable name
+	TypeAnnotation Expression  // Parsed type node (e.g., *Identifier)
+	Value          Expression  // The expression being assigned
+	ComputedType   types.Type  // Stores the resolved type from TypeAnnotation or Value
+}
+
+func (vs *VarStatement) statementNode()       {}
+func (vs *VarStatement) TokenLiteral() string { return vs.Token.Literal }
+func (vs *VarStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(vs.TokenLiteral() + " ")
+	if vs.Name != nil {
+		out.WriteString(vs.Name.String())
+	}
+	if vs.TypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(vs.TypeAnnotation.String())
+	}
+	out.WriteString(" = ")
+	if vs.Value != nil {
+		out.WriteString(vs.Value.String())
+	} else {
+		// Indicate undefined if no value is provided (affects computed type later)
+		// out.WriteString("undefined")
+	}
+	if vs.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", vs.ComputedType.String()))
+	}
+	out.WriteString(";")
+	return out.String()
+}
+
 // ConstStatement represents a `const` variable declaration.
 // const <Name> : <TypeAnnotation> = <Value>;
 // Note: Structurally identical to LetStatement for now, but semantically different.

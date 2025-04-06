@@ -114,7 +114,8 @@ func TestScripts(t *testing.T) {
 				} else {
 					var allErrors strings.Builder
 					for _, cerr := range compileErrs {
-						allErrors.WriteString(cerr.Error() + "\n")
+						allErrors.WriteString(cerr.Kind() + "Error: " + cerr.Message() + "\n")
+						allErrors.WriteString(fmt.Sprintf("    at %s:%d:%d\n\n", scriptPath, cerr.Pos().Line, cerr.Pos().Column))
 					}
 					t.Fatalf("Unexpected compile errors:\n%s", allErrors.String())
 				}

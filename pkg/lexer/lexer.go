@@ -5,6 +5,17 @@ import (
 	"strings" // Added for strings.Builder
 )
 
+// --- Debug Flag ---
+const lexerDebug = false
+
+func debugPrintf(format string, args ...interface{}) {
+	if lexerDebug {
+		fmt.Printf("[Lexer Debug] "+format+"\n", args...)
+	}
+}
+
+// --- End Debug Flag ---
+
 // TokenType represents the type of a token.
 type TokenType string
 
@@ -106,6 +117,7 @@ const (
 	FUNCTION TokenType = "FUNCTION"
 	LET      TokenType = "LET"
 	CONST    TokenType = "CONST"
+	VAR      TokenType = "VAR" // Added
 	TRUE     TokenType = "TRUE"
 	FALSE    TokenType = "FALSE"
 	IF       TokenType = "IF"
@@ -137,7 +149,7 @@ const (
 var keywords = map[string]TokenType{
 	"function":  FUNCTION,
 	"let":       LET,
-	"var":       LET, // Make it behave like let for now
+	"var":       VAR, // Added
 	"const":     CONST,
 	"true":      TRUE,
 	"false":     FALSE,
@@ -630,12 +642,12 @@ func (l *Lexer) NextToken() Token {
 			tokType := LookupIdent(literal)
 			// readIdentifier leaves l.position *after* the last char of the identifier
 			tok = Token{Type: tokType, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			return tok // Return early, readIdentifier already called readChar()
+			//return tok // Return early, readIdentifier already called readChar()
 		} else if isDigit(l.ch) {
 			literal := l.readNumber() // Consumes digits and potentially '.'
 			// readNumber leaves l.position *after* the last char of the number
 			tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			return tok // Return early, readNumber already called readChar()
+			//return tok // Return early, readNumber already called readChar()
 		} else {
 			// Illegal character
 			literal := string(l.ch)
@@ -644,6 +656,7 @@ func (l *Lexer) NextToken() Token {
 		}
 	}
 
+	debugPrintf("Token: %s, %s, %d, %d, %d, %d", tok.Type, tok.Literal, tok.Line, tok.Column, tok.StartPos, tok.EndPos)
 	return tok
 }
 
@@ -896,12 +909,7 @@ func (l *Lexer) skipMultilineComment() bool {
 			return true
 		}
 
-		// Handle newlines inside the comment
-		if l.ch == '\n' {
-			l.line++
-		}
-
-		// Consume the current character
+		// Consume the current character. readChar() handles line counting.
 		l.readChar()
 	}
 }

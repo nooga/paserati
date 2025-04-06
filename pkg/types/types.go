@@ -64,16 +64,21 @@ func (ft *FunctionType) String() string {
 		if i > 0 {
 			params += ", "
 		}
-		if p != nil { // Add nil check
+		if p != nil {
 			params += p.String()
 		} else {
 			params += "<nil>"
 		}
 	}
 	retTypeStr := "<nil>"
-	if ft.ReturnType != nil { // Add nil check
-		retTypeStr = ft.ReturnType.String()
+
+	if ft.ReturnType == nil {
+		//panic(fmt.Sprintf("PANIC TYPES: ft.ReturnType is nil inside FunctionType.String! FuncType: %#v", ft))
+		return fmt.Sprintf("(%s) => <nil>", params)
 	}
+
+	retTypeStr = ft.ReturnType.String()
+
 	return fmt.Sprintf("(%s) => %s", params, retTypeStr)
 }
 func (ft *FunctionType) typeNode() {}

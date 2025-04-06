@@ -11,10 +11,18 @@ import (
 )
 
 func main() {
+	// Define the -e flag for running expressions
+	exprFlag := flag.String("e", "", "Run the given expression and exit")
 	flag.Parse() // Parses the command-line flags
 
+	if *exprFlag != "" {
+		// Run the expression provided via -e flag
+		runExpression(*exprFlag)
+		return
+	}
+
 	if flag.NArg() > 1 {
-		fmt.Fprintf(os.Stderr, "Usage: paserati [script]\n")
+		fmt.Fprintf(os.Stderr, "Usage: paserati [script] or paserati -e \"expression\"\n")
 		os.Exit(64) // Exit code 64: command line usage error
 	} else if flag.NArg() == 1 {
 		// Execute the script file provided as an argument
@@ -22,6 +30,23 @@ func main() {
 	} else {
 		// No file provided, start the REPL
 		runRepl()
+	}
+}
+
+// runExpression executes a single expression provided via the -e flag
+func runExpression(expr string) {
+	// Create a new Paserati session
+	paserati := driver.NewPaserati()
+
+	// Run the expression
+	value, errs := paserati.RunString(expr)
+
+	// Display the result or errors
+	ok := paserati.DisplayResult(expr, value, errs)
+
+	// Exit with appropriate code
+	if !ok {
+		os.Exit(70) // Exit code 70: internal software error
 	}
 }
 
@@ -75,10 +100,7 @@ func runRepl() {
 		// chunk, compileErrs := driver.CompileString(line)
 		// if compileErrs != nil {
 		// 	// Print compile errors but continue the REPL loop
-		// 	fmt.Fprintf(os.Stderr, "Compile errors:\n")
-		// 	for _, e := range compileErrs {
-		// 		fmt.Fprintf(os.Stderr, \"\\t%s\\n\", e)
-		// 	}
+		// 	fmt.Fprintf(os.Stderr, \"\\t%s\\n\", e)
 		// 	continue // Don't try to interpret if compilation failed
 		// }
 		//

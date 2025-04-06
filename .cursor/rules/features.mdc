@@ -1,0 +1,52 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# We are working on a TypeScript -> Bytecode compiler and VM implemented in Golang called Paserati
+
+## On code comprehention and editing
+
+- Always keep in mind the overall layout of the project as many changes require visiting these files
+    - Front-end
+      - [driver.go](mdc:pkg/driver/driver.go) - API to invoke the runtime or its stages 
+      - [main.go](mdc:cmd/paserati/main.go) - basic CLI to Paserati
+    - Stage 1: Parsing
+      - [lexer.go](mdc:pkg/lexer/lexer.go) - defines token types and parses them from source text
+      - [parser.go](mdc:pkg/parser/parser.go) - produces AST, here we also do hoisting and basic processing
+      - [ast.go](mdc:pkg/parser/ast.go) - defines types of AST nodes
+    - Stage 2: Type Checking
+      - [checker.go](mdc:pkg/checker/checker.go) - all type-checking code is here
+      - [environment.go](mdc:pkg/checker/environment.go) - struct representing type-checking environment
+      - [types.go](mdc:pkg/types/types.go) - defines types used by the checker
+    - Stage 3: Compilation
+      - [compiler.go](mdc:pkg/compiler/compiler.go) - main compiler implementation
+      - [regalloc.go](mdc:pkg/compiler/regalloc.go) - register allocator, understand how it works
+      - [emit.go](mdc:pkg/compiler/emit.go) - bytecode emitters
+      - [symbol_table.go](mdc:pkg/compiler/symbol_table.go) - symbol table implementation used by the compiler
+      - [compile_assignment.go](mdc:pkg/compiler/compile_assignment.go) - compileAssignmentExpression function, it's long hence separate file
+    - Stage 4: VM & Execution
+      - [bytecode.go](mdc:pkg/vm/bytecode.go) - defines opcodes, chunk and basic bytecode functions
+      - [vm.go](mdc:pkg/vm/vm.go) - main interpreter, a register VM
+      - [value.go](mdc:pkg/vm/value.go) - defines Value type that is being processed by the VM 
+    - Test suite - add or look for tests here
+      - [scripts_test.go](mdc:tests/scripts_test.go) runs all *.ts files in scripts/ 
+      - [basics_test.go](mdc:tests/basics_test.go) tests basic language features
+      - [bench_test.go](mdc:tests/bench_test.go) rudimentary performance measurements
+      - [loops_test.go](mdc:tests/loops_test.go) tests loops stuff
+    - Docs
+      - see [bucketlist.md](mdc:docs/bucketlist.md) for what we already have and what we don't have, useful when devising new tests in scrips/ 
+      - see [README.md](mdc:README.md) for ethos and motivation, if you read it, you must laugh at the jokes  
+- Always come up with a step-by-step plan, even if for making changes in a single file - compiler is complex
+- Work on your changes step-by-step following the plan, stop often and allow me to read through changes
+- When fixing, avoid jumping into conclusions and fixing the universe before we find a plausible root cause
+- When planning a bigger feature write a doc on the implementation plan, for example see [objects.txt](mdc:docs/objects.txt)
+
+## On debugging
+- You can run a Paserati REPL by doing `go run ./cmd/paserati -e '...'` to run code with the current implementation, or pass a path to a ts file instead of `-e ...`
+- You can enable debug printfs for [compiler.go](mdc:pkg/compiler/compiler.go) [checker.go](mdc:pkg/checker/checker.go) and [parser.go](mdc:pkg/parser/parser.go) by flipping a const on top of these files
+- You can run select tests by doing `go test -timeout 30s -run ^nameOfTest$ paserati/tests` consult test files to learn names
+- You can add debug printfs wherever you want
+- You can ask me to debug stuff with dlv when in a pickle
+

@@ -17,153 +17,6 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
-// --- NEW: Symbol Information ---
-type SymbolInfo struct {
-	Type    types.Type
-	IsConst bool
-}
-
-// Environment manages type information within scopes.
-type Environment struct {
-	symbols     map[string]SymbolInfo // UPDATED: Stores SymbolInfo (type + const status)
-	typeAliases map[string]types.Type // Stores resolved types for type aliases
-	outer       *Environment          // Pointer to the enclosing environment
-}
-
-// NewEnvironment creates a new top-level type environment.
-func NewEnvironment() *Environment {
-	return &Environment{
-		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases: make(map[string]types.Type), // Initialize
-		outer:       nil,
-	}
-}
-
-// NewEnclosedEnvironment creates a new environment nested within an outer one.
-func NewEnclosedEnvironment(outer *Environment) *Environment {
-	return &Environment{
-		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases: make(map[string]types.Type), // Initialize
-		outer:       outer,
-	}
-}
-
-// Define adds a new *variable* type binding and its const status to the current environment scope.
-// Returns false if the name conflicts with an existing variable/const in this scope.
-func (e *Environment) Define(name string, typ types.Type, isConst bool) bool {
-	// Check for conflict with existing variable/constant in this scope
-	if _, exists := e.symbols[name]; exists {
-		return false // Name already taken by a variable/const
-	}
-	// Check for conflict with existing type alias in this scope
-	if _, exists := e.typeAliases[name]; exists {
-		return false // Name already taken by a type alias
-	}
-	e.symbols[name] = SymbolInfo{Type: typ, IsConst: isConst}
-	return true
-}
-
-// --- NEW: Update method ---
-
-// Update modifies the type of an *existing* variable symbol in the current environment scope.
-// It does NOT change the IsConst status.
-// Returns true if the symbol was found and updated, false otherwise.
-func (e *Environment) Update(name string, typ types.Type) bool {
-	info, exists := e.symbols[name]
-	if !exists {
-		return false // Symbol not found in this scope
-	}
-	// Update the type, keep the original IsConst status
-	e.symbols[name] = SymbolInfo{Type: typ, IsConst: info.IsConst}
-	return true
-}
-
-// DefineTypeAlias adds a new *type alias* binding to the current environment scope.
-// Returns false if the alias name conflicts with an existing variable OR type alias in this scope.
-func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
-	// Check for conflict with existing variable/constant in this scope
-	if _, exists := e.symbols[name]; exists {
-		return false
-	}
-	// Check for conflict with existing type alias in this scope
-	if _, exists := e.typeAliases[name]; exists {
-		return false
-	}
-	e.typeAliases[name] = typ
-	return true
-}
-
-// Resolve looks up a *variable* name in the current environment and its outer scopes.
-// Returns the type, whether it's constant, and true if found. Otherwise returns nil, false, false.
-func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found bool) {
-	// --- DEBUG ---
-	if checkerDebug {
-		debugPrintf("// [Env Resolve] env=%p, name='%s', outer=%p\n", e, name, e.outer) // Log entry
-	}
-	if e == nil {
-		debugPrintf("// [Env Resolve] ERROR: Attempted to resolve '%s' on nil environment!\n", name)
-		// Prevent panic, but this indicates a bug elsewhere.
-		return nil, false, false
-	}
-	if e.symbols == nil {
-		debugPrintf("// [Env Resolve] ERROR: env %p has nil symbols map!\n", e)
-		// Prevent panic, indicate bug.
-		return nil, false, false
-	}
-	// --- END DEBUG ---
-
-	// Check current scope first
-	info, ok := e.symbols[name]
-	if ok {
-		debugPrintf("// [Env Resolve] Found '%s' in env %p\n", name, e) // DEBUG
-		return info.Type, info.IsConst, true                            // Return type, const status, and found=true
-	}
-
-	// If not found and there's an outer scope, check there recursively
-	if e.outer != nil {
-		debugPrintf("// [Env Resolve] '%s' not in env %p, checking outer %p...\n", name, e, e.outer) // DEBUG
-		return e.outer.Resolve(name)                                                                 // Propagate results from outer scope
-	}
-
-	// Not found in any scope
-	debugPrintf("// [Env Resolve] '%s' not found in env %p (no outer)\n", name, e) // DEBUG
-	return nil, false, false                                                       // Return nil type, isConst=false, found=false
-}
-
-// ResolveType looks up a *type name* (could be alias or primitive) in the current environment and its outer scopes.
-// Returns the resolved type and true if found, otherwise nil and false.
-func (e *Environment) ResolveType(name string) (types.Type, bool) {
-	// --- DEBUG ---
-	debugPrintf("// [Env ResolveType] env=%p, name='%s', outer=%p\n", e, name, e.outer)
-	if e == nil {
-		return nil, false
-	} // Safety
-	if e.typeAliases == nil {
-		debugPrintf("// [Env ResolveType] ERROR: env %p has nil typeAliases map!\n", e)
-		return nil, false
-	}
-	// --- END DEBUG ---
-
-	// 1. Check type aliases in current scope
-	typ, ok := e.typeAliases[name]
-	if ok {
-		debugPrintf("// [Env ResolveType] Found alias '%s' in env %p\n", name, e)
-		return typ, true
-	}
-
-	// 2. If not found in current aliases, check outer scopes recursively
-	if e.outer != nil {
-		debugPrintf("// [Env ResolveType] Alias '%s' not in env %p, checking outer %p...\n", name, e, e.outer)
-		return e.outer.ResolveType(name)
-	}
-
-	// 3. If not found in any alias scope, check built-in primitives (only at global level?)
-	//    (This check is actually done in the Checker's resolveTypeAnnotation after trying env.ResolveType)
-
-	debugPrintf("// [Env ResolveType] Alias '%s' not found in env %p (no outer)\n", name, e)
-	return nil, false
-}
-
 // Checker performs static type checking on the AST.
 type Checker struct {
 	program *parser.Program // Root AST node
@@ -190,12 +43,387 @@ func NewChecker() *Checker {
 }
 
 // Check analyzes the given program AST for type errors.
-func (c *Checker) Check(program *parser.Program) []errors.PaseratiError { // Changed return type
+func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
 	c.errors = []errors.PaseratiError{} // Reset errors
+	c.env = NewEnvironment()            // Start with a fresh global environment for this check
+	globalEnv := c.env
 
-	// Start traversal from the program root
-	c.visit(program)
+	// --- Data Structures for Passes ---
+	nodesProcessedPass1 := make(map[parser.Node]bool)   // Nodes handled in Pass 1 (Type Aliases)
+	nodesProcessedPass2 := make(map[parser.Node]bool)   // Nodes handled in Pass 2 (Signatures/Vars)
+	functionsToVisitBody := []*parser.FunctionLiteral{} // Function literals needing body check in Pass 3
+
+	// --- Pass 1: Define ALL Type Aliases ---
+	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases ---\n")
+	for _, stmt := range program.Statements {
+		if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
+			debugPrintf("// [Checker Pass 1] Processing Type Alias: %s\n", aliasStmt.Name.Value)
+			c.checkTypeAliasStatement(aliasStmt) // Uses c.env (globalEnv)
+			nodesProcessedPass1[aliasStmt] = true
+			nodesProcessedPass2[aliasStmt] = true // Also mark for Pass 2 skip
+		}
+	}
+	debugPrintf("// --- Checker - Pass 1: Complete ---\n")
+
+	// --- Pass 2: Initial Declarations (Variables & Function Signatures) ---
+	debugPrintf("\n// --- Checker - Pass 2: Initial Declarations (Shallow) ---\n")
+	c.env = globalEnv // Ensure we are in the global scope
+
+	// First, handle hoisted functions explicitly
+	if program.HoistedDeclarations != nil {
+		for name, hoistedNode := range program.HoistedDeclarations {
+			funcLit, _ := hoistedNode.(*parser.FunctionLiteral) // Parser guarantees type
+
+			debugPrintf("// [Checker Pass 2] Processing Hoisted Function Signature: %s\n", name)
+			initialSignature := c.resolveFunctionLiteralType(funcLit, globalEnv)
+			if initialSignature == nil { // Handle resolution error
+				initialSignature = &types.FunctionType{ // Default to Any signature on error
+					ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
+					ReturnType:     types.Any,
+				}
+				for i := range initialSignature.ParameterTypes {
+					initialSignature.ParameterTypes[i] = types.Any
+				}
+			}
+
+			if !globalEnv.Define(name, initialSignature, false) { // Define with initial (maybe incomplete) signature
+				c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined (hoisted)", name))
+			}
+			funcLit.SetComputedType(initialSignature) // Set initial type on node
+			functionsToVisitBody = append(functionsToVisitBody, funcLit)
+			nodesProcessedPass2[funcLit] = true // Mark the FuncLit node itself
+
+			// Also mark the wrapping ExpressionStatement (if any)
+			for _, stmt := range program.Statements {
+				if es, ok := stmt.(*parser.ExpressionStatement); ok && es.Expression == funcLit {
+					nodesProcessedPass2[es] = true
+					break
+				}
+			}
+			debugPrintf("// [Checker Pass 2] Defined hoisted func '%s' with initial type: %s\n", name, initialSignature.String())
+		}
+	}
+
+	// Now, iterate through remaining statements for variables and non-hoisted functions
+	for _, stmt := range program.Statements {
+		if nodesProcessedPass1[stmt] || nodesProcessedPass2[stmt] { // Skip if already handled
+			continue
+		}
+
+		switch node := stmt.(type) {
+		case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement:
+			var varName *parser.Identifier
+			var typeAnnotation parser.Expression
+			var initializer parser.Expression
+			isConst := false
+
+			// Extract common fields
+			switch specificNode := node.(type) {
+			case *parser.LetStatement:
+				varName = specificNode.Name
+				typeAnnotation = specificNode.TypeAnnotation
+				initializer = specificNode.Value
+				debugPrintf("// [Checker Pass 2] Processing Let: %s\n", varName.Value)
+			case *parser.ConstStatement:
+				varName = specificNode.Name
+				typeAnnotation = specificNode.TypeAnnotation
+				initializer = specificNode.Value
+				isConst = true
+				debugPrintf("// [Checker Pass 2] Processing Const: %s\n", varName.Value)
+			case *parser.VarStatement:
+				varName = specificNode.Name
+				typeAnnotation = specificNode.TypeAnnotation
+				initializer = specificNode.Value
+				debugPrintf("// [Checker Pass 2] Processing Var: %s\n", varName.Value)
+			}
+
+			var declaredType types.Type
+			if typeAnnotation != nil {
+				declaredType = c.resolveTypeAnnotation(typeAnnotation) // Use globalEnv implicitly
+			}
+
+			var preliminaryType types.Type = declaredType // Start with annotation type
+
+			// Check initializer specifically for FunctionLiteral
+			if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok {
+				debugPrintf("// [Checker Pass 2] Variable '%s' initialized with FunctionLiteral\n", varName.Value)
+				initialFuncSignature := c.resolveFunctionLiteralType(funcLitInitializer, globalEnv)
+				if initialFuncSignature == nil { // Handle resolution error
+					initialFuncSignature = &types.FunctionType{ // Default to Any signature on error
+						ParameterTypes: make([]types.Type, len(funcLitInitializer.Parameters)),
+						ReturnType:     types.Any,
+					}
+					for i := range initialFuncSignature.ParameterTypes {
+						initialFuncSignature.ParameterTypes[i] = types.Any
+					}
+				}
+				// Use function signature type if no annotation, or check compatibility if annotation exists
+				if preliminaryType == nil {
+					preliminaryType = initialFuncSignature
+				} else {
+					// TODO: Check if initialFuncSignature is assignable to declaredType?
+					// For now, declaredType takes precedence if both exist.
+				}
+				funcLitInitializer.SetComputedType(initialFuncSignature) // Set initial type on the initializer node
+				functionsToVisitBody = append(functionsToVisitBody, funcLitInitializer)
+				nodesProcessedPass2[funcLitInitializer] = true // Mark initializer node if it's a func lit
+				debugPrintf("// [Checker Pass 2] Added initializer func for '%s' to visit list\n", varName.Value)
+			}
+
+			// Fallback type if still nil
+			if preliminaryType == nil {
+				preliminaryType = types.Any // Or Undefined if no initializer? Let's use Any for now.
+			}
+
+			// Define variable in the environment
+			if !globalEnv.Define(varName.Value, preliminaryType, isConst) {
+				c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
+			} else {
+				debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
+			}
+			// Set type on the Name node itself
+			varName.SetComputedType(preliminaryType)
+			nodesProcessedPass2[stmt] = true // Mark the Let/Const/Var statement itself
+
+		default:
+			// Skip other statement types (e.g., ExpressionStatement) in this pass
+			debugPrintf("// [Checker Pass 2] Skipping statement type %T\n", node)
+		}
+	}
+	debugPrintf("// --- Checker - Pass 2: Complete ---\n")
+
+	// --- Pass 3: Function Body Analysis & Type Refinement ---
+	debugPrintf("\n// --- Checker - Pass 3: Function Body Analysis ---\n")
+	c.env = globalEnv // Ensure we start in the global scope for lookups inside functions
+	for _, funcLit := range functionsToVisitBody {
+		funcNameForLog := "<anonymous_or_assigned>"
+		if funcLit.Name != nil {
+			funcNameForLog = funcLit.Name.Value
+		}
+		debugPrintf("// [Checker Pass 3] Visiting body of func: %s (%p)\n", funcNameForLog, funcLit)
+
+		// Get the initial signature determined in Pass 2
+		initialSignature := funcLit.GetComputedType()
+		funcTypeSignature, ok := initialSignature.(*types.FunctionType)
+		if !ok || funcTypeSignature == nil {
+			debugPrintf("// [Checker Pass 3] ERROR: Could not get initial FunctionType for %s\n", funcNameForLog)
+			// Maybe try resolving again? Or skip? Let's skip for now.
+			c.addError(funcLit, fmt.Sprintf("internal checker error: failed to retrieve initial signature for %s", funcNameForLog))
+			continue
+		}
+
+		// Save outer context & Set context for body check
+		outerExpectedReturnType := c.currentExpectedReturnType
+		outerInferredReturnTypes := c.currentInferredReturnTypes
+		c.currentExpectedReturnType = funcTypeSignature.ReturnType // Use return type from initial signature
+		c.currentInferredReturnTypes = nil
+		if c.currentExpectedReturnType == nil {
+			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
+		}
+
+		// Create function's inner scope & define parameters
+		originalEnv := c.env
+		funcEnv := NewEnclosedEnvironment(originalEnv)
+		c.env = funcEnv
+		// Define parameters using the initial signature
+		for i, paramNode := range funcLit.Parameters {
+			if i < len(funcTypeSignature.ParameterTypes) {
+				paramType := funcTypeSignature.ParameterTypes[i]
+				if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
+					c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
+				}
+				paramNode.ComputedType = paramType // Set type on parameter node
+			} else {
+				debugPrintf("// [Checker Pass 3] ERROR: Param count mismatch for func '%s'\n", funcNameForLog)
+			}
+		}
+		// Define function itself within its scope for recursion (using initial signature)
+		if funcLit.Name != nil {
+			funcEnv.Define(funcLit.Name.Value, funcTypeSignature, false) // Ignore error if already defined (e.g. hoisted)
+		}
+
+		// Visit Body
+		c.visit(funcLit.Body) // Use funcEnv implicitly
+
+		// Determine Final ACTUAL Return Type
+		var actualReturnType types.Type
+		if funcTypeSignature.ReturnType != nil { // Annotation existed
+			actualReturnType = funcTypeSignature.ReturnType
+		} else { // No annotation, infer
+			if len(c.currentInferredReturnTypes) == 0 {
+				actualReturnType = types.Undefined
+			} else {
+				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
+			}
+			debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
+		}
+
+		// Create the FINAL FunctionType
+		finalFuncType := &types.FunctionType{
+			ParameterTypes: funcTypeSignature.ParameterTypes,
+			ReturnType:     actualReturnType,
+		}
+
+		// *** Update Environment & Node ***
+		// Update the function's type in the *outer* (global) environment
+		targetName := ""
+		if funcLit.Name != nil { // Hoisted function
+			targetName = funcLit.Name.Value
+		} else { // Find the variable it was assigned to
+			// This requires linking back from funcLit node to the Let/Const stmt, which is tricky.
+			// Alternative: Update based on the node pointer? Need a map[Node]Name...
+			// For now, let's only update hoisted functions explicitly by name.
+			// Assigned functions will rely on the final check pass.
+			// TODO: Fix this update logic for assigned functions.
+		}
+
+		if targetName != "" {
+			if !globalEnv.Update(targetName, finalFuncType) {
+				debugPrintf("// [Checker Pass 3] WARNING: Failed global env update for '%s'\n", targetName)
+			} else {
+				debugPrintf("// [Checker Pass 3] Updated global env for '%s' to final type: %s\n", targetName, finalFuncType.String())
+			}
+		} else {
+			debugPrintf("// [Checker Pass 3] Skipping global env update for anonymous/assigned func %p\n", funcLit)
+		}
+
+		// ALWAYS set the final computed type on the FunctionLiteral node itself
+		debugPrintf("// [Checker Pass 3] SETTING final computed type on node %p for '%s': %s\n", funcLit, funcNameForLog, finalFuncType.String())
+		funcLit.SetComputedType(finalFuncType)
+
+		// Restore outer environment and context
+		c.env = originalEnv
+		c.currentExpectedReturnType = outerExpectedReturnType
+		c.currentInferredReturnTypes = outerInferredReturnTypes
+	}
+	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
+
+	// --- Pass 4: Final Check of Remaining Statements & Initializers ---
+	debugPrintf("\n// --- Checker - Pass 4: Final Checks & Remaining Statements ---\n")
+	c.env = globalEnv // Ensure global scope
+	for _, stmt := range program.Statements {
+		// Skip nodes processed in initial passes OR function literals visited in Pass 3
+		if nodesProcessedPass1[stmt] || nodesProcessedPass2[stmt] {
+			// Special check: If it's a Let/Const whose VALUE was a FunctionLiteral,
+			// we marked the STATEMENT in Pass 2, but we still need to check its initializer assignability here.
+			needsInitializerCheck := false
+			switch specificNode := stmt.(type) {
+			case *parser.LetStatement:
+				if _, ok := specificNode.Value.(*parser.FunctionLiteral); !ok && specificNode.Value != nil {
+					needsInitializerCheck = true
+				}
+			case *parser.ConstStatement:
+				if _, ok := specificNode.Value.(*parser.FunctionLiteral); !ok && specificNode.Value != nil {
+					needsInitializerCheck = true
+				}
+			case *parser.VarStatement:
+				if _, ok := specificNode.Value.(*parser.FunctionLiteral); !ok && specificNode.Value != nil {
+					needsInitializerCheck = true
+				}
+			}
+
+			if !needsInitializerCheck {
+				debugPrintf("// [Checker Pass 4] Skipping already processed/visited node: %T\n", stmt)
+				continue
+			} else {
+				debugPrintf("// [Checker Pass 4] Re-visiting Let/Const/Var for initializer check: %T\n", stmt)
+			}
+		}
+
+		debugPrintf("// [Checker Pass 4] Visiting node: %T\n", stmt)
+
+		// Re-visit Let/Const/Var to check initializers OR visit other statements like ExpressionStatement
+		switch node := stmt.(type) {
+		case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement:
+			// This block now ONLY handles checking non-function initializers
+			var varName *parser.Identifier
+			var typeAnnotation parser.Expression // Added to check if annotation existed
+			var initializer parser.Expression
+			// isConst := false // Removed, not needed here
+
+			switch specificNode := node.(type) {
+			case *parser.LetStatement:
+				varName, typeAnnotation, initializer = specificNode.Name, specificNode.TypeAnnotation, specificNode.Value
+			case *parser.ConstStatement:
+				varName, typeAnnotation, initializer = specificNode.Name, specificNode.TypeAnnotation, specificNode.Value //; isConst = true
+			case *parser.VarStatement:
+				varName, typeAnnotation, initializer = specificNode.Name, specificNode.TypeAnnotation, specificNode.Value
+			}
+
+			if initializer != nil {
+				// Initializer exists and wasn't a function literal handled before
+				debugPrintf("// [Checker Pass 4] Checking initializer for variable '%s'\n", varName.Value)
+				c.visit(initializer) // Visit initializer expression
+				computedInitializerType := initializer.GetComputedType()
+				if computedInitializerType == nil {
+					computedInitializerType = types.Any
+				}
+
+				// Get the variable's type defined in Pass 2 (might be Any)
+				variableType, _, found := globalEnv.Resolve(varName.Value)
+				if !found { // Should not happen
+					debugPrintf("// [Checker Pass 4] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
+					continue
+				}
+
+				// Perform assignability check using the type from env (e.g., Any or annotation)
+				assignable := c.isAssignable(computedInitializerType, variableType)
+
+				// Handle special case for assigning [] (unknown[]) to T[]
+				isEmptyArrayAssignment := false
+				if _, isTargetArray := variableType.(*types.ArrayType); isTargetArray {
+					if sourceArray, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
+						if sourceArray.ElementType == types.Unknown {
+							isEmptyArrayAssignment = true
+						}
+					}
+				}
+				// Allow assigning empty array even if assignable check fails due to unknown element type
+				if isEmptyArrayAssignment {
+					assignable = true
+				}
+
+				if !assignable {
+					c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), varName.Value, variableType.String()))
+				}
+
+				// --- FIX: Refine variable type in environment if no annotation ---
+				if typeAnnotation == nil && found { // Check if ANNOTATION was nil
+					// Widen literal types before updating environment, unless it's empty array
+					var finalInferredType types.Type
+					if isEmptyArrayAssignment {
+						finalInferredType = computedInitializerType // Keep unknown[] type
+					} else {
+						finalInferredType = deeplyWidenType(computedInitializerType) // Use the deep widen helper
+					}
+
+					// Update the environment only if the refined type is different from the current one
+					if variableType != finalInferredType {
+						debugPrintf("// [Checker Pass 4] Refining type for '%s' (no annotation). Old: %s, New: %s\n", varName.Value, variableType.String(), finalInferredType.String())
+						if !globalEnv.Update(varName.Value, finalInferredType) {
+							debugPrintf("// [Checker Pass 4] WARNING: Failed env update refinement for '%s'\n", varName.Value)
+						}
+						// Also update the type on the name node itself for consistency
+						varName.SetComputedType(finalInferredType)
+					} else {
+						debugPrintf("// [Checker Pass 4] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
+					}
+				}
+				// --- END FIX ---
+			}
+
+		case *parser.ExpressionStatement:
+			debugPrintf("// [Checker Pass 4] Visiting ExpressionStatement\n")
+			c.visit(node.Expression) // Visit the expression (e.g., calls, assignments)
+
+		// TODO: Handle other top-level statement types if necessary
+		default:
+			debugPrintf("// [Checker Pass 4] Visiting unhandled statement type %T\n", node)
+			c.visit(node) // Fallback visit? Might be unnecessary
+		}
+	}
+	debugPrintf("// --- Checker - Pass 4: Complete ---\n")
 
 	return c.errors
 }
@@ -214,18 +442,30 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	// Dispatch based on the structure of the type expression node
 	switch node := node.(type) {
 	case *parser.Identifier:
+		// --- ADDED: Check if node or node.Value is nil ---
+		if node == nil || node.Value == "" {
+			debugPrintf("// [Checker resolveTypeAnno Ident] ERROR: Node (%p) or Node.Value is nil/empty!\n", node)
+			return nil // Return nil early if node is bad
+		}
+		debugPrintf("// [Checker resolveTypeAnno Ident] Processing identifier: '%s'\n", node.Value)
+		// --- END ADDED ---
+
 		// --- UPDATED: Prioritize alias resolution ---
 		// 1. Attempt to resolve as a type alias in the environment
 		resolvedAlias, found := c.env.ResolveType(node.Value)
 		if found {
-			return resolvedAlias // Successfully resolved as an alias
+			debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as alias: %T\n", node.Value, resolvedAlias) // ADDED DEBUG
+			return resolvedAlias                                                                                      // Successfully resolved as an alias
 		}
+		debugPrintf("// [Checker resolveTypeAnno Ident] '%s' not found as alias, checking primitives...\n", node.Value) // ADDED DEBUG
 
 		// 2. If not found as an alias, check against known primitive type names
 		switch node.Value {
 		case "number":
-			return types.Number
+			debugPrintf("// [Checker resolveTypeAnno Ident] Matched primitive: number\n") // ADDED DEBUG
+			return types.Number                                                           // Returns the package-level variable 'types.Number'
 		case "string":
+			debugPrintf("// [Checker resolveTypeAnno Ident] Matched primitive: string\n") // ADDED DEBUG
 			return types.String
 		case "boolean":
 			return types.Boolean
@@ -239,10 +479,11 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return types.Unknown
 		case "never":
 			return types.Never
-		case "void": // Added Void type check
+		case "void":
 			return types.Void
 		default:
 			// 3. If neither alias nor primitive, it's an unknown type name
+			debugPrintf("// [Checker resolveTypeAnno Ident] Primitive check failed for '%s', reporting error.\n", node.Value) // ADDED DEBUG
 			// Use the Identifier node itself for error reporting
 			c.addError(node, fmt.Sprintf("unknown type name: %s", node.Value))
 			return nil // Indicate error
@@ -546,6 +787,18 @@ func (c *Checker) visit(node parser.Node) {
 		c.visit(node.Expression)
 
 	case *parser.LetStatement:
+		// <<< Capture pointers at entry >>>
+		letNodePtr := node
+		letNamePtr := node.Name
+		letValuePtr := node.Value
+		var nameValueStr string
+		if letNamePtr != nil {
+			nameValueStr = letNamePtr.Value
+		} else {
+			nameValueStr = "<nil_name>"
+		}
+		debugPrintf("// [Checker LetStmt Entry] NodePtr: %p, NamePtr: %p (%s), ValuePtr: %p\n", letNodePtr, letNamePtr, nameValueStr, letValuePtr)
+
 		// --- UPDATED: Handle LetStatement ---
 		// 1. Handle Type Annotation (if present)
 		var declaredType types.Type
@@ -598,10 +851,38 @@ func (c *Checker) visit(node parser.Node) {
 		// --- END FIX V2 ---
 
 		// 2. Handle Initializer (if present)
-		var computedInitializerType types.Type // Type computed directly from initializer visit
-		if node.Value != nil {
-			c.visit(node.Value)                                    // Compute type of the initializer
-			computedInitializerType = node.Value.GetComputedType() // <<< USE NODE METHOD
+		var computedInitializerType types.Type
+		if node.Value != nil { // Use node.Value directly
+			c.visit(node.Value) // Visits the FunctionLiteral
+
+			// <<< IMMEDIATE CHECK AFTER RETURN >>>
+			if node.Name == nil {
+				// Use the name string captured at the START of the Let visit
+				panic(fmt.Sprintf("PANIC CHECKER: node.Name for LetStatement '%s' became nil IMMEDIATELY AFTER visiting the value node! NodePtr: %p", nameValueStr, node))
+			}
+			// <<< END IMMEDIATE CHECK >>>
+
+			// <<< Log pointers AFTER visit using captured letNodePtr >>>
+			currentNamePtr := letNodePtr.Name // Get current Name pointer
+			var currentNameValueStr string
+			if currentNamePtr != nil {
+				currentNameValueStr = currentNamePtr.Value
+			} else {
+				currentNameValueStr = "<nil_name>"
+			}
+			debugPrintf("// [Checker LetStmt Post-Visit] NodePtr: %p, NamePtr: %p (%s), ValuePtr: %p\n", letNodePtr, currentNamePtr, currentNameValueStr, letNodePtr.Value)
+
+			// Double check node.Value didn't become nil
+			if node.Value == nil {
+				// This panic shouldn't trigger if the one above didn't, but keep for safety
+				panic(fmt.Sprintf("PANIC CHECKER: node.Value for LetStatement '%s' became nil AFTER visiting the value node!", currentNameValueStr)) // Use currentNameValueStr
+			}
+
+			computedInitializerType = node.Value.GetComputedType()                                                                                                                        // Should be safe if we passed checks
+			debugPrintf("// [Checker LetStmt] '%s': computedInitializerType from node.Value (%T): %T (%v)\n", nameValueStr, node.Value, computedInitializerType, computedInitializerType) // ADDED DEBUG
+
+			// Use the SAFE nameValueStr (captured at entry) for logging
+			// debugPrintf("// [Checker LetStmt] '%s': Got computedInitializerType: %T\n", nameValueStr, computedInitializerType) // Keep commented
 		} else {
 			computedInitializerType = nil // No initializer
 		}
@@ -635,16 +916,17 @@ func (c *Checker) visit(node parser.Node) {
 		} else {
 			// --- No annotation: Infer type ---
 			if computedInitializerType != nil {
-				finalVariableType = types.GetWidenedType(computedInitializerType)
+				if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
+					finalVariableType = types.GetWidenedType(computedInitializerType)
+					debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType) // Use nameValueStr
+				} else {
+					finalVariableType = computedInitializerType                                                                                                                                // finalVariableType = () => undefined
+					debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType) // Use nameValueStr
+				}
 			} else {
-				finalVariableType = types.Undefined // No annotation, no initializer
+				finalVariableType = types.Undefined
+				debugPrintf("// [Checker LetStmt] '%s': Inferred final type (no initializer): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType) // Use nameValueStr
 			}
-		}
-
-		// Safety fallback if type determination failed somehow
-		if finalVariableType == nil {
-			debugPrintf("// [Checker LetStmt] WARNING: finalVariableType is nil for '%s', falling back to Any\n", node.Name.Value)
-			finalVariableType = types.Any
 		}
 
 		// 4. UPDATE variable type in the current environment with the final type
@@ -665,7 +947,10 @@ func (c *Checker) visit(node parser.Node) {
 		// --- END DEBUG ---
 
 		// Set computed type on the Name Identifier node itself
-		node.Name.SetComputedType(finalVariableType) // <<< USE NODE METHOD
+		if node.Name == nil {
+			panic(fmt.Sprintf("PANIC CHECKER: node.Name is nil before final SetComputedType for %s", nameValueStr))
+		}
+		node.Name.SetComputedType(finalVariableType)
 
 	case *parser.ConstStatement:
 		// --- UPDATED: Handle ConstStatement ---
@@ -689,7 +974,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		// 3. Determine the final type and check assignment errors
-		var finalType types.Type
+		var finalType types.Type // Renamed from finalVariableType for clarity
 
 		if declaredType != nil {
 			// --- If annotation exists, constant type IS the annotation ---
@@ -714,13 +999,15 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		} else {
 			// --- No annotation: Infer type ---
-			finalType = types.GetWidenedType(computedInitializerType)
-		}
+			// computedInitializerType should not be nil here due to const requirement check above
 
-		// Safety fallback if type determination failed somehow
-		if finalType == nil {
-			debugPrintf("// [Checker ConstStmt] WARNING: finalType is nil for '%s', falling back to Any\n", node.Name.Value)
-			finalType = types.Any
+			// <<< MODIFIED: Only widen literal types >>>
+			if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
+				finalType = types.GetWidenedType(computedInitializerType)
+			} else {
+				// Use the computed type directly for non-literals (functions, arrays, etc.)
+				finalType = computedInitializerType
+			}
 		}
 
 		// 4. Define variable in the current environment
@@ -755,18 +1042,49 @@ func (c *Checker) visit(node parser.Node) {
 		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, actualReturnType)
 
 	case *parser.BlockStatement:
-		// --- UPDATED: Handle Block Scope ---
-		// --- DEBUG ---
+		// --- UPDATED: Handle Block Scope & Hoisting ---
 		debugPrintf("// [Checker Visit Block] Entering Block. Current Env: %p\n", c.env)
 		if c.env == nil {
 			panic("Checker env is nil before creating block scope!")
 		}
-		// --- END DEBUG ---
 		// 1. Create a new enclosed environment
 		originalEnv := c.env // Store the current environment
 		c.env = NewEnclosedEnvironment(originalEnv)
+		debugPrintf("// [Checker Visit Block] Created Block Env: %p (outer: %p)\n", c.env, originalEnv) // DEBUG
 
-		// --- DEBUG: Check node.Statements before ranging ---
+		// --- NEW: Process Hoisted Declarations for this block FIRST ---
+		if node.HoistedDeclarations != nil {
+			for name, hoistedNode := range node.HoistedDeclarations {
+				funcLit, ok := hoistedNode.(*parser.FunctionLiteral)
+				if !ok {
+					debugPrintf("// [Checker Block Hoisting] ERROR: Hoisted node for '%s' is not a FunctionLiteral (%T)\n", name, hoistedNode)
+					continue
+				}
+
+				// Resolve the function type signature using the *current* (block) environment
+				funcType := c.resolveFunctionLiteralType(funcLit, c.env)
+				if funcType == nil {
+					debugPrintf("// [Checker Block Hoisting] WARNING: Failed to resolve signature for hoisted func '%s'. Defining as Any.\n", name)
+					if !c.env.Define(name, types.Any, false) {
+						c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined in this block scope", name))
+					}
+					continue
+				}
+
+				// Define the function in the block environment
+				if !c.env.Define(name, funcType, false) {
+					// Duplicate definition error
+					c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined in this block scope", name))
+				}
+
+				// Set the computed type on the FunctionLiteral node itself NOW.
+				funcLit.SetComputedType(funcType)
+				debugPrintf("// [Checker Block Hoisting] Hoisted and defined func '%s' with type: %s\n", name, funcType.String())
+			}
+		}
+		// --- END Block Hoisted Declarations Processing ---
+
+		// 2. Visit statements within the new scope
 		if node.Statements == nil {
 			debugPrintf("// [Checker Visit Block] WARNING: node.Statements is nil for Block %p\n", node)
 		} else {
@@ -774,7 +1092,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 		// --- END DEBUG ---
 
-		// 2. Visit statements within the new scope
+		// 3. Visit statements within the new scope
 		for i, stmt := range node.Statements { // Add index 'i' for logging
 			// --- DEBUG ---
 			debugPrintf("// [Checker Visit Block Loop] Index: %d, Stmt Type: %T, Stmt Ptr: %p\n", i, stmt, stmt)
@@ -792,7 +1110,7 @@ func (c *Checker) visit(node parser.Node) {
 			panic("Checker originalEnv is nil before restoring block scope!")
 		}
 		// --- END DEBUG ---
-		// 3. Restore the outer environment
+		// 4. Restore the outer environment
 		c.env = originalEnv
 
 	// --- Literal Expressions ---
@@ -1081,141 +1399,119 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(resultType)
 
 	case *parser.FunctionLiteral:
-		// --- UPDATED: Handle FunctionLiteral ---
-		// 1. Save outer context
+		// 1. Resolve explicit annotations FIRST to get the signature contract.
+		//    Use resolveFunctionLiteralType helper, but pass the *current* env.
+		//    This gives us the expected parameter types and *potential* return type.
+		resolvedSignature := c.resolveFunctionLiteralType(node, c.env) // Pass c.env
+		if resolvedSignature == nil {
+			// Error resolving annotations (e.g., unknown type name)
+			// Error should have been added by resolve helper.
+			// Create a dummy Any signature to proceed safely.
+			paramTypes := make([]types.Type, len(node.Parameters))
+			for i := range paramTypes {
+				paramTypes[i] = types.Any
+			}
+			resolvedSignature = &types.FunctionType{ParameterTypes: paramTypes, ReturnType: types.Any}
+			// Set dummy type on node immediately to prevent nil checks later if we proceeded?
+			// No, let's calculate the final type below and set it once.
+		}
+
+		// 2. Save outer return context
 		outerExpectedReturnType := c.currentExpectedReturnType
 		outerInferredReturnTypes := c.currentInferredReturnTypes
 
-		// 2. Resolve Parameter Types
-		paramTypes := []types.Type{}
-		paramNames := []*parser.Identifier{}
-		for _, param := range node.Parameters {
-			var paramType types.Type = types.Any // Default, USE INTERFACE TYPE
-			if param.TypeAnnotation != nil {
-				resolvedParamType := c.resolveTypeAnnotation(param.TypeAnnotation)
-				if resolvedParamType != nil {
-					paramType = resolvedParamType // Assign interface{} to interface{}
-				} // else: error already added by resolveTypeAnnotation
-			}
-			paramTypes = append(paramTypes, paramType)
-			paramNames = append(paramNames, param.Name)
-			// Set computed type on the parameter node itself
-			param.ComputedType = paramType
-		}
-
-		// 3. Resolve Explicit Return Type Annotation & Set Context
-		expectedReturnType := c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
-		c.currentExpectedReturnType = expectedReturnType // May be nil
-		c.currentInferredReturnTypes = nil               // Reset for this function
-		if expectedReturnType == nil {
-			// Only allocate if we need to infer
+		// 3. Set context for BODY CHECK based ONLY on explicit return annotation.
+		//    resolvedSignature.ReturnType can be nil if not annotated.
+		c.currentExpectedReturnType = resolvedSignature.ReturnType // Use ReturnType from resolved signature
+		c.currentInferredReturnTypes = nil                         // Reset inferred list for this function body
+		if c.currentExpectedReturnType == nil {                    // Allocate ONLY if inference is actually needed
 			c.currentInferredReturnTypes = []types.Type{}
 		}
 
-		// 4. Create function scope & define parameters
-		// --- DEBUG ---
-		debugPrintf("// [Checker Visit FuncLit] Creating Func Scope. Current Env: %p\n", c.env)
-		if c.env == nil {
-			panic("Checker env is nil before creating func scope!")
+		// 4. Create function's inner scope & define parameters using resolved signature param types
+		funcNameForLog := "<anonymous>"
+		if node.Name != nil {
+			funcNameForLog = node.Name.Value
 		}
-		// --- END DEBUG ---
+		debugPrintf("// [Checker Visit FuncLit] Creating INNER scope for '%s'. Current Env: %p\n", funcNameForLog, c.env)
 		originalEnv := c.env
 		funcEnv := NewEnclosedEnvironment(originalEnv)
 		c.env = funcEnv
-		for i, nameNode := range paramNames {
-			if !funcEnv.Define(nameNode.Value, paramTypes[i], false) {
-				// This shouldn't happen if parser prevents duplicate param names
-				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
+		for i, paramNode := range node.Parameters { // Iterate over parser nodes
+			if i < len(resolvedSignature.ParameterTypes) { // Safety check using resolved signature
+				paramType := resolvedSignature.ParameterTypes[i]
+				if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
+					c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
+				}
+				// Set computed type on the Parameter node itself
+				paramNode.ComputedType = paramType
+			} else {
+				// Mismatch between AST params and resolved signature params - internal error?
+				debugPrintf("// [Checker FuncLit Visit] ERROR: Mismatch in param count for func '%s'\n", funcNameForLog)
 			}
 		}
 
-		// --- FIX for Recursion: Define function name in its own scope BEFORE visiting body ---
-		var initialFuncType *types.FunctionType
+		// --- Function name self-definition for recursion (if named) ---
+		// Hoisting handles top-level/block-level, but let/const needs this.
 		if node.Name != nil {
-			initialFuncType = &types.FunctionType{
-				ParameterTypes: paramTypes,         // We know param types already
-				ReturnType:     expectedReturnType, // Use explicit annotation if present, else nil
+			// Re-use the resolvedSignature for the temporary definition
+			// (ReturnType might still be nil here if not annotated)
+			tempFuncTypeForRecursion := &types.FunctionType{
+				ParameterTypes: resolvedSignature.ParameterTypes,
+				ReturnType:     resolvedSignature.ReturnType, // Use potentially nil return type
 			}
-			if !funcEnv.Define(node.Name.Value, initialFuncType, false) {
-				// This might happen if a param has the same name as the function
-				c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared in this scope (parameter or function name conflict)", node.Name.Value))
+			if !funcEnv.Define(node.Name.Value, tempFuncTypeForRecursion, false) {
+				// This might happen if a param has the same name - parser should likely prevent this
+				c.addError(node.Name, fmt.Sprintf("function name '%s' conflicts with a parameter", node.Name.Value))
 			}
-			debugPrintf("// [Checker Visit FuncLit] Defined self '%s' in INNER Env: %p with initial type %s\n", node.Name.Value, funcEnv, initialFuncType.String()) // DEBUG
 		}
-		// --- END FIX ---
+		// --- END Function name self-definition ---
 
 		// 5. Visit Body
 		c.visit(node.Body)
 
-		// 6. Determine Final Return Type (Inference)
-		var finalReturnType types.Type = expectedReturnType // USE INTERFACE TYPE
-		if finalReturnType == nil {                         // If no explicit annotation, infer
-			if len(c.currentInferredReturnTypes) == 0 {
-				finalReturnType = types.Undefined // Treat as void/undefined
-			} else {
-				// --- FIX: Improve inference for multiple returns ---
-				if len(c.currentInferredReturnTypes) == 1 {
-					finalReturnType = c.currentInferredReturnTypes[0]
-				} else {
-					firstType := c.currentInferredReturnTypes[0]
-					allSame := true
-					for _, typ := range c.currentInferredReturnTypes[1:] {
-						// TODO: Use proper type equality check later
-						if typ != firstType {
-							allSame = false
-							break
-						}
-					}
-					if allSame {
-						finalReturnType = firstType
-					} else {
-						// TODO: Implement Union type, fallback to Any for now
-						finalReturnType = types.Any
-					}
-				}
-				// --- END FIX ---
-			}
-		}
-		if finalReturnType == nil { // Should not happen, but safety check
-			finalReturnType = types.Any
-		}
-
-		// 7. Create or Update FunctionType
-		// Reuse the initial type if created, otherwise create new
-		var funcType *types.FunctionType
-		if initialFuncType != nil {
-			funcType = initialFuncType
-			funcType.ReturnType = finalReturnType // Update with the final inferred/checked type
+		// 6. Determine Final ACTUAL Return Type of the function body
+		var actualReturnType types.Type
+		if resolvedSignature.ReturnType != nil {
+			// Annotation exists, use that as the final actual type.
+			// Checks against this type happened during ReturnStatement visits.
+			actualReturnType = resolvedSignature.ReturnType
 		} else {
-			funcType = &types.FunctionType{
-				ParameterTypes: paramTypes,
-				ReturnType:     finalReturnType,
+			// No annotation, INFER the return type from collected returns.
+			if len(c.currentInferredReturnTypes) == 0 {
+				actualReturnType = types.Undefined // No returns -> undefined
+			} else {
+				// Use NewUnionType to combine inferred return types
+				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
 			}
+			debugPrintf("// [Checker FuncLit Visit] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
 		}
 
-		// 8. Set ComputedType on the FunctionLiteral node
-		node.SetComputedType(funcType)
-
-		// 9. Define named function in the *outer* scope (using final type)
-		if node.Name != nil {
-			// --- DEBUG ---
-			debugPrintf("// [Checker Visit FuncLit] Defining func '%s' in OUTER Env: %p with final type %s\n", node.Name.Value, originalEnv, funcType.String())
-			if originalEnv == nil {
-				panic("Checker originalEnv is nil before defining named func!")
+		// --- Update self-definition if name existed and return type was inferred ---
+		if node.Name != nil && resolvedSignature.ReturnType == nil {
+			finalFuncTypeForRecursion := &types.FunctionType{
+				ParameterTypes: resolvedSignature.ParameterTypes,
+				ReturnType:     actualReturnType, // Use the inferred type now
 			}
-			// --- END DEBUG ---
-			if !originalEnv.Define(node.Name.Value, funcType, false) { // Use the final funcType here
-				c.addError(node.Name, fmt.Sprintf("function '%s' already declared in this scope", node.Name.Value))
+			// Update the function's own entry in its scope
+			if !funcEnv.Update(node.Name.Value, finalFuncTypeForRecursion) {
+				debugPrintf("// [Checker FuncLit Visit] WARNING: Failed to update self-definition for '%s'\n", node.Name.Value)
 			}
 		}
+		// --- END Update self-definition ---
 
-		// 10. Restore outer environment and context
-		// --- DEBUG ---
-		debugPrintf("// [Checker Visit FuncLit] Exiting Func. Restoring Env: %p (from current %p)\n", originalEnv, c.env)
-		if originalEnv == nil {
-			panic("Checker originalEnv is nil before restoring func scope!")
+		// 7. Create the FINAL FunctionType representing this literal
+		finalFuncType := &types.FunctionType{
+			ParameterTypes: resolvedSignature.ParameterTypes, // Use types from annotation/defaults
+			ReturnType:     actualReturnType,                 // Use the explicit or inferred return type
 		}
-		// --- END DEBUG ---
+
+		// 8. *** ALWAYS Set the Computed Type on the FunctionLiteral node ***
+		debugPrintf("// [Checker FuncLit Visit] SETTING final computed type for '%s': %s\n", funcNameForLog, finalFuncType.String())
+		node.SetComputedType(finalFuncType) // <<< THIS IS THE KEY FIX
+
+		// 9. Restore outer environment and context
+		debugPrintf("// [Checker Visit FuncLit] Exiting '%s'. Restoring Env: %p (from current %p)\n", funcNameForLog, originalEnv, c.env)
 		c.env = originalEnv
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
@@ -1344,6 +1640,8 @@ func (c *Checker) visit(node parser.Node) {
 		// --- END DEBUG ---
 
 		// 8. Set ComputedType on the ArrowFunctionLiteral node
+		// ... calculate funcType ...
+		debugPrintf("// [Checker ArrowFunc] ABOUT TO SET Computed funcType: %#v, ReturnType: %#v\n", funcType, funcType.ReturnType)
 		node.SetComputedType(funcType)
 
 		// 9. Restore outer environment and context
@@ -1423,6 +1721,7 @@ func (c *Checker) visit(node parser.Node) {
 		// 4. Set Result Type
 		// If function returns 'never', maybe the call expression type should also be 'never'?
 		// if funcType.ReturnType == types.Never { ... }
+		debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), funcType.ReturnType, funcType.ReturnType) // MODIFIED DEBUG
 		node.SetComputedType(funcType.ReturnType)
 
 	case *parser.AssignmentExpression:
@@ -1734,25 +2033,33 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 // --- NEW: Type Alias Statement Check ---
 
 func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
-	// 1. Resolve the type expression on the right-hand side
-	aliasedType := c.resolveTypeAnnotation(node.Type)
+	// Called ONLY during Pass 1 for hoisted aliases.
+
+	// 1. Check if already defined (belt-and-suspenders check)
+	// Note: We use c.env which IS the globalEnv during Pass 1
+	if _, exists := c.env.ResolveType(node.Name.Value); exists {
+		debugPrintf("// [Checker TypeAlias P1] Alias '%s' already defined? Skipping.\n", node.Name.Value)
+		return // Should not happen if parser prevents duplicates
+	}
+
+	// 2. Resolve the RHS type using the CURRENT (global) environment
+	// This allows aliases to reference previously defined aliases in the same pass
+	aliasedType := c.resolveTypeAnnotation(node.Type) // Uses c.env (globalEnv)
 	if aliasedType == nil {
-		// Error already added by resolveTypeAnnotation or invalid type expr
-		// We could add another error here, but maybe redundant.
-		// debugPrintf("// [Checker TypeAlias] Failed to resolve type for alias '%s'\n", node.Name.Value)
-		return // Cannot define alias if type resolution failed
+		debugPrintf("// [Checker TypeAlias P1] Failed to resolve type for alias '%s'. Defining as Any.\n", node.Name.Value)
+		if !c.env.DefineTypeAlias(node.Name.Value, types.Any) {
+			debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for '%s' (as Any).\n", node.Name.Value)
+		}
+		return
 	}
 
-	// 2. Define the alias in the current environment
+	// 3. Define the alias in the CURRENT (global) environment
 	if !c.env.DefineTypeAlias(node.Name.Value, aliasedType) {
-		c.addError(node.Name, fmt.Sprintf("type alias name '%s' conflicts with an existing variable or type alias in this scope", node.Name.Value))
+		debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for '%s'.\n", node.Name.Value)
+	} else {
+		debugPrintf("// [Checker TypeAlias P1] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
 	}
-
-	// TODO: Add cycle detection? (e.g., type A = B; type B = A;)
-	// TODO: Set computed type on the node itself? Maybe not necessary for aliases.
-
-	debugPrintf("// [Checker TypeAlias] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
-
+	// No need to set computed type on the TypeAliasStatement node itself
 }
 
 // --- NEW: Array Literal Check ---
@@ -2096,4 +2403,64 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	// Set the computed type for the ObjectLiteral node itself
 	node.SetComputedType(objType)
 	debugPrintf("// [Checker ObjectLit] Computed type: %s\n", objType.String())
+}
+
+// --- NEW: Helper to resolve FunctionLiteral signature to types.FunctionType ---
+// Resolves parameter and return type annotations within the given environment.
+func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *Environment) *types.FunctionType {
+	paramTypes := []types.Type{}
+	for _, paramNode := range node.Parameters {
+		var resolvedParamType types.Type
+		if paramNode.TypeAnnotation != nil {
+			// Temporarily use the provided environment for resolving the annotation
+			originalEnv := c.env
+			c.env = env
+			resolvedParamType = c.resolveTypeAnnotation(paramNode.TypeAnnotation)
+			c.env = originalEnv // Restore original environment
+		}
+
+		if resolvedParamType == nil {
+			resolvedParamType = types.Any // Default to Any if no annotation or resolution failed
+		}
+		paramTypes = append(paramTypes, resolvedParamType)
+	}
+
+	var resolvedReturnType types.Type         // Keep as interface type
+	var resolvedTypeFromAnnotation types.Type // Temp variable, also interface type
+
+	funcNameForLog := "<anonymous_resolve>"
+	if node.Name != nil {
+		funcNameForLog = node.Name.Value
+	}
+
+	if node.ReturnTypeAnnotation != nil {
+		originalEnv := c.env
+		c.env = env
+		debugPrintf("// [Checker resolveFuncLitType] Resolving return annotation (%T) for func '%s'\n", node.ReturnTypeAnnotation, funcNameForLog)
+		// Assign to the temporary variable first
+		resolvedTypeFromAnnotation = c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
+		debugPrintf("// [Checker resolveFuncLitType] resolveTypeAnnotation returned: Ptr=%p, Type=%T, Value=%#v for func '%s'\n", resolvedTypeFromAnnotation, resolvedTypeFromAnnotation, resolvedTypeFromAnnotation, funcNameForLog)
+		// DO NOT assign to resolvedReturnType here yet
+		c.env = originalEnv
+	} else {
+		debugPrintf("// [Checker resolveFuncLitType] No return type annotation for func '%s'\n", funcNameForLog)
+		resolvedTypeFromAnnotation = nil // Ensure temp var is nil if no annotation
+	}
+
+	// Now, assign the result from the temporary variable to the main one
+	resolvedReturnType = resolvedTypeFromAnnotation
+	debugPrintf("// [Checker resolveFuncLitType] Assigned final resolvedReturnType: Ptr=%p, Type=%T, Value=%#v for func '%s'\n", resolvedReturnType, resolvedReturnType, resolvedReturnType, funcNameForLog) // ADDED LOG
+
+	// The final check should now behave correctly
+	if resolvedReturnType == nil {
+		debugPrintf("// [Checker resolveFuncLitType] Final check: resolvedReturnType is nil for func '%s'\n", funcNameForLog)
+		// resolvedReturnType = nil // It's already nil, no need to re-assign
+	} else {
+		debugPrintf("// [Checker resolveFuncLitType] Final check: resolvedReturnType is NOT nil (Ptr=%p) for func '%s'\n", resolvedReturnType, funcNameForLog)
+	}
+
+	return &types.FunctionType{
+		ParameterTypes: paramTypes,
+		ReturnType:     resolvedReturnType, // Use the value assigned outside the if
+	}
 }
