@@ -1,6 +1,8 @@
 package checker
 
 import (
+	"fmt"
+	"paserati/pkg/builtins"
 	"paserati/pkg/types"
 )
 
@@ -33,6 +35,36 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		typeAliases: make(map[string]types.Type), // Initialize
 		outer:       outer,
 	}
+}
+
+// NewGlobalEnvironment creates a new top-level global environment.
+// It populates the environment with built-in types.
+func NewGlobalEnvironment() *Environment {
+	builtins.InitializeRegistry()
+	env := &Environment{
+		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases: make(map[string]types.Type), // Initialize
+		outer:       nil,
+	}
+
+	// Define built-in primitive types (if not already globally available elsewhere)
+	// Example: env.Define("number", types.Number) // Assuming types.Number is a Type itself representing the primitive
+	// env.Define("string", types.String)
+	// env.Define("boolean", types.Boolean)
+	// ... etc
+
+	// Populate with built-in function types
+	builtinTypes := builtins.GetAllTypes()
+	for name, typ := range builtinTypes {
+		if !env.Define(name, typ, true) {
+			// This should ideally not happen if names are unique and Define works correctly
+			fmt.Printf("Warning: Failed to define built-in '%s' in global environment (already exists?).\n", name)
+		} else {
+			// fmt.Printf("Checker Env: Defined built-in '%s' with type %s\n", name, typ.String()) // Debug print
+		}
+	}
+
+	return env
 }
 
 // Define adds a new *variable* type binding and its const status to the current environment scope.

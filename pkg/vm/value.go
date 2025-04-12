@@ -16,10 +16,11 @@ const (
 	TypeBool
 	TypeNumber
 	TypeString
-	TypeFunction // Represents *Function
-	TypeClosure  // Represents *Closure
-	TypeArray    // Represents *Array (Added)
-	TypeObject   // Represents *Object (NEW)
+	TypeFunction    // Represents *Function (compiled Paserati code)
+	TypeClosure     // Represents *Closure (compiled Paserati code)
+	TypeArray       // Represents *Array (Added)
+	TypeObject      // Represents *Object (NEW)
+	TypeBuiltinFunc // Represents *BuiltinFunc (native Go function)
 )
 
 // Function represents a compiled function.
@@ -31,6 +32,16 @@ type Function struct {
 	RegisterSize int    // Number of registers needed for this function's frame
 	// TODO: Add UpvalueCount later for closures
 }
+
+// --- NEW: BuiltinFunc Struct ---
+// BuiltinFunc represents a native Go function callable from Paserati.
+type BuiltinFunc struct {
+	Name  string
+	Func  func(args []Value) (Value, error) // Explicitly takes/returns vm.Value
+	Arity int                               // -1 for variadic
+}
+
+// --- END NEW ---
 
 // --- NEW: Object Struct (Phase 1: Map-based) ---
 type Object struct {
@@ -49,10 +60,11 @@ type Value struct {
 		boolean bool
 		number  float64
 		str     string
-		fn      *Function // Direct pointer for functions
-		closure *Closure  // Direct pointer for closures
-		arr     *Array    // Direct pointer for arrays (Added)
-		obj     *Object   // Direct pointer for objects (NEW)
+		fn      *Function    // Direct pointer for functions
+		closure *Closure     // Direct pointer for closures
+		arr     *Array       // Direct pointer for arrays (Added)
+		obj     *Object      // Direct pointer for objects (NEW)
+		builtin *BuiltinFunc // Direct pointer for built-in funcs
 	}
 }
 
@@ -134,6 +146,18 @@ func ObjectV(obj *Object) Value {
 
 // --- END NEW ---
 
+// --- NEW: BuiltinFunc Constructor ---
+func NewBuiltinFunc(bf *BuiltinFunc) Value {
+	if bf == nil {
+		panic("Attempted to create Value from nil BuiltinFunc pointer")
+	}
+	v := Value{Type: TypeBuiltinFunc}
+	v.as.builtin = bf
+	return v
+}
+
+// --- END NEW ---
+
 // Type Checkers
 
 func IsUndefined(v Value) bool {
@@ -167,6 +191,13 @@ func IsClosure(v Value) bool {
 // --- NEW: Object Type Checker ---
 func IsObject(v Value) bool {
 	return v.Type == TypeObject
+}
+
+// --- END NEW ---
+
+// --- NEW: BuiltinFunc Type Checker ---
+func IsBuiltinFunc(v Value) bool {
+	return v.Type == TypeBuiltinFunc
 }
 
 // --- END NEW ---
@@ -216,6 +247,16 @@ func AsObject(v Value) *Object {
 		panic("value is not an object")
 	}
 	return v.as.obj
+}
+
+// --- END NEW ---
+
+// --- NEW: BuiltinFunc Accessor ---
+func AsBuiltinFunc(v Value) *BuiltinFunc {
+	if !IsBuiltinFunc(v) {
+		panic("value is not a built-in function")
+	}
+	return v.as.builtin
 }
 
 // --- END NEW ---
@@ -286,6 +327,13 @@ func (v Value) String() string {
 		builder.WriteString("}")
 		return builder.String()
 	// --- END NEW ---
+	case TypeBuiltinFunc:
+		bf := v.as.builtin // No assertion needed due to switch
+		if bf != nil && bf.Name != "" {
+			return fmt.Sprintf("<builtin fn %s>", bf.Name)
+		} else {
+			return "<builtin fn>"
+		}
 	default:
 		return fmt.Sprintf("Unknown ValueType: %d", v.Type)
 	}
@@ -311,6 +359,8 @@ func (v Value) TypeName() string {
 		return "array"
 	case TypeObject:
 		return "object"
+	case TypeBuiltinFunc:
+		return "function"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.Type)
 	}
@@ -386,6 +436,9 @@ func valuesEqual(a, b Value) bool {
 		// Object equality is by reference
 		return AsObject(a) == AsObject(b)
 	// --- END NEW ---
+	case TypeBuiltinFunc:
+		// Builtin function equality is by reference
+		return AsBuiltinFunc(a) == AsBuiltinFunc(b)
 	default:
 		return false // Should not happen
 	}

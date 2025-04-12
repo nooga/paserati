@@ -366,93 +366,181 @@ func (vm *VM) run() (InterpretResult, Value) {
 			}
 
 		case OpCall:
-			destReg := code[ip]         // Where the result should go
-			funcReg := code[ip+1]       // Register holding the function/closure to call
+			destReg := code[ip]         // Where the result should go IN THE CALLER frame
+			funcReg := code[ip+1]       // Register holding the function/closure/builtin to call
 			argCount := int(code[ip+2]) // Number of arguments provided
 			ip += 3
 
-			calleeVal := registers[funcReg]
-			var calleeClosure *Closure
+			// !! Capture caller registers BEFORE potential frame switch !!
+			callerRegisters := registers
+			callerIP := ip // Save IP before potential jump/call
+
+			calleeVal := callerRegisters[funcReg] // Get callee from CALLER registers
 
 			switch calleeVal.Type {
 			case TypeClosure:
-				calleeClosure = AsClosure(calleeVal) // Use local AsClosure
-			case TypeFunction:
-				// Allow calling plain functions directly (implicitly creating a closure with no upvalues)
-				// This is useful for top-level functions that don't close over anything.
-				funcToCall := AsFunction(calleeVal) // Use local AsFunction
-				// Create a temporary closure on the fly
-				calleeClosure = &Closure{Fn: funcToCall, Upvalues: []*Upvalue{}} // Empty slice is okay
-			default:
-				frame.ip = ip
-				status := vm.runtimeError("Can only call functions and closures.")
-				return status, Undefined()
-			}
-
-			calleeFunc := calleeClosure.Fn
-
-			if argCount != calleeFunc.Arity {
-				frame.ip = ip
-				status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
-				return status, Undefined()
-			}
-
-			if vm.frameCount == MaxFrames {
-				frame.ip = ip
-				status := vm.runtimeError("Stack overflow.")
-				return status, Undefined()
-			}
-
-			// --- Setup New Frame ---
-			// Check if enough space in the global register stack
-			requiredRegs := calleeFunc.RegisterSize
-			if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
-				// TODO: Implement garbage collection or stack resizing?
-				status := vm.runtimeError("Register stack overflow during call.")
-				return status, Undefined()
-			}
-
-			// !! Store caller registers *before* getting pointer to new frame slot !!
-			callerRegisters := registers
-
-			// Save current IP into the current (soon-to-be caller) frame
-			frame.ip = ip
-
-			// Get pointer to the new frame slot
-			newFrame := &vm.frames[vm.frameCount]
-			newFrame.closure = calleeClosure
-			newFrame.ip = 0                   // Start at the beginning of the called function's code
-			newFrame.targetRegister = destReg // Store where the return value should go in the CALLER
-
-			// Allocate register window for the new frame
-			newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-			vm.nextRegSlot += requiredRegs
-
-			// --- Copy Arguments ---
-			// Arguments are typically in registers immediately following the function register in the *caller's* frame.
-			argStartRegInCaller := funcReg + 1
-			for i := 0; i < argCount; i++ {
-				// Copy from callerRegisters into the new frame's first registers (R0, R1, ...)
-				if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
-					newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
-				} else {
-					// Bounds check error - should ideally not happen if compiler is correct
-					status := vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
+				// --- Existing Closure Handling ---
+				calleeClosure := AsClosure(calleeVal) // Use local AsClosure
+				calleeFunc := calleeClosure.Fn
+				if argCount != calleeFunc.Arity {
+					frame.ip = callerIP // Use saved IP for error context
+					status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
 					return status, Undefined()
 				}
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow.")
+					return status, Undefined()
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during call.")
+					return status, Undefined()
+				}
+
+				frame.ip = callerIP // Store return IP in the outgoing frame
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = calleeClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg // Store target register for return
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				argStartRegInCaller := funcReg + 1
+				for i := 0; i < argCount; i++ {
+					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						// Rollback frame setup before erroring
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
+						return status, Undefined()
+					}
+				}
+				vm.frameCount++
+
+				// Switch context (update cached variables)
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				// --- End Existing Closure Handling ---
+
+			case TypeFunction:
+				// --- Existing Function Handling (implicit closure) ---
+				funcToCall := AsFunction(calleeVal) // Use local AsFunction
+				calleeClosure := &Closure{Fn: funcToCall, Upvalues: []*Upvalue{}}
+				calleeFunc := calleeClosure.Fn
+
+				if argCount != calleeFunc.Arity {
+					frame.ip = callerIP
+					status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+					return status, Undefined()
+				}
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow.")
+					return status, Undefined()
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during call.")
+					return status, Undefined()
+				}
+
+				frame.ip = callerIP // Store return IP in the outgoing frame
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = calleeClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				argStartRegInCaller := funcReg + 1
+				for i := 0; i < argCount; i++ {
+					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						// Rollback frame setup before erroring
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
+						return status, Undefined()
+					}
+				}
+				vm.frameCount++
+
+				// Switch context
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				// --- End Existing Function Handling ---
+
+			// <<< NEW CASE FOR BUILTINS >>>
+			case TypeBuiltinFunc:
+				builtin := AsBuiltinFunc(calleeVal)
+
+				// --- Arity Check ---
+				if builtin.Arity >= 0 && builtin.Arity != argCount {
+					frame.ip = callerIP // Use saved IP for error context
+					status := vm.runtimeError("Builtin function '%s' expected %d arguments but got %d.",
+						builtin.Name, builtin.Arity, argCount)
+					return status, Undefined()
+				}
+
+				// --- Collect Arguments from CALLER registers ---
+				args := make([]Value, argCount)
+				argStartRegInCaller := funcReg + 1
+				for i := 0; i < argCount; i++ {
+					// Bounds check against caller's register window length
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index %d out of bounds for builtin call.", argStartRegInCaller+byte(i))
+						return status, Undefined()
+					}
+				}
+
+				// --- Execute Built-in ---
+				// Note: Builtins run *within* the caller's frame context. No frame switch.
+				result, err := builtin.Func(args)
+				if err != nil {
+					// Propagate error from the built-in function implementation
+					frame.ip = callerIP // Use saved IP for error context
+					status := vm.runtimeError("Error executing builtin function '%s': %s", builtin.Name, err.Error())
+					return status, Undefined()
+				}
+
+				// --- Store Result in CALLER's target register ---
+				// Bounds check against caller's register window length
+				if int(destReg) < len(callerRegisters) {
+					callerRegisters[destReg] = result
+				} else {
+					frame.ip = callerIP
+					status := vm.runtimeError("Internal Error: Invalid target register %d for builtin return value.", destReg)
+					return status, Undefined()
+				}
+				// --- Builtin call finished, continue in the same frame ---
+				// No context switch needed, ip continues from where OpCall finished reading operands.
+
+			default:
+				frame.ip = callerIP // Use saved IP for error context
+				status := vm.runtimeError("Can only call functions and closures (got %s).", calleeVal.TypeName())
+				return status, Undefined()
 			}
-
-			vm.frameCount++
-
-			// --- Switch Context --- (Update cached variables)
-			frame = newFrame // Current frame is now the new frame
-			closure = frame.closure
-			function = closure.Fn
-			code = function.Chunk.Code
-			constants = function.Chunk.Constants
-			registers = frame.registers
-			ip = frame.ip
-			// --- Context Switch Complete ---
 
 		case OpReturn:
 			srcReg := code[ip]

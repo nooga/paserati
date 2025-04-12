@@ -26,3 +26,5 @@ pkg/.DS_Store
 paserati
 
 *.baseline
+gojac
+.DS_Store

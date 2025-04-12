@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"paserati/pkg/vm"
 	"sort"
+	"strings"
 )
 
 // Type is the interface implemented by all type representations.
@@ -56,30 +57,41 @@ var (
 type FunctionType struct {
 	ParameterTypes []Type
 	ReturnType     Type
+	IsVariadic     bool // Indicates if the function accepts variable arguments
 }
 
 func (ft *FunctionType) String() string {
-	params := ""
+	var params strings.Builder // Use strings.Builder for efficiency
+	params.WriteString("(")
+	numParams := len(ft.ParameterTypes)
 	for i, p := range ft.ParameterTypes {
-		if i > 0 {
-			params += ", "
-		}
-		if p != nil {
-			params += p.String()
+		if ft.IsVariadic && i == numParams-1 {
+			// For variadic, assume last param type describes the rest elements
+			params.WriteString("...")
+			if p != nil {
+				params.WriteString(p.String()) // e.g., ...any[] or ...number[]
+			} else {
+				params.WriteString("<nil>") // Default if type is nil? Or maybe error?
+			}
 		} else {
-			params += "<nil>"
+			if p != nil {
+				params.WriteString(p.String())
+			} else {
+				params.WriteString("<nil>") // Represent nil param type as any?
+			}
+		}
+		if i < numParams-1 {
+			params.WriteString(", ")
 		}
 	}
-	retTypeStr := "<nil>"
+	params.WriteString(")")
 
-	if ft.ReturnType == nil {
-		//panic(fmt.Sprintf("PANIC TYPES: ft.ReturnType is nil inside FunctionType.String! FuncType: %#v", ft))
-		return fmt.Sprintf("(%s) => <nil>", params)
+	retTypeStr := "void" // Default to void if nil? Or unknown?
+	if ft.ReturnType != nil {
+		retTypeStr = ft.ReturnType.String()
 	}
 
-	retTypeStr = ft.ReturnType.String()
-
-	return fmt.Sprintf("(%s) => %s", params, retTypeStr)
+	return fmt.Sprintf("%s => %s", params.String(), retTypeStr)
 }
 func (ft *FunctionType) typeNode() {}
 func (ft *FunctionType) Equals(other Type) bool {
@@ -93,6 +105,10 @@ func (ft *FunctionType) Equals(other Type) bool {
 	if len(ft.ParameterTypes) != len(otherFt.ParameterTypes) {
 		return false // Different number of parameters
 	}
+	if ft.IsVariadic != otherFt.IsVariadic {
+		return false
+	}
+
 	// Check parameter types (invariant check for simplicity)
 	for i, p1 := range ft.ParameterTypes {
 		p2 := otherFt.ParameterTypes[i]

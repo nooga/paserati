@@ -46,7 +46,7 @@ func NewChecker() *Checker {
 func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
 	c.errors = []errors.PaseratiError{} // Reset errors
-	c.env = NewEnvironment()            // Start with a fresh global environment for this check
+	c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
 	globalEnv := c.env
 
 	// --- Data Structures for Passes ---
@@ -1659,12 +1659,9 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle CallExpression ---
 		// 1. Check the expression being called
 		c.visit(node.Function)
-		// --- DEBUG: Check if we return here ---
-		debugPrintf("// [Checker CallExpr] Returned from visiting node.Function: %T\n", node.Function)
-		// --- END DEBUG ---
-		funcNodeType := node.Function.GetComputedType() // Retrieve type stored by the identifier visit
+		funcNodeType := node.Function.GetComputedType()
 		if funcNodeType == nil {
-			// Error visiting the function expression itself? Or type not found?
+			// Error visiting the function expression itself
 			funcIdent, isIdent := node.Function.(*parser.Identifier)
 			errMsg := "cannot determine type of called expression"
 			if isIdent {
@@ -1675,13 +1672,15 @@ func (c *Checker) visit(node parser.Node) {
 			return
 		}
 
-		// allow calling any for now
 		if funcNodeType == types.Any {
+			// Allow calling 'any', result is 'any'. Check args against 'any'.
+			for _, argNode := range node.Arguments {
+				c.visit(argNode) // Visit args even if function is 'any'
+			}
 			node.SetComputedType(types.Any)
 			return
 		}
 
-		// Assert that the computed type is actually a function type
 		funcType, ok := funcNodeType.(*types.FunctionType)
 		if !ok {
 			c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
@@ -1689,39 +1688,93 @@ func (c *Checker) visit(node parser.Node) {
 			return
 		}
 
-		// 2. Check Arity (Number of arguments)
-		expectedArgCount := len(funcType.ParameterTypes)
+		// --- MODIFIED Arity and Argument Type Checking ---
 		actualArgCount := len(node.Arguments)
-		if actualArgCount != expectedArgCount {
-			c.addError(node, fmt.Sprintf("expected %d arguments, but got %d", expectedArgCount, actualArgCount))
-			// Continue checking assignable args anyway? Or stop?
-			// Let's stop checking args if arity is wrong, but still set return type.
-			node.SetComputedType(funcType.ReturnType)
-			return
-		}
 
-		// 3. Check Argument Types
-		for i, argNode := range node.Arguments {
-			c.visit(argNode) // Visit argument to compute its type
-			argType := argNode.GetComputedType()
-			paramType := funcType.ParameterTypes[i]
-
-			if argType == nil {
-				// Error computing argument type, can't check assignability
-				// Error already added, just skip assignability check for this arg.
-				continue
+		if funcType.IsVariadic {
+			// --- Variadic Function Check ---
+			if len(funcType.ParameterTypes) == 0 {
+				c.addError(node, "internal checker error: variadic function type must have at least one parameter type (for the array)")
+				node.SetComputedType(types.Any) // Error state
+				return
 			}
 
-			if !c.isAssignable(argType, paramType) {
-				c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
-				// Continue checking other arguments even if one fails
+			minExpectedArgs := len(funcType.ParameterTypes) - 1
+			if actualArgCount < minExpectedArgs {
+				c.addError(node, fmt.Sprintf("expected at least %d arguments for variadic function, but got %d", minExpectedArgs, actualArgCount))
+				// Don't check args if minimum count isn't met.
+			} else {
+				// Check fixed arguments
+				fixedArgsOk := true
+				for i := 0; i < minExpectedArgs; i++ {
+					argNode := node.Arguments[i]
+					c.visit(argNode)
+					argType := argNode.GetComputedType()
+					paramType := funcType.ParameterTypes[i]
+					if argType == nil { // Error visiting arg
+						fixedArgsOk = false
+						continue
+					}
+					if !c.isAssignable(argType, paramType) {
+						c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
+						fixedArgsOk = false
+					}
+				}
+
+				// Check variadic arguments
+				if fixedArgsOk { // Only check variadic part if fixed part was okay
+					variadicParamType := funcType.ParameterTypes[minExpectedArgs]
+					arrayType, isArray := variadicParamType.(*types.ArrayType)
+					if !isArray {
+						c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", variadicParamType.String()))
+					} else {
+						variadicElementType := arrayType.ElementType
+						if variadicElementType == nil { // Should not happen with valid types
+							variadicElementType = types.Any
+						}
+						// Check remaining arguments against the element type
+						for i := minExpectedArgs; i < actualArgCount; i++ {
+							argNode := node.Arguments[i]
+							c.visit(argNode)
+							argType := argNode.GetComputedType()
+							if argType == nil { // Error visiting arg
+								continue
+							}
+							if !c.isAssignable(argType, variadicElementType) {
+								c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
+							}
+						}
+					}
+				}
+			}
+		} else {
+			// --- Non-Variadic Function Check (Original Logic) ---
+			expectedArgCount := len(funcType.ParameterTypes)
+			if actualArgCount != expectedArgCount {
+				c.addError(node, fmt.Sprintf("expected %d arguments, but got %d", expectedArgCount, actualArgCount))
+				// Continue checking assignable args anyway? Let's stop if arity wrong.
+			} else {
+				// Check Argument Types
+				for i, argNode := range node.Arguments {
+					c.visit(argNode) // Visit argument to compute its type
+					argType := argNode.GetComputedType()
+					paramType := funcType.ParameterTypes[i]
+
+					if argType == nil {
+						// Error computing argument type, can't check assignability
+						continue
+					}
+
+					if !c.isAssignable(argType, paramType) {
+						c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
+					}
+				}
 			}
 		}
+		// --- END MODIFIED Checking ---
 
-		// 4. Set Result Type
-		// If function returns 'never', maybe the call expression type should also be 'never'?
-		// if funcType.ReturnType == types.Never { ... }
-		debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), funcType.ReturnType, funcType.ReturnType) // MODIFIED DEBUG
+		// Set Result Type (unchanged)
+		debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), funcType.ReturnType, funcType.ReturnType)
 		node.SetComputedType(funcType.ReturnType)
 
 	case *parser.AssignmentExpression:

@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"math"
+	"paserati/pkg/builtins" // <<< ADDED: Import builtins
 	"paserati/pkg/checker"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
@@ -444,12 +445,39 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		return nil // ADDED: Explicit return
 
 	case *parser.Identifier:
+		// <<< ADDED: Check for built-in first >>>
+		if builtinFunc := builtins.GetFunc(node.Value); builtinFunc != nil {
+			// It's a built-in function.
+			debugPrintf("// DEBUG Identifier '%s': Resolved as Builtin\n", node.Value)
+			builtinValue := vm.NewBuiltinFunc(builtinFunc)
+			constIdx := c.chunk.AddConstant(builtinValue) // Add vm.Value to constant pool
+
+			// Allocate register and load the constant
+			destReg := c.regAlloc.Alloc()
+			c.emitLoadConstant(destReg, constIdx, node.Token.Line) // Use existing emitter
+			c.regAlloc.SetCurrent(destReg)                         // Update allocator state
+
+			// Set last expression tracking state (consistent with other expressions)
+			// Note: This might be adjusted based on overall expression handling logic
+			c.lastExprReg = destReg
+			c.lastExprRegValid = true
+
+			return nil // Built-in handled successfully
+		}
+		// <<< END ADDED >>>
+
+		// If not a built-in, proceed with existing variable lookup logic
 		scopeName := "Function"
 		if c.currentSymbolTable.Outer == nil {
 			scopeName = "Global"
 		}
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
 		if !found {
+			// <<< MODIFIED: Check if it's a potential built-in that failed GetFunc earlier, unlikely but maybe useful? >>>
+			// This branch should ideally not be reached if it was a built-in, but for robustness:
+			// if builtins.GetFunc(node.Value) != nil {
+			// 	 return NewCompileError(node, fmt.Sprintf("internal compiler error: builtin '%s' resolved incorrectly", node.Value))
+			// }
 			return NewCompileError(node, fmt.Sprintf("undefined variable '%s'", node.Value))
 		}
 		isLocal := definingTable == c.currentSymbolTable
@@ -462,14 +490,12 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 
 		if isRecursiveSelfCall {
 			// Treat as a free variable that captures the closure itself.
-			// This requires adding it to freeSymbols and emitting OpLoadFree.
-			// The closure emission logic already handles the self-capture part
-			// when it sees a free var matching funcName.
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
 			destReg := c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
+			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else if !isLocal {
 			// This is a regular free variable (defined in an outer scope)
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
@@ -477,20 +503,24 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
+			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else {
-			// This is a standard local or global variable (handled by current stack frame)
+			// This is a standard local variable (handled by current stack frame)
 			srcReg := symbolRef.Register
-			// <<< ADDED LOGGING >>> vvv
 			debugPrintf("// DEBUG Identifier '%s': Resolved to isLocal=%v, srcReg=R%d\n", node.Value, isLocal, srcReg)
 			if srcReg == nilRegister {
+				// This panic indicates an internal logic error, like trying to use a variable
+				// during its temporary definition phase inappropriately.
 				panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
 			}
-			// <<< END LOGGING >>>
 			destReg := c.regAlloc.Alloc()
 			debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, destReg, srcReg)
 			c.emitMove(destReg, srcReg, node.Token.Line)
-			c.regAlloc.SetCurrent(destReg)
+			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		}
+		// Set last expression tracking state for identifiers (consistent with literals/builtins)
+		c.lastExprReg = c.regAlloc.Current() // Current() should hold destReg now
+		c.lastExprRegValid = true
 		return nil // ADDED: Explicit return
 
 	case *parser.PrefixExpression:

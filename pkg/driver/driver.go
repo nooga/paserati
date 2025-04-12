@@ -10,6 +10,8 @@ import (
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
+
+	_ "paserati/pkg/builtins"
 )
 
 // Paserati represents a persistent interpreter session.
@@ -185,4 +187,70 @@ func RunFile(filename string) bool {
 	source := string(sourceBytes)
 	// Delegate to the non-persistent RunString, which handles other errors and printing
 	return RunString(source)
+}
+
+// EmitJavaScript parses TypeScript source and emits equivalent JavaScript code
+// without type annotations and TypeScript-specific syntax.
+func EmitJavaScript(source string) (string, []errors.PaseratiError) {
+	l := lexer.NewLexer(source)
+	p := parser.NewParser(l)
+	program, parseErrs := p.ParseProgram()
+	if len(parseErrs) > 0 {
+		return "", parseErrs
+	}
+
+	// Create JavaScript emitter and emit JS code
+	emitter := parser.NewJSEmitter()
+	jsCode := emitter.Emit(program)
+
+	return jsCode, nil
+}
+
+// EmitJavaScriptFile reads a TypeScript file and emits equivalent JavaScript code.
+// It returns the JavaScript code as a string or an error list.
+func EmitJavaScriptFile(filename string) (string, []errors.PaseratiError) {
+	sourceBytes, err := ioutil.ReadFile(filename)
+	if err != nil {
+		readErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Failed to read file '%s': %s", filename, err.Error()),
+		}
+		return "", []errors.PaseratiError{readErr}
+	}
+	source := string(sourceBytes)
+	return EmitJavaScript(source)
+}
+
+// WriteJavaScriptFile reads a TypeScript file, converts it to JavaScript,
+// and writes the output to a file with a .js extension.
+// Returns true if successful, false otherwise.
+func WriteJavaScriptFile(inputFilename string, outputFilename string) bool {
+	if outputFilename == "" {
+		// Default to replacing .ts with .js
+		outputFilename = inputFilename
+		if len(outputFilename) > 3 && outputFilename[len(outputFilename)-3:] == ".ts" {
+			outputFilename = outputFilename[:len(outputFilename)-3] + ".js"
+		} else {
+			outputFilename = outputFilename + ".js"
+		}
+	}
+
+	jsCode, errs := EmitJavaScriptFile(inputFilename)
+	if len(errs) > 0 {
+		// Print errors
+		sourceBytes, _ := ioutil.ReadFile(inputFilename)
+		source := string(sourceBytes)
+		errors.DisplayErrors(source, errs)
+		return false
+	}
+
+	// Write JavaScript code to the output file
+	err := ioutil.WriteFile(outputFilename, []byte(jsCode), 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing JavaScript file: %s\n", err)
+		return false
+	}
+
+	fmt.Printf("JavaScript code written to %s\n", outputFilename)
+	return true
 }

@@ -11,10 +11,29 @@ import (
 )
 
 func main() {
-	// Define the -e flag for running expressions
+	// Define flags
 	exprFlag := flag.String("e", "", "Run the given expression and exit")
+	emitJSFlag := flag.Bool("js", false, "Emit JavaScript from TypeScript source file")
+	jsOutputFile := flag.String("o", "", "Output file for JavaScript emission (default: input file with .js extension)")
+
 	flag.Parse() // Parses the command-line flags
 
+	// JavaScript emission mode
+	if *emitJSFlag {
+		if flag.NArg() < 1 {
+			fmt.Fprintf(os.Stderr, "Usage: paserati -js [options] <input.ts>\n")
+			os.Exit(64) // Exit code 64: command line usage error
+		}
+
+		inputFile := flag.Arg(0)
+		ok := driver.WriteJavaScriptFile(inputFile, *jsOutputFile)
+		if !ok {
+			os.Exit(70) // Exit code 70: internal software error
+		}
+		return
+	}
+
+	// Normal execution mode
 	if *exprFlag != "" {
 		// Run the expression provided via -e flag
 		runExpression(*exprFlag)
@@ -22,7 +41,7 @@ func main() {
 	}
 
 	if flag.NArg() > 1 {
-		fmt.Fprintf(os.Stderr, "Usage: paserati [script] or paserati -e \"expression\"\n")
+		fmt.Fprintf(os.Stderr, "Usage: paserati [script] or paserati -e \"expression\" or paserati -js <input.ts>\n")
 		os.Exit(64) // Exit code 64: command line usage error
 	} else if flag.NArg() == 1 {
 		// Execute the script file provided as an argument
