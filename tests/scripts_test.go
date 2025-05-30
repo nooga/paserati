@@ -147,14 +147,14 @@ func TestScripts(t *testing.T) {
 					}
 					t.Errorf("Expected value %q, but got runtime errors:\n%s", expectation.Value, allErrors.String())
 				} else {
-					actualOutput := finalValue.String()
+					actualOutput := finalValue.Inspect()
 					if actualOutput != expectation.Value {
 						t.Errorf("Expected output %q, but got %q", expectation.Value, actualOutput)
 					}
 				}
 			case "runtime_error":
 				if len(runtimeErrs) == 0 {
-					t.Errorf("Expected runtime error containing %q, but got no runtime errors. Final value: %s", expectation.Value, finalValue.String())
+					t.Errorf("Expected runtime error containing %q, but got no runtime errors. Final value: %s", expectation.Value, finalValue.ToString())
 				} else {
 					// Check if any runtime error message contains the expected substring
 					found := false

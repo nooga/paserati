@@ -158,8 +158,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			isUndefReg := c.regAlloc.Alloc()
 			nullConstReg := c.regAlloc.Alloc()
 			undefConstReg := c.regAlloc.Alloc()
-			c.emitLoadNewConstant(nullConstReg, vm.Null(), line)
-			c.emitLoadNewConstant(undefConstReg, vm.Undefined(), line)
+			c.emitLoadNewConstant(nullConstReg, vm.Null, line)
+			c.emitLoadNewConstant(undefConstReg, vm.Undefined, line)
 			c.emitStrictEqual(isNullReg, currentValueReg, nullConstReg, line)
 			jumpIfNotNull := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullReg, line)
 			// If IS null -> jumpToEvalRhs

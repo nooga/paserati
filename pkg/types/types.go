@@ -286,8 +286,8 @@ type LiteralType struct {
 }
 
 func (lt *LiteralType) isType()        {}
-func (lt *LiteralType) Name() string   { return lt.Value.String() }
-func (lt *LiteralType) String() string { return lt.Value.String() }
+func (lt *LiteralType) Name() string   { return lt.Value.ToString() }
+func (lt *LiteralType) String() string { return lt.Value.ToString() }
 func (lt *LiteralType) typeNode()      {}
 func (lt *LiteralType) Equals(other Type) bool {
 	otherLt, ok := other.(*LiteralType)
@@ -299,7 +299,7 @@ func (lt *LiteralType) Equals(other Type) bool {
 	}
 
 	// Check if underlying vm.Value types are the same
-	if lt.Value.Type != otherLt.Value.Type {
+	if lt.Value.Type() != otherLt.Value.Type() {
 		return false
 	}
 
@@ -309,13 +309,13 @@ func (lt *LiteralType) Equals(other Type) bool {
 	// but for primitives it should be fine.
 	//return reflect.DeepEqual(lt.Value.Value, otherLt.Value.Value)
 	//Alternative: Use vm specific comparisons if DeepEqual isn't appropriate
-	switch lt.Value.Type {
-	case vm.TypeNumber:
+	switch lt.Value.Type() {
+	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 		return vm.AsNumber(lt.Value) == vm.AsNumber(otherLt.Value)
 	case vm.TypeString:
 		return vm.AsString(lt.Value) == vm.AsString(otherLt.Value)
-	case vm.TypeBool:
-		return vm.AsBool(lt.Value) == vm.AsBool(otherLt.Value)
+	case vm.TypeBoolean:
+		return lt.Value.AsBoolean() == otherLt.Value.AsBoolean()
 	case vm.TypeNull, vm.TypeUndefined:
 		return true // Already checked type match
 	default:
@@ -437,12 +437,12 @@ func (at *AliasType) Equals(other Type) bool {
 // Other types are returned unchanged.
 func GetWidenedType(t Type) Type {
 	if litType, ok := t.(*LiteralType); ok {
-		switch litType.Value.Type {
-		case vm.TypeNumber:
+		switch litType.Value.Type() {
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 			return Number
 		case vm.TypeString:
 			return String
-		case vm.TypeBool:
+		case vm.TypeBoolean:
 			return Boolean
 		case vm.TypeNull:
 			return Null // Null widens to null

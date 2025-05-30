@@ -518,7 +518,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.NumberLiteral:
 		return &types.LiteralType{Value: vm.Number(node.Value)}
 	case *parser.BooleanLiteral:
-		return &types.LiteralType{Value: vm.Bool(node.Value)}
+		return &types.LiteralType{Value: vm.BooleanValue(node.Value)}
 	case *parser.NullLiteral:
 		return types.Null
 	case *parser.UndefinedLiteral:
@@ -643,21 +643,21 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 		// Assigning LiteralType to LiteralType: Values must be strictly equal
 		// Use vm.valuesEqual (unexported) logic for now.
 		// Types must match AND values must match.
-		if sourceLiteral.Value.Type != targetLiteral.Value.Type {
+		if sourceLiteral.Value.Type() != targetLiteral.Value.Type() {
 			return false
 		}
 		// Use the existing loose equality check from VM package
 		// as types are already confirmed to be the same.
 		// Need to export valuesEqual or replicate logic.
 		// Let's replicate the core logic here for simplicity for now.
-		switch sourceLiteral.Value.Type {
+		switch sourceLiteral.Value.Type() {
 		case vm.TypeNull:
 			return true // null === null
 		case vm.TypeUndefined:
 			return true // undefined === undefined
-		case vm.TypeBool:
-			return vm.AsBool(sourceLiteral.Value) == vm.AsBool(targetLiteral.Value)
-		case vm.TypeNumber:
+		case vm.TypeBoolean:
+			return sourceLiteral.Value.AsBoolean() == targetLiteral.Value.AsBoolean()
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 			return vm.AsNumber(sourceLiteral.Value) == vm.AsNumber(targetLiteral.Value)
 		case vm.TypeString:
 			return vm.AsString(sourceLiteral.Value) == vm.AsString(targetLiteral.Value)
@@ -673,12 +673,12 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 		// e.g., LiteralType{true} -> boolean (true)
 		// e.g., LiteralType{"hello"} -> number (false)
 		var underlyingPrimitiveType types.Type
-		switch sourceLiteral.Value.Type {
+		switch sourceLiteral.Value.Type() {
 		case vm.TypeString:
 			underlyingPrimitiveType = types.String
-		case vm.TypeNumber:
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 			underlyingPrimitiveType = types.Number
-		case vm.TypeBool:
+		case vm.TypeBoolean:
 			underlyingPrimitiveType = types.Boolean
 		// Cannot have literal types for null/undefined/functions/etc.
 		default:
@@ -1123,7 +1123,7 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(literalType) // <<< USE NODE METHOD
 
 	case *parser.BooleanLiteral:
-		literalType := &types.LiteralType{Value: vm.Bool(node.Value)}
+		literalType := &types.LiteralType{Value: vm.BooleanValue(node.Value)}
 		// Treat boolean literals as literal types during checking
 		node.SetComputedType(literalType) // <<< USE NODE METHOD
 
@@ -2218,7 +2218,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		// Index must be string or number (or any)
 		isIndexStringLiteral := false
 		var indexStringValue string
-		if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.Type == vm.TypeString {
+		if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.Type() == vm.TypeString {
 			isIndexStringLiteral = true
 			indexStringValue = vm.AsString(litIndex.Value)
 		}

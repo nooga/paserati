@@ -15,12 +15,19 @@ const MaxFrames = 64    // Max call stack depth
 
 // CallFrame represents a single active function call.
 type CallFrame struct {
-	closure *Closure // Closure being executed (contains Function and Upvalues)
-	ip      int      // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
+	// closure is the current runtime closure (user-level ClosureObject)
+	closure *ClosureObject // ClosureObject being executed (contains FunctionObject and Upvalues)
+	ip      int            // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
 	registers      []Value
 	targetRegister byte // Which register in the CALLER the result should go into
+}
+
+// PropCacheEntry represents a cached property lookup for inline caching.
+type PropCacheEntry struct {
+	shape  *Shape // The shape this cache entry is valid for
+	offset int    // The property offset in the object's properties slice
 }
 
 // VM represents the virtual machine state.
@@ -36,8 +43,11 @@ type VM struct {
 
 	// List of upvalues pointing to variables still on the registerStack
 	openUpvalues []*Upvalue
-	// Globals, open upvalues, etc. would go here later
 
+	// Inline cache for property access (maps instruction pointer to cache entry)
+	propCache map[int]*PropCacheEntry
+
+	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
 }
 
@@ -54,7 +64,8 @@ const (
 func NewVM() *VM {
 	return &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues: make([]*Upvalue, 0, 16), // Pre-allocate slightly
+		openUpvalues: make([]*Upvalue, 0, 16),       // Pre-allocate slightly
+		propCache:    make(map[int]*PropCacheEntry), // Initialize inline cache
 	}
 }
 
@@ -64,6 +75,10 @@ func (vm *VM) Reset() {
 	vm.nextRegSlot = 0
 	vm.openUpvalues = vm.openUpvalues[:0] // Clear slice while keeping capacity
 	vm.errors = vm.errors[:0]             // Clear errors slice
+	// Clear inline cache
+	for k := range vm.propCache {
+		delete(vm.propCache, k)
+	}
 	// No need to clear registerStack explicitly, slots will be overwritten.
 }
 
@@ -88,15 +103,23 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 			Msg:      "Stack overflow (cannot push initial script frame)",
 		}
 		vm.errors = append(vm.errors, runtimeErr)
-		return Undefined(), vm.errors
+		return Undefined, vm.errors
 	}
 
 	// Wrap the main script chunk in a dummy function and closure
 	// Use a reasonable default register size for the script body.
 	// TODO: Should the compiler determine the required registers for the top level?
 	scriptRegSize := RegFileSize // Default to max for now
-	mainFunc := &Function{Chunk: chunk, Name: "<script>", RegisterSize: scriptRegSize}
-	mainClosure := &Closure{Fn: mainFunc, Upvalues: []*Upvalue{}} // No upvalues for main script
+	// Wrap the main script chunk in a dummy FunctionObject and ClosureObject
+	mainFuncObj := &FunctionObject{
+		Arity:        0,
+		Variadic:     false,
+		Chunk:        chunk,
+		Name:         "<script>",
+		UpvalueCount: 0,
+		RegisterSize: scriptRegSize,
+	}
+	mainClosureObj := &ClosureObject{Fn: mainFuncObj, Upvalues: []*Upvalue{}}
 
 	// Check if enough space in the global register stack for this new frame
 	if vm.nextRegSlot+scriptRegSize > len(vm.registerStack) {
@@ -106,12 +129,13 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 			Msg:      fmt.Sprintf("Register stack overflow (needed %d, available %d)", scriptRegSize, len(vm.registerStack)-vm.nextRegSlot),
 		}
 		vm.errors = append(vm.errors, runtimeErr)
-		return Undefined(), vm.errors
+		return Undefined, vm.errors
 	}
 
 	// --- Push the new frame ---
 	frame := &vm.frames[vm.frameCount] // Get pointer to the frame slot
-	frame.closure = mainClosure
+	// Initialize the first frame to run the mainClosureObj
+	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
 	frame.targetRegister = 0 // Result of script isn't stored in caller's reg
@@ -136,7 +160,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 func (vm *VM) run() (InterpretResult, Value) {
 	// --- Caching frame variables ---
 	if vm.frameCount == 0 {
-		return InterpretOK, Undefined() // Nothing to run
+		return InterpretOK, Undefined // Nothing to run
 	}
 	frame := &vm.frames[vm.frameCount-1]
 	// Get function/chunk/constants FROM the closure in the frame
@@ -147,11 +171,11 @@ func (vm *VM) run() (InterpretResult, Value) {
 		// runtimeError now collects the error and returns the enum
 		// Need to return a default value along with the error status
 		status := vm.runtimeError("Internal VM Error: Closure contains a nil function pointer.")
-		return status, Undefined()
+		return status, Undefined
 	}
 	if function.Chunk == nil { // Check if the chunk within the function is nil
 		status := vm.runtimeError("Internal VM Error: Function associated with closure has a nil chunk.")
-		return status, Undefined()
+		return status, Undefined
 	}
 	code := function.Chunk.Code
 	constants := function.Chunk.Constants
@@ -165,10 +189,10 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if vm.frameCount > 1 {
 				// If we run off the end of a function without OpReturn, that's an error
 				status := vm.runtimeError("Implicit return missing in function?")
-				return status, Undefined()
+				return status, Undefined
 			} else {
 				// Running off end of main script is okay, return Undefined implicitly
-				return InterpretOK, Undefined()
+				return InterpretOK, Undefined
 			}
 		}
 
@@ -185,29 +209,29 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if int(constIdx) >= len(constants) {
 				frame.ip = ip // Save IP
 				status := vm.runtimeError("Invalid constant index %d", constIdx)
-				return status, Undefined()
+				return status, Undefined
 			}
 			registers[reg] = constants[constIdx]
 
 		case OpLoadNull:
 			reg := code[ip]
 			ip++
-			registers[reg] = Null() // Use local Null()
+			registers[reg] = Null // Use local Null
 
 		case OpLoadUndefined:
 			reg := code[ip]
 			ip++
-			registers[reg] = Undefined() // Use local Undefined()
+			registers[reg] = Undefined // Use local Undefined
 
 		case OpLoadTrue:
 			reg := code[ip]
 			ip++
-			registers[reg] = Bool(true) // Use local Bool()
+			registers[reg] = BooleanValue(true) // Use local BooleanValue()
 
 		case OpLoadFalse:
 			reg := code[ip]
 			ip++
-			registers[reg] = Bool(false) // Use local Bool()
+			registers[reg] = BooleanValue(false) // Use local BooleanValue()
 
 		case OpMove:
 			regDest := code[ip]
@@ -223,7 +247,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if !IsNumber(srcVal) { // Use local IsNumber
 				frame.ip = ip
 				status := vm.runtimeError("Operand must be a number for negation.")
-				return status, Undefined()
+				return status, Undefined
 			}
 			registers[destReg] = Number(-AsNumber(srcVal)) // Use local Number/AsNumber
 
@@ -233,7 +257,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			ip += 2
 			srcVal := registers[srcReg]
 			// In many languages, ! evaluates truthiness
-			registers[destReg] = Bool(isFalsey(srcVal)) // Use local Bool
+			registers[destReg] = BooleanValue(isFalsey(srcVal)) // Use local Bool
 
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
 			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
@@ -262,7 +286,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				} else {
 					frame.ip = ip
 					status := vm.runtimeError("Operands must be two numbers, two strings, or a string and a number for '+'.")
-					return status, Undefined()
+					return status, Undefined
 				}
 			case OpSubtract, OpMultiply, OpDivide:
 				// Strictly numbers for these
@@ -270,7 +294,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 					frame.ip = ip
 					opStr := opcode.String()                                                 // Get opcode name
 					status := vm.runtimeError("Operands must be numbers for %s.", opStr[2:]) // Simple way to get op name like Subtract
-					return status, Undefined()
+					return status, Undefined
 				}
 				leftNum := AsNumber(leftVal)
 				rightNum := AsNumber(rightVal)
@@ -283,7 +307,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 					if rightNum == 0 {
 						frame.ip = ip
 						status := vm.runtimeError("Division by zero.")
-						return status, Undefined()
+						return status, Undefined
 					}
 					registers[destReg] = Number(leftNum / rightNum)
 				}
@@ -291,14 +315,14 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if !IsNumber(leftVal) || !IsNumber(rightVal) {
 					frame.ip = ip
 					status := vm.runtimeError("Operands must be numbers for %%.")
-					return status, Undefined()
+					return status, Undefined
 				}
 				leftNum := AsNumber(leftVal)
 				rightNum := AsNumber(rightVal)
 				if rightNum == 0 {
 					frame.ip = ip
 					status := vm.runtimeError("Division by zero (in remainder operation).")
-					return status, Undefined()
+					return status, Undefined
 				}
 				registers[destReg] = Number(math.Mod(leftNum, rightNum))
 
@@ -306,7 +330,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if !IsNumber(leftVal) || !IsNumber(rightVal) {
 					frame.ip = ip
 					status := vm.runtimeError("Operands must be numbers for **.")
-					return status, Undefined()
+					return status, Undefined
 				}
 				leftNum := AsNumber(leftVal)
 				rightNum := AsNumber(rightVal)
@@ -315,16 +339,16 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// Use a helper for equality check (handles type differences)
 				isEqual := valuesEqual(leftVal, rightVal)
 				if opcode == OpEqual {
-					registers[destReg] = Bool(isEqual)
+					registers[destReg] = BooleanValue(isEqual)
 				} else {
-					registers[destReg] = Bool(!isEqual)
+					registers[destReg] = BooleanValue(!isEqual)
 				}
 			case OpStrictEqual, OpStrictNotEqual: // Added cases
 				isStrictlyEqual := valuesStrictEqual(leftVal, rightVal)
 				if opcode == OpStrictEqual {
-					registers[destReg] = Bool(isStrictlyEqual)
+					registers[destReg] = BooleanValue(isStrictlyEqual)
 				} else { // OpStrictNotEqual
-					registers[destReg] = Bool(!isStrictlyEqual)
+					registers[destReg] = BooleanValue(!isStrictlyEqual)
 				}
 			case OpGreater, OpLess, OpLessEqual:
 				// Strictly numbers for comparison
@@ -332,7 +356,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 					frame.ip = ip
 					opStr := opcode.String() // Get opcode name
 					status := vm.runtimeError("Operands must be numbers for comparison (%s).", opStr[2:])
-					return status, Undefined()
+					return status, Undefined
 				}
 				leftNum := AsNumber(leftVal)
 				rightNum := AsNumber(rightVal)
@@ -345,7 +369,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				case OpLessEqual:
 					result = leftNum <= rightNum
 				}
-				registers[destReg] = Bool(result)
+				registers[destReg] = BooleanValue(result)
 			}
 
 		case OpJump:
@@ -377,7 +401,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			calleeVal := callerRegisters[funcReg] // Get callee from CALLER registers
 
-			switch calleeVal.Type {
+			switch calleeVal.Type() {
 			case TypeClosure:
 				// --- Existing Closure Handling ---
 				calleeClosure := AsClosure(calleeVal) // Use local AsClosure
@@ -385,18 +409,18 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if argCount != calleeFunc.Arity {
 					frame.ip = callerIP // Use saved IP for error context
 					status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
-					return status, Undefined()
+					return status, Undefined
 				}
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow.")
-					return status, Undefined()
+					return status, Undefined
 				}
 				requiredRegs := calleeFunc.RegisterSize
 				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 					frame.ip = callerIP
 					status := vm.runtimeError("Register stack overflow during call.")
-					return status, Undefined()
+					return status, Undefined
 				}
 
 				frame.ip = callerIP // Store return IP in the outgoing frame
@@ -417,7 +441,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 						vm.nextRegSlot -= requiredRegs
 						frame.ip = callerIP
 						status := vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
-						return status, Undefined()
+						return status, Undefined
 					}
 				}
 				vm.frameCount++
@@ -435,24 +459,24 @@ func (vm *VM) run() (InterpretResult, Value) {
 			case TypeFunction:
 				// --- Existing Function Handling (implicit closure) ---
 				funcToCall := AsFunction(calleeVal) // Use local AsFunction
-				calleeClosure := &Closure{Fn: funcToCall, Upvalues: []*Upvalue{}}
+				calleeClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
 				calleeFunc := calleeClosure.Fn
 
 				if argCount != calleeFunc.Arity {
 					frame.ip = callerIP
 					status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
-					return status, Undefined()
+					return status, Undefined
 				}
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow.")
-					return status, Undefined()
+					return status, Undefined
 				}
 				requiredRegs := calleeFunc.RegisterSize
 				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 					frame.ip = callerIP
 					status := vm.runtimeError("Register stack overflow during call.")
-					return status, Undefined()
+					return status, Undefined
 				}
 
 				frame.ip = callerIP // Store return IP in the outgoing frame
@@ -473,7 +497,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 						vm.nextRegSlot -= requiredRegs
 						frame.ip = callerIP
 						status := vm.runtimeError("Internal Error: Argument register index out of bounds during call setup.")
-						return status, Undefined()
+						return status, Undefined
 					}
 				}
 				vm.frameCount++
@@ -488,16 +512,16 @@ func (vm *VM) run() (InterpretResult, Value) {
 				ip = frame.ip
 				// --- End Existing Function Handling ---
 
-			// <<< NEW CASE FOR BUILTINS >>>
-			case TypeBuiltinFunc:
-				builtin := AsBuiltinFunc(calleeVal)
+			// <<< NEW CASE FOR NATIVE FUNCTIONS/BUILTINS >>>
+			case TypeNativeFunction:
+				builtin := AsNativeFunction(calleeVal)
 
 				// --- Arity Check ---
 				if builtin.Arity >= 0 && builtin.Arity != argCount {
 					frame.ip = callerIP // Use saved IP for error context
 					status := vm.runtimeError("Builtin function '%s' expected %d arguments but got %d.",
 						builtin.Name, builtin.Arity, argCount)
-					return status, Undefined()
+					return status, Undefined
 				}
 
 				// --- Collect Arguments from CALLER registers ---
@@ -510,19 +534,13 @@ func (vm *VM) run() (InterpretResult, Value) {
 					} else {
 						frame.ip = callerIP
 						status := vm.runtimeError("Internal Error: Argument register index %d out of bounds for builtin call.", argStartRegInCaller+byte(i))
-						return status, Undefined()
+						return status, Undefined
 					}
 				}
 
 				// --- Execute Built-in ---
 				// Note: Builtins run *within* the caller's frame context. No frame switch.
-				result, err := builtin.Func(args)
-				if err != nil {
-					// Propagate error from the built-in function implementation
-					frame.ip = callerIP // Use saved IP for error context
-					status := vm.runtimeError("Error executing builtin function '%s': %s", builtin.Name, err.Error())
-					return status, Undefined()
-				}
+				result := builtin.Fn(args)
 
 				// --- Store Result in CALLER's target register ---
 				// Bounds check against caller's register window length
@@ -531,7 +549,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				} else {
 					frame.ip = callerIP
 					status := vm.runtimeError("Internal Error: Invalid target register %d for builtin return value.", destReg)
-					return status, Undefined()
+					return status, Undefined
 				}
 				// --- Builtin call finished, continue in the same frame ---
 				// No context switch needed, ip continues from where OpCall finished reading operands.
@@ -539,7 +557,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			default:
 				frame.ip = callerIP // Use saved IP for error context
 				status := vm.runtimeError("Can only call functions and closures (got %s).", calleeVal.TypeName())
-				return status, Undefined()
+				return status, Undefined
 			}
 
 		case OpReturn:
@@ -573,7 +591,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			} else {
 				// This would be an internal error (compiler/vm mismatch)
 				status := vm.runtimeError("Internal Error: Invalid target register %d for return value.", callerTargetRegister)
-				return status, Undefined()
+				return status, Undefined
 			}
 
 			// Restore cached variables for the caller frame
@@ -600,17 +618,17 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			if vm.frameCount == 0 {
 				// Returned undefined from top-level
-				return InterpretOK, Undefined()
+				return InterpretOK, Undefined
 			}
 
 			// Get the caller frame
 			callerFrame := &vm.frames[vm.frameCount-1]
 			// Place Undefined into the caller's target register
 			if int(callerTargetRegister) < len(callerFrame.registers) {
-				callerFrame.registers[callerTargetRegister] = Undefined()
+				callerFrame.registers[callerTargetRegister] = Undefined
 			} else {
 				status := vm.runtimeError("Internal Error: Invalid target register %d for return undefined.", callerTargetRegister)
-				return status, Undefined()
+				return status, Undefined
 			}
 
 			// Restore cached variables for the caller frame
@@ -633,13 +651,13 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if int(funcConstIdx) >= len(constants) {
 				frame.ip = ip
 				status := vm.runtimeError("Invalid function constant index %d for closure.", funcConstIdx)
-				return status, Undefined()
+				return status, Undefined
 			}
 			protoVal := constants[funcConstIdx]
 			if !IsFunction(protoVal) {
 				frame.ip = ip
 				status := vm.runtimeError("Constant %d is not a function, cannot create closure.", funcConstIdx)
-				return status, Undefined()
+				return status, Undefined
 			}
 			protoFunc := AsFunction(protoVal)
 
@@ -656,7 +674,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 					if index >= len(registers) {
 						frame.ip = ip
 						status := vm.runtimeError("Invalid local register index %d for upvalue capture.", index)
-						return status, Undefined()
+						return status, Undefined
 					}
 					// Pass pointer to the stack slot (register) itself.
 					location := &registers[index]
@@ -666,7 +684,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 					if closure == nil || index >= len(closure.Upvalues) {
 						frame.ip = ip
 						status := vm.runtimeError("Invalid upvalue index %d for capture.", index)
-						return status, Undefined()
+						return status, Undefined
 					}
 					upvalues[i] = closure.Upvalues[index]
 				}
@@ -674,12 +692,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			// Create the closure Value using the constructor
 			// newClosureVal := NewClosure(protoFunc, upvalues)
-			// Create the closure struct directly
-			newClosure := &Closure{
-				Fn:       protoFunc,
-				Upvalues: upvalues,
-			}
-			registers[destReg] = ClosureV(newClosure) // Use ClosureV to create the value
+			// Create a new closure value using the value-level constructor
+			registers[destReg] = NewClosure(protoFunc, upvalues)
 
 		case OpLoadFree:
 			destReg := code[ip]
@@ -689,7 +703,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
 				frame.ip = ip
 				status := vm.runtimeError("Invalid upvalue index %d for OpLoadFree.", upvalueIndex)
-				return status, Undefined()
+				return status, Undefined
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
 			if upvalue.Location != nil {
@@ -709,7 +723,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
 				frame.ip = ip
 				status := vm.runtimeError("Invalid upvalue index %d for OpSetUpvalue.", upvalueIndex)
-				return status, Undefined()
+				return status, Undefined
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
 			if upvalue.Location != nil {
@@ -736,13 +750,16 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if startIdx < 0 || endIdx > len(registers) {
 				frame.ip = ip
 				status := vm.runtimeError("Internal Error: Register index out of bounds during array creation (start=%d, count=%d, frame size=%d)", startIdx, count, len(registers))
-				return status, Undefined()
+				return status, Undefined
 			}
 
 			copy(elements, registers[startIdx:endIdx])
 
 			// Create the array value
-			arrayValue := NewArray(elements)
+			arrayValue := NewArray()
+			arrayObj := AsArray(arrayValue)
+			arrayObj.elements = elements
+			arrayObj.length = len(elements)
 			registers[destReg] = arrayValue
 
 		case OpGetIndex:
@@ -755,38 +772,47 @@ func (vm *VM) run() (InterpretResult, Value) {
 			indexVal := registers[indexReg]
 
 			// --- MODIFIED: Handle Array, Object, String ---
-			switch baseVal.Type {
+			switch baseVal.Type() {
 			case TypeArray:
 				if !IsNumber(indexVal) {
 					frame.ip = ip
-					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
-					return status, Undefined()
+					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type())
+					return status, Undefined
 				}
 				arr := AsArray(baseVal)
 				idx := int(AsNumber(indexVal))
-				if idx < 0 || idx >= len(arr.Elements) {
-					registers[destReg] = Undefined() // Out of bounds -> undefined
+				if idx < 0 || idx >= len(arr.elements) {
+					registers[destReg] = Undefined // Out of bounds -> undefined
 				} else {
-					registers[destReg] = arr.Elements[idx]
+					registers[destReg] = arr.elements[idx]
 				}
 
-			case TypeObject: // <<< NEW
-				obj := AsObject(baseVal)
+			case TypeObject, TypeDictObject: // <<< NEW
 				var key string
-				switch indexVal.Type {
+				switch indexVal.Type() {
 				case TypeString:
 					key = AsString(indexVal)
-				case TypeNumber:
+				case TypeFloatNumber, TypeIntegerNumber:
 					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
 					// Or: key = fmt.Sprintf("%v", AsNumber(indexVal))
 				default:
 					frame.ip = ip
-					status := vm.runtimeError("Object index must be a string or number, got '%v'", indexVal.Type)
-					return status, Undefined()
+					status := vm.runtimeError("Object index must be a string or number, got '%v'", indexVal.Type())
+					return status, Undefined
 				}
-				propValue, ok := obj.Properties[key]
+
+				var propValue Value
+				var ok bool
+				if baseVal.Type() == TypeDictObject {
+					dict := AsDictObject(baseVal)
+					propValue, ok = dict.GetOwn(key)
+				} else {
+					obj := AsPlainObject(baseVal)
+					propValue, ok = obj.GetOwn(key)
+				}
+
 				if !ok {
-					registers[destReg] = Undefined() // Property not found -> undefined
+					registers[destReg] = Undefined // Property not found -> undefined
 				} else {
 					registers[destReg] = propValue
 				}
@@ -794,22 +820,22 @@ func (vm *VM) run() (InterpretResult, Value) {
 			case TypeString: // <<< NEW (or ensure existing logic is here)
 				if !IsNumber(indexVal) {
 					frame.ip = ip
-					status := vm.runtimeError("String index must be a number, got '%v'", indexVal.Type)
-					return status, Undefined()
+					status := vm.runtimeError("String index must be a number, got '%v'", indexVal.Type())
+					return status, Undefined
 				}
 				str := AsString(baseVal)
 				idx := int(AsNumber(indexVal))
 				runes := []rune(str)
 				if idx < 0 || idx >= len(runes) {
-					registers[destReg] = Undefined() // Out of bounds -> undefined
+					registers[destReg] = Undefined // Out of bounds -> undefined
 				} else {
 					registers[destReg] = String(string(runes[idx])) // Return char as string
 				}
 
 			default:
 				frame.ip = ip
-				status := vm.runtimeError("Cannot index non-array/object/string type '%v' at IP %d", baseVal.Type, ip)
-				return status, Undefined()
+				status := vm.runtimeError("Cannot index non-array/object/string type '%v' at IP %d", baseVal.Type(), ip)
+				return status, Undefined
 			}
 			// --- END MODIFICATION ---
 
@@ -824,12 +850,12 @@ func (vm *VM) run() (InterpretResult, Value) {
 			valueVal := registers[valueReg]
 
 			// --- MODIFIED: Handle Array and Object ---
-			switch baseVal.Type {
+			switch baseVal.Type() {
 			case TypeArray:
 				if !IsNumber(indexVal) {
 					frame.ip = ip
-					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type)
-					return status, Undefined()
+					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type())
+					return status, Undefined
 				}
 
 				arr := AsArray(baseVal)
@@ -839,44 +865,52 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if idx < 0 {
 					frame.ip = ip
 					status := vm.runtimeError("Array index cannot be negative, got %d", idx)
-					return status, Undefined()
-				} else if idx < len(arr.Elements) {
-					arr.Elements[idx] = valueVal
-				} else if idx == len(arr.Elements) {
-					arr.Elements = append(arr.Elements, valueVal)
+					return status, Undefined
+				} else if idx < len(arr.elements) {
+					arr.elements[idx] = valueVal
+				} else if idx == len(arr.elements) {
+					arr.elements = append(arr.elements, valueVal)
+					arr.length++
 				} else {
 					neededCapacity := idx + 1
-					if cap(arr.Elements) < neededCapacity {
-						newElements := make([]Value, len(arr.Elements), neededCapacity)
-						copy(newElements, arr.Elements)
-						arr.Elements = newElements
+					if cap(arr.elements) < neededCapacity {
+						newElements := make([]Value, len(arr.elements), neededCapacity)
+						copy(newElements, arr.elements)
+						arr.elements = newElements
 					}
-					for i := len(arr.Elements); i < idx; i++ {
-						arr.Elements = append(arr.Elements, Undefined())
+					for i := len(arr.elements); i < idx; i++ {
+						arr.elements = append(arr.elements, Undefined)
 					}
-					arr.Elements = append(arr.Elements, valueVal)
+					arr.elements = append(arr.elements, valueVal)
+					arr.length = len(arr.elements)
 				}
 
-			case TypeObject: // <<< NEW
-				obj := AsObject(baseVal)
+			case TypeObject, TypeDictObject: // <<< NEW
 				var key string
-				switch indexVal.Type {
+				switch indexVal.Type() {
 				case TypeString:
 					key = AsString(indexVal)
-				case TypeNumber:
+				case TypeFloatNumber, TypeIntegerNumber:
 					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
 				default:
 					frame.ip = ip
-					status := vm.runtimeError("Object index must be a string or number, got '%v'", indexVal.Type)
-					return status, Undefined()
+					status := vm.runtimeError("Object index must be a string or number, got '%v'", indexVal.Type())
+					return status, Undefined
 				}
-				// Set the property on the object's map
-				obj.Properties[key] = valueVal
+
+				// Set the property on the object
+				if baseVal.Type() == TypeDictObject {
+					dict := AsDictObject(baseVal)
+					dict.SetOwn(key, valueVal)
+				} else {
+					obj := AsPlainObject(baseVal)
+					obj.SetOwn(key, valueVal)
+				}
 
 			default:
 				frame.ip = ip
-				status := vm.runtimeError("Cannot set index on non-array/object type '%v'", baseVal.Type)
-				return status, Undefined()
+				status := vm.runtimeError("Cannot set index on non-array/object type '%v'", baseVal.Type())
+				return status, Undefined
 			}
 			// --- END MODIFICATION ---
 
@@ -891,18 +925,18 @@ func (vm *VM) run() (InterpretResult, Value) {
 			srcVal := registers[srcReg]
 			var length float64 = -1 // Initialize to -1 to indicate error if type is wrong
 
-			switch srcVal.Type {
+			switch srcVal.Type() {
 			case TypeArray:
 				arr := AsArray(srcVal)
-				length = float64(len(arr.Elements))
+				length = float64(len(arr.elements))
 			case TypeString:
 				str := AsString(srcVal)
 				// Use rune count for string length to handle multi-byte chars correctly
 				length = float64(len(str))
 			default:
 				frame.ip = ip
-				status := vm.runtimeError("Cannot get length of type '%v'", srcVal.Type)
-				return status, Undefined()
+				status := vm.runtimeError("Cannot get length of type '%v'", srcVal.Type())
+				return status, Undefined
 			}
 
 			registers[destReg] = Number(length)
@@ -918,7 +952,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if !IsNumber(srcVal) {
 				frame.ip = ip
 				status := vm.runtimeError("Operand must be a number for bitwise NOT (~).")
-				return status, Undefined()
+				return status, Undefined
 			}
 			// Convert to int64 for bitwise op, then back to Number
 			// Note: JS typically operates on 32-bit integers. We use 64-bit here.
@@ -953,7 +987,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 					opStr = ">>>"
 				}
 				status := vm.runtimeError("Operands must be numbers for bitwise/shift operator '%s'.", opStr)
-				return status, Undefined()
+				return status, Undefined
 			}
 
 			// Convert to integers. Use uint64 for shifts involving unsigned right shift.
@@ -995,7 +1029,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			destReg := code[ip]
 			ip++
 			// Create a new empty object value
-			registers[destReg] = ObjectV(&Object{Properties: make(map[string]Value)}) // Use constructor
+			// Create a new empty object using the shape-based PlainObject
+			registers[destReg] = NewObject(Undefined)
 
 		case OpGetProp:
 			destReg := code[ip]
@@ -1003,6 +1038,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			nameConstIdxHi := code[ip+2]
 			nameConstIdxLo := code[ip+3]
 			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			// Calculate cache key based on instruction pointer (before advancing ip)
+			cacheKey := ip - 1 // ip points to first operand, opcode was at ip-1
 			ip += 4
 
 			// Get object and property name values
@@ -1010,23 +1047,23 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if int(nameConstIdx) >= len(constants) {
 				frame.ip = ip
 				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
-				return status, Undefined()
+				return status, Undefined
 			}
 			nameVal := constants[nameConstIdx]
 			if !IsString(nameVal) { // Compiler should ensure this
 				frame.ip = ip
 				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
-				return status, Undefined()
+				return status, Undefined
 			}
 			propName := AsString(nameVal)
 
 			// --- Special handling for .length ---
 			// Check the *original* value type before checking if it's an Object type
 			if propName == "length" {
-				switch objVal.Type {
+				switch objVal.Type() {
 				case TypeArray:
 					arr := AsArray(objVal)
-					registers[destReg] = Number(float64(len(arr.Elements)))
+					registers[destReg] = Number(float64(len(arr.elements)))
 					continue // Skip general object lookup
 				case TypeString:
 					str := AsString(objVal)
@@ -1038,26 +1075,76 @@ func (vm *VM) run() (InterpretResult, Value) {
 			}
 
 			// General property lookup
-			if !IsObject(objVal) {
+			if !objVal.IsObject() {
 				frame.ip = ip
 				// Check for null/undefined specifically for a better error message
-				if objVal.Type == TypeNull || objVal.Type == TypeUndefined {
+				switch objVal.Type() {
+				case TypeNull, TypeUndefined:
 					status := vm.runtimeError("Cannot read property '%s' of %s", propName, objVal.TypeName())
-					return status, Undefined()
-				} else {
-					// Or a generic error for other non-objects
+					return status, Undefined
+				default:
+					// Generic error for other non-object types
 					status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())
-					return status, Undefined()
+					return status, Undefined
 				}
 			}
 
-			obj := AsObject(objVal)
-			value, ok := obj.Properties[propName]
-			if ok {
-				registers[destReg] = value
-			} else {
-				// Property not found on object
-				registers[destReg] = Undefined()
+			// --- INLINE CACHE CHECK (PlainObjects only for now) ---
+			if objVal.Type() == TypeObject {
+				po := AsPlainObject(objVal)
+
+				// Check cache for this instruction site
+				if cacheEntry, exists := vm.propCache[cacheKey]; exists {
+					// Cache hit - check if shape matches
+					if cacheEntry.shape == po.shape {
+						// Shape matches! Use cached offset directly (fast path)
+						if cacheEntry.offset < len(po.properties) {
+							registers[destReg] = po.properties[cacheEntry.offset]
+							continue // Skip slow path lookup
+						}
+						// Cached offset is out of bounds - cache is stale, fall through to slow path
+					}
+					// Shape mismatch - cache is stale, fall through to slow path
+				}
+
+				// Cache miss or stale cache - do slow path lookup and update cache
+				if fv, ok := po.GetOwn(propName); ok {
+					registers[destReg] = fv
+					// Update cache: find the offset for this property in the shape
+					for _, field := range po.shape.fields {
+						if field.name == propName {
+							vm.propCache[cacheKey] = &PropCacheEntry{
+								shape:  po.shape,
+								offset: field.offset,
+							}
+							break
+						}
+					}
+				} else {
+					registers[destReg] = Undefined
+					// Don't cache undefined lookups for now
+				}
+				continue // Skip the old dispatch logic below
+			}
+
+			// --- Fallback for DictObject (no caching) ---
+			// Dispatch to PlainObject or DictObject lookup
+			switch objVal.Type() {
+			case TypeDictObject:
+				dict := AsDictObject(objVal)
+				if fv, ok := dict.GetOwn(propName); ok {
+					registers[destReg] = fv
+				} else {
+					registers[destReg] = Undefined
+				}
+			default:
+				// PlainObject or other object types (should not reach here due to continue above)
+				po := AsPlainObject(objVal)
+				if fv, ok := po.GetOwn(propName); ok {
+					registers[destReg] = fv
+				} else {
+					registers[destReg] = Undefined
+				}
 			}
 
 		case OpSetProp:
@@ -1072,31 +1159,37 @@ func (vm *VM) run() (InterpretResult, Value) {
 			objVal := registers[objReg]
 			valueToSet := registers[valReg]
 
-			// Check if the base is actually an object
-			if !IsObject(objVal) {
-				frame.ip = ip
-				status := vm.runtimeError("Cannot set property on non-object type '%v'", objVal.Type)
-				return status, Undefined() // Error: Cannot set property on non-object
-			}
-
 			// Get property name from constants
 			if int(nameConstIdx) >= len(constants) {
 				frame.ip = ip
 				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
-				return status, Undefined()
+				return status, Undefined
 			}
 			nameVal := constants[nameConstIdx]
 			if !IsString(nameVal) { // Compiler should ensure this
 				frame.ip = ip
 				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
-				return status, Undefined()
+				return status, Undefined
 			}
 			propName := AsString(nameVal)
 
-			// Get the underlying object map
-			obj := AsObject(objVal)
-			// Set the property
-			obj.Properties[propName] = valueToSet
+			// Check if the base is actually an object
+			if !objVal.IsObject() {
+				frame.ip = ip
+				// Error setting property on non-object
+				status := vm.runtimeError("Cannot set property '%s' on non-object type '%s'", propName, objVal.TypeName())
+				return status, Undefined
+			}
+
+			// Set property on DictObject or PlainObject
+			switch objVal.Type() {
+			case TypeDictObject:
+				d := AsDictObject(objVal)
+				d.SetOwn(propName, valueToSet)
+			default:
+				po := AsPlainObject(objVal)
+				po.SetOwn(propName, valueToSet)
+			}
 
 			// OpSetProp itself doesn't modify destReg. The assignment expression result
 			// (the value that was set) is already available in registers[valReg]
@@ -1107,7 +1200,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
-			return status, Undefined()
+			return status, Undefined
 		}
 	}
 }
@@ -1166,7 +1259,8 @@ func (vm *VM) closeUpvalues(frameRegisters []Value) {
 		if upvaluePtr >= frameStartPtr && upvaluePtr < frameEndPtr {
 			// This upvalue points into the frame being popped, close it.
 			closedValue := *upvalue.Location // Copy the value from the stack
-			upvalue.Close(closedValue)       // Update the upvalue object
+			upvalue.Closed = closedValue     // Store the value
+			upvalue.Location = nil           // Mark as closed
 			// Do NOT add it back to newOpenUpvalues
 		} else {
 			// This upvalue points elsewhere (e.g., higher up the stack), keep it open.
@@ -1222,39 +1316,3 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 
 	return InterpretRuntimeError
 }
-
-// valuesEqual compares two values for equality (loose comparison like ==).
-// Already defined in value.go - REMOVING DUPLICATE
-// func valuesEqual(a, b Value) bool { ... }
-
-// valuesStrictEqual compares two values for strict equality (like ===).
-func valuesStrictEqual(a, b Value) bool {
-	if a.Type != b.Type {
-		return false // Different types are never strictly equal
-	}
-
-	// If types are the same, compare values based on type
-	switch a.Type {
-	case TypeNull:
-		return true // null === null
-	case TypeUndefined:
-		return true // undefined === undefined
-	case TypeBool:
-		return AsBool(a) == AsBool(b)
-	case TypeNumber:
-		return AsNumber(a) == AsNumber(b)
-	case TypeString:
-		return AsString(a) == AsString(b)
-	case TypeFunction: // Compare function pointers for identity
-		return AsFunction(a) == AsFunction(b)
-	case TypeClosure: // Compare closure pointers for identity
-		return AsClosure(a) == AsClosure(b)
-	default:
-		// Should not happen for valid types
-		return false
-	}
-}
-
-// isFalsey determines the truthiness of a value.
-// Already defined in value.go - REMOVING DUPLICATE
-// func isFalsey(value Value) bool { ... }

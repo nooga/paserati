@@ -272,7 +272,7 @@ func _TestCompileFunctions(t *testing.T) {
 	// 0: Function object for 'double'
 	// 1: Number 10 (for the argument)
 	expectedMainConstants := []vm.Value{
-		vm.NewFunction(&vm.Function{}), // Placeholder for Function check
+		vm.NewFunction(1, 0, 4, false, "double", vm.NewChunk()), // Placeholder for Function check
 		vm.Number(10),
 	}
 
@@ -424,12 +424,12 @@ func logAllChunks(t *testing.T, chunk *vm.Chunk, name string, logged map[interfa
 	t.Logf("--- Disassembly [%s] ---\n%s", name, chunk.DisassembleChunk(name))
 
 	for i, constant := range chunk.Constants {
-		var funcProto *vm.Function
+		var funcProto *vm.FunctionObject
 		constName := fmt.Sprintf("%s Const[%d]", name, i)
 
 		if vm.IsFunction(constant) {
 			funcProto = vm.AsFunction(constant)
-		} else if vm.IsClosure(constant) {
+		} else if constant.IsClosure() {
 			closure := vm.AsClosure(constant)
 			funcProto = closure.Fn
 		}
@@ -503,8 +503,8 @@ return result; // Explicitly return the result
 		t.Fatalf("VM execution failed:\n%s", errMsgs.String())
 	}
 
-	expectedOutput := "15"              // Expect the final value, not stdout
-	actualOutput := finalValue.String() // Get string representation of the final value
+	expectedOutput := "15"                // Expect the final value, not stdout
+	actualOutput := finalValue.ToString() // Get string representation of the final value
 	if actualOutput != expectedOutput {
 		t.Errorf("VM result mismatch.\nExpected: %q\nGot:      %q", expectedOutput, actualOutput)
 		logAllChunks(t, chunk, "Closure Test Mismatch", make(map[interface{}]bool))
@@ -596,7 +596,7 @@ func TestValuesNullUndefined(t *testing.T) {
 				t.Fatalf("VM execution failed:\n%s", errMsgs.String())
 			}
 
-			actualOutput := finalValue.String()
+			actualOutput := finalValue.ToString()
 			if actualOutput != tt.expected {
 				t.Errorf("VM result mismatch.\nInput:    %q\nExpected: %q\nGot:      %q", tt.input, tt.expected, actualOutput)
 				logAllChunks(t, chunk, "Value Test Mismatch", make(map[interface{}]bool))
@@ -664,7 +664,7 @@ return countdown(3);
 	}
 
 	expectedOutput := "3" // Final result of countdown(3)
-	actualOutput := finalValue.String()
+	actualOutput := finalValue.ToString()
 	if actualOutput != expectedOutput {
 		t.Errorf("VM result mismatch.\nInput:    %q\nExpected: %q\nGot:      %q", input, expectedOutput, actualOutput)
 		logAllChunks(t, chunk, "Recursion Test Mismatch", make(map[interface{}]bool))

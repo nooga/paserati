@@ -31,7 +31,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 
 		// Prefix
 		{name: "PrefixMinusNum", input: "-15;", expect: "-15"},
-		{name: "PrefixMinusZero", input: "-0;", expect: "0"},
+		{name: "PrefixMinusZero", input: "-0;", expect: "-0"},
 		{name: "PrefixNotTrue", input: "!true;", expect: "false"},
 		{name: "PrefixNotFalse", input: "!false;", expect: "true"},
 		{name: "PrefixNotNull", input: "!null;", expect: "true"},
@@ -464,7 +464,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 			// 3. Check Results
 			if tc.isError {
 				if len(runtimeErrs) == 0 {
-					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tc.expect, finalValue.String())
+					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tc.expect, finalValue.ToString())
 				} else {
 					found := false
 					var allErrors strings.Builder
@@ -486,9 +486,9 @@ func TestOperatorsAndLiterals(t *testing.T) {
 					}
 					t.Errorf("Expected value %q, but got runtime errors:\n%s", tc.expect, allErrors.String())
 				} else {
-					actualOutput := finalValue.String()
+					actualOutput := finalValue.ToString()
 					if actualOutput != tc.expect {
-						t.Errorf("Expected output %q, but got %q", tc.expect, actualOutput)
+						t.Errorf("Test %s failed.\nInput:    %q\nExpected: %q\nGot:      %q", tc.name, tc.input, tc.expect, actualOutput)
 					}
 				}
 

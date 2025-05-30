@@ -49,7 +49,7 @@ func (p *Paserati) RunString(source string) (vm.Value, []errors.PaseratiError) {
 		// If ParseProgram already returns PaseratiError, this is fine.
 		// If not, we need a conversion step here.
 		// Let's assume parser.ParseProgram returns compatible errors for now.
-		return vm.Undefined(), parseErrs
+		return vm.Undefined, parseErrs
 	}
 
 	// --- Type Checking is now done inside Compiler.Compile using the persistent checker ---
@@ -63,7 +63,7 @@ func (p *Paserati) RunString(source string) (vm.Value, []errors.PaseratiError) {
 	// using the injected checker.
 	chunk, compileAndTypeErrs := comp.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
-		return vm.Undefined(), compileAndTypeErrs // Errors could be type or compile errors
+		return vm.Undefined, compileAndTypeErrs // Errors could be type or compile errors
 	}
 	if chunk == nil {
 		// Handle internal compiler error where no chunk is returned despite no errors
@@ -71,7 +71,7 @@ func (p *Paserati) RunString(source string) (vm.Value, []errors.PaseratiError) {
 			Position: errors.Position{Line: 0, Column: 0}, // Placeholder position
 			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
 		}
-		return vm.Undefined(), []errors.PaseratiError{internalErr}
+		return vm.Undefined, []errors.PaseratiError{internalErr}
 	}
 	// --- End Compilation ---
 
@@ -90,8 +90,8 @@ func (p *Paserati) DisplayResult(source string, value vm.Value, errs []errors.Pa
 	}
 
 	// Only print non-undefined results in REPL-like contexts
-	if !vm.IsUndefined(value) {
-		fmt.Println(value)
+	if value != vm.Undefined {
+		fmt.Println(value.Inspect())
 	}
 	return true
 }
@@ -163,8 +163,8 @@ func RunString(source string) bool {
 	}
 
 	// Display result similar to the session's DisplayResult
-	if !vm.IsUndefined(finalValue) {
-		fmt.Println(finalValue)
+	if finalValue != vm.Undefined {
+		fmt.Println(finalValue.Inspect())
 	}
 	return true
 }

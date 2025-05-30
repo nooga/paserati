@@ -26,7 +26,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false
+const debugCompiler = true
 const debugCompilerStats = false
 
 func debugPrintf(format string, args ...interface{}) {
@@ -156,31 +156,26 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 				continue
 			}
 
-			// 1. Compile the function literal (creates chunk & function object)
-			// We will modify compileFunctionLiteral later to return the constant index.
-			// For now, this call compiles the function but we don't capture the index yet.
-			funcConstIndex, _, err := c.compileFunctionLiteral(funcLit, name) // Assign freeSymbols to blank identifier _
+			// 1. Define the function name temporarily to allow self-recursion
+			c.currentSymbolTable.Define(name, nilRegister)
+
+			// 2. Compile the function literal (creates chunk & function object)
+			// This will now properly detect self-recursion and include it in freeSymbols
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, name)
 			if err != nil {
 				// Error during function compilation, already added to c.errors by sub-compiler
 				debugPrintf("[Compile Hoisting] ERROR compiling hoisted func '%s': %v\n", name, err)
 				continue // Skip defining this function
 			}
 
-			// For global functions, freeSymbols should be empty, so we pass nil for now.
-			var globalFreeSymbols []*Symbol = nil // Explicitly nil for globals
-			// 2. Create the Closure
-			closureReg := c.regAlloc.Alloc()                                      // Allocate register for the closure object
-			c.emitClosure(closureReg, funcConstIndex, funcLit, globalFreeSymbols) // Use emitClosure
+			// 3. Create the Closure with the actual freeSymbols (not nil)
+			closureReg := c.regAlloc.Alloc()                                // Allocate register for the closure object
+			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // Use actual freeSymbols
 
-			// 3. Define the global symbol
-			symbol := c.currentSymbolTable.Define(name, closureReg) // Define the symbol globally
+			// 4. Update the symbol table entry with the register holding the closure
+			c.currentSymbolTable.UpdateRegister(name, closureReg) // Update from nilRegister to actual register
 
-			// Note: Define currently doesn't return a 'defined' flag. Assume no redefinition for globals for now.
-			// Need to enhance SymbolTable later if strict checking is needed here.
-			debugPrintf("[Compile Hoisting] Defined global func '%s' (Symbol: %v) in R%d\n", name, symbol, closureReg)
-
-			// No need to emit OpSetGlobal. The closure is created and its register
-			// is associated with the symbol. Runtime lookup finds it via symbol table.
+			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d\n", name, len(freeSymbols), closureReg)
 
 			// Invalidate lastExprReg, as the hoisted function definition itself isn't the result.
 			c.lastExprRegValid = false
@@ -449,7 +444,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		if builtinFunc := builtins.GetFunc(node.Value); builtinFunc != nil {
 			// It's a built-in function.
 			debugPrintf("// DEBUG Identifier '%s': Resolved as Builtin\n", node.Value)
-			builtinValue := vm.NewBuiltinFunc(builtinFunc)
+			builtinValue := vm.NewNativeFunction(builtinFunc.Arity, builtinFunc.Variadic, builtinFunc.Name, builtinFunc.Fn)
 			constIdx := c.chunk.AddConstant(builtinValue) // Add vm.Value to constant pool
 
 			// Allocate register and load the constant
@@ -949,8 +944,8 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression) errors.P
 		undefConstReg := c.regAlloc.Alloc()
 
 		// Load null and undefined constants
-		c.emitLoadNewConstant(nullConstReg, vm.Null(), line)
-		c.emitLoadNewConstant(undefConstReg, vm.Undefined(), line)
+		c.emitLoadNewConstant(nullConstReg, vm.Null, line)
+		c.emitLoadNewConstant(undefConstReg, vm.Undefined, line)
 
 		// Check if left == null
 		c.emitStrictEqual(isNullReg, leftReg, nullConstReg, line)
@@ -1076,15 +1071,9 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	} else {
 		funcName = "<anonymous>"
 	}
-	funcObj := vm.Function{
-		Arity:        len(node.Parameters),
-		Chunk:        functionChunk,
-		Name:         funcName,
-		RegisterSize: int(regSize),
-	}
 
 	// 6. Add the function object to the *outer* compiler's constant pool.
-	funcValue := vm.NewFunction(&funcObj)
+	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, funcName, functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// <<< REMOVE OpClosure EMISSION FROM HERE (should already be removed) >>>
@@ -1559,16 +1548,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	regSize := funcCompiler.regAlloc.MaxRegs()
 	functionChunk := funcCompiler.chunk
 
-	// 6. Create the function object
-	compiledFunc := vm.Function{
-		Chunk:        functionChunk,
-		Arity:        len(node.Parameters),
-		RegisterSize: int(regSize),
-		Name:         "<arrow>", // Arrow functions are anonymous
-	}
-
-	// 7. Add function constant to the *enclosing* compiler (c)
-	funcValue := vm.NewFunction(&compiledFunc)
+	// 6. Create the function object directly using vm.NewFunction
+	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, "<arrow>", functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c)

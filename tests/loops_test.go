@@ -110,7 +110,7 @@ func TestWhileStatement(t *testing.T) {
 			// Check results
 			if tt.isError {
 				if len(runtimeErrs) == 0 {
-					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tt.expected, finalValue.String())
+					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tt.expected, finalValue.ToString())
 				} else {
 					found := false
 					var allErrors strings.Builder
@@ -132,7 +132,7 @@ func TestWhileStatement(t *testing.T) {
 					}
 					t.Errorf("Expected value %q, but got runtime errors:\n%s", tt.expected, allErrors.String())
 				} else {
-					actualOutput := finalValue.String()
+					actualOutput := finalValue.ToString()
 					if actualOutput != tt.expected {
 						t.Errorf("Expected output=%q, got=%q", tt.expected, actualOutput)
 					}
@@ -277,7 +277,7 @@ func TestForStatement(t *testing.T) {
 			// Check results
 			if tt.isError {
 				if len(runtimeErrs) == 0 {
-					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tt.expected, finalValue.String())
+					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tt.expected, finalValue.ToString())
 				} else {
 					found := false
 					var allErrors strings.Builder
@@ -299,7 +299,7 @@ func TestForStatement(t *testing.T) {
 					}
 					t.Errorf("Expected value %q, but got runtime errors:\n%s", tt.expected, allErrors.String())
 				} else {
-					actualOutput := finalValue.String()
+					actualOutput := finalValue.ToString()
 					if actualOutput != tt.expected {
 						t.Errorf("Expected output=%q, got=%q", tt.expected, actualOutput)
 					}
@@ -398,7 +398,7 @@ func TestDoWhileStatement(t *testing.T) {
 			// Check results
 			if tt.isError {
 				if len(runtimeErrs) == 0 {
-					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tt.expected, finalValue.String())
+					t.Errorf("Expected runtime error containing %q, but VM returned OK. Final Value: %s", tt.expected, finalValue.ToString())
 				} else {
 					found := false
 					var allErrors strings.Builder
@@ -420,7 +420,7 @@ func TestDoWhileStatement(t *testing.T) {
 					}
 					t.Errorf("Expected value %q, but got runtime errors:\n%s", tt.expected, allErrors.String())
 				} else {
-					actualOutput := finalValue.String()
+					actualOutput := finalValue.ToString()
 					if actualOutput != tt.expected {
 						t.Errorf("Expected output=%q, got=%q", tt.expected, actualOutput)
 					}

@@ -1,4 +1,4 @@
-package values
+package vm
 
 import (
 	"fmt"
@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"unsafe"
-
-	"paserati/pkg/vm" // Assuming vm contains Chunk definition if needed by FunctionObject
 )
 
 // Helper function to check for panics using standard library
@@ -108,11 +106,11 @@ func assertNotSame(t *testing.T, notExpected, actual interface{}, msgAndArgs ...
 // Helper to create a basic FunctionObject for tests
 func createTestFunctionObject(name string, upvalueCount int) *FunctionObject {
 	return &FunctionObject{
-		name:         name,
-		arity:        0,
-		upvalueCount: upvalueCount,
-		registerSize: 8,           // Arbitrary
-		chunk:        &vm.Chunk{}, // Dummy chunk
+		Name:         name,
+		Arity:        0,
+		UpvalueCount: upvalueCount,
+		RegisterSize: 8,        // Arbitrary
+		Chunk:        &Chunk{}, // Dummy chunk
 	}
 }
 
@@ -467,7 +465,7 @@ func TestArrayValue(t *testing.T) {
 }
 
 func TestFunctionValue(t *testing.T) {
-	dummyChunk := &vm.Chunk{}
+	dummyChunk := &Chunk{}
 	v := NewFunction(2, 0, 8, false, "testFn", dummyChunk) // Use constructor
 
 	if v.Type() != TypeFunction {
@@ -490,22 +488,22 @@ func TestFunctionValue(t *testing.T) {
 	if fnObj == nil {
 		t.Fatalf("AsFunction() returned nil")
 	}
-	if fnObj.arity != 2 {
-		t.Errorf("Arity mismatch. Expected 2, got %d", fnObj.arity)
+	if fnObj.Arity != 2 {
+		t.Errorf("Arity mismatch. Expected 2, got %d", fnObj.Arity)
 	}
-	if fnObj.variadic {
+	if fnObj.Variadic {
 		t.Errorf("Expected variadic to be false")
 	}
-	if fnObj.upvalueCount != 0 {
-		t.Errorf("UpvalueCount mismatch. Expected 0, got %d", fnObj.upvalueCount)
+	if fnObj.UpvalueCount != 0 {
+		t.Errorf("UpvalueCount mismatch. Expected 0, got %d", fnObj.UpvalueCount)
 	}
-	if fnObj.registerSize != 8 {
-		t.Errorf("RegisterSize mismatch. Expected 8, got %d", fnObj.registerSize)
+	if fnObj.RegisterSize != 8 {
+		t.Errorf("RegisterSize mismatch. Expected 8, got %d", fnObj.RegisterSize)
 	}
-	if fnObj.name != "testFn" {
-		t.Errorf("Name mismatch. Expected %q, got %q", "testFn", fnObj.name)
+	if fnObj.Name != "testFn" {
+		t.Errorf("Name mismatch. Expected %q, got %q", "testFn", fnObj.Name)
 	}
-	assertSame(t, dummyChunk, fnObj.chunk, "Chunk mismatch")
+	assertSame(t, dummyChunk, fnObj.Chunk, "Chunk mismatch")
 
 	expectPanic(t, func() { v.AsInteger() }, "not an integer")
 	expectPanic(t, func() { v.AsNativeFunction() }, "not a native function")
@@ -548,21 +546,21 @@ func TestNativeFunctionValue(t *testing.T) {
 	if nativeFnObj == nil {
 		t.Fatalf("AsNativeFunction() returned nil")
 	}
-	if nativeFnObj.arity != 1 {
-		t.Errorf("Arity mismatch. Expected 1, got %d", nativeFnObj.arity)
+	if nativeFnObj.Arity != 1 {
+		t.Errorf("Arity mismatch. Expected 1, got %d", nativeFnObj.Arity)
 	}
-	if !nativeFnObj.variadic {
+	if !nativeFnObj.Variadic {
 		t.Errorf("Expected variadic to be true")
 	}
-	if nativeFnObj.name != "nativeLog" {
-		t.Errorf("Name mismatch. Expected %q, got %q", "nativeLog", nativeFnObj.name)
+	if nativeFnObj.Name != "nativeLog" {
+		t.Errorf("Name mismatch. Expected %q, got %q", "nativeLog", nativeFnObj.Name)
 	}
-	if nativeFnObj.fn == nil {
+	if nativeFnObj.Fn == nil {
 		t.Fatalf("Native function fn is nil")
 	}
 
 	// Check that calling the retrieved function works
-	result := nativeFnObj.fn(nil)
+	result := nativeFnObj.Fn(nil)
 	if !result.Is(Null) {
 		t.Errorf("Native function call result mismatch. Expected Null, got %v", result)
 	}
@@ -623,15 +621,15 @@ func TestClosureValue(t *testing.T) {
 		t.Fatalf("AsClosure() returned nil")
 	}
 
-	assertSame(t, fnObj, closureObj.fn, "Closure function object mismatch")
+	assertSame(t, fnObj, closureObj.Fn, "Closure function object mismatch")
 
-	if len(closureObj.upvalues) != 2 {
-		t.Fatalf("Expected 2 upvalues, got %d", len(closureObj.upvalues))
+	if len(closureObj.Upvalues) != 2 {
+		t.Fatalf("Expected 2 upvalues, got %d", len(closureObj.Upvalues))
 	}
 
-	assertSame(t, upval1, closureObj.upvalues[0], "Upvalue[0] mismatch")
+	assertSame(t, upval1, closureObj.Upvalues[0], "Upvalue[0] mismatch")
 
-	assertSame(t, upval2, closureObj.upvalues[1], "Upvalue[1] mismatch")
+	assertSame(t, upval2, closureObj.Upvalues[1], "Upvalue[1] mismatch")
 
 	// 4. Test accessors panic
 	expectPanic(t, func() { v.AsInteger() }, "not an integer")
@@ -950,11 +948,11 @@ func TestIsSameValueZero(t *testing.T) {
 	// Re-use objects for reference checks
 	fnObjPtr1 := createTestFunctionObject("f1", 0)
 	fnObjPtr2 := createTestFunctionObject("f1", 0) // Same content, different obj
-	closureObjPtr1 := &ClosureObject{fn: fnObjPtr1, upvalues: nil}
-	closureObjPtr1b := &ClosureObject{fn: fnObjPtr1, upvalues: nil} // Different closure obj, same func obj
-	closureObjPtr2 := &ClosureObject{fn: fnObjPtr2, upvalues: nil}
-	nativeFnObjPtr1 := &NativeFunctionObject{name: "n1", fn: nil}
-	nativeFnObjPtr1b := &NativeFunctionObject{name: "n1", fn: nil} // Different obj
+	closureObjPtr1 := &ClosureObject{Fn: fnObjPtr1, Upvalues: nil}
+	closureObjPtr1b := &ClosureObject{Fn: fnObjPtr1, Upvalues: nil} // Different closure obj, same func obj
+	closureObjPtr2 := &ClosureObject{Fn: fnObjPtr2, Upvalues: nil}
+	nativeFnObjPtr1 := &NativeFunctionObject{Name: "n1", Fn: nil}
+	nativeFnObjPtr1b := &NativeFunctionObject{Name: "n1", Fn: nil} // Different obj
 	plainObjPtr1 := &PlainObject{}
 	plainObjPtr2 := &PlainObject{}
 	arrObjPtr1 := &ArrayObject{}
@@ -1079,10 +1077,10 @@ func TestStrictlyEquals(t *testing.T) {
 	// Re-use objects from TestIsSameValueZero setup
 	fnObjPtr1 := createTestFunctionObject("f1", 0)
 	fnObjPtr2 := createTestFunctionObject("f1", 0)
-	closureObjPtr1 := &ClosureObject{fn: fnObjPtr1, upvalues: nil}
-	closureObjPtr1b := &ClosureObject{fn: fnObjPtr1, upvalues: nil}
-	nativeFnObjPtr1 := &NativeFunctionObject{name: "n1", fn: nil}
-	nativeFnObjPtr1b := &NativeFunctionObject{name: "n1", fn: nil}
+	closureObjPtr1 := &ClosureObject{Fn: fnObjPtr1, Upvalues: nil}
+	closureObjPtr1b := &ClosureObject{Fn: fnObjPtr1, Upvalues: nil}
+	nativeFnObjPtr1 := &NativeFunctionObject{Name: "n1", Fn: nil}
+	nativeFnObjPtr1b := &NativeFunctionObject{Name: "n1", Fn: nil}
 	plainObjPtr1 := &PlainObject{prototype: DefaultObjectPrototype}
 	plainObjPtr2 := &PlainObject{prototype: DefaultObjectPrototype}
 	arrObjPtr1 := &ArrayObject{}
