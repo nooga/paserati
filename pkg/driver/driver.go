@@ -142,6 +142,11 @@ func CompileFile(filename string) (*vm.Chunk, []errors.PaseratiError) {
 // Returns true if execution completed without any errors, false otherwise.
 // This version does NOT use a persistent session.
 func RunString(source string) bool {
+	return RunStringWithOptions(source, RunOptions{})
+}
+
+// RunStringWithOptions is like RunString but accepts options for debugging output
+func RunStringWithOptions(source string, options RunOptions) bool {
 	// Use the non-persistent CompileString (which now handles type checking internally)
 	chunk, compileOrTypeErrs := CompileString(source)
 	if len(compileOrTypeErrs) > 0 {
@@ -160,6 +165,13 @@ func RunString(source string) bool {
 	if len(runtimeErrs) > 0 {
 		errors.DisplayErrors(source, runtimeErrs)
 		return false
+	}
+
+	// Show cache statistics if requested
+	if options.ShowCacheStats {
+		fmt.Println("\n=== Inline Cache Statistics ===")
+		vmInstance.PrintCacheStats()
+		fmt.Println("===============================")
 	}
 
 	// Display result similar to the session's DisplayResult
@@ -253,4 +265,26 @@ func WriteJavaScriptFile(inputFilename string, outputFilename string) bool {
 
 	fmt.Printf("JavaScript code written to %s\n", outputFilename)
 	return true
+}
+
+// RunOptions configures optional debugging output
+type RunOptions struct {
+	ShowTokens     bool
+	ShowAST        bool
+	ShowBytecode   bool
+	ShowCacheStats bool // Show inline cache statistics
+}
+
+// RunCode runs source code with the given Paserati session and options
+func (p *Paserati) RunCode(source string, options RunOptions) (vm.Value, []errors.PaseratiError) {
+	value, errs := p.RunString(source)
+
+	// Show cache statistics if requested
+	if options.ShowCacheStats {
+		fmt.Println("\n=== Inline Cache Statistics ===")
+		p.vmInstance.PrintCacheStats()
+		fmt.Println("===============================")
+	}
+
+	return value, errs
 }

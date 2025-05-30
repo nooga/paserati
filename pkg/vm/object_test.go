@@ -108,3 +108,120 @@ func TestDictObjectBasic(t *testing.T) {
 		t.Errorf("OwnKeys sorting mismatch, expected [a b], got %v", keys)
 	}
 }
+
+func TestInlineCache(t *testing.T) {
+	vm := NewVM()
+
+	// Create objects with same shape for monomorphic caching
+	obj1 := NewObject(DefaultObjectPrototype).AsPlainObject()
+	obj1.SetOwn("x", IntegerValue(1))
+	obj1.SetOwn("y", IntegerValue(2))
+
+	obj2 := NewObject(DefaultObjectPrototype).AsPlainObject()
+	obj2.SetOwn("x", IntegerValue(10))
+	obj2.SetOwn("y", IntegerValue(20))
+
+	// Create a simple cache for testing (simulating instruction pointer 100)
+	cacheKey := 100
+	cache := &PropInlineCache{
+		state: CacheStateUninitialized,
+	}
+	vm.propCache[cacheKey] = cache
+
+	// First lookup should miss and populate cache
+	offset, hit := cache.lookupInCache(obj1.shape)
+	if hit {
+		t.Errorf("Expected cache miss on first lookup, got hit")
+	}
+
+	// Update cache with shape+offset for property "x"
+	cache.updateCache(obj1.shape, 0) // "x" should be at offset 0
+
+	// Second lookup should hit
+	offset, hit = cache.lookupInCache(obj1.shape)
+	if !hit {
+		t.Errorf("Expected cache hit on second lookup, got miss")
+	}
+	if offset != 0 {
+		t.Errorf("Expected offset 0, got %d", offset)
+	}
+
+	// Lookup with same shape should also hit
+	offset, hit = cache.lookupInCache(obj2.shape)
+	if !hit {
+		t.Errorf("Expected cache hit for object with same shape, got miss")
+	}
+
+	// Create object with different shape (polymorphic case)
+	obj3 := NewObject(DefaultObjectPrototype).AsPlainObject()
+	obj3.SetOwn("x", IntegerValue(100))
+	obj3.SetOwn("y", IntegerValue(200))
+	obj3.SetOwn("z", IntegerValue(300)) // Different shape!
+
+	// Should miss because shape is different
+	offset, hit = cache.lookupInCache(obj3.shape)
+	if hit {
+		t.Errorf("Expected cache miss for different shape, got hit")
+	}
+
+	// Update cache with new shape (should transition to polymorphic)
+	cache.updateCache(obj3.shape, 0) // "x" should still be at offset 0
+
+	if cache.state != CacheStatePolymorphic {
+		t.Errorf("Expected cache to transition to polymorphic, got state %d", cache.state)
+	}
+	if cache.entryCount != 2 {
+		t.Errorf("Expected 2 cache entries, got %d", cache.entryCount)
+	}
+
+	// Both shapes should now hit
+	offset, hit = cache.lookupInCache(obj1.shape)
+	if !hit {
+		t.Errorf("Expected cache hit for first shape in polymorphic cache, got miss")
+	}
+
+	offset, hit = cache.lookupInCache(obj3.shape)
+	if !hit {
+		t.Errorf("Expected cache hit for second shape in polymorphic cache, got miss")
+	}
+}
+
+func TestInlineCacheStats(t *testing.T) {
+	vm := NewVM()
+
+	// Verify initial stats are zero
+	stats := vm.GetCacheStats()
+	if stats.totalHits != 0 || stats.totalMisses != 0 {
+		t.Errorf("Expected zero initial stats, got hits=%d misses=%d", stats.totalHits, stats.totalMisses)
+	}
+
+	// Create a cache and perform some operations
+	cache := &PropInlineCache{
+		state:      CacheStateMonomorphic,
+		entries:    [4]PropCacheEntry{{shape: RootShape, offset: 0}},
+		entryCount: 1,
+	}
+
+	// Simulate cache hit
+	offset, hit := cache.lookupInCache(RootShape)
+	if !hit || offset != 0 {
+		t.Errorf("Expected cache hit with offset 0, got hit=%v offset=%d", hit, offset)
+	}
+
+	// Simulate cache miss
+	obj := NewObject(DefaultObjectPrototype).AsPlainObject()
+	obj.SetOwn("test", IntegerValue(42)) // Creates different shape
+
+	offset, hit = cache.lookupInCache(obj.shape)
+	if hit {
+		t.Errorf("Expected cache miss for different shape, got hit")
+	}
+
+	// Check that hit/miss counts were updated
+	if cache.hitCount != 1 {
+		t.Errorf("Expected hitCount=1, got %d", cache.hitCount)
+	}
+	if cache.missCount != 1 {
+		t.Errorf("Expected missCount=1, got %d", cache.missCount)
+	}
+}
