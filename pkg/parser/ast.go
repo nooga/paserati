@@ -1163,20 +1163,51 @@ func (id *InterfaceDeclaration) String() string {
 
 // InterfaceProperty represents a property or method signature in an interface.
 type InterfaceProperty struct {
-	Name     *Identifier // Property/method name
-	Type     Expression  // Type annotation (for properties) or function type (for methods)
-	IsMethod bool        // Whether this is a method signature
-	Optional bool        // Whether the property is optional (Name?)
+	Name                   *Identifier // Property/method name
+	Type                   Expression  // Type annotation (for properties) or function type (for methods)
+	IsMethod               bool        // Whether this is a method signature
+	Optional               bool        // Whether the property is optional (Name?)
+	IsConstructorSignature bool        // Whether this is a constructor signature (new (): T)
 }
 
 func (ip *InterfaceProperty) String() string {
 	var out bytes.Buffer
-	out.WriteString(ip.Name.String())
-	if ip.Optional {
-		out.WriteString("?")
+	if ip.IsConstructorSignature {
+		out.WriteString("new ")
+		out.WriteString(ip.Type.String()) // This should be a function type for the constructor
+	} else {
+		out.WriteString(ip.Name.String())
+		if ip.Optional {
+			out.WriteString("?")
+		}
+		out.WriteString(": ")
+		out.WriteString(ip.Type.String())
 	}
-	out.WriteString(": ")
-	out.WriteString(ip.Type.String())
+	return out.String()
+}
+
+// ConstructorTypeExpression represents a constructor type signature like `new () => T`
+type ConstructorTypeExpression struct {
+	BaseExpression              // Embed base for ComputedType
+	Token          lexer.Token  // The 'new' token
+	Parameters     []Expression // Parameter types for the constructor
+	ReturnType     Expression   // The constructed type (T in `new (): T`)
+}
+
+func (cte *ConstructorTypeExpression) expressionNode()      {}
+func (cte *ConstructorTypeExpression) TokenLiteral() string { return cte.Token.Literal }
+func (cte *ConstructorTypeExpression) String() string {
+	var out bytes.Buffer
+	params := []string{}
+	for _, p := range cte.Parameters {
+		params = append(params, p.String())
+	}
+
+	out.WriteString("new (")
+	out.WriteString(strings.Join(params, ", "))
+	out.WriteString("): ")
+	out.WriteString(cte.ReturnType.String())
+
 	return out.String()
 }
 

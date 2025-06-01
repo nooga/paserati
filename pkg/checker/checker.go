@@ -542,6 +542,10 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.ObjectTypeExpression:
 		return c.resolveObjectTypeSignature(node)
 
+	// --- NEW: Handle ConstructorTypeExpression ---
+	case *parser.ConstructorTypeExpression:
+		return c.resolveConstructorTypeSignature(node)
+
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
@@ -584,6 +588,31 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 	}
 
 	return &types.ObjectType{Properties: properties}
+}
+
+// --- NEW: Helper to resolve ConstructorTypeExpression nodes ---
+func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeExpression) types.Type {
+	paramTypes := []types.Type{}
+	for _, paramNode := range node.Parameters {
+		paramType := c.resolveTypeAnnotation(paramNode)
+		if paramType == nil {
+			// Error should have been added by resolveTypeAnnotation
+			return nil // Indicate error by returning nil
+		}
+		paramTypes = append(paramTypes, paramType)
+	}
+
+	constructedType := c.resolveTypeAnnotation(node.ReturnType)
+	if constructedType == nil {
+		// Error should have been added by resolveTypeAnnotation
+		return nil // Indicate error by returning nil
+	}
+
+	// Construct the internal ConstructorType representation
+	return &types.ConstructorType{
+		ParameterTypes:  paramTypes,
+		ConstructedType: constructedType,
+	}
 }
 
 // isAssignable checks if a value of type `source` can be assigned to a variable
@@ -2067,7 +2096,58 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Determine the result type based on the constructor type
 		var resultType types.Type
-		if _, ok := constructorType.(*types.FunctionType); ok {
+		if constructorTypeVal, ok := constructorType.(*types.ConstructorType); ok {
+			// Direct constructor type
+			if len(node.Arguments) != len(constructorTypeVal.ParameterTypes) {
+				c.addError(node, fmt.Sprintf("constructor expects %d arguments but got %d",
+					len(constructorTypeVal.ParameterTypes), len(node.Arguments)))
+			} else {
+				// Check argument types
+				for i, arg := range node.Arguments {
+					argType := arg.GetComputedType()
+					if argType == nil {
+						argType = types.Any
+					}
+					expectedType := constructorTypeVal.ParameterTypes[i]
+					if !c.isAssignable(argType, expectedType) {
+						c.addError(arg, fmt.Sprintf("argument %d: cannot assign %s to %s",
+							i+1, argType.String(), expectedType.String()))
+					}
+				}
+			}
+			resultType = constructorTypeVal.ConstructedType
+		} else if objType, ok := constructorType.(*types.ObjectType); ok {
+			// Check if this object type has a constructor signature ("new" property)
+			if newProp, hasNew := objType.Properties["new"]; hasNew {
+				if ctorType, isConstructor := newProp.(*types.ConstructorType); isConstructor {
+					// Validate arguments against constructor signature
+					if len(node.Arguments) != len(ctorType.ParameterTypes) {
+						c.addError(node, fmt.Sprintf("constructor expects %d arguments but got %d",
+							len(ctorType.ParameterTypes), len(node.Arguments)))
+					} else {
+						// Check argument types
+						for i, arg := range node.Arguments {
+							argType := arg.GetComputedType()
+							if argType == nil {
+								argType = types.Any
+							}
+							expectedType := ctorType.ParameterTypes[i]
+							if !c.isAssignable(argType, expectedType) {
+								c.addError(arg, fmt.Sprintf("argument %d: cannot assign %s to %s",
+									i+1, argType.String(), expectedType.String()))
+							}
+						}
+					}
+					resultType = ctorType.ConstructedType
+				} else {
+					c.addError(node.Constructor, fmt.Sprintf("'new' property is not a constructor type"))
+					resultType = types.Any
+				}
+			} else {
+				c.addError(node.Constructor, fmt.Sprintf("object type does not have a constructor signature"))
+				resultType = types.Any
+			}
+		} else if _, ok := constructorType.(*types.FunctionType); ok {
 			// For function constructors, the result is typically an object
 			// In a more sophisticated implementation, we'd track constructor return types
 			// For now, we'll assume constructors return objects
@@ -2322,12 +2402,23 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// 2. Build the ObjectType from interface properties
 	properties := make(map[string]types.Type)
 	for _, prop := range node.Properties {
-		propType := c.resolveTypeAnnotation(prop.Type)
-		if propType == nil {
-			debugPrintf("// [Checker Interface P1] Failed to resolve type for property '%s' in interface '%s'. Using Any.\n", prop.Name.Value, node.Name.Value)
-			propType = types.Any
+		if prop.IsConstructorSignature {
+			// For constructor signatures, add them as a special "new" property
+			// This allows the interface to describe both instance properties and constructor behavior
+			constructorType := c.resolveTypeAnnotation(prop.Type)
+			if constructorType == nil {
+				debugPrintf("// [Checker Interface P1] Failed to resolve constructor type in interface '%s'. Using Any.\n", node.Name.Value)
+				constructorType = types.Any
+			}
+			properties["new"] = constructorType
+		} else {
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				debugPrintf("// [Checker Interface P1] Failed to resolve type for property '%s' in interface '%s'. Using Any.\n", prop.Name.Value, node.Name.Value)
+				propType = types.Any
+			}
+			properties[prop.Name.Value] = propType
 		}
-		properties[prop.Name.Value] = propType
 	}
 
 	// 3. Create the ObjectType representing this interface

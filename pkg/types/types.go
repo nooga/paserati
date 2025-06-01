@@ -458,3 +458,83 @@ func GetWidenedType(t Type) Type {
 	// This would require more complex logic here or in NewUnionType.
 	return t // Not a literal type, return as is
 }
+
+// ConstructorType represents a constructor function type.
+// This is used for functions that can be called with `new` to create instances.
+type ConstructorType struct {
+	ParameterTypes  []Type // Parameters for the constructor call
+	ConstructedType Type   // The type of object this constructor creates
+	IsVariadic      bool   // Indicates if the constructor accepts variable arguments
+}
+
+func (ct *ConstructorType) String() string {
+	var params strings.Builder
+	params.WriteString("new (")
+	for i, p := range ct.ParameterTypes {
+		if ct.IsVariadic && i == len(ct.ParameterTypes)-1 {
+			params.WriteString("...")
+			if p != nil {
+				params.WriteString(p.String())
+			} else {
+				params.WriteString("<nil>")
+			}
+		} else {
+			if p != nil {
+				params.WriteString(p.String())
+			} else {
+				params.WriteString("<nil>")
+			}
+		}
+		if i < len(ct.ParameterTypes)-1 {
+			params.WriteString(", ")
+		}
+	}
+	params.WriteString("): ")
+
+	if ct.ConstructedType != nil {
+		params.WriteString(ct.ConstructedType.String())
+	} else {
+		params.WriteString("<nil>")
+	}
+
+	return params.String()
+}
+
+func (ct *ConstructorType) typeNode() {}
+
+func (ct *ConstructorType) Equals(other Type) bool {
+	otherCt, ok := other.(*ConstructorType)
+	if !ok {
+		return false
+	}
+	if ct == nil || otherCt == nil {
+		return ct == otherCt
+	}
+	if len(ct.ParameterTypes) != len(otherCt.ParameterTypes) {
+		return false
+	}
+	if ct.IsVariadic != otherCt.IsVariadic {
+		return false
+	}
+
+	// Check parameter types
+	for i, p1 := range ct.ParameterTypes {
+		p2 := otherCt.ParameterTypes[i]
+		if (p1 == nil) != (p2 == nil) {
+			return false
+		}
+		if p1 != nil && !p1.Equals(p2) {
+			return false
+		}
+	}
+
+	// Check constructed type
+	if (ct.ConstructedType == nil) != (otherCt.ConstructedType == nil) {
+		return false
+	}
+	if ct.ConstructedType != nil && !ct.ConstructedType.Equals(otherCt.ConstructedType) {
+		return false
+	}
+
+	return true
+}

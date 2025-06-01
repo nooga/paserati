@@ -1253,16 +1253,35 @@ func (p *Parser) parseIfExpression() Expression {
 		return nil
 	}
 
-	if !p.expectPeek(lexer.LBRACE) {
-		return nil
+	// --- MODIFIED: Handle both block statements and single statements ---
+	if p.peekTokenIs(lexer.LBRACE) {
+		// Block statement case: if (condition) { ... }
+		if !p.expectPeek(lexer.LBRACE) {
+			return nil
+		}
+		debugPrint("parseIfExpression parsing consequence block...")
+		expr.Consequence = p.parseBlockStatement()
+	} else {
+		// Single statement case: if (condition) statement
+		p.nextToken() // Move to the start of the statement
+		debugPrint("parseIfExpression parsing single consequence statement...")
+		stmt := p.parseStatement()
+		if stmt == nil {
+			return nil
+		}
+		// Wrap the single statement in a BlockStatement
+		expr.Consequence = &BlockStatement{
+			Token:               p.curToken, // Use current token for the wrapper
+			Statements:          []Statement{stmt},
+			HoistedDeclarations: make(map[string]Expression),
+		}
 	}
+	// --- END MODIFICATION ---
 
-	debugPrint("parseIfExpression parsing consequence block...")
-	expr.Consequence = p.parseBlockStatement()
 	if expr.Consequence == nil {
 		return nil
 	} // <<< NIL CHECK
-	debugPrint("parseIfExpression parsed consequence block.")
+	debugPrint("parseIfExpression parsed consequence.")
 
 	// Check for optional 'else' block
 	if p.peekTokenIs(lexer.ELSE) {
@@ -1285,10 +1304,15 @@ func (p *Parser) parseIfExpression() Expression {
 			// We use the 'else' token for the block, as it's the start of the alternative branch
 			elseBlock := &BlockStatement{Token: expr.Token} // Use the 'else' token?
 			elseBlock.Statements = []Statement{&ExpressionStatement{Expression: elseIfExpr}}
+			elseBlock.HoistedDeclarations = make(map[string]Expression)
 			expr.Alternative = elseBlock
 			debugPrint("parseIfExpression parsed 'else if' branch.")
 
-		} else if p.expectPeek(lexer.LBRACE) { // Standard 'else { ... }'
+		} else if p.peekTokenIs(lexer.LBRACE) {
+			// Block statement case: else { ... }
+			if !p.expectPeek(lexer.LBRACE) {
+				return nil
+			}
 			debugPrint("parseIfExpression parsing standard 'else' block...")
 			// Call parseBlockStatement first before assigning
 			alternativeBlock := p.parseBlockStatement()
@@ -1315,11 +1339,21 @@ func (p *Parser) parseIfExpression() Expression {
 			} // <<< NIL CHECK
 			debugPrint("parseIfExpression parsed standard 'else' block.")
 		} else {
-			// Error: expected '{' or 'if' after 'else'
-			msg := fmt.Sprintf("expected { or if after else, got %s instead", p.peekToken.Type)
-			p.addError(p.peekToken, msg)
-			debugPrint("parseIfExpression failed: %s", msg)
-			return nil
+			// --- NEW: Single statement case: else statement ---
+			p.nextToken() // Move to the start of the else statement
+			debugPrint("parseIfExpression parsing single 'else' statement...")
+			stmt := p.parseStatement()
+			if stmt == nil {
+				return nil
+			}
+			// Wrap the single statement in a BlockStatement
+			expr.Alternative = &BlockStatement{
+				Token:               p.curToken, // Use current token for the wrapper
+				Statements:          []Statement{stmt},
+				HoistedDeclarations: make(map[string]Expression),
+			}
+			debugPrint("parseIfExpression parsed single 'else' statement.")
+			// --- END NEW ---
 		}
 	} else {
 		debugPrint("parseIfExpression found no 'else' branch.")
@@ -1614,11 +1648,28 @@ func (p *Parser) parseWhileStatement() *WhileStatement {
 		return nil // Expected ')' after condition
 	}
 
-	if !p.expectPeek(lexer.LBRACE) {
-		return nil // Expected '{' to start the body
+	// --- MODIFIED: Handle both block statements and single statements ---
+	if p.peekTokenIs(lexer.LBRACE) {
+		// Block statement case: while (condition) { ... }
+		if !p.expectPeek(lexer.LBRACE) {
+			return nil
+		}
+		stmt.Body = p.parseBlockStatement()
+	} else {
+		// Single statement case: while (condition) statement
+		p.nextToken() // Move to the start of the statement
+		bodyStmt := p.parseStatement()
+		if bodyStmt == nil {
+			return nil
+		}
+		// Wrap the single statement in a BlockStatement
+		stmt.Body = &BlockStatement{
+			Token:               p.curToken,
+			Statements:          []Statement{bodyStmt},
+			HoistedDeclarations: make(map[string]Expression),
+		}
 	}
-
-	stmt.Body = p.parseBlockStatement() // parseBlockStatement handles '{' ... '}'
+	// --- END MODIFICATION ---
 
 	return stmt
 }
@@ -1719,13 +1770,35 @@ func (p *Parser) parseForStatement() *ForStatement {
 
 	// --- 4. Parse Body ---
 	debugPrint("parseForStatement: Body START, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal) // Expect cur=')'
-	if !p.expectPeek(lexer.LBRACE) {                                                                          // Consume ')', check/consume '{', cur='{'
-		debugPrint("parseForStatement: ERROR expected LBRACE for body")
-		return nil
-	}
-	debugPrint("parseForStatement: Consumed LBRACE, cur='%s'", p.curToken.Literal)
 
-	stmt.Body = p.parseBlockStatement()
+	// --- MODIFIED: Handle both block statements and single statements ---
+	if p.peekTokenIs(lexer.LBRACE) {
+		// Block statement case: for (...) { ... }
+		if !p.expectPeek(lexer.LBRACE) {
+			debugPrint("parseForStatement: ERROR expected LBRACE for body")
+			return nil
+		}
+		debugPrint("parseForStatement: Consumed LBRACE, cur='%s'", p.curToken.Literal)
+		stmt.Body = p.parseBlockStatement()
+	} else {
+		// Single statement case: for (...) statement
+		p.nextToken() // Move to the start of the statement
+		debugPrint("parseForStatement: Parsing single body statement, cur='%s'", p.curToken.Literal)
+		bodyStmt := p.parseStatement()
+		if bodyStmt == nil {
+			debugPrint("parseForStatement: ERROR parsing single body statement")
+			return nil
+		}
+		// Wrap the single statement in a BlockStatement
+		stmt.Body = &BlockStatement{
+			Token:               p.curToken,
+			Statements:          []Statement{bodyStmt},
+			HoistedDeclarations: make(map[string]Expression),
+		}
+		debugPrint("parseForStatement: Wrapped single statement in BlockStatement")
+	}
+	// --- END MODIFICATION ---
+
 	debugPrint("parseForStatement: Parsed Body, FINISHED")
 
 	return stmt
@@ -1760,12 +1833,28 @@ func (p *Parser) parseContinueStatement() *ContinueStatement {
 func (p *Parser) parseDoWhileStatement() *DoWhileStatement {
 	stmt := &DoWhileStatement{Token: p.curToken}
 
-	// Expect { after 'do'
-	if !p.expectPeek(lexer.LBRACE) {
-		return nil
+	// --- MODIFIED: Handle both block statements and single statements ---
+	if p.peekTokenIs(lexer.LBRACE) {
+		// Block statement case: do { ... } while (condition)
+		if !p.expectPeek(lexer.LBRACE) {
+			return nil
+		}
+		stmt.Body = p.parseBlockStatement()
+	} else {
+		// Single statement case: do statement while (condition)
+		p.nextToken() // Move to the start of the statement
+		bodyStmt := p.parseStatement()
+		if bodyStmt == nil {
+			return nil
+		}
+		// Wrap the single statement in a BlockStatement
+		stmt.Body = &BlockStatement{
+			Token:               p.curToken,
+			Statements:          []Statement{bodyStmt},
+			HoistedDeclarations: make(map[string]Expression),
+		}
 	}
-
-	stmt.Body = p.parseBlockStatement()
+	// --- END MODIFICATION ---
 
 	// Expect 'while' after the block
 	if !p.expectPeek(lexer.WHILE) {
@@ -2235,6 +2324,22 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 
 // parseInterfaceProperty parses a single property in an interface
 func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
+	// Check for constructor signature first: `new (): T`
+	if p.curTokenIs(lexer.NEW) {
+		prop := &InterfaceProperty{
+			IsConstructorSignature: true,
+		}
+
+		// Parse constructor type expression
+		constructorType := p.parseConstructorTypeExpression()
+		if constructorType == nil {
+			return nil // Error parsing constructor type
+		}
+
+		prop.Type = constructorType
+		return prop
+	}
+
 	// Check for shorthand method syntax first (identifier followed by '(')
 	if !p.curTokenIs(lexer.IDENT) {
 		p.addError(p.curToken, "expected property name (identifier) in interface")
@@ -2277,6 +2382,40 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 	}
 
 	return prop
+}
+
+// parseConstructorTypeExpression parses constructor type signatures like `new (): T`
+func (p *Parser) parseConstructorTypeExpression() Expression {
+	cte := &ConstructorTypeExpression{
+		Token: p.curToken, // The 'new' token
+	}
+
+	// Expect '(' for parameters
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+
+	// Parse parameter types (similar to function type parameters)
+	params, err := p.parseFunctionTypeParameterList()
+	if err != nil {
+		p.addError(p.curToken, err.Error())
+		return nil
+	}
+	cte.Parameters = params
+
+	// Expect ':' for return type
+	if !p.expectPeek(lexer.COLON) {
+		return nil
+	}
+
+	// Parse the constructed type
+	p.nextToken() // Move to the start of the return type expression
+	cte.ReturnType = p.parseTypeExpression()
+	if cte.ReturnType == nil {
+		return nil // Error should have been added by parseTypeExpression
+	}
+
+	return cte
 }
 
 // parseObjectTypeExpression parses object type literals like { name: string; age: number }.
