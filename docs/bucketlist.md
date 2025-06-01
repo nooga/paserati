@@ -147,7 +147,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] `.length` Property (Checker uses for arrays/strings)
   - [ ] Array Methods (`.push`, `.pop`, `.map`, etc.)
 - [ ] Objects
-  - [ ] Creation (`{}`)
+  - [x] Creation (`{}`)
   - [x] Property Access (`.`, `[]`)
   - [x] Property Assignment
   - [ ] Methods
