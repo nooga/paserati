@@ -491,6 +491,24 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 
 			return nil // Built-in handled successfully
 		}
+
+		// <<< ADDED: Check for built-in objects >>>
+		if builtinObj := builtins.GetObject(node.Value); !builtinObj.Is(vm.Undefined) {
+			// It's a built-in object (like console).
+			debugPrintf("// DEBUG Identifier '%s': Resolved as Builtin Object\n", node.Value)
+			constIdx := c.chunk.AddConstant(builtinObj) // Add the object to constant pool
+
+			// Allocate register and load the constant
+			destReg := c.regAlloc.Alloc()
+			c.emitLoadConstant(destReg, constIdx, node.Token.Line) // Use existing emitter
+			c.regAlloc.SetCurrent(destReg)                         // Update allocator state
+
+			// Set last expression tracking state
+			c.lastExprReg = destReg
+			c.lastExprRegValid = true
+
+			return nil // Built-in object handled successfully
+		}
 		// <<< END ADDED >>>
 
 		// If not a built-in, proceed with existing variable lookup logic

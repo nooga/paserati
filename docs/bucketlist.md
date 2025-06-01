@@ -167,6 +167,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [ ] `WeakMap` / `WeakSet`
 - [ ] Typed Arrays
 - [ ] `Promise`
+- [x] `console` Object
+  - [x] `console.log()` - variadic logging with inspect formatting
 
 ## TypeScript Specific Features
 

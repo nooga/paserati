@@ -6,6 +6,9 @@ alwaysApply: true
 
 # We are working on a TypeScript -> Bytecode compiler and VM implemented in Golang called Paserati
 
+## Project goals
+We want this to be a real production ready TS runtime, one of a kind, which executes TypeScript directly without lowering to JS. Our goals are performance and correctness. Sometimes we can make compromises but we should strive to achieve as much as possible looking at real modern JS runtimes, just with TS as a source language. See [README.md](mdc:README.md) whenever you want to understand the ethos.
+
 ## On code comprehention and editing
 
 - Always keep in mind the overall layout of the project as many changes require visiting these files
