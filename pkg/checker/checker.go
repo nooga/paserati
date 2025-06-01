@@ -29,6 +29,10 @@ type Checker struct {
 	currentExpectedReturnType types.Type
 	// List of types found in return statements within the current function (used for inference).
 	currentInferredReturnTypes []types.Type
+
+	// --- NEW: Context for 'this' type checking ---
+	// Type of 'this' in the current context (set when checking methods)
+	currentThisType types.Type
 }
 
 // NewChecker creates a new type checker.
@@ -1132,6 +1136,19 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.UndefinedLiteral:
 		node.SetComputedType(types.Undefined)
+
+	// --- NEW: Handle ThisExpression ---
+	case *parser.ThisExpression:
+		// In global context or regular function context, 'this' is undefined
+		// In method context, 'this' refers to the object the method is called on
+		if c.currentThisType != nil {
+			node.SetComputedType(c.currentThisType)
+			debugPrintf("// [Checker ThisExpr] Using context this type: %s\n", c.currentThisType.String())
+		} else {
+			// Global context or regular function - 'this' is undefined
+			node.SetComputedType(types.Undefined)
+			debugPrintf("// [Checker ThisExpr] No this context, using undefined\n")
+		}
 
 	// --- Other Expressions ---
 	case *parser.Identifier:
@@ -2412,6 +2429,11 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	fields := make(map[string]types.Type)
 	seenKeys := make(map[string]bool)
 
+	// --- NEW: Create preliminary object type for 'this' context ---
+	// We need to construct the object type first so function methods can reference it
+	preliminaryObjType := &types.ObjectType{Properties: make(map[string]types.Type)}
+
+	// First pass: collect all non-function properties
 	for _, prop := range node.Properties {
 		var keyName string
 		switch key := prop.Key.(type) {
@@ -2434,23 +2456,73 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		}
 		seenKeys[keyName] = true
 
-		// Visit the value to determine its type
-		c.visit(prop.Value)
-		valueType := prop.Value.GetComputedType()
-		if valueType == nil {
-			// If visiting the value failed, checker should have added error.
-			// Default to Any to prevent cascading nil errors.
-			valueType = types.Any
+		// For non-function properties, visit and store the type immediately
+		if _, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); !isFunctionLiteral {
+			if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); !isArrowFunction {
+				// Visit the value to determine its type
+				c.visit(prop.Value)
+				valueType := prop.Value.GetComputedType()
+				if valueType == nil {
+					// If visiting the value failed, checker should have added error.
+					// Default to Any to prevent cascading nil errors.
+					valueType = types.Any
+				}
+				fields[keyName] = valueType
+				preliminaryObjType.Properties[keyName] = valueType
+			}
 		}
-
-		// Store the resolved type (use widened type for consistency?)
-		// Let's use the direct type for now, widening happens on access/assignment.
-		fields[keyName] = valueType
-		// Set type on property node itself? Optional, maybe not needed.
-		// prop.ComputedType = valueType
 	}
 
-	// Create the ObjectType
+	// Second pass: visit function properties with 'this' context set
+	outerThisType := c.currentThisType     // Save outer this context
+	c.currentThisType = preliminaryObjType // Set this context to the object being constructed
+	debugPrintf("// [Checker ObjectLit] Set this context to: %s\n", preliminaryObjType.String())
+
+	for _, prop := range node.Properties {
+		var keyName string
+		switch key := prop.Key.(type) {
+		case *parser.Identifier:
+			keyName = key.Value
+		case *parser.StringLiteral:
+			keyName = key.Value
+		case *parser.NumberLiteral:
+			keyName = fmt.Sprintf("%v", key.Value)
+		default:
+			continue // Already handled error in first pass
+		}
+
+		// Skip if already processed in first pass
+		if _, alreadyProcessed := fields[keyName]; alreadyProcessed {
+			continue
+		}
+
+		// Visit function properties with 'this' context
+		if _, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); isFunctionLiteral {
+			debugPrintf("// [Checker ObjectLit] Visiting function property '%s' with this context\n", keyName)
+			c.visit(prop.Value)
+			valueType := prop.Value.GetComputedType()
+			if valueType == nil {
+				valueType = types.Any
+			}
+			fields[keyName] = valueType
+		} else if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); isArrowFunction {
+			// Arrow functions don't bind 'this', so we can visit them normally
+			// But for consistency, let's still visit them in this pass
+			debugPrintf("// [Checker ObjectLit] Visiting arrow function property '%s'\n", keyName)
+			c.visit(prop.Value)
+			valueType := prop.Value.GetComputedType()
+			if valueType == nil {
+				valueType = types.Any
+			}
+			fields[keyName] = valueType
+		}
+	}
+
+	// Restore outer this context
+	c.currentThisType = outerThisType
+	debugPrintf("// [Checker ObjectLit] Restored this context to: %v\n", outerThisType)
+
+	// Create the final ObjectType
 	objType := &types.ObjectType{Properties: fields}
 
 	// Set the computed type for the ObjectLiteral node itself
