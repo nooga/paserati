@@ -1,17 +1,17 @@
-// expect: {}
+// expect: {x: xx}
 
 // Define interface for the object we want to create
-interface KupaInstance {
+interface ObjInstance {
   x: string;
 }
 
 // Define interface for constructor function with property-style function type
-interface KupaConstructor {
-  construct: () => KupaInstance;
+interface ObjConstructor {
+  construct: () => ObjInstance;
 }
 
 // Create constructor function with proper typing
-const Kupa: KupaConstructor = {
+const Obj: ObjConstructor = {
   construct: function () {
     let value: string = "xx";
     return { x: value };
@@ -19,6 +19,6 @@ const Kupa: KupaConstructor = {
 };
 
 // Use the construct method
-const instance = Kupa.construct();
+const instance = Obj.construct();
 
 instance;

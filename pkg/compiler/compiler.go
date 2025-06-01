@@ -273,6 +273,27 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		// emitClosure now handles setting lastExprReg/Valid correctly.
 		return nil // <<< Return nil error
 
+	// --- NEW: Handle Shorthand Method as an EXPRESSION ---
+	// This handles shorthand methods in object literals like { method() { ... } }
+	case *parser.ShorthandMethod:
+		debugPrintf("// DEBUG Node-ShorthandMethod: Compiling shorthand method '%s'.\n", node.Name.Value)
+		// Shorthand methods are essentially function expressions with a known name
+		hint := ""
+		if node.Name != nil {
+			hint = node.Name.Value
+		}
+
+		funcConstIndex, freeSymbols, err := c.compileShorthandMethod(node, hint)
+		if err != nil {
+			return err
+		}
+
+		// Allocate register for the closure and emit OpClosure using the generic emitClosureGeneric
+		closureReg := c.regAlloc.Alloc()
+		c.emitClosureGeneric(closureReg, funcConstIndex, node.Token.Line, node.Name, freeSymbols)
+
+		return nil
+
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
 		// Block statements don't affect the top-level last expression directly
@@ -1095,6 +1116,72 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	// --- Return the constant index, the free symbols, and nil error ---
 	// Accumulated errors are in c.errors.
 	return constIdx, freeSymbols, nil // <<< MODIFY return statement
+}
+
+// compileShorthandMethod compiles a shorthand method like methodName() { ... }
+// Similar to compileFunctionLiteral but for shorthand method syntax
+func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
+	// 1. Create a new Compiler instance for the method body
+	functionCompiler := newFunctionCompiler(c)
+
+	// 2. Determine and set the function name being compiled
+	var determinedFuncName string
+	if nameHint != "" {
+		determinedFuncName = nameHint
+	} else if node.Name != nil {
+		determinedFuncName = node.Name.Value
+	} else {
+		determinedFuncName = "<shorthand-method>"
+	}
+	functionCompiler.compilingFuncName = determinedFuncName
+
+	// 3. Define inner name in inner scope for recursion
+	var funcNameForLookup string
+	if node.Name != nil {
+		funcNameForLookup = node.Name.Value
+		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
+	} else if nameHint != "" {
+		funcNameForLookup = nameHint
+		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
+	}
+
+	// 4. Define parameters in the function compiler's enclosed scope
+	for _, param := range node.Parameters {
+		reg := functionCompiler.regAlloc.Alloc()
+		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
+	}
+
+	// 5. Compile the body using the function compiler
+	err := functionCompiler.compileNode(node.Body)
+	if err != nil {
+		// Propagate errors (already appended to c.errors by sub-compiler)
+	}
+
+	// 6. Finalize function chunk (add implicit return to the function's chunk)
+	functionCompiler.emitFinalReturn(node.Body.Token.Line)
+	functionChunk := functionCompiler.chunk
+	freeSymbols := functionCompiler.freeSymbols
+	// Collect any additional errors from the sub-compilation
+	if len(functionCompiler.errors) > 0 {
+		c.errors = append(c.errors, functionCompiler.errors...)
+	}
+	regSize := functionCompiler.regAlloc.MaxRegs()
+
+	// 7. Create the bytecode.Function object
+	var funcName string
+	if nameHint != "" {
+		funcName = nameHint
+	} else if node.Name != nil {
+		funcName = node.Name.Value
+	} else {
+		funcName = "<shorthand-method>"
+	}
+
+	// 8. Add the function object to the outer compiler's constant pool
+	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, funcName, functionChunk)
+	constIdx := c.chunk.AddConstant(funcValue)
+
+	return constIdx, freeSymbols, nil
 }
 
 func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.PaseratiError {
@@ -2468,6 +2555,61 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 	c.lastExprReg = destReg
 	c.lastExprRegValid = true
 	debugPrintf("// [emitClosure %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
+}
+
+// emitClosureGeneric is a generic version of emitClosure that works with any node type
+// that has Token.Line and Name fields (like ShorthandMethod)
+func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, line int, nameNode *parser.Identifier, freeSymbols []*Symbol) {
+	c.emitOpCode(vm.OpClosure, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(funcConstIndex)       // Operand 1: Constant index of the function blueprint
+	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
+
+	// Determine the name used for potential self-recursion lookup
+	var funcNameForLookup string
+	if nameNode != nil {
+		funcNameForLookup = nameNode.Value
+	}
+
+	// Emit operands for each upvalue (same logic as emitClosure)
+	for i, freeSym := range freeSymbols {
+		debugPrintf("// [emitClosureGeneric %s] Emitting upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register)
+
+		// Check for self-capture first
+		if freeSym.Register == nilRegister {
+			debugPrintf("// [emitClosureGeneric SelfCapture] Symbol '%s' is self-reference. Emitting isLocal=1, index=destReg=R%d\n", freeSym.Name, destReg)
+			c.emitByte(1)             // isLocal = true
+			c.emitByte(byte(destReg)) // Index = the destination register of OpClosure itself
+			continue
+		}
+
+		// Resolve the symbol in the enclosing compiler's context
+		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
+		if !found {
+			panic(fmt.Sprintf("compiler internal error: free variable '%s' not found in enclosing scope during closure emission", freeSym.Name))
+		}
+
+		if enclosingTable == c.currentSymbolTable {
+			// The free variable is local in the direct enclosing scope
+			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register)
+			c.emitByte(1)                              // isLocal = true
+			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+		} else {
+			// The free variable is also a free variable in the enclosing scope
+			// Create a dummy node for addFreeSymbol (it only uses the node for error reporting)
+			dummyNode := &parser.Identifier{Token: lexer.Token{}, Value: freeSym.Name}
+			enclosingFreeIndex := c.addFreeSymbol(dummyNode, &enclosingSymbol)
+			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex)
+			c.emitByte(0)                        // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
+		}
+	}
+
+	// Set the compiler's current register state to reflect the closure object
+	c.regAlloc.SetCurrent(destReg)
+	c.lastExprReg = destReg
+	c.lastExprRegValid = true
+	debugPrintf("// [emitClosureGeneric %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
 }
 
 // resolveRegisterMoves handles moving values from sourceRegs to consecutive target registers

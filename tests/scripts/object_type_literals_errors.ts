@@ -1,5 +1,5 @@
 // Test file for object type literal error cases
-// expect: error
+// expect_compile_error: Type Error
 
 // Type mismatch: expected number, got string
 let person1: { name: string; age: number } = { name: "John", age: "thirty" };

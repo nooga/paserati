@@ -2059,53 +2059,67 @@ func (p *Parser) parseObjectLiteral() Expression {
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken() // Consume '{' or ',' to get to the key
 
-		var key Expression
-		// --- MODIFIED: Handle Keys (Identifier, String, NUMBER, Computed) ---
-		if p.curTokenIs(lexer.IDENT) {
-			key = p.parseIdentifier()
-		} else if p.curTokenIs(lexer.STRING) {
-			key = p.parseStringLiteral()
-		} else if p.curTokenIs(lexer.NUMBER) { // <<< ADD NUMBER CASE
-			key = p.parseNumberLiteral()
-		} else if p.curTokenIs(lexer.LBRACKET) { // Computed properties
-			p.nextToken() // Consume '['
-			key = p.parseExpression(LOWEST)
-			if key == nil {
-				return nil // Error parsing expression inside []
+		// --- NEW: Check for shorthand method syntax (identifier followed by '(') ---
+		if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN) {
+			// This is a shorthand method like methodName() { ... }
+			shorthandMethod := p.parseShorthandMethod()
+			if shorthandMethod == nil {
+				return nil // Error parsing shorthand method
 			}
-			if !p.expectPeek(lexer.RBRACKET) {
-				return nil // Missing closing ']'
-			}
-			// After expectPeek, curToken is RBRACKET. parseExpression below needs the next token.
-			// We need to be careful here, as the COLON is expected *next*.
+
+			// Create an ObjectProperty with the method name as key and the shorthand method as value
+			methodName := shorthandMethod.Name
+			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodName, Value: shorthandMethod})
 		} else {
-			// <<< UPDATE ERROR MESSAGE >>>
-			msg := fmt.Sprintf("invalid object literal key: expected identifier, string, number, or '[', got %s", p.curToken.Type)
-			p.addError(p.curToken, msg)
-			return nil
+			// Regular property parsing
+			var key Expression
+			// --- MODIFIED: Handle Keys (Identifier, String, NUMBER, Computed) ---
+			if p.curTokenIs(lexer.IDENT) {
+				key = p.parseIdentifier()
+			} else if p.curTokenIs(lexer.STRING) {
+				key = p.parseStringLiteral()
+			} else if p.curTokenIs(lexer.NUMBER) { // <<< ADD NUMBER CASE
+				key = p.parseNumberLiteral()
+			} else if p.curTokenIs(lexer.LBRACKET) { // Computed properties
+				p.nextToken() // Consume '['
+				key = p.parseExpression(LOWEST)
+				if key == nil {
+					return nil // Error parsing expression inside []
+				}
+				if !p.expectPeek(lexer.RBRACKET) {
+					return nil // Missing closing ']'
+				}
+				// After expectPeek, curToken is RBRACKET. parseExpression below needs the next token.
+				// We need to be careful here, as the COLON is expected *next*.
+			} else {
+				// <<< UPDATE ERROR MESSAGE >>>
+				msg := fmt.Sprintf("invalid object literal key: expected identifier, string, number, or '[', got %s", p.curToken.Type)
+				p.addError(p.curToken, msg)
+				return nil
+			}
+			// --- END MODIFICATION ---
+
+			if key == nil {
+				// Error should have been added by the respective parse function
+				return nil
+			} // Error parsing key
+
+			// Check for Colon *after* parsing the key (including potential closing ']')
+			if !p.expectPeek(lexer.COLON) {
+				return nil // Expected ':'
+			}
+			// p.curToken is now COLON
+
+			p.nextToken() // Consume ':' to get to the start of the value
+
+			value := p.parseExpression(LOWEST)
+			if value == nil {
+				return nil
+			} // Error parsing value
+
+			// Append the property
+			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
 		}
-		// --- END MODIFICATION ---
-
-		if key == nil {
-			// Error should have been added by the respective parse function
-			return nil
-		} // Error parsing key
-
-		// Check for Colon *after* parsing the key (including potential closing ']')
-		if !p.expectPeek(lexer.COLON) {
-			return nil // Expected ':'
-		}
-		// p.curToken is now COLON
-
-		p.nextToken() // Consume ':' to get to the start of the value
-
-		value := p.parseExpression(LOWEST)
-		if value == nil {
-			return nil
-		} // Error parsing value
-
-		// Append the property
-		objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
 
 		// Expect ',' or '}'
 		if !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.COMMA) {
@@ -2128,6 +2142,53 @@ func (p *Parser) parseObjectLiteral() Expression {
 	} // Missing '}'
 
 	return objLit
+}
+
+// parseShorthandMethod parses a shorthand method like methodName() { ... }
+func (p *Parser) parseShorthandMethod() *ShorthandMethod {
+	if !p.curTokenIs(lexer.IDENT) {
+		p.addError(p.curToken, "expected method name (identifier) for shorthand method")
+		return nil
+	}
+
+	method := &ShorthandMethod{
+		Token: p.curToken, // The method name token
+		Name:  &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+	}
+
+	// Expect '(' for parameters
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+
+	// Parse parameters
+	method.Parameters = p.parseFunctionParameters()
+	if method.Parameters == nil {
+		return nil // Error parsing parameters
+	}
+
+	// Check for optional return type annotation
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ')'
+		p.nextToken() // Consume ':'
+		method.ReturnTypeAnnotation = p.parseTypeExpression()
+		if method.ReturnTypeAnnotation == nil {
+			return nil // Error parsing return type
+		}
+	}
+
+	// Expect '{' for method body
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+
+	// Parse method body
+	method.Body = p.parseBlockStatement()
+	if method.Body == nil {
+		return nil // Error parsing method body
+	}
+
+	return method
 }
 
 // --- NEW: Interface Declaration Parsing ---
@@ -2174,7 +2235,7 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 
 // parseInterfaceProperty parses a single property in an interface
 func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
-	// Expecting: PropertyName : TypeExpression ;
+	// Check for shorthand method syntax first (identifier followed by '(')
 	if !p.curTokenIs(lexer.IDENT) {
 		p.addError(p.curToken, "expected property name (identifier) in interface")
 		return nil
@@ -2184,6 +2245,24 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
 	}
 
+	// Check if this is a shorthand method signature
+	if p.peekTokenIs(lexer.LPAREN) {
+		// This is a shorthand method signature like methodName(): ReturnType
+		p.nextToken() // Move to '('
+
+		// Parse function type signature
+		funcType := p.parseFunctionTypeExpression()
+		if funcType == nil {
+			return nil // Error parsing function type
+		}
+
+		prop.Type = funcType
+		prop.IsMethod = true
+
+		return prop
+	}
+
+	// Regular property: PropertyName : TypeExpression
 	// Expect ':'
 	if !p.expectPeek(lexer.COLON) {
 		return nil // Error message already added by expectPeek
@@ -2227,23 +2306,39 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
 		}
 
-		// Check for optional property marker '?'
-		if p.peekTokenIs(lexer.QUESTION) {
-			p.nextToken() // Consume '?'
-			prop.Optional = true
-		}
+		// Check for shorthand method syntax first (identifier followed by '(')
+		if p.peekTokenIs(lexer.LPAREN) {
+			// This is a shorthand method signature like methodName(): ReturnType
+			p.nextToken() // Move to '('
 
-		// Expect ':'
-		if !p.expectPeek(lexer.COLON) {
-			return nil // Error message already added by expectPeek
-		}
+			// Parse function type signature
+			funcType := p.parseFunctionTypeExpression()
+			if funcType == nil {
+				return nil // Error parsing function type
+			}
 
-		// Parse the type expression
-		p.nextToken() // Move to the start of the type expression
-		prop.Type = p.parseTypeExpression()
-		if prop.Type == nil {
-			// Error should have been added by parseTypeExpression
-			return nil
+			prop.Type = funcType
+		} else {
+			// Regular property: PropertyName?: TypeExpression
+
+			// Check for optional property marker '?'
+			if p.peekTokenIs(lexer.QUESTION) {
+				p.nextToken() // Consume '?'
+				prop.Optional = true
+			}
+
+			// Expect ':'
+			if !p.expectPeek(lexer.COLON) {
+				return nil // Error message already added by expectPeek
+			}
+
+			// Parse the type expression
+			p.nextToken() // Move to the start of the type expression
+			prop.Type = p.parseTypeExpression()
+			if prop.Type == nil {
+				// Error should have been added by parseTypeExpression
+				return nil
+			}
 		}
 
 		objType.Properties = append(objType.Properties, prop)

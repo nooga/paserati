@@ -1021,7 +1021,47 @@ func (op *ObjectProperty) String() string {
 	return fmt.Sprintf("%s: %s", keyStr, valStr)
 }
 
-// --- END NEW ---
+// --- END NEW: ObjectProperty ---
+
+// ShorthandMethod represents a shorthand method in object literals like { method() { ... } }
+type ShorthandMethod struct {
+	BaseExpression                       // Embed base for ComputedType (Function type)
+	Token                lexer.Token     // The identifier token (method name)
+	Name                 *Identifier     // Method name
+	Parameters           []*Parameter    // Method parameters
+	ReturnTypeAnnotation Expression      // Optional return type annotation
+	Body                 *BlockStatement // Method body
+}
+
+func (sm *ShorthandMethod) expressionNode()      {}
+func (sm *ShorthandMethod) TokenLiteral() string { return sm.Token.Literal }
+func (sm *ShorthandMethod) String() string {
+	var out bytes.Buffer
+
+	out.WriteString(sm.Name.String())
+	out.WriteString("(")
+	params := []string{}
+	for _, p := range sm.Parameters {
+		params = append(params, p.String())
+	}
+	out.WriteString(strings.Join(params, ", "))
+	out.WriteString(")")
+
+	if sm.ReturnTypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(sm.ReturnTypeAnnotation.String())
+	}
+
+	out.WriteString(" ")
+	out.WriteString(sm.Body.String())
+
+	if sm.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", sm.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// --- END NEW: ShorthandMethod ---
 
 // ObjectLiteral represents an object literal expression (e.g., { key: value, "str_key": 1 }).
 type ObjectLiteral struct {

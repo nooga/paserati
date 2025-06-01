@@ -1,4 +1,4 @@
-// expect: error
+// expect_compile_error: Type Error
 
 interface Point {
   x: number;

@@ -1,4 +1,4 @@
-// expect: {x: "xx"}
+// expect: {x: xx}
 
 // Define interface for the object we want to create
 interface KupaInstance {

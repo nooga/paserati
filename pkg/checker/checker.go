@@ -2083,6 +2083,92 @@ func (c *Checker) visit(node parser.Node) {
 
 		node.SetComputedType(resultType)
 
+	case *parser.ShorthandMethod:
+		// Handle shorthand methods like methodName() { ... }
+		// Similar to FunctionLiteral but specifically for method context
+
+		// 1. Resolve explicit annotations FIRST
+		paramTypes := make([]types.Type, len(node.Parameters))
+		for i, param := range node.Parameters {
+			if param.TypeAnnotation != nil {
+				paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
+				if paramType != nil {
+					paramTypes[i] = paramType
+				} else {
+					paramTypes[i] = types.Any
+				}
+			} else {
+				paramTypes[i] = types.Any
+			}
+		}
+
+		// Resolve return type annotation if present
+		var resolvedReturnType types.Type
+		if node.ReturnTypeAnnotation != nil {
+			resolvedReturnType = c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
+		}
+
+		// 2. Save outer return context
+		outerExpectedReturnType := c.currentExpectedReturnType
+		outerInferredReturnTypes := c.currentInferredReturnTypes
+
+		// 3. Set context for body check
+		c.currentExpectedReturnType = resolvedReturnType
+		c.currentInferredReturnTypes = nil
+		if resolvedReturnType == nil {
+			c.currentInferredReturnTypes = []types.Type{}
+		}
+
+		// 4. Create function's inner scope & define parameters
+		methodNameForLog := "<anonymous-method>"
+		if node.Name != nil {
+			methodNameForLog = node.Name.Value
+		}
+		debugPrintf("// [Checker Visit ShorthandMethod] Creating scope for method '%s'. Current Env: %p\n", methodNameForLog, c.env)
+		originalEnv := c.env
+		funcEnv := NewEnclosedEnvironment(originalEnv)
+		c.env = funcEnv
+
+		// Define parameters in the method scope
+		for i, paramNode := range node.Parameters {
+			if !funcEnv.Define(paramNode.Name.Value, paramTypes[i], false) {
+				c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
+			}
+			paramNode.ComputedType = paramTypes[i]
+		}
+
+		// 5. Visit method body
+		c.visit(node.Body)
+
+		// 6. Determine final return type
+		var actualReturnType types.Type
+		if resolvedReturnType != nil {
+			actualReturnType = resolvedReturnType
+		} else {
+			if len(c.currentInferredReturnTypes) == 0 {
+				actualReturnType = types.Undefined
+			} else {
+				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
+			}
+			debugPrintf("// [Checker ShorthandMethod] Inferred return type for '%s': %s\n", methodNameForLog, actualReturnType.String())
+		}
+
+		// 7. Create the final function type
+		finalMethodType := &types.FunctionType{
+			ParameterTypes: paramTypes,
+			ReturnType:     actualReturnType,
+		}
+
+		// 8. Set the computed type on the ShorthandMethod node
+		debugPrintf("// [Checker ShorthandMethod] Setting computed type for '%s': %s\n", methodNameForLog, finalMethodType.String())
+		node.SetComputedType(finalMethodType)
+
+		// 9. Restore outer environment and context
+		debugPrintf("// [Checker ShorthandMethod] Exiting '%s'. Restoring Env: %p\n", methodNameForLog, originalEnv)
+		c.env = originalEnv
+		c.currentExpectedReturnType = outerExpectedReturnType
+		c.currentInferredReturnTypes = outerInferredReturnTypes
+
 	default:
 		// Optional: Add error for unhandled node types
 		// c.addError(0, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
@@ -2155,6 +2241,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token
 	case *parser.ObjectLiteral: // <<< ADD THIS
 		return n.Token // The '{' token
+	case *parser.ShorthandMethod: // <<< ADD THIS
+		return n.Token // The method name token
 	case *parser.FunctionLiteral:
 		return n.Token // The 'function' token
 	case *parser.ArrowFunctionLiteral:
@@ -2554,7 +2642,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	// We need to construct the object type first so function methods can reference it
 	preliminaryObjType := &types.ObjectType{Properties: make(map[string]types.Type)}
 
-	// First pass: collect all non-function properties
+	// First pass: collect all non-function properties AND create preliminary function signatures
 	for _, prop := range node.Properties {
 		var keyName string
 		switch key := prop.Key.(type) {
@@ -2580,25 +2668,23 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		// For non-function properties, visit and store the type immediately
 		if _, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); !isFunctionLiteral {
 			if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); !isArrowFunction {
-				// Visit the value to determine its type
-				c.visit(prop.Value)
-				valueType := prop.Value.GetComputedType()
-				if valueType == nil {
-					// If visiting the value failed, checker should have added error.
-					// Default to Any to prevent cascading nil errors.
-					valueType = types.Any
+				if _, isShorthandMethod := prop.Value.(*parser.ShorthandMethod); !isShorthandMethod {
+					// Visit the value to determine its type
+					c.visit(prop.Value)
+					valueType := prop.Value.GetComputedType()
+					if valueType == nil {
+						// If visiting the value failed, checker should have added error.
+						// Default to Any to prevent cascading nil errors.
+						valueType = types.Any
+					}
+					fields[keyName] = valueType
+					preliminaryObjType.Properties[keyName] = valueType
 				}
-				fields[keyName] = valueType
-				preliminaryObjType.Properties[keyName] = valueType
 			}
 		}
 	}
 
-	// Second pass: visit function properties with 'this' context set
-	outerThisType := c.currentThisType     // Save outer this context
-	c.currentThisType = preliminaryObjType // Set this context to the object being constructed
-	debugPrintf("// [Checker ObjectLit] Set this context to: %s\n", preliminaryObjType.String())
-
+	// Second pass: create preliminary function signatures for all function properties
 	for _, prop := range node.Properties {
 		var keyName string
 		switch key := prop.Key.(type) {
@@ -2617,6 +2703,80 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			continue
 		}
 
+		// Create preliminary function signatures for function properties
+		if funcLit, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); isFunctionLiteral {
+			preliminaryFuncType := c.resolveFunctionLiteralType(funcLit, c.env)
+			if preliminaryFuncType == nil {
+				preliminaryFuncType = &types.FunctionType{
+					ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
+					ReturnType:     types.Any,
+				}
+				for i := range preliminaryFuncType.ParameterTypes {
+					preliminaryFuncType.ParameterTypes[i] = types.Any
+				}
+			}
+			preliminaryObjType.Properties[keyName] = preliminaryFuncType
+		} else if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); isArrowFunction {
+			// For arrow functions, we can use a generic function type temporarily
+			preliminaryObjType.Properties[keyName] = &types.FunctionType{
+				ParameterTypes: []types.Type{}, // We'll refine this later
+				ReturnType:     types.Any,
+			}
+		} else if shorthandMethod, isShorthandMethod := prop.Value.(*parser.ShorthandMethod); isShorthandMethod {
+			// Create preliminary function signature for shorthand methods
+			paramTypes := make([]types.Type, len(shorthandMethod.Parameters))
+			for i, param := range shorthandMethod.Parameters {
+				if param.TypeAnnotation != nil {
+					paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
+					if paramType != nil {
+						paramTypes[i] = paramType
+					} else {
+						paramTypes[i] = types.Any
+					}
+				} else {
+					paramTypes[i] = types.Any
+				}
+			}
+
+			var returnType types.Type
+			if shorthandMethod.ReturnTypeAnnotation != nil {
+				returnType = c.resolveTypeAnnotation(shorthandMethod.ReturnTypeAnnotation)
+			}
+			if returnType == nil {
+				returnType = types.Any // We'll infer this later during body checking
+			}
+
+			preliminaryFuncType := &types.FunctionType{
+				ParameterTypes: paramTypes,
+				ReturnType:     returnType,
+			}
+			preliminaryObjType.Properties[keyName] = preliminaryFuncType
+		}
+	}
+
+	// Third pass: visit function properties with 'this' context set to the complete preliminary type
+	outerThisType := c.currentThisType     // Save outer this context
+	c.currentThisType = preliminaryObjType // Set this context to the object being constructed
+	debugPrintf("// [Checker ObjectLit] Set this context to: %s\n", preliminaryObjType.String())
+
+	for _, prop := range node.Properties {
+		var keyName string
+		switch key := prop.Key.(type) {
+		case *parser.Identifier:
+			keyName = key.Value
+		case *parser.StringLiteral:
+			keyName = key.Value
+		case *parser.NumberLiteral:
+			keyName = fmt.Sprintf("%v", key.Value)
+		default:
+			continue // Already handled error in first pass
+		}
+
+		// Skip if already processed in first pass (non-function properties)
+		if _, isNonFunction := fields[keyName]; isNonFunction {
+			continue
+		}
+
 		// Visit function properties with 'this' context
 		if _, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); isFunctionLiteral {
 			debugPrintf("// [Checker ObjectLit] Visiting function property '%s' with this context\n", keyName)
@@ -2630,6 +2790,15 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			// Arrow functions don't bind 'this', so we can visit them normally
 			// But for consistency, let's still visit them in this pass
 			debugPrintf("// [Checker ObjectLit] Visiting arrow function property '%s'\n", keyName)
+			c.visit(prop.Value)
+			valueType := prop.Value.GetComputedType()
+			if valueType == nil {
+				valueType = types.Any
+			}
+			fields[keyName] = valueType
+		} else if _, isShorthandMethod := prop.Value.(*parser.ShorthandMethod); isShorthandMethod {
+			// Shorthand methods bind 'this' like regular function methods
+			debugPrintf("// [Checker ObjectLit] Visiting shorthand method '%s' with this context\n", keyName)
 			c.visit(prop.Value)
 			valueType := prop.Value.GetComputedType()
 			if valueType == nil {
