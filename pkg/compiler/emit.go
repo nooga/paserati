@@ -135,6 +135,21 @@ func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
 	c.emitByte(argCount)
 }
 
+// emitCallMethod emits OpCallMethod with method call convention (this as implicit first parameter)
+func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte, line int) {
+	c.emitOpCode(vm.OpCallMethod, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(funcReg))
+	c.emitByte(byte(thisReg))
+	c.emitByte(argCount)
+}
+
+// emitLoadThis emits OpLoadThis to load 'this' value from current call context
+func (c *Compiler) emitLoadThis(dest Register, line int) {
+	c.emitOpCode(vm.OpLoadThis, line)
+	c.emitByte(byte(dest))
+}
+
 // emitFinalReturn adds the final OpReturnUndefined instruction.
 func (c *Compiler) emitFinalReturn(line int) {
 	// No need to load undefined first

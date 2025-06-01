@@ -440,10 +440,10 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		return nil // ADDED: Explicit return
 
 	case *parser.ThisExpression: // Added for this keyword
-		// For now, just load undefined as placeholder
-		// TODO: Implement proper this context handling
+		// Load 'this' value from current call context
 		destReg := c.regAlloc.Alloc()
-		c.emitLoadUndefined(destReg, node.Token.Line)
+		c.emitLoadThis(destReg, node.Token.Line)
+		c.regAlloc.SetCurrent(destReg) // Fix: Set current register
 		return nil
 
 	case *parser.Identifier:
@@ -1091,6 +1091,51 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 }
 
 func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.PaseratiError {
+	// Check if this is a method call (function is a member expression like obj.method())
+	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
+		// Method call: obj.method(args...)
+		// 1. Compile the object part
+		err := c.compileNode(memberExpr.Object)
+		if err != nil {
+			return err
+		}
+		thisReg := c.regAlloc.Current() // Register holding the 'this' object
+
+		// 2. Compile the method property access to get the function
+		err = c.compileMemberExpression(memberExpr)
+		if err != nil {
+			return err
+		}
+		funcReg := c.regAlloc.Current() // Register holding the method function
+
+		// 3. Compile arguments
+		argRegs := []Register{}
+		for _, arg := range node.Arguments {
+			err = c.compileNode(arg)
+			if err != nil {
+				return err
+			}
+			argRegs = append(argRegs, c.regAlloc.Current())
+		}
+		argCount := len(argRegs)
+
+		// 4. Ensure arguments are in the correct registers for the call convention.
+		// Convention: Args must be in registers funcReg+1, funcReg+2, ...
+		if argCount > 0 {
+			c.resolveRegisterMoves(argRegs, funcReg+1, node.Token.Line)
+		}
+
+		// 5. Allocate register for the return value
+		resultReg := c.regAlloc.Alloc()
+
+		// 6. Emit OpCallMethod (method call with 'this' context)
+		c.emitCallMethod(resultReg, funcReg, thisReg, byte(argCount), node.Token.Line)
+
+		// The result of the method call is now in resultReg
+		return nil
+	}
+
+	// Regular function call: func(args...)
 	// 1. Compile the expression being called (e.g., function name)
 	err := c.compileNode(node.Function)
 	if err != nil {
@@ -1121,7 +1166,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.Pas
 	// 3. Allocate register for the return value
 	resultReg := c.regAlloc.Alloc()
 
-	// 4. Emit OpCall
+	// 4. Emit OpCall (regular function call)
 	c.emitCall(resultReg, funcReg, byte(argCount), node.Token.Line)
 
 	// The result of the call is now in resultReg

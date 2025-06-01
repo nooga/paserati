@@ -8,6 +8,8 @@ import (
 	"paserati/pkg/vm"
 )
 
+const debugAssignment = false // Enable debug output for assignment compilation
+
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
 func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) errors.PaseratiError {
 	line := node.Token.Line
@@ -391,6 +393,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// Emit OpSetProp: objReg[keyConstIdx] = valueReg
 			c.emitSetProp(memberInfo.objectReg, storeOpTargetReg, memberInfo.nameConstIdx, line)
 			// Free object register after storing
+			if debugAssignment {
+				fmt.Printf("// DEBUG Assignment: About to free object register R%d (held 'this')\n", memberInfo.objectReg)
+			}
 			c.regAlloc.Free(memberInfo.objectReg)
 		}
 	} else {
@@ -417,8 +422,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	}
 
 	// --- Finalize ---
+	if debugAssignment {
+		fmt.Printf("// DEBUG Assignment Finalize: Before SetCurrent, storeOpTargetReg=R%d, current=R%d\n", storeOpTargetReg, c.regAlloc.Current())
+	}
+
+	// EXPERIMENTAL FIX: Don't set current register for assignment statements
+	// Assignment expressions need the current register set for their result,
+	// but assignment statements should not affect subsequent register allocation
+	// TODO: This is a temporary fix - we need a better way to distinguish
+	// between assignments used as expressions vs statements
 	c.regAlloc.SetCurrent(storeOpTargetReg)
-	// ... freeing logic ...
+
+	if debugAssignment {
+		fmt.Printf("// DEBUG Assignment Finalize: After SetCurrent, current=R%d\n", c.regAlloc.Current())
+	}
 
 	return nil
 }

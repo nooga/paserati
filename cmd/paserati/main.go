@@ -16,6 +16,7 @@ func main() {
 	emitJSFlag := flag.Bool("js", false, "Emit JavaScript from TypeScript source file")
 	jsOutputFile := flag.String("o", "", "Output file for JavaScript emission (default: input file with .js extension)")
 	cacheStatsFlag := flag.Bool("cache-stats", false, "Show inline cache statistics after execution")
+	bytecodeFlag := flag.Bool("bytecode", false, "Show compiled bytecode before execution")
 
 	flag.Parse() // Parses the command-line flags
 
@@ -37,7 +38,7 @@ func main() {
 	// Normal execution mode
 	if *exprFlag != "" {
 		// Run the expression provided via -e flag
-		runExpression(*exprFlag, *cacheStatsFlag)
+		runExpression(*exprFlag, *cacheStatsFlag, *bytecodeFlag)
 		return
 	}
 
@@ -46,20 +47,20 @@ func main() {
 		os.Exit(64) // Exit code 64: command line usage error
 	} else if flag.NArg() == 1 {
 		// Execute the script file provided as an argument
-		runFile(flag.Arg(0), *cacheStatsFlag)
+		runFile(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag)
 	} else {
 		// No file provided, start the REPL
-		runRepl(*cacheStatsFlag)
+		runRepl(*cacheStatsFlag, *bytecodeFlag)
 	}
 }
 
 // runExpression executes a single expression provided via the -e flag
-func runExpression(expr string, showCacheStats bool) {
+func runExpression(expr string, showCacheStats bool, showBytecode bool) {
 	// Create a new Paserati session
 	paserati := driver.NewPaserati()
 
 	// Run the expression with options
-	options := driver.RunOptions{ShowCacheStats: showCacheStats}
+	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
 	value, errs := paserati.RunCode(expr, options)
 
 	// Display the result or errors
@@ -72,16 +73,16 @@ func runExpression(expr string, showCacheStats bool) {
 }
 
 // runFile uses the driver to compile and execute a Paserati script from a file.
-func runFile(filename string, showCacheStats bool) {
-	if showCacheStats {
-		// For file execution with cache stats, we need to read the file and use RunStringWithOptions
+func runFile(filename string, showCacheStats bool, showBytecode bool) {
+	if showCacheStats || showBytecode {
+		// For file execution with debug options, we need to read the file and use RunStringWithOptions
 		sourceBytes, err := os.ReadFile(filename)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to read file '%s': %s\n", filename, err.Error())
 			os.Exit(70)
 		}
 		source := string(sourceBytes)
-		options := driver.RunOptions{ShowCacheStats: showCacheStats}
+		options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
 		ok := driver.RunStringWithOptions(source, options)
 		if !ok {
 			os.Exit(70)
@@ -96,7 +97,7 @@ func runFile(filename string, showCacheStats bool) {
 }
 
 // runRepl starts the Read-Eval-Print Loop.
-func runRepl(showCacheStats bool) {
+func runRepl(showCacheStats bool, showBytecode bool) {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Create a persistent Paserati session for the REPL
@@ -124,7 +125,7 @@ func runRepl(showCacheStats bool) {
 		}
 
 		// Run the input in the persistent session with options
-		options := driver.RunOptions{ShowCacheStats: showCacheStats}
+		options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
 		value, errs := paserati.RunCode(line, options)
 		_ = paserati.DisplayResult(line, value, errs) // Ignore the bool return in REPL
 	}

@@ -84,6 +84,10 @@ const (
 	OpMakeEmptyObject OpCode = 40 // Rx: Creates an empty object in Rx
 	OpGetProp         OpCode = 41 // Rx Ry NameIdx(16bit): Rx = Ry[NameIdx]
 	OpSetProp         OpCode = 42 // Rx Ry NameIdx(16bit): Rx[NameIdx] = Ry (Object in Rx, Value in Ry)
+
+	// --- NEW: Method Calls and This Context ---
+	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
+	OpLoadThis   OpCode = 44 // Rx: Load 'this' value from current call context into register Rx
 	// --- END NEW ---
 )
 
@@ -178,6 +182,10 @@ func (op OpCode) String() string {
 		return "OpGetProp"
 	case OpSetProp:
 		return "OpSetProp"
+	case OpCallMethod:
+		return "OpCallMethod"
+	case OpLoadThis:
+		return "OpLoadThis"
 	// --- END NEW ---
 
 	default:
@@ -319,6 +327,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetProp:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpCallMethod:
+		return c.callMethodInstruction(builder, instruction.String(), offset)
+	case OpLoadThis:
+		return c.loadThisInstruction(builder, instruction.String(), offset)
 	// --- END NEW ---
 
 	default:
@@ -666,4 +678,38 @@ func (c *Chunk) registerRegisterConstantInstruction(builder *strings.Builder, na
 	}
 
 	return offset + 5 // Opcode + RegX + RegY + ConstIdx(2)
+}
+
+// callMethodInstruction handles OpCallMethod Rx, FuncReg, ThisReg, ArgCount
+func (c *Chunk) callMethodInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+3 < len(c.Code) {
+			return offset + 4
+		}
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	funcReg := c.Code[offset+2]
+	thisReg := c.Code[offset+3]
+	argCount := c.Code[offset+4]
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d, Args %d\n", name, destReg, funcReg, thisReg, argCount))
+	return offset + 5 // Opcode + Rx + FuncReg + ThisReg + ArgCount
+}
+
+// loadThisInstruction handles OpLoadThis Rx
+func (c *Chunk) loadThisInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+1 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing register operand)\n", name))
+		return offset + 1
+	}
+	reg := c.Code[offset+1]
+	builder.WriteString(fmt.Sprintf("%-16s R%d\n", name, reg))
+	return offset + 2
 }

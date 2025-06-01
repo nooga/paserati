@@ -10,6 +10,7 @@ import (
 	"unsafe"
 )
 
+const debugVM = false   // Enable VM bytecode execution tracing
 const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
@@ -21,7 +22,8 @@ type CallFrame struct {
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
 	registers      []Value
-	targetRegister byte // Which register in the CALLER the result should go into
+	targetRegister byte  // Which register in the CALLER the result should go into
+	thisValue      Value // The 'this' value for method calls (undefined for regular function calls)
 }
 
 // PropCacheState represents the different states of inline cache
@@ -291,7 +293,8 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
-	frame.targetRegister = 0 // Result of script isn't stored in caller's reg
+	frame.targetRegister = 0    // Result of script isn't stored in caller's reg
+	frame.thisValue = Undefined // Main script has no 'this' context
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
@@ -582,6 +585,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.closure = calleeClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg // Store target register for return
+				newFrame.thisValue = Undefined    // Regular function call has no 'this' context
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
@@ -638,6 +642,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.closure = calleeClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
+				newFrame.thisValue = Undefined // Regular function call has no 'this' context
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
@@ -1192,11 +1197,12 @@ func (vm *VM) run() (InterpretResult, Value) {
 			nameConstIdxLo := code[ip+3]
 			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
 			// Calculate cache key based on instruction pointer (before advancing ip)
-			cacheKey := ip - 1 // ip points to first operand, opcode was at ip-1
 			ip += 4
 
 			// Get object and property name values
 			objVal := registers[objReg]
+
+			// Get property name from constants
 			if int(nameConstIdx) >= len(constants) {
 				frame.ip = ip
 				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
@@ -1209,6 +1215,21 @@ func (vm *VM) run() (InterpretResult, Value) {
 				return status, Undefined
 			}
 			propName := AsString(nameVal)
+
+			// FIX: Use hash-based cache key to avoid collisions
+			// Combine instruction pointer with property name hash
+			propNameHash := 0
+			for _, b := range []byte(propName) {
+				propNameHash = propNameHash*31 + int(b)
+			}
+			cacheKey := (ip-5)*100000 + (propNameHash & 0xFFFF) // Use ip-5 since ip was advanced by 4
+			cache, exists := vm.propCache[cacheKey]
+			if !exists {
+				cache = &PropInlineCache{
+					state: CacheStateUninitialized,
+				}
+				vm.propCache[cacheKey] = cache
+			}
 
 			// --- Special handling for .length ---
 			// Check the *original* value type before checking if it's an Object type
@@ -1246,15 +1267,6 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if objVal.Type() == TypeObject {
 				po := AsPlainObject(objVal)
 
-				// Get or create cache for this instruction site
-				cache, exists := vm.propCache[cacheKey]
-				if !exists {
-					cache = &PropInlineCache{
-						state: CacheStateUninitialized,
-					}
-					vm.propCache[cacheKey] = cache
-				}
-
 				// Try cache lookup first
 				if offset, hit := cache.lookupInCache(po.shape); hit {
 					// Cache hit! Use cached offset directly (fast path)
@@ -1269,7 +1281,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 					}
 
 					if offset < len(po.properties) {
-						registers[destReg] = po.properties[offset]
+						result := po.properties[offset]
+						registers[destReg] = result
 						continue // Skip slow path lookup
 					}
 					// Cached offset is out of bounds - cache is stale, fall through to slow path
@@ -1320,7 +1333,6 @@ func (vm *VM) run() (InterpretResult, Value) {
 			nameConstIdxLo := code[ip+3]
 			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
 			// Calculate cache key based on instruction pointer (before advancing ip)
-			cacheKey := ip - 1 // ip points to first operand, opcode was at ip-1
 			ip += 4
 
 			// Get object, property name, and value
@@ -1341,6 +1353,21 @@ func (vm *VM) run() (InterpretResult, Value) {
 			}
 			propName := AsString(nameVal)
 
+			// FIX: Use hash-based cache key to avoid collisions
+			// Combine instruction pointer with property name hash
+			propNameHash := 0
+			for _, b := range []byte(propName) {
+				propNameHash = propNameHash*31 + int(b)
+			}
+			cacheKey := (ip-5)*100000 + (propNameHash & 0xFFFF) // Use ip-5 since ip was advanced by 4
+			cache, exists := vm.propCache[cacheKey]
+			if !exists {
+				cache = &PropInlineCache{
+					state: CacheStateUninitialized,
+				}
+				vm.propCache[cacheKey] = cache
+			}
+
 			// Check if the base is actually an object
 			if !objVal.IsObject() {
 				frame.ip = ip
@@ -1352,15 +1379,6 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// --- INLINE CACHE CHECK FOR PROPERTY WRITES (PlainObjects only) ---
 			if objVal.Type() == TypeObject {
 				po := AsPlainObject(objVal)
-
-				// Get or create cache for this instruction site
-				cache, exists := vm.propCache[cacheKey]
-				if !exists {
-					cache = &PropInlineCache{
-						state: CacheStateUninitialized,
-					}
-					vm.propCache[cacheKey] = cache
-				}
 
 				// Try cache lookup for existing property write
 				if offset, hit := cache.lookupInCache(po.shape); hit {
@@ -1423,7 +1441,181 @@ func (vm *VM) run() (InterpretResult, Value) {
 				po.SetOwn(propName, valueToSet)
 			}
 
-		// --- END Object Opcodes ---
+		case OpCallMethod:
+			destReg := code[ip]         // Where the result should go in the caller
+			funcReg := code[ip+1]       // Register holding the method function/closure
+			thisReg := code[ip+2]       // Register holding the 'this' object
+			argCount := int(code[ip+3]) // Number of arguments provided
+			ip += 4
+
+			// Capture caller context before potential frame switch
+			callerRegisters := registers
+			callerIP := ip
+
+			calleeVal := callerRegisters[funcReg]
+			thisVal := callerRegisters[thisReg]
+
+			switch calleeVal.Type() {
+			case TypeClosure:
+				// Method call on closure
+				calleeClosure := AsClosure(calleeVal)
+				calleeFunc := calleeClosure.Fn
+				if argCount != calleeFunc.Arity {
+					frame.ip = callerIP
+					status := vm.runtimeError("Method expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+					return status, Undefined
+				}
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow during method call.")
+					return status, Undefined
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during method call.")
+					return status, Undefined
+				}
+
+				frame.ip = callerIP // Store return IP
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = calleeClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = thisVal // Set 'this' context for the method
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy arguments to new frame (starting from register 0)
+				argStartRegInCaller := funcReg + 1
+				for i := 0; i < argCount; i++ {
+					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index out of bounds during method call setup.")
+						return status, Undefined
+					}
+				}
+				vm.frameCount++
+
+				// Switch context to new frame
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeFunction:
+				// Method call on function (create implicit closure)
+				funcToCall := AsFunction(calleeVal)
+				calleeClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
+				calleeFunc := calleeClosure.Fn
+
+				if argCount != calleeFunc.Arity {
+					frame.ip = callerIP
+					status := vm.runtimeError("Method expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+					return status, Undefined
+				}
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow during method call.")
+					return status, Undefined
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during method call.")
+					return status, Undefined
+				}
+
+				frame.ip = callerIP
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = calleeClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = thisVal // Set 'this' context for the method
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy arguments to new frame
+				argStartRegInCaller := funcReg + 1
+				for i := 0; i < argCount; i++ {
+					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index out of bounds during method call setup.")
+						return status, Undefined
+					}
+				}
+				vm.frameCount++
+
+				// Switch context
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeNativeFunction:
+				// Method call on builtin function
+				builtin := AsNativeFunction(calleeVal)
+
+				if builtin.Arity >= 0 && builtin.Arity != argCount {
+					frame.ip = callerIP
+					status := vm.runtimeError("Built-in method '%s' expected %d arguments but got %d.",
+						builtin.Name, builtin.Arity, argCount)
+					return status, Undefined
+				}
+
+				// Collect arguments for builtin method call
+				args := make([]Value, argCount)
+				argStartRegInCaller := funcReg + 1
+				for i := 0; i < argCount; i++ {
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index %d out of bounds for builtin method call.", argStartRegInCaller+byte(i))
+						return status, Undefined
+					}
+				}
+
+				// Execute builtin method (builtins receive 'this' as context)
+				// TODO: Update builtin signature to receive 'this' as first parameter or context
+				result := builtin.Fn(args)
+
+				// Store result in caller's target register
+				if int(destReg) < len(callerRegisters) {
+					callerRegisters[destReg] = result
+				} else {
+					frame.ip = callerIP
+					status := vm.runtimeError("Internal Error: Invalid target register %d for builtin method return value.", destReg)
+					return status, Undefined
+				}
+
+			default:
+				frame.ip = callerIP
+				status := vm.runtimeError("Cannot call method on non-function type '%s'.", calleeVal.TypeName())
+				return status, Undefined
+			}
+
+		case OpLoadThis:
+			destReg := code[ip]
+			ip++
+
+			// Load 'this' value from current call frame context
+			// If no 'this' context is set (regular function call), return undefined
+			registers[destReg] = frame.thisValue
 
 		default:
 			frame.ip = ip // Save IP before erroring

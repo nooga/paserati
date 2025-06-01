@@ -159,6 +159,13 @@ func RunStringWithOptions(source string, options RunOptions) bool {
 		return false
 	}
 
+	// Show bytecode if requested
+	if options.ShowBytecode {
+		fmt.Println("\n=== Bytecode ===")
+		fmt.Print(chunk.DisassembleChunk("<script>"))
+		fmt.Println("================")
+	}
+
 	// --- Execution (fresh VM) ---
 	vmInstance := vm.NewVM()
 	finalValue, runtimeErrs := vmInstance.Interpret(chunk)
@@ -277,7 +284,38 @@ type RunOptions struct {
 
 // RunCode runs source code with the given Paserati session and options
 func (p *Paserati) RunCode(source string, options RunOptions) (vm.Value, []errors.PaseratiError) {
-	value, errs := p.RunString(source)
+	l := lexer.NewLexer(source)
+	parser := parser.NewParser(l)
+	program, parseErrs := parser.ParseProgram()
+	if len(parseErrs) > 0 {
+		return vm.Undefined, parseErrs
+	}
+
+	// --- Compilation Step ---
+	comp := compiler.NewCompiler()
+	comp.SetChecker(p.checker) // Use persistent checker
+
+	chunk, compileAndTypeErrs := comp.Compile(program)
+	if len(compileAndTypeErrs) > 0 {
+		return vm.Undefined, compileAndTypeErrs
+	}
+	if chunk == nil {
+		internalErr := &errors.RuntimeError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+		}
+		return vm.Undefined, []errors.PaseratiError{internalErr}
+	}
+
+	// Show bytecode if requested
+	if options.ShowBytecode {
+		fmt.Println("\n=== Bytecode ===")
+		fmt.Print(chunk.DisassembleChunk("<script>"))
+		fmt.Println("================")
+	}
+
+	// --- Execution Step (using persistent VM) ---
+	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 
 	// Show cache statistics if requested
 	if options.ShowCacheStats {
@@ -286,5 +324,5 @@ func (p *Paserati) RunCode(source string, options RunOptions) (vm.Value, []error
 		fmt.Println("===============================")
 	}
 
-	return value, errs
+	return finalValue, runtimeErrs
 }
