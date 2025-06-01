@@ -2399,8 +2399,31 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		return
 	}
 
-	// 2. Build the ObjectType from interface properties
+	// 2. Build the ObjectType from interface properties, including inheritance
 	properties := make(map[string]types.Type)
+
+	// First, inherit properties from extended interfaces
+	for _, extendedInterfaceName := range node.Extends {
+		extendedType, exists := c.env.ResolveType(extendedInterfaceName.Value)
+		if !exists {
+			c.addError(extendedInterfaceName, fmt.Sprintf("extended interface '%s' is not defined", extendedInterfaceName.Value))
+			continue
+		}
+
+		// The extended type should be an ObjectType (interface is stored as ObjectType)
+		if extendedObjectType, ok := extendedType.(*types.ObjectType); ok {
+			// Copy all properties from the extended interface
+			for propName, propType := range extendedObjectType.Properties {
+				properties[propName] = propType
+			}
+			debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from '%s'\n",
+				node.Name.Value, len(extendedObjectType.Properties), extendedInterfaceName.Value)
+		} else {
+			c.addError(extendedInterfaceName, fmt.Sprintf("'%s' is not an interface, cannot extend", extendedInterfaceName.Value))
+		}
+	}
+
+	// Then, add/override properties from this interface's declaration
 	for _, prop := range node.Properties {
 		if prop.IsConstructorSignature {
 			// For constructor signatures, add them as a special "new" property
@@ -2417,6 +2440,15 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				debugPrintf("// [Checker Interface P1] Failed to resolve type for property '%s' in interface '%s'. Using Any.\n", prop.Name.Value, node.Name.Value)
 				propType = types.Any
 			}
+
+			// Check if we're overriding an inherited property
+			if existingType, exists := properties[prop.Name.Value]; exists {
+				// Verify that the override is compatible (for now, just log a debug message)
+				debugPrintf("// [Checker Interface P1] Interface '%s' overrides property '%s' (was: %s, now: %s)\n",
+					node.Name.Value, prop.Name.Value, existingType.String(), propType.String())
+				// TODO: Add stricter type compatibility checking for overrides if needed
+			}
+
 			properties[prop.Name.Value] = propType
 		}
 	}
@@ -2428,7 +2460,8 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
 		debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
 	} else {
-		debugPrintf("// [Checker Interface P1] Defined interface '%s' as type '%s' in env %p\n", node.Name.Value, interfaceType.String(), c.env)
+		debugPrintf("// [Checker Interface P1] Defined interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
+			node.Name.Value, interfaceType.String(), c.env, len(node.Extends))
 	}
 }
 

@@ -1142,6 +1142,7 @@ func (otp *ObjectTypeProperty) String() string {
 type InterfaceDeclaration struct {
 	Token      lexer.Token          // The 'interface' token
 	Name       *Identifier          // Interface name
+	Extends    []*Identifier        // Interfaces this interface extends (NEW)
 	Properties []*InterfaceProperty // Interface properties/methods
 }
 
@@ -1151,6 +1152,18 @@ func (id *InterfaceDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("interface ")
 	out.WriteString(id.Name.String())
+
+	// Add extends clause if present
+	if len(id.Extends) > 0 {
+		out.WriteString(" extends ")
+		for i, ext := range id.Extends {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(ext.String())
+		}
+	}
+
 	out.WriteString(" {\n")
 	for _, prop := range id.Properties {
 		out.WriteString("  ")

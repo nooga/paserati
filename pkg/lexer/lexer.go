@@ -151,6 +151,8 @@ const (
 	NEW TokenType = "NEW"
 	// INTERFACE keyword
 	INTERFACE TokenType = "INTERFACE"
+	// EXTENDS keyword
+	EXTENDS TokenType = "EXTENDS"
 )
 
 var keywords = map[string]TokenType{
@@ -177,6 +179,7 @@ var keywords = map[string]TokenType{
 	"this":      THIS,      // Added for this keyword
 	"new":       NEW,       // Added for NEW keyword
 	"interface": INTERFACE, // Added for interface keyword
+	"extends":   EXTENDS,   // Added for extends keyword
 }
 
 // LookupIdent checks the keywords table for an identifier.

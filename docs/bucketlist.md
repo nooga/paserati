@@ -186,6 +186,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Function Types (`(a: number) => string`)
 - [x] Object Type Literals (`{ name: string; age: number }`)
 - [x] Interfaces (`interface Point { x: number; y: number; }`)
+  - [x] Interface Inheritance (`interface Point3D extends Point2D { z: number; }`)
 - [ ] Index Signatures (`{ [key: string]: number }`)
 - [x] Type Aliases (`type Name = string;`)
 

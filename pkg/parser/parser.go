@@ -2285,8 +2285,31 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 
 	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
+	// Check for extends clause
+	if p.peekTokenIs(lexer.EXTENDS) {
+		p.nextToken() // Consume 'extends'
+
+		// Parse list of extended interfaces
+		for {
+			if !p.expectPeek(lexer.IDENT) {
+				return nil // Expected interface name after 'extends'
+			}
+
+			extendedInterface := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			stmt.Extends = append(stmt.Extends, extendedInterface)
+
+			// Check for comma to continue list, or break if not found
+			if p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // Consume ','
+				continue
+			} else {
+				break
+			}
+		}
+	}
+
 	if !p.expectPeek(lexer.LBRACE) {
-		return nil // Expected '{' after interface name
+		return nil // Expected '{' after interface name or extends clause
 	}
 
 	// Parse interface body
