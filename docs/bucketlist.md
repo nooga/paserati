@@ -8,6 +8,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Semicolons (optional)
 - [x] Comments (`//`, `/* */`)
 - [x] Block Scoping (`{}`)
+- [x] Control Flow without braces (single statement bodies)
 - [ ] Module System (`import`/`export`)
 - [ ] `var` keyword (legacy)
 
@@ -106,7 +107,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 ## Control Flow
 
 - [x] `if`/`else if`/`else` Statements/Expressions
-- [x] `switch`/`case`/`default` Statements
+- [x] `switch`/`case`/`default` Statements (with fallthrough and break)
 - [x] `while` Loops
 - [x] `do...while` Loops
 - [x] `for` Loops (C-style)
@@ -129,11 +130,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Block Body
 - [x] Return Statements (`return`, implicit `undefined`)
 - [x] Parameters (incl. basic type annotations)
+- [x] Higher-order functions (function parameters and returns)
+- [x] Curried functions
 - [ ] Default Parameter Values
 - [ ] Rest Parameters (`...`)
 - [ ] `arguments` Object
 - [x] Closures / Lexical Scoping
-- [ ] `this` Keyword (basic checker handling, needs object context)
+- [x] `this` Keyword (basic object method context)
 - [ ] `new` Operator / Constructor Functions
 - [ ] Generator Functions (`function*`)
 - [ ] Async Functions (`async function`)
@@ -144,13 +147,19 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Creation (`[]`)
   - [x] Index Access (`arr[i]`)
   - [x] Assignment (`arr[i] = v`)
-  - [x] `.length` Property (Checker uses for arrays/strings)
+  - [x] Compound assignment to indices (`arr[i] += v`, etc.)
+  - [x] `.length` Property
   - [ ] Array Methods (`.push`, `.pop`, `.map`, etc.)
-- [ ] Objects
+- [x] Objects
   - [x] Creation (`{}`)
   - [x] Property Access (`.`, `[]`)
   - [x] Property Assignment
-  - [ ] Methods
+  - [x] String keys and computed property names
+  - [x] Method shorthand syntax (`{ add(a, b) { return a + b; } }`)
+  - [x] Methods with `this` context
+- [x] Strings
+  - [x] `.length` Property
+  - [ ] String Methods (`.charAt`, `.slice`, etc.)
 - [ ] `Math` Object
 - [ ] `Date` Object
 - [ ] `JSON` Object
@@ -163,40 +172,43 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 ### Types
 
-- [x] Basic Types (`number`, `string`, `boolean`, `null`, `undefined`) (Checker)
+- [x] Basic Types (`number`, `string`, `boolean`, `null`, `undefined`)
 - [x] `any` Type (Implicitly used in checker)
-- [x] `void` Type (Checker return type inference)
+- [x] `void` Type (Function return type inference)
 - [ ] `unknown` Type
 - [x] `never` Type
-- [x] Array Types (`T[]`) (Parser/Checker support)
+- [x] Array Types (`T[]`)
 - [ ] Tuple Types (`[string, number]`)
 - [ ] Enum Types (`enum Color { Red, Green }`)
-- [x] Literal Types (`'hello'`, `123`, `true`) (Parser/Checker support)
-- [x] Union Types (`string | number`) (Parser/Checker support)
+- [x] Literal Types (`'hello'`, `123`, `true`)
+- [x] Union Types (`string | number`)
 - [ ] Intersection Types (`A & B`)
-- [x] Function Types (`(a: number) => string`) (Parser/Checker support)
-- [ ] Object Types / Interfaces (`interface Point { x: number; y: number; }`)
+- [x] Function Types (`(a: number) => string`)
+- [x] Object Type Literals (`{ name: string; age: number }`)
+- [x] Interfaces (`interface Point { x: number; y: number; }`)
 - [ ] Index Signatures (`{ [key: string]: number }`)
-- [x] Type Aliases (`type Name = string;`) (Parser/Checker support)
+- [x] Type Aliases (`type Name = string;`)
 
 ### Type Annotations
 
 - [x] Variable Type Annotations (`let x: number;`)
 - [x] Function Parameter Type Annotations
 - [x] Function Return Type Annotations
+- [x] Object property type annotations
 
 ### Type Inference
 
 - [x] Variable Initialization (`let x = 10;` // infers number)
-- [x] Function Return Type Inference (checker support)
+- [x] Function Return Type Inference
 - [ ] Contextual Typing
 
 ### Type Checking Features
 
-- [x] Assignability Checks (checker support)
-- [x] Operator Type Checking (checker support)
-- [x] Function Call Checks (arity, basic arg types - checker support)
-- [ ] Structural Typing (vs. Nominal)
+- [x] Assignability Checks
+- [x] Operator Type Checking
+- [x] Function Call Checks (arity, parameter types)
+- [x] Structural Typing for interfaces and object types
+- [x] Interface compatibility and duck typing
 - [ ] Type Narrowing (Control Flow Analysis)
 - [ ] Type Guards (`typeof`, `instanceof`, custom)
 - [ ] Strict Null Checks (`strictNullChecks` compiler option)
