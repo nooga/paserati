@@ -177,6 +177,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.NULL, p.parseNullLiteral)
 	p.registerPrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // Keep for value context
+	p.registerPrefix(lexer.THIS, p.parseThisExpression)        // Added for this keyword
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
@@ -856,6 +857,10 @@ func (p *Parser) parseNullLiteral() Expression {
 
 func (p *Parser) parseUndefinedLiteral() Expression {
 	return &UndefinedLiteral{Token: p.curToken}
+}
+
+func (p *Parser) parseThisExpression() Expression {
+	return &ThisExpression{Token: p.curToken}
 }
 
 func (p *Parser) parseFunctionLiteral() Expression {

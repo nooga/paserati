@@ -439,6 +439,13 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		c.emitLoadUndefined(destReg, node.Token.Line)
 		return nil // ADDED: Explicit return
 
+	case *parser.ThisExpression: // Added for this keyword
+		// For now, just load undefined as placeholder
+		// TODO: Implement proper this context handling
+		destReg := c.regAlloc.Alloc()
+		c.emitLoadUndefined(destReg, node.Token.Line)
+		return nil
+
 	case *parser.Identifier:
 		// <<< ADDED: Check for built-in first >>>
 		if builtinFunc := builtins.GetFunc(node.Value); builtinFunc != nil {
@@ -1994,6 +2001,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 	case *parser.NullLiteral:
 		return n.Token
 	case *parser.UndefinedLiteral:
+		return n.Token
+	case *parser.ThisExpression:
 		return n.Token
 	case *parser.PrefixExpression:
 		return n.Token // Operator token

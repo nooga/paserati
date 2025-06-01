@@ -308,6 +308,16 @@ func (ul *UndefinedLiteral) expressionNode()      {}
 func (ul *UndefinedLiteral) TokenLiteral() string { return ul.Token.Literal }
 func (ul *UndefinedLiteral) String() string       { return ul.Token.Literal }
 
+// ThisExpression represents the `this` keyword.
+type ThisExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.THIS token
+}
+
+func (te *ThisExpression) expressionNode()      {}
+func (te *ThisExpression) TokenLiteral() string { return te.Token.Literal }
+func (te *ThisExpression) String() string       { return "this" }
+
 // FunctionLiteral represents a function definition.
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }

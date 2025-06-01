@@ -144,6 +144,9 @@ const (
 
 	// New Ternary Operator Tokens
 	QUESTION TokenType = "?"
+
+	// This keyword
+	THIS TokenType = "THIS"
 )
 
 var keywords = map[string]TokenType{
@@ -167,6 +170,7 @@ var keywords = map[string]TokenType{
 	"switch":    SWITCH,   // Added
 	"case":      CASE,     // Added
 	"default":   DEFAULT,  // Added
+	"this":      THIS,     // Added for this keyword
 }
 
 // LookupIdent checks the keywords table for an identifier.
