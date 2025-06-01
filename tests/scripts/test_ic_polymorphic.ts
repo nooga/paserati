@@ -1,3 +1,4 @@
+// expect: 120
 // Test polymorphic inline cache with different object shapes
 
 let objA = { x: 10, y: 20 }; // Shape 1

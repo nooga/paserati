@@ -26,7 +26,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = true
+const debugCompiler = false
 const debugCompilerStats = false
 
 func debugPrintf(format string, args ...interface{}) {
@@ -1106,18 +1106,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.Pas
 
 	// Ensure arguments are in the correct registers for the call convention.
 	// Convention: Args must be in registers funcReg+1, funcReg+2, ...
-	for i := 0; i < argCount; i++ {
-		targetArgReg := funcReg + 1 + Register(i)
-		actualArgReg := argRegs[i]
-		// Only move if the argument isn't already in the target register
-		if actualArgReg != targetArgReg {
-			// TODO: Ensure targetArgReg was allocated or handle allocation?
-			// For now, assume the register allocator provides enough headroom
-			// or that targetArgReg might overwrite something no longer needed.
-			// This is slightly dangerous and might need a more robust register
-			// allocation strategy for calls.
-			c.emitMove(targetArgReg, actualArgReg, node.Token.Line) // Use line of call expression
-		}
+	// FIXED: Handle register cycles properly using a temporary register approach
+	if argCount > 0 {
+		c.resolveRegisterMoves(argRegs, funcReg+1, node.Token.Line)
 	}
 
 	// 3. Allocate register for the return value
@@ -2412,4 +2403,135 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 	c.lastExprReg = destReg
 	c.lastExprRegValid = true
 	debugPrintf("// [emitClosure %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
+}
+
+// resolveRegisterMoves handles moving values from sourceRegs to consecutive target registers
+// starting at firstTargetReg. It correctly handles register cycles by using temporary registers.
+func (c *Compiler) resolveRegisterMoves(sourceRegs []Register, firstTargetReg Register, line int) {
+	argCount := len(sourceRegs)
+	if argCount == 0 {
+		return
+	}
+
+	// Create mapping of source -> target
+	moves := make(map[Register]Register)
+	for i, sourceReg := range sourceRegs {
+		targetReg := firstTargetReg + Register(i)
+		if sourceReg != targetReg {
+			moves[sourceReg] = targetReg
+		}
+	}
+
+	debugPrintf("// DEBUG RegisterMoves: Processing %d moves\n", len(moves))
+	for source, target := range moves {
+		debugPrintf("// DEBUG RegisterMoves: R%d -> R%d\n", source, target)
+	}
+
+	// Track which registers have been resolved
+	resolved := make(map[Register]bool)
+
+	// Process each move, handling cycles
+	for sourceReg, targetReg := range moves {
+		if resolved[sourceReg] {
+			continue
+		}
+
+		// Check if this is part of a cycle
+		cycle := c.findMoveCycle(sourceReg, moves, resolved)
+
+		debugPrintf("// DEBUG RegisterMoves: Found cycle starting from R%d: %v\n", sourceReg, cycle)
+
+		if len(cycle) > 1 {
+			// Handle cycle by using a temporary register
+			debugPrintf("// DEBUG RegisterMoves: Resolving cycle of length %d\n", len(cycle))
+			c.resolveCycle(cycle, moves, line)
+			// Mark all registers in the cycle as resolved
+			for _, reg := range cycle {
+				resolved[reg] = true
+			}
+		} else {
+			// Simple move, no cycle
+			debugPrintf("// DEBUG RegisterMoves: Simple move R%d -> R%d\n", sourceReg, targetReg)
+			c.emitMove(targetReg, sourceReg, line)
+			resolved[sourceReg] = true
+		}
+	}
+}
+
+// findMoveCycle detects if a register is part of a move cycle
+func (c *Compiler) findMoveCycle(startReg Register, moves map[Register]Register, resolved map[Register]bool) []Register {
+	visited := make(map[Register]bool)
+	path := []Register{}
+	current := startReg
+
+	for {
+		if resolved[current] {
+			// Already resolved, no cycle involving this register
+			return []Register{startReg}
+		}
+
+		if visited[current] {
+			// Found a cycle - find where it starts
+			cycleStart := -1
+			for i, reg := range path {
+				if reg == current {
+					cycleStart = i
+					break
+				}
+			}
+			if cycleStart >= 0 {
+				return path[cycleStart:] // Return just the cycle portion
+			}
+			break
+		}
+
+		visited[current] = true
+		path = append(path, current)
+
+		// Follow the move chain
+		next, exists := moves[current]
+		if !exists {
+			// Chain ends here, no cycle
+			return []Register{startReg}
+		}
+		current = next
+	}
+
+	// No cycle found
+	return []Register{startReg}
+}
+
+// resolveCycle breaks a register move cycle using a temporary register
+func (c *Compiler) resolveCycle(cycle []Register, moves map[Register]Register, line int) {
+	if len(cycle) <= 1 {
+		return
+	}
+
+	debugPrintf("// DEBUG ResolveCycle: Cycle %v\n", cycle)
+
+	// Use a temporary register to break the cycle
+	tempReg := c.regAlloc.Alloc()
+	debugPrintf("// DEBUG ResolveCycle: Using temp register R%d\n", tempReg)
+
+	// Move the first register to temp
+	debugPrintf("// DEBUG ResolveCycle: Move R%d -> R%d (first to temp)\n", cycle[0], tempReg)
+	c.emitMove(tempReg, cycle[0], line)
+
+	// Move each register to the next in sequence
+	for i := 0; i < len(cycle)-1; i++ {
+		sourceReg := cycle[i+1]
+		targetReg := moves[cycle[i+1]]
+		debugPrintf("// DEBUG ResolveCycle: Move R%d -> R%d (chain move %d)\n", sourceReg, targetReg, i)
+		c.emitMove(targetReg, sourceReg, line)
+	}
+
+	// Move temp to the final position
+	firstReg := cycle[0]
+	targetReg := moves[firstReg]
+	debugPrintf("// DEBUG ResolveCycle: Move R%d -> R%d (temp to final)\n", tempReg, targetReg)
+	c.emitMove(targetReg, tempReg, line)
+
+	// Free the temporary register
+	c.regAlloc.Free(tempReg)
+	debugPrintf("// DEBUG ResolveCycle: Freed temp register R%d\n", tempReg)
 }

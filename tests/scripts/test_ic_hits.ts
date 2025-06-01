@@ -1,3 +1,4 @@
+// expect: 50
 // Test inline cache with repeated access (should show cache hits)
 
 let obj = { x: 10, y: 20 };

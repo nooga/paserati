@@ -1,3 +1,4 @@
+// expect: 120
 // Test inline cache performance with different object patterns
 
 // Create objects with same shape (monomorphic case)
