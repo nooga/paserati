@@ -178,6 +178,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.NULL, p.parseNullLiteral)
 	p.registerPrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // Keep for value context
 	p.registerPrefix(lexer.THIS, p.parseThisExpression)        // Added for this keyword
+	p.registerPrefix(lexer.NEW, p.parseNewExpression)          // Added for new keyword
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
@@ -247,13 +248,15 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.IDENT, p.parseTypeIdentifier)       // Basic types like 'number', 'string', custom types
 	p.registerTypePrefix(lexer.NULL, p.parseNullLiteral)           // 'null' type
 	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // 'undefined' type
-	// Literal types
+	// Literal types in TYPE context too
 	p.registerTypePrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerTypePrefix(lexer.NUMBER, p.parseNumberLiteral)
 	p.registerTypePrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerTypePrefix(lexer.FALSE, p.parseBooleanLiteral)
-	// Function types
+	// Function types that start with '('
 	p.registerTypePrefix(lexer.LPAREN, p.parseFunctionTypeExpression) // Starts with '(', e.g., '() => number'
+	// Object type literals that start with '{'
+	p.registerTypePrefix(lexer.LBRACE, p.parseObjectTypeExpression) // NEW: Object type literals like { name: string; age: number }
 
 	// --- Register TYPE Infix Functions ---
 	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)     // TYPE context: '|' is union
@@ -338,6 +341,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseContinueStatement()
 	case lexer.TYPE:
 		return p.parseTypeAliasStatement()
+	case lexer.INTERFACE:
+		return p.parseInterfaceDeclaration()
 	case lexer.SWITCH:
 		return p.parseSwitchStatement()
 	default:
@@ -861,6 +866,27 @@ func (p *Parser) parseUndefinedLiteral() Expression {
 
 func (p *Parser) parseThisExpression() Expression {
 	return &ThisExpression{Token: p.curToken}
+}
+
+func (p *Parser) parseNewExpression() Expression {
+	ne := &NewExpression{Token: p.curToken} // 'new' token
+
+	// Move to the next token (constructor identifier/expression)
+	p.nextToken()
+
+	// Parse the constructor expression (identifier, member expression, etc.)
+	ne.Constructor = p.parseExpression(CALL)
+
+	// Check if there are arguments (parentheses)
+	if p.peekTokenIs(lexer.LPAREN) {
+		p.nextToken() // Move to '('
+		ne.Arguments = p.parseExpressionList(lexer.RPAREN)
+	} else {
+		// No arguments provided (e.g., "new Date")
+		ne.Arguments = []Expression{}
+	}
+
+	return ne
 }
 
 func (p *Parser) parseFunctionLiteral() Expression {
@@ -2102,4 +2128,142 @@ func (p *Parser) parseObjectLiteral() Expression {
 	} // Missing '}'
 
 	return objLit
+}
+
+// --- NEW: Interface Declaration Parsing ---
+func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
+	stmt := &InterfaceDeclaration{Token: p.curToken} // 'interface' token
+
+	if !p.expectPeek(lexer.IDENT) {
+		return nil // Expected identifier after 'interface'
+	}
+
+	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil // Expected '{' after interface name
+	}
+
+	// Parse interface body
+	stmt.Properties = []*InterfaceProperty{}
+
+	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
+		p.nextToken() // Move to next property
+
+		if p.curTokenIs(lexer.RBRACE) || p.curTokenIs(lexer.EOF) {
+			break
+		}
+
+		prop := p.parseInterfaceProperty()
+		if prop != nil {
+			stmt.Properties = append(stmt.Properties, prop)
+		}
+
+		// Skip optional semicolon
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+	}
+
+	if !p.expectPeek(lexer.RBRACE) {
+		return nil // Expected '}' after interface body
+	}
+
+	return stmt
+}
+
+// parseInterfaceProperty parses a single property in an interface
+func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
+	// Expecting: PropertyName : TypeExpression ;
+	if !p.curTokenIs(lexer.IDENT) {
+		p.addError(p.curToken, "expected property name (identifier) in interface")
+		return nil
+	}
+
+	prop := &InterfaceProperty{
+		Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+	}
+
+	// Expect ':'
+	if !p.expectPeek(lexer.COLON) {
+		return nil // Error message already added by expectPeek
+	}
+
+	// Parse the type expression
+	p.nextToken() // Move to the start of the type expression
+	prop.Type = p.parseTypeExpression()
+	if prop.Type == nil {
+		// Error should have been added by parseTypeExpression
+		return nil
+	}
+
+	return prop
+}
+
+// parseObjectTypeExpression parses object type literals like { name: string; age: number }.
+func (p *Parser) parseObjectTypeExpression() Expression {
+	objType := &ObjectTypeExpression{
+		Token:      p.curToken, // The '{' token
+		Properties: []*ObjectTypeProperty{},
+	}
+
+	// Handle empty object type {}
+	if p.peekTokenIs(lexer.RBRACE) {
+		p.nextToken() // Consume '}'
+		return objType
+	}
+
+	// Parse properties
+	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
+		p.nextToken() // Consume '{' or ';' to get to the property name
+
+		// Expect property name (identifier)
+		if !p.curTokenIs(lexer.IDENT) {
+			p.addError(p.curToken, "expected property name (identifier) in object type")
+			return nil
+		}
+
+		prop := &ObjectTypeProperty{
+			Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		}
+
+		// Check for optional property marker '?'
+		if p.peekTokenIs(lexer.QUESTION) {
+			p.nextToken() // Consume '?'
+			prop.Optional = true
+		}
+
+		// Expect ':'
+		if !p.expectPeek(lexer.COLON) {
+			return nil // Error message already added by expectPeek
+		}
+
+		// Parse the type expression
+		p.nextToken() // Move to the start of the type expression
+		prop.Type = p.parseTypeExpression()
+		if prop.Type == nil {
+			// Error should have been added by parseTypeExpression
+			return nil
+		}
+
+		objType.Properties = append(objType.Properties, prop)
+
+		// Expect ';' or '}' next
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Consume ';'
+		} else if p.peekTokenIs(lexer.RBRACE) {
+			// End of object type, will be consumed by outer loop condition
+			break
+		} else {
+			p.addError(p.peekToken, "expected ';' or '}' after object type property")
+			return nil
+		}
+	}
+
+	// Expect closing '}'
+	if !p.expectPeek(lexer.RBRACE) {
+		return nil // Error message already added by expectPeek
+	}
+
+	return objType
 }

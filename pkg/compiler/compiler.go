@@ -298,6 +298,10 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		// Type aliases only exist for type checking, ignore in compiler.
 		return nil
 
+	case *parser.InterfaceDeclaration: // Added
+		// Interface declarations only exist for type checking, ignore in compiler.
+		return nil
+
 	case *parser.ExpressionStatement:
 		debugPrintf("// DEBUG ExprStmt: Compiling expression %T.\n", node.Expression)
 
@@ -573,6 +577,9 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		}
 		return err // Return any error encountered during compilation
 		// --- END Member Expression ---
+
+	case *parser.NewExpression:
+		return c.compileNewExpression(node)
 
 	default:
 		// Add check here? If type is FunctionLiteral and wasn't caught above, it's an error.
@@ -2033,6 +2040,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token // 'continue'
 	case *parser.TypeAliasStatement:
 		return n.Token // 'type'
+	case *parser.InterfaceDeclaration:
+		return n.Token // 'interface'
 
 	// Expressions
 	case *parser.Identifier:
@@ -2061,6 +2070,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token // '=>' token
 	case *parser.CallExpression:
 		return n.Token // '(' token
+	case *parser.NewExpression:
+		return n.Token // 'new' token
 	case *parser.AssignmentExpression:
 		return n.Token // Assignment operator token
 	case *parser.UpdateExpression:
@@ -2588,4 +2599,39 @@ func (c *Compiler) resolveCycle(cycle []Register, moves map[Register]Register, l
 	// Free the temporary register
 	c.regAlloc.Free(tempReg)
 	debugPrintf("// DEBUG ResolveCycle: Freed temp register R%d\n", tempReg)
+}
+
+func (c *Compiler) compileNewExpression(node *parser.NewExpression) errors.PaseratiError {
+	// 1. Compile the constructor expression
+	err := c.compileNode(node.Constructor)
+	if err != nil {
+		return err
+	}
+	constructorReg := c.regAlloc.Current() // Register holding the constructor function
+
+	// 2. Compile arguments
+	argRegs := []Register{}
+	for _, arg := range node.Arguments {
+		err = c.compileNode(arg)
+		if err != nil {
+			return err
+		}
+		argRegs = append(argRegs, c.regAlloc.Current())
+	}
+	argCount := len(argRegs)
+
+	// 3. Ensure arguments are in the correct registers for the call convention.
+	// Convention: Args must be in registers constructorReg+1, constructorReg+2, ...
+	if argCount > 0 {
+		c.resolveRegisterMoves(argRegs, constructorReg+1, node.Token.Line)
+	}
+
+	// 4. Allocate register for the created instance
+	resultReg := c.regAlloc.Alloc()
+
+	// 5. Emit OpNew (constructor call)
+	c.emitNew(resultReg, constructorReg, byte(argCount), node.Token.Line)
+
+	// The result of the new operation is now in resultReg
+	return nil
 }

@@ -144,6 +144,14 @@ func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte
 	c.emitByte(argCount)
 }
 
+// emitNew emits OpNew to create a new instance using a constructor
+func (c *Compiler) emitNew(dest, constructorReg Register, argCount byte, line int) {
+	c.emitOpCode(vm.OpNew, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(constructorReg))
+	c.emitByte(argCount)
+}
+
 // emitLoadThis emits OpLoadThis to load 'this' value from current call context
 func (c *Compiler) emitLoadThis(dest Register, line int) {
 	c.emitOpCode(vm.OpLoadThis, line)

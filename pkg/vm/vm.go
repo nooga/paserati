@@ -21,9 +21,10 @@ type CallFrame struct {
 	ip      int            // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
-	registers      []Value
-	targetRegister byte  // Which register in the CALLER the result should go into
-	thisValue      Value // The 'this' value for method calls (undefined for regular function calls)
+	registers         []Value
+	targetRegister    byte  // Which register in the CALLER the result should go into
+	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
+	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
 }
 
 // PropCacheState represents the different states of inline cache
@@ -731,6 +732,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// Stash required info before modifying frameCount/nextRegSlot
 			returningFrameRegSize := function.RegisterSize
 			callerTargetRegister := frame.targetRegister
+			isConstructor := frame.isConstructorCall
+			constructorThisValue := frame.thisValue
 
 			vm.frameCount--
 			vm.nextRegSlot -= returningFrameRegSize // Reclaim register space
@@ -743,9 +746,25 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			// Get the caller frame (which is now the top frame)
 			callerFrame := &vm.frames[vm.frameCount-1]
-			// Place the result into the caller's target register
+
+			// Handle constructor return semantics
+			var finalResult Value
+			if isConstructor {
+				// Constructor call: only return the explicit value if it's an object,
+				// otherwise return the instance (this)
+				if result.IsObject() {
+					finalResult = result // Return the explicit object
+				} else {
+					finalResult = constructorThisValue // Return the instance
+				}
+			} else {
+				// Regular function call: return the explicit value
+				finalResult = result
+			}
+
+			// Place the final result into the caller's target register
 			if int(callerTargetRegister) < len(callerFrame.registers) {
-				callerFrame.registers[callerTargetRegister] = result
+				callerFrame.registers[callerTargetRegister] = finalResult
 			} else {
 				// This would be an internal error (compiler/vm mismatch)
 				status := vm.runtimeError("Internal Error: Invalid target register %d for return value.", callerTargetRegister)
@@ -770,6 +789,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// Pop the current frame
 			returningFrameRegSize := function.RegisterSize
 			callerTargetRegister := frame.targetRegister
+			isConstructor := frame.isConstructorCall
+			constructorThisValue := frame.thisValue
 
 			vm.frameCount--
 			vm.nextRegSlot -= returningFrameRegSize
@@ -781,9 +802,20 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			// Get the caller frame
 			callerFrame := &vm.frames[vm.frameCount-1]
-			// Place Undefined into the caller's target register
+
+			// Handle constructor return semantics
+			var finalResult Value
+			if isConstructor {
+				// Constructor returning undefined: return the instance (this)
+				finalResult = constructorThisValue
+			} else {
+				// Regular function returning undefined
+				finalResult = Undefined
+			}
+
+			// Place the final result into the caller's target register
 			if int(callerTargetRegister) < len(callerFrame.registers) {
-				callerFrame.registers[callerTargetRegister] = Undefined
+				callerFrame.registers[callerTargetRegister] = finalResult
 			} else {
 				status := vm.runtimeError("Internal Error: Invalid target register %d for return undefined.", callerTargetRegister)
 				return status, Undefined
@@ -1606,6 +1638,189 @@ func (vm *VM) run() (InterpretResult, Value) {
 			default:
 				frame.ip = callerIP
 				status := vm.runtimeError("Cannot call method on non-function type '%s'.", calleeVal.TypeName())
+				return status, Undefined
+			}
+
+		case OpNew:
+			destReg := code[ip]          // Where the created instance should go in the caller
+			constructorReg := code[ip+1] // Register holding the constructor function/closure
+			argCount := int(code[ip+2])  // Number of arguments provided to the constructor
+			ip += 3
+
+			// Capture caller context before potential frame switch
+			callerRegisters := registers
+			callerIP := ip
+
+			constructorVal := callerRegisters[constructorReg]
+
+			switch constructorVal.Type() {
+			case TypeClosure:
+				// Constructor call on closure
+				constructorClosure := AsClosure(constructorVal)
+				constructorFunc := constructorClosure.Fn
+				if argCount != constructorFunc.Arity {
+					frame.ip = callerIP
+					status := vm.runtimeError("Constructor expected %d arguments but got %d.", constructorFunc.Arity, argCount)
+					return status, Undefined
+				}
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow during constructor call.")
+					return status, Undefined
+				}
+				requiredRegs := constructorFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during constructor call.")
+					return status, Undefined
+				}
+
+				// Create new instance object as 'this'
+				newInstance := NewObject(DefaultObjectPrototype)
+
+				frame.ip = callerIP // Store return IP
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = constructorClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = newInstance  // Set the new instance as 'this'
+				newFrame.isConstructorCall = true // Mark this as a constructor call
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy arguments to new frame (starting from register 0)
+				argStartRegInCaller := constructorReg + 1
+				for i := 0; i < argCount; i++ {
+					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index out of bounds during constructor call setup.")
+						return status, Undefined
+					}
+				}
+				vm.frameCount++
+
+				// Store the new instance in the caller's destination register
+				// NOTE: This is different from regular calls - we set the result immediately
+				// and the constructor can modify 'this', but the instance is always returned
+				// unless the constructor explicitly returns a different object
+				callerRegisters[destReg] = newInstance
+
+				// Switch context to new frame
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeFunction:
+				// Constructor call on function (create implicit closure)
+				funcToCall := AsFunction(constructorVal)
+				constructorClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
+				constructorFunc := constructorClosure.Fn
+
+				if argCount != constructorFunc.Arity {
+					frame.ip = callerIP
+					status := vm.runtimeError("Constructor expected %d arguments but got %d.", constructorFunc.Arity, argCount)
+					return status, Undefined
+				}
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow during constructor call.")
+					return status, Undefined
+				}
+				requiredRegs := constructorFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during constructor call.")
+					return status, Undefined
+				}
+
+				// Create new instance object as 'this'
+				newInstance := NewObject(DefaultObjectPrototype)
+
+				frame.ip = callerIP
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = constructorClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = newInstance  // Set the new instance as 'this'
+				newFrame.isConstructorCall = true // Mark this as a constructor call
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy arguments to new frame
+				argStartRegInCaller := constructorReg + 1
+				for i := 0; i < argCount; i++ {
+					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index out of bounds during constructor call setup.")
+						return status, Undefined
+					}
+				}
+				vm.frameCount++
+
+				// Store the new instance in the caller's destination register
+				callerRegisters[destReg] = newInstance
+
+				// Switch context
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeNativeFunction:
+				// Constructor call on builtin function
+				builtin := AsNativeFunction(constructorVal)
+
+				if builtin.Arity >= 0 && builtin.Arity != argCount {
+					frame.ip = callerIP
+					status := vm.runtimeError("Built-in constructor '%s' expected %d arguments but got %d.",
+						builtin.Name, builtin.Arity, argCount)
+					return status, Undefined
+				}
+
+				// Collect arguments for builtin constructor call
+				args := make([]Value, argCount)
+				argStartRegInCaller := constructorReg + 1
+				for i := 0; i < argCount; i++ {
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index %d out of bounds for builtin constructor call.", argStartRegInCaller+byte(i))
+						return status, Undefined
+					}
+				}
+
+				// Execute builtin constructor
+				// For builtins, we let them handle instance creation
+				result := builtin.Fn(args)
+
+				// Store result in caller's target register
+				if int(destReg) < len(callerRegisters) {
+					callerRegisters[destReg] = result
+				} else {
+					frame.ip = callerIP
+					status := vm.runtimeError("Internal Error: Invalid target register %d for builtin constructor return value.", destReg)
+					return status, Undefined
+				}
+
+			default:
+				frame.ip = callerIP
+				status := vm.runtimeError("Cannot use '%s' as a constructor.", constructorVal.TypeName())
 				return status, Undefined
 			}
 

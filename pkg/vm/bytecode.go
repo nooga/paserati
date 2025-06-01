@@ -49,6 +49,7 @@ const (
 	// Function/Call related
 	OpCall   OpCode = 19 // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
 	OpReturn OpCode = 20 // Rx: Return value from register Rx.
+	OpNew    OpCode = 45 // Rx ConstructorReg ArgCount: Create new instance using ConstructorReg with ArgCount args, result in Rx
 
 	// Closure related
 	OpClosure         OpCode = 21 // Rx FuncConstIdx UpvalueCount [IsLocal1 Index1 IsLocal2 Index2 ...]: Create closure for function Const[FuncConstIdx] with UpvalueCount upvalues, store in Rx.
@@ -186,6 +187,8 @@ func (op OpCode) String() string {
 		return "OpCallMethod"
 	case OpLoadThis:
 		return "OpLoadThis"
+	case OpNew:
+		return "OpNew"
 	// --- END NEW ---
 
 	default:
@@ -331,6 +334,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.callMethodInstruction(builder, instruction.String(), offset)
 	case OpLoadThis:
 		return c.loadThisInstruction(builder, instruction.String(), offset)
+	case OpNew:
+		return c.newInstruction(builder, instruction.String(), offset)
 	// --- END NEW ---
 
 	default:
@@ -712,4 +717,23 @@ func (c *Chunk) loadThisInstruction(builder *strings.Builder, name string, offse
 	reg := c.Code[offset+1]
 	builder.WriteString(fmt.Sprintf("%-16s R%d\n", name, reg))
 	return offset + 2
+}
+
+// newInstruction handles OpNew Rx ConstructorReg ArgCount
+func (c *Chunk) newInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	constructorReg := c.Code[offset+2]
+	argCount := c.Code[offset+3]
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, Args %d\n", name, destReg, constructorReg, argCount))
+	return offset + 4 // Opcode + Rx + ConstructorReg + ArgCount
 }

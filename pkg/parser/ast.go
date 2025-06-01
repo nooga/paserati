@@ -688,18 +688,47 @@ func (ce *CallExpression) TokenLiteral() string { return ce.Token.Literal }
 func (ce *CallExpression) String() string {
 	var out bytes.Buffer
 	args := []string{}
-	for _, a := range ce.Arguments {
-		if a != nil {
-			args = append(args, a.String())
+	for _, arg := range ce.Arguments {
+		if arg != nil {
+			args = append(args, arg.String())
 		}
 	}
-
 	out.WriteString(ce.Function.String())
 	out.WriteString("(")
 	out.WriteString(strings.Join(args, ", "))
 	out.WriteString(")")
 	if ce.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", ce.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// NewExpression represents a constructor call with the `new` keyword.
+// new <Constructor>(<Arguments>)
+type NewExpression struct {
+	BaseExpression              // Embed base for ComputedType (constructed object type)
+	Token          lexer.Token  // The 'new' token
+	Constructor    Expression   // Identifier or function being called as constructor
+	Arguments      []Expression // List of arguments
+}
+
+func (ne *NewExpression) expressionNode()      {}
+func (ne *NewExpression) TokenLiteral() string { return ne.Token.Literal }
+func (ne *NewExpression) String() string {
+	var out bytes.Buffer
+	args := []string{}
+	for _, arg := range ne.Arguments {
+		if arg != nil {
+			args = append(args, arg.String())
+		}
+	}
+	out.WriteString("new ")
+	out.WriteString(ne.Constructor.String())
+	out.WriteString("(")
+	out.WriteString(strings.Join(args, ", "))
+	out.WriteString(")")
+	if ne.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ne.ComputedType.String()))
 	}
 	return out.String()
 }
@@ -1022,3 +1051,93 @@ func (ol *ObjectLiteral) String() string {
 }
 
 // --- END NEW: ObjectLiteral ---
+
+// ObjectTypeExpression represents an object type literal (e.g., { name: string; age: number }).
+type ObjectTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType (which will be an ObjectType)
+	Token          lexer.Token // The '{' token
+	Properties     []*ObjectTypeProperty
+}
+
+func (ote *ObjectTypeExpression) expressionNode()      {}
+func (ote *ObjectTypeExpression) TokenLiteral() string { return ote.Token.Literal }
+func (ote *ObjectTypeExpression) String() string {
+	var out bytes.Buffer
+	propStrings := []string{}
+	for _, prop := range ote.Properties {
+		propStrings = append(propStrings, prop.String())
+	}
+
+	out.WriteString("{ ")
+	out.WriteString(strings.Join(propStrings, "; "))
+	out.WriteString(" }")
+	if ote.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ote.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// ObjectTypeProperty represents a property in an object type literal.
+type ObjectTypeProperty struct {
+	Name     *Identifier // Property name
+	Type     Expression  // Property type annotation
+	Optional bool        // Whether the property is optional (for future use)
+}
+
+func (otp *ObjectTypeProperty) String() string {
+	var out bytes.Buffer
+	out.WriteString(otp.Name.String())
+	if otp.Optional {
+		out.WriteString("?")
+	}
+	out.WriteString(": ")
+	out.WriteString(otp.Type.String())
+	return out.String()
+}
+
+// --- END NEW: ObjectTypeExpression ---
+
+// InterfaceDeclaration represents an interface declaration.
+// interface Name { property: Type; method(): ReturnType; }
+type InterfaceDeclaration struct {
+	Token      lexer.Token          // The 'interface' token
+	Name       *Identifier          // Interface name
+	Properties []*InterfaceProperty // Interface properties/methods
+}
+
+func (id *InterfaceDeclaration) statementNode()       {}
+func (id *InterfaceDeclaration) TokenLiteral() string { return id.Token.Literal }
+func (id *InterfaceDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString("interface ")
+	out.WriteString(id.Name.String())
+	out.WriteString(" {\n")
+	for _, prop := range id.Properties {
+		out.WriteString("  ")
+		out.WriteString(prop.String())
+		out.WriteString(";\n")
+	}
+	out.WriteString("}")
+	return out.String()
+}
+
+// InterfaceProperty represents a property or method signature in an interface.
+type InterfaceProperty struct {
+	Name     *Identifier // Property/method name
+	Type     Expression  // Type annotation (for properties) or function type (for methods)
+	IsMethod bool        // Whether this is a method signature
+	Optional bool        // Whether the property is optional (Name?)
+}
+
+func (ip *InterfaceProperty) String() string {
+	var out bytes.Buffer
+	out.WriteString(ip.Name.String())
+	if ip.Optional {
+		out.WriteString("?")
+	}
+	out.WriteString(": ")
+	out.WriteString(ip.Type.String())
+	return out.String()
+}
+
+// --- END NEW ---

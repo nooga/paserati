@@ -147,6 +147,10 @@ const (
 
 	// This keyword
 	THIS TokenType = "THIS"
+	// NEW keyword
+	NEW TokenType = "NEW"
+	// INTERFACE keyword
+	INTERFACE TokenType = "INTERFACE"
 )
 
 var keywords = map[string]TokenType{
@@ -164,13 +168,15 @@ var keywords = map[string]TokenType{
 	"while":     WHILE,
 	"do":        DO, // Added for do...while
 	"for":       FOR,
-	"break":     BREAK,    // Added
-	"continue":  CONTINUE, // Added
-	"type":      TYPE,     // Added
-	"switch":    SWITCH,   // Added
-	"case":      CASE,     // Added
-	"default":   DEFAULT,  // Added
-	"this":      THIS,     // Added for this keyword
+	"break":     BREAK,     // Added
+	"continue":  CONTINUE,  // Added
+	"type":      TYPE,      // Added
+	"switch":    SWITCH,    // Added
+	"case":      CASE,      // Added
+	"default":   DEFAULT,   // Added
+	"this":      THIS,      // Added for this keyword
+	"new":       NEW,       // Added for NEW keyword
+	"interface": INTERFACE, // Added for interface keyword
 }
 
 // LookupIdent checks the keywords table for an identifier.

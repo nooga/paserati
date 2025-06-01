@@ -59,13 +59,18 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	functionsToVisitBody := []*parser.FunctionLiteral{} // Function literals needing body check in Pass 3
 
 	// --- Pass 1: Define ALL Type Aliases ---
-	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases ---\n")
+	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases and Interfaces ---\n")
 	for _, stmt := range program.Statements {
 		if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
 			debugPrintf("// [Checker Pass 1] Processing Type Alias: %s\n", aliasStmt.Name.Value)
 			c.checkTypeAliasStatement(aliasStmt) // Uses c.env (globalEnv)
 			nodesProcessedPass1[aliasStmt] = true
 			nodesProcessedPass2[aliasStmt] = true // Also mark for Pass 2 skip
+		} else if interfaceStmt, ok := stmt.(*parser.InterfaceDeclaration); ok {
+			debugPrintf("// [Checker Pass 1] Processing Interface: %s\n", interfaceStmt.Name.Value)
+			c.checkInterfaceDeclaration(interfaceStmt)
+			nodesProcessedPass1[interfaceStmt] = true
+			nodesProcessedPass2[interfaceStmt] = true // Also mark for Pass 2 skip
 		}
 	}
 	debugPrintf("// --- Checker - Pass 1: Complete ---\n")
@@ -533,6 +538,10 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.FunctionTypeExpression:
 		return c.resolveFunctionTypeSignature(node)
 
+	// --- NEW: Handle ObjectTypeExpression ---
+	case *parser.ObjectTypeExpression:
+		return c.resolveObjectTypeSignature(node)
+
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
@@ -560,6 +569,21 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 
 	// Construct the internal FunctionType representation
 	return &types.FunctionType{ParameterTypes: paramTypes, ReturnType: returnType}
+}
+
+// --- NEW: Helper to resolve ObjectTypeExpression nodes ---
+func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
+	properties := make(map[string]types.Type)
+	for _, prop := range node.Properties {
+		propType := c.resolveTypeAnnotation(prop.Type)
+		if propType == nil {
+			debugPrintf("// [Checker ObjectType] Failed to resolve type for property '%s' in object type literal. Using Any.\n", prop.Name.Value)
+			propType = types.Any
+		}
+		properties[prop.Name.Value] = propType
+	}
+
+	return &types.ObjectType{Properties: properties}
 }
 
 // isAssignable checks if a value of type `source` can be assigned to a variable
@@ -754,6 +778,32 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 	}
 	// --- End Function Type Handling ---
 
+	// --- NEW: Object Type Assignability ---
+	sourceObject, sourceIsObject := source.(*types.ObjectType)
+	targetObject, targetIsObject := target.(*types.ObjectType)
+
+	if targetIsObject && sourceIsObject {
+		// Both are objects. Check structural compatibility.
+		// For source to be assignable to target:
+		// - All properties required in target must exist in source with compatible types
+		// - Source can have additional properties (structural typing)
+
+		for targetPropName, targetPropType := range targetObject.Properties {
+			sourcePropType, exists := sourceObject.Properties[targetPropName]
+			if !exists {
+				// Target requires property that source doesn't have
+				return false
+			}
+			if !c.isAssignable(sourcePropType, targetPropType) {
+				// Property type mismatch
+				return false
+			}
+		}
+		// All target properties found and compatible in source
+		return true
+	}
+	// --- End Object Type Handling ---
+
 	// TODO: Handle null/undefined assignability based on strict flags later.
 	// For now, let's be strict unless target is Any/Unknown/Union.
 	if source == types.Null && target != types.Null { // Allow null -> T | null
@@ -786,6 +836,9 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.TypeAliasStatement:
 		c.checkTypeAliasStatement(node)
+
+	case *parser.InterfaceDeclaration:
+		c.checkInterfaceDeclaration(node)
 
 	case *parser.ExpressionStatement:
 		c.visit(node.Expression)
@@ -1999,6 +2052,37 @@ func (c *Checker) visit(node parser.Node) {
 		// TODO: Resolve TypeAnnotation and store in node.ComputedType
 		// TODO: Define param name in function scope environment
 
+	case *parser.NewExpression:
+		// Check the constructor expression
+		c.visit(node.Constructor)
+		constructorType := node.Constructor.GetComputedType()
+		if constructorType == nil {
+			constructorType = types.Any
+		}
+
+		// Check arguments
+		for _, arg := range node.Arguments {
+			c.visit(arg)
+		}
+
+		// Determine the result type based on the constructor type
+		var resultType types.Type
+		if _, ok := constructorType.(*types.FunctionType); ok {
+			// For function constructors, the result is typically an object
+			// In a more sophisticated implementation, we'd track constructor return types
+			// For now, we'll assume constructors return objects
+			resultType = &types.ObjectType{Properties: make(map[string]types.Type)}
+		} else if constructorType == types.Any {
+			// If constructor type is Any, result is also Any
+			resultType = types.Any
+		} else {
+			// Invalid constructor type
+			c.addError(node.Constructor, fmt.Sprintf("'%s' is not a constructor", constructorType.String()))
+			resultType = types.Any
+		}
+
+		node.SetComputedType(resultType)
+
 	default:
 		// Optional: Add error for unhandled node types
 		// c.addError(0, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
@@ -2053,6 +2137,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token
 	case *parser.TypeAliasStatement:
 		return n.Token
+	case *parser.InterfaceDeclaration:
+		return n.Token
 
 	// Expressions (use the primary token where available)
 	case *parser.Identifier:
@@ -2081,6 +2167,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token // The '?' token
 	case *parser.CallExpression:
 		return n.Token // The '(' token
+	case *parser.NewExpression:
+		return n.Token // The 'new' token
 	case *parser.IndexExpression:
 		return n.Token // The '[' token
 	case *parser.ArrayLiteral:
@@ -2130,6 +2218,39 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 		debugPrintf("// [Checker TypeAlias P1] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
 	}
 	// No need to set computed type on the TypeAliasStatement node itself
+}
+
+// --- NEW: Interface Declaration Check ---
+
+func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
+	// Called during Pass 1 for interface declarations
+
+	// 1. Check if already defined
+	if _, exists := c.env.ResolveType(node.Name.Value); exists {
+		debugPrintf("// [Checker Interface P1] Interface '%s' already defined? Skipping.\n", node.Name.Value)
+		return
+	}
+
+	// 2. Build the ObjectType from interface properties
+	properties := make(map[string]types.Type)
+	for _, prop := range node.Properties {
+		propType := c.resolveTypeAnnotation(prop.Type)
+		if propType == nil {
+			debugPrintf("// [Checker Interface P1] Failed to resolve type for property '%s' in interface '%s'. Using Any.\n", prop.Name.Value, node.Name.Value)
+			propType = types.Any
+		}
+		properties[prop.Name.Value] = propType
+	}
+
+	// 3. Create the ObjectType representing this interface
+	interfaceType := &types.ObjectType{Properties: properties}
+
+	// 4. Define the interface as a type alias in the environment
+	if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
+		debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
+	} else {
+		debugPrintf("// [Checker Interface P1] Defined interface '%s' as type '%s' in env %p\n", node.Name.Value, interfaceType.String(), c.env)
+	}
 }
 
 // --- NEW: Array Literal Check ---
