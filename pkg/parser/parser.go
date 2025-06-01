@@ -1595,27 +1595,8 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		Left:     left,
 	}
 
-	// Check if the left side is assignable (Identifier or IndexExpression)
-	validLHS := false
-	switch left.(type) {
-	case *Identifier:
-		validLHS = true
-	case *IndexExpression:
-		// // Allow simple assignment (=) for index expressions
-		// if expr.Operator == "=" {
-		// 	validLHS = true
-		// } else {
-		// 	msg := fmt.Sprintf("operator %s cannot be applied to index expression", expr.Operator)
-		// 	p.addError(expr.Token, msg)
-		// 	return nil
-		// }
-		validLHS = true
-		// TODO: Add case for MemberExpression later
-	case *MemberExpression:
-		validLHS = true
-	}
-
-	if !validLHS {
+	// Check if the left side is assignable using the shared utility function
+	if !p.isValidLValue(left) {
 		msg := fmt.Sprintf("invalid left-hand side in assignment: %s", left.String())
 		p.addError(expr.Token, msg)
 		return nil
@@ -1884,6 +1865,20 @@ func (p *Parser) parseDoWhileStatement() *DoWhileStatement {
 
 // --- New: Update Expression Parsing ---
 
+// isValidLValue checks if an expression can be used as an lvalue (left-hand side of assignment or update operations)
+func (p *Parser) isValidLValue(expr Expression) bool {
+	switch expr.(type) {
+	case *Identifier:
+		return true
+	case *IndexExpression:
+		return true
+	case *MemberExpression:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *Parser) parsePrefixUpdateExpression() Expression {
 	expr := &UpdateExpression{
 		Token:    p.curToken, // ++ or --
@@ -1893,9 +1888,9 @@ func (p *Parser) parsePrefixUpdateExpression() Expression {
 	p.nextToken()                             // Consume ++ or --
 	expr.Argument = p.parseExpression(PREFIX) // Parse argument with PREFIX precedence
 
-	// Check if argument is assignable (currently just Identifier)
-	if _, ok := expr.Argument.(*Identifier); !ok {
-		msg := fmt.Sprintf("invalid argument for prefix %s: expected identifier, got %T",
+	// Check if argument is assignable (Identifier, IndexExpression, or MemberExpression)
+	if !p.isValidLValue(expr.Argument) {
+		msg := fmt.Sprintf("invalid argument for prefix %s: expected identifier, member expression, or index expression, got %T",
 			expr.Operator, expr.Argument)
 		p.addError(expr.Token, msg)
 		return nil
@@ -1912,9 +1907,9 @@ func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
 		Prefix:   false,
 	}
 
-	// Check if argument is assignable (currently just Identifier)
-	if _, ok := expr.Argument.(*Identifier); !ok {
-		msg := fmt.Sprintf("invalid argument for postfix %s: expected identifier, got %T",
+	// Check if argument is assignable (Identifier, IndexExpression, or MemberExpression)
+	if !p.isValidLValue(expr.Argument) {
+		msg := fmt.Sprintf("invalid argument for postfix %s: expected identifier, member expression, or index expression, got %T",
 			expr.Operator, expr.Argument)
 		p.addError(expr.Token, msg)
 		return nil

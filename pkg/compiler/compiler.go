@@ -1832,95 +1832,199 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) errors
 func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors.PaseratiError {
 	line := node.Token.Line
 
-	// 1. Argument must be an identifier (parser should enforce, but check again)
-	ident, ok := node.Argument.(*parser.Identifier)
-	if !ok {
-		return NewCompileError(node, fmt.Sprintf("invalid target for %s: expected identifier, got %T", node.Operator, node.Argument))
+	// Define types for different lvalue kinds
+	type lvalueType int
+	const (
+		lvalueIdentifier lvalueType = iota
+		lvalueMemberExpr
+		lvalueIndexExpr
+	)
+
+	var lvalueKind lvalueType
+	var currentValueReg Register // Register holding the current value before increment/decrement
+
+	// Information needed for storing back to different lvalue types
+	var identInfo struct {
+		targetReg    Register
+		isUpvalue    bool
+		upvalueIndex uint8
+	}
+	var memberInfo struct {
+		objectReg    Register
+		nameConstIdx uint16
+	}
+	var indexInfo struct {
+		arrayReg Register
+		indexReg Register
 	}
 
-	// 2. Resolve identifier and determine if local or upvalue
-	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
-	if !found {
-		return NewCompileError(node, fmt.Sprintf("applying %s to undeclared variable '%s'", node.Operator, ident.Value))
+	// 1. Determine lvalue type and load current value
+	switch argNode := node.Argument.(type) {
+	case *parser.Identifier:
+		lvalueKind = lvalueIdentifier
+		// Resolve identifier and determine if local or upvalue
+		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(argNode.Value)
+		if !found {
+			return NewCompileError(node, fmt.Sprintf("applying %s to undeclared variable '%s'", node.Operator, argNode.Value))
+		}
+
+		if definingTable == c.currentSymbolTable {
+			// Local variable: Get its register
+			identInfo.targetReg = symbolRef.Register
+			identInfo.isUpvalue = false
+			currentValueReg = identInfo.targetReg // Current value is already in targetReg
+		} else {
+			// Upvalue: Get its index and load current value into a temporary register
+			identInfo.isUpvalue = true
+			identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
+			currentValueReg = c.regAlloc.Alloc()
+			c.emitOpCode(vm.OpLoadFree, line)
+			c.emitByte(byte(currentValueReg))
+			c.emitByte(identInfo.upvalueIndex)
+		}
+
+	case *parser.MemberExpression:
+		lvalueKind = lvalueMemberExpr
+		// Compile the object part
+		err := c.compileNode(argNode.Object)
+		if err != nil {
+			return NewCompileError(argNode.Object, "error compiling object part of member expression").CausedBy(err)
+		}
+		memberInfo.objectReg = c.regAlloc.Current()
+
+		// Get property name (assume identifier property for now: obj.prop)
+		propIdent := argNode.Property
+		propName := propIdent.Value
+		memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+
+		// Load current property value
+		currentValueReg = c.regAlloc.Alloc()
+		c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+
+	case *parser.IndexExpression:
+		lvalueKind = lvalueIndexExpr
+		// Compile array expression
+		err := c.compileNode(argNode.Left)
+		if err != nil {
+			return NewCompileError(argNode.Left, "error compiling array part of index expression").CausedBy(err)
+		}
+		indexInfo.arrayReg = c.regAlloc.Current()
+
+		// Compile index expression
+		err = c.compileNode(argNode.Index)
+		if err != nil {
+			return NewCompileError(argNode.Index, "error compiling index part of index expression").CausedBy(err)
+		}
+		indexInfo.indexReg = c.regAlloc.Current()
+
+		// Load the current value at the index
+		currentValueReg = c.regAlloc.Alloc()
+		c.emitOpCode(vm.OpGetIndex, line)
+		c.emitByte(byte(currentValueReg))
+		c.emitByte(byte(indexInfo.arrayReg))
+		c.emitByte(byte(indexInfo.indexReg))
+
+	default:
+		return NewCompileError(node, fmt.Sprintf("invalid target for %s: expected identifier, member expression, or index expression, got %T", node.Operator, node.Argument))
 	}
 
-	var targetReg Register
-	isUpvalue := false
-	var upvalueIndex uint8
-	targetRegIsTemporary := false // Flag if targetReg was allocated for upvalue load
-
-	if definingTable == c.currentSymbolTable {
-		// Local variable: Get its register.
-		targetReg = symbolRef.Register
-		// If it's a compound assignment, the existing value in targetReg is used directly.
-		// If it's simple assignment '=', targetReg will be overwritten later.
-	} else {
-		// Upvalue: Get its index and load current value into a temporary register.
-		isUpvalue = true
-		upvalueIndex = c.addFreeSymbol(node, &symbolRef)
-		targetReg = c.regAlloc.Alloc()
-		targetRegIsTemporary = true // Mark this register as temporary
-		c.emitOpCode(vm.OpLoadFree, line)
-		c.emitByte(byte(targetReg))
-		c.emitByte(upvalueIndex)
-	}
-	// Now targetReg holds the *current* value (either directly or loaded from upvalue)
-
-	// 3. Load constant 1
+	// 2. Load constant 1
 	constOneReg := c.regAlloc.Alloc()
 	constOneIdx := c.chunk.AddConstant(vm.Number(1))
 	c.emitLoadConstant(constOneReg, constOneIdx, line)
 
-	// 4. Perform Pre/Post logic
+	// 3. Perform Pre/Post logic
 	resultReg := c.regAlloc.Alloc() // Register to hold the expression's final result
 
 	if node.Prefix {
 		// Prefix (++x or --x):
-		// a. Operate: targetReg = targetReg +/- constOneReg
+		// a. Operate: currentValueReg = currentValueReg +/- constOneReg
 		switch node.Operator {
 		case "++":
-			c.emitAdd(targetReg, targetReg, constOneReg, line)
+			c.emitAdd(currentValueReg, currentValueReg, constOneReg, line)
 		case "--":
-			c.emitSubtract(targetReg, targetReg, constOneReg, line)
+			c.emitSubtract(currentValueReg, currentValueReg, constOneReg, line)
 		}
-		// b. Store back if upvalue
-		if isUpvalue {
-			c.emitSetUpvalue(upvalueIndex, targetReg, line)
-		}
+		// b. Store back to lvalue
+		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, currentValueReg, line)
 		// c. Result of expression is the *new* value
-		c.emitMove(resultReg, targetReg, line)
-
-		// Free the temporary targetReg if it was allocated for an upvalue
-		if targetRegIsTemporary {
-			c.regAlloc.Free(targetReg)
-		}
+		c.emitMove(resultReg, currentValueReg, line)
 
 	} else {
 		// Postfix (x++ or x--):
-		// a. Save original value: resultReg = targetReg
-		c.emitMove(resultReg, targetReg, line)
-		// b. Operate: targetReg = targetReg +/- constOneReg
+		// a. Save original value: resultReg = currentValueReg
+		c.emitMove(resultReg, currentValueReg, line)
+		// b. Operate: currentValueReg = currentValueReg +/- constOneReg
 		switch node.Operator {
 		case "++":
-			c.emitAdd(targetReg, targetReg, constOneReg, line)
+			c.emitAdd(currentValueReg, currentValueReg, constOneReg, line)
 		case "--":
-			c.emitSubtract(targetReg, targetReg, constOneReg, line)
+			c.emitSubtract(currentValueReg, currentValueReg, constOneReg, line)
 		}
-		// c. Store back if upvalue
-		if isUpvalue {
-			c.emitSetUpvalue(upvalueIndex, targetReg, line)
-			// Free the temporary targetReg AFTER storing back
-			c.regAlloc.Free(targetReg)
-		}
+		// c. Store back to lvalue
+		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, currentValueReg, line)
 		// d. Result of expression is the *original* value (already saved in resultReg)
 	}
 
-	// Release temporary register for constant 1
+	// 4. Clean up temporary registers
 	c.regAlloc.Free(constOneReg)
+	// Free the currentValueReg if it was allocated as temporary (for upvalues, member exprs, index exprs)
+	if lvalueKind != lvalueIdentifier || identInfo.isUpvalue {
+		c.regAlloc.Free(currentValueReg)
+	}
+	// Free object/array/index registers for member/index expressions
+	if lvalueKind == lvalueMemberExpr {
+		c.regAlloc.Free(memberInfo.objectReg)
+	} else if lvalueKind == lvalueIndexExpr {
+		c.regAlloc.Free(indexInfo.arrayReg)
+		c.regAlloc.Free(indexInfo.indexReg)
+	}
 
 	// 5. Set compiler's current register to the expression result
 	c.regAlloc.SetCurrent(resultReg)
 	return nil
+}
+
+// storeToLvalue is a helper function to store a value back to different types of lvalues
+func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInfo interface{}, valueReg Register, line int) {
+	const (
+		lvalueIdentifier = iota
+		lvalueMemberExpr
+		lvalueIndexExpr
+	)
+
+	switch lvalueKind {
+	case lvalueIdentifier:
+		info := identInfo.(struct {
+			targetReg    Register
+			isUpvalue    bool
+			upvalueIndex uint8
+		})
+		if info.isUpvalue {
+			c.emitSetUpvalue(info.upvalueIndex, valueReg, line)
+		} else {
+			if valueReg != info.targetReg {
+				c.emitMove(info.targetReg, valueReg, line)
+			}
+		}
+
+	case lvalueMemberExpr:
+		info := memberInfo.(struct {
+			objectReg    Register
+			nameConstIdx uint16
+		})
+		c.emitSetProp(info.objectReg, valueReg, info.nameConstIdx, line)
+
+	case lvalueIndexExpr:
+		info := indexInfo.(struct {
+			arrayReg Register
+			indexReg Register
+		})
+		c.emitOpCode(vm.OpSetIndex, line)
+		c.emitByte(byte(info.arrayReg))
+		c.emitByte(byte(info.indexReg))
+		c.emitByte(byte(valueReg))
+	}
 }
 
 // --- NEW: Array/Index ---
