@@ -99,6 +99,13 @@ func (c *Compiler) emitDivide(dest, left, right Register, line int) {
 	c.emitByte(byte(right))
 }
 
+func (c *Compiler) emitStringConcat(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpStringConcat, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
 func (c *Compiler) emitEqual(dest, left, right Register, line int) {
 	c.emitOpCode(vm.OpEqual, line)
 	c.emitByte(byte(dest))

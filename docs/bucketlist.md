@@ -23,7 +23,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Array Literals (`[]`)
 - [x] Object Literals (`{}`)
 - [ ] Regular Expression Literals (`/abc/`)
-- [ ] Template Literals (backticks, `${}`)
+- [x] Template Literals (backticks, `${}`)
 - [ ] BigInt Literals (`100n`)
 
 ## Operators

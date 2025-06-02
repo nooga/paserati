@@ -288,6 +288,48 @@ func (s *StringLiteral) expressionNode()      {}
 func (s *StringLiteral) TokenLiteral() string { return s.Token.Literal }
 func (s *StringLiteral) String() string       { return s.Token.Literal } // Maybe add quotes?
 
+// TemplateLiteral represents template literals with interpolations.
+// `hello ${name} world` becomes: ["hello ", Expression("name"), " world"]
+type TemplateLiteral struct {
+	BaseExpression             // Embed base for ComputedType (always string)
+	Token          lexer.Token // The opening '`' token
+	Parts          []Node      // Alternating string parts and expressions
+}
+
+func (tl *TemplateLiteral) expressionNode()      {}
+func (tl *TemplateLiteral) TokenLiteral() string { return tl.Token.Literal }
+func (tl *TemplateLiteral) String() string {
+	var out bytes.Buffer
+	out.WriteString("`")
+	for i, part := range tl.Parts {
+		if i%2 == 0 {
+			// String part - escape backticks and dollar signs
+			str := part.String()
+			str = strings.ReplaceAll(str, "`", "\\`")
+			str = strings.ReplaceAll(str, "$", "\\$")
+			out.WriteString(str)
+		} else {
+			// Expression part
+			out.WriteString("${")
+			out.WriteString(part.String())
+			out.WriteString("}")
+		}
+	}
+	out.WriteString("`")
+	if tl.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", tl.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// --- ADDED: Helper struct for template string parts ---
+type TemplateStringPart struct {
+	Value string // The actual string content
+}
+
+func (tsp *TemplateStringPart) TokenLiteral() string { return tsp.Value }
+func (tsp *TemplateStringPart) String() string       { return tsp.Value }
+
 // NullLiteral represents the `null` keyword.
 type NullLiteral struct {
 	BaseExpression             // Embed base for ComputedType

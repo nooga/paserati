@@ -466,18 +466,26 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		return nil // ADDED: Explicit return
 
 	case *parser.StringLiteral:
-		destReg := c.regAlloc.Alloc()
-		c.emitLoadNewConstant(destReg, vm.String(node.Value), node.Token.Line)
-		return nil // ADDED: Explicit return
+		// Handle string literals by adding them to constants
+		c.emitLoadNewConstant(c.regAlloc.Alloc(), vm.String(node.Value), node.Token.Line)
+		c.lastExprReg = c.regAlloc.Current()
+		c.lastExprRegValid = true
+		return nil
+
+	case *parser.TemplateLiteral:
+		return c.compileTemplateLiteral(node)
 
 	case *parser.BooleanLiteral:
-		destReg := c.regAlloc.Alloc()
+		// Handle boolean literals by using appropriate opcode
+		reg := c.regAlloc.Alloc()
 		if node.Value {
-			c.emitLoadTrue(destReg, node.Token.Line)
+			c.emitLoadTrue(reg, node.Token.Line)
 		} else {
-			c.emitLoadFalse(destReg, node.Token.Line)
+			c.emitLoadFalse(reg, node.Token.Line)
 		}
-		return nil // ADDED: Explicit return
+		c.lastExprReg = reg
+		c.lastExprRegValid = true
+		return nil
 
 	case *parser.NullLiteral:
 		destReg := c.regAlloc.Alloc()
@@ -3082,4 +3090,85 @@ func (c *Compiler) getOrAssignGlobalIndex(name string) uint16 {
 	}
 
 	return uint16(idx)
+}
+
+// compileTemplateLiteral compiles template literals using the simple binary OpStringConcat approach
+func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral) errors.PaseratiError {
+	line := node.Token.Line
+	parts := node.Parts
+
+	// Handle edge case: empty template ``
+	if len(parts) == 0 {
+		// Empty template becomes empty string
+		destReg := c.regAlloc.Alloc()
+		c.emitLoadNewConstant(destReg, vm.String(""), line)
+		return nil
+	}
+
+	// Handle single part (just a string)
+	if len(parts) == 1 {
+		if stringPart, ok := parts[0].(*parser.TemplateStringPart); ok {
+			destReg := c.regAlloc.Alloc()
+			c.emitLoadNewConstant(destReg, vm.String(stringPart.Value), line)
+			return nil
+		}
+		// Single interpolated expression: convert to string
+		err := c.compileNode(parts[0])
+		if err != nil {
+			return err
+		}
+		// Result is already in a register, but we might need to convert to string
+		// For now, assume expressions evaluate to their string representation
+		// TODO: Add explicit string conversion if needed
+		return nil
+	}
+
+	// Multiple parts: build up result using binary concatenation
+	var resultReg Register
+	var initialized bool = false
+
+	for _, part := range parts {
+		switch p := part.(type) {
+		case *parser.TemplateStringPart:
+			// String part: load as constant
+			stringReg := c.regAlloc.Alloc()
+			c.emitLoadNewConstant(stringReg, vm.String(p.Value), line)
+
+			if !initialized {
+				resultReg = stringReg
+				initialized = true
+			} else {
+				// Concatenate with previous result
+				newResultReg := c.regAlloc.Alloc()
+				c.emitStringConcat(newResultReg, resultReg, stringReg, line)
+				c.regAlloc.Free(resultReg) // Free old result
+				c.regAlloc.Free(stringReg) // Free string constant
+				resultReg = newResultReg
+			}
+
+		default:
+			// Expression part: compile and concatenate
+			err := c.compileNode(p)
+			if err != nil {
+				return err
+			}
+			exprReg := c.regAlloc.Current()
+
+			if !initialized {
+				resultReg = exprReg
+				initialized = true
+			} else {
+				// Concatenate with previous result
+				newResultReg := c.regAlloc.Alloc()
+				c.emitStringConcat(newResultReg, resultReg, exprReg, line)
+				c.regAlloc.Free(resultReg) // Free old result
+				c.regAlloc.Free(exprReg)   // Free expression result
+				resultReg = newResultReg
+			}
+		}
+	}
+
+	// Update register allocator state
+	c.regAlloc.SetCurrent(resultReg)
+	return nil
 }

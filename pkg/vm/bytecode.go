@@ -28,6 +28,9 @@ const (
 	OpMultiply OpCode = 8 // Rx Ry Rz: Rx = Ry * Rz
 	OpDivide   OpCode = 9 // Rx Ry Rz: Rx = Ry / Rz
 
+	// --- NEW: String Operations ---
+	OpStringConcat OpCode = 49 // Rx Ry Rz: Rx = Ry + Rz (optimized string concatenation)
+
 	// Unary
 	OpNegate OpCode = 10 // Rx Ry: Rx = -Ry
 	OpNot    OpCode = 11 // Rx Ry: Rx = !Ry (logical not)
@@ -121,6 +124,8 @@ func (op OpCode) String() string {
 		return "OpMultiply"
 	case OpDivide:
 		return "OpDivide"
+	case OpStringConcat:
+		return "OpStringConcat"
 	case OpNegate:
 		return "OpNegate"
 	case OpNot:
@@ -306,7 +311,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
-	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual,
+	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpStringConcat, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual,
 		OpRemainder, OpExponent,
 		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
 		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight:

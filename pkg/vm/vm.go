@@ -437,6 +437,19 @@ func (vm *VM) run() (InterpretResult, Value) {
 			typeofStr := getTypeofString(srcVal)
 			registers[destReg] = String(typeofStr)
 
+		case OpStringConcat:
+			destReg := code[ip]
+			leftReg := code[ip+1]
+			rightReg := code[ip+2]
+			ip += 3
+			leftVal := registers[leftReg]
+			rightVal := registers[rightReg]
+
+			// Optimized string concatenation: convert both operands to strings
+			leftStr := leftVal.ToString()
+			rightStr := rightVal.ToString()
+			registers[destReg] = String(leftStr + rightStr)
+
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
 			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
 			OpGreater, OpLess, OpLessEqual,

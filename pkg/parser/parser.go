@@ -173,6 +173,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
 	p.registerPrefix(lexer.NUMBER, p.parseNumberLiteral)
 	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
+	p.registerPrefix(lexer.TEMPLATE_START, p.parseTemplateLiteral) // NEW: Template literals
 	p.registerPrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.NULL, p.parseNullLiteral)
@@ -851,6 +852,76 @@ func (p *Parser) parseNumberLiteral() Expression {
 
 func (p *Parser) parseStringLiteral() Expression {
 	return &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+}
+
+// parseTemplateLiteral parses template literals with interpolations
+// Expects current token to be TEMPLATE_START (`), processes tokens in sequence,
+// ends with TEMPLATE_END (`). Always maintains string/expression alternation.
+func (p *Parser) parseTemplateLiteral() Expression {
+	lit := &TemplateLiteral{Token: p.curToken} // TEMPLATE_START token
+	lit.Parts = []Node{}
+
+	// Consume the opening backtick
+	p.nextToken()
+
+	// Always start with a string part (can be empty)
+	expectingString := true
+
+	for !p.curTokenIs(lexer.TEMPLATE_END) && !p.curTokenIs(lexer.EOF) {
+		if p.curTokenIs(lexer.TEMPLATE_STRING) {
+			if !expectingString {
+				p.addError(p.curToken, "unexpected string in template literal")
+				return nil
+			}
+			// String part of the template
+			stringPart := &TemplateStringPart{Value: p.curToken.Literal}
+			lit.Parts = append(lit.Parts, stringPart)
+			expectingString = false
+			p.nextToken()
+		} else if p.curTokenIs(lexer.TEMPLATE_INTERPOLATION) {
+			// If we were expecting a string but got interpolation, add empty string
+			if expectingString {
+				emptyString := &TemplateStringPart{Value: ""}
+				lit.Parts = append(lit.Parts, emptyString)
+			}
+
+			p.nextToken() // Move past ${
+
+			// Parse the expression inside the interpolation
+			expr := p.parseExpression(LOWEST)
+			if expr == nil {
+				p.addError(p.curToken, "failed to parse expression in template interpolation")
+				return nil
+			}
+			lit.Parts = append(lit.Parts, expr)
+
+			// Expect closing brace }
+			if !p.expectPeek(lexer.RBRACE) {
+				p.addError(p.curToken, "expected '}' to close template interpolation")
+				return nil
+			}
+			p.nextToken()          // Move past }
+			expectingString = true // After expression, we expect a string
+		} else {
+			// Unexpected token
+			p.addError(p.curToken, fmt.Sprintf("unexpected token in template literal: %s", p.curToken.Type))
+			return nil
+		}
+	}
+
+	if !p.curTokenIs(lexer.TEMPLATE_END) {
+		p.addError(p.curToken, "unterminated template literal, expected closing backtick")
+		return nil
+	}
+
+	// If we were expecting a string at the end, add empty string
+	if expectingString {
+		emptyString := &TemplateStringPart{Value: ""}
+		lit.Parts = append(lit.Parts, emptyString)
+	}
+
+	// Don't consume the closing backtick here - let the caller handle it
+	return lit
 }
 
 func (p *Parser) parseBooleanLiteral() Expression {

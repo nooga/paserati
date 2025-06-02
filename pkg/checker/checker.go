@@ -1223,6 +1223,10 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.UndefinedLiteral:
 		node.SetComputedType(types.Undefined)
 
+	// --- NEW: Handle TemplateLiteral ---
+	case *parser.TemplateLiteral:
+		c.checkTemplateLiteral(node)
+
 	// --- NEW: Handle ThisExpression ---
 	case *parser.ThisExpression:
 		// In global context or regular function context, 'this' is undefined
@@ -3017,6 +3021,43 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	// Set the computed type for the ObjectLiteral node itself
 	node.SetComputedType(objType)
 	debugPrintf("// [Checker ObjectLit] Computed type: %s\n", objType.String())
+}
+
+// --- NEW: Template Literal Check ---
+func (c *Checker) checkTemplateLiteral(node *parser.TemplateLiteral) {
+	// Template literals always evaluate to string type, regardless of interpolated expressions
+	// But we still need to visit all the parts to check for type errors
+
+	for _, part := range node.Parts {
+		switch p := part.(type) {
+		case *parser.TemplateStringPart:
+			// String parts don't need type checking - they're always strings
+			// TemplateStringPart doesn't implement Expression interface, so no SetComputedType
+			debugPrintf("// [Checker TemplateLit] Processing string part: '%s'\n", p.Value)
+
+		default:
+			// Expression parts: visit them to check for type errors
+			c.visit(part)
+			// Get the computed type (cast to Expression interface for safety)
+			if expr, ok := part.(parser.Expression); ok {
+				exprType := expr.GetComputedType()
+				if exprType == nil {
+					exprType = types.Any // Handle potential error
+				}
+
+				// In JavaScript/TypeScript, any expression in template literal interpolation
+				// gets converted to string, so we don't need to enforce any particular type.
+				// However, we can warn about problematic types if needed in the future.
+				debugPrintf("// [Checker TemplateLit] Interpolated expression type: %s\n", exprType.String())
+			} else {
+				debugPrintf("// [Checker TemplateLit] WARNING: Non-expression part in template literal: %T\n", part)
+			}
+		}
+	}
+
+	// Template literals always result in string type
+	node.SetComputedType(types.String)
+	debugPrintf("// [Checker TemplateLit] Set template literal type to: string\n")
 }
 
 // --- NEW: Helper to resolve FunctionLiteral signature to types.FunctionType ---

@@ -42,6 +42,12 @@ const (
 	NULL      TokenType = "NULL"      // Added
 	UNDEFINED TokenType = "UNDEFINED" // Added
 
+	// --- NEW: Template Literal Tokens ---
+	TEMPLATE_START         TokenType = "TEMPLATE_START"         // ` (opening backtick)
+	TEMPLATE_STRING        TokenType = "TEMPLATE_STRING"        // string parts between interpolations
+	TEMPLATE_INTERPOLATION TokenType = "TEMPLATE_INTERPOLATION" // ${ (start of interpolation)
+	TEMPLATE_END           TokenType = "TEMPLATE_END"           // ` (closing backtick)
+
 	// Operators (add more later)
 	ASSIGN   TokenType = "="
 	PLUS     TokenType = "+"
@@ -200,6 +206,11 @@ type Lexer struct {
 	ch           byte // current char under examination
 	line         int  // current 1-based line number
 	column       int  // current 1-based column number (position of l.position on l.line)
+
+	// --- NEW: Template literal state tracking ---
+	inTemplate    bool // true when we're inside a template literal
+	braceDepth    int  // tracks nested braces inside ${...} interpolations
+	templateStart int  // position where current template started (for error reporting)
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -276,12 +287,66 @@ func (l *Lexer) skipWhitespace() {
 func (l *Lexer) NextToken() Token {
 	var tok Token
 
-	l.skipWhitespace()
+	// --- MODIFIED: Don't skip whitespace inside template literals ---
+	if !l.inTemplate || l.braceDepth > 0 {
+		l.skipWhitespace()
+	}
 
 	// Capture token start position *after* skipping whitespace
 	startLine := l.line
 	startCol := l.column
 	startPos := l.position
+
+	// --- NEW: Handle template literal state ---
+	if l.inTemplate && l.braceDepth == 0 {
+		// We're inside a template literal but not in an interpolation
+		// Check if we're at the start of an interpolation or template string
+		if l.ch == '$' && l.peekChar() == '{' {
+			// Start of interpolation: ${
+			literal := l.input[startPos : l.position+2] // "${"
+			l.readChar()                                // Consume '$'
+			l.readChar()                                // Consume '{'
+			l.braceDepth = 1                            // Start tracking braces
+			return Token{
+				Type:     TEMPLATE_INTERPOLATION,
+				Literal:  literal,
+				Line:     startLine,
+				Column:   startCol,
+				StartPos: startPos,
+				EndPos:   l.position,
+			}
+		} else if l.ch == '`' {
+			// End of template literal - handle in normal switch case below
+		} else {
+			// Read template string content
+			return l.readTemplateString(startLine, startCol, startPos)
+		}
+	}
+
+	// --- MODIFIED: Handle closing braces in interpolation mode ---
+	if l.inTemplate && l.braceDepth > 0 && l.ch == '}' {
+		l.braceDepth--
+		if l.braceDepth == 0 {
+			// End of interpolation, back to template string mode
+			literal := string(l.ch)
+			l.readChar()
+			return Token{
+				Type:     RBRACE,
+				Literal:  literal,
+				Line:     startLine,
+				Column:   startCol,
+				StartPos: startPos,
+				EndPos:   l.position,
+			}
+		}
+		// Fall through to normal brace handling
+	}
+
+	// --- MODIFIED: Track opening braces in interpolation mode ---
+	if l.inTemplate && l.braceDepth > 0 && l.ch == '{' {
+		l.braceDepth++
+		// Fall through to normal brace handling
+	}
 
 	switch l.ch {
 	case '=':
@@ -649,6 +714,8 @@ func (l *Lexer) NextToken() Token {
 			l.readChar()            // Advance past '%'
 			tok = Token{Type: REMAINDER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
+	case '`': // Template literal backtick
+		return l.readTemplateLiteral(startLine, startCol, startPos)
 	case 0: // EOF
 		tok = Token{Type: EOF, Literal: "", Line: startLine, Column: startCol, StartPos: startPos, EndPos: startPos}
 	default:
@@ -967,6 +1034,123 @@ func isDigitForBase(ch byte, base int) bool {
 		return isBinaryDigit(ch)
 	default:
 		return false
+	}
+}
+
+// readTemplateLiteral handles template literal tokenization
+// Returns the appropriate token based on current template state
+func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
+	if !l.inTemplate {
+		// Opening backtick - start of template literal
+		l.inTemplate = true
+		l.templateStart = startPos
+		l.braceDepth = 0
+
+		literal := string(l.ch) // The opening backtick
+		l.readChar()            // Consume the backtick
+
+		return Token{
+			Type:     TEMPLATE_START,
+			Literal:  literal,
+			Line:     startLine,
+			Column:   startCol,
+			StartPos: startPos,
+			EndPos:   l.position,
+		}
+	} else {
+		// Closing backtick - end of template literal
+		l.inTemplate = false
+		l.braceDepth = 0
+
+		literal := string(l.ch) // The closing backtick
+		l.readChar()            // Consume the backtick
+
+		return Token{
+			Type:     TEMPLATE_END,
+			Literal:  literal,
+			Line:     startLine,
+			Column:   startCol,
+			StartPos: startPos,
+			EndPos:   l.position,
+		}
+	}
+}
+
+// readTemplateString reads string content within a template literal
+// Stops at: backtick (`), interpolation start (${), or EOF
+func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
+	var builder strings.Builder
+
+	for {
+		// Stop conditions
+		if l.ch == 0 { // EOF
+			// Unterminated template literal
+			return Token{
+				Type:     ILLEGAL,
+				Literal:  "Unterminated template literal",
+				Line:     startLine,
+				Column:   startCol,
+				StartPos: startPos,
+				EndPos:   l.position,
+			}
+		}
+
+		if l.ch == '`' {
+			// End of template - don't consume the backtick, let NextToken handle it
+			break
+		}
+
+		if l.ch == '$' && l.peekChar() == '{' {
+			// Start of interpolation - don't consume, let NextToken handle it
+			break
+		}
+
+		// Handle escape sequences in template strings
+		if l.ch == '\\' {
+			l.readChar() // Consume backslash
+			switch l.ch {
+			case 'n':
+				builder.WriteByte('\n')
+			case 't':
+				builder.WriteByte('\t')
+			case 'r':
+				builder.WriteByte('\r')
+			case '\\':
+				builder.WriteByte('\\')
+			case '`':
+				builder.WriteByte('`') // Escaped backtick
+			case '$':
+				builder.WriteByte('$') // Escaped dollar sign
+			case 0: // EOF after backslash
+				return Token{
+					Type:     ILLEGAL,
+					Literal:  "Invalid escape sequence in template literal",
+					Line:     startLine,
+					Column:   startCol,
+					StartPos: startPos,
+					EndPos:   l.position,
+				}
+			default:
+				// For other characters, include the backslash (JS behavior)
+				builder.WriteByte('\\')
+				builder.WriteByte(l.ch)
+			}
+		} else {
+			// Regular character (including newlines, which are allowed in templates)
+			builder.WriteByte(l.ch)
+		}
+
+		l.readChar()
+	}
+
+	// Return the template string token
+	return Token{
+		Type:     TEMPLATE_STRING,
+		Literal:  builder.String(),
+		Line:     startLine,
+		Column:   startCol,
+		StartPos: startPos,
+		EndPos:   l.position,
 	}
 }
 
