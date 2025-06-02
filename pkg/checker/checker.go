@@ -2393,19 +2393,64 @@ func (c *Checker) visit(node parser.Node) {
 		// Handle shorthand methods like methodName() { ... }
 		// Similar to FunctionLiteral but specifically for method context
 
-		// 1. Resolve explicit annotations FIRST
+		// 1. Resolve explicit annotations and handle default values FIRST (similar to resolveFunctionLiteralType)
 		paramTypes := make([]types.Type, len(node.Parameters))
+		optionalParams := make([]bool, len(node.Parameters))
+
+		// Create a temporary environment that will progressively accumulate parameters
+		// This allows later parameters to reference earlier ones in their default values
+		tempEnv := NewEnclosedEnvironment(c.env) // Create child environment
+
 		for i, param := range node.Parameters {
+			var resolvedParamType types.Type
 			if param.TypeAnnotation != nil {
-				paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
-				if paramType != nil {
-					paramTypes[i] = paramType
-				} else {
-					paramTypes[i] = types.Any
-				}
-			} else {
-				paramTypes[i] = types.Any
+				resolvedParamType = c.resolveTypeAnnotation(param.TypeAnnotation)
 			}
+
+			// NEW: If no type annotation but has default value, infer type from default value
+			if resolvedParamType == nil && param.DefaultValue != nil {
+				// Use the temporary environment that includes previously defined parameters
+				originalEnv := c.env
+				c.env = tempEnv             // Use progressive environment that includes earlier parameters
+				c.visit(param.DefaultValue) // This will set the computed type
+				c.env = originalEnv         // Restore original environment
+
+				defaultValueType := param.DefaultValue.GetComputedType()
+				if defaultValueType != nil {
+					// Widen literal types for parameter inference (like let/const inference)
+					resolvedParamType = types.GetWidenedType(defaultValueType)
+					debugPrintf("// [Checker ShorthandMethod] Inferred parameter '%s' type from default value: %s -> %s\n",
+						param.Name.Value, defaultValueType.String(), resolvedParamType.String())
+				}
+			}
+
+			if resolvedParamType == nil {
+				resolvedParamType = types.Any // Default to Any if no annotation or resolution failed
+			}
+			paramTypes[i] = resolvedParamType
+
+			// Add this parameter to the temporary environment BEFORE checking its default value
+			// This way, the next parameter's default value can reference this parameter
+			tempEnv.Define(param.Name.Value, resolvedParamType, false) // false = not const
+
+			// Validate default value if present (skip if we already visited it for inference)
+			if param.DefaultValue != nil && param.TypeAnnotation != nil {
+				// Only validate if we had an explicit annotation (inference case already visited above)
+				// Use the temporary environment that includes previously defined parameters
+				originalEnv := c.env
+				c.env = tempEnv             // Use progressive environment that includes earlier parameters
+				c.visit(param.DefaultValue) // This will set the computed type
+				c.env = originalEnv         // Restore original environment
+
+				defaultValueType := param.DefaultValue.GetComputedType()
+				if defaultValueType != nil && !c.isAssignable(defaultValueType, resolvedParamType) {
+					c.addError(param.DefaultValue, fmt.Sprintf("default value type '%s' is not assignable to parameter type '%s'", defaultValueType.String(), resolvedParamType.String()))
+				}
+			}
+
+			// Parameter is optional if explicitly marked OR has a default value
+			isOptional := param.Optional || (param.DefaultValue != nil)
+			optionalParams[i] = isOptional
 		}
 
 		// Resolve return type annotation if present
@@ -2435,7 +2480,7 @@ func (c *Checker) visit(node parser.Node) {
 		funcEnv := NewEnclosedEnvironment(originalEnv)
 		c.env = funcEnv
 
-		// Define parameters in the method scope
+		// Define parameters in the method scope using resolved types
 		for i, paramNode := range node.Parameters {
 			if !funcEnv.Define(paramNode.Name.Value, paramTypes[i], false) {
 				c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
@@ -2459,10 +2504,11 @@ func (c *Checker) visit(node parser.Node) {
 			debugPrintf("// [Checker ShorthandMethod] Inferred return type for '%s': %s\n", methodNameForLog, actualReturnType.String())
 		}
 
-		// 7. Create the final function type
+		// 7. Create the final function type with optional parameters
 		finalMethodType := &types.FunctionType{
 			ParameterTypes: paramTypes,
 			ReturnType:     actualReturnType,
+			OptionalParams: optionalParams,
 		}
 
 		// 8. Set the computed type on the ShorthandMethod node

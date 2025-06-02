@@ -1352,13 +1352,58 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
 	}
 
-	// 5. Compile the body using the function compiler
+	// 5. Handle default parameters
+	for _, param := range node.Parameters {
+		if param.DefaultValue != nil {
+			// Get the parameter's register
+			symbol, _, exists := functionCompiler.currentSymbolTable.Resolve(param.Name.Value)
+			if !exists {
+				// This should not happen if parameter definition worked correctly
+				functionCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
+				continue
+			}
+			paramReg := symbol.Register
+
+			// Create a temporary register to hold undefined for comparison
+			undefinedReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
+
+			// Create another temporary register for the comparison result
+			compareReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
+
+			// Jump if the comparison is false (parameter is not undefined, so keep original value)
+			jumpIfDefinedPos := functionCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
+
+			// Free temporary registers
+			functionCompiler.regAlloc.Free(undefinedReg)
+			functionCompiler.regAlloc.Free(compareReg)
+
+			// Compile the default value expression
+			err := functionCompiler.compileNode(param.DefaultValue)
+			if err != nil {
+				// Continue with compilation even if default value has errors
+				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
+			} else {
+				// Move the default value to the parameter register
+				defaultValueReg := functionCompiler.regAlloc.Current()
+				if defaultValueReg != paramReg {
+					functionCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
+				}
+			}
+
+			// Patch the jump to come here (end of default value assignment)
+			functionCompiler.patchJump(jumpIfDefinedPos)
+		}
+	}
+
+	// 6. Compile the body using the function compiler
 	err := functionCompiler.compileNode(node.Body)
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)
 	}
 
-	// 6. Finalize function chunk (add implicit return to the function's chunk)
+	// 7. Finalize function chunk (add implicit return to the function's chunk)
 	functionCompiler.emitFinalReturn(node.Body.Token.Line)
 	functionChunk := functionCompiler.chunk
 	freeSymbols := functionCompiler.freeSymbols
@@ -1368,7 +1413,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 	regSize := functionCompiler.regAlloc.MaxRegs()
 
-	// 7. Create the bytecode.Function object
+	// 8. Create the bytecode.Function object
 	var funcName string
 	if nameHint != "" {
 		funcName = nameHint
@@ -1378,7 +1423,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		funcName = "<shorthand-method>"
 	}
 
-	// 8. Add the function object to the outer compiler's constant pool
+	// 9. Add the function object to the outer compiler's constant pool
 	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, funcName, functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
