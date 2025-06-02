@@ -1101,6 +1101,12 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 	param := &Parameter{Token: p.curToken}
 	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
+	// Check for optional parameter (?)
+	if p.peekTokenIs(lexer.QUESTION) {
+		p.nextToken() // Consume '?'
+		param.Optional = true
+	}
+
 	// Check for Type Annotation
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
@@ -1114,7 +1120,7 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 	}
 	parameters = append(parameters, param)
 
-	// Subsequent parameters
+	// Parse subsequent parameters (comma-separated)
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // Consume ','
 		p.nextToken() // Consume identifier for next param name
@@ -1127,6 +1133,12 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 		}
 		param := &Parameter{Token: p.curToken}
 		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+		// Check for optional parameter (?)
+		if p.peekTokenIs(lexer.QUESTION) {
+			p.nextToken() // Consume '?'
+			param.Optional = true
+		}
 
 		// Check for Type Annotation
 		if p.peekTokenIs(lexer.COLON) {
@@ -1656,6 +1668,12 @@ func (p *Parser) parseParameterList() []*Parameter {
 	param := &Parameter{Token: p.curToken}
 	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
+	// Check for optional parameter (?)
+	if p.peekTokenIs(lexer.QUESTION) {
+		p.nextToken() // Consume '?'
+		param.Optional = true
+	}
+
 	// Check for Type Annotation
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
@@ -1682,6 +1700,12 @@ func (p *Parser) parseParameterList() []*Parameter {
 		}
 		param := &Parameter{Token: p.curToken}
 		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+		// Check for optional parameter (?)
+		if p.peekTokenIs(lexer.QUESTION) {
+			p.nextToken() // Consume '?'
+			param.Optional = true
+		}
 
 		// Check for Type Annotation
 		if p.peekTokenIs(lexer.COLON) {

@@ -236,6 +236,7 @@ type Parameter struct {
 	Name           *Identifier
 	TypeAnnotation Expression // Parsed type node (e.g., *Identifier)
 	ComputedType   types.Type // Stores the resolved type from TypeAnnotation
+	Optional       bool       // Whether this parameter is optional (param?)
 }
 
 func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
@@ -244,6 +245,9 @@ func (p *Parameter) String() string {
 	var out bytes.Buffer
 	if p.Name != nil {
 		out.WriteString(p.Name.String())
+	}
+	if p.Optional {
+		out.WriteString("?")
 	}
 	if p.TypeAnnotation != nil {
 		out.WriteString(": ")

@@ -1340,6 +1340,70 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	return constIdx, freeSymbols, nil
 }
 
+// compileArgumentsWithOptionalHandling compiles the provided arguments and pads missing optional
+// parameters with undefined values. Returns the register list and total argument count.
+func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpression) ([]Register, int, errors.PaseratiError) {
+	// 1. Compile the provided arguments
+	argRegs := []Register{}
+	for _, arg := range node.Arguments {
+		err := c.compileNode(arg)
+		if err != nil {
+			return nil, 0, err
+		}
+		argRegs = append(argRegs, c.regAlloc.Current())
+	}
+	providedArgCount := len(argRegs)
+
+	// 2. Check if we need to handle optional parameters
+	// Get the function type from the call expression to see if it has optional parameters
+	functionType := node.Function.GetComputedType()
+	if functionType == nil {
+		// No type information available, use provided arguments as-is
+		return argRegs, providedArgCount, nil
+	}
+
+	var expectedParamCount int
+	var optionalParams []bool
+
+	// Extract parameter information based on function type
+	switch ft := functionType.(type) {
+	case *types.FunctionType:
+		expectedParamCount = len(ft.ParameterTypes)
+		optionalParams = ft.OptionalParams
+	case *types.OverloadedFunctionType:
+		// For overloaded functions, use the implementation signature
+		if ft.Implementation != nil {
+			expectedParamCount = len(ft.Implementation.ParameterTypes)
+			optionalParams = ft.Implementation.OptionalParams
+		} else {
+			// No implementation info, use provided arguments as-is
+			return argRegs, providedArgCount, nil
+		}
+	default:
+		// Unknown function type, use provided arguments as-is
+		return argRegs, providedArgCount, nil
+	}
+
+	// 3. If we have fewer arguments than expected parameters, pad with undefined for optional params
+	if providedArgCount < expectedParamCount && len(optionalParams) == expectedParamCount {
+		for i := providedArgCount; i < expectedParamCount; i++ {
+			// Only pad if the parameter is optional
+			if i < len(optionalParams) && optionalParams[i] {
+				// Allocate register and load undefined
+				undefinedReg := c.regAlloc.Alloc()
+				c.emitLoadUndefined(undefinedReg, node.Token.Line)
+				argRegs = append(argRegs, undefinedReg)
+			} else {
+				// Required parameter missing - this should have been caught by type checker
+				// but let's not pad it to avoid masking errors
+				break
+			}
+		}
+	}
+
+	return argRegs, len(argRegs), nil
+}
+
 func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.PaseratiError {
 	// Check if this is a method call (function is a member expression like obj.method())
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
@@ -1358,20 +1422,15 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.Pas
 		}
 		funcReg := c.regAlloc.Current() // Register holding the method function
 
-		// 3. Compile arguments
-		argRegs := []Register{}
-		for _, arg := range node.Arguments {
-			err = c.compileNode(arg)
-			if err != nil {
-				return err
-			}
-			argRegs = append(argRegs, c.regAlloc.Current())
+		// 3. Compile arguments and handle optional parameters
+		argRegs, totalArgCount, err := c.compileArgumentsWithOptionalHandling(node)
+		if err != nil {
+			return err
 		}
-		argCount := len(argRegs)
 
 		// 4. Ensure arguments are in the correct registers for the call convention.
 		// Convention: Args must be in registers funcReg+1, funcReg+2, ...
-		if argCount > 0 {
+		if totalArgCount > 0 {
 			c.resolveRegisterMoves(argRegs, funcReg+1, node.Token.Line)
 		}
 
@@ -1379,7 +1438,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.Pas
 		resultReg := c.regAlloc.Alloc()
 
 		// 6. Emit OpCallMethod (method call with 'this' context)
-		c.emitCallMethod(resultReg, funcReg, thisReg, byte(argCount), node.Token.Line)
+		c.emitCallMethod(resultReg, funcReg, thisReg, byte(totalArgCount), node.Token.Line)
 
 		// The result of the method call is now in resultReg
 		return nil
@@ -1393,23 +1452,16 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.Pas
 	}
 	funcReg := c.regAlloc.Current() // Register holding the function value
 
-	// 2. Compile arguments
-	argRegs := []Register{}
-	for _, arg := range node.Arguments {
-		err = c.compileNode(arg)
-		if err != nil {
-			return err
-		}
-		argRegs = append(argRegs, c.regAlloc.Current())
+	// 2. Compile arguments and handle optional parameters
+	argRegs, totalArgCount, err := c.compileArgumentsWithOptionalHandling(node)
+	if err != nil {
+		return err
 	}
-	argCount := len(argRegs)
-
-	// TODO: Check arity at compile time or runtime?
 
 	// Ensure arguments are in the correct registers for the call convention.
 	// Convention: Args must be in registers funcReg+1, funcReg+2, ...
 	// FIXED: Handle register cycles properly using a temporary register approach
-	if argCount > 0 {
+	if totalArgCount > 0 {
 		c.resolveRegisterMoves(argRegs, funcReg+1, node.Token.Line)
 	}
 
@@ -1417,7 +1469,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression) errors.Pas
 	resultReg := c.regAlloc.Alloc()
 
 	// 4. Emit OpCall (regular function call)
-	c.emitCall(resultReg, funcReg, byte(argCount), node.Token.Line)
+	c.emitCall(resultReg, funcReg, byte(totalArgCount), node.Token.Line)
 
 	// The result of the call is now in resultReg
 	return nil

@@ -69,7 +69,8 @@ var TypeofResultType = NewUnionType(
 type FunctionType struct {
 	ParameterTypes []Type
 	ReturnType     Type
-	IsVariadic     bool // Indicates if the function accepts variable arguments
+	IsVariadic     bool   // Indicates if the function accepts variable arguments
+	OptionalParams []bool // Tracks which parameters are optional (same length as ParameterTypes)
 }
 
 func (ft *FunctionType) String() string {
@@ -90,6 +91,10 @@ func (ft *FunctionType) String() string {
 				params.WriteString(p.String())
 			} else {
 				params.WriteString("<nil>") // Represent nil param type as any?
+			}
+			// Add optional marker if this parameter is optional
+			if i < len(ft.OptionalParams) && ft.OptionalParams[i] {
+				params.WriteString("?")
 			}
 		}
 		if i < numParams-1 {
@@ -120,6 +125,9 @@ func (ft *FunctionType) Equals(other Type) bool {
 	if ft.IsVariadic != otherFt.IsVariadic {
 		return false
 	}
+	if len(ft.OptionalParams) != len(otherFt.OptionalParams) {
+		return false // Different optional parameter tracking
+	}
 
 	// Check parameter types (invariant check for simplicity)
 	for i, p1 := range ft.ParameterTypes {
@@ -131,6 +139,14 @@ func (ft *FunctionType) Equals(other Type) bool {
 			return false // Parameter types differ
 		}
 	}
+
+	// Check optional parameter markers
+	for i, opt1 := range ft.OptionalParams {
+		if opt1 != otherFt.OptionalParams[i] {
+			return false // Optional parameter markers differ
+		}
+	}
+
 	// Check return type
 	if (ft.ReturnType == nil) != (otherFt.ReturnType == nil) {
 		return false

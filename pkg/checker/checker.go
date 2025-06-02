@@ -289,6 +289,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		finalFuncType := &types.FunctionType{
 			ParameterTypes: funcTypeSignature.ParameterTypes,
 			ReturnType:     actualReturnType,
+			OptionalParams: funcTypeSignature.OptionalParams,
 		}
 
 		// *** Update Environment & Node ***
@@ -600,7 +601,12 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 	}
 
 	// Construct the internal FunctionType representation
-	return &types.FunctionType{ParameterTypes: paramTypes, ReturnType: returnType}
+	return &types.FunctionType{
+		ParameterTypes: paramTypes,
+		ReturnType:     returnType,
+		// Note: Function type expressions don't track optional parameters
+		// They are just type signatures, not parameter declarations
+	}
 }
 
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
@@ -628,6 +634,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			funcType := &types.FunctionType{
 				ParameterTypes: paramTypes,
 				ReturnType:     returnType,
+				// Note: Object type call signatures don't track optional parameters
 			}
 
 			callSignatures = append(callSignatures, funcType)
@@ -697,6 +704,7 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 	return &types.ConstructorType{
 		ParameterTypes:  paramTypes,
 		ConstructedType: constructedType,
+		// Note: Constructor type expressions don't track optional parameters
 	}
 }
 
@@ -1759,9 +1767,15 @@ func (c *Checker) visit(node parser.Node) {
 
 		// --- Update self-definition if name existed and return type was inferred ---
 		if node.Name != nil && resolvedSignature.ReturnType == nil {
+			optionalParams := make([]bool, len(node.Parameters))
+			for i, param := range node.Parameters {
+				optionalParams[i] = param.Optional
+			}
+
 			finalFuncTypeForRecursion := &types.FunctionType{
 				ParameterTypes: resolvedSignature.ParameterTypes,
 				ReturnType:     actualReturnType, // Use the inferred type now
+				OptionalParams: optionalParams,
 			}
 			// Update the function's own entry in its scope
 			if !funcEnv.Update(node.Name.Value, finalFuncTypeForRecursion) {
@@ -1771,9 +1785,15 @@ func (c *Checker) visit(node parser.Node) {
 		// --- END Update self-definition ---
 
 		// 7. Create the FINAL FunctionType representing this literal
+		optionalParams := make([]bool, len(node.Parameters))
+		for i, param := range node.Parameters {
+			optionalParams[i] = param.Optional
+		}
+
 		finalFuncType := &types.FunctionType{
 			ParameterTypes: resolvedSignature.ParameterTypes, // Use types from annotation/defaults
 			ReturnType:     actualReturnType,                 // Use the explicit or inferred return type
+			OptionalParams: optionalParams,
 		}
 
 		// 8. *** ALWAYS Set the Computed Type on the FunctionLiteral node ***
@@ -1906,9 +1926,15 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		// 7. Create FunctionType
+		optionalParams := make([]bool, len(node.Parameters))
+		for i, param := range node.Parameters {
+			optionalParams[i] = param.Optional
+		}
+
 		funcType := &types.FunctionType{
 			ParameterTypes: paramTypes,
 			ReturnType:     finalReturnType,
+			OptionalParams: optionalParams,
 		}
 
 		// --- DEBUG: Log type before setting ---
@@ -2031,13 +2057,29 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			}
 		} else {
-			// --- Non-Variadic Function Check (Original Logic) ---
+			// --- Non-Variadic Function Check (Updated for Optional Parameters) ---
 			expectedArgCount := len(funcType.ParameterTypes)
-			if actualArgCount != expectedArgCount {
-				c.addError(node, fmt.Sprintf("expected %d arguments, but got %d", expectedArgCount, actualArgCount))
+
+			// Calculate minimum required arguments (non-optional parameters)
+			minRequiredArgs := expectedArgCount
+			if len(funcType.OptionalParams) == expectedArgCount {
+				// Count required parameters from the end
+				for i := expectedArgCount - 1; i >= 0; i-- {
+					if funcType.OptionalParams[i] {
+						minRequiredArgs--
+					} else {
+						break // Stop at first required parameter from the end
+					}
+				}
+			}
+
+			if actualArgCount < minRequiredArgs {
+				c.addError(node, fmt.Sprintf("expected at least %d arguments, but got %d", minRequiredArgs, actualArgCount))
 				// Continue checking assignable args anyway? Let's stop if arity wrong.
+			} else if actualArgCount > expectedArgCount {
+				c.addError(node, fmt.Sprintf("expected at most %d arguments, but got %d", expectedArgCount, actualArgCount))
 			} else {
-				// Check Argument Types
+				// Check Argument Types (only for provided arguments)
 				for i, argNode := range node.Arguments {
 					c.visit(argNode) // Visit argument to compute its type
 					argType := argNode.GetComputedType()
@@ -3217,6 +3259,7 @@ func (c *Checker) checkTemplateLiteral(node *parser.TemplateLiteral) {
 // Resolves parameter and return type annotations within the given environment.
 func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *Environment) *types.FunctionType {
 	paramTypes := []types.Type{}
+	var optionalParams []bool
 	for _, paramNode := range node.Parameters {
 		var resolvedParamType types.Type
 		if paramNode.TypeAnnotation != nil {
@@ -3231,6 +3274,7 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 			resolvedParamType = types.Any // Default to Any if no annotation or resolution failed
 		}
 		paramTypes = append(paramTypes, resolvedParamType)
+		optionalParams = append(optionalParams, paramNode.Optional)
 	}
 
 	var resolvedReturnType types.Type         // Keep as interface type
@@ -3270,6 +3314,7 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 	return &types.FunctionType{
 		ParameterTypes: paramTypes,
 		ReturnType:     resolvedReturnType, // Use the value assigned outside the if
+		OptionalParams: optionalParams,
 	}
 }
 
@@ -3316,22 +3361,24 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 
 	// Create the function type for this signature
 	var paramTypes []types.Type
+	var optionalParams []bool
 	for _, param := range node.Parameters {
 		if param.ComputedType != nil {
 			paramTypes = append(paramTypes, param.ComputedType)
 		} else {
 			paramTypes = append(paramTypes, types.Any) // Fallback for error cases
 		}
+		optionalParams = append(optionalParams, param.Optional)
 	}
 
 	funcType := &types.FunctionType{
 		ParameterTypes: paramTypes,
 		ReturnType:     returnType,
+		OptionalParams: optionalParams,
 	}
 
 	// Set the computed type on the signature node
 	node.SetComputedType(funcType)
-
 	debugPrintf("// [Checker] Added overload signature for '%s': %s\n", functionName, funcType.String())
 }
 
