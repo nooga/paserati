@@ -1,0 +1,278 @@
+package builtins
+
+import (
+	"fmt"
+	"paserati/pkg/types"
+	"paserati/pkg/vm"
+	"time"
+)
+
+// registerConsole creates and registers the console object with its methods
+func registerConsole() {
+	// Create the console object as a DictObject
+	consoleObj := vm.NewDictObject(vm.Undefined)
+	consoleDict := consoleObj.AsDictObject()
+
+	// Register all console methods
+	consoleDict.SetOwn("log", vm.NewNativeFunction(-1, true, "log", consoleLogImpl))
+	consoleDict.SetOwn("error", vm.NewNativeFunction(-1, true, "error", consoleErrorImpl))
+	consoleDict.SetOwn("warn", vm.NewNativeFunction(-1, true, "warn", consoleWarnImpl))
+	consoleDict.SetOwn("info", vm.NewNativeFunction(-1, true, "info", consoleInfoImpl))
+	consoleDict.SetOwn("debug", vm.NewNativeFunction(-1, true, "debug", consoleDebugImpl))
+	consoleDict.SetOwn("trace", vm.NewNativeFunction(-1, true, "trace", consoleTraceImpl))
+	consoleDict.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", consoleClearImpl))
+	consoleDict.SetOwn("count", vm.NewNativeFunction(-1, true, "count", consoleCountImpl))
+	consoleDict.SetOwn("countReset", vm.NewNativeFunction(-1, true, "countReset", consoleCountResetImpl))
+	consoleDict.SetOwn("time", vm.NewNativeFunction(-1, true, "time", consoleTimeImpl))
+	consoleDict.SetOwn("timeEnd", vm.NewNativeFunction(-1, true, "timeEnd", consoleTimeEndImpl))
+	consoleDict.SetOwn("group", vm.NewNativeFunction(-1, true, "group", consoleGroupImpl))
+	consoleDict.SetOwn("groupCollapsed", vm.NewNativeFunction(-1, true, "groupCollapsed", consoleGroupCollapsedImpl))
+	consoleDict.SetOwn("groupEnd", vm.NewNativeFunction(0, false, "groupEnd", consoleGroupEndImpl))
+
+	// Define the type for console object with all methods
+	consoleType := &types.ObjectType{
+		Properties: map[string]types.Type{
+			"log": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"error": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"warn": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"info": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"debug": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"trace": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"clear": &types.FunctionType{
+				ParameterTypes: []types.Type{},
+				ReturnType:     types.Void,
+				IsVariadic:     false,
+			},
+			"count": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"countReset": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"time": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"timeEnd": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"group": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"groupCollapsed": &types.FunctionType{
+				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+				ReturnType:     types.Void,
+				IsVariadic:     true,
+			},
+			"groupEnd": &types.FunctionType{
+				ParameterTypes: []types.Type{},
+				ReturnType:     types.Void,
+				IsVariadic:     false,
+			},
+		},
+	}
+
+	// Register the console object
+	registerObject("console", consoleObj, consoleType)
+}
+
+// --- Console Method Implementations ---
+
+// consoleLogImpl implements console.log(...args)
+func consoleLogImpl(args []vm.Value) vm.Value {
+	printConsoleMessage(args, "")
+	return vm.Undefined
+}
+
+// consoleErrorImpl implements console.error(...args)
+func consoleErrorImpl(args []vm.Value) vm.Value {
+	printConsoleMessage(args, "ERROR: ")
+	return vm.Undefined
+}
+
+// consoleWarnImpl implements console.warn(...args)
+func consoleWarnImpl(args []vm.Value) vm.Value {
+	printConsoleMessage(args, "WARN: ")
+	return vm.Undefined
+}
+
+// consoleInfoImpl implements console.info(...args)
+func consoleInfoImpl(args []vm.Value) vm.Value {
+	printConsoleMessage(args, "INFO: ")
+	return vm.Undefined
+}
+
+// consoleDebugImpl implements console.debug(...args)
+func consoleDebugImpl(args []vm.Value) vm.Value {
+	printConsoleMessage(args, "DEBUG: ")
+	return vm.Undefined
+}
+
+// consoleTraceImpl implements console.trace(...args)
+func consoleTraceImpl(args []vm.Value) vm.Value {
+	printConsoleMessage(args, "TRACE: ")
+	// TODO: Add stack trace information when available
+	return vm.Undefined
+}
+
+// consoleClearImpl implements console.clear()
+func consoleClearImpl(args []vm.Value) vm.Value {
+	// Print ANSI clear screen sequence
+	fmt.Print("\033[2J\033[H")
+	return vm.Undefined
+}
+
+// Simple counter storage for console.count
+var counters = make(map[string]int)
+
+// consoleCountImpl implements console.count(label?)
+func consoleCountImpl(args []vm.Value) vm.Value {
+	label := "default"
+	if len(args) > 0 {
+		label = args[0].ToString()
+	}
+
+	counters[label]++
+	fmt.Printf("%s: %d\n", label, counters[label])
+	return vm.Undefined
+}
+
+// consoleCountResetImpl implements console.countReset(label?)
+func consoleCountResetImpl(args []vm.Value) vm.Value {
+	label := "default"
+	if len(args) > 0 {
+		label = args[0].ToString()
+	}
+
+	delete(counters, label)
+	return vm.Undefined
+}
+
+// Simple timer storage for console.time/timeEnd
+var timers = make(map[string]int64)
+
+// consoleTimeImpl implements console.time(label?)
+func consoleTimeImpl(args []vm.Value) vm.Value {
+	label := "default"
+	if len(args) > 0 {
+		label = args[0].ToString()
+	}
+
+	// Store current time in nanoseconds
+	timers[label] = getNow()
+	return vm.Undefined
+}
+
+// consoleTimeEndImpl implements console.timeEnd(label?)
+func consoleTimeEndImpl(args []vm.Value) vm.Value {
+	label := "default"
+	if len(args) > 0 {
+		label = args[0].ToString()
+	}
+
+	startTime, exists := timers[label]
+	if !exists {
+		fmt.Printf("Timer '%s' does not exist\n", label)
+		return vm.Undefined
+	}
+
+	elapsed := float64(getNow()-startTime) / 1e6 // Convert to milliseconds
+	fmt.Printf("%s: %.3fms\n", label, elapsed)
+	delete(timers, label)
+	return vm.Undefined
+}
+
+// Simple group indentation level
+var groupLevel = 0
+
+// consoleGroupImpl implements console.group(...args)
+func consoleGroupImpl(args []vm.Value) vm.Value {
+	if len(args) > 0 {
+		printConsoleMessage(args, "")
+	}
+	groupLevel++
+	return vm.Undefined
+}
+
+// consoleGroupCollapsedImpl implements console.groupCollapsed(...args)
+func consoleGroupCollapsedImpl(args []vm.Value) vm.Value {
+	// For our simple implementation, treat same as group
+	return consoleGroupImpl(args)
+}
+
+// consoleGroupEndImpl implements console.groupEnd()
+func consoleGroupEndImpl(args []vm.Value) vm.Value {
+	if groupLevel > 0 {
+		groupLevel--
+	}
+	return vm.Undefined
+}
+
+// --- Helper Functions ---
+
+// printConsoleMessage is a helper function that formats and prints console messages
+func printConsoleMessage(args []vm.Value, prefix string) {
+	// Add indentation for groups
+	indent := ""
+	for i := 0; i < groupLevel; i++ {
+		indent += "  "
+	}
+
+	// Convert all arguments to strings using Inspect() for better formatting
+	parts := make([]string, len(args))
+	for i, arg := range args {
+		parts[i] = arg.Inspect()
+	}
+
+	// Print with space separation, followed by newline
+	if len(parts) > 0 {
+		fmt.Print(indent + prefix)
+		for i, part := range parts {
+			if i > 0 {
+				fmt.Print(" ")
+			}
+			fmt.Print(part)
+		}
+	} else if prefix != "" {
+		fmt.Print(indent + prefix)
+	}
+	fmt.Println()
+}
+
+// getNow returns current time in nanoseconds
+func getNow() int64 {
+	return time.Now().UnixNano()
+}

@@ -81,40 +81,6 @@ func InitializeRegistry() {
 	})
 }
 
-// registerConsole creates and registers the console object with its methods
-func registerConsole() {
-	// Create the console object as a DictObject
-	consoleObj := vm.NewDictObject(vm.Undefined)
-	consoleDict := consoleObj.AsDictObject()
-
-	// We need to convert the NativeFunctionObject to a Value
-	logValue := vm.NewNativeFunction(-1, true, "log", consoleLogImpl)
-	consoleDict.SetOwn("log", logValue)
-
-	// Define the type for console object
-	consoleType := &types.ObjectType{
-		Properties: map[string]types.Type{
-			"log": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}}, // Variadic any[]
-				ReturnType:     types.Void,
-				IsVariadic:     true,
-			},
-		},
-	}
-
-	// Register the console object
-	// Note: Since console is an object (not a function), we can't use the normal register helper
-	// We need to register it directly in the registry
-	registry["console"] = BuiltinDefinition{
-		Func: nil, // Console is not a function itself
-		Type: consoleType,
-	}
-
-	// We also need a way for the VM to get the console object
-	// For now, let's create a special entry point for objects
-	registerObject("console", consoleObj, consoleType)
-}
-
 // --- Built-in Implementations ---
 
 // clockImpl implements the native clock() function.
@@ -129,29 +95,6 @@ func clockImpl(args []vm.Value) vm.Value {
 func arrayImpl(args []vm.Value) vm.Value {
 	// Use the new helper function that properly handles Array constructor semantics
 	return vm.NewArrayWithArgs(args)
-}
-
-// consoleLogImpl implements console.log(...args)
-func consoleLogImpl(args []vm.Value) vm.Value {
-	// Convert all arguments to strings and print them separated by spaces
-	parts := make([]string, len(args))
-	for i, arg := range args {
-		parts[i] = arg.Inspect() // Use Inspect() for better formatting (like Node.js console.log)
-	}
-
-	// Print with space separation, followed by newline
-	if len(parts) > 0 {
-		for i, part := range parts {
-			if i > 0 {
-				fmt.Print(" ")
-			}
-			fmt.Print(part)
-		}
-	}
-	fmt.Println()
-
-	// console.log returns undefined
-	return vm.Undefined
 }
 
 // register is a helper to add a built-in function to the registry.
