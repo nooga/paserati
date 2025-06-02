@@ -677,6 +677,22 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		return err // Return any error encountered during compilation
 		// --- END Member Expression ---
 
+		// --- Optional Chaining Expression ---
+	case *parser.OptionalChainingExpression:
+		// <<< NEW: Call the new helper function >>>
+		err := c.compileOptionalChainingExpression(node)
+		if err == nil {
+			// If successful, the result register is already set by compileOptionalChainingExpression
+			// We just need to update the lastExpr tracking for top-level scripts
+			if c.enclosing == nil {
+				c.lastExprReg = c.regAlloc.Current()
+				c.lastExprRegValid = true
+				debugPrintf("// DEBUG OptionalChaining (Top Level): Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg)
+			}
+		}
+		return err // Return any error encountered during compilation
+		// --- END Optional Chaining Expression ---
+
 	case *parser.NewExpression:
 		return c.compileNewExpression(node)
 
@@ -2643,6 +2659,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 		return n.Token // '[' token
 	case *parser.MemberExpression:
 		return n.Token // '.' token
+	case *parser.OptionalChainingExpression:
+		return n.Token // '?.' token
 
 	// Program node doesn't have a single token, return a dummy?
 	case *parser.Program:
@@ -2960,6 +2978,80 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression) errors
 	// Result is now in destReg
 	c.regAlloc.SetCurrent(destReg) // Set current register
 	// Note: We don't need to set lastExprReg/Valid here, as compileNode will handle it.
+	return nil
+}
+
+// compileOptionalChainingExpression compiles optional chaining property access (e.g., obj?.prop)
+// This is similar to compileMemberExpression but adds null/undefined checks
+func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChainingExpression) errors.PaseratiError {
+	// 1. Compile the object part
+	err := c.compileNode(node.Object)
+	if err != nil {
+		return NewCompileError(node.Object, "error compiling object part of optional chaining expression").CausedBy(err)
+	}
+	objectReg := c.regAlloc.Current() // Register holding the object
+
+	// 2. Check if the object is null or undefined
+	// If so, return undefined immediately
+
+	// Allocate destination register first
+	destReg := c.regAlloc.Alloc()
+
+	// Check if object is null
+	nullReg := c.regAlloc.Alloc()
+	c.emitLoadNull(nullReg, node.Token.Line)
+	nullCheckReg := c.regAlloc.Alloc()
+	c.emitStrictEqual(nullCheckReg, objectReg, nullReg, node.Token.Line)
+
+	// Check if object is undefined
+	undefinedReg := c.regAlloc.Alloc()
+	c.emitLoadUndefined(undefinedReg, node.Token.Line)
+	undefinedCheckReg := c.regAlloc.Alloc()
+	c.emitStrictEqual(undefinedCheckReg, objectReg, undefinedReg, node.Token.Line)
+
+	// If object is null, jump to return undefined
+	nullJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, nullCheckReg, node.Token.Line)
+	c.emitLoadUndefined(destReg, node.Token.Line)
+	endJumpPos1 := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+	// If object is undefined, jump to return undefined
+	c.patchJump(nullJumpPos) // Patch the null check jump to here
+	undefinedJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, undefinedCheckReg, node.Token.Line)
+	c.emitLoadUndefined(destReg, node.Token.Line)
+	endJumpPos2 := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+	// Object is not null/undefined - do normal property access
+	c.patchJump(undefinedJumpPos)
+
+	// 3. Get Property Name
+	propertyName := node.Property.Value
+
+	// 4. Special case for .length (same as regular member access)
+	if propertyName == "length" {
+		objectStaticType := node.Object.GetComputedType()
+		if objectStaticType != nil {
+			widenedObjectType := types.GetWidenedType(objectStaticType)
+			_, isArray := widenedObjectType.(*types.ArrayType)
+			if isArray || widenedObjectType == types.String {
+				c.emitGetLength(destReg, objectReg, node.Token.Line)
+				c.patchJump(endJumpPos1)
+				c.patchJump(endJumpPos2)
+				c.regAlloc.SetCurrent(destReg)
+				return nil
+			}
+		}
+	}
+
+	// 5. Add property name string to constant pool and emit OpGetProp
+	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+	c.emitGetProp(destReg, objectReg, nameConstIdx, node.Token.Line)
+
+	// 6. Patch the end jumps
+	c.patchJump(endJumpPos1)
+	c.patchJump(endJumpPos2)
+
+	// Result is now in destReg
+	c.regAlloc.SetCurrent(destReg)
 	return nil
 }
 

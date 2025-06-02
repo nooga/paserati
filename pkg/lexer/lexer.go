@@ -153,6 +153,9 @@ const (
 	// New Ternary Operator Tokens
 	QUESTION TokenType = "?"
 
+	// Optional Chaining
+	OPTIONAL_CHAINING TokenType = "?."
+
 	// This keyword
 	THIS TokenType = "THIS"
 	// NEW keyword
@@ -673,6 +676,11 @@ func (l *Lexer) NextToken() Token {
 				l.readChar()                                // Advance past second '?'
 				tok = Token{Type: COALESCE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
+		} else if peek == '.' { // Optional Chaining ?.
+			l.readChar()                                // Consume '.'
+			literal := l.input[startPos : l.position+1] // Read "?."
+			l.readChar()                                // Advance past '.'
+			tok = Token{Type: OPTIONAL_CHAINING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else { // Original ternary operator ?
 			literal := string(l.ch)
 			l.readChar()

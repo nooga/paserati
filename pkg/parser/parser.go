@@ -139,9 +139,10 @@ var precedences = map[lexer.TokenType]int{
 	// lexer.DEC prefix/postfix handled by registration
 
 	// Call, Index, Member Access
-	lexer.LPAREN:   CALL,
-	lexer.LBRACKET: INDEX,
-	lexer.DOT:      MEMBER,
+	lexer.LPAREN:            CALL,
+	lexer.LBRACKET:          INDEX,
+	lexer.DOT:               MEMBER,
+	lexer.OPTIONAL_CHAINING: MEMBER, // Same precedence as regular member access
 
 	// Postfix operators need precedence for the parseExpression loop termination condition
 	lexer.INC: POSTFIX,
@@ -224,6 +225,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.LPAREN, p.parseCallExpression)    // Value context: function call
 	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression) // Value context: array/member index
 	p.registerInfix(lexer.DOT, p.parseMemberExpression)
+	p.registerInfix(lexer.OPTIONAL_CHAINING, p.parseOptionalChainingExpression)
 	p.registerInfix(lexer.QUESTION, p.parseTernaryExpression)
 	// Assignment Operators
 	p.registerInfix(lexer.ASSIGN, p.parseAssignmentExpression)
@@ -2964,4 +2966,28 @@ func (p *Parser) isLikelyFunctionSignature() bool {
 	p.peekToken = savedPeekToken
 
 	return isSignature
+}
+
+// parseOptionalChainingExpression handles optional chaining property access (e.g., obj?.prop)
+func (p *Parser) parseOptionalChainingExpression(left Expression) Expression {
+	// Current token should be OPTIONAL_CHAINING (?.)
+	exp := &OptionalChainingExpression{
+		Token:  p.curToken, // The '?.' token
+		Object: left,
+	}
+
+	if !p.expectPeek(lexer.IDENT) {
+		// If the token after '?.' is not an identifier, it's a syntax error.
+		msg := fmt.Sprintf("expected identifier after '?.', got %s", p.peekToken.Type)
+		p.addError(p.peekToken, msg)
+		return nil
+	}
+
+	// Construct the Identifier node for the property
+	propIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	exp.Property = propIdent
+
+	// We don't call parseExpression here because the right side MUST be an identifier.
+	// The precedence check in the main parseExpression loop handles chaining, e.g., a?.b?.c
+	return exp
 }

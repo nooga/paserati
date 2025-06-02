@@ -2264,6 +2264,10 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.MemberExpression:
 		c.checkMemberExpression(node)
 
+	// --- NEW: Optional Chaining Expression Type Checking ---
+	case *parser.OptionalChainingExpression:
+		c.checkOptionalChainingExpression(node)
+
 	// --- Loop Statements (Control flow, check condition/body) ---
 	case *parser.WhileStatement:
 		c.visit(node.Condition)
@@ -2984,7 +2988,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			} else {
 				// Property not found
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
-				// resultType remains types.Error
+				// resultType remains types.Never
 			}
 		case *types.FunctionType:
 			// Handle static properties/methods on function types (like String.fromCharCode)
@@ -3672,4 +3676,138 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 	// Set the result type from the matched overload
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
+}
+
+// checkOptionalChainingExpression handles optional chaining property access (e.g., obj?.prop)
+func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingExpression) {
+	// 1. Visit the object part
+	c.visit(node.Object)
+	objectType := node.Object.GetComputedType()
+	if objectType == nil {
+		// If visiting the object failed, checker should have added error.
+		// Set objectType to Any to prevent cascading nil errors here.
+		objectType = types.Any
+	}
+
+	// 2. Get the property name (Property is always an Identifier in OptionalChainingExpression)
+	propertyName := node.Property.Value // node.Property is *parser.Identifier
+
+	// 3. Widen the object type for checks
+	widenedObjectType := types.GetWidenedType(objectType)
+
+	var baseResultType types.Type = types.Never // Default to Never if property not found/invalid access
+
+	// 4. Handle different base types (similar to MemberExpression but more permissive)
+	if widenedObjectType == types.Any {
+		baseResultType = types.Any // Property access on 'any' results in 'any'
+	} else if widenedObjectType == types.Null || widenedObjectType == types.Undefined {
+		// Optional chaining on null/undefined is safe and returns undefined
+		baseResultType = types.Undefined
+	} else if widenedObjectType == types.String {
+		if propertyName == "length" {
+			baseResultType = types.Number // string.length is number
+		} else if propertyName == "charCodeAt" {
+			baseResultType = &types.FunctionType{
+				ParameterTypes: []types.Type{types.Number},
+				ReturnType:     types.Number,
+				IsVariadic:     false,
+			}
+		} else if propertyName == "charAt" {
+			baseResultType = &types.FunctionType{
+				ParameterTypes: []types.Type{types.Number},
+				ReturnType:     types.String,
+				IsVariadic:     false,
+			}
+		} else {
+			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
+			// baseResultType remains types.Never
+		}
+	} else {
+		// Use a type switch for struct-based types
+		switch obj := widenedObjectType.(type) {
+		case *types.ArrayType:
+			if propertyName == "length" {
+				baseResultType = types.Number // Array.length is number
+			} else if propertyName == "concat" {
+				baseResultType = &types.FunctionType{
+					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+					ReturnType:     &types.ArrayType{ElementType: types.Any},
+					IsVariadic:     true,
+				}
+			} else if propertyName == "push" {
+				baseResultType = &types.FunctionType{
+					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+					ReturnType:     types.Number,
+					IsVariadic:     true,
+				}
+			} else if propertyName == "pop" {
+				baseResultType = &types.FunctionType{
+					ParameterTypes: []types.Type{},
+					ReturnType:     types.Any,
+					IsVariadic:     false,
+				}
+			} else {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+				// baseResultType remains types.Never
+			}
+		case *types.ObjectType:
+			// Look for the property in the object's fields
+			fieldType, exists := obj.Properties[propertyName]
+			if exists {
+				// Property found
+				if fieldType == nil { // Should ideally not happen if checker populates correctly
+					c.addError(node.Property, fmt.Sprintf("internal checker error: property '%s' has nil type in ObjectType", propertyName))
+					baseResultType = types.Never
+				} else {
+					baseResultType = fieldType
+				}
+			} else {
+				// Property not found - for optional chaining, this is OK, just return undefined
+				// Don't add an error like regular member access would
+				baseResultType = types.Undefined
+			}
+		case *types.FunctionType:
+			// Handle static properties/methods on function types (like String.fromCharCode)
+			// Check if the object is a builtin constructor that has static methods
+			if objIdentifier, ok := node.Object.(*parser.Identifier); ok {
+				// Look for builtin static method: ConstructorName.methodName
+				staticMethodName := objIdentifier.Value + "." + propertyName
+				staticMethodType := c.getBuiltinType(staticMethodName)
+				if staticMethodType != nil {
+					baseResultType = staticMethodType
+				} else {
+					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
+					// baseResultType remains types.Never
+				}
+			} else {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
+				// baseResultType remains types.Never
+			}
+		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
+		default:
+			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
+			// e.g., trying to access property on number, boolean, null, undefined
+			c.addError(node.Object, fmt.Sprintf("property access is not supported on type %s", widenedObjectType.String()))
+			// baseResultType remains types.Never
+		}
+	}
+
+	// 5. For optional chaining, the result type is always a union with undefined
+	// unless the object is already null/undefined (in which case it's just undefined)
+	var resultType types.Type
+	if widenedObjectType == types.Null || widenedObjectType == types.Undefined {
+		resultType = types.Undefined
+	} else if baseResultType == types.Never {
+		// If property access failed, optional chaining still returns undefined instead of error
+		resultType = types.Undefined
+	} else {
+		// Create union type: baseResultType | undefined
+		resultType = &types.UnionType{
+			Types: []types.Type{baseResultType, types.Undefined},
+		}
+	}
+
+	// 6. Set the computed type on the OptionalChainingExpression node itself
+	node.SetComputedType(resultType)
+	debugPrintf("// [Checker OptionalChaining] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
 }

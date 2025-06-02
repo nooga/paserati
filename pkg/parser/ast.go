@@ -981,6 +981,29 @@ func (me *MemberExpression) String() string {
 	return out.String()
 }
 
+// OptionalChainingExpression represents optional chaining property access (e.g., object?.property).
+type OptionalChainingExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The '?.' token
+	Object         Expression  // The expression on the left (e.g., identifier, call result)
+	Property       *Identifier // The identifier on the right (the property name)
+}
+
+func (oce *OptionalChainingExpression) expressionNode()      {}
+func (oce *OptionalChainingExpression) TokenLiteral() string { return oce.Token.Literal }
+func (oce *OptionalChainingExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(oce.Object.String())
+	out.WriteString("?.")
+	out.WriteString(oce.Property.String())
+	out.WriteString(")")
+	if oce.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", oce.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // --- NEW: Switch Statement Nodes ---
 
 // SwitchCase represents a single case or default clause within a switch statement.

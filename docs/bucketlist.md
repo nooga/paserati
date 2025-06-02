@@ -133,6 +133,11 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Parameters (incl. basic type annotations)
 - [x] Higher-order functions (function parameters and returns)
 - [x] Curried functions
+- [x] Function Overloads
+  - [x] Basic overload declarations (`function f(x: string): string; function f(x: number): number;`)
+  - [x] Implementation signature matching
+  - [x] Integration with default/optional parameters
+    - [ ] TypeScript compliant type-checking for default/optional parameters
 - [x] Default Parameter Values
   - [x] Basic default values (`function f(x = 5)`)
   - [x] Multiple default parameters
@@ -140,6 +145,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Parameter references in defaults (`function f(a, b = a + 1)`)
   - [x] Complex expressions in defaults
   - [x] Arrow functions with defaults
+  - [x] Shorthand methods with defaults (`{ method(x = 5) {} }`)
   - [x] Type checking for default value assignability
   - [x] Forward reference prevention (proper error for `function f(a = b, b)`)
   - [x] Type inference from default values (`function f(x = 20)` infers `x: number`)
@@ -150,6 +156,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Type checking for optional parameter usage
   - [x] Proper arity checking (minimum required arguments)
   - [x] Arrow functions with optional parameters
+  - [x] Shorthand methods with optional parameters (`{ method(x?: string) {} }`)
 - [ ] Rest Parameters (`...`)
 - [ ] `arguments` Object
 - [x] Closures / Lexical Scoping
