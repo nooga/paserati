@@ -432,8 +432,22 @@ func (v Value) ToInteger() int32 {
 
 // Inspect returns a developer-friendly representation of Value, similar to a REPL.
 func (v Value) Inspect() string {
+	return v.inspectWithContext(false) // Top-level call, strings unquoted
+}
+
+// InspectNested is used for nested contexts where strings should be quoted
+func (v Value) InspectNested() string {
+	return v.inspectWithContext(true) // Nested call, strings quoted
+}
+
+func (v Value) inspectWithContext(nested bool) string {
 	switch v.typ {
 	case TypeString:
+		if nested {
+			// In nested context (like inside objects/arrays), quote the string
+			return fmt.Sprintf(`"%s"`, v.AsString())
+		}
+		// At top level, return unquoted string
 		return v.AsString()
 	case TypeSymbol:
 		return fmt.Sprintf("Symbol(%s)", v.AsSymbol())
@@ -477,7 +491,7 @@ func (v Value) Inspect() string {
 			}
 			b.WriteString(field.name)
 			b.WriteString(": ")
-			b.WriteString(obj.properties[i].Inspect())
+			b.WriteString(obj.properties[i].InspectNested()) // Use nested context
 		}
 		b.WriteString("}")
 		return b.String()
@@ -491,7 +505,7 @@ func (v Value) Inspect() string {
 		sort.Strings(keys)
 		parts := make([]string, len(keys))
 		for i, k := range keys {
-			parts[i] = k + ": " + dict.properties[k].Inspect()
+			parts[i] = k + ": " + dict.properties[k].InspectNested() // Use nested context
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	case TypeArray:
@@ -499,7 +513,7 @@ func (v Value) Inspect() string {
 		arr := v.AsArray()
 		elems := make([]string, len(arr.elements))
 		for i, el := range arr.elements {
-			elems[i] = el.Inspect()
+			elems[i] = el.InspectNested() // Use nested context
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
 	case TypeNull:

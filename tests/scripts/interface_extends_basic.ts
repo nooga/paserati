@@ -1,4 +1,4 @@
-// expect: {name: John, age: 30, id: 1}
+// expect: {name: "John", age: 30, id: 1}
 
 interface Named {
   name: string;
