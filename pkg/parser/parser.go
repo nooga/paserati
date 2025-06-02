@@ -2499,15 +2499,21 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
 	}
 
+	// Check for optional marker '?' first
+	if p.peekTokenIs(lexer.QUESTION) {
+		p.nextToken() // Consume '?'
+		prop.Optional = true
+	}
+
 	// Check if this is a shorthand method signature
 	if p.peekTokenIs(lexer.LPAREN) {
-		// This is a shorthand method signature like methodName(): ReturnType
+		// This is a shorthand method signature like methodName(): ReturnType or methodName?(): ReturnType
 		p.nextToken() // Move to '('
 
-		// Parse function type signature
-		funcType := p.parseFunctionTypeExpression()
+		// Parse method type signature (uses ':' syntax, not '=>')
+		funcType := p.parseMethodTypeSignature()
 		if funcType == nil {
-			return nil // Error parsing function type
+			return nil // Error parsing method type
 		}
 
 		prop.Type = funcType
@@ -2618,26 +2624,26 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
 			}
 
-			// Check for shorthand method syntax first (identifier followed by '(')
+			// Check for optional marker '?' first
+			if p.peekTokenIs(lexer.QUESTION) {
+				p.nextToken() // Consume '?'
+				prop.Optional = true
+			}
+
+			// Check for shorthand method syntax (identifier followed by '(')
 			if p.peekTokenIs(lexer.LPAREN) {
-				// This is a shorthand method signature like methodName(): ReturnType
+				// This is a shorthand method signature like methodName(): ReturnType or methodName?(): ReturnType
 				p.nextToken() // Move to '('
 
-				// Parse function type signature
-				funcType := p.parseFunctionTypeExpression()
+				// Parse method type signature (uses ':' syntax, not '=>')
+				funcType := p.parseMethodTypeSignature()
 				if funcType == nil {
-					return nil // Error parsing function type
+					return nil // Error parsing method type
 				}
 
 				prop.Type = funcType
 			} else {
 				// Regular property: PropertyName?: TypeExpression
-
-				// Check for optional property marker '?'
-				if p.peekTokenIs(lexer.QUESTION) {
-					p.nextToken() // Consume '?'
-					prop.Optional = true
-				}
 
 				// Expect ':'
 				if !p.expectPeek(lexer.COLON) {
@@ -3212,4 +3218,81 @@ func (p *Parser) parseForBody() *BlockStatement {
 			HoistedDeclarations: make(map[string]Expression),
 		}
 	}
+}
+
+// parseMethodTypeSignature parses method type signatures like methodName(param: Type): ReturnType
+// This is different from parseFunctionTypeExpression which uses arrow syntax
+func (p *Parser) parseMethodTypeSignature() Expression {
+	// Current token should be '(' when this is called
+	if !p.curTokenIs(lexer.LPAREN) {
+		p.addError(p.curToken, "expected '(' for method signature")
+		return nil
+	}
+
+	// Parse parameter list (similar to parseFunctionTypeParameterList)
+	params := []Expression{}
+
+	// Handle empty parameter list: () : ...
+	if p.peekTokenIs(lexer.RPAREN) {
+		p.nextToken() // Consume ')'
+	} else {
+		// Parse first parameter type
+		p.nextToken() // Consume '('
+
+		// Handle optional parameter name
+		if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume IDENT (parameter name, ignored for type)
+			p.nextToken() // Consume ':', move to the actual type
+		} // Now curToken should be the start of the type expression
+
+		paramType := p.parseTypeExpression()
+		if paramType == nil {
+			return nil
+		}
+		params = append(params, paramType)
+
+		// Parse subsequent parameter types
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			p.nextToken() // Move to next token
+
+			// Handle optional parameter name
+			if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // Consume IDENT
+				p.nextToken() // Consume ':', move to the actual type
+			}
+
+			paramType := p.parseTypeExpression()
+			if paramType == nil {
+				return nil
+			}
+			params = append(params, paramType)
+		}
+
+		// Expect closing parenthesis
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+	}
+
+	// Now expect ':' for return type (not '=>' like in arrow functions)
+	if !p.expectPeek(lexer.COLON) {
+		return nil
+	}
+
+	// Parse the return type
+	p.nextToken() // Move to the start of the return type expression
+	returnType := p.parseTypeExpression()
+	if returnType == nil {
+		return nil
+	}
+
+	// Create a FunctionTypeExpression to represent the method signature
+	funcType := &FunctionTypeExpression{
+		Token:      lexer.Token{Type: lexer.LPAREN, Literal: "("},
+		Parameters: params,
+		ReturnType: returnType,
+	}
+
+	return funcType
 }

@@ -612,11 +612,12 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	properties := make(map[string]types.Type)
+	optionalProperties := make(map[string]bool)
 	var callSignatures []*types.FunctionType
 
 	for _, prop := range node.Properties {
 		if prop.IsCallSignature {
-			// Handle call signature
+			// Handle call signature like (param: type): returnType
 			var paramTypes []types.Type
 			for _, paramNode := range prop.Parameters {
 				paramType := c.resolveTypeAnnotation(paramNode)
@@ -634,30 +635,36 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			funcType := &types.FunctionType{
 				ParameterTypes: paramTypes,
 				ReturnType:     returnType,
-				// Note: Object type call signatures don't track optional parameters
+				// Note: Object type call signatures don't track optional parameters for now
 			}
 
 			callSignatures = append(callSignatures, funcType)
-		} else {
-			// Handle regular property
+		} else if prop.Name != nil {
+			// Regular property or method
 			propType := c.resolveTypeAnnotation(prop.Type)
-			if propType == nil {
-				if prop.Name != nil {
-					debugPrintf("// [Checker ObjectType] Failed to resolve type for property '%s' in object type literal. Using Any.\n", prop.Name.Value)
-				}
-				propType = types.Any
+			properties[prop.Name.Value] = propType
+			if prop.Optional {
+				optionalProperties[prop.Name.Value] = true
 			}
-			if prop.Name != nil {
-				properties[prop.Name.Value] = propType
-			}
+			debugPrintf("// [Checker ObjectType] Property '%s'%s: %s\n",
+				prop.Name.Value,
+				func() string {
+					if prop.Optional {
+						return "?"
+					} else {
+						return ""
+					}
+				}(),
+				propType.String())
 		}
+		// Skip properties with nil names that aren't call signatures
 	}
 
 	// For now, if we have call signatures, we need to represent this as a callable object type
-	// Since we don't have a specific CallableObjectType yet, we'll need to extend the type system
-	// For simplicity, let's treat a single call signature as an OverloadedFunctionType with one overload
+	// Since we don't have a specific CallableObjectType yet, we'll treat a single call signature
+	// as a function type, and multiple call signatures as an overloaded function type
 	if len(callSignatures) > 0 && len(properties) == 0 {
-		// Pure callable type - convert to overloaded function type
+		// Pure callable type - convert to function type
 		if len(callSignatures) == 1 {
 			// Single call signature - return as simple function type
 			return callSignatures[0]
@@ -679,7 +686,10 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 		}
 	}
 
-	return &types.ObjectType{Properties: properties}
+	return &types.ObjectType{
+		Properties:         properties,
+		OptionalProperties: optionalProperties,
+	}
 }
 
 // --- NEW: Helper to resolve ConstructorTypeExpression nodes ---
@@ -938,21 +948,28 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 	if targetIsObject && sourceIsObject {
 		// Both are objects. Check structural compatibility.
 		// For source to be assignable to target:
-		// - All properties required in target must exist in source with compatible types
+		// - All REQUIRED properties in target must exist in source with compatible types
+		// - Optional properties in target don't need to exist in source
 		// - Source can have additional properties (structural typing)
 
 		for targetPropName, targetPropType := range targetObject.Properties {
 			sourcePropType, exists := sourceObject.Properties[targetPropName]
 			if !exists {
-				// Target requires property that source doesn't have
-				return false
+				// Check if this property is optional in the target
+				isOptional := targetObject.OptionalProperties != nil && targetObject.OptionalProperties[targetPropName]
+				if !isOptional {
+					// Target requires property that source doesn't have
+					return false
+				}
+				// Property is optional, so it's okay that source doesn't have it
+				continue
 			}
 			if !c.isAssignable(sourcePropType, targetPropType) {
 				// Property type mismatch
 				return false
 			}
 		}
-		// All target properties found and compatible in source
+		// All required target properties found and compatible in source
 		return true
 	}
 	// --- End Object Type Handling ---
@@ -2760,6 +2777,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 	// 2. Build the ObjectType from interface properties, including inheritance
 	properties := make(map[string]types.Type)
+	optionalProperties := make(map[string]bool)
 
 	// First, inherit properties from extended interfaces
 	for _, extendedInterfaceName := range node.Extends {
@@ -2774,6 +2792,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// Copy all properties from the extended interface
 			for propName, propType := range extendedObjectType.Properties {
 				properties[propName] = propType
+				// Copy optional property flags
+				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
+					optionalProperties[propName] = true
+				}
 			}
 			debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from '%s'\n",
 				node.Name.Value, len(extendedObjectType.Properties), extendedInterfaceName.Value)
@@ -2793,6 +2815,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				constructorType = types.Any
 			}
 			properties["new"] = constructorType
+			// Constructor signatures are always required (not optional)
 		} else {
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
@@ -2809,11 +2832,22 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 
 			properties[prop.Name.Value] = propType
+
+			// Track optional properties
+			if prop.Optional {
+				optionalProperties[prop.Name.Value] = true
+			} else {
+				// Explicitly mark as not optional in case it was inherited as optional
+				optionalProperties[prop.Name.Value] = false
+			}
 		}
 	}
 
 	// 3. Create the ObjectType representing this interface
-	interfaceType := &types.ObjectType{Properties: properties}
+	interfaceType := &types.ObjectType{
+		Properties:         properties,
+		OptionalProperties: optionalProperties,
+	}
 
 	// 4. Define the interface as a type alias in the environment
 	if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {

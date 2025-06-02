@@ -217,6 +217,11 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [ ] Intersection Types (`A & B`)
 - [x] Function Types (`(a: number) => string`)
 - [x] Object Type Literals (`{ name: string; age: number }`)
+- [x] Callable Types (`{ (param: Type): ReturnType }`)
+  - [x] Single call signature in object types
+  - [x] Multiple call signatures (overloaded callable types)
+  - [x] Type checking for callable object assignments
+  - [x] Call expression type checking with callable types
 - [x] Interfaces (`interface Point { x: number; y: number; }`)
   - [x] Interface Inheritance (`interface Point3D extends Point2D { z: number; }`)
   - [x] Multiple Interface Inheritance (`interface Combined extends A, B {}`)
@@ -245,6 +250,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Structural Typing for interfaces and object types
 - [x] Interface compatibility and duck typing
 - [x] Constructor function type checking with `new` expressions
+- [x] Optional Properties and Methods
+  - [x] Optional properties in object type literals (`{ name: string; age?: number }`)
+  - [x] Optional methods in object type literals (`{ getValue(): string; clear?(): void }`)
+  - [x] Optional properties in interfaces (`interface User { name: string; email?: string }`)
+  - [x] Optional methods in interfaces (`interface Service { connect(): void; disconnect?(): void }`)
+  - [x] Proper type checking for optional vs required properties
+  - [x] Structural typing compatibility with optional properties
 - [ ] Type Narrowing (Control Flow Analysis)
 - [ ] Type Guards (`typeof`, `instanceof`, custom)
 - [ ] Strict Null Checks (`strictNullChecks` compiler option)

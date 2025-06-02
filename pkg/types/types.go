@@ -293,7 +293,8 @@ func (at *ArrayType) Equals(other Type) bool {
 // ObjectType represents the type of an object literal or interface.
 type ObjectType struct {
 	// Using a map for simplicity now. Consider ordered map or slice for stability.
-	Properties map[string]Type
+	Properties         map[string]Type
+	OptionalProperties map[string]bool // Tracks which properties are optional
 	// TODO: Index Signatures?
 }
 
@@ -308,7 +309,11 @@ func (ot *ObjectType) String() string {
 		if typ != nil { // Add nil check
 			typStr = typ.String()
 		}
-		props += fmt.Sprintf("%s: %s", name, typStr)
+		optional := ""
+		if ot.OptionalProperties != nil && ot.OptionalProperties[name] {
+			optional = "?"
+		}
+		props += fmt.Sprintf("%s%s: %s", name, optional, typStr)
 		i++
 	}
 	return fmt.Sprintf("{ %s }", props)
@@ -346,8 +351,16 @@ func (ot *ObjectType) Equals(other Type) bool {
 		if t1 != nil && !t1.Equals(t2) {
 			return false // Property types are not equal
 		}
+
+		// Check optional property flags
+		optional1 := ot.OptionalProperties != nil && ot.OptionalProperties[key]
+		optional2 := otherOt.OptionalProperties != nil && otherOt.OptionalProperties[key]
+		if optional1 != optional2 {
+			return false // Optionality mismatch
+		}
 	}
-	return true // All properties matched
+
+	return true // All properties and optionality flags match
 }
 
 // --- NEW: UnionType ---
