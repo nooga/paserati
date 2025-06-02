@@ -114,7 +114,7 @@ func TestTemplateLiteralExecution(t *testing.T) {
 
 func TestTemplateLiteralBytecodeGeneration(t *testing.T) {
 	// Test that OpStringConcat is being generated for template literals
-	input := "`hello ${name}`"
+	input := "let name; `hello ${name}`"
 
 	l := lexer.NewLexer(input)
 	p := parser.NewParser(l)

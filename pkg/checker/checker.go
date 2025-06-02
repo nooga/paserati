@@ -1312,6 +1312,21 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			case "!":
 				resultType = types.Boolean
+			// --- NEW: Handle Unary Plus (+) ---
+			case "+":
+				// Unary plus coerces operand to number
+				if widenedRightType == types.Any {
+					resultType = types.Any
+				} else {
+					// In TypeScript/JavaScript, unary plus always attempts to convert to number
+					// For type checking purposes, the result is always number (even if it could be NaN at runtime)
+					resultType = types.Number
+				}
+			// --- NEW: Handle Void ---
+			case "void":
+				// void operator always returns undefined, regardless of operand type
+				// The operand is still evaluated (for side effects), but the result is always undefined
+				resultType = types.Undefined
 			// --- NEW: Handle Bitwise NOT (~) ---
 			case "~":
 				if widenedRightType == types.Any {

@@ -906,6 +906,15 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) errors
 		c.emitNot(destReg, rightReg, node.Token.Line)
 	case "-":
 		c.emitNegate(destReg, rightReg, node.Token.Line)
+	// --- NEW: Handle Unary Plus (+) ---
+	case "+":
+		// Unary plus converts operand to number using the dedicated OpToNumber instruction
+		c.emitToNumber(destReg, rightReg, node.Token.Line)
+	// --- NEW: Handle Void ---
+	case "void":
+		// void operator evaluates operand (for side effects) then returns undefined
+		// Operand is already compiled above (rightReg), so we just load undefined
+		c.emitLoadUndefined(destReg, node.Token.Line)
 	// --- NEW ---
 	case "~":
 		c.emitBitwiseNot(destReg, rightReg, node.Token.Line)

@@ -32,9 +32,10 @@ const (
 	OpStringConcat OpCode = 49 // Rx Ry Rz: Rx = Ry + Rz (optimized string concatenation)
 
 	// Unary
-	OpNegate OpCode = 10 // Rx Ry: Rx = -Ry
-	OpNot    OpCode = 11 // Rx Ry: Rx = !Ry (logical not)
-	OpTypeof OpCode = 48 // Rx Ry: Rx = typeof Ry (returns string)
+	OpNegate   OpCode = 10 // Rx Ry: Rx = -Ry
+	OpNot      OpCode = 11 // Rx Ry: Rx = !Ry (logical not)
+	OpTypeof   OpCode = 48 // Rx Ry: Rx = typeof Ry (returns string)
+	OpToNumber OpCode = 50 // Rx Ry: Rx = Number(Ry) (unary plus conversion)
 
 	// Comparison (Result Dest, Left, Right) -> Result is boolean
 	OpEqual          OpCode = 12 // Rx Ry Rz: Rx = (Ry == Rz)
@@ -132,6 +133,8 @@ func (op OpCode) String() string {
 		return "OpNot"
 	case OpTypeof:
 		return "OpTypeof"
+	case OpToNumber:
+		return "OpToNumber"
 	case OpEqual:
 		return "OpEqual"
 	case OpNotEqual:
@@ -307,7 +310,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
 	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
-	case OpNegate, OpNot, OpTypeof, OpBitwiseNot, OpGetLength:
+	case OpNegate, OpNot, OpTypeof, OpToNumber, OpBitwiseNot, OpGetLength:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

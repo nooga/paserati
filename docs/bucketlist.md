@@ -39,7 +39,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Increment (`++`) (prefix/postfix)
 - [x] Decrement (`--`) (prefix/postfix)
 - [x] Unary Negation (`-`)
-- [ ] Unary Plus (`+`) (type coercion)
+- [x] Unary Plus (`+`) (type coercion)
 
 ### Comparison
 
@@ -95,7 +95,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [ ] `instanceof` Operator
 - [ ] `in` Operator
 - [ ] `delete` Operator
-- [ ] `void` Operator
+- [x] `void` Operator
 - [x] Grouping Operator (`()`)
 - [x] Nullish Coalescing Operator (`??`)
 - [ ] Optional Chaining (`?.`)

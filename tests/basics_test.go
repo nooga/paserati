@@ -149,6 +149,16 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "Coalesce Right Value", input: `null ?? "world";`, expect: "world"},
 		{name: "Coalesce Short Circuit", input: `1 ?? (1/0);`, expect: "1"}, // Should not divide by zero
 
+		// --- Unary Plus and Void Operators ---
+		{name: "UnaryPlusString", input: `+"5";`, expect: "5"},
+		{name: "UnaryPlusTrue", input: "+true;", expect: "1"},
+		{name: "UnaryPlusFalse", input: "+false;", expect: "0"},
+		{name: "UnaryPlusFloat", input: `+"3.14";`, expect: "3.14"},
+		{name: "VoidZero", input: "void 0;", expect: "undefined"},
+		{name: "VoidNumber", input: "void 42;", expect: "undefined"},
+		{name: "VoidString", input: `void "hello";`, expect: "undefined"},
+		{name: "VoidTrue", input: "void true;", expect: "undefined"},
+
 		// --- Compound Assignment Tests ---
 		{name: "CompAssign Simple Add", input: "let x = 5; x += 3; x;", expect: "8"},
 		{name: "CompAssign Simple Sub", input: "let y = 10; y -= 2; y;", expect: "8"},

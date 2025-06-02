@@ -322,3 +322,10 @@ func (c *Compiler) emitSetGlobal(globalIdx uint16, src Register, line int) {
 	c.emitUint16(globalIdx)
 	c.emitByte(byte(src))
 }
+
+// emitToNumber implements unary plus by converting the operand to a number
+func (c *Compiler) emitToNumber(dest, src Register, line int) {
+	c.emitOpCode(vm.OpToNumber, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}

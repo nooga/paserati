@@ -437,6 +437,14 @@ func (vm *VM) run() (InterpretResult, Value) {
 			typeofStr := getTypeofString(srcVal)
 			registers[destReg] = String(typeofStr)
 
+		case OpToNumber:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			srcVal := registers[srcReg]
+			// Convert value to number using the ToFloat() method
+			registers[destReg] = Number(srcVal.ToFloat())
+
 		case OpStringConcat:
 			destReg := code[ip]
 			leftReg := code[ip+1]

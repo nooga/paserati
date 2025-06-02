@@ -183,8 +183,10 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
+	p.registerPrefix(lexer.PLUS, p.parsePrefixExpression) // Added for unary plus
 	p.registerPrefix(lexer.BITWISE_NOT, p.parsePrefixExpression)
 	p.registerPrefix(lexer.TYPEOF, p.parseTypeofExpression) // Added for typeof operator
+	p.registerPrefix(lexer.VOID, p.parseVoidExpression)     // Added for void operator
 	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
@@ -250,6 +252,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.IDENT, p.parseTypeIdentifier)       // Basic types like 'number', 'string', custom types
 	p.registerTypePrefix(lexer.NULL, p.parseNullLiteral)           // 'null' type
 	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // 'undefined' type
+	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)       // 'void' type
 	// Literal types in TYPE context too
 	p.registerTypePrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerTypePrefix(lexer.NUMBER, p.parseNumberLiteral)
@@ -2608,4 +2611,28 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 	}
 
 	return objType
+}
+
+// parseVoidExpression parses a void expression.
+func (p *Parser) parseVoidExpression() Expression {
+	expression := &PrefixExpression{
+		Token:    p.curToken, // The 'void' token
+		Operator: "void",
+	}
+
+	p.nextToken() // Move past 'void'
+
+	// Parse the operand with PREFIX precedence
+	expression.Right = p.parseExpression(PREFIX)
+	if expression.Right == nil {
+		p.addError(p.curToken, "expected expression after 'void'")
+		return nil
+	}
+
+	return expression
+}
+
+// parseVoidTypeLiteral parses 'void' as a type annotation.
+func (p *Parser) parseVoidTypeLiteral() Expression {
+	return &Identifier{Token: p.curToken, Value: "void"}
 }
