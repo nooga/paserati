@@ -1,4 +1,6 @@
 // Medium complexity test for rest parameters
+// expect: Done
+
 console.log("Starting medium test");
 
 function sum(...numbers: number[]): number {
@@ -29,5 +31,3 @@ console.log("array length:", arr.length);
 console.log("sum of array:", sum(...arr));
 
 ("Done");
-
-// expect: Done

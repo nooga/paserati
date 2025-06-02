@@ -241,6 +241,8 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		panic("Compiler internal error: typeChecker is nil during compileNode")
 	}
 
+	fmt.Printf("// DEBUG compiling line %d (%s)\n", GetTokenFromNode(node).Line, c.compilingFuncName)
+
 	switch node := node.(type) {
 	case *parser.Program:
 		if c.enclosing == nil {
@@ -1504,32 +1506,24 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 			}
 			arrayReg := c.regAlloc.Current()
 
-			// For now, we'll emit a special opcode to expand the array
-			// This will be handled in the VM phase
-			// TODO: We need to add OpSpreadArray opcode to expand array elements
-			// For now, let's add a placeholder that will be implemented in VM phase
+			// Note: Length access removed - spread syntax not fully implemented yet
+			// This is just a placeholder to mark the spread element
+			// The VM currently treats spread args the same as regular args
 
-			// Get array length
-			lengthReg := c.regAlloc.Alloc()
-			lengthConstIdx := c.chunk.AddConstant(vm.NewString("length"))
-			c.emitGetProp(lengthReg, arrayReg, lengthConstIdx, spreadElement.Token.Line)
+			// For now, we'll mark this as needing special handling later
+			// Store the register that contains the array to be spread
+			argRegs = append(argRegs, arrayReg)
 
-			// For each element in the array, get it and add to argRegs
-			// This is a simplified approach - in a real implementation we'd want
-			// to emit special bytecode for efficient spreading
-
-			// For now, we'll mark this as needing special handling and continue
-			// The VM will need to handle the spread during the call
-			argRegs = append(argRegs, arrayReg) // Store the array register for spreading
-
-		} else {
-			// Regular argument
-			err := c.compileNode(arg)
-			if err != nil {
-				return nil, 0, err
-			}
-			argRegs = append(argRegs, c.regAlloc.Current())
+			// Early return since spread is not fully implemented
+			return argRegs, 1, NewCompileError(spreadElement, "spread syntax in function calls not fully implemented yet")
 		}
+
+		// Regular argument
+		err := c.compileNode(arg)
+		if err != nil {
+			return nil, 0, err
+		}
+		argRegs = append(argRegs, c.regAlloc.Current())
 	}
 
 	// If we have spread elements, we need special handling in the VM

@@ -85,6 +85,10 @@ type VM struct {
 	// Global variable names (parallel array for debugging, maps index to name)
 	globalNames []string
 
+	// Singleton empty array for rest parameters optimization
+	// Used when variadic functions are called with no extra arguments
+	emptyRestArray Value
+
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
 }
@@ -222,12 +226,13 @@ const (
 func NewVM() *VM {
 	return &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues: make([]*Upvalue, 0, 16),         // Pre-allocate slightly
-		propCache:    make(map[int]*PropInlineCache),  // Initialize inline cache
-		cacheStats:   ICacheStats{},                   // Initialize cache statistics
-		globals:      make([]Value, 0),                // Initialize global variables table
-		globalNames:  make([]string, 0),               // Initialize global variable names
-		errors:       make([]errors.PaseratiError, 0), // Initialize error list
+		openUpvalues:   make([]*Upvalue, 0, 16),         // Pre-allocate slightly
+		propCache:      make(map[int]*PropInlineCache),  // Initialize inline cache
+		cacheStats:     ICacheStats{},                   // Initialize cache statistics
+		globals:        make([]Value, 0),                // Initialize global variables table
+		globalNames:    make([]string, 0),               // Initialize global variable names
+		emptyRestArray: NewArray(),                      // Initialize singleton empty array for rest params
+		errors:         make([]errors.PaseratiError, 0), // Initialize error list
 	}
 }
 
@@ -662,14 +667,21 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// Handle rest parameters if the function is variadic
 				if calleeFunc.Variadic {
 					extraArgCount := argCount - calleeFunc.Arity
-					restArray := NewArray()
-					restArrayObj := restArray.AsArray()
+					var restArray Value
 
-					// Collect extra arguments into the rest array
-					for i := 0; i < extraArgCount; i++ {
-						argIndex := calleeFunc.Arity + i
-						if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
-							restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+					if extraArgCount == 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							}
 						}
 					}
 
@@ -754,14 +766,21 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// Handle rest parameters if the function is variadic
 				if calleeFunc.Variadic {
 					extraArgCount := argCount - calleeFunc.Arity
-					restArray := NewArray()
-					restArrayObj := restArray.AsArray()
+					var restArray Value
 
-					// Collect extra arguments into the rest array
-					for i := 0; i < extraArgCount; i++ {
-						argIndex := calleeFunc.Arity + i
-						if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
-							restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+					if extraArgCount == 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							}
 						}
 					}
 

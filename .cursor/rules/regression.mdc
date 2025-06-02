@@ -1,0 +1,15 @@
+---
+description: When checking test suite status before and after big changes
+globs: 
+alwaysApply: false
+---
+To confirm that no regressions happen you can run the test suite by invoking the command:
+
+```
+go test -timeout 30s -run ^TestScripts$ paserati/tests | grep 'FAIL'
+```
+
+Here grep skips over output of the tests which can be overwhelming.
+
+This will give you a list of failing tests. There can be some test failing to start with but if after big changes in code there is more tests failing then we were most likely wrong.
+

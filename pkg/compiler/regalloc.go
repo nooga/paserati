@@ -3,7 +3,7 @@ package compiler
 import "fmt"
 
 // Debug flag for register allocation tracing
-const debugRegAlloc = false
+const debugRegAlloc = true
 
 // Register represents a virtual machine register index.
 type Register uint8 // Assuming max 256 registers per function for now
