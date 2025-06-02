@@ -77,6 +77,12 @@ func InitializeRegistry() {
 		// Register console object
 		registerConsole()
 
+		// Register String constructor and prototype methods
+		registerString()
+
+		// Register Array prototype methods
+		registerArray()
+
 		// TODO: Register other built-ins here
 	})
 }

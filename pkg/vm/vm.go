@@ -218,8 +218,10 @@ const (
 func NewVM() *VM {
 	return &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues: make([]*Upvalue, 0, 16),        // Pre-allocate slightly
-		propCache:    make(map[int]*PropInlineCache), // Initialize inline cache
+		openUpvalues: make([]*Upvalue, 0, 16),         // Pre-allocate slightly
+		propCache:    make(map[int]*PropInlineCache),  // Initialize inline cache
+		cacheStats:   ICacheStats{},                   // Initialize cache statistics
+		errors:       make([]errors.PaseratiError, 0), // Initialize error list
 	}
 }
 
@@ -1263,6 +1265,9 @@ func (vm *VM) run() (InterpretResult, Value) {
 				vm.propCache[cacheKey] = cache
 			}
 
+			// Initialize prototypes if needed
+			initPrototypes()
+
 			// --- Special handling for .length ---
 			// Check the *original* value type before checking if it's an Object type
 			if propName == "length" {
@@ -1278,6 +1283,23 @@ func (vm *VM) run() (InterpretResult, Value) {
 					continue // Skip general object lookup
 				}
 				// If not Array or String, fall through to general object property lookup
+			}
+
+			// --- Handle prototype methods for primitives ---
+			// Handle String prototype methods
+			if objVal.IsString() {
+				if method, exists := StringPrototype[propName]; exists {
+					registers[destReg] = createBoundMethod(objVal, method)
+					continue // Skip object lookup
+				}
+			}
+
+			// Handle Array prototype methods
+			if objVal.IsArray() {
+				if method, exists := ArrayPrototype[propName]; exists {
+					registers[destReg] = createBoundMethod(objVal, method)
+					continue // Skip object lookup
+				}
 			}
 
 			// General property lookup

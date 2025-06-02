@@ -2652,6 +2652,18 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	} else if widenedObjectType == types.String {
 		if propertyName == "length" {
 			resultType = types.Number // string.length is number
+		} else if propertyName == "charCodeAt" {
+			resultType = &types.FunctionType{
+				ParameterTypes: []types.Type{types.Number},
+				ReturnType:     types.Number,
+				IsVariadic:     false,
+			}
+		} else if propertyName == "charAt" {
+			resultType = &types.FunctionType{
+				ParameterTypes: []types.Type{types.Number},
+				ReturnType:     types.String,
+				IsVariadic:     false,
+			}
 		} else {
 			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
 			// resultType remains types.Error
@@ -2662,8 +2674,25 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		case *types.ArrayType:
 			if propertyName == "length" {
 				resultType = types.Number // Array.length is number
+			} else if propertyName == "concat" {
+				resultType = &types.FunctionType{
+					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+					ReturnType:     &types.ArrayType{ElementType: types.Any},
+					IsVariadic:     true,
+				}
+			} else if propertyName == "push" {
+				resultType = &types.FunctionType{
+					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+					ReturnType:     types.Number,
+					IsVariadic:     true,
+				}
+			} else if propertyName == "pop" {
+				resultType = &types.FunctionType{
+					ParameterTypes: []types.Type{},
+					ReturnType:     types.Any,
+					IsVariadic:     false,
+				}
 			} else {
-				// TODO: Add array methods later? (e.g., .push)
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
 				// resultType remains types.Error
 			}

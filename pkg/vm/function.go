@@ -6,13 +6,13 @@ import (
 )
 
 type FunctionObject struct {
-   Object
-   Arity        int
-   Variadic     bool
-   Chunk        *Chunk
-   Name         string
-   UpvalueCount int
-   RegisterSize int
+	Object
+	Arity        int
+	Variadic     bool
+	Chunk        *Chunk
+	Name         string
+	UpvalueCount int
+	RegisterSize int
 }
 
 type Upvalue struct {
@@ -36,29 +36,37 @@ func (uv *Upvalue) Resolve() *Value {
 }
 
 type ClosureObject struct {
-   Object
-   Fn       *FunctionObject
-   Upvalues []*Upvalue
+	Object
+	Fn       *FunctionObject
+	Upvalues []*Upvalue
 }
 
 // NativeFunctionObject represents a native Go function callable from Paserati.
 type NativeFunctionObject struct {
-   Object
-   Arity    int
-   Variadic bool
-   Name     string
-   Fn       func(args []Value) Value
+	Object
+	Arity    int
+	Variadic bool
+	Name     string
+	Fn       func(args []Value) Value
+}
+
+// BoundNativeFunctionObject represents a native function bound to a 'this' value
+type BoundNativeFunctionObject struct {
+	Object
+	ThisValue  Value
+	NativeFunc *NativeFunctionObject
+	Name       string
 }
 
 func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk) Value {
-   fnObj := &FunctionObject{
-       Arity:        arity,
-       Variadic:     variadic,
-       Chunk:        chunk,
-       Name:         name,
-       UpvalueCount: upvalueCount,
-       RegisterSize: registerSize,
-   }
+	fnObj := &FunctionObject{
+		Arity:        arity,
+		Variadic:     variadic,
+		Chunk:        chunk,
+		Name:         name,
+		UpvalueCount: upvalueCount,
+		RegisterSize: registerSize,
+	}
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}
 }
 
@@ -66,21 +74,21 @@ func NewClosure(fn *FunctionObject, upvalues []*Upvalue) Value {
 	if fn == nil {
 		panic("Cannot create Closure with a nil FunctionObject")
 	}
-   if len(upvalues) != fn.UpvalueCount {
-       panic(fmt.Sprintf("Incorrect number of upvalues provided for closure: expected %d, got %d", fn.UpvalueCount, len(upvalues)))
-   }
-   closureObj := &ClosureObject{
-       Fn:       fn,
-       Upvalues: upvalues,
-   }
+	if len(upvalues) != fn.UpvalueCount {
+		panic(fmt.Sprintf("Incorrect number of upvalues provided for closure: expected %d, got %d", fn.UpvalueCount, len(upvalues)))
+	}
+	closureObj := &ClosureObject{
+		Fn:       fn,
+		Upvalues: upvalues,
+	}
 	return Value{typ: TypeClosure, obj: unsafe.Pointer(closureObj)}
 }
 
 func NewNativeFunction(arity int, variadic bool, name string, fn func(args []Value) Value) Value {
-   return Value{typ: TypeNativeFunction, obj: unsafe.Pointer(&NativeFunctionObject{
-       Arity:    arity,
-       Variadic: variadic,
-       Name:     name,
-       Fn:       fn,
-   })}
+	return Value{typ: TypeNativeFunction, obj: unsafe.Pointer(&NativeFunctionObject{
+		Arity:    arity,
+		Variadic: variadic,
+		Name:     name,
+		Fn:       fn,
+	})}
 }

@@ -7,6 +7,9 @@ import (
 // getProp handles property read for OpGetProp.
 // Returns the property value or a runtime error status.
 func (vm *VM) getProp(frame *CallFrame, objVal Value, propName string) (Value, InterpretResult) {
+	// Initialize prototypes if needed
+	initPrototypes()
+
 	// Special case: length property on arrays/strings
 	if propName == "length" {
 		switch objVal.Type() {
@@ -18,7 +21,22 @@ func (vm *VM) getProp(frame *CallFrame, objVal Value, propName string) (Value, I
 			return Number(float64(utf8.RuneCountInString(str))), InterpretOK
 		}
 	}
-	// Must be object
+
+	// Handle String prototype methods
+	if objVal.IsString() {
+		if method, exists := StringPrototype[propName]; exists {
+			return createBoundMethod(objVal, method), InterpretOK
+		}
+	}
+
+	// Handle Array prototype methods
+	if objVal.IsArray() {
+		if method, exists := ArrayPrototype[propName]; exists {
+			return createBoundMethod(objVal, method), InterpretOK
+		}
+	}
+
+	// Must be object for regular property access
 	if !objVal.IsObject() {
 		if objVal.Type() == TypeNull || objVal.Type() == TypeUndefined {
 			return Undefined, vm.runtimeError("Cannot read property '%s' of %s", propName, objVal.TypeName())
