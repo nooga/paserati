@@ -296,16 +296,16 @@ func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int)
 
 // --- NEW: Global Variable Emit Functions ---
 
-// emitGetGlobal emits OpGetGlobal instruction
-func (c *Compiler) emitGetGlobal(dest Register, nameConstIdx uint16, line int) {
+// emitGetGlobal emits OpGetGlobal instruction with direct global index
+func (c *Compiler) emitGetGlobal(dest Register, globalIdx uint16, line int) {
 	c.emitOpCode(vm.OpGetGlobal, line)
 	c.emitByte(byte(dest))
-	c.emitUint16(nameConstIdx)
+	c.emitUint16(globalIdx)
 }
 
-// emitSetGlobal emits OpSetGlobal instruction
-func (c *Compiler) emitSetGlobal(nameConstIdx uint16, src Register, line int) {
+// emitSetGlobal emits OpSetGlobal instruction with direct global index
+func (c *Compiler) emitSetGlobal(globalIdx uint16, src Register, line int) {
 	c.emitOpCode(vm.OpSetGlobal, line)
-	c.emitUint16(nameConstIdx)
+	c.emitUint16(globalIdx)
 	c.emitByte(byte(src))
 }

@@ -54,6 +54,12 @@ type Compiler struct {
 	compilingFuncName  string
 	typeChecker        *checker.Checker // Holds the checker instance
 	stats              *CompilerStats
+
+	// --- NEW: Global Variable Indexing for Performance ---
+	// Maps global variable names to their assigned indices (only for top-level compiler)
+	globalIndices map[string]int
+	// Count of global variables assigned so far (only for top-level compiler)
+	globalCount int
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -70,6 +76,8 @@ func NewCompiler() *Compiler {
 		compilingFuncName:  "<script>",
 		typeChecker:        nil, // Initialized to nil, can be set externally
 		stats:              &CompilerStats{},
+		globalIndices:      make(map[string]int),
+		globalCount:        0,
 	}
 }
 
@@ -534,9 +542,9 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, treating as GLOBAL\n", node.Value) // <<< ADDED
 			// Variable not found in any scope, treat as a global variable access
 			// This will return undefined at runtime if the global doesn't exist
-			nameConstIdx := c.chunk.AddConstant(vm.String(node.Value))
+			globalIdx := c.getOrAssignGlobalIndex(node.Value)
 			destReg := c.regAlloc.Alloc()
-			c.emitGetGlobal(destReg, nameConstIdx, node.Token.Line)
+			c.emitGetGlobal(destReg, globalIdx, node.Token.Line)
 			c.regAlloc.SetCurrent(destReg) // Update allocator state
 			// Set last expression tracking state
 			c.lastExprReg = destReg
@@ -566,9 +574,9 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			if c.enclosing == nil && definingTable.Outer == nil {
 				debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED
 				// This is a global variable, use OpGetGlobal
-				nameConstIdx := c.chunk.AddConstant(vm.String(node.Value))
+				globalIdx := c.getOrAssignGlobalIndex(node.Value)
 				destReg := c.regAlloc.Alloc()
-				c.emitGetGlobal(destReg, nameConstIdx, node.Token.Line)
+				c.emitGetGlobal(destReg, globalIdx, node.Token.Line)
 				c.regAlloc.SetCurrent(destReg) // Update allocator state
 			} else {
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
@@ -721,8 +729,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
 		if c.enclosing == nil {
 			// Top-level: use global variable
-			nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
-			c.emitSetGlobal(nameConstIdx, valueReg, node.Name.Token.Line)
+			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 		} else {
 			// Function scope: use local symbol table
 			c.currentSymbolTable.Define(node.Name.Value, valueReg)
@@ -733,8 +741,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
 		if c.enclosing == nil {
 			// Top-level: use global variable
-			nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
-			c.emitSetGlobal(nameConstIdx, valueReg, node.Name.Token.Line)
+			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 			// Also add to symbol table so it can be resolved later
 			c.currentSymbolTable.Define(node.Name.Value, valueReg)
 		} else {
@@ -743,11 +751,11 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		}
 	} else if c.enclosing == nil {
 		// Top-level function: also set as global
-		nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
+		globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
 		// Get the closure register from the symbol table
 		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 		if found && symbolRef.Register != nilRegister {
-			c.emitSetGlobal(nameConstIdx, symbolRef.Register, node.Name.Token.Line)
+			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
 		}
 	}
 
@@ -801,19 +809,19 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 		// For non-functions, Define associates the name with the final value register.
 		if c.enclosing == nil {
 			// Top-level: use global variable
-			nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
-			c.emitSetGlobal(nameConstIdx, valueReg, node.Name.Token.Line)
+			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 		} else {
 			// Function scope: use local symbol table
 			c.currentSymbolTable.Define(node.Name.Value, valueReg)
 		}
 	} else if c.enclosing == nil {
 		// Top-level function: also set as global
-		nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
+		globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
 		// Get the closure register from the symbol table
 		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 		if found && symbolRef.Register != nilRegister {
-			c.emitSetGlobal(nameConstIdx, symbolRef.Register, node.Name.Token.Line)
+			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
 		}
 	}
 	return nil
@@ -3002,4 +3010,32 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression) errors.Paser
 
 	// The result of the new operation is now in resultReg
 	return nil
+}
+
+// --- NEW: Global Variable Index Management ---
+
+// getOrAssignGlobalIndex returns the index for a global variable name.
+// If the variable doesn't have an index yet, assigns a new one.
+// This function should only be called on the top-level compiler.
+func (c *Compiler) getOrAssignGlobalIndex(name string) uint16 {
+	// Only top-level compiler should manage global indices
+	topCompiler := c
+	for topCompiler.enclosing != nil {
+		topCompiler = topCompiler.enclosing
+	}
+
+	if idx, exists := topCompiler.globalIndices[name]; exists {
+		return uint16(idx)
+	}
+
+	// Assign new index
+	idx := topCompiler.globalCount
+	topCompiler.globalIndices[name] = idx
+	topCompiler.globalCount++
+
+	if idx > 65535 {
+		panic(fmt.Sprintf("Too many global variables (max 65536): %s", name))
+	}
+
+	return uint16(idx)
 }

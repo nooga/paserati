@@ -211,12 +211,12 @@ func TestCompileExpressions(t *testing.T) {
 		},
 		{
 			input:             "let a = 5; let b = 10; a < b;",
-			expectedConstants: []vm.Value{vm.Number(5), vm.String("a"), vm.Number(10), vm.String("b")},
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(10)}, // No name constants needed anymore
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "a" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 10
-				vm.OpSetGlobal, uint16(3), Register(1), // Global "b" = R1
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0 (first global variable)
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 10
+				vm.OpSetGlobal, uint16(1), Register(1), // Global[1] = R1 (second global variable)
 				vm.OpMove, Register(2), Register(0), // R2 = R0 (value of a)
 				vm.OpMove, Register(3), Register(1), // R3 = R1 (value of b)
 				vm.OpLess, Register(4), Register(2), Register(3), // R4 = R2 < R3
@@ -299,14 +299,10 @@ func TestCompileFunctions(t *testing.T) {
 
 	// Expected Constants for the MAIN chunk:
 	// 0: Function object for 'double'
-	// 1: String "double" (for global variable name)
-	// 2: Number 10 (for the argument)
-	// 3: String "result" (for global variable name)
+	// 1: Number 10 (for the argument)
 	expectedMainConstants := []vm.Value{
 		vm.NewFunction(1, 0, 4, false, "double", vm.NewChunk()), // Placeholder for Function check
-		vm.String("double"), // Global variable name
-		vm.Number(10),       // Function argument
-		vm.String("result"), // Global variable name
+		vm.Number(10), // Function argument
 	}
 
 	// Expected Instructions for the 'double' FUNCTION chunk:
@@ -328,16 +324,16 @@ func TestCompileFunctions(t *testing.T) {
 		// let double = function(x) { ... };
 		// OPTIMIZATION: Functions with 0 upvalues use OpLoadConst instead of OpClosure
 		vm.OpLoadConst, Register(0), uint16(0), // R0 = Function(FuncConst=0) - OPTIMIZED
-		vm.OpSetGlobal, uint16(1), Register(0), // Global "double" = R0
+		vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0 (first global variable)
 
 		// let result = double(10);
 		// Compile double -> R1 (load global)
 		vm.OpMove, Register(1), Register(0), // R1 = R0 (double function)
 		// Compile 10 -> R2
-		vm.OpLoadConst, Register(2), uint16(2), // R2 = 10 (Const Idx 2)
+		vm.OpLoadConst, Register(2), uint16(1), // R2 = 10 (Const Idx 1)
 		// Emit Call R3, R1, 1 (Result in R3, Func in R1, ArgCount 1)
 		vm.OpCall, Register(3), Register(1), byte(1), // R3 = call double(R2)
-		vm.OpSetGlobal, uint16(3), Register(3), // Global "result" = R3
+		vm.OpSetGlobal, uint16(1), Register(3), // Global[1] = R3 (second global variable)
 
 		// return result;
 		// Compile result -> R4 (resolve R3, move R3->R4)
@@ -398,22 +394,10 @@ func TestCompileFunctions(t *testing.T) {
 	}
 
 	// 3. Check non-function constants in Main Chunk
-	if !vm.IsString(mainChunk.Constants[1]) || vm.AsString(mainChunk.Constants[1]) != "double" {
-		t.Errorf("Main constant mismatch (global name 'double'):")
-		t.Errorf("  Expected Constant[1]: %q", "double")
-		t.Errorf("  Got Constant[1]:      %v", mainChunk.Constants[1])
-		t.FailNow()
-	}
-	if !reflect.DeepEqual(mainChunk.Constants[2], expectedMainConstants[2]) {
+	if !reflect.DeepEqual(mainChunk.Constants[1], expectedMainConstants[1]) {
 		t.Errorf("Main constant mismatch (number 10):")
-		t.Errorf("  Expected Constant[2]: %v", expectedMainConstants[2])
-		t.Errorf("  Got Constant[2]:      %v", mainChunk.Constants[2])
-		t.FailNow()
-	}
-	if !vm.IsString(mainChunk.Constants[3]) || vm.AsString(mainChunk.Constants[3]) != "result" {
-		t.Errorf("Main constant mismatch (global name 'result'):")
-		t.Errorf("  Expected Constant[3]: %q", "result")
-		t.Errorf("  Got Constant[3]:      %v", mainChunk.Constants[3])
+		t.Errorf("  Expected Constant[1]: %v", expectedMainConstants[1])
+		t.Errorf("  Got Constant[1]:      %v", mainChunk.Constants[1])
 		t.FailNow()
 	}
 
@@ -799,11 +783,11 @@ func TestCompoundAssignments(t *testing.T) {
 		{
 			name:              "Add Assign Local",
 			input:             "let x = 5; x += 3; x;",
-			expectedConstants: []vm.Value{vm.Number(5), vm.String("x"), vm.Number(3)},
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(3)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "x" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 3
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
 				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x = x + 3)
 				vm.OpMove, Register(1), Register(0), // R1 = R0 (load x)
 				vm.OpReturn, Register(1), // Return R1
@@ -812,11 +796,11 @@ func TestCompoundAssignments(t *testing.T) {
 		{
 			name:              "Subtract Assign Local",
 			input:             "let y = 10; y -= 4; y;",
-			expectedConstants: []vm.Value{vm.Number(10), vm.String("y"), vm.Number(4)},
+			expectedConstants: []vm.Value{vm.Number(10), vm.Number(4)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 10
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "y" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 4
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 4
 				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
 				vm.OpMove, Register(1), Register(0), // R1 = R0 (load y)
 				vm.OpReturn, Register(1), // Return R1
@@ -825,11 +809,11 @@ func TestCompoundAssignments(t *testing.T) {
 		{
 			name:              "Multiply Assign Local",
 			input:             "let z = 2; z *= 6; z;",
-			expectedConstants: []vm.Value{vm.Number(2), vm.String("z"), vm.Number(6)},
+			expectedConstants: []vm.Value{vm.Number(2), vm.Number(6)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 2
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "z" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 6
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 6
 				vm.OpMultiply, Register(0), Register(0), Register(1), // R0 = R0 * R1
 				vm.OpMove, Register(1), Register(0), // R1 = R0 (load z)
 				vm.OpReturn, Register(1), // Return R1
@@ -838,11 +822,11 @@ func TestCompoundAssignments(t *testing.T) {
 		{
 			name:              "Divide Assign Local",
 			input:             "let w = 12; w /= 3; w;",
-			expectedConstants: []vm.Value{vm.Number(12), vm.String("w"), vm.Number(3)},
+			expectedConstants: []vm.Value{vm.Number(12), vm.Number(3)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 12
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "w" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 3
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
 				vm.OpDivide, Register(0), Register(0), Register(1), // R0 = R0 / R1
 				vm.OpMove, Register(1), Register(0), // R1 = R0 (load w)
 				vm.OpReturn, Register(1), // Return R1
@@ -911,60 +895,60 @@ func TestUpdateExpressions(t *testing.T) {
 	}{
 		{
 			name:              "Prefix Increment Local",
-			input:             "let x = 5; let y = ++x; y;", // x becomes 6, y is 6
-			expectedConstants: []vm.Value{vm.Number(5), vm.String("x"), vm.Number(1), vm.String("y")},
+			input:             "let x = 5; let y = ++x; y;",           // x becomes 6, y is 6
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "x" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 1
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
 				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments)
 				vm.OpMove, Register(2), Register(0), // R2 = R0 (result of ++x is new value)
-				vm.OpSetGlobal, uint16(3), Register(2), // Global "y" = R2
+				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2
 				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
 				vm.OpReturn, Register(1),
 			),
 		},
 		{
 			name:              "Postfix Increment Local",
-			input:             "let x = 5; let y = x++; y;", // x becomes 6, y is 5
-			expectedConstants: []vm.Value{vm.Number(5), vm.String("x"), vm.Number(1), vm.String("y")},
+			input:             "let x = 5; let y = x++; y;",           // x becomes 6, y is 5
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "x" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 1
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
 				vm.OpMove, Register(2), Register(0), // R2 = R0 (save original value of x)
 				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments using R1)
-				vm.OpSetGlobal, uint16(3), Register(2), // Global "y" = R2 (original value)
+				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2 (original value)
 				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
 				vm.OpReturn, Register(1),
 			),
 		},
 		{
 			name:              "Prefix Decrement Local",
-			input:             "let x = 5; let y = --x; y;", // x becomes 4, y is 4
-			expectedConstants: []vm.Value{vm.Number(5), vm.String("x"), vm.Number(1), vm.String("y")},
+			input:             "let x = 5; let y = --x; y;",           // x becomes 4, y is 4
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "x" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 1
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
 				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
 				vm.OpMove, Register(2), Register(0), // R2 = R0 (new value)
-				vm.OpSetGlobal, uint16(3), Register(2), // Global "y" = R2
+				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2
 				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
 				vm.OpReturn, Register(1),
 			),
 		},
 		{
 			name:              "Postfix Decrement Local",
-			input:             "let x = 5; let y = x--; y;", // x becomes 4, y is 5
-			expectedConstants: []vm.Value{vm.Number(5), vm.String("x"), vm.Number(1), vm.String("y")},
+			input:             "let x = 5; let y = x--; y;",           // x becomes 4, y is 5
+			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(1), Register(0), // Global "x" = R0
-				vm.OpLoadConst, Register(1), uint16(2), // R1 = 1
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
+				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
 				vm.OpMove, Register(2), Register(0), // R2 = R0 (save original x)
 				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
-				vm.OpSetGlobal, uint16(3), Register(2), // Global "y" = R2 (original value)
+				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2 (original value)
 				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
 				vm.OpReturn, Register(1),
 			),

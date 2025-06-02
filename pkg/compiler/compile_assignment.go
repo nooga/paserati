@@ -28,8 +28,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		targetReg    Register
 		isUpvalue    bool
 		upvalueIndex uint8
-		isGlobal     bool   // NEW: Track if this is a global variable
-		nameConstIdx uint16 // NEW: Constant index for global variable name
+		isGlobal     bool   // Track if this is a global variable
+		globalIdx    uint16 // Direct global index instead of name constant index
 	}
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register
@@ -49,11 +49,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		if !found {
 			// Variable not found in any scope, treat as global assignment
 			identInfo.isGlobal = true
-			identInfo.nameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
+			identInfo.globalIdx = c.getOrAssignGlobalIndex(lhsNode.Value)
 			// For compound assignments, we need the current value
 			if node.Operator != "=" {
 				currentValueReg = c.regAlloc.Alloc()
-				c.emitGetGlobal(currentValueReg, identInfo.nameConstIdx, line)
+				c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
 			} else {
 				currentValueReg = nilRegister // Not needed for simple assignment
 			}
@@ -68,11 +68,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			} else if c.enclosing == nil && definingTable.Outer == nil {
 				// Global variable (found in global scope AND we're at top level)
 				identInfo.isGlobal = true
-				identInfo.nameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
+				identInfo.globalIdx = c.getOrAssignGlobalIndex(lhsNode.Value)
 				// For compound assignments, we need the current value
 				if node.Operator != "=" {
 					currentValueReg = c.regAlloc.Alloc()
-					c.emitGetGlobal(currentValueReg, identInfo.nameConstIdx, line)
+					c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
 				} else {
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}
@@ -396,7 +396,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		case lhsIsIdentifier:
 			if identInfo.isGlobal {
 				// Global variable assignment
-				c.emitSetGlobal(identInfo.nameConstIdx, storeOpTargetReg, line)
+				c.emitSetGlobal(identInfo.globalIdx, storeOpTargetReg, line)
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, storeOpTargetReg, line)
 			} else {

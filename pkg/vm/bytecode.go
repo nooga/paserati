@@ -92,8 +92,8 @@ const (
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Operations ---
-	OpGetGlobal OpCode = 46 // Rx NameIdx(16bit): Rx = Globals[NameIdx]
-	OpSetGlobal OpCode = 47 // NameIdx(16bit) Ry: Globals[NameIdx] = Ry
+	OpGetGlobal OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
+	OpSetGlobal OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
 	// --- END NEW ---
 )
 
@@ -352,9 +352,9 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 
 	// --- NEW: Global Variable Operations Disassembly ---
 	case OpGetGlobal:
-		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx, NameIdx(16bit)
+		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx, GlobalIdx(16bit)
 	case OpSetGlobal:
-		return c.constantRegisterInstruction(builder, instruction.String(), offset, "NameIdx") // NameIdx(16bit), Ry
+		return c.constantRegisterInstruction(builder, instruction.String(), offset, "GlobalIdx") // GlobalIdx(16bit), Ry
 	// --- END NEW ---
 
 	default:

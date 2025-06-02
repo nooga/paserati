@@ -80,8 +80,10 @@ type VM struct {
 	// Cache statistics for debugging/profiling
 	cacheStats ICacheStats
 
-	// Global variables table (maps variable names to values)
-	globals map[string]Value
+	// Global variables table (indexed by global variable index for performance)
+	globals []Value
+	// Global variable names (parallel array for debugging, maps index to name)
+	globalNames []string
 
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
@@ -223,7 +225,8 @@ func NewVM() *VM {
 		openUpvalues: make([]*Upvalue, 0, 16),         // Pre-allocate slightly
 		propCache:    make(map[int]*PropInlineCache),  // Initialize inline cache
 		cacheStats:   ICacheStats{},                   // Initialize cache statistics
-		globals:      make(map[string]Value),          // Initialize global variables table
+		globals:      make([]Value, 0),                // Initialize global variables table
+		globalNames:  make([]string, 0),               // Initialize global variable names
 		errors:       make([]errors.PaseratiError, 0), // Initialize error list
 	}
 }
@@ -241,7 +244,8 @@ func (vm *VM) Reset() {
 	// Reset cache statistics
 	vm.cacheStats = ICacheStats{}
 	// Clear global variables
-	vm.globals = make(map[string]Value)
+	vm.globals = make([]Value, 0)
+	vm.globalNames = make([]string, 0)
 	// No need to clear registerStack explicitly, slots will be overwritten.
 }
 
@@ -1855,56 +1859,39 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 		case OpGetGlobal:
 			destReg := code[ip]
-			nameIdxHi := code[ip+1]
-			nameIdxLo := code[ip+2]
-			nameIdx := uint16(nameIdxHi)<<8 | uint16(nameIdxLo)
+			globalIdxHi := code[ip+1]
+			globalIdxLo := code[ip+2]
+			globalIdx := uint16(globalIdxHi)<<8 | uint16(globalIdxLo)
 			ip += 3
 
-			// Get the global variable name from constants
-			if int(nameIdx) >= len(constants) {
+			// Use direct global index access
+			if int(globalIdx) >= len(vm.globals) {
 				frame.ip = ip
-				status := vm.runtimeError("Invalid global variable name constant index %d", nameIdx)
+				status := vm.runtimeError("Invalid global variable index %d (max: %d)", globalIdx, len(vm.globals)-1)
 				return status, Undefined
 			}
-			nameVal := constants[nameIdx]
-			if !nameVal.IsString() {
-				frame.ip = ip
-				status := vm.runtimeError("Global variable name must be a string, got %s", nameVal.TypeName())
-				return status, Undefined
-			}
-			varName := nameVal.AsString()
 
-			// Look up the global variable
-			if globalVal, exists := vm.globals[varName]; exists {
-				registers[destReg] = globalVal
-			} else {
-				// Variable doesn't exist, return undefined (JavaScript behavior)
-				registers[destReg] = Undefined
-			}
+			// Direct array access - much faster than map lookup
+			registers[destReg] = vm.globals[globalIdx]
 
 		case OpSetGlobal:
-			nameIdxHi := code[ip]
-			nameIdxLo := code[ip+1]
+			globalIdxHi := code[ip]
+			globalIdxLo := code[ip+1]
 			srcReg := code[ip+2]
-			nameIdx := uint16(nameIdxHi)<<8 | uint16(nameIdxLo)
+			globalIdx := uint16(globalIdxHi)<<8 | uint16(globalIdxLo)
 			ip += 3
 
-			// Get the global variable name from constants
-			if int(nameIdx) >= len(constants) {
-				frame.ip = ip
-				status := vm.runtimeError("Invalid global variable name constant index %d", nameIdx)
-				return status, Undefined
+			// Use direct global index access for setting
+			if int(globalIdx) >= len(vm.globals) {
+				// Expand globals array if needed (for dynamic global assignment)
+				for len(vm.globals) <= int(globalIdx) {
+					vm.globals = append(vm.globals, Undefined)
+					vm.globalNames = append(vm.globalNames, "") // Placeholder name
+				}
 			}
-			nameVal := constants[nameIdx]
-			if !nameVal.IsString() {
-				frame.ip = ip
-				status := vm.runtimeError("Global variable name must be a string, got %s", nameVal.TypeName())
-				return status, Undefined
-			}
-			varName := nameVal.AsString()
 
-			// Set the global variable
-			vm.globals[varName] = registers[srcReg]
+			// Direct array assignment - much faster than map assignment
+			vm.globals[globalIdx] = registers[srcReg]
 
 		default:
 			frame.ip = ip // Save IP before erroring
