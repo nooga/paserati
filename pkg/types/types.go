@@ -51,6 +51,18 @@ var (
 	// Add Void later if needed for function returns? TS uses undefined.
 )
 
+// TypeofResultType represents the union of all possible string literals that the typeof operator can return
+var TypeofResultType = NewUnionType(
+	&LiteralType{Value: vm.String("undefined")},
+	&LiteralType{Value: vm.String("boolean")},
+	&LiteralType{Value: vm.String("number")},
+	&LiteralType{Value: vm.String("string")},
+	&LiteralType{Value: vm.String("function")},
+	&LiteralType{Value: vm.String("object")},
+	// Note: In TypeScript/JavaScript, typeof can also return "symbol" and "bigint" in newer versions
+	// but for now we'll stick to the basic set that our VM supports
+)
+
 // --- Simple Composite Types (Placeholder Structs) ---
 
 // FunctionType represents the type of a function.

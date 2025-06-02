@@ -1339,8 +1339,8 @@ func (c *Checker) visit(node parser.Node) {
 			node.Operand.SetComputedType(types.Any)
 		}
 
-		// typeof expression always evaluates to string type
-		node.SetComputedType(types.String)
+		// typeof expression always evaluates to a specific union of string literals
+		node.SetComputedType(types.TypeofResultType)
 
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
