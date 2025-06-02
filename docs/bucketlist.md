@@ -142,6 +142,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Arrow functions with defaults
   - [x] Type checking for default value assignability
   - [x] Forward reference prevention (proper error for `function f(a = b, b)`)
+  - [x] Type inference from default values (`function f(x = 20)` infers `x: number`)
 - [x] Optional Parameters
   - [x] Basic optional parameters (`function f(a: number, b?: string)`)
   - [x] Multiple optional parameters

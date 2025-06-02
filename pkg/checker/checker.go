@@ -3275,6 +3275,23 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 			c.env = originalEnv // Restore original environment
 		}
 
+		// NEW: If no type annotation but has default value, infer type from default value
+		if resolvedParamType == nil && paramNode.DefaultValue != nil {
+			// Use the temporary environment that includes previously defined parameters
+			originalEnv := c.env
+			c.env = tempEnv                 // Use progressive environment that includes earlier parameters
+			c.visit(paramNode.DefaultValue) // This will set the computed type
+			c.env = originalEnv             // Restore original environment
+
+			defaultValueType := paramNode.DefaultValue.GetComputedType()
+			if defaultValueType != nil {
+				// Widen literal types for parameter inference (like let/const inference)
+				resolvedParamType = types.GetWidenedType(defaultValueType)
+				debugPrintf("// [Checker resolveFuncLitType] Inferred parameter '%s' type from default value: %s -> %s\n",
+					paramNode.Name.Value, defaultValueType.String(), resolvedParamType.String())
+			}
+		}
+
 		if resolvedParamType == nil {
 			resolvedParamType = types.Any // Default to Any if no annotation or resolution failed
 		}
@@ -3284,8 +3301,9 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 		// This way, the next parameter's default value can reference this parameter
 		tempEnv.Define(paramNode.Name.Value, resolvedParamType, false) // false = not const
 
-		// Validate default value if present
-		if paramNode.DefaultValue != nil {
+		// Validate default value if present (skip if we already visited it for inference)
+		if paramNode.DefaultValue != nil && paramNode.TypeAnnotation != nil {
+			// Only validate if we had an explicit annotation (inference case already visited above)
 			// Use the temporary environment that includes previously defined parameters
 			originalEnv := c.env
 			c.env = tempEnv                 // Use progressive environment that includes earlier parameters
