@@ -9,25 +9,25 @@ import (
 
 // registerConsole creates and registers the console object with its methods
 func registerConsole() {
-	// Create the console object as a DictObject
-	consoleObj := vm.NewDictObject(vm.Undefined)
-	consoleDict := consoleObj.AsDictObject()
+	// Create the console object as a PlainObject
+	consoleObj := vm.NewObject(vm.Undefined)
+	console := consoleObj.AsPlainObject()
 
 	// Register all console methods
-	consoleDict.SetOwn("log", vm.NewNativeFunction(-1, true, "log", consoleLogImpl))
-	consoleDict.SetOwn("error", vm.NewNativeFunction(-1, true, "error", consoleErrorImpl))
-	consoleDict.SetOwn("warn", vm.NewNativeFunction(-1, true, "warn", consoleWarnImpl))
-	consoleDict.SetOwn("info", vm.NewNativeFunction(-1, true, "info", consoleInfoImpl))
-	consoleDict.SetOwn("debug", vm.NewNativeFunction(-1, true, "debug", consoleDebugImpl))
-	consoleDict.SetOwn("trace", vm.NewNativeFunction(-1, true, "trace", consoleTraceImpl))
-	consoleDict.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", consoleClearImpl))
-	consoleDict.SetOwn("count", vm.NewNativeFunction(-1, true, "count", consoleCountImpl))
-	consoleDict.SetOwn("countReset", vm.NewNativeFunction(-1, true, "countReset", consoleCountResetImpl))
-	consoleDict.SetOwn("time", vm.NewNativeFunction(-1, true, "time", consoleTimeImpl))
-	consoleDict.SetOwn("timeEnd", vm.NewNativeFunction(-1, true, "timeEnd", consoleTimeEndImpl))
-	consoleDict.SetOwn("group", vm.NewNativeFunction(-1, true, "group", consoleGroupImpl))
-	consoleDict.SetOwn("groupCollapsed", vm.NewNativeFunction(-1, true, "groupCollapsed", consoleGroupCollapsedImpl))
-	consoleDict.SetOwn("groupEnd", vm.NewNativeFunction(0, false, "groupEnd", consoleGroupEndImpl))
+	console.SetOwn("log", vm.NewNativeFunction(-1, true, "log", consoleLogImpl))
+	console.SetOwn("error", vm.NewNativeFunction(-1, true, "error", consoleErrorImpl))
+	console.SetOwn("warn", vm.NewNativeFunction(-1, true, "warn", consoleWarnImpl))
+	console.SetOwn("info", vm.NewNativeFunction(-1, true, "info", consoleInfoImpl))
+	console.SetOwn("debug", vm.NewNativeFunction(-1, true, "debug", consoleDebugImpl))
+	console.SetOwn("trace", vm.NewNativeFunction(-1, true, "trace", consoleTraceImpl))
+	console.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", consoleClearImpl))
+	console.SetOwn("count", vm.NewNativeFunction(-1, true, "count", consoleCountImpl))
+	console.SetOwn("countReset", vm.NewNativeFunction(-1, true, "countReset", consoleCountResetImpl))
+	console.SetOwn("time", vm.NewNativeFunction(-1, true, "time", consoleTimeImpl))
+	console.SetOwn("timeEnd", vm.NewNativeFunction(-1, true, "timeEnd", consoleTimeEndImpl))
+	console.SetOwn("group", vm.NewNativeFunction(-1, true, "group", consoleGroupImpl))
+	console.SetOwn("groupCollapsed", vm.NewNativeFunction(-1, true, "groupCollapsed", consoleGroupCollapsedImpl))
+	console.SetOwn("groupEnd", vm.NewNativeFunction(0, false, "groupEnd", consoleGroupEndImpl))
 
 	// Define the type for console object with all methods
 	consoleType := &types.ObjectType{
