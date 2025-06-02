@@ -7,18 +7,20 @@ import (
 
 // registerString registers the String constructor and static methods
 func registerString() {
-	// Register String constructor
+	// Register String constructor - should handle String() and String(...values)
 	register("String", -1, true, stringConstructor, &types.FunctionType{
-		ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-		ReturnType:     types.String,
-		IsVariadic:     true,
+		ParameterTypes:    []types.Type{}, // No fixed parameters
+		ReturnType:        types.String,
+		IsVariadic:        true,
+		RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
 	})
 
 	// Register static String methods
 	register("String.fromCharCode", -1, true, stringFromCharCode, &types.FunctionType{
-		ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Number}},
-		ReturnType:     types.String,
-		IsVariadic:     true,
+		ParameterTypes:    []types.Type{}, // No fixed parameters
+		ReturnType:        types.String,
+		IsVariadic:        true,
+		RestParameterType: &types.ArrayType{ElementType: types.Number}, // Accept numbers only
 	})
 }
 

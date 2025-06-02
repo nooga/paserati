@@ -67,12 +67,8 @@ func InitializeRegistry() {
 			IsVariadic:     false,
 		})
 
-		// Register Array
-		register("Array", -1, true, arrayImpl, &types.FunctionType{
-			ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-			ReturnType:     &types.ArrayType{ElementType: types.Any},
-			IsVariadic:     true,
-		})
+		// Register Array constructor with overloads
+		registerArrayConstructor()
 
 		// Register console object
 		registerConsole()
@@ -150,4 +146,65 @@ func GetObject(name string) vm.Value {
 		return vm.Undefined
 	}
 	return obj
+}
+
+// registerArrayConstructor registers the Array constructor with proper overloads
+func registerArrayConstructor() {
+	// Define the three Array constructor overloads:
+	// 1. Array() - empty array
+	// 2. Array(length: number) - array with specific length
+	// 3. Array(...items: T[]) - array from rest parameters
+
+	overloads := []*types.FunctionType{
+		// Array() -> any[]
+		{
+			ParameterTypes: []types.Type{},
+			ReturnType:     &types.ArrayType{ElementType: types.Any},
+			IsVariadic:     false,
+		},
+		// Array(length: number) -> any[]
+		{
+			ParameterTypes: []types.Type{types.Number},
+			ReturnType:     &types.ArrayType{ElementType: types.Any},
+			IsVariadic:     false,
+		},
+		// Array(...items: any[]) -> any[]
+		{
+			ParameterTypes:    []types.Type{}, // No fixed parameters
+			ReturnType:        &types.ArrayType{ElementType: types.Any},
+			IsVariadic:        true,
+			RestParameterType: &types.ArrayType{ElementType: types.Any},
+		},
+	}
+
+	// Implementation signature - must be compatible with all overloads
+	implementation := &types.FunctionType{
+		ParameterTypes:    []types.Type{}, // No fixed parameters
+		ReturnType:        &types.ArrayType{ElementType: types.Any},
+		IsVariadic:        true,
+		RestParameterType: &types.ArrayType{ElementType: types.Any},
+	}
+
+	overloadedArrayType := &types.OverloadedFunctionType{
+		Name:           "Array",
+		Overloads:      overloads,
+		Implementation: implementation,
+	}
+
+	// Register the overloaded function
+	if _, exists := registry["Array"]; exists {
+		panic("Builtin 'Array' already registered.")
+	}
+
+	runtimeFunc := &vm.NativeFunctionObject{
+		Arity:    -1, // Variadic
+		Variadic: true,
+		Name:     "Array",
+		Fn:       arrayImpl,
+	}
+
+	registry["Array"] = BuiltinDefinition{
+		Func: runtimeFunc,
+		Type: overloadedArrayType,
+	}
 }

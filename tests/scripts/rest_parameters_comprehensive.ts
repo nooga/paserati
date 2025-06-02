@@ -249,3 +249,5 @@ function deepSum(...args: any[]): number {
 console.log("deepSum(1, 2, 3, 4):", deepSum(1, 2, 3, 4));
 
 console.log("\n=== Rest Parameters Test Complete ===");
+
+// expect: === Rest Parameters Test Complete ===

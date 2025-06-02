@@ -242,3 +242,5 @@ let nestedResult = processNestedData("test", { a: 1 }, { b: 2 }, { c: 3 });
 console.log("Nested result:", nestedResult);
 
 console.log("\n=== Rest Parameters Error Tests Complete ===");
+
+// expect: === Rest Parameters Error Tests Complete ===

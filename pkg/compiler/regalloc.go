@@ -2,6 +2,9 @@ package compiler
 
 import "fmt"
 
+// Debug flag for register allocation tracing
+const debugRegAlloc = false
+
 // Register represents a virtual machine register index.
 type Register uint8 // Assuming max 256 registers per function for now
 
@@ -38,6 +41,9 @@ func (ra *RegisterAllocator) Alloc() Register {
 		lastIdx := len(ra.freeRegs) - 1
 		reg = ra.freeRegs[lastIdx]
 		ra.freeRegs = ra.freeRegs[:lastIdx]
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC] REUSE R%d (from free list, %d available)\n", reg, len(ra.freeRegs))
+		}
 	} else {
 		// Allocate new register if free list is empty
 		reg = ra.nextReg
@@ -45,11 +51,19 @@ func (ra *RegisterAllocator) Alloc() Register {
 			ra.nextReg++
 		} else {
 			// Handle register exhaustion - Panic for now
+			if debugRegAlloc {
+				fmt.Printf("[REGALLOC] EXHAUSTED! Next would be R%d but limit is 255\n", ra.nextReg)
+				fmt.Printf("[REGALLOC] Free list has %d registers: %v\n", len(ra.freeRegs), ra.freeRegs)
+				fmt.Printf("[REGALLOC] MaxReg so far: R%d\n", ra.maxReg)
+			}
 			panic("Compiler Error: Ran out of registers!")
 		}
 
 		if reg > ra.maxReg {
 			ra.maxReg = reg
+		}
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC] NEW R%d (nextReg now %d, maxReg %d, %d free)\n", reg, ra.nextReg, ra.maxReg, len(ra.freeRegs))
 		}
 	}
 
@@ -83,6 +97,11 @@ func (ra *RegisterAllocator) Current() Register {
 // SetCurrent explicitly sets the register considered to hold the current/result value.
 func (ra *RegisterAllocator) SetCurrent(reg Register) {
 	// Optional: Add check? if reg > ra.maxReg { panic(...) }
+	if debugRegAlloc {
+		oldReg := ra.currentReg
+		oldSet := ra.currentSet
+		fmt.Printf("[REGALLOC] SET_CURRENT R%d (was R%d, set=%v)\n", reg, oldReg, oldSet)
+	}
 	ra.currentReg = reg
 	ra.currentSet = true
 }
@@ -109,6 +128,9 @@ func (ra *RegisterAllocator) Reset() {
 func (ra *RegisterAllocator) Free(reg Register) {
 	// Optional: Could check if reg is already free or out of bounds
 	// For simplicity, we assume valid usage for now.
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] FREE R%d (free list will have %d registers)\n", reg, len(ra.freeRegs)+1)
+	}
 	ra.freeRegs = append(ra.freeRegs, reg)
 }
 
