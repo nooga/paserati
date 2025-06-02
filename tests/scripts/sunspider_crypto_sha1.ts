@@ -1,4 +1,4 @@
-// expect: 2524d264def74cce2498bf112bedf00e6c0b796d
+// expect: 5043d77c2a81ce31619f3e77b7a929a22340fc53
 /*
  * A JavaScript implementation of the Secure Hash Algorithm, SHA-1, as defined
  * in FIPS PUB 180-1

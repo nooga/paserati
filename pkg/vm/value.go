@@ -394,13 +394,17 @@ func (v Value) ToInteger() int32 {
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return 0
 		}
-		return int32(f)
+		// Proper 32-bit wrapping instead of clamping
+		// Convert to int64 first to avoid overflow, then wrap to 32-bit range
+		i64 := int64(f)
+		// Use bitwise AND to wrap to 32-bit range (equivalent to modulo 2^32 for unsigned)
+		// Then convert to signed int32
+		return int32(uint32(i64))
 	case TypeBigInt:
 		if v.AsBigInt().IsInt64() {
 			i64 := v.AsBigInt().Int64()
-			if i64 >= math.MinInt32 && i64 <= math.MaxInt32 {
-				return int32(i64)
-			}
+			// Apply the same wrapping logic for BigInt
+			return int32(uint32(i64))
 		}
 		return 0
 	case TypeBoolean:
@@ -422,7 +426,9 @@ func (v Value) ToInteger() int32 {
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				return 0
 			}
-			return int32(f)
+			// Apply the same wrapping logic for string-parsed floats
+			i64 := int64(f)
+			return int32(uint32(i64))
 		}
 		return 0
 	default:

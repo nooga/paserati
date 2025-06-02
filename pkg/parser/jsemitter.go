@@ -89,6 +89,8 @@ func (e *JSEmitter) emitStatement(stmt Statement) {
 		e.emitSwitchStatement(s)
 	case *TypeAliasStatement:
 		// Skip TypeAliasStatement as it's TS-specific
+	case *InterfaceDeclaration:
+		// Skip InterfaceDeclaration as it's TS-specific
 	default:
 		// Handle unknown statement types
 		e.writeLine("/* Unsupported statement type: %T */", s)
@@ -150,6 +152,16 @@ func (e *JSEmitter) emitExpressionStatement(stmt *ExpressionStatement) {
 	switch expr := stmt.Expression.(type) {
 	case *IfExpression:
 		e.emitIfStatement(expr)
+		return
+	case *FunctionLiteral:
+		// Function declarations don't need semicolons
+		e.emitExpression(stmt.Expression)
+		e.write("\n")
+		return
+	case *ArrowFunctionLiteral:
+		// Arrow function expressions assigned to variables need semicolons, but standalone ones don't
+		e.emitExpression(stmt.Expression)
+		e.write("\n")
 		return
 	default:
 		e.emitExpression(stmt.Expression)
@@ -288,17 +300,21 @@ func (e *JSEmitter) emitExpression(expr Expression) {
 	case *NumberLiteral:
 		e.write(exp.TokenLiteral())
 	case *StringLiteral:
-		e.write(exp.TokenLiteral())
+		e.write("%q", exp.Value)
 	case *NullLiteral:
 		e.write("null")
 	case *UndefinedLiteral:
 		e.write("undefined")
+	case *ThisExpression:
+		e.write("this")
 	case *FunctionLiteral:
 		e.emitFunctionLiteral(exp)
 	case *ArrowFunctionLiteral:
 		e.emitArrowFunctionLiteral(exp)
 	case *CallExpression:
 		e.emitCallExpression(exp)
+	case *NewExpression:
+		e.emitNewExpression(exp)
 	case *PrefixExpression:
 		e.emitPrefixExpression(exp)
 	case *InfixExpression:
@@ -319,6 +335,24 @@ func (e *JSEmitter) emitExpression(expr Expression) {
 		e.emitObjectLiteral(exp)
 	case *IfExpression:
 		e.emitIfExpression(exp)
+	case *ShorthandMethod:
+		e.emitShorthandMethod(exp)
+	// TypeScript-specific expression types - skip or handle minimally
+	case *UnionTypeExpression:
+		// Skip union types as they're TS-specific, emit comment
+		e.write("/* Union type */")
+	case *ArrayTypeExpression:
+		// Skip array types as they're TS-specific, emit comment
+		e.write("/* Array type */")
+	case *FunctionTypeExpression:
+		// Skip function types as they're TS-specific, emit comment
+		e.write("/* Function type */")
+	case *ObjectTypeExpression:
+		// Skip object types as they're TS-specific, emit comment
+		e.write("/* Object type */")
+	case *ConstructorTypeExpression:
+		// Skip constructor types as they're TS-specific, emit comment
+		e.write("/* Constructor type */")
 	default:
 		// Handle unsupported expression types
 		e.write("/* Unsupported expression type: %T */", exp)
@@ -382,18 +416,60 @@ func (e *JSEmitter) emitCallExpression(call *CallExpression) {
 	e.write(")")
 }
 
-func (e *JSEmitter) emitPrefixExpression(expr *PrefixExpression) {
-	e.write("(%s", expr.Operator)
-	e.emitExpression(expr.Right)
+func (e *JSEmitter) emitNewExpression(newExpr *NewExpression) {
+	e.write("new ")
+	e.emitExpression(newExpr.Constructor)
+
+	e.write("(")
+
+	for i, arg := range newExpr.Arguments {
+		e.emitExpression(arg)
+
+		if i < len(newExpr.Arguments)-1 {
+			e.write(", ")
+		}
+	}
+
 	e.write(")")
 }
 
+func (e *JSEmitter) emitPrefixExpression(expr *PrefixExpression) {
+	e.write("%s", expr.Operator)
+	e.emitExpression(expr.Right)
+}
+
 func (e *JSEmitter) emitInfixExpression(expr *InfixExpression) {
-	e.write("(")
+	// Only add parentheses when necessary for operator precedence
+	needsParens := e.needsParentheses(expr)
+
+	if needsParens {
+		e.write("(")
+	}
+
 	e.emitExpression(expr.Left)
 	e.write(" %s ", expr.Operator)
 	e.emitExpression(expr.Right)
-	e.write(")")
+
+	if needsParens {
+		e.write(")")
+	}
+}
+
+// Helper function to determine if infix expression needs parentheses
+func (e *JSEmitter) needsParentheses(expr *InfixExpression) bool {
+	// For now, only parenthesize complex expressions
+	// This is a simplified approach - in a full implementation we'd check operator precedence
+	switch expr.Operator {
+	case "&&", "||":
+		return true
+	case "+", "-", "*", "/", "%":
+		// Check if operands are complex expressions
+		_, leftIsInfix := expr.Left.(*InfixExpression)
+		_, rightIsInfix := expr.Right.(*InfixExpression)
+		return leftIsInfix || rightIsInfix
+	default:
+		return false
+	}
 }
 
 func (e *JSEmitter) emitAssignmentExpression(expr *AssignmentExpression) {
@@ -413,13 +489,11 @@ func (e *JSEmitter) emitUpdateExpression(expr *UpdateExpression) {
 }
 
 func (e *JSEmitter) emitTernaryExpression(expr *TernaryExpression) {
-	e.write("(")
 	e.emitExpression(expr.Condition)
 	e.write(" ? ")
 	e.emitExpression(expr.Consequence)
 	e.write(" : ")
 	e.emitExpression(expr.Alternative)
-	e.write(")")
 }
 
 func (e *JSEmitter) emitArrayLiteral(arr *ArrayLiteral) {
@@ -512,4 +586,19 @@ func (e *JSEmitter) emitIfExpression(expr *IfExpression) {
 	}
 
 	e.write(" })())")
+}
+
+func (e *JSEmitter) emitShorthandMethod(method *ShorthandMethod) {
+	e.write("function")
+
+	e.write("(")
+
+	params := []string{}
+	for _, p := range method.Parameters {
+		params = append(params, p.Name.Value)
+	}
+	e.write(strings.Join(params, ", "))
+
+	e.write(") ")
+	e.emitBlockStatement(method.Body)
 }
