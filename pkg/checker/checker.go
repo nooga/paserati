@@ -41,7 +41,7 @@ type Checker struct {
 // NewChecker creates a new type checker.
 func NewChecker() *Checker {
 	return &Checker{
-		env:    NewEnvironment(),         // Start with a global environment
+		env:    NewGlobalEnvironment(),   // Create persistent global environment
 		errors: []errors.PaseratiError{}, // Initialize with correct type
 		// Initialize function context fields to nil/empty
 		currentExpectedReturnType:  nil,
@@ -53,7 +53,8 @@ func NewChecker() *Checker {
 func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
 	c.errors = []errors.PaseratiError{} // Reset errors
-	c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
+	// DON'T reset the environment - keep it persistent for REPL sessions
+	// c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
 	globalEnv := c.env
 
 	// --- Data Structures for Passes ---

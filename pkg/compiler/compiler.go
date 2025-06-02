@@ -184,7 +184,11 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			// 4. Update the symbol table entry with the register holding the closure
 			c.currentSymbolTable.UpdateRegister(name, closureReg) // Update from nilRegister to actual register
 
-			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d\n", name, len(freeSymbols), closureReg)
+			// 5. NEW: Emit OpSetGlobal to store the function in the VM's globals array
+			globalIdx := c.getOrAssignGlobalIndex(name)
+			c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
+
+			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d, stored at global index %d\n", name, len(freeSymbols), closureReg, globalIdx)
 
 			// Invalidate lastExprReg, as the hoisted function definition itself isn't the result.
 			c.lastExprRegValid = false

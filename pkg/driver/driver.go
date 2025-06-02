@@ -21,16 +21,19 @@ import (
 type Paserati struct {
 	vmInstance *vm.VM
 	checker    *checker.Checker
-	// We don't persist the compiler because each compilation
-	// produces a fresh chunk that gets executed in the VM.
-	// However, the VM maintains environment state like globals.
+	compiler   *compiler.Compiler
 }
 
 // NewPaserati creates a new Paserati session with a fresh VM and Checker.
 func NewPaserati() *Paserati {
+	checker := checker.NewChecker()
+	comp := compiler.NewCompiler()
+	comp.SetChecker(checker)
+
 	return &Paserati{
 		vmInstance: vm.NewVM(),
-		checker:    checker.NewChecker(),
+		checker:    checker,
+		compiler:   comp,
 	}
 }
 
@@ -56,12 +59,7 @@ func (p *Paserati) RunString(source string) (vm.Value, []errors.PaseratiError) {
 	// No need to call p.checker.Check(program) here directly.
 
 	// --- Compilation Step ---
-	comp := compiler.NewCompiler() // Create a fresh compiler
-	comp.SetChecker(p.checker)     // Inject the persistent checker
-
-	// Compile the program. Type checking now happens inside Compile
-	// using the injected checker.
-	chunk, compileAndTypeErrs := comp.Compile(program)
+	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
 		return vm.Undefined, compileAndTypeErrs // Errors could be type or compile errors
 	}
@@ -292,10 +290,7 @@ func (p *Paserati) RunCode(source string, options RunOptions) (vm.Value, []error
 	}
 
 	// --- Compilation Step ---
-	comp := compiler.NewCompiler()
-	comp.SetChecker(p.checker) // Use persistent checker
-
-	chunk, compileAndTypeErrs := comp.Compile(program)
+	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
 		return vm.Undefined, compileAndTypeErrs
 	}
