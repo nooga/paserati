@@ -417,7 +417,7 @@ func (c *Chunk) registerConstantInstruction(builder *strings.Builder, name strin
 		builder.WriteString(fmt.Sprintf("%-16s R%d, %d (invalid constant index)\n", name, reg, constantIndex))
 	} else {
 		constantValue := c.Constants[constantIndex]
-		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%v')\n", name, reg, constantIndex, constantValue))
+		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%s')\n", name, reg, constantIndex, constantValue.ToString()))
 	}
 	return offset + 1 + 1 + operandSize
 }
@@ -664,7 +664,7 @@ func (c *Chunk) registerRegisterConstantInstruction(builder *strings.Builder, na
 	if int(constantIndex) < len(c.Constants) {
 		constantValue := c.Constants[constantIndex]
 		// Optionally add type check if needed (e.g., ensure it's a string for property names)
-		constantValueStr = fmt.Sprintf("'%v'", constantValue)
+		constantValueStr = fmt.Sprintf("'%s'", constantValue.ToString())
 	}
 
 	// Adjust format based on whether Rx or Ry is the object/destination

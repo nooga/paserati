@@ -26,7 +26,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false
+const debugCompiler = false // <<< DISABLE DEBUG
 const debugCompilerStats = false
 
 func debugPrintf(format string, args ...interface{}) {
@@ -516,6 +516,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		if c.currentSymbolTable.Outer == nil {
 			scopeName = "Global"
 		}
+		debugPrintf("// DEBUG Identifier '%s': Looking up in %s scope\n", node.Value, scopeName) // <<< ADDED
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
 		if !found {
 			// <<< MODIFIED: Check if it's a potential built-in that failed GetFunc earlier, unlikely but maybe useful? >>>
@@ -523,9 +524,11 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// if builtins.GetFunc(node.Value) != nil {
 			// 	 return NewCompileError(node, fmt.Sprintf("internal compiler error: builtin '%s' resolved incorrectly", node.Value))
 			// }
+			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table\n", node.Value) // <<< ADDED
 			return NewCompileError(node, fmt.Sprintf("undefined variable '%s'", node.Value))
 		}
 		isLocal := definingTable == c.currentSymbolTable
+		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
 
 		// --- NEW RECURSION CHECK --- // Revised Check
 		// Check if this is a recursive call identifier referencing the temp definition.
@@ -534,6 +537,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			scopeName == "Function" // Are we compiling inside a function? // Removed check against c.compilingFuncName
 
 		if isRecursiveSelfCall {
+			debugPrintf("// DEBUG Identifier '%s': Identified as RECURSIVE SELF CALL\n", node.Value) // <<< ADDED
 			// Treat as a free variable that captures the closure itself.
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
 			destReg := c.regAlloc.Alloc()
@@ -542,6 +546,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			c.emitByte(byte(freeVarIndex))
 			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else if !isLocal {
+			debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
 			// This is a regular free variable (defined in an outer scope)
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
 			destReg := c.regAlloc.Alloc()
@@ -550,6 +555,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			c.emitByte(byte(freeVarIndex))
 			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else {
+			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED
 			// This is a standard local variable (handled by current stack frame)
 			srcReg := symbolRef.Register
 			debugPrintf("// DEBUG Identifier '%s': Resolved to isLocal=%v, srcReg=R%d\n", node.Value, isLocal, srcReg)
@@ -637,6 +643,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 const nilRegister Register = 255 // Or another value guaranteed not to be used
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.PaseratiError {
+	debugPrintf("// DEBUG compileLetStatement: Defining '%s' (is top-level: %v)\n", node.Name.Value, c.enclosing == nil) // <<< ADDED
 	var valueReg Register = nilRegister
 	var err errors.PaseratiError
 	isValueFunc := false // Flag to track if value is a function literal
@@ -646,6 +653,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		// --- Handle let f = function g() {} or let f = function() {} ---
 		// 1. Define the *variable name (f)* temporarily for potential recursion
 		//    within the function body (e.g., recursive anonymous function).
+		debugPrintf("// DEBUG compileLetStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value) // <<< ADDED
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
 		// 2. Compile the function literal body.
@@ -659,10 +667,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		}
 		// 3. Create the closure object
 		closureReg := c.regAlloc.Alloc()
-		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
+		debugPrintf("// DEBUG compileLetStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols)) // <<< ADDED
+		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)                                                                                 // <<< Call emitClosure
 
 		// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg) // <<< Use closureReg
+		debugPrintf("// DEBUG compileLetStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg) // <<< ADDED
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)                                                                   // <<< Use closureReg
 
 		// The variable's value (the closure) is now set.
 		// We don't need to assign to valueReg anymore for this path.
@@ -682,10 +692,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 		valueReg = undefReg
 		// Define symbol for the `let x;` case
+		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
 		c.currentSymbolTable.Define(node.Name.Value, valueReg)
 	} else if !isValueFunc {
 		// Define symbol ONLY for non-function values.
 		// Function assignments were handled above by UpdateRegister.
+		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
 		c.currentSymbolTable.Define(node.Name.Value, valueReg)
 	}
 
@@ -1593,8 +1605,12 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) erro
 // addFreeSymbol adds a symbol identified as a free variable to the compiler's list.
 // It ensures the symbol is added only once and returns its index in the freeSymbols slice.
 func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // Assuming max 256 free vars for now
+	debugPrintf("// DEBUG addFreeSymbol: Adding '%s' as free variable (Register: R%d)\n", symbol.Name, symbol.Register) // <<< ADDED
 	for i, free := range c.freeSymbols {
-		if free == symbol { // Pointer comparison should work if Resolve returns the same Symbol instance
+		// Compare by name and register instead of pointer comparison
+		// This prevents duplicate upvalues for the same variable
+		if free.Name == symbol.Name && free.Register == symbol.Register {
+			debugPrintf("// DEBUG addFreeSymbol: Symbol '%s' already exists at index %d (REUSING)\n", symbol.Name, i) // <<< UPDATED
 			return uint8(i)
 		}
 	}
@@ -1606,6 +1622,7 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // As
 		return 255 // Indicate error state, maybe?
 	}
 	c.freeSymbols = append(c.freeSymbols, symbol)
+	debugPrintf("// DEBUG addFreeSymbol: Added '%s' at index %d (total free symbols: %d)\n", symbol.Name, len(c.freeSymbols)-1, len(c.freeSymbols)) // <<< ADDED
 	return uint8(len(c.freeSymbols) - 1)
 }
 
@@ -2664,8 +2681,8 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 		} else {
 			// The free variable is also a free variable in the *enclosing* scope (c).
 			// It needs to be captured from the enclosing scope's upvalues.
-			// Find its index within the *enclosing* compiler's (c) freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                             // Use the same helper in the enclosing compiler
+			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                             // Use the same helper
 			debugPrintf("// [emitClosure Upvalue] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex) // DEBUG
 			c.emitByte(0)                                                                                                                             // isLocal = false
 			c.emitByte(byte(enclosingFreeIndex))                                                                                                      // Index = upvalue index in enclosing scope

@@ -10,7 +10,6 @@ import (
 	"unsafe"
 )
 
-const debugVM = false   // Enable VM bytecode execution tracing
 const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
@@ -356,7 +355,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 		}
 
 		opcode := OpCode(code[ip]) // Use local OpCode
-		ip++                       // Advance IP past the opcode itself
+		//fmt.Printf("%s | ip: %d | %s\n", frame.closure.Fn.Name, ip, opcode.String())
+		ip++ // Advance IP past the opcode itself
 
 		switch opcode {
 		case OpLoadConst:
@@ -1141,14 +1141,9 @@ func (vm *VM) run() (InterpretResult, Value) {
 			ip += 2
 			srcVal := registers[srcReg]
 
-			if !IsNumber(srcVal) {
-				frame.ip = ip
-				status := vm.runtimeError("Operand must be a number for bitwise NOT (~).")
-				return status, Undefined
-			}
-			// Convert to int64 for bitwise op, then back to Number
-			// Note: JS typically operates on 32-bit integers. We use 64-bit here.
-			srcInt := int64(AsNumber(srcVal))
+			// JavaScript-style type coercion for bitwise operations
+			// undefined becomes 0, null becomes 0, booleans become 0/1, etc.
+			srcInt := int64(srcVal.ToInteger())
 			result := ^srcInt
 			registers[destReg] = Number(float64(result))
 
@@ -1161,30 +1156,10 @@ func (vm *VM) run() (InterpretResult, Value) {
 			leftVal := registers[leftReg]
 			rightVal := registers[rightReg]
 
-			if !IsNumber(leftVal) || !IsNumber(rightVal) {
-				frame.ip = ip
-				opStr := ""
-				switch opcode {
-				case OpBitwiseAnd:
-					opStr = "&"
-				case OpBitwiseOr:
-					opStr = "|"
-				case OpBitwiseXor:
-					opStr = "^"
-				case OpShiftLeft:
-					opStr = "<<"
-				case OpShiftRight:
-					opStr = ">>"
-				case OpUnsignedShiftRight:
-					opStr = ">>>"
-				}
-				status := vm.runtimeError("Operands must be numbers for bitwise/shift operator '%s'.", opStr)
-				return status, Undefined
-			}
-
-			// Convert to integers. Use uint64 for shifts involving unsigned right shift.
-			leftInt := int64(AsNumber(leftVal))
-			rightInt := int64(AsNumber(rightVal))
+			// JavaScript-style type coercion for bitwise operations
+			// undefined becomes 0, null becomes 0, booleans become 0/1, etc.
+			leftInt := int64(leftVal.ToInteger())
+			rightInt := int64(rightVal.ToInteger())
 			var result int64 // Keep result var for cases that use it
 
 			switch opcode {
@@ -1207,8 +1182,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 				registers[destReg] = Number(float64(result)) // Store result
 			case OpUnsignedShiftRight: // Logical shift (zero-fills)
 				// Convert left operand to uint32 first to mimic JS >>> behavior
-				leftUint32 := uint32(AsNumber(leftVal)) // Corrected: Use AsNumber(leftVal)
-				shiftAmount := uint64(rightInt) & 31    // JS uses lower 5 bits for 32-bit shift count
+				leftUint32 := uint32(leftVal.ToInteger()) // Use ToInteger() for coercion
+				shiftAmount := uint64(rightInt) & 31      // JS uses lower 5 bits for 32-bit shift count
 				unsignedResult := leftUint32 >> shiftAmount
 				// Result is converted back to Number (float64)
 				registers[destReg] = Number(float64(unsignedResult)) // Store the uint32 result directly as Number
@@ -1298,6 +1273,24 @@ func (vm *VM) run() (InterpretResult, Value) {
 			if objVal.IsArray() {
 				if method, exists := ArrayPrototype[propName]; exists {
 					registers[destReg] = createBoundMethod(objVal, method)
+					continue // Skip object lookup
+				}
+			}
+
+			// Handle static methods on native function constructors (like String.fromCharCode)
+			if objVal.IsNativeFunction() {
+				nativeFn := AsNativeFunction(objVal)
+				// Check for known static methods - hard-coded for now
+				// TODO: Make this more extensible
+				if nativeFn.Name == "String" && propName == "fromCharCode" {
+					// Return the String.fromCharCode function
+					staticMethod := &NativeFunctionObject{
+						Arity:    -1,
+						Variadic: true,
+						Name:     "fromCharCode",
+						Fn:       stringFromCharCodeStaticImpl,
+					}
+					registers[destReg] = NewNativeFunction(staticMethod.Arity, staticMethod.Variadic, staticMethod.Name, staticMethod.Fn)
 					continue // Skip object lookup
 				}
 			}
@@ -1972,4 +1965,19 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	// --- Remove later ---
 
 	return InterpretRuntimeError
+}
+
+// stringFromCharCodeStaticImpl implements String.fromCharCode (static method)
+func stringFromCharCodeStaticImpl(args []Value) Value {
+	if len(args) == 0 {
+		return NewString("")
+	}
+
+	result := make([]byte, len(args))
+	for i, arg := range args {
+		code := int(arg.ToFloat()) & 0xFFFF // Mask to 16 bits like JS
+		result[i] = byte(code)
+	}
+
+	return NewString(string(result))
 }

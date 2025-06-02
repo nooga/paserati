@@ -3,6 +3,9 @@ package checker
 import (
 	"fmt"
 	"paserati/pkg/errors" // Added import
+
+	// <<< ADDED: Import builtins
+	"paserati/pkg/builtins"
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
@@ -1254,10 +1257,18 @@ func (c *Checker) visit(node parser.Node) {
 
 		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
 		if !found {
-			debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
-			c.addError(node, fmt.Sprintf("undefined variable: %s", node.Value))
-			// Set computed type if node itself is not nil (already checked)
-			node.SetComputedType(types.Any) // Set to Any on error?
+			// Check for built-in function before reporting error
+			builtinType := c.getBuiltinType(node.Value)
+			if builtinType != nil {
+				debugPrintf("// [Checker Debug] visit(Identifier): '%s' resolved as built-in type: %s\n", node.Value, builtinType.String())
+				node.SetComputedType(builtinType)
+				node.IsConstant = true // Built-ins are effectively constants
+			} else {
+				debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
+				c.addError(node, fmt.Sprintf("undefined variable: %s", node.Value))
+				// Set computed type if node itself is not nil (already checked)
+				node.SetComputedType(types.Any) // Set to Any on error?
+			}
 		} else {
 			// --- DEBUG: Log raw type value immediately after resolve ---
 			// debugPrintf("// [Checker Debug] Identifier: Resolved type for '%s': Ptr=%p, Value=%#v\n", node.Value, typ, typ) // Re-commented
@@ -2712,6 +2723,23 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
 				// resultType remains types.Error
 			}
+		case *types.FunctionType:
+			// Handle static properties/methods on function types (like String.fromCharCode)
+			// Check if the object is a builtin constructor that has static methods
+			if objIdentifier, ok := node.Object.(*parser.Identifier); ok {
+				// Look for builtin static method: ConstructorName.methodName
+				staticMethodName := objIdentifier.Value + "." + propertyName
+				staticMethodType := c.getBuiltinType(staticMethodName)
+				if staticMethodType != nil {
+					resultType = staticMethodType
+				} else {
+					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
+					// resultType remains types.Never
+				}
+			} else {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
+				// resultType remains types.Never
+			}
 		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
@@ -3031,4 +3059,9 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 		ParameterTypes: paramTypes,
 		ReturnType:     resolvedReturnType, // Use the value assigned outside the if
 	}
+}
+
+// getBuiltinType looks up a builtin type by name (e.g., "String.fromCharCode")
+func (c *Checker) getBuiltinType(name string) types.Type {
+	return builtins.GetType(name)
 }

@@ -9,14 +9,14 @@ import (
 func registerString() {
 	// Register String constructor
 	register("String", -1, true, stringConstructor, &types.FunctionType{
-		ParameterTypes: []types.Type{types.Any},
+		ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
 		ReturnType:     types.String,
 		IsVariadic:     true,
 	})
 
 	// Register static String methods
 	register("String.fromCharCode", -1, true, stringFromCharCode, &types.FunctionType{
-		ParameterTypes: []types.Type{types.Number},
+		ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Number}},
 		ReturnType:     types.String,
 		IsVariadic:     true,
 	})
