@@ -1185,19 +1185,42 @@ func (ote *ObjectTypeExpression) String() string {
 
 // ObjectTypeProperty represents a property in an object type literal.
 type ObjectTypeProperty struct {
-	Name     *Identifier // Property name
-	Type     Expression  // Property type annotation
-	Optional bool        // Whether the property is optional (for future use)
+	Name            *Identifier  // Property name (nil for call signatures)
+	Type            Expression   // Property type annotation or function type for call signatures
+	Optional        bool         // Whether the property is optional (for future use)
+	IsCallSignature bool         // Whether this is a call signature like (param: type): returnType
+	Parameters      []Expression // Parameters for call signatures (only used when IsCallSignature is true)
+	ReturnType      Expression   // Return type for call signatures (only used when IsCallSignature is true)
 }
 
 func (otp *ObjectTypeProperty) String() string {
 	var out bytes.Buffer
-	out.WriteString(otp.Name.String())
-	if otp.Optional {
-		out.WriteString("?")
+
+	if otp.IsCallSignature {
+		// Call signature: (param1: type1, param2: type2): returnType
+		params := []string{}
+		for _, p := range otp.Parameters {
+			params = append(params, p.String())
+		}
+		out.WriteString("(")
+		out.WriteString(strings.Join(params, ", "))
+		out.WriteString("): ")
+		if otp.ReturnType != nil {
+			out.WriteString(otp.ReturnType.String())
+		}
+	} else {
+		// Regular property: name?: type
+		if otp.Name != nil {
+			out.WriteString(otp.Name.String())
+		}
+		if otp.Optional {
+			out.WriteString("?")
+		}
+		out.WriteString(": ")
+		if otp.Type != nil {
+			out.WriteString(otp.Type.String())
+		}
 	}
-	out.WriteString(": ")
-	out.WriteString(otp.Type.String())
 	return out.String()
 }
 

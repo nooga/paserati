@@ -606,13 +606,70 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	properties := make(map[string]types.Type)
+	var callSignatures []*types.FunctionType
+
 	for _, prop := range node.Properties {
-		propType := c.resolveTypeAnnotation(prop.Type)
-		if propType == nil {
-			debugPrintf("// [Checker ObjectType] Failed to resolve type for property '%s' in object type literal. Using Any.\n", prop.Name.Value)
-			propType = types.Any
+		if prop.IsCallSignature {
+			// Handle call signature
+			var paramTypes []types.Type
+			for _, paramNode := range prop.Parameters {
+				paramType := c.resolveTypeAnnotation(paramNode)
+				if paramType == nil {
+					paramType = types.Any
+				}
+				paramTypes = append(paramTypes, paramType)
+			}
+
+			returnType := c.resolveTypeAnnotation(prop.ReturnType)
+			if returnType == nil {
+				returnType = types.Any
+			}
+
+			funcType := &types.FunctionType{
+				ParameterTypes: paramTypes,
+				ReturnType:     returnType,
+			}
+
+			callSignatures = append(callSignatures, funcType)
+		} else {
+			// Handle regular property
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				if prop.Name != nil {
+					debugPrintf("// [Checker ObjectType] Failed to resolve type for property '%s' in object type literal. Using Any.\n", prop.Name.Value)
+				}
+				propType = types.Any
+			}
+			if prop.Name != nil {
+				properties[prop.Name.Value] = propType
+			}
 		}
-		properties[prop.Name.Value] = propType
+	}
+
+	// For now, if we have call signatures, we need to represent this as a callable object type
+	// Since we don't have a specific CallableObjectType yet, we'll need to extend the type system
+	// For simplicity, let's treat a single call signature as an OverloadedFunctionType with one overload
+	if len(callSignatures) > 0 && len(properties) == 0 {
+		// Pure callable type - convert to overloaded function type
+		if len(callSignatures) == 1 {
+			// Single call signature - return as simple function type
+			return callSignatures[0]
+		} else {
+			// Multiple call signatures - return as overloaded function type
+			return &types.OverloadedFunctionType{
+				Name:           "callable", // Anonymous callable
+				Overloads:      callSignatures,
+				Implementation: callSignatures[0], // Use first as implementation
+			}
+		}
+	} else if len(callSignatures) > 0 && len(properties) > 0 {
+		// Mixed object with both properties and call signatures
+		// For now, we'll store call signatures as special properties
+		// This is a simplification - TypeScript has more complex handling
+		for i, sig := range callSignatures {
+			callPropName := fmt.Sprintf("__call%d", i)
+			properties[callPropName] = sig
+		}
 	}
 
 	return &types.ObjectType{Properties: properties}
@@ -800,6 +857,8 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 	// --- NEW: Function Type Assignability ---
 	sourceFunc, sourceIsFunc := source.(*types.FunctionType)
 	targetFunc, targetIsFunc := target.(*types.FunctionType)
+	sourceOverloaded, sourceIsOverloaded := source.(*types.OverloadedFunctionType)
+	targetOverloaded, targetIsOverloaded := target.(*types.OverloadedFunctionType)
 
 	if targetIsFunc {
 		if sourceIsFunc {
@@ -830,6 +889,35 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 		} else {
 			// Assigning Non-Function to Function Target: Generally false
 			// (Unless source is Any/Unknown/Never, handled earlier)
+			return false
+		}
+	} else if targetIsOverloaded {
+		// Assigning to OverloadedFunctionType
+		if sourceIsFunc {
+			// Assigning a regular function to an overloaded function type
+			// The source function must be compatible with ALL overloads
+			for _, overload := range targetOverloaded.Overloads {
+				if !c.isImplementationCompatible(sourceFunc, overload) {
+					return false // Source function not compatible with this overload
+				}
+			}
+			return true // Source function is compatible with all overloads
+		} else if sourceIsOverloaded {
+			// Assigning OverloadedFunctionType to OverloadedFunctionType
+			// For now, require exact match
+			return sourceOverloaded.Equals(targetOverloaded)
+		} else {
+			// Assigning Non-Function to OverloadedFunctionType: Generally false
+			return false
+		}
+	} else if sourceIsOverloaded {
+		// Assigning OverloadedFunctionType to something else
+		if targetIsFunc {
+			// Can an overloaded function be assigned to a single function type?
+			// This is complex - for now, let's be strict and disallow it
+			return false
+		} else {
+			// Assigning OverloadedFunctionType to non-function type: false
 			return false
 		}
 	}

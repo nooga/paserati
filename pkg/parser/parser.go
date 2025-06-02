@@ -2610,54 +2610,82 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 
 	// Parse properties
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
-		p.nextToken() // Consume '{' or ';' to get to the property name
+		p.nextToken() // Consume '{' or ';' to get to the property name or call signature
 
-		// Expect property name (identifier)
-		if !p.curTokenIs(lexer.IDENT) {
-			p.addError(p.curToken, "expected property name (identifier) in object type")
-			return nil
-		}
-
-		prop := &ObjectTypeProperty{
-			Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
-		}
-
-		// Check for shorthand method syntax first (identifier followed by '(')
-		if p.peekTokenIs(lexer.LPAREN) {
-			// This is a shorthand method signature like methodName(): ReturnType
-			p.nextToken() // Move to '('
-
-			// Parse function type signature
-			funcType := p.parseFunctionTypeExpression()
-			if funcType == nil {
-				return nil // Error parsing function type
+		// Check if this is a call signature starting with '('
+		if p.curTokenIs(lexer.LPAREN) {
+			// This is a call signature: (param: type, ...): returnType
+			prop := &ObjectTypeProperty{
+				IsCallSignature: true,
 			}
 
-			prop.Type = funcType
-		} else {
-			// Regular property: PropertyName?: TypeExpression
-
-			// Check for optional property marker '?'
-			if p.peekTokenIs(lexer.QUESTION) {
-				p.nextToken() // Consume '?'
-				prop.Optional = true
-			}
-
-			// Expect ':'
-			if !p.expectPeek(lexer.COLON) {
-				return nil // Error message already added by expectPeek
-			}
-
-			// Parse the type expression
-			p.nextToken() // Move to the start of the type expression
-			prop.Type = p.parseTypeExpression()
-			if prop.Type == nil {
-				// Error should have been added by parseTypeExpression
+			// Parse parameter types
+			params, err := p.parseFunctionTypeParameterList()
+			if err != nil {
+				p.addError(p.curToken, err.Error())
 				return nil
 			}
-		}
+			prop.Parameters = params
 
-		objType.Properties = append(objType.Properties, prop)
+			// Expect ':' for return type
+			if !p.expectPeek(lexer.COLON) {
+				return nil
+			}
+
+			// Parse the return type
+			p.nextToken() // Move to the start of the return type expression
+			prop.ReturnType = p.parseTypeExpression()
+			if prop.ReturnType == nil {
+				return nil // Error should have been added by parseTypeExpression
+			}
+
+			objType.Properties = append(objType.Properties, prop)
+		} else if p.curTokenIs(lexer.IDENT) {
+			// Regular property or method signature
+			prop := &ObjectTypeProperty{
+				Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+			}
+
+			// Check for shorthand method syntax first (identifier followed by '(')
+			if p.peekTokenIs(lexer.LPAREN) {
+				// This is a shorthand method signature like methodName(): ReturnType
+				p.nextToken() // Move to '('
+
+				// Parse function type signature
+				funcType := p.parseFunctionTypeExpression()
+				if funcType == nil {
+					return nil // Error parsing function type
+				}
+
+				prop.Type = funcType
+			} else {
+				// Regular property: PropertyName?: TypeExpression
+
+				// Check for optional property marker '?'
+				if p.peekTokenIs(lexer.QUESTION) {
+					p.nextToken() // Consume '?'
+					prop.Optional = true
+				}
+
+				// Expect ':'
+				if !p.expectPeek(lexer.COLON) {
+					return nil // Error message already added by expectPeek
+				}
+
+				// Parse the type expression
+				p.nextToken() // Move to the start of the type expression
+				prop.Type = p.parseTypeExpression()
+				if prop.Type == nil {
+					// Error should have been added by parseTypeExpression
+					return nil
+				}
+			}
+
+			objType.Properties = append(objType.Properties, prop)
+		} else {
+			p.addError(p.curToken, "expected property name (identifier) or call signature '(' in object type")
+			return nil
+		}
 
 		// Expect ';' or '}' next
 		if p.peekTokenIs(lexer.SEMICOLON) {
