@@ -90,6 +90,11 @@ const (
 	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
 	OpLoadThis   OpCode = 44 // Rx: Load 'this' value from current call context into register Rx
 	// --- END NEW ---
+
+	// --- NEW: Global Variable Operations ---
+	OpGetGlobal OpCode = 46 // Rx NameIdx(16bit): Rx = Globals[NameIdx]
+	OpSetGlobal OpCode = 47 // NameIdx(16bit) Ry: Globals[NameIdx] = Ry
+	// --- END NEW ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -189,6 +194,13 @@ func (op OpCode) String() string {
 		return "OpLoadThis"
 	case OpNew:
 		return "OpNew"
+	// --- END NEW ---
+
+	// --- NEW: Global Variable Op Cases ---
+	case OpGetGlobal:
+		return "OpGetGlobal"
+	case OpSetGlobal:
+		return "OpSetGlobal"
 	// --- END NEW ---
 
 	default:
@@ -336,6 +348,13 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.loadThisInstruction(builder, instruction.String(), offset)
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
+	// --- END NEW ---
+
+	// --- NEW: Global Variable Operations Disassembly ---
+	case OpGetGlobal:
+		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx, NameIdx(16bit)
+	case OpSetGlobal:
+		return c.constantRegisterInstruction(builder, instruction.String(), offset, "NameIdx") // NameIdx(16bit), Ry
 	// --- END NEW ---
 
 	default:
@@ -638,12 +657,10 @@ func (c *Chunk) setIndexInstruction(builder *strings.Builder, name string, offse
 }
 
 // registerRegisterConstantInstruction handles OpCode Rx, Ry, ConstIdx(16bit)
-// Used for OpGetProp, OpSetProp
 func (c *Chunk) registerRegisterConstantInstruction(builder *strings.Builder, name string, offset int, constName string) int {
-	// Opcode + Rx + Ry + ConstIdx(2 bytes) = 5 bytes total
+	// Need Rx + Ry + ConstIdx(2 bytes) = 4 bytes total operands
 	if offset+4 >= len(c.Code) {
 		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
-		// Determine how many bytes we actually read before failing
 		if offset+3 < len(c.Code) {
 			return offset + 4
 		}
@@ -658,31 +675,57 @@ func (c *Chunk) registerRegisterConstantInstruction(builder *strings.Builder, na
 
 	regX := c.Code[offset+1]
 	regY := c.Code[offset+2]
-	constantIndex := uint16(c.Code[offset+3])<<8 | uint16(c.Code[offset+4])
+	constIdx := uint16(c.Code[offset+3])<<8 | uint16(c.Code[offset+4])
 
-	constantValueStr := "invalid const idx"
-	if int(constantIndex) < len(c.Constants) {
-		constantValue := c.Constants[constantIndex]
-		// Optionally add type check if needed (e.g., ensure it's a string for property names)
-		constantValueStr = fmt.Sprintf("'%s'", constantValue.ToString())
+	// Try to get the constant value for prettier display
+	constValue := "invalid"
+	if int(constIdx) < len(c.Constants) {
+		v := c.Constants[constIdx]
+		if v.IsString() {
+			constValue = fmt.Sprintf("\"%s\"", v.AsString())
+		} else if v.IsNumber() {
+			constValue = fmt.Sprintf("%g", v.ToFloat())
+		} else {
+			constValue = v.ToString()
+		}
 	}
 
-	// Adjust format based on whether Rx or Ry is the object/destination
-	// OpGetProp: Rx = Ry[NameIdx]
-	// OpSetProp: Rx[NameIdx] = Ry
-	if name == "OpGetProp" {
-		builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constantIndex, constantValueStr))
-	} else if name == "OpSetProp" {
-		builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constantIndex, constantValueStr))
-		// Note: The order Rx, Ry might be confusing for SetProp (ObjReg, ValueReg).
-		// We might want to reverse the register printing or add comments in the disassembler output.
-		// Let's keep it consistent with emit for now: emitSetProp(obj, val, idx) -> OpSetProp Rx, Ry, Idx
-	} else {
-		// Default format if reused for other opcodes
-		builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constantIndex, constantValueStr))
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constIdx, constValue))
+	return offset + 5 // Opcode + Rx + Ry + ConstIdx(2 bytes)
+}
+
+// constantRegisterInstruction handles OpCode ConstIdx(16bit), Ry
+func (c *Chunk) constantRegisterInstruction(builder *strings.Builder, name string, offset int, constName string) int {
+	// Need ConstIdx(2 bytes) + Ry = 3 bytes total operands
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
 	}
 
-	return offset + 5 // Opcode + RegX + RegY + ConstIdx(2)
+	constIdx := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+	regY := c.Code[offset+3]
+
+	// Try to get the constant value for prettier display
+	constValue := "invalid"
+	if int(constIdx) < len(c.Constants) {
+		v := c.Constants[constIdx]
+		if v.IsString() {
+			constValue = fmt.Sprintf("\"%s\"", v.AsString())
+		} else if v.IsNumber() {
+			constValue = fmt.Sprintf("%g", v.ToFloat())
+		} else {
+			constValue = v.ToString()
+		}
+	}
+
+	builder.WriteString(fmt.Sprintf("%-16s %s %d (%s), R%d\n", name, constName, constIdx, constValue, regY))
+	return offset + 4 // Opcode + ConstIdx(2 bytes) + Ry
 }
 
 // callMethodInstruction handles OpCallMethod Rx, FuncReg, ThisReg, ArgCount

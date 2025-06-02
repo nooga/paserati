@@ -80,6 +80,9 @@ type VM struct {
 	// Cache statistics for debugging/profiling
 	cacheStats ICacheStats
 
+	// Global variables table (maps variable names to values)
+	globals map[string]Value
+
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
 }
@@ -220,6 +223,7 @@ func NewVM() *VM {
 		openUpvalues: make([]*Upvalue, 0, 16),         // Pre-allocate slightly
 		propCache:    make(map[int]*PropInlineCache),  // Initialize inline cache
 		cacheStats:   ICacheStats{},                   // Initialize cache statistics
+		globals:      make(map[string]Value),          // Initialize global variables table
 		errors:       make([]errors.PaseratiError, 0), // Initialize error list
 	}
 }
@@ -236,6 +240,8 @@ func (vm *VM) Reset() {
 	}
 	// Reset cache statistics
 	vm.cacheStats = ICacheStats{}
+	// Clear global variables
+	vm.globals = make(map[string]Value)
 	// No need to clear registerStack explicitly, slots will be overwritten.
 }
 
@@ -1846,6 +1852,59 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// Load 'this' value from current call frame context
 			// If no 'this' context is set (regular function call), return undefined
 			registers[destReg] = frame.thisValue
+
+		case OpGetGlobal:
+			destReg := code[ip]
+			nameIdxHi := code[ip+1]
+			nameIdxLo := code[ip+2]
+			nameIdx := uint16(nameIdxHi)<<8 | uint16(nameIdxLo)
+			ip += 3
+
+			// Get the global variable name from constants
+			if int(nameIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid global variable name constant index %d", nameIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameIdx]
+			if !nameVal.IsString() {
+				frame.ip = ip
+				status := vm.runtimeError("Global variable name must be a string, got %s", nameVal.TypeName())
+				return status, Undefined
+			}
+			varName := nameVal.AsString()
+
+			// Look up the global variable
+			if globalVal, exists := vm.globals[varName]; exists {
+				registers[destReg] = globalVal
+			} else {
+				// Variable doesn't exist, return undefined (JavaScript behavior)
+				registers[destReg] = Undefined
+			}
+
+		case OpSetGlobal:
+			nameIdxHi := code[ip]
+			nameIdxLo := code[ip+1]
+			srcReg := code[ip+2]
+			nameIdx := uint16(nameIdxHi)<<8 | uint16(nameIdxLo)
+			ip += 3
+
+			// Get the global variable name from constants
+			if int(nameIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid global variable name constant index %d", nameIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameIdx]
+			if !nameVal.IsString() {
+				frame.ip = ip
+				status := vm.runtimeError("Global variable name must be a string, got %s", nameVal.TypeName())
+				return status, Undefined
+			}
+			varName := nameVal.AsString()
+
+			// Set the global variable
+			vm.globals[varName] = registers[srcReg]
 
 		default:
 			frame.ip = ip // Save IP before erroring

@@ -26,8 +26,9 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false // <<< DISABLE DEBUG
-const debugCompilerStats = false
+const debugCompiler = false      // <<< CHANGED back to false
+const debugCompilerStats = false // <<< CHANGED back to false
+const debugCompiledCode = false
 
 func debugPrintf(format string, args ...interface{}) {
 	if debugCompiler {
@@ -330,6 +331,17 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		// Anonymous ones are handled by the case *parser.FunctionLiteral above now.
 		if funcLit, ok := node.Expression.(*parser.FunctionLiteral); ok && funcLit.Name != nil {
 			debugPrintf("// DEBUG ExprStmt: Handling NAMED function declaration '%s' as statement.\n", funcLit.Name.Value)
+
+			// Check if this function was already processed during hoisting
+			if symbolRef, _, found := c.currentSymbolTable.Resolve(funcLit.Name.Value); found && symbolRef.Register != nilRegister {
+				debugPrintf("// DEBUG ExprStmt: Function '%s' already hoisted, skipping duplicate processing.\n", funcLit.Name.Value)
+				// Function was already hoisted and processed, skip it
+				if c.enclosing == nil {
+					c.lastExprRegValid = false // Function declarations don't produce a value
+				}
+				return nil
+			}
+
 			// --- Handle named function recursion ---
 			// 1. Define the function name temporarily.
 			c.currentSymbolTable.Define(funcLit.Name.Value, nilRegister)
@@ -519,13 +531,17 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		debugPrintf("// DEBUG Identifier '%s': Looking up in %s scope\n", node.Value, scopeName) // <<< ADDED
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
 		if !found {
-			// <<< MODIFIED: Check if it's a potential built-in that failed GetFunc earlier, unlikely but maybe useful? >>>
-			// This branch should ideally not be reached if it was a built-in, but for robustness:
-			// if builtins.GetFunc(node.Value) != nil {
-			// 	 return NewCompileError(node, fmt.Sprintf("internal compiler error: builtin '%s' resolved incorrectly", node.Value))
-			// }
-			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table\n", node.Value) // <<< ADDED
-			return NewCompileError(node, fmt.Sprintf("undefined variable '%s'", node.Value))
+			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, treating as GLOBAL\n", node.Value) // <<< ADDED
+			// Variable not found in any scope, treat as a global variable access
+			// This will return undefined at runtime if the global doesn't exist
+			nameConstIdx := c.chunk.AddConstant(vm.String(node.Value))
+			destReg := c.regAlloc.Alloc()
+			c.emitGetGlobal(destReg, nameConstIdx, node.Token.Line)
+			c.regAlloc.SetCurrent(destReg) // Update allocator state
+			// Set last expression tracking state
+			c.lastExprReg = destReg
+			c.lastExprRegValid = true
+			return nil // Handle as global access
 		}
 		isLocal := definingTable == c.currentSymbolTable
 		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
@@ -546,14 +562,24 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			c.emitByte(byte(freeVarIndex))
 			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else if !isLocal {
-			debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
-			// This is a regular free variable (defined in an outer scope)
-			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-			destReg := c.regAlloc.Alloc()
-			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
-			c.emitByte(byte(destReg))
-			c.emitByte(byte(freeVarIndex))
-			c.regAlloc.SetCurrent(destReg) // Update allocator state
+			// Check if the variable is in the global scope (definingTable has no outer)
+			if c.enclosing == nil && definingTable.Outer == nil {
+				debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED
+				// This is a global variable, use OpGetGlobal
+				nameConstIdx := c.chunk.AddConstant(vm.String(node.Value))
+				destReg := c.regAlloc.Alloc()
+				c.emitGetGlobal(destReg, nameConstIdx, node.Token.Line)
+				c.regAlloc.SetCurrent(destReg) // Update allocator state
+			} else {
+				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
+				// This is a regular free variable (defined in an outer scope that's not global)
+				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
+				destReg := c.regAlloc.Alloc()
+				c.emitOpCode(vm.OpLoadFree, node.Token.Line)
+				c.emitByte(byte(destReg))
+				c.emitByte(byte(freeVarIndex))
+				c.regAlloc.SetCurrent(destReg) // Update allocator state
+			}
 		} else {
 			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED
 			// This is a standard local variable (handled by current stack frame)
@@ -693,12 +719,36 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		valueReg = undefReg
 		// Define symbol for the `let x;` case
 		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
-		c.currentSymbolTable.Define(node.Name.Value, valueReg)
+		if c.enclosing == nil {
+			// Top-level: use global variable
+			nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
+			c.emitSetGlobal(nameConstIdx, valueReg, node.Name.Token.Line)
+		} else {
+			// Function scope: use local symbol table
+			c.currentSymbolTable.Define(node.Name.Value, valueReg)
+		}
 	} else if !isValueFunc {
 		// Define symbol ONLY for non-function values.
 		// Function assignments were handled above by UpdateRegister.
 		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
-		c.currentSymbolTable.Define(node.Name.Value, valueReg)
+		if c.enclosing == nil {
+			// Top-level: use global variable
+			nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
+			c.emitSetGlobal(nameConstIdx, valueReg, node.Name.Token.Line)
+			// Also add to symbol table so it can be resolved later
+			c.currentSymbolTable.Define(node.Name.Value, valueReg)
+		} else {
+			// Function scope: use local symbol table
+			c.currentSymbolTable.Define(node.Name.Value, valueReg)
+		}
+	} else if c.enclosing == nil {
+		// Top-level function: also set as global
+		nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
+		// Get the closure register from the symbol table
+		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+		if found && symbolRef.Register != nilRegister {
+			c.emitSetGlobal(nameConstIdx, symbolRef.Register, node.Name.Token.Line)
+		}
 	}
 
 	return nil
@@ -749,7 +799,22 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 	// Const function assignments were handled above by UpdateRegister.
 	if !isValueFunc {
 		// For non-functions, Define associates the name with the final value register.
-		c.currentSymbolTable.Define(node.Name.Value, valueReg)
+		if c.enclosing == nil {
+			// Top-level: use global variable
+			nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
+			c.emitSetGlobal(nameConstIdx, valueReg, node.Name.Token.Line)
+		} else {
+			// Function scope: use local symbol table
+			c.currentSymbolTable.Define(node.Name.Value, valueReg)
+		}
+	} else if c.enclosing == nil {
+		// Top-level function: also set as global
+		nameConstIdx := c.chunk.AddConstant(vm.String(node.Name.Value))
+		// Get the closure register from the symbol table
+		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+		if found && symbolRef.Register != nilRegister {
+			c.emitSetGlobal(nameConstIdx, symbolRef.Register, node.Name.Token.Line)
+		}
 	}
 	return nil
 }
@@ -2635,8 +2700,19 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression) errors
 // emitClosure emits the OpClosure instruction and its operands.
 // It handles resolving free variables from the *enclosing* scope (c)
 // based on the freeSymbols list collected during the function body's compilation.
+// OPTIMIZATION: If there are no upvalues, just load the function constant directly.
 func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *parser.FunctionLiteral, freeSymbols []*Symbol) {
 	line := node.Token.Line // Use function literal token line
+
+	// OPTIMIZATION: If no upvalues, just load the function constant
+	if len(freeSymbols) == 0 {
+		debugPrintf("// [emitClosure OPTIMIZED] No upvalues, using OpLoadConstant instead of OpClosure\n")
+		c.emitLoadConstant(destReg, funcConstIndex, line)
+		c.regAlloc.SetCurrent(destReg)
+		c.lastExprReg = destReg
+		c.lastExprRegValid = true
+		return
+	}
 
 	c.emitOpCode(vm.OpClosure, line)
 	c.emitByte(byte(destReg))
@@ -2698,7 +2774,18 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 
 // emitClosureGeneric is a generic version of emitClosure that works with any node type
 // that has Token.Line and Name fields (like ShorthandMethod)
+// OPTIMIZATION: If there are no upvalues, just load the function constant directly.
 func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, line int, nameNode *parser.Identifier, freeSymbols []*Symbol) {
+	// OPTIMIZATION: If no upvalues, just load the function constant
+	if len(freeSymbols) == 0 {
+		debugPrintf("// [emitClosureGeneric OPTIMIZED] No upvalues, using OpLoadConstant instead of OpClosure\n")
+		c.emitLoadConstant(destReg, funcConstIndex, line)
+		c.regAlloc.SetCurrent(destReg)
+		c.lastExprReg = destReg
+		c.lastExprRegValid = true
+		return
+	}
+
 	c.emitOpCode(vm.OpClosure, line)
 	c.emitByte(byte(destReg))
 	c.emitUint16(funcConstIndex)       // Operand 1: Constant index of the function blueprint

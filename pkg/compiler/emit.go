@@ -286,10 +286,26 @@ func (c *Compiler) emitGetProp(dest, obj Register, nameConstIdx uint16, line int
 // emitSetProp emits OpSetProp ObjReg, ValueReg, NameConstIdx(Uint16)
 // Note: The order ObjReg, ValueReg, NameIdx seems reasonable for VM stack manipulation.
 func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int) {
-	c.emitOpCode(vm.OpSetProp, line) // Use the placeholder opcode
+	c.emitOpCode(vm.OpSetProp, line)
 	c.emitByte(byte(obj))
 	c.emitByte(byte(val))
 	c.emitUint16(nameConstIdx)
 }
 
 // --- END REVISED/NEW ---
+
+// --- NEW: Global Variable Emit Functions ---
+
+// emitGetGlobal emits OpGetGlobal instruction
+func (c *Compiler) emitGetGlobal(dest Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpGetGlobal, line)
+	c.emitByte(byte(dest))
+	c.emitUint16(nameConstIdx)
+}
+
+// emitSetGlobal emits OpSetGlobal instruction
+func (c *Compiler) emitSetGlobal(nameConstIdx uint16, src Register, line int) {
+	c.emitOpCode(vm.OpSetGlobal, line)
+	c.emitUint16(nameConstIdx)
+	c.emitByte(byte(src))
+}

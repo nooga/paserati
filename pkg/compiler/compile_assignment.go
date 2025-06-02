@@ -28,6 +28,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		targetReg    Register
 		isUpvalue    bool
 		upvalueIndex uint8
+		isGlobal     bool   // NEW: Track if this is a global variable
+		nameConstIdx uint16 // NEW: Constant index for global variable name
 	}
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register
@@ -45,27 +47,50 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		// Resolve the identifier
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(lhsNode.Value)
 		if !found {
-			return NewCompileError(node, fmt.Sprintf("assignment to undeclared variable '%s'", lhsNode.Value))
-		}
-
-		// Determine target register/upvalue index and load current value
-		if definingTable == c.currentSymbolTable {
-			// Local variable
-			identInfo.targetReg = symbolRef.Register
-			identInfo.isUpvalue = false
-			currentValueReg = identInfo.targetReg // Current value is already in targetReg
+			// Variable not found in any scope, treat as global assignment
+			identInfo.isGlobal = true
+			identInfo.nameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
+			// For compound assignments, we need the current value
+			if node.Operator != "=" {
+				currentValueReg = c.regAlloc.Alloc()
+				c.emitGetGlobal(currentValueReg, identInfo.nameConstIdx, line)
+			} else {
+				currentValueReg = nilRegister // Not needed for simple assignment
+			}
 		} else {
-			// Upvalue
-			identInfo.isUpvalue = true
-			identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
-			currentValueReg = c.regAlloc.Alloc() // Allocate temporary reg for current value
-			c.emitOpCode(vm.OpLoadFree, line)
-			c.emitByte(byte(currentValueReg))  // Destination register
-			c.emitByte(identInfo.upvalueIndex) // Upvalue index
+			// Determine target register/upvalue index and load current value
+			if definingTable == c.currentSymbolTable {
+				// Local variable
+				identInfo.targetReg = symbolRef.Register
+				identInfo.isUpvalue = false
+				identInfo.isGlobal = false
+				currentValueReg = identInfo.targetReg // Current value is already in targetReg
+			} else if c.enclosing == nil && definingTable.Outer == nil {
+				// Global variable (found in global scope AND we're at top level)
+				identInfo.isGlobal = true
+				identInfo.nameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
+				// For compound assignments, we need the current value
+				if node.Operator != "=" {
+					currentValueReg = c.regAlloc.Alloc()
+					c.emitGetGlobal(currentValueReg, identInfo.nameConstIdx, line)
+				} else {
+					currentValueReg = nilRegister // Not needed for simple assignment
+				}
+			} else {
+				// Upvalue (either non-global outer scope OR we're in a closure accessing global scope)
+				identInfo.isUpvalue = true
+				identInfo.isGlobal = false
+				identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
+				currentValueReg = c.regAlloc.Alloc() // Allocate temporary reg for current value
+				c.emitOpCode(vm.OpLoadFree, line)
+				c.emitByte(byte(currentValueReg))  // Destination register
+				c.emitByte(identInfo.upvalueIndex) // Upvalue index
+			}
 		}
 		// If currentValueReg is nilRegister here, it's an internal error (should be targetReg or newly allocated)
-		if currentValueReg == nilRegister {
-			panic(fmt.Sprintf("Internal compiler error: currentValueReg is nilRegister for identifier '%s'", lhsNode.Value))
+		// EXCEPT for simple assignments to globals or member expressions where we don't need the current value
+		if currentValueReg == nilRegister && !(node.Operator == "=" && (identInfo.isGlobal || lhsType == lhsIsMemberExpr)) {
+			panic(fmt.Sprintf("Internal compiler error: currentValueReg is nilRegister for identifier '%s' (operator: %s, isGlobal: %v, lhsType: %d)", lhsNode.Value, node.Operator, identInfo.isGlobal, lhsType))
 		}
 
 	case *parser.IndexExpression:
@@ -229,7 +254,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		switch node.Operator {
 		// --- Compound Arithmetic ---
 		case "+=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitAdd(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -238,7 +263,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "-=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitSubtract(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -247,7 +272,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "*=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitMultiply(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -256,7 +281,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "/=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitDivide(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -265,7 +290,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "%=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitRemainder(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -274,7 +299,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "**=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitExponent(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -285,7 +310,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 		// --- Compound Bitwise / Shift ---
 		case "&=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitBitwiseAnd(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -294,7 +319,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "|=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitBitwiseOr(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -303,7 +328,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "^=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitBitwiseXor(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -312,7 +337,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case "<<=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitShiftLeft(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -321,7 +346,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case ">>=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitShiftRight(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -330,7 +355,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				storeOpTargetReg = resultReg
 			}
 		case ">>>=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
 				c.emitUnsignedShiftRight(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				storeOpTargetReg = currentValueReg
 			} else {
@@ -369,7 +394,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	if needsStore { // Check flag again just before emitting store code
 		switch lhsType {
 		case lhsIsIdentifier:
-			if identInfo.isUpvalue {
+			if identInfo.isGlobal {
+				// Global variable assignment
+				c.emitSetGlobal(identInfo.nameConstIdx, storeOpTargetReg, line)
+			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, storeOpTargetReg, line)
 			} else {
 				if storeOpTargetReg != identInfo.targetReg {
