@@ -1769,7 +1769,7 @@ func (c *Checker) visit(node parser.Node) {
 		if node.Name != nil && resolvedSignature.ReturnType == nil {
 			optionalParams := make([]bool, len(node.Parameters))
 			for i, param := range node.Parameters {
-				optionalParams[i] = param.Optional
+				optionalParams[i] = param.Optional || (param.DefaultValue != nil)
 			}
 
 			finalFuncTypeForRecursion := &types.FunctionType{
@@ -1787,7 +1787,7 @@ func (c *Checker) visit(node parser.Node) {
 		// 7. Create the FINAL FunctionType representing this literal
 		optionalParams := make([]bool, len(node.Parameters))
 		for i, param := range node.Parameters {
-			optionalParams[i] = param.Optional
+			optionalParams[i] = param.Optional || (param.DefaultValue != nil)
 		}
 
 		finalFuncType := &types.FunctionType{
@@ -1928,7 +1928,7 @@ func (c *Checker) visit(node parser.Node) {
 		// 7. Create FunctionType
 		optionalParams := make([]bool, len(node.Parameters))
 		for i, param := range node.Parameters {
-			optionalParams[i] = param.Optional
+			optionalParams[i] = param.Optional || (param.DefaultValue != nil)
 		}
 
 		funcType := &types.FunctionType{
@@ -3274,7 +3274,24 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 			resolvedParamType = types.Any // Default to Any if no annotation or resolution failed
 		}
 		paramTypes = append(paramTypes, resolvedParamType)
-		optionalParams = append(optionalParams, paramNode.Optional)
+
+		// Validate default value if present
+		if paramNode.DefaultValue != nil {
+			// Temporarily set environment and check default value type
+			originalEnv := c.env
+			c.env = env
+			c.visit(paramNode.DefaultValue) // This will set the computed type
+			c.env = originalEnv             // Restore original environment
+
+			defaultValueType := paramNode.DefaultValue.GetComputedType()
+			if defaultValueType != nil && !c.isAssignable(defaultValueType, resolvedParamType) {
+				c.addError(paramNode.DefaultValue, fmt.Sprintf("default value type '%s' is not assignable to parameter type '%s'", defaultValueType.String(), resolvedParamType.String()))
+			}
+		}
+
+		// Parameter is optional if explicitly marked OR has a default value
+		isOptional := paramNode.Optional || (paramNode.DefaultValue != nil)
+		optionalParams = append(optionalParams, isOptional)
 	}
 
 	var resolvedReturnType types.Type         // Keep as interface type
@@ -3368,7 +3385,7 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 		} else {
 			paramTypes = append(paramTypes, types.Any) // Fallback for error cases
 		}
-		optionalParams = append(optionalParams, param.Optional)
+		optionalParams = append(optionalParams, param.Optional || (param.DefaultValue != nil))
 	}
 
 	funcType := &types.FunctionType{

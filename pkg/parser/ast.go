@@ -237,6 +237,7 @@ type Parameter struct {
 	TypeAnnotation Expression // Parsed type node (e.g., *Identifier)
 	ComputedType   types.Type // Stores the resolved type from TypeAnnotation
 	Optional       bool       // Whether this parameter is optional (param?)
+	DefaultValue   Expression // Default value expression (param = defaultValue)
 }
 
 func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
@@ -252,6 +253,10 @@ func (p *Parameter) String() string {
 	if p.TypeAnnotation != nil {
 		out.WriteString(": ")
 		out.WriteString(p.TypeAnnotation.String())
+	}
+	if p.DefaultValue != nil {
+		out.WriteString(" = ")
+		out.WriteString(p.DefaultValue.String())
 	}
 	if p.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", p.ComputedType.String()))

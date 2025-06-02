@@ -1234,14 +1234,59 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
 	}
 
-	// 3. Compile the body using the function compiler
+	// 3. Handle default parameters
+	for _, param := range node.Parameters {
+		if param.DefaultValue != nil {
+			// Get the parameter's register
+			symbol, _, exists := functionCompiler.currentSymbolTable.Resolve(param.Name.Value)
+			if !exists {
+				// This should not happen if parameter definition worked correctly
+				functionCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
+				continue
+			}
+			paramReg := symbol.Register
+
+			// Create a temporary register to hold undefined for comparison
+			undefinedReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
+
+			// Create another temporary register for the comparison result
+			compareReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
+
+			// Jump if the comparison is false (parameter is not undefined, so keep original value)
+			jumpIfDefinedPos := functionCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
+
+			// Free temporary registers
+			functionCompiler.regAlloc.Free(undefinedReg)
+			functionCompiler.regAlloc.Free(compareReg)
+
+			// Compile the default value expression
+			err := functionCompiler.compileNode(param.DefaultValue)
+			if err != nil {
+				// Continue with compilation even if default value has errors
+				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
+			} else {
+				// Move the default value to the parameter register
+				defaultValueReg := functionCompiler.regAlloc.Current()
+				if defaultValueReg != paramReg {
+					functionCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
+				}
+			}
+
+			// Patch the jump to come here (end of default value assignment)
+			functionCompiler.patchJump(jumpIfDefinedPos)
+		}
+	}
+
+	// 4. Compile the body using the function compiler
 	err := functionCompiler.compileNode(node.Body)
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)
 		// Proceed to create function object even if body has errors? Continue for now.
 	}
 
-	// 4. Finalize function chunk (add implicit return to the function's chunk)
+	// 5. Finalize function chunk (add implicit return to the function's chunk)
 	functionCompiler.emitFinalReturn(node.Body.Token.Line) // Use body's end token? Or func literal token?
 	functionChunk := functionCompiler.chunk
 	// <<< Get freeSymbols from the functionCompiler instance >>>
@@ -1252,7 +1297,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 	regSize := functionCompiler.regAlloc.MaxRegs()
 
-	// 5. Create the bytecode.Function object
+	// 6. Create the bytecode.Function object
 	// ... (determine funcName as before) ...
 	var funcName string
 	if nameHint != "" {
@@ -1263,7 +1308,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		funcName = "<anonymous>"
 	}
 
-	// 6. Add the function object to the *outer* compiler's constant pool.
+	// 7. Add the function object to the *outer* compiler's constant pool.
 	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, funcName, functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
@@ -1857,7 +1902,52 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		funcCompiler.currentSymbolTable.Define(p.Name.Value, reg)
 	}
 
-	// 3. Compile the function body
+	// 3. Handle default parameters
+	for _, param := range node.Parameters {
+		if param.DefaultValue != nil {
+			// Get the parameter's register
+			symbol, _, exists := funcCompiler.currentSymbolTable.Resolve(param.Name.Value)
+			if !exists {
+				// This should not happen if parameter definition worked correctly
+				funcCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
+				continue
+			}
+			paramReg := symbol.Register
+
+			// Create a temporary register to hold undefined for comparison
+			undefinedReg := funcCompiler.regAlloc.Alloc()
+			funcCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
+
+			// Create another temporary register for the comparison result
+			compareReg := funcCompiler.regAlloc.Alloc()
+			funcCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
+
+			// Jump if the comparison is false (parameter is not undefined, so keep original value)
+			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
+
+			// Free temporary registers
+			funcCompiler.regAlloc.Free(undefinedReg)
+			funcCompiler.regAlloc.Free(compareReg)
+
+			// Compile the default value expression
+			err := funcCompiler.compileNode(param.DefaultValue)
+			if err != nil {
+				// Continue with compilation even if default value has errors
+				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
+			} else {
+				// Move the default value to the parameter register
+				defaultValueReg := funcCompiler.regAlloc.Current()
+				if defaultValueReg != paramReg {
+					funcCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
+				}
+			}
+
+			// Patch the jump to come here (end of default value assignment)
+			funcCompiler.patchJump(jumpIfDefinedPos)
+		}
+	}
+
+	// 4. Compile the function body
 	var returnReg Register
 	implicitReturnNeeded := true
 	switch bodyNode := node.Body.(type) {

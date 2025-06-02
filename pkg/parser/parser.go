@@ -1118,6 +1118,18 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 	} else {
 		param.TypeAnnotation = nil
 	}
+
+	// Check for Default Value
+	if p.peekTokenIs(lexer.ASSIGN) {
+		p.nextToken() // Consume '='
+		p.nextToken() // Move to expression
+		param.DefaultValue = p.parseExpression(LOWEST)
+		if param.DefaultValue == nil {
+			p.addError(p.curToken, "expected expression after '=' in parameter default value")
+			return nil
+		}
+	}
+
 	parameters = append(parameters, param)
 
 	// Parse subsequent parameters (comma-separated)
@@ -1151,6 +1163,18 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 		} else {
 			param.TypeAnnotation = nil
 		}
+
+		// Check for Default Value
+		if p.peekTokenIs(lexer.ASSIGN) {
+			p.nextToken() // Consume '='
+			p.nextToken() // Move to expression
+			param.DefaultValue = p.parseExpression(LOWEST)
+			if param.DefaultValue == nil {
+				p.addError(p.curToken, "expected expression after '=' in parameter default value")
+				return nil
+			}
+		}
+
 		parameters = append(parameters, param)
 	}
 
@@ -1685,6 +1709,18 @@ func (p *Parser) parseParameterList() []*Parameter {
 	} else {
 		param.TypeAnnotation = nil
 	}
+
+	// Check for Default Value
+	if p.peekTokenIs(lexer.ASSIGN) {
+		p.nextToken() // Consume '='
+		p.nextToken() // Move to expression
+		param.DefaultValue = p.parseExpression(LOWEST)
+		if param.DefaultValue == nil {
+			p.addError(p.curToken, "expected expression after '=' in parameter default value")
+			return nil
+		}
+	}
+
 	params = append(params, param)
 	debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
 
@@ -1718,6 +1754,18 @@ func (p *Parser) parseParameterList() []*Parameter {
 		} else {
 			param.TypeAnnotation = nil
 		}
+
+		// Check for Default Value
+		if p.peekTokenIs(lexer.ASSIGN) {
+			p.nextToken() // Consume '='
+			p.nextToken() // Move to expression
+			param.DefaultValue = p.parseExpression(LOWEST)
+			if param.DefaultValue == nil {
+				p.addError(p.curToken, "expected expression after '=' in parameter default value")
+				return nil
+			}
+		}
+
 		params = append(params, param)
 		debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
 	}
