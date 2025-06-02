@@ -65,6 +65,12 @@ func (c *Compiler) emitNot(dest, src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+func (c *Compiler) emitTypeof(dest, src Register, line int) {
+	c.emitOpCode(vm.OpTypeof, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
 func (c *Compiler) emitAdd(dest, left, right Register, line int) {
 	c.emitOpCode(vm.OpAdd, line)
 	c.emitByte(byte(dest))

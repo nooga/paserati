@@ -639,10 +639,34 @@ func (pe *PrefixExpression) String() string {
 	var out bytes.Buffer
 	out.WriteString("(")
 	out.WriteString(pe.Operator)
-	out.WriteString(pe.Right.String())
+	if pe.Right != nil {
+		out.WriteString(pe.Right.String())
+	}
 	out.WriteString(")")
 	if pe.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", pe.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// TypeofExpression represents a typeof operator expression.
+// typeof <operand>
+type TypeofExpression struct {
+	BaseExpression             // Embed base for ComputedType (always string)
+	Token          lexer.Token // The 'typeof' token
+	Operand        Expression  // The expression whose type we want to get
+}
+
+func (te *TypeofExpression) expressionNode()      {}
+func (te *TypeofExpression) TokenLiteral() string { return te.Token.Literal }
+func (te *TypeofExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("typeof ")
+	if te.Operand != nil {
+		out.WriteString(te.Operand.String())
+	}
+	if te.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", te.ComputedType.String()))
 	}
 	return out.String()
 }

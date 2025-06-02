@@ -6,8 +6,10 @@ import "fmt"
 
 // Symbol represents an entry in the symbol table.
 type Symbol struct {
-	Name     string
-	Register Register // The register allocated for this symbol in its scope
+	Name        string
+	Register    Register // The register allocated for this symbol in its scope (only for locals)
+	IsGlobal    bool     // True if this is a global variable
+	GlobalIndex uint16   // Index in global array (only valid if IsGlobal is true)
 	// Add ScopeType (Global, Local, Free, Function, etc.) if needed later
 	// Add Index for things like builtins or free vars if needed later
 }
@@ -37,7 +39,14 @@ func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
 // Define adds a new symbol to the *current* scope's table.
 // It does not check outer scopes. Assumes the symbol is being defined in this scope.
 func (st *SymbolTable) Define(name string, reg Register) Symbol {
-	symbol := Symbol{Name: name, Register: reg}
+	symbol := Symbol{Name: name, Register: reg, IsGlobal: false}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineGlobal adds a new global symbol to the *current* scope's table.
+func (st *SymbolTable) DefineGlobal(name string, globalIndex uint16) Symbol {
+	symbol := Symbol{Name: name, IsGlobal: true, GlobalIndex: globalIndex}
 	st.store[name] = symbol
 	return symbol
 }

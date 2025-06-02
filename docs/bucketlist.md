@@ -9,6 +9,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Comments (`//`, `/* */`)
 - [x] Block Scoping (`{}`)
 - [x] Control Flow without braces (single statement bodies)
+- [x] Global Variables (implemented with OpGetGlobal/OpSetGlobal)
 - [ ] Module System (`import`/`export`)
 - [ ] `var` keyword (legacy)
 
@@ -90,7 +91,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 - [x] Conditional (Ternary) Operator (`? :`)
 - [x] Comma Operator (in specific contexts like `for` loops, array literals)
-- [ ] `typeof` Operator
+- [x] `typeof` Operator
 - [ ] `instanceof` Operator
 - [ ] `in` Operator
 - [ ] `delete` Operator
@@ -137,7 +138,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [ ] `arguments` Object
 - [x] Closures / Lexical Scoping
 - [x] `this` Keyword (basic object method context)
-- [ ] `new` Operator / Constructor Functions
+- [x] `new` Operator / Constructor Functions (OpNew implemented)
 - [ ] Generator Functions (`function*`)
 - [ ] Async Functions (`async function`)
 
@@ -148,8 +149,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Index Access (`arr[i]`)
   - [x] Assignment (`arr[i] = v`)
   - [x] Compound assignment to indices (`arr[i] += v`, etc.)
-  - [x] `.length` Property
-  - [ ] Array Methods (`.push`, `.pop`, `.map`, etc.)
+  - [x] `.length` Property (OpGetLength optimization)
+  - [x] Array Prototype Methods (`.push`, `.pop`, `.concat`)
 - [x] Objects
   - [x] Creation (`{}`)
   - [x] Property Access (`.`, `[]`)
@@ -158,8 +159,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Method shorthand syntax (`{ add(a, b) { return a + b; } }`)
   - [x] Methods with `this` context
 - [x] Strings
-  - [x] `.length` Property
-  - [ ] String Methods (`.charAt`, `.slice`, etc.)
+  - [x] `.length` Property (OpGetLength optimization)
+  - [x] String Prototype Methods (`.charAt`, `.charCodeAt`)
 - [ ] `Math` Object
 - [ ] `Date` Object
 - [ ] `JSON` Object
@@ -169,6 +170,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [ ] `Promise`
 - [x] `console` Object
   - [x] `console.log()` - variadic logging with inspect formatting
+  - [x] `console.error()`, `console.warn()`, `console.info()`, `console.debug()`
+  - [x] `console.trace()` - with trace prefix
+  - [x] `console.clear()` - ANSI clear screen
+  - [x] `console.count()`, `console.countReset()` - counting operations
+  - [x] `console.time()`, `console.timeEnd()` - timing operations
+  - [x] `console.group()`, `console.groupCollapsed()`, `console.groupEnd()` - grouping
 
 ## TypeScript Specific Features
 
@@ -189,8 +196,10 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Object Type Literals (`{ name: string; age: number }`)
 - [x] Interfaces (`interface Point { x: number; y: number; }`)
   - [x] Interface Inheritance (`interface Point3D extends Point2D { z: number; }`)
+  - [x] Multiple Interface Inheritance (`interface Combined extends A, B {}`)
 - [ ] Index Signatures (`{ [key: string]: number }`)
 - [x] Type Aliases (`type Name = string;`)
+- [x] Constructor Types (`new () => T`)
 
 ### Type Annotations
 
@@ -212,6 +221,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Function Call Checks (arity, parameter types)
 - [x] Structural Typing for interfaces and object types
 - [x] Interface compatibility and duck typing
+- [x] Constructor function type checking with `new` expressions
 - [ ] Type Narrowing (Control Flow Analysis)
 - [ ] Type Guards (`typeof`, `instanceof`, custom)
 - [ ] Strict Null Checks (`strictNullChecks` compiler option)

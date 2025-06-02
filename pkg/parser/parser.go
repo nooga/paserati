@@ -183,6 +183,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
 	p.registerPrefix(lexer.BITWISE_NOT, p.parsePrefixExpression)
+	p.registerPrefix(lexer.TYPEOF, p.parseTypeofExpression) // Added for typeof operator
 	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
@@ -1139,6 +1140,24 @@ func (p *Parser) parsePrefixExpression() Expression {
 	p.nextToken() // Consume the operator
 
 	expression.Right = p.parseExpression(PREFIX) // Parse the right-hand side with PREFIX precedence
+
+	return expression
+}
+
+// parseTypeofExpression parses a typeof expression.
+func (p *Parser) parseTypeofExpression() Expression {
+	expression := &TypeofExpression{
+		Token: p.curToken, // The 'typeof' token
+	}
+
+	p.nextToken() // Move past 'typeof'
+
+	// Parse the operand with PREFIX precedence
+	expression.Operand = p.parseExpression(PREFIX)
+	if expression.Operand == nil {
+		p.addError(p.curToken, "expected expression after 'typeof'")
+		return nil
+	}
 
 	return expression
 }

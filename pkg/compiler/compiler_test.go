@@ -217,8 +217,8 @@ func TestCompileExpressions(t *testing.T) {
 				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0 (first global variable)
 				vm.OpLoadConst, Register(1), uint16(1), // R1 = 10
 				vm.OpSetGlobal, uint16(1), Register(1), // Global[1] = R1 (second global variable)
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (value of a)
-				vm.OpMove, Register(3), Register(1), // R3 = R1 (value of b)
+				vm.OpGetGlobal, Register(2), uint16(0), // R2 = Global[0] (value of a)
+				vm.OpGetGlobal, Register(3), uint16(1), // R3 = Global[1] (value of b)
 				vm.OpLess, Register(4), Register(2), Register(3), // R4 = R2 < R3
 				vm.OpReturn, Register(4), // Return R4
 			),
@@ -328,7 +328,7 @@ func TestCompileFunctions(t *testing.T) {
 
 		// let result = double(10);
 		// Compile double -> R1 (load global)
-		vm.OpMove, Register(1), Register(0), // R1 = R0 (double function)
+		vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (double function)
 		// Compile 10 -> R2
 		vm.OpLoadConst, Register(2), uint16(1), // R2 = 10 (Const Idx 1)
 		// Emit Call R3, R1, 1 (Result in R3, Func in R1, ArgCount 1)
@@ -336,8 +336,8 @@ func TestCompileFunctions(t *testing.T) {
 		vm.OpSetGlobal, uint16(1), Register(3), // Global[1] = R3 (second global variable)
 
 		// return result;
-		// Compile result -> R4 (resolve R3, move R3->R4)
-		vm.OpMove, Register(4), Register(3), // R4 = R3 (result value)
+		// Compile result -> R4 (resolve global)
+		vm.OpGetGlobal, Register(4), uint16(1), // R4 = Global[1] (result value)
 		// Emit return R4
 		vm.OpReturn, Register(4),
 		// Extra OpReturn from final return logic
@@ -787,10 +787,12 @@ func TestCompoundAssignments(t *testing.T) {
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
 				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
-				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x = x + 3)
-				vm.OpMove, Register(1), Register(0), // R1 = R0 (load x)
-				vm.OpReturn, Register(1), // Return R1
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of x)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 3
+				vm.OpAdd, Register(3), Register(1), Register(2), // R3 = R1 + R2 (x = x + 3)
+				vm.OpSetGlobal, uint16(0), Register(3), // Global[0] = R3 (store result back)
+				vm.OpGetGlobal, Register(2), uint16(0), // R2 = Global[0] (load x for final expression)
+				vm.OpReturn, Register(2), // Return R2
 			),
 		},
 		{
@@ -800,10 +802,12 @@ func TestCompoundAssignments(t *testing.T) {
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 10
 				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 4
-				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
-				vm.OpMove, Register(1), Register(0), // R1 = R0 (load y)
-				vm.OpReturn, Register(1), // Return R1
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of y)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 4
+				vm.OpSubtract, Register(3), Register(1), Register(2), // R3 = R1 - R2
+				vm.OpSetGlobal, uint16(0), Register(3), // Global[0] = R3 (store result back)
+				vm.OpGetGlobal, Register(2), uint16(0), // R2 = Global[0] (load y for final expression)
+				vm.OpReturn, Register(2), // Return R2
 			),
 		},
 		{
@@ -813,10 +817,12 @@ func TestCompoundAssignments(t *testing.T) {
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 2
 				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 6
-				vm.OpMultiply, Register(0), Register(0), Register(1), // R0 = R0 * R1
-				vm.OpMove, Register(1), Register(0), // R1 = R0 (load z)
-				vm.OpReturn, Register(1), // Return R1
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of z)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 6
+				vm.OpMultiply, Register(3), Register(1), Register(2), // R3 = R1 * R2
+				vm.OpSetGlobal, uint16(0), Register(3), // Global[0] = R3 (store result back)
+				vm.OpGetGlobal, Register(2), uint16(0), // R2 = Global[0] (load z for final expression)
+				vm.OpReturn, Register(2), // Return R2
 			),
 		},
 		{
@@ -826,10 +832,12 @@ func TestCompoundAssignments(t *testing.T) {
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 12
 				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 3
-				vm.OpDivide, Register(0), Register(0), Register(1), // R0 = R0 / R1
-				vm.OpMove, Register(1), Register(0), // R1 = R0 (load w)
-				vm.OpReturn, Register(1), // Return R1
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of w)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 3
+				vm.OpDivide, Register(3), Register(1), Register(2), // R3 = R1 / R2
+				vm.OpSetGlobal, uint16(0), Register(3), // Global[0] = R3 (store result back)
+				vm.OpGetGlobal, Register(2), uint16(0), // R2 = Global[0] (load w for final expression)
+				vm.OpReturn, Register(2), // Return R2
 			),
 		},
 		// TODO: Add tests for compound assignment with upvalues later?
@@ -899,12 +907,14 @@ func TestUpdateExpressions(t *testing.T) {
 			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
-				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments)
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (result of ++x is new value)
-				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2
-				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0 (x = 5)
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of x)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 1
+				vm.OpAdd, Register(1), Register(1), Register(2), // R1 = R1 + R2 (x increments)
+				vm.OpSetGlobal, uint16(0), Register(1), // Global[0] = R1 (store incremented x)
+				vm.OpMove, Register(3), Register(1), // R3 = R1 (result of ++x is new value)
+				vm.OpSetGlobal, uint16(1), Register(3), // Global[1] = R3 (y = incremented x)
+				vm.OpGetGlobal, Register(1), uint16(1), // R1 = Global[1] (load y for final expression)
 				vm.OpReturn, Register(1),
 			),
 		},
@@ -914,12 +924,14 @@ func TestUpdateExpressions(t *testing.T) {
 			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (save original value of x)
-				vm.OpAdd, Register(0), Register(0), Register(1), // R0 = R0 + R1 (x increments using R1)
-				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2 (original value)
-				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0 (x = 5)
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of x)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 1
+				vm.OpMove, Register(3), Register(1), // R3 = R1 (save original value of x)
+				vm.OpAdd, Register(1), Register(1), Register(2), // R1 = R1 + R2 (x increments)
+				vm.OpSetGlobal, uint16(0), Register(1), // Global[0] = R1 (store incremented x)
+				vm.OpSetGlobal, uint16(1), Register(3), // Global[1] = R3 (y = original value)
+				vm.OpGetGlobal, Register(1), uint16(1), // R1 = Global[1] (load y for final expression)
 				vm.OpReturn, Register(1),
 			),
 		},
@@ -929,12 +941,14 @@ func TestUpdateExpressions(t *testing.T) {
 			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
-				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (new value)
-				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2
-				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0 (x = 5)
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of x)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 1
+				vm.OpSubtract, Register(1), Register(1), Register(2), // R1 = R1 - R2 (x decrements)
+				vm.OpSetGlobal, uint16(0), Register(1), // Global[0] = R1 (store decremented x)
+				vm.OpMove, Register(3), Register(1), // R3 = R1 (result of --x is new value)
+				vm.OpSetGlobal, uint16(1), Register(3), // Global[1] = R3 (y = decremented x)
+				vm.OpGetGlobal, Register(1), uint16(1), // R1 = Global[1] (load y for final expression)
 				vm.OpReturn, Register(1),
 			),
 		},
@@ -944,12 +958,14 @@ func TestUpdateExpressions(t *testing.T) {
 			expectedConstants: []vm.Value{vm.Number(5), vm.Number(1)}, // No name constants
 			expectedInstructions: makeInstructions(
 				vm.OpLoadConst, Register(0), uint16(0), // R0 = 5
-				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0
-				vm.OpLoadConst, Register(1), uint16(1), // R1 = 1
-				vm.OpMove, Register(2), Register(0), // R2 = R0 (save original x)
-				vm.OpSubtract, Register(0), Register(0), Register(1), // R0 = R0 - R1
-				vm.OpSetGlobal, uint16(1), Register(2), // Global[1] = R2 (original value)
-				vm.OpMove, Register(1), Register(2), // R1 = R2 (load y)
+				vm.OpSetGlobal, uint16(0), Register(0), // Global[0] = R0 (x = 5)
+				vm.OpGetGlobal, Register(1), uint16(0), // R1 = Global[0] (current value of x)
+				vm.OpLoadConst, Register(2), uint16(1), // R2 = 1
+				vm.OpMove, Register(3), Register(1), // R3 = R1 (save original value of x)
+				vm.OpSubtract, Register(1), Register(1), Register(2), // R1 = R1 - R2 (x decrements)
+				vm.OpSetGlobal, uint16(0), Register(1), // Global[0] = R1 (store decremented x)
+				vm.OpSetGlobal, uint16(1), Register(3), // Global[1] = R3 (y = original value)
+				vm.OpGetGlobal, Register(1), uint16(1), // R1 = Global[1] (load y for final expression)
 				vm.OpReturn, Register(1),
 			),
 		},

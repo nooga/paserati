@@ -29,6 +29,7 @@ type LoopContext struct {
 const debugCompiler = false      // <<< CHANGED back to false
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
+const debugPrint = true // Enable debug output
 
 func debugPrintf(format string, args ...interface{}) {
 	if debugCompiler {
@@ -573,25 +574,21 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
 			c.regAlloc.SetCurrent(destReg) // Update allocator state
+		} else if symbolRef.IsGlobal {
+			// This is a global variable, use OpGetGlobal
+			debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED
+			destReg := c.regAlloc.Alloc()
+			c.emitGetGlobal(destReg, symbolRef.GlobalIndex, node.Token.Line)
+			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else if !isLocal {
-			// Check if the variable is in the global scope (definingTable has no outer)
-			if c.enclosing == nil && definingTable.Outer == nil {
-				debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED
-				// This is a global variable, use OpGetGlobal
-				globalIdx := c.getOrAssignGlobalIndex(node.Value)
-				destReg := c.regAlloc.Alloc()
-				c.emitGetGlobal(destReg, globalIdx, node.Token.Line)
-				c.regAlloc.SetCurrent(destReg) // Update allocator state
-			} else {
-				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
-				// This is a regular free variable (defined in an outer scope that's not global)
-				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-				destReg := c.regAlloc.Alloc()
-				c.emitOpCode(vm.OpLoadFree, node.Token.Line)
-				c.emitByte(byte(destReg))
-				c.emitByte(byte(freeVarIndex))
-				c.regAlloc.SetCurrent(destReg) // Update allocator state
-			}
+			debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
+			// This is a regular free variable (defined in an outer scope that's not global)
+			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
+			destReg := c.regAlloc.Alloc()
+			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
+			c.emitByte(byte(destReg))
+			c.emitByte(byte(freeVarIndex))
+			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else {
 			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED
 			// This is a standard local variable (handled by current stack frame)
@@ -614,6 +611,9 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 
 	case *parser.PrefixExpression:
 		return c.compilePrefixExpression(node)
+
+	case *parser.TypeofExpression:
+		return c.compileTypeofExpression(node)
 
 	case *parser.InfixExpression:
 		return c.compileInfixExpression(node)
@@ -735,6 +735,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 			// Top-level: use global variable
 			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
 			// Function scope: use local symbol table
 			c.currentSymbolTable.Define(node.Name.Value, valueReg)
@@ -747,8 +748,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 			// Top-level: use global variable
 			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-			// Also add to symbol table so it can be resolved later
-			c.currentSymbolTable.Define(node.Name.Value, valueReg)
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
 			// Function scope: use local symbol table
 			c.currentSymbolTable.Define(node.Name.Value, valueReg)
@@ -760,6 +760,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 		if found && symbolRef.Register != nilRegister {
 			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+			// Update the symbol to be global
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		}
 	}
 
@@ -815,6 +817,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 			// Top-level: use global variable
 			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
 			// Function scope: use local symbol table
 			c.currentSymbolTable.Define(node.Name.Value, valueReg)
@@ -826,6 +829,8 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 		if found && symbolRef.Register != nilRegister {
 			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+			// Update the symbol to be global
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		}
 	}
 	return nil
@@ -905,6 +910,25 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression) errors
 
 	// The result is now in destReg
 	c.regAlloc.SetCurrent(destReg) // Explicitly set current for clarity
+	return nil
+}
+
+func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression) errors.PaseratiError {
+	// Compile the operand being typeof
+	err := c.compileNode(node.Operand)
+	if err != nil {
+		return err
+	}
+	exprReg := c.regAlloc.Current()
+
+	// Allocate a new register for the result
+	resultReg := c.regAlloc.Alloc()
+
+	// Emit the OpTypeof instruction
+	c.emitTypeof(resultReg, exprReg, node.Token.Line)
+
+	// The result of the typeof operation is now in resultReg
+	c.regAlloc.SetCurrent(resultReg)
 	return nil
 }
 
@@ -1960,6 +1984,8 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 		targetReg    Register
 		isUpvalue    bool
 		upvalueIndex uint8
+		isGlobal     bool
+		globalIndex  uint16
 	}
 	var memberInfo struct {
 		objectReg    Register
@@ -1980,14 +2006,22 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 			return NewCompileError(node, fmt.Sprintf("applying %s to undeclared variable '%s'", node.Operator, argNode.Value))
 		}
 
-		if definingTable == c.currentSymbolTable {
+		if symbolRef.IsGlobal {
+			// Global variable: Load current value with OpGetGlobal
+			identInfo.isGlobal = true
+			identInfo.globalIndex = symbolRef.GlobalIndex
+			currentValueReg = c.regAlloc.Alloc()
+			c.emitGetGlobal(currentValueReg, symbolRef.GlobalIndex, line)
+		} else if definingTable == c.currentSymbolTable {
 			// Local variable: Get its register
 			identInfo.targetReg = symbolRef.Register
 			identInfo.isUpvalue = false
+			identInfo.isGlobal = false
 			currentValueReg = identInfo.targetReg // Current value is already in targetReg
 		} else {
 			// Upvalue: Get its index and load current value into a temporary register
 			identInfo.isUpvalue = true
+			identInfo.isGlobal = false
 			identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
 			currentValueReg = c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, line)
@@ -2080,8 +2114,8 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression) errors
 
 	// 4. Clean up temporary registers
 	c.regAlloc.Free(constOneReg)
-	// Free the currentValueReg if it was allocated as temporary (for upvalues, member exprs, index exprs)
-	if lvalueKind != lvalueIdentifier || identInfo.isUpvalue {
+	// Free the currentValueReg if it was allocated as temporary (for upvalues, member exprs, index exprs, globals)
+	if lvalueKind != lvalueIdentifier || identInfo.isUpvalue || identInfo.isGlobal {
 		c.regAlloc.Free(currentValueReg)
 	}
 	// Free object/array/index registers for member/index expressions
@@ -2111,8 +2145,12 @@ func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInf
 			targetReg    Register
 			isUpvalue    bool
 			upvalueIndex uint8
+			isGlobal     bool
+			globalIndex  uint16
 		})
-		if info.isUpvalue {
+		if info.isGlobal {
+			c.emitSetGlobal(info.globalIndex, valueReg, line)
+		} else if info.isUpvalue {
 			c.emitSetUpvalue(info.upvalueIndex, valueReg, line)
 		} else {
 			if valueReg != info.targetReg {
@@ -2362,6 +2400,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 	case *parser.ThisExpression:
 		return n.Token
 	case *parser.PrefixExpression:
+		return n.Token // Operator token
+	case *parser.TypeofExpression:
 		return n.Token // Operator token
 	case *parser.InfixExpression:
 		return n.Token // Operator token

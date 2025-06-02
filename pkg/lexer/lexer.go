@@ -132,6 +132,7 @@ const (
 	SWITCH   TokenType = "SWITCH"   // Added for switch statements
 	CASE     TokenType = "CASE"     // Added for switch statements
 	DEFAULT  TokenType = "DEFAULT"  // Added for switch statements
+	TYPEOF   TokenType = "TYPEOF"   // Added for typeof operator
 
 	// Logical Operators
 	LOGICAL_AND TokenType = "&&" // Added
@@ -180,6 +181,7 @@ var keywords = map[string]TokenType{
 	"new":       NEW,       // Added for NEW keyword
 	"interface": INTERFACE, // Added for interface keyword
 	"extends":   EXTENDS,   // Added for extends keyword
+	"typeof":    TYPEOF,    // Added for typeof operator
 }
 
 // LookupIdent checks the keywords table for an identifier.

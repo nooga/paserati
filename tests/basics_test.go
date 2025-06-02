@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const basicsDebug = true // Enable for debugging
+
 // --- Operator & Literal Matrix Test ---
 
 type matrixTestCase struct {

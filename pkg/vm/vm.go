@@ -428,6 +428,15 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// In many languages, ! evaluates truthiness
 			registers[destReg] = BooleanValue(isFalsey(srcVal)) // Use local Bool
 
+		case OpTypeof:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			srcVal := registers[srcReg]
+			// Get the typeof string for the value
+			typeofStr := getTypeofString(srcVal)
+			registers[destReg] = String(typeofStr)
+
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
 			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
 			OpGreater, OpLess, OpLessEqual,
@@ -2011,6 +2020,30 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	// --- Remove later ---
 
 	return InterpretRuntimeError
+}
+
+// getTypeofString returns the JavaScript typeof string for a given value
+func getTypeofString(val Value) string {
+	switch val.Type() {
+	case TypeUndefined:
+		return "undefined"
+	case TypeNull:
+		return "object" // In JavaScript, typeof null === "object" (historical quirk)
+	case TypeBoolean:
+		return "boolean"
+	case TypeFloatNumber, TypeIntegerNumber:
+		return "number"
+	case TypeString:
+		return "string"
+	case TypeFunction, TypeClosure, TypeNativeFunction:
+		return "function"
+	case TypeObject, TypeDictObject:
+		return "object"
+	case TypeArray:
+		return "object" // Arrays are objects in JavaScript
+	default:
+		return "object" // Default fallback
+	}
 }
 
 // stringFromCharCodeStaticImpl implements String.fromCharCode (static method)

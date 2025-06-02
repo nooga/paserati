@@ -1326,16 +1326,33 @@ func (c *Checker) visit(node parser.Node) {
 		} // else: Error might have occurred visiting operand, or type is nil.
 		node.SetComputedType(resultType)
 
+	case *parser.TypeofExpression:
+		// --- NEW: Handle TypeofExpression ---
+		// Visit the operand first to ensure it has a computed type
+		c.visit(node.Operand)
+
+		// typeof always returns a string, regardless of the operand type
+		// The operand type doesn't affect the result type, but we still need to check it exists
+		operandType := node.Operand.GetComputedType()
+		if operandType == nil {
+			// Set a default if operand type is unknown (shouldn't normally happen)
+			node.Operand.SetComputedType(types.Any)
+		}
+
+		// typeof expression always evaluates to string type
+		node.SetComputedType(types.String)
+
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
 		c.visit(node.Left)
 		c.visit(node.Right)
 		leftType := node.Left.GetComputedType()
-		rightType := node.Right.GetComputedType()
 
 		if leftType == nil {
 			leftType = types.Any
 		}
+		rightType := node.Right.GetComputedType()
+
 		if rightType == nil {
 			rightType = types.Any
 		}

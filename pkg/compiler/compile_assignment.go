@@ -59,16 +59,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			}
 		} else {
 			// Determine target register/upvalue index and load current value
-			if definingTable == c.currentSymbolTable {
-				// Local variable
-				identInfo.targetReg = symbolRef.Register
-				identInfo.isUpvalue = false
-				identInfo.isGlobal = false
-				currentValueReg = identInfo.targetReg // Current value is already in targetReg
-			} else if c.enclosing == nil && definingTable.Outer == nil {
-				// Global variable (found in global scope AND we're at top level)
+			if symbolRef.IsGlobal {
+				// Global variable
 				identInfo.isGlobal = true
-				identInfo.globalIdx = c.getOrAssignGlobalIndex(lhsNode.Value)
+				identInfo.globalIdx = symbolRef.GlobalIndex
 				// For compound assignments, we need the current value
 				if node.Operator != "=" {
 					currentValueReg = c.regAlloc.Alloc()
@@ -76,6 +70,12 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				} else {
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}
+			} else if definingTable == c.currentSymbolTable {
+				// Local variable
+				identInfo.targetReg = symbolRef.Register
+				identInfo.isUpvalue = false
+				identInfo.isGlobal = false
+				currentValueReg = identInfo.targetReg // Current value is already in targetReg
 			} else {
 				// Upvalue (either non-global outer scope OR we're in a closure accessing global scope)
 				identInfo.isUpvalue = true
