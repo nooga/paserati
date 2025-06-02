@@ -602,14 +602,27 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			switch calleeVal.Type() {
 			case TypeClosure:
-				// --- Existing Closure Handling ---
+				// --- Updated Closure Handling with Rest Parameters ---
 				calleeClosure := AsClosure(calleeVal) // Use local AsClosure
 				calleeFunc := calleeClosure.Fn
-				if argCount != calleeFunc.Arity {
-					frame.ip = callerIP // Use saved IP for error context
-					status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
-					return status, Undefined
+
+				// Updated arity check for variadic functions
+				if calleeFunc.Variadic {
+					// For variadic functions, must have at least base parameters
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					// For non-variadic functions, exact arity match required
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
 				}
+
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow.")
@@ -632,8 +645,9 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
+				// Copy fixed arguments
 				argStartRegInCaller := funcReg + 1
-				for i := 0; i < argCount; i++ {
+				for i := 0; i < calleeFunc.Arity; i++ {
 					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
 						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
 					} else {
@@ -644,29 +658,63 @@ func (vm *VM) run() (InterpretResult, Value) {
 						return status, Undefined
 					}
 				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					restArray := NewArray()
+					restArrayObj := restArray.AsArray()
+
+					// Collect extra arguments into the rest array
+					for i := 0; i < extraArgCount; i++ {
+						argIndex := calleeFunc.Arity + i
+						if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+							restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
+					}
+				}
+
 				vm.frameCount++
 
 				// Switch context (update cached variables)
 				frame = newFrame
 				closure = frame.closure
 				function = closure.Fn
+
 				code = function.Chunk.Code
 				constants = function.Chunk.Constants
 				registers = frame.registers
 				ip = frame.ip
-				// --- End Existing Closure Handling ---
+				// --- End Updated Closure Handling ---
 
 			case TypeFunction:
-				// --- Existing Function Handling (implicit closure) ---
+				// --- Updated Function Handling with Rest Parameters ---
 				funcToCall := AsFunction(calleeVal) // Use local AsFunction
 				calleeClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
 				calleeFunc := calleeClosure.Fn
 
-				if argCount != calleeFunc.Arity {
-					frame.ip = callerIP
-					status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
-					return status, Undefined
+				// Updated arity check for variadic functions
+				if calleeFunc.Variadic {
+					// For variadic functions, must have at least base parameters
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					// For non-variadic functions, exact arity match required
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
 				}
+
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow.")
@@ -689,8 +737,9 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
+				// Copy fixed arguments
 				argStartRegInCaller := funcReg + 1
-				for i := 0; i < argCount; i++ {
+				for i := 0; i < calleeFunc.Arity; i++ {
 					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
 						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
 					} else {
@@ -701,6 +750,27 @@ func (vm *VM) run() (InterpretResult, Value) {
 						return status, Undefined
 					}
 				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					restArray := NewArray()
+					restArrayObj := restArray.AsArray()
+
+					// Collect extra arguments into the rest array
+					for i := 0; i < extraArgCount; i++ {
+						argIndex := calleeFunc.Arity + i
+						if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+							restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
+					}
+				}
+
 				vm.frameCount++
 
 				// Switch context
@@ -711,10 +781,11 @@ func (vm *VM) run() (InterpretResult, Value) {
 				constants = function.Chunk.Constants
 				registers = frame.registers
 				ip = frame.ip
-				// --- End Existing Function Handling ---
+				// --- End Updated Function Handling ---
 
 			// <<< NEW CASE FOR NATIVE FUNCTIONS/BUILTINS >>>
 			case TypeNativeFunction:
+
 				builtin := AsNativeFunction(calleeVal)
 
 				// --- Arity Check ---

@@ -33,34 +33,40 @@ func registerConsole() {
 	consoleType := &types.ObjectType{
 		Properties: map[string]types.Type{
 			"log": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"error": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"warn": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"info": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"debug": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"trace": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"clear": &types.FunctionType{
 				ParameterTypes: []types.Type{},
@@ -68,34 +74,40 @@ func registerConsole() {
 				IsVariadic:     false,
 			},
 			"count": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"countReset": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"time": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"timeEnd": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"group": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"groupCollapsed": &types.FunctionType{
-				ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-				ReturnType:     types.Void,
-				IsVariadic:     true,
+				ParameterTypes:    []types.Type{}, // No fixed parameters
+				ReturnType:        types.Void,
+				IsVariadic:        true,
+				RestParameterType: &types.ArrayType{ElementType: types.Any},
 			},
 			"groupEnd": &types.FunctionType{
 				ParameterTypes: []types.Type{},

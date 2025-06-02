@@ -195,6 +195,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.IF, p.parseIfExpression)
 	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
 	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)  // <<< NEW: Register Object Literal Parsing
+	p.registerPrefix(lexer.SPREAD, p.parseSpreadElement)  // NEW: Spread syntax in calls
 
 	// --- Register VALUE Infix Functions ---
 	// Arithmetic & Comparison/Logical
@@ -452,7 +453,7 @@ func (p *Parser) parseFunctionTypeExpression() Expression {
 	funcType := &FunctionTypeExpression{Token: p.curToken} // '(' token
 
 	var parseErr error
-	funcType.Parameters, parseErr = p.parseFunctionTypeParameterList()
+	funcType.Parameters, funcType.RestParameter, parseErr = p.parseFunctionTypeParameterList()
 	if parseErr != nil {
 		// Error already added by helper
 		return nil
@@ -474,25 +475,40 @@ func (p *Parser) parseFunctionTypeExpression() Expression {
 
 // --- NEW: Helper for parsing function type parameter list: (), (T1), (name: T1, T2) ---
 // This function should also correctly use parseTypeExpression internally.
-func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
+func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, error) {
 	// ... existing implementation looks okay, relies on parseTypeExpression calls ...
 	params := []Expression{}
+	var restParam Expression
 
 	if !p.curTokenIs(lexer.LPAREN) {
 		// Should not happen if called correctly
 		msg := fmt.Sprintf("internal parser error: parseFunctionTypeParameterList called without LPAREN, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
-		return nil, fmt.Errorf("%s", msg)
+		return nil, nil, fmt.Errorf("%s", msg)
 	}
 
 	// Handle empty parameter list: () => ...
 	if p.peekTokenIs(lexer.RPAREN) {
 		p.nextToken() // Consume ')'
-		return params, nil
+		return params, nil, nil
 	}
 
 	// Parse first parameter type
 	p.nextToken() // Consume '('
+
+	// Check for rest parameter
+	if p.curTokenIs(lexer.SPREAD) {
+		// This is a rest parameter: ...type
+		restParam = p.parseRestParameterType()
+		if restParam == nil {
+			return nil, nil, fmt.Errorf("failed to parse rest parameter type")
+		}
+		// Expect closing parenthesis after rest parameter
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil, nil, fmt.Errorf("missing closing parenthesis after rest parameter")
+		}
+		return params, restParam, nil
+	}
 
 	// --- MODIFIED: Handle optional parameter name ---
 	if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
@@ -503,7 +519,7 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
 
 	paramType := p.parseTypeExpression() // This call will use the updated recursive function
 	if paramType == nil {
-		return nil, fmt.Errorf("failed to parse first function type parameter")
+		return nil, nil, fmt.Errorf("failed to parse first function type parameter")
 	}
 	params = append(params, paramType)
 
@@ -511,6 +527,20 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // Consume ','
 		p.nextToken() // Move to next token (could be IDENT or start of type)
+
+		// Check for rest parameter
+		if p.curTokenIs(lexer.SPREAD) {
+			// This is a rest parameter: ...type
+			restParam = p.parseRestParameterType()
+			if restParam == nil {
+				return nil, nil, fmt.Errorf("failed to parse rest parameter type")
+			}
+			// Expect closing parenthesis after rest parameter
+			if !p.expectPeek(lexer.RPAREN) {
+				return nil, nil, fmt.Errorf("missing closing parenthesis after rest parameter")
+			}
+			return params, restParam, nil
+		}
 
 		// --- MODIFIED: Handle optional parameter name ---
 		if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
@@ -521,17 +551,58 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, error) {
 
 		paramType := p.parseTypeExpression() // This call will use the updated recursive function
 		if paramType == nil {
-			return nil, fmt.Errorf("failed to parse subsequent function type parameter")
+			return nil, nil, fmt.Errorf("failed to parse subsequent function type parameter")
 		}
 		params = append(params, paramType)
 	}
 
 	// Expect closing parenthesis
 	if !p.expectPeek(lexer.RPAREN) {
-		return nil, fmt.Errorf("missing closing parenthesis in function type parameter list")
+		return nil, nil, fmt.Errorf("missing closing parenthesis in function type parameter list")
 	}
 
-	return params, nil
+	return params, restParam, nil
+}
+
+// parseRestParameterType parses a rest parameter type like ...args: string[]
+// In function type expressions, the parameter name is optional and can be ignored
+func (p *Parser) parseRestParameterType() Expression {
+	if !p.curTokenIs(lexer.SPREAD) {
+		p.addError(p.curToken, "expected '...' for rest parameter")
+		return nil
+	}
+
+	// Move past the '...' token
+	p.nextToken()
+
+	// Check if there's a parameter name (optional in type expressions)
+	if p.curTokenIs(lexer.IDENT) {
+		// Skip the parameter name - we don't need it in type expressions
+		p.nextToken()
+	}
+
+	// Check for type annotation
+	if p.curTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		// Parse the type (should be an array type)
+		restType := p.parseTypeExpression()
+		if restType == nil {
+			p.addError(p.curToken, "expected type annotation after ':' in rest parameter type")
+			return nil
+		}
+		return restType
+	} else {
+		// No type annotation - default to any[]
+		// Return an ArrayTypeExpression with 'any' as element type
+		anyType := &Identifier{
+			Token: lexer.Token{Type: lexer.IDENT, Literal: "any"},
+			Value: "any",
+		}
+		return &ArrayTypeExpression{
+			Token:       p.curToken,
+			ElementType: anyType,
+		}
+	}
 }
 
 // --- NEW: Helper for infix union type parsing ---
@@ -787,7 +858,7 @@ func (p *Parser) parseIdentifier() Expression {
 			TypeAnnotation: nil, // No type annotation in this shorthand syntax
 		}
 		// parseArrowFunctionBodyAndFinish expects curToken to be '=>'
-		return p.parseArrowFunctionBodyAndFinish([]*Parameter{param}, nil)
+		return p.parseArrowFunctionBodyAndFinish([]*Parameter{param}, nil, nil)
 	}
 
 	debugPrint("parseIdentifier (VALUE context): Just identifier '%s', returning.", ident.Value)
@@ -988,8 +1059,8 @@ func (p *Parser) parseFunctionLiteral() Expression {
 	}
 
 	// --- MODIFIED: Use parseFunctionParameters ---
-	lit.Parameters = p.parseFunctionParameters() // Includes consuming RPAREN
-	if lit.Parameters == nil {
+	lit.Parameters, lit.RestParameter, _ = p.parseFunctionParameters() // Includes consuming RPAREN
+	if lit.Parameters == nil && lit.RestParameter == nil {
 		return nil
 	} // Propagate error
 
@@ -1015,6 +1086,7 @@ func (p *Parser) parseFunctionLiteral() Expression {
 			Token:                lit.Token,
 			Name:                 lit.Name,
 			Parameters:           lit.Parameters,
+			RestParameter:        lit.RestParameter,
 			ReturnTypeAnnotation: lit.ReturnTypeAnnotation,
 		}
 		return sig
@@ -1055,8 +1127,8 @@ func (p *Parser) parseFunctionSignature() *FunctionSignature {
 	}
 
 	// Parse parameters
-	sig.Parameters = p.parseFunctionParameters()
-	if sig.Parameters == nil {
+	sig.Parameters, sig.RestParameter, _ = p.parseFunctionParameters()
+	if sig.Parameters == nil && sig.RestParameter == nil {
 		return nil
 	}
 
@@ -1083,23 +1155,38 @@ func (p *Parser) parseFunctionSignature() *FunctionSignature {
 }
 
 // --- MODIFIED: parseFunctionParameters to handle Parameter struct & types ---
-func (p *Parser) parseFunctionParameters() []*Parameter {
+// Returns ([]*Parameter, *RestParameter)
+func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error) {
 	parameters := []*Parameter{}
+	var restParam *RestParameter
 
 	// Check for empty parameter list: function() { ... }
 	if p.peekTokenIs(lexer.RPAREN) {
 		p.nextToken() // Consume ')'
-		return parameters
+		return parameters, nil, nil
 	}
 
 	p.nextToken() // Consume '(' or ',' to get to the first parameter name
 
-	// Parse first parameter
+	// Check if first parameter is a rest parameter
+	if p.curTokenIs(lexer.SPREAD) {
+		// Parse rest parameter
+		restParam = p.parseRestParameter()
+		if restParam == nil {
+			return nil, nil, fmt.Errorf("failed to parse rest parameter")
+		}
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil, nil, fmt.Errorf("expected closing parenthesis after rest parameter")
+		}
+		return parameters, restParam, nil
+	}
+
+	// Parse first regular parameter
 	if !p.curTokenIs(lexer.IDENT) {
 		msg := fmt.Sprintf("expected identifier for parameter name, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
-		return nil
+		return nil, nil, fmt.Errorf("%s", msg)
 	}
 	param := &Parameter{Token: p.curToken}
 	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1116,7 +1203,7 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 		p.nextToken() // Consume token starting the type expression
 		param.TypeAnnotation = p.parseTypeExpression()
 		if param.TypeAnnotation == nil {
-			return nil
+			return nil, nil, fmt.Errorf("failed to parse type annotation for parameter")
 		} // Propagate error
 	} else {
 		param.TypeAnnotation = nil
@@ -1129,7 +1216,7 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 		param.DefaultValue = p.parseExpression(LOWEST)
 		if param.DefaultValue == nil {
 			p.addError(p.curToken, "expected expression after '=' in parameter default value")
-			return nil
+			return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
 		}
 	}
 
@@ -1140,11 +1227,24 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 		p.nextToken() // Consume ','
 		p.nextToken() // Consume identifier for next param name
 
+		// Check if this is a rest parameter
+		if p.curTokenIs(lexer.SPREAD) {
+			// Parse rest parameter (must be last)
+			restParam = p.parseRestParameter()
+			if restParam == nil {
+				return nil, nil, fmt.Errorf("failed to parse rest parameter")
+			}
+			if !p.expectPeek(lexer.RPAREN) {
+				return nil, nil, fmt.Errorf("expected closing parenthesis after rest parameter")
+			}
+			return parameters, restParam, nil
+		}
+
 		if !p.curTokenIs(lexer.IDENT) {
 			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
-			return nil
+			return nil, nil, fmt.Errorf("%s", msg)
 		}
 		param := &Parameter{Token: p.curToken}
 		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1161,7 +1261,7 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 			p.nextToken() // Consume token starting the type expression
 			param.TypeAnnotation = p.parseTypeExpression()
 			if param.TypeAnnotation == nil {
-				return nil
+				return nil, nil, fmt.Errorf("failed to parse type annotation for parameter")
 			} // Propagate error
 		} else {
 			param.TypeAnnotation = nil
@@ -1174,7 +1274,7 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 			param.DefaultValue = p.parseExpression(LOWEST)
 			if param.DefaultValue == nil {
 				p.addError(p.curToken, "expected expression after '=' in parameter default value")
-				return nil
+				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
 			}
 		}
 
@@ -1182,10 +1282,49 @@ func (p *Parser) parseFunctionParameters() []*Parameter {
 	}
 
 	if !p.expectPeek(lexer.RPAREN) {
-		return nil // Expected closing parenthesis
+		return nil, nil, fmt.Errorf("expected closing parenthesis after parameters")
 	}
 
-	return parameters
+	return parameters, restParam, nil
+}
+
+// parseRestParameter parses a rest parameter (...args or ...args: type)
+func (p *Parser) parseRestParameter() *RestParameter {
+	restParam := &RestParameter{Token: p.curToken} // The '...' token
+
+	// Expect identifier after '...'
+	if !p.expectPeek(lexer.IDENT) {
+		p.addError(p.peekToken, "expected identifier after '...' in rest parameter")
+		return nil
+	}
+
+	restParam.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	// Check for type annotation
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Move to type expression
+		restParam.TypeAnnotation = p.parseTypeExpression()
+		if restParam.TypeAnnotation == nil {
+			return nil
+		}
+	}
+
+	return restParam
+}
+
+func (p *Parser) parseSpreadElement() Expression {
+	spreadElement := &SpreadElement{Token: p.curToken} // The '...' token
+
+	// Parse the expression after '...'
+	p.nextToken() // Move to the expression
+	spreadElement.Argument = p.parseExpression(LOWEST)
+	if spreadElement.Argument == nil {
+		p.addError(p.curToken, "expected expression after '...' in spread syntax")
+		return nil
+	}
+
+	return spreadElement
 }
 
 func (p *Parser) parseBlockStatement() *BlockStatement {
@@ -1352,15 +1491,15 @@ func (p *Parser) parseGroupedExpression() Expression {
 	// --- Attempt to parse as Arrow Function Parameters ---
 	if p.curTokenIs(lexer.LPAREN) {
 		debugPrint("parseGroupedExpression: Attempting arrow param parse...")
-		params := p.parseParameterList() // Consumes up to and including ')'
+		params, restParam, _ := p.parseParameterList() // Consumes up to and including ')'
 
 		// Case 1: Arrow function with params, NO return type annotation: (a, b) => body
 		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found '=>' next.", params)
 			p.nextToken() // Consume ')', Now curToken is '=>'
 			debugPrint("parseGroupedExpression: Consumed ')', cur is now '=>'")
-			p.errors = p.errors[:startErrors]                     // Clear errors from backtrack attempt
-			return p.parseArrowFunctionBodyAndFinish(params, nil) // No return type annotation
+			p.errors = p.errors[:startErrors]                                // Clear errors from backtrack attempt
+			return p.parseArrowFunctionBodyAndFinish(params, restParam, nil) // No return type annotation
 
 			// Case 2: Arrow function with params AND return type annotation: (a: T, b: U): R => body
 		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
@@ -1393,7 +1532,7 @@ func (p *Parser) parseGroupedExpression() Expression {
 
 			// Pass the correctly parsed returnTypeAnnotation.
 			// parseArrowFunctionBodyAndFinish expects curToken to be '=>'.
-			return p.parseArrowFunctionBodyAndFinish(params, returnTypeAnnotation)
+			return p.parseArrowFunctionBodyAndFinish(params, restParam, returnTypeAnnotation)
 
 		} else {
 			// Not an arrow function (or parseParameterList failed), backtrack.
@@ -1642,11 +1781,12 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 
 // parseArrowFunctionBodyAndFinish completes parsing an arrow function.
 // It assumes the parameters have been parsed and the current token is '=>'.
-func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter, returnTypeAnnotation Expression) Expression {
-	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v", p.curToken.Literal, p.curToken.Type, params)
+func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression) Expression {
+	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v, restParam=%v", p.curToken.Literal, p.curToken.Type, params, restParam)
 	arrowFunc := &ArrowFunctionLiteral{
 		Token:                p.curToken, // The '=>' token
 		Parameters:           params,     // Use the passed-in parameters
+		RestParameter:        restParam,  // Use the passed-in rest parameter
 		ReturnTypeAnnotation: returnTypeAnnotation,
 	}
 
@@ -1667,13 +1807,14 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter, returnType
 
 // parseParameterList parses a list of identifiers enclosed in parentheses.
 // Expects the current token to be '('. Consumes tokens up to and including the closing ')'.
-// Returns the list of identifier nodes or nil if parsing fails.
-func (p *Parser) parseParameterList() []*Parameter {
+// Returns the list of parameters and optional rest parameter, or nil if parsing fails.
+func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 	params := []*Parameter{}
+	var restParam *RestParameter
 
 	if !p.curTokenIs(lexer.LPAREN) { // Check current token IS LPAREN
 		// This case should ideally not be hit if called correctly from parseGroupedExpression
-		return nil
+		return nil, nil, fmt.Errorf("expected '('")
 	}
 	debugPrint("parseParameterList: Starting, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
 
@@ -1681,16 +1822,33 @@ func (p *Parser) parseParameterList() []*Parameter {
 	if p.peekTokenIs(lexer.RPAREN) {
 		p.nextToken() // Consume ')'
 		debugPrint("parseParameterList: Found empty list '()'")
-		return params // Return empty slice
+		return params, nil, nil // Return empty slice
 	}
 
 	// Parse the first parameter
-	p.nextToken() // Move past '(' to the first parameter identifier
+	p.nextToken() // Move past '(' to the first parameter identifier or spread
+
+	// Check if first parameter is a rest parameter
+	if p.curTokenIs(lexer.SPREAD) {
+		debugPrint("parseParameterList: Found rest parameter at start")
+		restParam = p.parseRestParameter()
+		if restParam == nil {
+			return nil, nil, fmt.Errorf("failed to parse rest parameter")
+		}
+		// Rest parameter must be last, so expect closing parenthesis
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil, nil, fmt.Errorf("expected closing parenthesis after rest parameter")
+		}
+		debugPrint("parseParameterList: Consumed ')', finished with rest parameter.")
+		return params, restParam, nil
+	}
+
+	// Parse regular parameter
 	if !p.curTokenIs(lexer.IDENT) {
 		msg := fmt.Sprintf("expected identifier as parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
-		return nil
+		return nil, nil, fmt.Errorf("%s", msg)
 	}
 	param := &Parameter{Token: p.curToken}
 	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1707,7 +1865,7 @@ func (p *Parser) parseParameterList() []*Parameter {
 		p.nextToken() // Consume token starting the type expression
 		param.TypeAnnotation = p.parseTypeExpression()
 		if param.TypeAnnotation == nil {
-			return nil
+			return nil, nil, fmt.Errorf("failed to parse type annotation for parameter")
 		} // Propagate error
 	} else {
 		param.TypeAnnotation = nil
@@ -1720,7 +1878,7 @@ func (p *Parser) parseParameterList() []*Parameter {
 		param.DefaultValue = p.parseExpression(LOWEST)
 		if param.DefaultValue == nil {
 			p.addError(p.curToken, "expected expression after '=' in parameter default value")
-			return nil
+			return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
 		}
 	}
 
@@ -1730,12 +1888,29 @@ func (p *Parser) parseParameterList() []*Parameter {
 	// Parse subsequent parameters (comma-separated)
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // Consume ','
-		p.nextToken() // Consume identifier
+		p.nextToken() // Consume identifier or spread
+
+		// Check if this is a rest parameter
+		if p.curTokenIs(lexer.SPREAD) {
+			debugPrint("parseParameterList: Found rest parameter after comma")
+			restParam = p.parseRestParameter()
+			if restParam == nil {
+				return nil, nil, fmt.Errorf("failed to parse rest parameter")
+			}
+			// Rest parameter must be last, so expect closing parenthesis
+			if !p.expectPeek(lexer.RPAREN) {
+				return nil, nil, fmt.Errorf("expected closing parenthesis after rest parameter")
+			}
+			debugPrint("parseParameterList: Consumed ')', finished with rest parameter.")
+			return params, restParam, nil
+		}
+
+		// Parse regular parameter
 		if !p.curTokenIs(lexer.IDENT) {
 			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
-			return nil
+			return nil, nil, fmt.Errorf("%s", msg)
 		}
 		param := &Parameter{Token: p.curToken}
 		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1752,7 +1927,7 @@ func (p *Parser) parseParameterList() []*Parameter {
 			p.nextToken() // Consume token starting the type expression
 			param.TypeAnnotation = p.parseTypeExpression()
 			if param.TypeAnnotation == nil {
-				return nil
+				return nil, nil, fmt.Errorf("failed to parse type annotation for parameter")
 			} // Propagate error
 		} else {
 			param.TypeAnnotation = nil
@@ -1765,7 +1940,7 @@ func (p *Parser) parseParameterList() []*Parameter {
 			param.DefaultValue = p.parseExpression(LOWEST)
 			if param.DefaultValue == nil {
 				p.addError(p.curToken, "expected expression after '=' in parameter default value")
-				return nil
+				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
 			}
 		}
 
@@ -1776,11 +1951,11 @@ func (p *Parser) parseParameterList() []*Parameter {
 	// Expect closing parenthesis
 	if !p.expectPeek(lexer.RPAREN) {
 		debugPrint("parseParameterList: Expected ')' after parameters, got peek '%s'", p.peekToken.Type)
-		return nil // Error: Missing closing parenthesis
+		return nil, nil, fmt.Errorf("expected closing parenthesis after parameters")
 	}
 	debugPrint("parseParameterList: Consumed ')', finished successfully.")
 
-	return params
+	return params, restParam, nil
 }
 
 // parseTernaryExpression parses condition ? consequence : alternative
@@ -2388,8 +2563,8 @@ func (p *Parser) parseShorthandMethod() *ShorthandMethod {
 	}
 
 	// Parse parameters
-	method.Parameters = p.parseFunctionParameters()
-	if method.Parameters == nil {
+	method.Parameters, method.RestParameter, _ = p.parseFunctionParameters()
+	if method.Parameters == nil && method.RestParameter == nil {
 		return nil // Error parsing parameters
 	}
 
@@ -2562,12 +2737,13 @@ func (p *Parser) parseConstructorTypeExpression() Expression {
 	}
 
 	// Parse parameter types (similar to function type parameters)
-	params, err := p.parseFunctionTypeParameterList()
+	params, _, err := p.parseFunctionTypeParameterList()
 	if err != nil {
 		p.addError(p.curToken, err.Error())
 		return nil
 	}
 	cte.Parameters = params
+	// Note: Constructor types don't typically use rest parameters, but we parse them anyway
 
 	// Expect ':' for return type
 	if !p.expectPeek(lexer.COLON) {
@@ -2609,12 +2785,13 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			}
 
 			// Parse parameter types
-			params, err := p.parseFunctionTypeParameterList()
+			params, _, err := p.parseFunctionTypeParameterList()
 			if err != nil {
 				p.addError(p.curToken, err.Error())
 				return nil
 			}
 			prop.Parameters = params
+			// Note: Call signatures in object types don't typically use rest parameters, but we parse them anyway
 
 			// Expect ':' for return type
 			if !p.expectPeek(lexer.COLON) {

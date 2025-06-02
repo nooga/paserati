@@ -703,6 +703,18 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 	case *parser.NewExpression:
 		return c.compileNewExpression(node)
 
+	// --- NEW: Rest Parameters and Spread Syntax ---
+	case *parser.SpreadElement:
+		// SpreadElement can appear in function calls - this should be handled there
+		// If we reach here, it's likely used in an invalid context
+		return NewCompileError(node, "spread syntax not supported in this context")
+
+	case *parser.RestParameter:
+		// RestParameter should only appear in function parameter lists
+		// If we reach here, it's likely used in an invalid context
+		return NewCompileError(node, "rest parameter syntax not supported in this context")
+	// --- END NEW ---
+
 	default:
 		// Add check here? If type is FunctionLiteral and wasn't caught above, it's an error.
 		if _, ok := node.(*parser.FunctionLiteral); ok {
@@ -1302,14 +1314,25 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		}
 	}
 
-	// 4. Compile the body using the function compiler
+	// 4. Handle rest parameter (if present)
+	if node.RestParameter != nil {
+		// Define the rest parameter in the symbol table
+		restParamReg := functionCompiler.regAlloc.Alloc()
+		functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+
+		// The rest parameter collection will be handled at runtime during function call
+		// We just need to ensure it has a register allocated here
+		debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+	}
+
+	// 5. Compile the body using the function compiler
 	err := functionCompiler.compileNode(node.Body)
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)
 		// Proceed to create function object even if body has errors? Continue for now.
 	}
 
-	// 5. Finalize function chunk (add implicit return to the function's chunk)
+	// 6. Finalize function chunk (add implicit return to the function's chunk)
 	functionCompiler.emitFinalReturn(node.Body.Token.Line) // Use body's end token? Or func literal token?
 	functionChunk := functionCompiler.chunk
 	// <<< Get freeSymbols from the functionCompiler instance >>>
@@ -1320,7 +1343,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 	regSize := functionCompiler.regAlloc.MaxRegs()
 
-	// 6. Create the bytecode.Function object
+	// 7. Create the bytecode.Function object
 	// ... (determine funcName as before) ...
 	var funcName string
 	if nameHint != "" {
@@ -1331,8 +1354,8 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		funcName = "<anonymous>"
 	}
 
-	// 7. Add the function object to the *outer* compiler's constant pool.
-	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, funcName, functionChunk)
+	// 8. Add the function object to the *outer* compiler's constant pool.
+	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// <<< REMOVE OpClosure EMISSION FROM HERE (should already be removed) >>>
@@ -1420,13 +1443,24 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		}
 	}
 
-	// 6. Compile the body using the function compiler
+	// 6. Handle rest parameter (if present)
+	if node.RestParameter != nil {
+		// Define the rest parameter in the symbol table
+		restParamReg := functionCompiler.regAlloc.Alloc()
+		functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+
+		// The rest parameter collection will be handled at runtime during function call
+		// We just need to ensure it has a register allocated here
+		debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+	}
+
+	// 7. Compile the body using the function compiler
 	err := functionCompiler.compileNode(node.Body)
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)
 	}
 
-	// 7. Finalize function chunk (add implicit return to the function's chunk)
+	// 8. Finalize function chunk (add implicit return to the function's chunk)
 	functionCompiler.emitFinalReturn(node.Body.Token.Line)
 	functionChunk := functionCompiler.chunk
 	freeSymbols := functionCompiler.freeSymbols
@@ -1436,7 +1470,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 	regSize := functionCompiler.regAlloc.MaxRegs()
 
-	// 8. Create the bytecode.Function object
+	// 9. Create the bytecode.Function object
 	var funcName string
 	if nameHint != "" {
 		funcName = nameHint
@@ -1446,8 +1480,8 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		funcName = "<shorthand-method>"
 	}
 
-	// 9. Add the function object to the outer compiler's constant pool
-	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, funcName, functionChunk)
+	// 10. Add the function object to the outer compiler's constant pool
+	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil
@@ -1456,18 +1490,59 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 // compileArgumentsWithOptionalHandling compiles the provided arguments and pads missing optional
 // parameters with undefined values. Returns the register list and total argument count.
 func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpression) ([]Register, int, errors.PaseratiError) {
-	// 1. Compile the provided arguments
+	// 1. Compile the provided arguments, handling spread elements
 	argRegs := []Register{}
+	hasSpread := false
+
 	for _, arg := range node.Arguments {
-		err := c.compileNode(arg)
-		if err != nil {
-			return nil, 0, err
+		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+			hasSpread = true
+			// Compile the expression being spread (should be an array)
+			err := c.compileNode(spreadElement.Argument)
+			if err != nil {
+				return nil, 0, err
+			}
+			arrayReg := c.regAlloc.Current()
+
+			// For now, we'll emit a special opcode to expand the array
+			// This will be handled in the VM phase
+			// TODO: We need to add OpSpreadArray opcode to expand array elements
+			// For now, let's add a placeholder that will be implemented in VM phase
+
+			// Get array length
+			lengthReg := c.regAlloc.Alloc()
+			lengthConstIdx := c.chunk.AddConstant(vm.NewString("length"))
+			c.emitGetProp(lengthReg, arrayReg, lengthConstIdx, spreadElement.Token.Line)
+
+			// For each element in the array, get it and add to argRegs
+			// This is a simplified approach - in a real implementation we'd want
+			// to emit special bytecode for efficient spreading
+
+			// For now, we'll mark this as needing special handling and continue
+			// The VM will need to handle the spread during the call
+			argRegs = append(argRegs, arrayReg) // Store the array register for spreading
+
+		} else {
+			// Regular argument
+			err := c.compileNode(arg)
+			if err != nil {
+				return nil, 0, err
+			}
+			argRegs = append(argRegs, c.regAlloc.Current())
 		}
-		argRegs = append(argRegs, c.regAlloc.Current())
 	}
+
+	// If we have spread elements, we need special handling in the VM
+	if hasSpread {
+		// For now, return the registers as-is and let the VM handle spreading
+		// This is a simplified implementation - a full implementation would
+		// need more sophisticated bytecode generation
+		return argRegs, len(argRegs), nil
+	}
+
 	providedArgCount := len(argRegs)
 
-	// 2. Check if we need to handle optional parameters
+	// 2. Check if we need to handle optional parameters (only if no spread)
 	// Get the function type from the call expression to see if it has optional parameters
 	functionType := node.Function.GetComputedType()
 	if functionType == nil {
@@ -2015,7 +2090,18 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		}
 	}
 
-	// 4. Compile the function body
+	// 4. Handle rest parameter (if present)
+	if node.RestParameter != nil {
+		// Define the rest parameter in the symbol table
+		restParamReg := funcCompiler.regAlloc.Alloc()
+		funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+
+		// The rest parameter collection will be handled at runtime during function call
+		// We just need to ensure it has a register allocated here
+		debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+	}
+
+	// 5. Compile the function body
 	var returnReg Register
 	implicitReturnNeeded := true
 	switch bodyNode := node.Body.(type) {
@@ -2057,7 +2143,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	functionChunk := funcCompiler.chunk
 
 	// 6. Create the function object directly using vm.NewFunction
-	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), false, "<arrow>", functionChunk)
+	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c)

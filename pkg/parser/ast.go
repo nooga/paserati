@@ -258,8 +258,47 @@ func (p *Parameter) String() string {
 		out.WriteString(" = ")
 		out.WriteString(p.DefaultValue.String())
 	}
-	if p.ComputedType != nil {
-		out.WriteString(fmt.Sprintf(" /* type: %s */", p.ComputedType.String()))
+	return out.String()
+}
+
+// RestParameter represents a rest parameter (...args) in function definitions
+type RestParameter struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The '...' token
+	Name           *Identifier // The parameter name (e.g., 'args' in ...args)
+	TypeAnnotation Expression  // Optional type annotation (e.g., 'string[]' in ...args: string[])
+	ComputedType   types.Type  // Stores the resolved type (should be array type)
+}
+
+func (rp *RestParameter) expressionNode()      {}
+func (rp *RestParameter) TokenLiteral() string { return rp.Token.Literal }
+func (rp *RestParameter) String() string {
+	var out bytes.Buffer
+	out.WriteString("...")
+	if rp.Name != nil {
+		out.WriteString(rp.Name.String())
+	}
+	if rp.TypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(rp.TypeAnnotation.String())
+	}
+	return out.String()
+}
+
+// SpreadElement represents spread syntax (...arr) in function calls and other contexts
+type SpreadElement struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The '...' token
+	Argument       Expression  // The expression being spread (e.g., 'arr' in ...arr)
+}
+
+func (se *SpreadElement) expressionNode()      {}
+func (se *SpreadElement) TokenLiteral() string { return se.Token.Literal }
+func (se *SpreadElement) String() string {
+	var out bytes.Buffer
+	out.WriteString("...")
+	if se.Argument != nil {
+		out.WriteString(se.Argument.String())
 	}
 	return out.String()
 }
@@ -376,7 +415,8 @@ type FunctionLiteral struct {
 	BaseExpression                       // Embed base for ComputedType (Function type)
 	Token                lexer.Token     // The 'function' token
 	Name                 *Identifier     // Optional function name
-	Parameters           []*Parameter    // << MODIFIED
+	Parameters           []*Parameter    // Regular parameters
+	RestParameter        *RestParameter  // Optional rest parameter (...args)
 	ReturnTypeAnnotation Expression      // << RENAMED & TYPE CHANGED
 	Body                 *BlockStatement // Function body
 }
@@ -390,6 +430,9 @@ func (fl *FunctionLiteral) String() string {
 		if p != nil {
 			params = append(params, p.String())
 		}
+	}
+	if fl.RestParameter != nil {
+		params = append(params, fl.RestParameter.String())
 	}
 	out.WriteString(fl.TokenLiteral())
 	if fl.Name != nil {
@@ -469,11 +512,12 @@ func (ue *UpdateExpression) String() string {
 // ArrowFunctionLiteral represents an arrow function definition.
 // (<Parameters>) => <BodyExpression | BodyStatements>
 type ArrowFunctionLiteral struct {
-	BaseExpression                    // Embed base for ComputedType (Function type)
-	Token                lexer.Token  // The '=>' token
-	Parameters           []*Parameter // << MODIFIED
-	ReturnTypeAnnotation Expression   // << MODIFIED
-	Body                 Node         // Can be Expression or *BlockStatement
+	BaseExpression                      // Embed base for ComputedType (Function type)
+	Token                lexer.Token    // The '=>' token
+	Parameters           []*Parameter   // Regular parameters
+	RestParameter        *RestParameter // Optional rest parameter (...args)
+	ReturnTypeAnnotation Expression     // << MODIFIED
+	Body                 Node           // Can be Expression or *BlockStatement
 }
 
 func (afl *ArrowFunctionLiteral) expressionNode()      {}
@@ -486,8 +530,11 @@ func (afl *ArrowFunctionLiteral) String() string {
 			params = append(params, p.String())
 		}
 	}
+	if afl.RestParameter != nil {
+		params = append(params, afl.RestParameter.String())
+	}
 
-	if len(afl.Parameters) == 1 && afl.Parameters[0] != nil && afl.Parameters[0].TypeAnnotation == nil {
+	if len(afl.Parameters) == 1 && afl.Parameters[0] != nil && afl.Parameters[0].TypeAnnotation == nil && afl.RestParameter == nil {
 		out.WriteString(params[0])
 	} else {
 		out.WriteString("(")
@@ -1102,6 +1149,7 @@ type FunctionTypeExpression struct {
 	BaseExpression              // Embed base for ComputedType (Function type)
 	Token          lexer.Token  // The '(' token starting the parameter list
 	Parameters     []Expression // Slice of Expression nodes representing parameter types
+	RestParameter  Expression   // Optional rest parameter type (e.g., ...args: string[])
 	ReturnType     Expression   // Expression node for the return type
 }
 
@@ -1112,6 +1160,10 @@ func (fte *FunctionTypeExpression) String() string {
 	params := []string{}
 	for _, p := range fte.Parameters {
 		params = append(params, p.String())
+	}
+
+	if fte.RestParameter != nil {
+		params = append(params, "..."+fte.RestParameter.String())
 	}
 
 	out.WriteString("(")
@@ -1157,7 +1209,8 @@ type ShorthandMethod struct {
 	BaseExpression                       // Embed base for ComputedType (Function type)
 	Token                lexer.Token     // The identifier token (method name)
 	Name                 *Identifier     // Method name
-	Parameters           []*Parameter    // Method parameters
+	Parameters           []*Parameter    // Regular method parameters
+	RestParameter        *RestParameter  // Optional rest parameter (...args)
 	ReturnTypeAnnotation Expression      // Optional return type annotation
 	Body                 *BlockStatement // Method body
 }
@@ -1166,13 +1219,18 @@ func (sm *ShorthandMethod) expressionNode()      {}
 func (sm *ShorthandMethod) TokenLiteral() string { return sm.Token.Literal }
 func (sm *ShorthandMethod) String() string {
 	var out bytes.Buffer
+	params := []string{}
+	for _, p := range sm.Parameters {
+		if p != nil {
+			params = append(params, p.String())
+		}
+	}
+	if sm.RestParameter != nil {
+		params = append(params, sm.RestParameter.String())
+	}
 
 	out.WriteString(sm.Name.String())
 	out.WriteString("(")
-	params := []string{}
-	for _, p := range sm.Parameters {
-		params = append(params, p.String())
-	}
 	out.WriteString(strings.Join(params, ", "))
 	out.WriteString(")")
 
@@ -1181,11 +1239,13 @@ func (sm *ShorthandMethod) String() string {
 		out.WriteString(sm.ReturnTypeAnnotation.String())
 	}
 
-	out.WriteString(" ")
-	out.WriteString(sm.Body.String())
-
 	if sm.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", sm.ComputedType.String()))
+	}
+
+	out.WriteString(" ")
+	if sm.Body != nil {
+		out.WriteString(sm.Body.String())
 	}
 	return out.String()
 }
@@ -1382,11 +1442,12 @@ func (cte *ConstructorTypeExpression) String() string {
 
 // FunctionSignature represents a function signature without a body (used in overloads)
 type FunctionSignature struct {
-	BaseExpression                    // Embed base for ComputedType (so it can be an Expression too)
-	Token                lexer.Token  // The 'function' token
-	Name                 *Identifier  // Function name (must match other overloads)
-	Parameters           []*Parameter // Function parameters with type annotations
-	ReturnTypeAnnotation Expression   // Return type annotation (required for overloads)
+	BaseExpression                      // Embed base for ComputedType (so it can be an Expression too)
+	Token                lexer.Token    // The 'function' token
+	Name                 *Identifier    // Function name (must match other overloads)
+	Parameters           []*Parameter   // Regular function parameters with type annotations
+	RestParameter        *RestParameter // Optional rest parameter (...args)
+	ReturnTypeAnnotation Expression     // Return type annotation (required for overloads)
 }
 
 func (fs *FunctionSignature) statementNode()       {}
@@ -1394,20 +1455,30 @@ func (fs *FunctionSignature) expressionNode()      {} // NEW: Also implement Exp
 func (fs *FunctionSignature) TokenLiteral() string { return fs.Token.Literal }
 func (fs *FunctionSignature) String() string {
 	var out bytes.Buffer
-	out.WriteString("function ")
+	params := []string{}
+	for _, p := range fs.Parameters {
+		if p != nil {
+			params = append(params, p.String())
+		}
+	}
+	if fs.RestParameter != nil {
+		params = append(params, fs.RestParameter.String())
+	}
+
+	out.WriteString(fs.TokenLiteral())
 	if fs.Name != nil {
+		out.WriteString(" ")
 		out.WriteString(fs.Name.String())
 	}
 	out.WriteString("(")
-	params := []string{}
-	for _, p := range fs.Parameters {
-		params = append(params, p.String())
-	}
 	out.WriteString(strings.Join(params, ", "))
 	out.WriteString(")")
 	if fs.ReturnTypeAnnotation != nil {
 		out.WriteString(": ")
 		out.WriteString(fs.ReturnTypeAnnotation.String())
+	}
+	if fs.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", fs.ComputedType.String()))
 	}
 	out.WriteString(";")
 	return out.String()

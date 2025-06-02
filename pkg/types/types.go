@@ -67,10 +67,11 @@ var TypeofResultType = NewUnionType(
 
 // FunctionType represents the type of a function.
 type FunctionType struct {
-	ParameterTypes []Type
-	ReturnType     Type
-	IsVariadic     bool   // Indicates if the function accepts variable arguments
-	OptionalParams []bool // Tracks which parameters are optional (same length as ParameterTypes)
+	ParameterTypes    []Type
+	ReturnType        Type
+	IsVariadic        bool   // Indicates if the function accepts variable arguments
+	OptionalParams    []bool // Tracks which parameters are optional (same length as ParameterTypes)
+	RestParameterType Type   // Type of the rest parameter (...args), if present
 }
 
 func (ft *FunctionType) String() string {
@@ -101,6 +102,16 @@ func (ft *FunctionType) String() string {
 			params.WriteString(", ")
 		}
 	}
+
+	// Add rest parameter if present
+	if ft.RestParameterType != nil {
+		if numParams > 0 {
+			params.WriteString(", ")
+		}
+		params.WriteString("...")
+		params.WriteString(ft.RestParameterType.String())
+	}
+
 	params.WriteString(")")
 
 	retTypeStr := "void" // Default to void if nil? Or unknown?
@@ -145,6 +156,14 @@ func (ft *FunctionType) Equals(other Type) bool {
 		if opt1 != otherFt.OptionalParams[i] {
 			return false // Optional parameter markers differ
 		}
+	}
+
+	// Check rest parameter type
+	if (ft.RestParameterType == nil) != (otherFt.RestParameterType == nil) {
+		return false // One has rest parameter, other doesn't
+	}
+	if ft.RestParameterType != nil && !ft.RestParameterType.Equals(otherFt.RestParameterType) {
+		return false // Rest parameter types differ
 	}
 
 	// Check return type

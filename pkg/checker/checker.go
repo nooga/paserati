@@ -594,6 +594,23 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 		paramTypes = append(paramTypes, paramType)
 	}
 
+	// Handle rest parameter if present
+	var restParameterType types.Type
+	if node.RestParameter != nil {
+		resolvedRestType := c.resolveTypeAnnotation(node.RestParameter)
+		if resolvedRestType != nil {
+			// Validate that rest parameter type is an array type
+			if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+				resolvedRestType = &types.ArrayType{ElementType: types.Any}
+			}
+		} else {
+			// Default to any[] if resolution failed
+			resolvedRestType = &types.ArrayType{ElementType: types.Any}
+		}
+		restParameterType = resolvedRestType
+	}
+
 	returnType := c.resolveTypeAnnotation(node.ReturnType)
 	if returnType == nil {
 		// Error should have been added by resolveTypeAnnotation
@@ -602,8 +619,10 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 
 	// Construct the internal FunctionType representation
 	return &types.FunctionType{
-		ParameterTypes: paramTypes,
-		ReturnType:     returnType,
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		IsVariadic:        node.RestParameter != nil,
+		RestParameterType: restParameterType,
 		// Note: Function type expressions don't track optional parameters
 		// They are just type signatures, not parameter declarations
 	}
@@ -1851,6 +1870,33 @@ func (c *Checker) visit(node parser.Node) {
 			param.ComputedType = paramType
 		}
 
+		// Handle rest parameter if present
+		var restParameterType types.Type
+		var restParameterName *parser.Identifier
+		if node.RestParameter != nil {
+			var resolvedRestType types.Type
+			if node.RestParameter.TypeAnnotation != nil {
+				resolvedRestType = c.resolveTypeAnnotation(node.RestParameter.TypeAnnotation)
+
+				// Rest parameter type should be an array type
+				if resolvedRestType != nil {
+					if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+						c.addError(node.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+						resolvedRestType = &types.ArrayType{ElementType: types.Any}
+					}
+				}
+			}
+
+			if resolvedRestType == nil {
+				// Default to any[] if no annotation
+				resolvedRestType = &types.ArrayType{ElementType: types.Any}
+			}
+
+			restParameterType = resolvedRestType
+			restParameterName = node.RestParameter.Name
+			node.RestParameter.ComputedType = restParameterType
+		}
+
 		// --- NEW: Resolve Return Type Annotation ---
 		expectedReturnType := c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
 
@@ -1875,6 +1921,13 @@ func (c *Checker) visit(node parser.Node) {
 		for i, nameNode := range paramNames {
 			if !funcEnv.Define(nameNode.Value, paramTypes[i], false) {
 				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
+			}
+		}
+
+		// Define rest parameter if present
+		if restParameterName != nil && restParameterType != nil {
+			if !funcEnv.Define(restParameterName.Value, restParameterType, false) {
+				c.addError(restParameterName, fmt.Sprintf("duplicate parameter name: %s", restParameterName.Value))
 			}
 		}
 
@@ -1949,9 +2002,11 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		funcType := &types.FunctionType{
-			ParameterTypes: paramTypes,
-			ReturnType:     finalReturnType,
-			OptionalParams: optionalParams,
+			ParameterTypes:    paramTypes,
+			ReturnType:        finalReturnType,
+			OptionalParams:    optionalParams,
+			IsVariadic:        node.RestParameter != nil,
+			RestParameterType: restParameterType,
 		}
 
 		// --- DEBUG: Log type before setting ---
@@ -2019,13 +2074,13 @@ func (c *Checker) visit(node parser.Node) {
 
 		if funcType.IsVariadic {
 			// --- Variadic Function Check ---
-			if len(funcType.ParameterTypes) == 0 {
-				c.addError(node, "internal checker error: variadic function type must have at least one parameter type (for the array)")
+			if funcType.RestParameterType == nil {
+				c.addError(node, "internal checker error: variadic function type must have a rest parameter type")
 				node.SetComputedType(types.Any) // Error state
 				return
 			}
 
-			minExpectedArgs := len(funcType.ParameterTypes) - 1
+			minExpectedArgs := len(funcType.ParameterTypes)
 			if actualArgCount < minExpectedArgs {
 				c.addError(node, fmt.Sprintf("expected at least %d arguments for variadic function, but got %d", minExpectedArgs, actualArgCount))
 				// Don't check args if minimum count isn't met.
@@ -2049,7 +2104,7 @@ func (c *Checker) visit(node parser.Node) {
 
 				// Check variadic arguments
 				if fixedArgsOk { // Only check variadic part if fixed part was okay
-					variadicParamType := funcType.ParameterTypes[minExpectedArgs]
+					variadicParamType := funcType.RestParameterType
 					arrayType, isArray := variadicParamType.(*types.ArrayType)
 					if !isArray {
 						c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", variadicParamType.String()))
@@ -3486,6 +3541,34 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 		optionalParams = append(optionalParams, isOptional)
 	}
 
+	// Handle rest parameter if present
+	var restParameterType types.Type
+	if node.RestParameter != nil {
+		var resolvedRestType types.Type
+		if node.RestParameter.TypeAnnotation != nil {
+			originalEnv := c.env
+			c.env = env
+			resolvedRestType = c.resolveTypeAnnotation(node.RestParameter.TypeAnnotation)
+			c.env = originalEnv
+
+			// Rest parameter type should be an array type
+			if resolvedRestType != nil {
+				if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+					c.addError(node.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+					resolvedRestType = &types.ArrayType{ElementType: types.Any}
+				}
+			}
+		}
+
+		if resolvedRestType == nil {
+			// Default to any[] if no annotation
+			resolvedRestType = &types.ArrayType{ElementType: types.Any}
+		}
+
+		restParameterType = resolvedRestType
+		node.RestParameter.ComputedType = restParameterType
+	}
+
 	var resolvedReturnType types.Type         // Keep as interface type
 	var resolvedTypeFromAnnotation types.Type // Temp variable, also interface type
 
@@ -3521,9 +3604,11 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 	}
 
 	return &types.FunctionType{
-		ParameterTypes: paramTypes,
-		ReturnType:     resolvedReturnType, // Use the value assigned outside the if
-		OptionalParams: optionalParams,
+		ParameterTypes:    paramTypes,
+		ReturnType:        resolvedReturnType, // Use the value assigned outside the if
+		OptionalParams:    optionalParams,
+		IsVariadic:        node.RestParameter != nil,
+		RestParameterType: restParameterType,
 	}
 }
 
