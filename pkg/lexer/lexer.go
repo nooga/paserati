@@ -164,6 +164,8 @@ const (
 	INTERFACE TokenType = "INTERFACE"
 	// EXTENDS keyword
 	EXTENDS TokenType = "EXTENDS"
+	// OF keyword
+	OF TokenType = "OF"
 )
 
 var keywords = map[string]TokenType{
@@ -193,6 +195,7 @@ var keywords = map[string]TokenType{
 	"extends":   EXTENDS,   // Added for extends keyword
 	"typeof":    TYPEOF,    // Added for typeof operator
 	"void":      VOID,      // Added for void operator
+	"of":        OF,        // Added for for...of loops
 }
 
 // LookupIdent checks the keywords table for an identifier.

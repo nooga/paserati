@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/lexer"
 	"strconv"
 	"strings"
+	"unsafe"
 )
 
 // --- Debug Flag ---
@@ -1890,132 +1891,29 @@ func (p *Parser) parseWhileStatement() *WhileStatement {
 
 // --- New: For Statement Parsing ---
 
-func (p *Parser) parseForStatement() *ForStatement {
+func (p *Parser) parseForStatement() Statement {
 	debugPrint("parseForStatement: START, cur='%s'", p.curToken.Literal)
-	stmt := &ForStatement{Token: p.curToken} // 'for'
 
-	if !p.expectPeek(lexer.LPAREN) { // Consume '(', cur='('
+	// Parse the opening structure first
+	forToken := p.curToken
+
+	if !p.expectPeek(lexer.LPAREN) {
 		debugPrint("parseForStatement: ERROR expected LPAREN")
 		return nil
 	}
-	debugPrint("parseForStatement: Consumed '(', cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal) // Expect cur='('
 
-	// --- 1. Parse Initializer ---
-	if !p.peekTokenIs(lexer.SEMICOLON) { // Is there something before the first ';'?
-		p.nextToken() // Consume '(', cur=start of initializer
-		debugPrint("parseForStatement: Initializer START, cur='%s'", p.curToken.Literal)
-		if p.curTokenIs(lexer.LET) {
-			// Parse let manually - Copied logic from previous attempt
-			letStmt := &LetStatement{Token: p.curToken}
-			if !p.expectPeek(lexer.IDENT) {
-				debugPrint("parseForStatement: ERROR expected IDENT after let")
-				return nil
-			} // Consume 'let', cur=IDENT
-			letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken()
-				p.nextToken() // Consume IDENT, ':', cur=Type
-				letStmt.TypeAnnotation = p.parseTypeExpression()
-			}
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken()
-				p.nextToken() // Consume Name/Type, '=', cur=start of value
-				letStmt.Value = p.parseExpression(LOWEST)
-			} else {
-				letStmt.Value = nil
-			}
-			stmt.Initializer = letStmt
-			debugPrint("parseForStatement: Parsed LET Initializer, cur='%s'", p.curToken.Literal)
-		} else { // Expression initializer
-			exprStmt := &ExpressionStatement{Token: p.curToken}
-			exprStmt.Expression = p.parseExpression(LOWEST)
-			stmt.Initializer = exprStmt
-			debugPrint("parseForStatement: Parsed EXPR Initializer, cur='%s'", p.curToken.Literal)
+	if !p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken() // Move past '('
+
+		// Try to detect for...of pattern
+		if p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.CONST) || p.curTokenIs(lexer.IDENT) {
+			// Check if this could be for...of by looking for pattern: variable of expression
+			return p.parseForStatementOrForOf(forToken)
 		}
-		// After parsing non-empty init, cur should be last token of init. Expect ';' next.
-		if !p.expectPeek(lexer.SEMICOLON) { // Consume ';', cur=';'
-			debugPrint("parseForStatement: ERROR expected SEMICOLON after initializer")
-			return nil
-		}
-	} else { // Initializer IS empty
-		p.nextToken() // Consume the first ';', cur becomes first ';'
-		stmt.Initializer = nil
-		debugPrint("parseForStatement: Initializer is EMPTY, cur=';'")
 	}
-	// STATE: cur = first ';'
 
-	// --- 2. Parse Condition ---
-	debugPrint("parseForStatement: Condition START, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal) // Expect cur=';'
-	if !p.peekTokenIs(lexer.SEMICOLON) {                                                                           // Is there something between first and second ';'?
-		p.nextToken() // Consume first ';', cur=start of condition
-		debugPrint("parseForStatement: Parsing Condition, cur='%s'", p.curToken.Literal)
-		stmt.Condition = p.parseExpression(LOWEST)
-		debugPrint("parseForStatement: Parsed Condition, cur='%s'", p.curToken.Literal)
-		// After parsing non-empty condition, cur should be last token of condition. Expect ';' next.
-		if !p.expectPeek(lexer.SEMICOLON) { // Consume ';', cur=';'
-			debugPrint("parseForStatement: ERROR expected SEMICOLON after condition")
-			return nil
-		}
-	} else { // Condition IS empty
-		p.nextToken() // Consume second ';', cur becomes second ';'
-		stmt.Condition = nil
-		debugPrint("parseForStatement: Condition is EMPTY, cur=';'")
-	}
-	// STATE: cur = second ';'
-
-	// --- 3. Parse Update ---
-	debugPrint("parseForStatement: Update START, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal) // Expect cur=';'
-	if !p.peekTokenIs(lexer.RPAREN) {                                                                           // Is there something between second ';' and ')'?
-		p.nextToken() // Consume second ';', cur=start of update
-		debugPrint("parseForStatement: Parsing Update, cur='%s'", p.curToken.Literal)
-		stmt.Update = p.parseExpression(LOWEST)
-		debugPrint("parseForStatement: Parsed Update, cur='%s'", p.curToken.Literal)
-		// After parsing non-empty update, cur should be last token of update. Expect ')' next.
-		if !p.expectPeek(lexer.RPAREN) { // Consume ')', cur=')'
-			debugPrint("parseForStatement: ERROR expected RPAREN after update")
-			return nil
-		}
-	} else { // Update IS empty
-		p.nextToken() // Consume ')', cur becomes ')'
-		stmt.Update = nil
-		debugPrint("parseForStatement: Update is EMPTY, cur=')'")
-	}
-	// STATE: cur = ')'
-
-	// --- 4. Parse Body ---
-	debugPrint("parseForStatement: Body START, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal) // Expect cur=')'
-
-	// --- MODIFIED: Handle both block statements and single statements ---
-	if p.peekTokenIs(lexer.LBRACE) {
-		// Block statement case: for (...) { ... }
-		if !p.expectPeek(lexer.LBRACE) {
-			debugPrint("parseForStatement: ERROR expected LBRACE for body")
-			return nil
-		}
-		debugPrint("parseForStatement: Consumed LBRACE, cur='%s'", p.curToken.Literal)
-		stmt.Body = p.parseBlockStatement()
-	} else {
-		// Single statement case: for (...) statement
-		p.nextToken() // Move to the start of the statement
-		debugPrint("parseForStatement: Parsing single body statement, cur='%s'", p.curToken.Literal)
-		bodyStmt := p.parseStatement()
-		if bodyStmt == nil {
-			debugPrint("parseForStatement: ERROR parsing single body statement")
-			return nil
-		}
-		// Wrap the single statement in a BlockStatement
-		stmt.Body = &BlockStatement{
-			Token:               p.curToken,
-			Statements:          []Statement{bodyStmt},
-			HoistedDeclarations: make(map[string]Expression),
-		}
-		debugPrint("parseForStatement: Wrapped single statement in BlockStatement")
-	}
-	// --- END MODIFICATION ---
-
-	debugPrint("parseForStatement: Parsed Body, FINISHED")
-
-	return stmt
+	// If we get here, it's a regular for loop
+	return p.parseRegularForStatement(forToken)
 }
 
 // --- New: Break/Continue Statement Parsing ---
@@ -2990,4 +2888,328 @@ func (p *Parser) parseOptionalChainingExpression(left Expression) Expression {
 	// We don't call parseExpression here because the right side MUST be an identifier.
 	// The precedence check in the main parseExpression loop handles chaining, e.g., a?.b?.c
 	return exp
+}
+
+// isForOfLoop looks ahead to determine if this is a for...of loop
+func (p *Parser) isForOfLoop() bool {
+	// Simple heuristic: look at tokens after 'for ('
+	// We'll parse minimally and reset if it's not for...of
+
+	// We're currently at 'for', check if next is '('
+	if !p.peekTokenIs(lexer.LPAREN) {
+		return false
+	}
+
+	// We need to look ahead more carefully
+	// For now, let's use a simpler approach: try to parse and handle errors
+	return true // We'll detect inside parseForOfStatement and fallback
+}
+
+// parseForOfStatement parses for...of loops
+func (p *Parser) parseForOfStatement() *ForStatement {
+	debugPrint("parseForOfStatement: START, cur='%s'", p.curToken.Literal)
+
+	// Create ForOfStatement
+	stmt := &ForOfStatement{Token: p.curToken} // 'for'
+
+	if !p.expectPeek(lexer.LPAREN) { // Consume '(', cur='('
+		debugPrint("parseForOfStatement: ERROR expected LPAREN")
+		return nil
+	}
+	debugPrint("parseForOfStatement: Consumed '(', cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+
+	// Parse variable declaration or identifier
+	p.nextToken() // Move past '('
+	debugPrint("parseForOfStatement: Variable START, cur='%s'", p.curToken.Literal)
+
+	if p.curTokenIs(lexer.LET) {
+		// Parse let declaration
+		letStmt := &LetStatement{Token: p.curToken}
+		if !p.expectPeek(lexer.IDENT) {
+			debugPrint("parseForOfStatement: ERROR expected IDENT after let")
+			return nil
+		}
+		letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		// Note: No type annotation or value assignment in for...of
+		stmt.Variable = letStmt
+	} else if p.curTokenIs(lexer.CONST) {
+		// Parse const declaration
+		constStmt := &ConstStatement{Token: p.curToken}
+		if !p.expectPeek(lexer.IDENT) {
+			debugPrint("parseForOfStatement: ERROR expected IDENT after const")
+			return nil
+		}
+		constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		stmt.Variable = constStmt
+	} else if p.curTokenIs(lexer.IDENT) {
+		// Parse bare identifier (reusing existing variable)
+		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
+		stmt.Variable = exprStmt
+	} else {
+		debugPrint("parseForOfStatement: ERROR expected variable declaration or identifier")
+		return nil
+	}
+
+	// Expect 'of'
+	if !p.expectPeek(lexer.OF) {
+		debugPrint("parseForOfStatement: ERROR expected OF")
+		return nil
+	}
+	debugPrint("parseForOfStatement: Found 'of', cur='%s'", p.curToken.Literal)
+
+	// Parse iterable expression
+	p.nextToken() // Move past 'of'
+	debugPrint("parseForOfStatement: Parsing iterable, cur='%s'", p.curToken.Literal)
+	stmt.Iterable = p.parseExpression(LOWEST)
+
+	// Expect ')'
+	if !p.expectPeek(lexer.RPAREN) {
+		debugPrint("parseForOfStatement: ERROR expected RPAREN")
+		return nil
+	}
+	debugPrint("parseForOfStatement: Found ')', cur='%s'", p.curToken.Literal)
+
+	// Parse body (same logic as regular for loop)
+	if p.peekTokenIs(lexer.LBRACE) {
+		// Block statement case
+		if !p.expectPeek(lexer.LBRACE) {
+			debugPrint("parseForOfStatement: ERROR expected LBRACE for body")
+			return nil
+		}
+		stmt.Body = p.parseBlockStatement()
+	} else {
+		// Single statement case
+		p.nextToken() // Move to the start of the statement
+		debugPrint("parseForOfStatement: Parsing single body statement, cur='%s'", p.curToken.Literal)
+		bodyStmt := p.parseStatement()
+		if bodyStmt == nil {
+			debugPrint("parseForOfStatement: ERROR parsing single body statement")
+			return nil
+		}
+		// Wrap the single statement in a BlockStatement
+		stmt.Body = &BlockStatement{
+			Token:               p.curToken,
+			Statements:          []Statement{bodyStmt},
+			HoistedDeclarations: make(map[string]Expression),
+		}
+	}
+
+	debugPrint("parseForOfStatement: FINISHED")
+
+	// Return as *ForStatement for now - we'll need to handle this in type system
+	return (*ForStatement)(unsafe.Pointer(stmt))
+}
+
+// parseForStatementOrForOf determines if this is for...of and parses accordingly
+func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
+	// We're positioned at the variable declaration or identifier
+	// Parse the variable part and see what comes next
+
+	var varStmt Statement
+	var varName string
+
+	if p.curTokenIs(lexer.LET) {
+		letStmt := &LetStatement{Token: p.curToken}
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+		letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		varStmt = letStmt
+		varName = p.curToken.Literal
+	} else if p.curTokenIs(lexer.CONST) {
+		constStmt := &ConstStatement{Token: p.curToken}
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+		constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		varStmt = constStmt
+		varName = p.curToken.Literal
+	} else if p.curTokenIs(lexer.IDENT) {
+		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
+		varStmt = exprStmt
+		varName = p.curToken.Literal
+	} else {
+		return nil
+	}
+
+	// Check what comes after the variable
+	if p.peekTokenIs(lexer.OF) {
+		// This is a for...of loop!
+		p.nextToken() // consume variable name, cur='of'
+
+		stmt := &ForOfStatement{Token: forToken}
+		stmt.Variable = varStmt
+
+		// Parse iterable
+		p.nextToken() // consume 'of', move to iterable
+		stmt.Iterable = p.parseExpression(LOWEST)
+
+		// Expect ')'
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+
+		// Parse body
+		stmt.Body = p.parseForBody()
+
+		// Return ForOfStatement properly
+		return stmt
+	} else {
+		// This is a regular for loop with variable declaration
+		// We need to continue parsing as regular for loop
+		// Reset and parse as regular for statement
+		return p.parseRegularForStatementWithVar(forToken, varStmt, varName)
+	}
+}
+
+// parseRegularForStatement parses a standard C-style for loop
+func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
+	stmt := &ForStatement{Token: forToken}
+
+	// We're at '(' already consumed, now parse the rest
+	debugPrint("parseRegularForStatement: START")
+
+	// --- 1. Parse Initializer ---
+	if !p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken() // Move to start of initializer
+		if p.curTokenIs(lexer.LET) {
+			letStmt := &LetStatement{Token: p.curToken}
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+			letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken()
+				p.nextToken()
+				letStmt.TypeAnnotation = p.parseTypeExpression()
+			}
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken()
+				p.nextToken()
+				letStmt.Value = p.parseExpression(LOWEST)
+			}
+			stmt.Initializer = letStmt
+		} else {
+			exprStmt := &ExpressionStatement{Token: p.curToken}
+			exprStmt.Expression = p.parseExpression(LOWEST)
+			stmt.Initializer = exprStmt
+		}
+		if !p.expectPeek(lexer.SEMICOLON) {
+			return nil
+		}
+	} else {
+		p.nextToken() // consume first ';'
+		stmt.Initializer = nil
+	}
+
+	// --- 2. Parse Condition ---
+	if !p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+		stmt.Condition = p.parseExpression(LOWEST)
+		if !p.expectPeek(lexer.SEMICOLON) {
+			return nil
+		}
+	} else {
+		p.nextToken() // consume second ';'
+		stmt.Condition = nil
+	}
+
+	// --- 3. Parse Update ---
+	if !p.peekTokenIs(lexer.RPAREN) {
+		p.nextToken()
+		stmt.Update = p.parseExpression(LOWEST)
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+	} else {
+		p.nextToken() // consume ')'
+		stmt.Update = nil
+	}
+
+	// Parse body
+	stmt.Body = p.parseForBody()
+
+	return stmt
+}
+
+// parseRegularForStatementWithVar parses regular for loop when we already parsed a variable
+func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt Statement, varName string) *ForStatement {
+	stmt := &ForStatement{Token: forToken}
+	stmt.Initializer = varStmt
+
+	// Continue parsing the initializer (might have type annotation or assignment)
+	if p.peekTokenIs(lexer.COLON) {
+		// Handle type annotation for let statements
+		if letStmt, ok := varStmt.(*LetStatement); ok {
+			p.nextToken()
+			p.nextToken()
+			letStmt.TypeAnnotation = p.parseTypeExpression()
+		}
+	}
+	if p.peekTokenIs(lexer.ASSIGN) {
+		// Handle assignment
+		p.nextToken()
+		p.nextToken()
+		if letStmt, ok := varStmt.(*LetStatement); ok {
+			letStmt.Value = p.parseExpression(LOWEST)
+		} else if constStmt, ok := varStmt.(*ConstStatement); ok {
+			constStmt.Value = p.parseExpression(LOWEST)
+		}
+		// For expression statements, we'd need to create an assignment expression
+	}
+
+	// Expect semicolon after initializer
+	if !p.expectPeek(lexer.SEMICOLON) {
+		return nil
+	}
+
+	// Continue with condition and update parsing
+	if !p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+		stmt.Condition = p.parseExpression(LOWEST)
+		if !p.expectPeek(lexer.SEMICOLON) {
+			return nil
+		}
+	} else {
+		p.nextToken()
+		stmt.Condition = nil
+	}
+
+	if !p.peekTokenIs(lexer.RPAREN) {
+		p.nextToken()
+		stmt.Update = p.parseExpression(LOWEST)
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+	} else {
+		p.nextToken()
+		stmt.Update = nil
+	}
+
+	stmt.Body = p.parseForBody()
+	return stmt
+}
+
+// parseForBody parses the body of any for loop
+func (p *Parser) parseForBody() *BlockStatement {
+	if p.peekTokenIs(lexer.LBRACE) {
+		if !p.expectPeek(lexer.LBRACE) {
+			return nil
+		}
+		return p.parseBlockStatement()
+	} else {
+		// Single statement
+		p.nextToken()
+		bodyStmt := p.parseStatement()
+		if bodyStmt == nil {
+			return nil
+		}
+		return &BlockStatement{
+			Token:               p.curToken,
+			Statements:          []Statement{bodyStmt},
+			HoistedDeclarations: make(map[string]Expression),
+		}
+	}
 }

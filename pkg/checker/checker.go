@@ -2295,6 +2295,87 @@ func (c *Checker) visit(node parser.Node) {
 		c.env = originalEnv
 		debugPrintf("// [Checker ForStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
 
+	case *parser.ForOfStatement:
+		// Handle for...of statement scope
+		if node == nil {
+			c.addError(nil, "nil ForOfStatement node")
+			return
+		}
+
+		originalEnv := c.env
+		loopEnv := NewEnclosedEnvironment(originalEnv)
+		c.env = loopEnv
+		debugPrintf("// [Checker ForOfStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
+
+		// Visit the iterable first to determine its type
+		if node.Iterable != nil {
+			c.visit(node.Iterable)
+			iterableType := node.Iterable.GetComputedType()
+			if iterableType == nil {
+				iterableType = types.Any
+			}
+
+			// Determine the element type from the iterable
+			var elementType types.Type
+			if arrayType, ok := iterableType.(*types.ArrayType); ok {
+				elementType = arrayType.ElementType
+			} else if iterableType == types.String || c.isAssignable(iterableType, types.String) {
+				// String iteration yields individual characters (strings)
+				// This handles both the general string type and string literal types
+				elementType = types.String
+			} else if iterableType == types.Any {
+				elementType = types.Any
+			} else {
+				// For now, assume any other type is not iterable
+				c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+				elementType = types.Any
+			}
+
+			// Handle the variable declaration/assignment
+			if node.Variable != nil {
+				if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
+					// Define the loop variable with the element type
+					if letStmt.Name != nil {
+						c.env.Define(letStmt.Name.Value, elementType, false)
+						letStmt.ComputedType = elementType
+						letStmt.Name.SetComputedType(elementType)
+					}
+				} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
+					// Define the loop variable with the element type
+					if constStmt.Name != nil {
+						c.env.Define(constStmt.Name.Value, elementType, true) // const = true
+						constStmt.ComputedType = elementType
+						constStmt.Name.SetComputedType(elementType)
+					}
+				} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
+					// This is an existing variable being assigned to
+					if exprStmt.Expression != nil {
+						if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
+							// Check if the variable exists and is assignable
+							varType, _, exists := c.env.Resolve(ident.Value)
+							if !exists {
+								c.addError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+							} else if !c.isAssignable(elementType, varType) {
+								c.addError(ident, fmt.Sprintf("cannot assign element type '%s' to variable type '%s'", elementType.String(), varType.String()))
+							}
+							ident.SetComputedType(elementType)
+						}
+					}
+				}
+			}
+
+			// Visit the body
+			if node.Body != nil {
+				c.visit(node.Body)
+			}
+		} else {
+			c.addError(node, "for...of statement missing iterable expression")
+		}
+
+		// Restore the outer environment
+		c.env = originalEnv
+		debugPrintf("// [Checker ForOfStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
+
 	// --- Loop Control (No specific type checking needed?) ---
 	case *parser.BreakStatement:
 		break // Nothing to check type-wise

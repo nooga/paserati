@@ -443,6 +443,13 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		}
 		return c.compileForStatement(node)
 
+	case *parser.ForOfStatement:
+		if c.enclosing == nil {
+			debugPrintf("// DEBUG ForOfStmt: Top Level. Setting lastExprRegValid=false.\n")
+			c.lastExprRegValid = false
+		}
+		return c.compileForOfStatement(node)
+
 	case *parser.BreakStatement:
 		if c.enclosing == nil {
 			c.lastExprRegValid = false
@@ -3468,5 +3475,117 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral) errors.P
 
 	// Update register allocator state
 	c.regAlloc.SetCurrent(resultReg)
+	return nil
+}
+
+func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement) errors.PaseratiError {
+	// 1. Compile the iterable expression first
+	if err := c.compileNode(node.Iterable); err != nil {
+		return err
+	}
+	iterableReg := c.regAlloc.Current()
+
+	// 2. Set up iteration variables
+	// For arrays: we need an index counter and length
+	indexReg := c.regAlloc.Alloc()
+	lengthReg := c.regAlloc.Alloc()
+	elementReg := c.regAlloc.Alloc()
+
+	// Initialize index to 0
+	c.emitLoadNewConstant(indexReg, vm.Number(0), node.Token.Line)
+
+	// Get length of iterable (for arrays, use .length property)
+	// For now, assume it's an array and get its length
+	c.emitOpCode(vm.OpGetProp, node.Token.Line)
+	c.emitByte(byte(lengthReg))   // destination register
+	c.emitByte(byte(iterableReg)) // object register
+	lengthConstIdx := c.chunk.AddConstant(vm.String("length"))
+	c.emitUint16(lengthConstIdx) // property name constant index
+
+	// --- Loop Start & Context Setup ---
+	loopStartPos := len(c.chunk.Code)
+	loopContext := &LoopContext{
+		LoopStartPos:               loopStartPos,
+		BreakPlaceholderPosList:    make([]int, 0),
+		ContinuePlaceholderPosList: make([]int, 0),
+	}
+	c.loopContextStack = append(c.loopContextStack, loopContext)
+
+	// 3. Check if index < length (loop condition)
+	conditionReg := c.regAlloc.Alloc()
+	c.emitOpCode(vm.OpLess, node.Token.Line)
+	c.emitByte(byte(conditionReg)) // destination
+	c.emitByte(byte(indexReg))     // left operand (index)
+	c.emitByte(byte(lengthReg))    // right operand (length)
+
+	// Jump out of loop if condition is false
+	conditionExitJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+
+	// 4. Get current element: iterable[index]
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+	c.emitByte(byte(elementReg))  // destination
+	c.emitByte(byte(iterableReg)) // array
+	c.emitByte(byte(indexReg))    // index
+
+	// 5. Assign element to loop variable
+	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
+		// Define the loop variable in symbol table
+		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
+		// Store element value in the variable's register
+		c.emitMove(symbol.Register, elementReg, node.Token.Line)
+	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
+		// Define the loop variable in symbol table
+		symbol := c.currentSymbolTable.Define(constStmt.Name.Value, c.regAlloc.Alloc())
+		// Store element value in the variable's register
+		c.emitMove(symbol.Register, elementReg, node.Token.Line)
+	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
+		// This is an existing variable being assigned to
+		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
+			symbolRef, _, found := c.currentSymbolTable.Resolve(ident.Value)
+			if !found {
+				return NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+			}
+			// Store element value in the existing variable's register
+			c.emitMove(symbolRef.Register, elementReg, node.Token.Line)
+		}
+	}
+
+	// 6. Compile loop body
+	if err := c.compileNode(node.Body); err != nil {
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+		return err
+	}
+
+	// 7. Patch continue jumps to land here (before increment)
+	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
+		c.patchJump(continuePos)
+	}
+
+	// 8. Increment index
+	oneReg := c.regAlloc.Alloc()
+	c.emitLoadNewConstant(oneReg, vm.Number(1), node.Token.Line)
+	c.emitOpCode(vm.OpAdd, node.Token.Line)
+	c.emitByte(byte(indexReg)) // destination (reuse indexReg)
+	c.emitByte(byte(indexReg)) // left operand (current index)
+	c.emitByte(byte(oneReg))   // right operand (1)
+
+	// 9. Jump back to loop start
+	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2
+	backOffset := loopStartPos - jumpBackInstructionEndPos
+	c.emitOpCode(vm.OpJump, node.Body.Token.Line)
+	c.emitUint16(uint16(int16(backOffset)))
+
+	// 10. Clean up loop context and patch jumps
+	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
+	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+
+	// Patch condition exit jump
+	c.patchJump(conditionExitJumpPos)
+
+	// Patch all break jumps
+	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
+		c.patchJump(breakPos)
+	}
+
 	return nil
 }

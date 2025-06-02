@@ -113,7 +113,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `do...while` Loops
 - [x] `for` Loops (C-style)
 - [ ] `for...in` Loops
-- [ ] `for...of` Loops
+- [x] `for...of` Loops
 - [x] `break` Statement
 - [x] `continue` Statement
 - [ ] Labeled Statements
