@@ -3725,6 +3725,42 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	} else {
 		// Use a type switch for struct-based types
 		switch obj := widenedObjectType.(type) {
+		case *types.UnionType:
+			// Handle union types - for optional chaining, we need to handle each type in the union
+			var nonNullUndefinedTypes []types.Type
+
+			// Separate null/undefined types from others
+			for _, t := range obj.Types {
+				if t == types.Null || t == types.Undefined {
+					// Skip null/undefined types - they are handled by optional chaining
+				} else {
+					nonNullUndefinedTypes = append(nonNullUndefinedTypes, t)
+				}
+			}
+
+			if len(nonNullUndefinedTypes) == 0 {
+				// Union contains only null/undefined types
+				baseResultType = types.Undefined
+			} else if len(nonNullUndefinedTypes) == 1 {
+				// Union has one non-null/undefined type - use that for property access
+				nonNullType := nonNullUndefinedTypes[0]
+				baseResultType = c.getPropertyTypeFromType(nonNullType, propertyName, true) // true for optional chaining
+			} else {
+				// Union has multiple non-null/undefined types - this is complex
+				// For now, try to access the property on each type and create a union of results
+				var resultTypes []types.Type
+				for _, t := range nonNullUndefinedTypes {
+					propType := c.getPropertyTypeFromType(t, propertyName, true)
+					if propType != types.Never {
+						resultTypes = append(resultTypes, propType)
+					}
+				}
+				if len(resultTypes) == 0 {
+					baseResultType = types.Undefined
+				} else {
+					baseResultType = types.NewUnionType(resultTypes...)
+				}
+			}
 		case *types.ArrayType:
 			if propertyName == "length" {
 				baseResultType = types.Number // Array.length is number
@@ -3810,4 +3846,92 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	// 6. Set the computed type on the OptionalChainingExpression node itself
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker OptionalChaining] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
+}
+
+// getPropertyTypeFromType returns the type of a property access on the given type
+// isOptionalChaining determines whether to be permissive about missing properties
+func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName string, isOptionalChaining bool) types.Type {
+	// Widen the object type for checks
+	widenedObjectType := types.GetWidenedType(objectType)
+
+	if widenedObjectType == types.Any {
+		return types.Any // Property access on 'any' results in 'any'
+	} else if widenedObjectType == types.Null || widenedObjectType == types.Undefined {
+		return types.Undefined
+	} else if widenedObjectType == types.String {
+		if propertyName == "length" {
+			return types.Number // string.length is number
+		} else if propertyName == "charCodeAt" {
+			return &types.FunctionType{
+				ParameterTypes: []types.Type{types.Number},
+				ReturnType:     types.Number,
+				IsVariadic:     false,
+			}
+		} else if propertyName == "charAt" {
+			return &types.FunctionType{
+				ParameterTypes: []types.Type{types.Number},
+				ReturnType:     types.String,
+				IsVariadic:     false,
+			}
+		} else {
+			if !isOptionalChaining {
+				// Only add error for regular member access, not optional chaining
+				// Note: We can't add error here since we don't have the node, but that's ok for union handling
+			}
+			return types.Never
+		}
+	} else {
+		// Use a type switch for struct-based types
+		switch obj := widenedObjectType.(type) {
+		case *types.ArrayType:
+			if propertyName == "length" {
+				return types.Number // Array.length is number
+			} else if propertyName == "concat" {
+				return &types.FunctionType{
+					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+					ReturnType:     &types.ArrayType{ElementType: types.Any},
+					IsVariadic:     true,
+				}
+			} else if propertyName == "push" {
+				return &types.FunctionType{
+					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
+					ReturnType:     types.Number,
+					IsVariadic:     true,
+				}
+			} else if propertyName == "pop" {
+				return &types.FunctionType{
+					ParameterTypes: []types.Type{},
+					ReturnType:     types.Any,
+					IsVariadic:     false,
+				}
+			} else {
+				return types.Never
+			}
+		case *types.ObjectType:
+			// Look for the property in the object's fields
+			fieldType, exists := obj.Properties[propertyName]
+			if exists {
+				// Property found
+				if fieldType == nil { // Should ideally not happen if checker populates correctly
+					return types.Never
+				} else {
+					return fieldType
+				}
+			} else {
+				// Property not found
+				if isOptionalChaining {
+					return types.Undefined
+				} else {
+					return types.Never
+				}
+			}
+		case *types.FunctionType:
+			// For union handling, we can't easily check builtin static methods without the node
+			// Return Never for now
+			return types.Never
+		default:
+			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
+			return types.Never
+		}
+	}
 }

@@ -1,5 +1,5 @@
 // Test file for optional chaining (?.) operator
-// expect: Alice
+// expect: deep
 
 // Test 1: Basic optional chaining with existing property
 let obj1 = { name: "Alice", age: 30 };
@@ -44,5 +44,18 @@ console.log("Test 10 - regular vs optional:", comparison); // Should print true
 
 console.log("Optional chaining tests completed!");
 
-// Final expression to be evaluated - testing basic optional chaining
-obj1?.name;
+// Test 11: Chained optional chaining - SUCCESS case
+let nestedObj = { level1: { level2: { value: "deep" } } };
+console.log("Test 11 - chained success:", nestedObj?.level1?.level2?.value); // Should print "deep"
+
+// Test 12: Chained optional chaining - NULL/UNDEFINED case
+let nullObj2 = null;
+console.log("Test 12 - chained null:", nullObj2?.level1?.level2?.value); // Should print undefined
+
+// Test 13: Chained optional chaining - MISSING property case
+console.log("Test 13 - chained missing:", nestedObj?.missing?.level2?.value); // Should print undefined
+
+console.log("All optional chaining tests completed!");
+
+// Final expression to be evaluated - testing chained optional chaining
+nestedObj?.level1?.level2?.value;
