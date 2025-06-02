@@ -337,6 +337,14 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		// Interface declarations only exist for type checking, ignore in compiler.
 		return nil
 
+	case *parser.FunctionSignature: // Added
+		// Function signatures are handled during type checking and don't need compilation
+		// They are processed in the checker to build overloaded function types
+		if c.enclosing == nil {
+			c.lastExprRegValid = false // Signatures don't produce a value
+		}
+		return nil
+
 	case *parser.ExpressionStatement:
 		debugPrintf("// DEBUG ExprStmt: Compiling expression %T.\n", node.Expression)
 
@@ -2425,6 +2433,8 @@ func GetTokenFromNode(node parser.Node) lexer.Token {
 	case *parser.IfExpression:
 		return n.Token // 'if' token
 	case *parser.FunctionLiteral:
+		return n.Token // 'function' token
+	case *parser.FunctionSignature:
 		return n.Token // 'function' token
 	case *parser.ArrowFunctionLiteral:
 		return n.Token // '=>' token

@@ -141,6 +141,108 @@ func (ft *FunctionType) Equals(other Type) bool {
 	return true // All checks passed
 }
 
+// OverloadedFunctionType represents a function with multiple overload signatures.
+type OverloadedFunctionType struct {
+	Name           string          // The function name
+	Overloads      []*FunctionType // The overload signatures
+	Implementation *FunctionType   // The implementation signature (must be compatible with all overloads)
+}
+
+func (oft *OverloadedFunctionType) String() string {
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("overloaded %s:\n", oft.Name))
+	for i, overload := range oft.Overloads {
+		result.WriteString(fmt.Sprintf("  [%d] %s\n", i, overload.String()))
+	}
+	if oft.Implementation != nil {
+		result.WriteString(fmt.Sprintf("  impl: %s", oft.Implementation.String()))
+	}
+	return result.String()
+}
+
+func (oft *OverloadedFunctionType) typeNode() {}
+
+func (oft *OverloadedFunctionType) Equals(other Type) bool {
+	otherOft, ok := other.(*OverloadedFunctionType)
+	if !ok {
+		return false
+	}
+	if oft == nil || otherOft == nil {
+		return oft == otherOft
+	}
+	if oft.Name != otherOft.Name {
+		return false
+	}
+	if len(oft.Overloads) != len(otherOft.Overloads) {
+		return false
+	}
+	for i, overload := range oft.Overloads {
+		if !overload.Equals(otherOft.Overloads[i]) {
+			return false
+		}
+	}
+	// Check implementation
+	if (oft.Implementation == nil) != (otherOft.Implementation == nil) {
+		return false
+	}
+	if oft.Implementation != nil && !oft.Implementation.Equals(otherOft.Implementation) {
+		return false
+	}
+	return true
+}
+
+// FindBestOverload finds the best matching overload for the given argument types.
+// Returns the overload index and the return type, or -1 if no match is found.
+func (oft *OverloadedFunctionType) FindBestOverload(argTypes []Type) (int, Type) {
+	// Simple matching strategy: find the first overload where all argument types are assignable
+	for i, overload := range oft.Overloads {
+		if len(argTypes) != len(overload.ParameterTypes) {
+			continue // Argument count mismatch
+		}
+
+		// Check if all argument types are assignable to parameter types
+		allMatch := true
+		for j, argType := range argTypes {
+			paramType := overload.ParameterTypes[j]
+			if !isAssignable(argType, paramType) {
+				allMatch = false
+				break
+			}
+		}
+
+		if allMatch {
+			return i, overload.ReturnType
+		}
+	}
+
+	return -1, nil // No matching overload found
+}
+
+// Helper function to check if source type is assignable to target type
+// This is a simplified version - we'll need to improve this
+func isAssignable(source, target Type) bool {
+	if source == nil || target == nil {
+		return source == target
+	}
+
+	// Exact match
+	if source.Equals(target) {
+		return true
+	}
+
+	// Any is assignable to/from anything
+	if source == Any || target == Any {
+		return true
+	}
+
+	// TODO: Add more sophisticated assignability rules
+	// - Union type handling
+	// - Structural compatibility for objects
+	// - etc.
+
+	return false
+}
+
 // ArrayType represents the type of an array.
 type ArrayType struct {
 	ElementType Type

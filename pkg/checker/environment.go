@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"paserati/pkg/builtins"
+	"paserati/pkg/parser"
 	"paserati/pkg/types"
 )
 
@@ -17,23 +18,33 @@ type Environment struct {
 	symbols     map[string]SymbolInfo // UPDATED: Stores SymbolInfo (type + const status)
 	typeAliases map[string]types.Type // Stores resolved types for type aliases
 	outer       *Environment          // Pointer to the enclosing environment
+
+	// --- NEW: Function overload support ---
+	// Maps function names to their collected overload signatures (before implementation is found)
+	pendingOverloads map[string][]*parser.FunctionSignature
+	// Maps function names to their completed overloaded function types
+	overloadedFunctions map[string]*types.OverloadedFunctionType
 }
 
 // NewEnvironment creates a new top-level type environment.
 func NewEnvironment() *Environment {
 	return &Environment{
-		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases: make(map[string]types.Type), // Initialize
-		outer:       nil,
+		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:         make(map[string]types.Type), // Initialize
+		outer:               nil,
+		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
+		overloadedFunctions: make(map[string]*types.OverloadedFunctionType),
 	}
 }
 
 // NewEnclosedEnvironment creates a new environment nested within an outer one.
 func NewEnclosedEnvironment(outer *Environment) *Environment {
 	return &Environment{
-		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases: make(map[string]types.Type), // Initialize
-		outer:       outer,
+		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:         make(map[string]types.Type), // Initialize
+		outer:               outer,
+		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
+		overloadedFunctions: make(map[string]*types.OverloadedFunctionType),
 	}
 }
 
@@ -42,9 +53,11 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 func NewGlobalEnvironment() *Environment {
 	builtins.InitializeRegistry()
 	env := &Environment{
-		symbols:     make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases: make(map[string]types.Type), // Initialize
-		outer:       nil,
+		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:         make(map[string]types.Type), // Initialize
+		outer:               nil,
+		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
+		overloadedFunctions: make(map[string]*types.OverloadedFunctionType),
 	}
 
 	// Define built-in primitive types (if not already globally available elsewhere)
@@ -181,4 +194,88 @@ func (e *Environment) ResolveType(name string) (types.Type, bool) {
 
 	debugPrintf("// [Env ResolveType] Alias '%s' not found in env %p (no outer)\n", name, e)
 	return nil, false
+}
+
+// --- NEW: Function Overload Support ---
+
+// AddOverloadSignature adds a function signature to the pending overloads for the given function name.
+func (e *Environment) AddOverloadSignature(name string, sig *parser.FunctionSignature) {
+	if e.pendingOverloads == nil {
+		e.pendingOverloads = make(map[string][]*parser.FunctionSignature)
+	}
+	e.pendingOverloads[name] = append(e.pendingOverloads[name], sig)
+}
+
+// GetPendingOverloads returns the pending overload signatures for the given function name.
+func (e *Environment) GetPendingOverloads(name string) []*parser.FunctionSignature {
+	if e.pendingOverloads == nil {
+		return nil
+	}
+	return e.pendingOverloads[name]
+}
+
+// CompleteOverloadedFunction creates an OverloadedFunctionType from pending signatures and implementation,
+// then stores it and clears the pending overloads.
+func (e *Environment) CompleteOverloadedFunction(name string, overloadTypes []*types.FunctionType, implementation *types.FunctionType) bool {
+	// Create the overloaded function type
+	overloadedFunc := &types.OverloadedFunctionType{
+		Name:           name,
+		Overloads:      overloadTypes,
+		Implementation: implementation,
+	}
+
+	// Store it
+	if e.overloadedFunctions == nil {
+		e.overloadedFunctions = make(map[string]*types.OverloadedFunctionType)
+	}
+	e.overloadedFunctions[name] = overloadedFunc
+
+	// Clear pending overloads for this function
+	if e.pendingOverloads != nil {
+		delete(e.pendingOverloads, name)
+	}
+
+	// Define the function in the environment with the overloaded type
+	return e.Update(name, overloadedFunc)
+}
+
+// ResolveOverloadedFunction looks up an overloaded function by name in this environment and outer scopes.
+func (e *Environment) ResolveOverloadedFunction(name string) (*types.OverloadedFunctionType, bool) {
+	// Check current scope
+	if e.overloadedFunctions != nil {
+		if overloaded, exists := e.overloadedFunctions[name]; exists {
+			return overloaded, true
+		}
+	}
+
+	// Check outer scopes
+	if e.outer != nil {
+		return e.outer.ResolveOverloadedFunction(name)
+	}
+
+	return nil, false
+}
+
+// IsOverloadedFunction checks if a function name has overloads (either pending or completed).
+func (e *Environment) IsOverloadedFunction(name string) bool {
+	// Check completed overloads
+	if e.overloadedFunctions != nil {
+		if _, exists := e.overloadedFunctions[name]; exists {
+			return true
+		}
+	}
+
+	// Check pending overloads
+	if e.pendingOverloads != nil {
+		if sigs := e.pendingOverloads[name]; len(sigs) > 0 {
+			return true
+		}
+	}
+
+	// Check outer scopes
+	if e.outer != nil {
+		return e.outer.IsOverloadedFunction(name)
+	}
+
+	return false
 }

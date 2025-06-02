@@ -121,30 +121,74 @@ func DisplayErrors(source string, errors []PaseratiError) {
 		kind := err.Kind()
 		msg := err.Message()
 
-		// Ensure line numbers are within bounds (1-based index)
-		lineIdx := pos.Line - 1
-		if lineIdx < 0 || lineIdx >= len(lines) {
-			// Print a generic error if line info is invalid
-			fmt.Fprintf(os.Stderr, "%s Error: %s\n", kind, msg)
-			continue
-		}
-
-		sourceLine := lines[lineIdx]
-		trimmedLine := strings.TrimRight(sourceLine, "\r\n\t ") // Trim trailing whitespace for cleaner output
-
 		// Print error location and message
 		// Format: <Kind> Error at <Line>:<Column>: <Message>
 		fmt.Fprintf(os.Stderr, "%s Error at %d:%d: %s\n", kind, pos.Line, pos.Column, msg)
 
-		// Print the source line
-		fmt.Fprintf(os.Stderr, "  %s\n", trimmedLine)
+		// Ensure line numbers are within bounds (1-based index)
+		lineIdx := pos.Line - 1
+		if lineIdx < 0 || lineIdx >= len(lines) {
+			// Print just the error message if line info is invalid
+			fmt.Fprintln(os.Stderr) // Add a blank line
+			continue
+		}
 
-		// Print the marker line (^)
-		// Adjust column for potentially trimmed leading whitespace? For now, assume column is relative to original line start.
-		marker := strings.Repeat(" ", pos.Column) + "^"
-		// TODO: Extend marker with '~' for multi-character spans (using StartPos, EndPos)?
-		// marker += strings.Repeat("~", pos.EndPos - pos.StartPos -1) // Needs StartPos/EndPos to be reliable
-		fmt.Fprintf(os.Stderr, "  %s\n", marker)
+		sourceLine := lines[lineIdx]
+		trimmedLine := strings.TrimRight(sourceLine, "\r\n\t ") // Trim trailing whitespace
+
+		// For very long single lines (like -e commands), show a truncated version
+		const maxLineLength = 100 // Maximum characters to show
+		showSourceLine := true
+		markerColumn := pos.Column
+
+		if len(trimmedLine) > maxLineLength {
+			// Calculate a reasonable window around the error position
+			start := pos.Column - 40 // Show 40 chars before error
+			if start < 0 {
+				start = 0
+			}
+
+			end := start + maxLineLength
+			if end > len(trimmedLine) {
+				end = len(trimmedLine)
+				start = end - maxLineLength
+				if start < 0 {
+					start = 0
+				}
+			}
+
+			// If we're showing a truncated version of a very long line (common with -e),
+			// and it's a single line of source, skip showing the source altogether
+			if len(lines) == 1 && len(trimmedLine) > 200 {
+				showSourceLine = false
+			} else {
+				// Show truncated version with ellipsis
+				prefix := ""
+				suffix := ""
+				if start > 0 {
+					prefix = "..."
+				}
+				if end < len(trimmedLine) {
+					suffix = "..."
+				}
+
+				truncatedLine := prefix + trimmedLine[start:end] + suffix
+				trimmedLine = truncatedLine
+				markerColumn = pos.Column - start + len(prefix)
+			}
+		}
+
+		if showSourceLine {
+			// Print the source line
+			fmt.Fprintf(os.Stderr, "  %s\n", trimmedLine)
+
+			// Print the marker line (^)
+			if markerColumn >= 0 {
+				marker := strings.Repeat(" ", markerColumn) + "^"
+				fmt.Fprintf(os.Stderr, "  %s\n", marker)
+			}
+		}
+
 		fmt.Fprintln(os.Stderr) // Add a blank line between errors
 	}
 }

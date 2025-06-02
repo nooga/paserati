@@ -303,14 +303,13 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
 					if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
 						// Function with this name already hoisted
-						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration: %s", funcLit.Name.Value)) // Use Token
+						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration: %s", funcLit.Name.Value))
 					} else {
 						program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
 					}
 				}
 			}
 			// --- End Hoisting Check ---
-
 		}
 		if p.curToken.Type != lexer.EOF {
 			p.nextToken()
@@ -1004,6 +1003,20 @@ func (p *Parser) parseFunctionLiteral() Expression {
 		lit.ReturnTypeAnnotation = nil // No annotation provided
 	}
 
+	// Check if this is a function signature (ends with semicolon) or implementation (has body)
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		// This is a function signature, not an implementation - return FunctionSignature instead
+		p.nextToken() // Consume semicolon
+
+		sig := &FunctionSignature{
+			Token:                lit.Token,
+			Name:                 lit.Name,
+			Parameters:           lit.Parameters,
+			ReturnTypeAnnotation: lit.ReturnTypeAnnotation,
+		}
+		return sig
+	}
+
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
@@ -1011,6 +1024,59 @@ func (p *Parser) parseFunctionLiteral() Expression {
 	lit.Body = p.parseBlockStatement() // Includes consuming RBRACE
 
 	return lit
+}
+
+// --- NEW: Parse function signature (overload declaration without body) ---
+func (p *Parser) parseFunctionSignature() *FunctionSignature {
+	sig := &FunctionSignature{Token: p.curToken} // 'function' token
+
+	// Function name is required for overloads
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+
+	nameIdentExpr := p.parseIdentifier()
+	nameIdent, ok := nameIdentExpr.(*Identifier)
+	if !ok {
+		msg := fmt.Sprintf("expected identifier for function name, got %s", p.curToken.Type)
+		p.addError(p.curToken, msg)
+		return nil
+	}
+	sig.Name = nameIdent
+
+	// Don't expectPeek here - parseFunctionParameters expects to see LPAREN in peek
+	if !p.peekTokenIs(lexer.LPAREN) {
+		msg := fmt.Sprintf("expected '(' after function name, got %s", p.peekToken.Type)
+		p.addError(p.peekToken, msg)
+		return nil
+	}
+
+	// Parse parameters
+	sig.Parameters = p.parseFunctionParameters()
+	if sig.Parameters == nil {
+		return nil
+	}
+
+	// Return type annotation is required for overload signatures
+	if !p.peekTokenIs(lexer.COLON) {
+		msg := "function overload signatures must have return type annotations"
+		p.addError(p.curToken, msg)
+		return nil
+	}
+
+	p.nextToken() // Consume ':'
+	p.nextToken() // Consume the token starting the type expression
+	sig.ReturnTypeAnnotation = p.parseTypeExpression()
+	if sig.ReturnTypeAnnotation == nil {
+		return nil
+	}
+
+	// Expect semicolon to end the signature
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken() // Consume semicolon
+	}
+
+	return sig
 }
 
 // --- MODIFIED: parseFunctionParameters to handle Parameter struct & types ---
@@ -2635,4 +2701,167 @@ func (p *Parser) parseVoidExpression() Expression {
 // parseVoidTypeLiteral parses 'void' as a type annotation.
 func (p *Parser) parseVoidTypeLiteral() Expression {
 	return &Identifier{Token: p.curToken, Value: "void"}
+}
+
+// --- NEW: Try to parse a function overload group ---
+func (p *Parser) tryParseFunctionOverloadGroup() *FunctionOverloadGroup {
+	// Save parser state in case we need to backtrack
+	originalCurToken := p.curToken
+	originalPeekToken := p.peekToken
+	originalErrors := len(p.errors)
+
+	var overloads []*FunctionSignature
+	var functionName string
+	var firstToken lexer.Token
+
+	// Try to parse function signatures
+	for p.curToken.Type == lexer.FUNCTION {
+		// Look ahead to see if this looks like a signature (no body)
+		if !p.isLikelyFunctionSignature() {
+			// This looks like a function implementation, not a signature
+			break
+		}
+
+		sig := p.parseFunctionSignature()
+		if sig == nil {
+			// Failed to parse signature, restore state and return nil
+			p.curToken = originalCurToken
+			p.peekToken = originalPeekToken
+			p.errors = p.errors[:originalErrors] // Remove any errors we added
+			return nil
+		}
+
+		if len(overloads) == 0 {
+			// First signature
+			functionName = sig.Name.Value
+			firstToken = sig.Token
+		} else {
+			// Check that the name matches previous signatures
+			if sig.Name.Value != functionName {
+				// Different function name, this is not part of the overload group
+				// Put back the current function declaration for later parsing
+				break
+			}
+		}
+
+		overloads = append(overloads, sig)
+
+		// Move to next statement
+		if p.curToken.Type != lexer.EOF {
+			p.nextToken()
+		}
+	}
+
+	// If we didn't find any overload signatures, this isn't an overload group
+	if len(overloads) == 0 {
+		p.curToken = originalCurToken
+		p.peekToken = originalPeekToken
+		p.errors = p.errors[:originalErrors]
+		return nil
+	}
+
+	// Now we should have a function implementation
+	if p.curToken.Type != lexer.FUNCTION {
+		// No implementation found, restore state
+		p.curToken = originalCurToken
+		p.peekToken = originalPeekToken
+		p.errors = p.errors[:originalErrors]
+		return nil
+	}
+
+	// Parse the implementation as a function literal
+	funcLitExpr := p.parseFunctionLiteral()
+	if funcLitExpr == nil {
+		// Failed to parse implementation
+		p.curToken = originalCurToken
+		p.peekToken = originalPeekToken
+		p.errors = p.errors[:originalErrors]
+		return nil
+	}
+
+	funcLit, ok := funcLitExpr.(*FunctionLiteral)
+	if !ok {
+		// Unexpected type
+		p.curToken = originalCurToken
+		p.peekToken = originalPeekToken
+		p.errors = p.errors[:originalErrors]
+		return nil
+	}
+
+	// Check that implementation name matches overload signatures
+	if funcLit.Name == nil || funcLit.Name.Value != functionName {
+		msg := fmt.Sprintf("function implementation name '%s' does not match overload signatures '%s'",
+			funcLit.Name.Value, functionName)
+		p.addError(funcLit.Name.Token, msg)
+		return nil
+	}
+
+	// Create the overload group
+	group := &FunctionOverloadGroup{
+		Token:          firstToken,
+		Name:           &Identifier{Token: firstToken, Value: functionName},
+		Overloads:      overloads,
+		Implementation: funcLit,
+	}
+
+	return group
+}
+
+// --- NEW: Helper to determine if current function declaration looks like a signature ---
+func (p *Parser) isLikelyFunctionSignature() bool {
+	// Save current state
+	savedCurToken := p.curToken
+	savedPeekToken := p.peekToken
+
+	debugPrint("isLikelyFunctionSignature: START cur='%s' peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+
+	// Skip past 'function'
+	if p.curToken.Type != lexer.FUNCTION {
+		debugPrint("isLikelyFunctionSignature: not a function token")
+		return false
+	}
+	p.nextToken()
+	debugPrint("isLikelyFunctionSignature: after function, cur='%s' peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+
+	// Skip past function name (if present)
+	if p.curToken.Type == lexer.IDENT {
+		p.nextToken()
+		debugPrint("isLikelyFunctionSignature: after name, cur='%s' peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+	}
+
+	// Skip past parameter list
+	if p.curToken.Type == lexer.LPAREN {
+		parenCount := 1
+		p.nextToken()
+		for parenCount > 0 && p.curToken.Type != lexer.EOF {
+			if p.curToken.Type == lexer.LPAREN {
+				parenCount++
+			} else if p.curToken.Type == lexer.RPAREN {
+				parenCount--
+			}
+			p.nextToken()
+		}
+		debugPrint("isLikelyFunctionSignature: after params, cur='%s' peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+	}
+
+	// Skip past return type annotation if present
+	if p.curToken.Type == lexer.COLON {
+		p.nextToken()
+		// Skip the type expression (simplified - just skip until semicolon or brace)
+		for p.curToken.Type != lexer.SEMICOLON && p.curToken.Type != lexer.LBRACE && p.curToken.Type != lexer.EOF {
+			p.nextToken()
+		}
+		debugPrint("isLikelyFunctionSignature: after return type, cur='%s' peek='%s'", p.curToken.Literal, p.peekToken.Literal)
+	}
+
+	// Check what comes next
+	isSignature := p.curToken.Type == lexer.SEMICOLON
+
+	debugPrint("isLikelyFunctionSignature: final decision: %t (cur='%s')", isSignature, p.curToken.Literal)
+
+	// Restore state
+	p.curToken = savedCurToken
+	p.peekToken = savedPeekToken
+
+	return isSignature
 }

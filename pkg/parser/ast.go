@@ -1291,3 +1291,65 @@ func (cte *ConstructorTypeExpression) String() string {
 }
 
 // --- END NEW ---
+
+// --- Function Overload Support ---
+
+// FunctionSignature represents a function signature without a body (used in overloads)
+type FunctionSignature struct {
+	BaseExpression                    // Embed base for ComputedType (so it can be an Expression too)
+	Token                lexer.Token  // The 'function' token
+	Name                 *Identifier  // Function name (must match other overloads)
+	Parameters           []*Parameter // Function parameters with type annotations
+	ReturnTypeAnnotation Expression   // Return type annotation (required for overloads)
+}
+
+func (fs *FunctionSignature) statementNode()       {}
+func (fs *FunctionSignature) expressionNode()      {} // NEW: Also implement Expression interface
+func (fs *FunctionSignature) TokenLiteral() string { return fs.Token.Literal }
+func (fs *FunctionSignature) String() string {
+	var out bytes.Buffer
+	out.WriteString("function ")
+	if fs.Name != nil {
+		out.WriteString(fs.Name.String())
+	}
+	out.WriteString("(")
+	params := []string{}
+	for _, p := range fs.Parameters {
+		params = append(params, p.String())
+	}
+	out.WriteString(strings.Join(params, ", "))
+	out.WriteString(")")
+	if fs.ReturnTypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(fs.ReturnTypeAnnotation.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
+
+// FunctionOverloadGroup represents a group of function overload signatures plus an implementation
+type FunctionOverloadGroup struct {
+	Token          lexer.Token          // The token of the first function declaration
+	Name           *Identifier          // Function name (shared by all overloads)
+	Overloads      []*FunctionSignature // The overload signatures (without bodies)
+	Implementation *FunctionLiteral     // The implementation (with body)
+}
+
+func (fog *FunctionOverloadGroup) statementNode()       {}
+func (fog *FunctionOverloadGroup) TokenLiteral() string { return fog.Token.Literal }
+func (fog *FunctionOverloadGroup) String() string {
+	var out bytes.Buffer
+
+	// Print all overload signatures
+	for _, overload := range fog.Overloads {
+		out.WriteString(overload.String())
+		out.WriteString("\n")
+	}
+
+	// Print implementation
+	if fog.Implementation != nil {
+		out.WriteString(fog.Implementation.String())
+	}
+
+	return out.String()
+}
