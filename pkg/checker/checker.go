@@ -3260,6 +3260,11 @@ func (c *Checker) checkTemplateLiteral(node *parser.TemplateLiteral) {
 func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *Environment) *types.FunctionType {
 	paramTypes := []types.Type{}
 	var optionalParams []bool
+
+	// Create a temporary environment that will progressively accumulate parameters
+	// This allows later parameters to reference earlier ones in their default values
+	tempEnv := NewEnclosedEnvironment(env) // Create child environment
+
 	for _, paramNode := range node.Parameters {
 		var resolvedParamType types.Type
 		if paramNode.TypeAnnotation != nil {
@@ -3275,11 +3280,15 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 		}
 		paramTypes = append(paramTypes, resolvedParamType)
 
+		// Add this parameter to the temporary environment BEFORE checking its default value
+		// This way, the next parameter's default value can reference this parameter
+		tempEnv.Define(paramNode.Name.Value, resolvedParamType, false) // false = not const
+
 		// Validate default value if present
 		if paramNode.DefaultValue != nil {
-			// Temporarily set environment and check default value type
+			// Use the temporary environment that includes previously defined parameters
 			originalEnv := c.env
-			c.env = env
+			c.env = tempEnv                 // Use progressive environment that includes earlier parameters
 			c.visit(paramNode.DefaultValue) // This will set the computed type
 			c.env = originalEnv             // Restore original environment
 
