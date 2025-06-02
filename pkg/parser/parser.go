@@ -2285,6 +2285,17 @@ func (p *Parser) parseObjectLiteral() Expression {
 			// Create an ObjectProperty with the method name as key and the shorthand method as value
 			methodName := shorthandMethod.Name
 			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodName, Value: shorthandMethod})
+		} else if p.curTokenIs(lexer.IDENT) && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE)) {
+			// --- NEW: Check for shorthand property syntax (identifier followed by ',' or '}') ---
+			// This is shorthand like { name, age } equivalent to { name: name, age: age }
+			identName := p.curToken.Literal
+			key := p.parseIdentifier()
+
+			// For shorthand property, the value is also the same identifier
+			value := &Identifier{Token: p.curToken, Value: identName}
+
+			// Append the property
+			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
 		} else {
 			// Regular property parsing
 			var key Expression

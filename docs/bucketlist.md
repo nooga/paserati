@@ -180,6 +180,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Property Assignment
   - [x] String keys and computed property names
   - [x] Method shorthand syntax (`{ add(a, b) { return a + b; } }`)
+  - [x] Property shorthand syntax (`{ name, age }` for `{ name: name, age: age }`)
   - [x] Methods with `this` context
 - [x] Strings
   - [x] `.length` Property (OpGetLength optimization)
