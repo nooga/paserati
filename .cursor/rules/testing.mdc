@@ -1,0 +1,11 @@
+---
+description: When creating tests
+globs: 
+alwaysApply: false
+---
+- place the test ts files in tests/scripts
+- it's safe to leave tests there for future reference
+- each test has to have an expectation comment, one of:
+- // expects: ... - the value is going to be compared with the value of the last statement in the file
+- // expects_runtime_error: ... - runtime error must contain string
+- // expect_compile_error: ... - compile (or type) error must contain string

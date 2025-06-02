@@ -98,7 +98,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `void` Operator
 - [x] Grouping Operator (`()`)
 - [x] Nullish Coalescing Operator (`??`)
-- [ ] Optional Chaining (`?.`)
+- [x] Optional Chaining (`?.`)
 - [ ] Spread Syntax (`...`) (Lexer token exists, not fully implemented in parser/compiler)
 - [ ] `yield` / `yield*` (Generators)
 - [ ] `await` (Async/Await)
