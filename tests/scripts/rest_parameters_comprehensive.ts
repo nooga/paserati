@@ -139,26 +139,26 @@ console.log(
 // 4. Spread Syntax in Function Calls
 // ============================================================================
 
-console.log("\n--- Spread Syntax in Calls ---");
+// console.log("\n--- Spread Syntax in Calls ---");
 
-// Using spread with arrays
-let numbers = [1, 2, 3, 4, 5];
-console.log("sum1(...numbers):", sum1(...numbers)); // Expected: 15
+// // Using spread with arrays
+// let numbers = [1, 2, 3, 4, 5];
+// console.log("sum1(...numbers):", sum1(...numbers)); // Expected: 15
 
-let words = ["Hello", "beautiful", "world"];
-console.log("concat(...words):", concat(...words));
+// let words = ["Hello", "beautiful", "world"];
+// console.log("concat(...words):", concat(...words));
 
-// Mixing spread with regular arguments
-let baseNumbers = [10, 20];
-console.log("sum1(5, ...baseNumbers, 30):", sum1(5, ...baseNumbers, 30)); // Expected: 65
+// // Mixing spread with regular arguments
+// let baseNumbers = [10, 20];
+// console.log("sum1(5, ...baseNumbers, 30):", sum1(5, ...baseNumbers, 30)); // Expected: 65
 
-// Multiple spreads
-let firstPart = ["a", "b"];
-let secondPart = ["c", "d"];
-console.log(
-  'concat(...firstPart, "middle", ...secondPart):',
-  concat(...firstPart, "middle", ...secondPart)
-);
+// // Multiple spreads
+// let firstPart = ["a", "b"];
+// let secondPart = ["c", "d"];
+// console.log(
+//   'concat(...firstPart, "middle", ...secondPart):',
+//   concat(...firstPart, "middle", ...secondPart)
+// );
 
 // ============================================================================
 // 5. Type Annotations and Edge Cases

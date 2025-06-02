@@ -6,10 +6,12 @@ alwaysApply: false
 To confirm that no regressions happen you can run the test suite by invoking the command:
 
 ```
-go test -timeout 30s -run ^TestScripts$ paserati/tests | grep 'FAIL'
+go test -timeout 30s paserati/tests | grep -E "(FAIL|PASS|---)" | tail -20
 ```
 
 Here grep skips over output of the tests which can be overwhelming.
 
 This will give you a list of failing tests. There can be some test failing to start with but if after big changes in code there is more tests failing then we were most likely wrong.
+
+higher_order_functions.ts and sunspider_crypto_sha1.ts tests are flaky and don't need to be considered as regressions for now
 

@@ -1,4 +1,4 @@
-// expect: 90
+// expect: 6765
 // tests/bench/fib.ts
 // Simple recursive Fibonacci for benchmarking
 

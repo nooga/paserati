@@ -19,6 +19,9 @@ type RegisterAllocator struct {
 	// New fields for tracking logical current/result register
 	currentReg Register
 	currentSet bool
+
+	// Pinning mechanism to prevent important registers from being freed
+	pinnedRegs map[Register]bool // Set of pinned registers
 }
 
 // NewRegisterAllocator creates a new allocator for a scope (e.g., a function).
@@ -29,6 +32,7 @@ func NewRegisterAllocator() *RegisterAllocator {
 		freeRegs:   make([]Register, 0, 16), // Initialize with some capacity
 		currentReg: 0,                       // Initialize
 		currentSet: false,                   // Initialize
+		pinnedRegs: make(map[Register]bool), // Initialize pinned registers map
 	}
 }
 
@@ -106,6 +110,11 @@ func (ra *RegisterAllocator) SetCurrent(reg Register) {
 	ra.currentSet = true
 }
 
+// CurrentSet returns whether a current register has been explicitly set.
+func (ra *RegisterAllocator) CurrentSet() bool {
+	return ra.currentSet
+}
+
 // MaxRegs returns the maximum register index allocated by this allocator + 1
 // (representing the number of register slots needed).
 func (ra *RegisterAllocator) MaxRegs() Register {
@@ -122,16 +131,57 @@ func (ra *RegisterAllocator) Reset() {
 	ra.freeRegs = ra.freeRegs[:0] // Clear free list (keeps allocated capacity)
 	ra.currentReg = 0
 	ra.currentSet = false
+	ra.pinnedRegs = make(map[Register]bool) // Clear pinned registers
 }
 
-// Free marks a register as available for reuse.
+// Free marks a register as available for reuse, unless it's pinned.
 func (ra *RegisterAllocator) Free(reg Register) {
+	// Check if register is pinned - if so, don't free it
+	if ra.pinnedRegs[reg] {
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC] SKIP FREE R%d (pinned, %d pinned total)\n", reg, len(ra.pinnedRegs))
+		}
+		return
+	}
+
 	// Optional: Could check if reg is already free or out of bounds
 	// For simplicity, we assume valid usage for now.
 	if debugRegAlloc {
 		fmt.Printf("[REGALLOC] FREE R%d (free list will have %d registers)\n", reg, len(ra.freeRegs)+1)
 	}
 	ra.freeRegs = append(ra.freeRegs, reg)
+}
+
+// Pin marks a register as pinned, preventing it from being freed.
+// This is useful for registers holding local variables that could be captured by upvalues.
+func (ra *RegisterAllocator) Pin(reg Register) {
+	ra.pinnedRegs[reg] = true
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] PIN R%d (now %d pinned registers)\n", reg, len(ra.pinnedRegs))
+	}
+}
+
+// Unpin removes the pin from a register, allowing it to be freed again.
+func (ra *RegisterAllocator) Unpin(reg Register) {
+	delete(ra.pinnedRegs, reg)
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] UNPIN R%d (now %d pinned registers)\n", reg, len(ra.pinnedRegs))
+	}
+}
+
+// IsPinned checks if a register is currently pinned.
+func (ra *RegisterAllocator) IsPinned(reg Register) bool {
+	return ra.pinnedRegs[reg]
+}
+
+// IsInFreeList checks if a register is already in the free list.
+func (ra *RegisterAllocator) IsInFreeList(reg Register) bool {
+	for _, freeReg := range ra.freeRegs {
+		if freeReg == reg {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Optional/Future ---
