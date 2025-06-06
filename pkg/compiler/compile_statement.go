@@ -8,7 +8,7 @@ import (
 	"paserati/pkg/vm"
 )
 
-func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.PaseratiError {
+func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("// DEBUG compileLetStatement: Defining '%s' (is top-level: %v)\n", node.Name.Value, c.enclosing == nil) // <<< ADDED
 	var valueReg Register = nilRegister
 	var err errors.PaseratiError
@@ -29,7 +29,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
 			// Error already added to c.errors by compileFunctionLiteral
-			return nil // Return nil error here, main error is tracked
+			return BadRegister, nil // Return nil error here, main error is tracked
 		}
 		// 3. Create the closure object
 		closureReg := c.regAlloc.Alloc()
@@ -45,9 +45,9 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 
 	} else if node.Value != nil {
 		// Compile other value types normally
-		err = c.compileNode(node.Value)
+		_, err = c.compileNode(node.Value, NoHint)
 		if err != nil {
-			return err
+			return BadRegister, err
 		}
 		valueReg = c.regAlloc.Current()
 	} // else: node.Value is nil (implicit undefined handled below)
@@ -99,13 +99,13 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement) errors.Paserat
 		}
 	}
 
-	return nil
+	return BadRegister, nil
 }
 
-func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.PaseratiError {
+func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Register) (Register, errors.PaseratiError) {
 	if node.Value == nil {
 		// Parser should prevent this, but defensive check
-		return NewCompileError(node.Name, "const declarations require an initializer")
+		return BadRegister, NewCompileError(node.Name, "const declarations require an initializer")
 	}
 	var valueReg Register = nilRegister
 	var err errors.PaseratiError
@@ -122,7 +122,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
 			// Error already added to c.errors by compileFunctionLiteral
-			return nil // Return nil error here, main error is tracked
+			return BadRegister, nil // Return nil error here, main error is tracked
 		}
 		// 3. Create the closure object
 		closureReg := c.regAlloc.Alloc()
@@ -136,9 +136,9 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 
 	} else {
 		// Compile other value types normally
-		err = c.compileNode(node.Value)
+		_, err = c.compileNode(node.Value, NoHint)
 		if err != nil {
-			return err
+			return BadRegister, err
 		}
 		valueReg = c.regAlloc.Current()
 	}
@@ -171,10 +171,10 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement) errors.Pas
 			c.regAlloc.Pin(symbolRef.Register)
 		}
 	}
-	return nil
+	return BadRegister, nil
 }
 
-func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) errors.PaseratiError {
+func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Register) (Register, errors.PaseratiError) {
 	if node.ReturnValue != nil {
 		var err errors.PaseratiError
 		var returnReg Register
@@ -186,7 +186,7 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) errors.P
 			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, "")
 			if err != nil {
 				// Error already added to c.errors by compileFunctionLiteral
-				return nil // Return nil error here, main error is tracked
+				return BadRegister, nil // Return nil error here, main error is tracked
 			}
 			// Create the closure object
 			closureReg := c.regAlloc.Alloc()
@@ -195,9 +195,9 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) errors.P
 
 		} else {
 			// Compile other expression types normally via compileNode
-			err = c.compileNode(node.ReturnValue)
+			_, err = c.compileNode(node.ReturnValue, NoHint)
 			if err != nil {
-				return err
+				return BadRegister, err
 			}
 			returnReg = c.regAlloc.Current() // Value to return is in the last allocated reg
 		}
@@ -206,7 +206,7 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) errors.P
 		if err != nil {
 			// This check might be redundant if errors are handled correctly above,
 			// but keep for safety unless proven otherwise.
-			return err
+			return BadRegister, err
 		}
 		// Emit return using the register holding the final value (closure or other expression result)
 		c.emitReturn(returnReg, node.Token.Line) // <<< Use potentially updated returnReg
@@ -214,12 +214,12 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement) errors.P
 		// Return undefined implicitly using the optimized opcode
 		c.emitOpCode(vm.OpReturnUndefined, node.Token.Line)
 	}
-	return nil
+	return BadRegister, nil
 }
 
 // --- Loop Compilation (Updated) ---
 
-func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) errors.PaseratiError {
+func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
 	// --- Setup Loop Context ---
@@ -233,10 +233,10 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) errors.Pas
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
 	// --- Compile Condition ---
-	err := c.compileNode(node.Condition)
+	_, err := c.compileNode(node.Condition, NoHint)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
-		return NewCompileError(node, "error compiling while condition").CausedBy(err)
+		return BadRegister, NewCompileError(node, "error compiling while condition").CausedBy(err)
 	}
 	conditionReg := c.regAlloc.Current()
 
@@ -244,10 +244,10 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) errors.Pas
 	jumpToEndPlaceholderPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
 
 	// --- Compile Body ---
-	err = c.compileNode(node.Body)
+	_, err = c.compileNode(node.Body, NoHint)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
-		return NewCompileError(node, "error compiling while body").CausedBy(err)
+		return BadRegister, NewCompileError(node, "error compiling while body").CausedBy(err)
 	}
 
 	// --- Jump Back To Start ---
@@ -273,23 +273,23 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement) errors.Pas
 		jumpInstructionEndPos := continuePos + 1 + 2 // OpCode + 16bit offset
 		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
 		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
-			return NewCompileError(node, fmt.Sprintf("internal compiler error: continue jump offset %d exceeds 16-bit limit", targetOffset))
+			return BadRegister, NewCompileError(node, fmt.Sprintf("internal compiler error: continue jump offset %d exceeds 16-bit limit", targetOffset))
 		}
 		// Manually write the 16-bit offset into the placeholder jump instruction
 		c.chunk.Code[continuePos+1] = byte(int16(targetOffset) >> 8)   // High byte
 		c.chunk.Code[continuePos+2] = byte(int16(targetOffset) & 0xFF) // Low byte
 	}
 
-	return nil
+	return BadRegister, nil
 }
 
-func (c *Compiler) compileForStatement(node *parser.ForStatement) errors.PaseratiError {
+func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register) (Register, errors.PaseratiError) {
 	// No new scope for initializer, it shares the outer scope
 
 	// 1. Initializer
 	if node.Initializer != nil {
-		if err := c.compileNode(node.Initializer); err != nil {
-			return err
+		if _, err := c.compileNode(node.Initializer, NoHint); err != nil {
+			return BadRegister, err
 		}
 	}
 
@@ -306,10 +306,10 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) errors.Paserat
 	// --- 2. Condition (Optional) ---
 	var conditionExitJumpPlaceholderPos int = -1
 	if node.Condition != nil {
-		if err := c.compileNode(node.Condition); err != nil {
+		if _, err := c.compileNode(node.Condition, NoHint); err != nil {
 			// Clean up loop context if condition compilation fails
 			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-			return err
+			return BadRegister, err
 		}
 		conditionReg := c.regAlloc.Current()
 		conditionExitJumpPlaceholderPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
@@ -317,10 +317,10 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) errors.Paserat
 
 	// --- 3. Body ---
 	// Continue placeholders will be added to loopContext here
-	if err := c.compileNode(node.Body); err != nil {
+	if _, err := c.compileNode(node.Body, NoHint); err != nil {
 		// Clean up loop context if body compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-		return err
+		return BadRegister, err
 	}
 
 	// --- 4. Patch Continues & Compile Update ---
@@ -334,10 +334,10 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) errors.Paserat
 
 	// *** Compile Update Expression (Optional) ***
 	if node.Update != nil {
-		if err := c.compileNode(node.Update); err != nil {
+		if _, err := c.compileNode(node.Update, NoHint); err != nil {
 			// Clean up loop context if update compilation fails
 			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-			return err
+			return BadRegister, err
 		}
 		// Result of update expression is discarded implicitly by not using c.lastReg
 	}
@@ -369,14 +369,14 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement) errors.Paserat
 		c.patchJump(breakPos) // Patch to jump to current position
 	}
 
-	return nil
+	return BadRegister, nil
 }
 
 // --- New: Break/Continue Compilation ---
 
-func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) errors.PaseratiError {
+func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Register) (Register, errors.PaseratiError) {
 	if len(c.loopContextStack) == 0 {
-		return NewCompileError(node, "break statement not within a loop")
+		return BadRegister, NewCompileError(node, "break statement not within a loop")
 	}
 
 	// Get current loop context (top of stack)
@@ -388,12 +388,12 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement) errors.Pas
 	// Add placeholder position to the context's list for later patching
 	currentLoopContext.BreakPlaceholderPosList = append(currentLoopContext.BreakPlaceholderPosList, placeholderPos)
 
-	return nil
+	return BadRegister, nil
 }
 
-func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) errors.PaseratiError {
+func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint Register) (Register, errors.PaseratiError) {
 	if len(c.loopContextStack) == 0 {
-		return NewCompileError(node, "continue statement not within a loop")
+		return BadRegister, NewCompileError(node, "continue statement not within a loop")
 	}
 
 	// Get current loop context (top of stack)
@@ -405,10 +405,10 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement) erro
 	// Add placeholder position to the context's list for later patching
 	currentLoopContext.ContinuePlaceholderPosList = append(currentLoopContext.ContinuePlaceholderPosList, placeholderPos)
 
-	return nil
+	return BadRegister, nil
 }
 
-func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) errors.PaseratiError {
+func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
 	// 1. Mark Loop Start (before body)
@@ -423,20 +423,20 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) errors
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
 	// 3. Compile Body (executes at least once)
-	if err := c.compileNode(node.Body); err != nil {
+	if _, err := c.compileNode(node.Body, NoHint); err != nil {
 		// Pop context if body compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-		return NewCompileError(node, "error compiling do-while body").CausedBy(err)
+		return BadRegister, NewCompileError(node, "error compiling do-while body").CausedBy(err)
 	}
 
 	// 4. Mark Condition Position (for clarity, not used directly in jump calcs below)
 	_ = len(c.chunk.Code) // conditionPos := len(c.chunk.Code)
 
 	// 5. Compile Condition
-	if err := c.compileNode(node.Condition); err != nil {
+	if _, err := c.compileNode(node.Condition, NoHint); err != nil {
 		// Pop context if condition compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-		return NewCompileError(node, "error compiling do-while condition").CausedBy(err)
+		return BadRegister, NewCompileError(node, "error compiling do-while condition").CausedBy(err)
 	}
 	conditionReg := c.regAlloc.Current()
 
@@ -450,7 +450,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) errors
 	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 + 1 // OpCode + Reg + 16bit offset
 	backOffset := loopStartPos - jumpBackInstructionEndPos
 	if backOffset > math.MaxInt16 || backOffset < math.MinInt16 {
-		return NewCompileError(node, fmt.Sprintf("internal compiler error: do-while loop jump offset %d exceeds 16-bit limit", backOffset))
+		return BadRegister, NewCompileError(node, fmt.Sprintf("internal compiler error: do-while loop jump offset %d exceeds 16-bit limit", backOffset))
 	}
 	c.emitOpCode(vm.OpJumpIfFalse, line)    // Use OpJumpIfFalse on inverted result
 	c.emitByte(byte(invertedConditionReg))  // Jump based on the inverted condition
@@ -477,14 +477,14 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) errors
 		jumpInstructionEndPos := continuePos + 1 + 2 // OpJump OpCode + 16bit offset
 		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
 		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
-			return NewCompileError(node, fmt.Sprintf("internal compiler error: do-while continue jump offset %d exceeds 16-bit limit", targetOffset))
+			return BadRegister, NewCompileError(node, fmt.Sprintf("internal compiler error: do-while continue jump offset %d exceeds 16-bit limit", targetOffset))
 		}
 		// Manually write the 16-bit offset into the placeholder OpJump instruction
 		c.chunk.Code[continuePos+1] = byte(int16(targetOffset) >> 8)   // High byte
 		c.chunk.Code[continuePos+2] = byte(int16(targetOffset) & 0xFF) // Low byte
 	}
 
-	return nil
+	return BadRegister, nil
 }
 
 // compileSwitchStatement compiles a switch statement.
@@ -506,11 +506,11 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement) errors
 //     f. Implicit fallthrough means after a body (without break), execution continues to the next case test.
 //  3. Handle default: If reached (all cases failed), execute default body.
 //  4. Patch all jumps.
-func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.PaseratiError {
+func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the expression being switched on
-	err := c.compileNode(node.Expression)
+	_, err := c.compileNode(node.Expression, NoHint)
 	if err != nil {
-		return err
+		return BadRegister, err
 	}
 	switchExprReg := c.regAlloc.Current()
 	// Keep this register allocated until the end of the switch
@@ -530,7 +530,7 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 			if defaultCaseBodyIndex != -1 {
 				// Use the switch statement node for error reporting context
 				c.addError(node, "Multiple default cases in switch statement")
-				return nil // Indicate error occurred
+				return BadRegister, nil // Indicate error occurred
 			}
 			defaultCaseBodyIndex = i
 		}
@@ -554,9 +554,9 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 
 		if caseClause.Condition != nil { // Regular 'case expr:'
 			// Compile the case condition
-			err = c.compileNode(caseClause.Condition)
+			_, err = c.compileNode(caseClause.Condition, NoHint)
 			if err != nil {
-				return err
+				return BadRegister, err
 			}
 			// Use Current() as CurrentAndFree is not available
 			caseCondReg := c.regAlloc.Current()
@@ -576,9 +576,9 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 			caseBodyStartPositions[i] = c.currentPosition()
 
 			// Compile the case body
-			err = c.compileNode(caseClause.Body)
+			_, err = c.compileNode(caseClause.Body, NoHint)
 			if err != nil {
-				return err
+				return BadRegister, err
 			}
 			// Implicit fallthrough *to the end* unless break exists.
 			// Add a jump to the end, break will have already added its own.
@@ -592,9 +592,9 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 			caseBodyStartPositions[i] = c.currentPosition()
 
 			// Compile the default case body
-			err = c.compileNode(caseClause.Body)
+			_, err = c.compileNode(caseClause.Body, NoHint)
 			if err != nil {
-				return err
+				return BadRegister, err
 			}
 			// Add jump to end (optional, could just fall out if it's last)
 			endCaseJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, caseLine) // 0 = unused reg for OpJump
@@ -627,13 +627,13 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement) errors.P
 	// Remove Free(), not available in current allocator
 	c.regAlloc.Free(switchExprReg)
 
-	return nil
+	return BadRegister, nil
 }
 
-func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement) errors.PaseratiError {
+func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the iterable expression first
-	if err := c.compileNode(node.Iterable); err != nil {
-		return err
+	if _, err := c.compileNode(node.Iterable, NoHint); err != nil {
+		return BadRegister, err
 	}
 	iterableReg := c.regAlloc.Current()
 
@@ -699,7 +699,7 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement) errors.Pas
 		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
 			symbolRef, _, found := c.currentSymbolTable.Resolve(ident.Value)
 			if !found {
-				return NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+				return BadRegister, NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
 			}
 			// Store element value in the existing variable's register
 			c.emitMove(symbolRef.Register, elementReg, node.Token.Line)
@@ -707,9 +707,9 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement) errors.Pas
 	}
 
 	// 6. Compile loop body
-	if err := c.compileNode(node.Body); err != nil {
+	if _, err := c.compileNode(node.Body, NoHint); err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
-		return err
+		return BadRegister, err
 	}
 
 	// 7. Patch continue jumps to land here (before increment)
@@ -746,5 +746,5 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement) errors.Pas
 		c.patchJump(breakPos)
 	}
 
-	return nil
+	return BadRegister, nil
 }

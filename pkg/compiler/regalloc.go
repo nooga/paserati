@@ -10,6 +10,7 @@ type Register uint8 // Assuming max 256 registers per function for now
 
 // NoHint is a sentinel value indicating no register hint is provided
 const NoHint Register = 255
+const BadRegister Register = 254
 
 // RegisterAllocator manages the allocation of registers within a function scope.
 // This initial implementation uses a simple stack-like allocation.

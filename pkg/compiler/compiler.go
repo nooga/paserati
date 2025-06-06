@@ -202,7 +202,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// --- END Hoisted Global Function Processing ---
 
 	// Use the already type-checked program node.
-	err := c.compileNode(program)
+	_, err := c.compileNode(program, NoHint)
 	if err != nil {
 		// An error occurred during compilation. addError should have already been called
 		// when the error was generated lower down. The returned `err` is mainly for control flow.
@@ -239,7 +239,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 }
 
 // compileNode dispatches compilation to the appropriate method based on node type.
-func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
+func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, errors.PaseratiError) {
 	// Safety check for nil checker, although it should be set by Compile()
 	if c.typeChecker == nil && c.enclosing == nil { // Only panic if top-level compiler has no checker
 		panic("Compiler internal error: typeChecker is nil during compileNode")
@@ -256,10 +256,10 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		debugPrintf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
 		for i, stmt := range node.Statements {
 			debugPrintf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
-			err := c.compileNode(stmt)
+			_, err := c.compileNode(stmt, NoHint)
 			if err != nil {
 				debugPrintf("// DEBUG Program: Error compiling statement %d: %v\n", i, err) // <<< ADDED
-				return err                                                                  // Propagate errors up
+				return BadRegister, err                                                     // Propagate errors up
 			}
 			// <<< ADDED vvv
 			if c.enclosing == nil {
@@ -287,7 +287,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// <<< ADDED ^^^
 		}
 		debugPrintf("// DEBUG Program: Finished statement loop.\n") // <<< ADDED
-		return nil                                                  // ADDED: Explicit return for Program case
+		return BadRegister, nil                                     // ADDED: Explicit return for Program case
 
 	// --- NEW: Handle Function Literal as an EXPRESSION first ---
 	// This handles anonymous/named functions used in assignments, arguments, etc.
@@ -302,7 +302,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(node, hint)
 		if err != nil {
 			// Error already added to c.errors by compileFunctionLiteral
-			return nil // Return nil error here, main error is tracked
+			return BadRegister, nil // Return nil error here, main error is tracked
 		}
 
 		// Allocate register for the closure and emit OpClosure
@@ -310,7 +310,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		c.emitClosure(closureReg, funcConstIndex, node, freeSymbols) // <<< Call emitClosure
 
 		// emitClosure now handles setting lastExprReg/Valid correctly.
-		return nil // <<< Return nil error
+		return BadRegister, nil // <<< Return nil error
 
 	// --- NEW: Handle Shorthand Method as an EXPRESSION ---
 	// This handles shorthand methods in object literals like { method() { ... } }
@@ -324,14 +324,14 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 
 		funcConstIndex, freeSymbols, err := c.compileShorthandMethod(node, hint)
 		if err != nil {
-			return err
+			return BadRegister, err
 		}
 
 		// Allocate register for the closure and emit OpClosure using the generic emitClosureGeneric
 		closureReg := c.regAlloc.Alloc()
 		c.emitClosureGeneric(closureReg, funcConstIndex, node.Token.Line, node.Name, freeSymbols)
 
-		return nil
+		return BadRegister, nil
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
@@ -341,9 +341,9 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		// of an if-expression, but let's handle that there.
 		originalLastExprValid := c.lastExprRegValid // Save state if inside top-level
 		for _, stmt := range node.Statements {
-			err := c.compileNode(stmt)
+			_, err := c.compileNode(stmt, NoHint)
 			if err != nil {
-				return err // Propagate errors up
+				return BadRegister, err // Propagate errors up
 			}
 			// DISABLED: Register freeing was causing infinite loops
 			// Conservative register freeing - only inside functions and only if register is not pinned
@@ -364,16 +364,16 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// Let's assume block statements themselves don't provide the final script value.
 			c.lastExprRegValid = originalLastExprValid
 		}
-		return nil // ADDED: Explicit return
+		return BadRegister, nil // ADDED: Explicit return
 
 	// --- Statements ---
 	case *parser.TypeAliasStatement: // Added
 		// Type aliases only exist for type checking, ignore in compiler.
-		return nil
+		return BadRegister, nil
 
 	case *parser.InterfaceDeclaration: // Added
 		// Interface declarations only exist for type checking, ignore in compiler.
-		return nil
+		return BadRegister, nil
 
 	case *parser.FunctionSignature: // Added
 		// Function signatures are handled during type checking and don't need compilation
@@ -381,7 +381,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		if c.enclosing == nil {
 			c.lastExprRegValid = false // Signatures don't produce a value
 		}
-		return nil
+		return BadRegister, nil
 
 	case *parser.ExpressionStatement:
 		debugPrintf("// DEBUG ExprStmt: Compiling expression %T.\n", node.Expression)
@@ -398,7 +398,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 				if c.enclosing == nil {
 					c.lastExprRegValid = false // Function declarations don't produce a value
 				}
-				return nil
+				return BadRegister, nil
 			}
 
 			// --- Handle named function recursion ---
@@ -410,7 +410,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, funcLit.Name.Value) // Use its own name as hint
 			if err != nil {
 				// Error already added to c.errors by compileFunctionLiteral
-				return nil // Return nil error here, main error is tracked
+				return BadRegister, nil // Return nil error here, main error is tracked
 			}
 
 			// 3. Create the closure object in a register
@@ -424,14 +424,14 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			if c.enclosing == nil {
 				c.lastExprRegValid = false
 			}
-			return nil // Handled
+			return BadRegister, nil // Handled
 		}
 
 		// Original ExpressionStatement logic for other expressions
 		debugPrintf("// DEBUG ExprStmt: Compiling non-func-decl expression %T.\n", node.Expression)
-		err := c.compileNode(node.Expression)
+		_, err := c.compileNode(node.Expression, NoHint)
 		if err != nil {
-			return err
+			return BadRegister, err
 		}
 		if c.enclosing == nil { // If at top level, track this as potential final value
 			currentReg := c.regAlloc.Current()                                                               // <<< ADDED
@@ -444,89 +444,89 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		} // <<< ADDED ^^^
 		// Result register is left allocated, potentially unused otherwise.
 		// TODO: Consider freeing registers?
-		return nil // ADDED: Explicit return
+		return BadRegister, nil // ADDED: Explicit return
 
 	case *parser.LetStatement:
 		if c.enclosing == nil {
 			debugPrintf("// DEBUG LetStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false                                                    // Declarations don't provide final value
 		}
-		return c.compileLetStatement(node)
+		return c.compileLetStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ConstStatement:
 		if c.enclosing == nil {
 			debugPrintf("// DEBUG ConstStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false                                                      // Declarations don't provide final value
 		}
-		return c.compileConstStatement(node)
+		return c.compileConstStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ReturnStatement: // Although less relevant for top-level script return
 		if c.enclosing == nil {
 			debugPrintf("// DEBUG ReturnStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false                                                       // Explicit return overrides implicit
 		}
-		return c.compileReturnStatement(node)
+		return c.compileReturnStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.WhileStatement:
 		if c.enclosing == nil {
 			debugPrintf("// DEBUG WhileStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false
 		}
-		return c.compileWhileStatement(node)
+		return c.compileWhileStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ForStatement:
 		if c.enclosing == nil {
 			debugPrintf("// DEBUG ForStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
 			c.lastExprRegValid = false
 		}
-		return c.compileForStatement(node)
+		return c.compileForStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ForOfStatement:
 		if c.enclosing == nil {
 			debugPrintf("// DEBUG ForOfStmt: Top Level. Setting lastExprRegValid=false.\n")
 			c.lastExprRegValid = false
 		}
-		return c.compileForOfStatement(node)
+		return c.compileForOfStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.BreakStatement:
 		if c.enclosing == nil {
 			c.lastExprRegValid = false
 		}
-		return c.compileBreakStatement(node)
+		return c.compileBreakStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ContinueStatement:
 		if c.enclosing == nil {
 			c.lastExprRegValid = false
 		}
-		return c.compileContinueStatement(node)
+		return c.compileContinueStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.DoWhileStatement:
 		if c.enclosing == nil {
 			c.lastExprRegValid = false // Loops don't produce a value
 		}
-		return c.compileDoWhileStatement(node)
+		return c.compileDoWhileStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.SwitchStatement: // Added
 		if c.enclosing == nil {
 			c.lastExprRegValid = false // Switch statements don't produce a value
 		}
-		return c.compileSwitchStatement(node)
+		return c.compileSwitchStatement(node, NoHint) // TODO: Fix this
 
 	// --- Expressions (excluding FunctionLiteral which is handled above) ---
 	case *parser.NumberLiteral:
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNewConstant(destReg, vm.Number(node.Value), node.Token.Line)
-		return nil // ADDED: Explicit return
+		return BadRegister, nil // ADDED: Explicit return
 
 	case *parser.StringLiteral:
 		// Handle string literals by adding them to constants
 		c.emitLoadNewConstant(c.regAlloc.Alloc(), vm.String(node.Value), node.Token.Line)
 		c.lastExprReg = c.regAlloc.Current()
 		c.lastExprRegValid = true
-		return nil
+		return BadRegister, nil
 
 	case *parser.TemplateLiteral:
-		return c.compileTemplateLiteral(node)
+		return c.compileTemplateLiteral(node, NoHint) // TODO: Fix this
 
 	case *parser.BooleanLiteral:
 		// Handle boolean literals by using appropriate opcode
@@ -538,24 +538,24 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		}
 		c.lastExprReg = reg
 		c.lastExprRegValid = true
-		return nil
+		return BadRegister, nil
 
 	case *parser.NullLiteral:
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNull(destReg, node.Token.Line)
-		return nil // ADDED: Explicit return
+		return BadRegister, nil // ADDED: Explicit return
 
 	case *parser.UndefinedLiteral: // Added
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadUndefined(destReg, node.Token.Line)
-		return nil // ADDED: Explicit return
+		return BadRegister, nil // ADDED: Explicit return
 
 	case *parser.ThisExpression: // Added for this keyword
 		// Load 'this' value from current call context
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadThis(destReg, node.Token.Line)
 		c.regAlloc.SetCurrent(destReg) // Fix: Set current register
-		return nil
+		return BadRegister, nil
 
 	case *parser.Identifier:
 		// <<< ADDED: Check for built-in first >>>
@@ -575,7 +575,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			c.lastExprReg = destReg
 			c.lastExprRegValid = true
 
-			return nil // Built-in handled successfully
+			return BadRegister, nil // Built-in handled successfully
 		}
 
 		// <<< ADDED: Check for built-in objects >>>
@@ -593,7 +593,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			c.lastExprReg = destReg
 			c.lastExprRegValid = true
 
-			return nil // Built-in object handled successfully
+			return BadRegister, nil // Built-in object handled successfully
 		}
 		// <<< END ADDED >>>
 
@@ -615,7 +615,7 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 			// Set last expression tracking state
 			c.lastExprReg = destReg
 			c.lastExprRegValid = true
-			return nil // Handle as global access
+			return BadRegister, nil // Handle as global access
 		}
 		isLocal := definingTable == c.currentSymbolTable
 		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
@@ -668,48 +668,48 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 		// Set last expression tracking state for identifiers (consistent with literals/builtins)
 		c.lastExprReg = c.regAlloc.Current() // Current() should hold destReg now
 		c.lastExprRegValid = true
-		return nil // ADDED: Explicit return
+		return BadRegister, nil // ADDED: Explicit return
 
 	case *parser.PrefixExpression:
-		return c.compilePrefixExpression(node)
+		return c.compilePrefixExpression(node, NoHint) // TODO: Fix this
 
 	case *parser.TypeofExpression:
-		return c.compileTypeofExpression(node)
+		return c.compileTypeofExpression(node, NoHint) // TODO: Fix this
 
 	case *parser.InfixExpression:
-		return c.compileInfixExpression(node)
+		return c.compileInfixExpression(node, NoHint) // TODO: Fix this
 
 	case *parser.ArrowFunctionLiteral: // Keep this separate
-		return c.compileArrowFunctionLiteral(node)
+		return c.compileArrowFunctionLiteral(node, NoHint) // TODO: Fix this
 
 	case *parser.CallExpression:
-		return c.compileCallExpression(node)
+		return c.compileCallExpression(node, NoHint) // TODO: Fix this
 
 	case *parser.IfExpression:
-		return c.compileIfExpression(node)
+		return c.compileIfExpression(node, NoHint) // TODO: Fix this
 
 	case *parser.TernaryExpression:
-		return c.compileTernaryExpression(node)
+		return c.compileTernaryExpression(node, NoHint) // TODO: Fix this
 
 	case *parser.AssignmentExpression:
-		return c.compileAssignmentExpression(node)
+		return c.compileAssignmentExpression(node, NoHint) // TODO: Fix this
 
 	case *parser.UpdateExpression:
-		return c.compileUpdateExpression(node)
+		return c.compileUpdateExpression(node, NoHint) // TODO: Fix this
 
 	// --- NEW: Array/Index ---
 	case *parser.ArrayLiteral:
-		return c.compileArrayLiteral(node)
+		return c.compileArrayLiteral(node, NoHint) // TODO: Fix this
 	case *parser.ObjectLiteral: // <<< NEW
-		return c.compileObjectLiteral(node)
+		return c.compileObjectLiteral(node, NoHint) // TODO: Fix this
 	case *parser.IndexExpression:
-		return c.compileIndexExpression(node)
+		return c.compileIndexExpression(node, NoHint) // TODO: Fix this
 		// --- End Array/Index ---
 
 		// --- Member Expression ---
 	case *parser.MemberExpression:
 		// <<< UPDATED: Call the new helper function >>>
-		err := c.compileMemberExpression(node)
+		_, err := c.compileMemberExpression(node, NoHint) // TODO: Fix this
 		if err == nil {
 			// If successful, the result register is already set by compileMemberExpression
 			// We just need to update the lastExpr tracking for top-level scripts
@@ -719,13 +719,13 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 				debugPrintf("// DEBUG MemberExpr (Top Level): Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg)
 			}
 		}
-		return err // Return any error encountered during compilation
+		return BadRegister, err // Return any error encountered during compilation
 		// --- END Member Expression ---
 
 		// --- Optional Chaining Expression ---
 	case *parser.OptionalChainingExpression:
 		// <<< NEW: Call the new helper function >>>
-		err := c.compileOptionalChainingExpression(node)
+		_, err := c.compileOptionalChainingExpression(node, NoHint) // TODO: Fix this
 		if err == nil {
 			// If successful, the result register is already set by compileOptionalChainingExpression
 			// We just need to update the lastExpr tracking for top-level scripts
@@ -735,30 +735,30 @@ func (c *Compiler) compileNode(node parser.Node) errors.PaseratiError {
 				debugPrintf("// DEBUG OptionalChaining (Top Level): Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg)
 			}
 		}
-		return err // Return any error encountered during compilation
+		return BadRegister, err // Return any error encountered during compilation
 		// --- END Optional Chaining Expression ---
 
 	case *parser.NewExpression:
-		return c.compileNewExpression(node)
+		return c.compileNewExpression(node, NoHint) // TODO: Fix this
 
 	// --- NEW: Rest Parameters and Spread Syntax ---
 	case *parser.SpreadElement:
 		// SpreadElement can appear in function calls - this should be handled there
 		// If we reach here, it's likely used in an invalid context
-		return NewCompileError(node, "spread syntax not supported in this context")
+		return BadRegister, NewCompileError(node, "spread syntax not supported in this context")
 
 	case *parser.RestParameter:
 		// RestParameter should only appear in function parameter lists
 		// If we reach here, it's likely used in an invalid context
-		return NewCompileError(node, "rest parameter syntax not supported in this context")
+		return BadRegister, NewCompileError(node, "rest parameter syntax not supported in this context")
 	// --- END NEW ---
 
 	default:
 		// Add check here? If type is FunctionLiteral and wasn't caught above, it's an error.
 		if _, ok := node.(*parser.FunctionLiteral); ok {
-			return NewCompileError(node, "compiler internal error: FunctionLiteral fell through switch")
+			return BadRegister, NewCompileError(node, "compiler internal error: FunctionLiteral fell through switch")
 		}
-		return NewCompileError(node, fmt.Sprintf("compilation not implemented for %T", node))
+		return BadRegister, NewCompileError(node, fmt.Sprintf("compilation not implemented for %T", node))
 	}
 	// REMOVED: unreachable return nil // Return nil on success if no specific error occurred in this frame
 }
@@ -826,7 +826,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 			functionCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
-			err := functionCompiler.compileNode(param.DefaultValue)
+			_, err := functionCompiler.compileNode(param.DefaultValue, NoHint)
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
@@ -857,7 +857,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 
 	// 7. Compile the body using the function compiler
-	err := functionCompiler.compileNode(node.Body)
+	_, err := functionCompiler.compileNode(node.Body, NoHint)
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)
 	}
@@ -900,7 +900,7 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
 			hasSpread = true
 			// Compile the expression being spread (should be an array)
-			err := c.compileNode(spreadElement.Argument)
+			_, err := c.compileNode(spreadElement.Argument, NoHint)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -919,7 +919,7 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 		}
 
 		// Regular argument
-		err := c.compileNode(arg)
+		_, err := c.compileNode(arg, NoHint)
 		if err != nil {
 			return nil, 0, err
 		}

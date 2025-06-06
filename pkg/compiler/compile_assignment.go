@@ -11,7 +11,7 @@ import (
 const debugAssignment = false // Enable debug output for assignment compilation
 
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
-func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression) errors.PaseratiError {
+func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
 	// --- Refactored LHS Handling ---
@@ -96,17 +96,17 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	case *parser.IndexExpression:
 		lhsType = lhsIsIndexExpr
 		// Compile array expression
-		err := c.compileNode(lhsNode.Left)
+		_, err := c.compileNode(lhsNode.Left, NoHint)
 		if err != nil {
-			return err
+			return BadRegister, err
 		}
 		indexInfo.arrayReg = c.regAlloc.Current()
 
 		// Compile index expression
-		err = c.compileNode(lhsNode.Index)
+		_, err = c.compileNode(lhsNode.Index, NoHint)
 		if err != nil {
 			// TODO: Consider freeing arrayReg if allocated?
-			return err
+			return BadRegister, err
 		}
 		indexInfo.indexReg = c.regAlloc.Current()
 
@@ -121,9 +121,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	case *parser.MemberExpression: // <<< NEW CASE
 		lhsType = lhsIsMemberExpr
 		// Compile the object expression
-		err := c.compileNode(lhsNode.Object)
+		_, err := c.compileNode(lhsNode.Object, NoHint)
 		if err != nil {
-			return err
+			return BadRegister, err
 		}
 		memberInfo.objectReg = c.regAlloc.Current()
 
@@ -151,7 +151,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	// 	// ... compile object, load property value, store info ...
 
 	default:
-		return NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier, index expression, or member expression, got %T", node.Left))
+		return BadRegister, NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier, index expression, or member expression, got %T", node.Left))
 	}
 	// --- End Refactored LHS Handling ---
 
@@ -207,9 +207,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			c.patchJump(jumpToEvalRhs) // Patch jumps that lead here
 		}
 		// This block is only reached if short-circuit didn't happen
-		err := c.compileNode(node.Value)
+		_, err := c.compileNode(node.Value, NoHint)
 		if err != nil {
-			return err
+			return BadRegister, err
 		}
 		evaluatedRhs = true
 		rhsValueReg = c.regAlloc.Current()
@@ -240,10 +240,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 	} else { // --- Non-Logical Assignment ---
 		// Compile RHS
-		err := c.compileNode(node.Value)
+		_, err := c.compileNode(node.Value, NoHint)
 		if err != nil {
 			// TODO: Free registers allocated for LHS?
-			return NewCompileError(node, "error compiling RHS").CausedBy(err)
+			return BadRegister, NewCompileError(node, "error compiling RHS").CausedBy(err)
 		}
 		rhsValueReg := c.regAlloc.Current() // RHS Value is in this register
 
@@ -374,7 +374,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 		default:
 			// TODO: Free registers?
-			return NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))
+			return BadRegister, NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))
 		}
 		// The final value to be stored is now in storeOpTargetReg
 
@@ -465,5 +465,5 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		fmt.Printf("// DEBUG Assignment Finalize: After SetCurrent, current=R%d\n", c.regAlloc.Current())
 	}
 
-	return nil
+	return BadRegister, nil
 }
