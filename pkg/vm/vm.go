@@ -857,6 +857,43 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// --- Builtin call finished, continue in the same frame ---
 				// No context switch needed, ip continues from where OpCall finished reading operands.
 
+			case TypeNativeFunctionWithProps:
+				nativeFnWithProps := calleeVal.AsNativeFunctionWithProps()
+
+				// --- Arity Check ---
+				if nativeFnWithProps.Arity >= 0 && nativeFnWithProps.Arity != argCount {
+					frame.ip = callerIP
+					status := vm.runtimeError("Native function '%s' expected %d arguments but got %d.",
+						nativeFnWithProps.Name, nativeFnWithProps.Arity, argCount)
+					return status, Undefined
+				}
+
+				// --- Collect Arguments from CALLER registers ---
+				args := make([]Value, argCount)
+				argStartRegInCaller := funcReg + 1
+				for i := 0; i < argCount; i++ {
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index %d out of bounds for native call.", argStartRegInCaller+byte(i))
+						return status, Undefined
+					}
+				}
+
+				// --- Execute Native Function ---
+				result := nativeFnWithProps.Fn(args)
+
+				// --- Store Result in CALLER's target register ---
+				if int(destReg) < len(callerRegisters) {
+					callerRegisters[destReg] = result
+				} else {
+					frame.ip = callerIP
+					status := vm.runtimeError("Internal Error: Invalid target register %d for native return value.", destReg)
+					return status, Undefined
+				}
+				// Continue in the same frame
+
 			default:
 				frame.ip = callerIP // Use saved IP for error context
 				status := vm.runtimeError("Can only call functions and closures (got %s).", calleeVal.TypeName())
@@ -1405,7 +1442,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// --- Handle prototype methods for primitives ---
 			// Handle String prototype methods
 			if objVal.IsString() {
-				if method, exists := StringPrototype[propName]; exists {
+				if method, exists := StringPrototype.GetOwn(propName); exists {
 					registers[destReg] = createBoundMethod(objVal, method)
 					continue // Skip object lookup
 				}
@@ -1413,26 +1450,17 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			// Handle Array prototype methods
 			if objVal.IsArray() {
-				if method, exists := ArrayPrototype[propName]; exists {
+				if method, exists := ArrayPrototype.GetOwn(propName); exists {
 					registers[destReg] = createBoundMethod(objVal, method)
 					continue // Skip object lookup
 				}
 			}
 
-			// Handle static methods on native function constructors (like String.fromCharCode)
-			if objVal.IsNativeFunction() {
-				nativeFn := AsNativeFunction(objVal)
-				// Check for known static methods - hard-coded for now
-				// TODO: Make this more extensible
-				if nativeFn.Name == "String" && propName == "fromCharCode" {
-					// Return the String.fromCharCode function
-					staticMethod := &NativeFunctionObject{
-						Arity:    -1,
-						Variadic: true,
-						Name:     "fromCharCode",
-						Fn:       stringFromCharCodeStaticImpl,
-					}
-					registers[destReg] = NewNativeFunction(staticMethod.Arity, staticMethod.Variadic, staticMethod.Name, staticMethod.Fn)
+			// Handle property access on NativeFunctionWithProps (like String.fromCharCode)
+			if objVal.Type() == TypeNativeFunctionWithProps {
+				nativeFnWithProps := objVal.AsNativeFunctionWithProps()
+				if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
+					registers[destReg] = prop
 					continue // Skip object lookup
 				}
 			}
@@ -2223,19 +2251,6 @@ func getTypeofString(val Value) string {
 }
 
 // stringFromCharCodeStaticImpl implements String.fromCharCode (static method)
-func stringFromCharCodeStaticImpl(args []Value) Value {
-	if len(args) == 0 {
-		return NewString("")
-	}
-
-	result := make([]byte, len(args))
-	for i, arg := range args {
-		code := int(arg.ToFloat()) & 0xFFFF // Mask to 16 bits like JS
-		result[i] = byte(code)
-	}
-
-	return NewString(string(result))
-}
 
 // printFrameStack prints the current call stack for debugging
 func (vm *VM) printFrameStack() {

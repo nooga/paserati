@@ -27,6 +27,7 @@ const (
 
 	TypeFunction
 	TypeNativeFunction
+	TypeNativeFunctionWithProps
 	TypeClosure
 
 	TypeObject
@@ -168,7 +169,7 @@ func (v Value) IsArray() bool {
 }
 
 func (v Value) IsCallable() bool {
-	return v.typ == TypeFunction || v.typ == TypeNativeFunction || v.typ == TypeClosure
+	return v.typ == TypeFunction || v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps || v.typ == TypeClosure
 }
 
 func (v Value) IsFunction() bool {
@@ -180,7 +181,7 @@ func (v Value) IsClosure() bool {
 }
 
 func (v Value) IsNativeFunction() bool {
-	return v.typ == TypeNativeFunction
+	return v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps
 }
 
 func (v Value) Type() ValueType {
@@ -203,7 +204,7 @@ func (v Value) TypeName() string {
 		return "string"
 	case TypeSymbol:
 		return "symbol"
-	case TypeFunction, TypeClosure, TypeNativeFunction:
+	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps:
 		return "function"
 	case TypeObject, TypeDictObject, TypeArray:
 		return "object"
@@ -296,6 +297,13 @@ func (v Value) AsNativeFunction() *NativeFunctionObject {
 	return (*NativeFunctionObject)(v.obj)
 }
 
+func (v Value) AsNativeFunctionWithProps() *NativeFunctionObjectWithProps {
+	if v.typ != TypeNativeFunctionWithProps {
+		panic("value is not a native function with props")
+	}
+	return (*NativeFunctionObjectWithProps)(v.obj)
+}
+
 func (v Value) AsBoolean() bool {
 	if v.typ != TypeBoolean {
 		panic("value is not a boolean")
@@ -334,6 +342,12 @@ func (v Value) ToString() string {
 		return "<closure>"
 	case TypeNativeFunction:
 		nativeFn := (*NativeFunctionObject)(v.obj)
+		if nativeFn.Name != "" {
+			return fmt.Sprintf("<native function %s>", nativeFn.Name)
+		}
+		return "<native function>"
+	case TypeNativeFunctionWithProps:
+		nativeFn := (*NativeFunctionObjectWithProps)(v.obj)
 		if nativeFn.Name != "" {
 			return fmt.Sprintf("<native function %s>", nativeFn.Name)
 		}
@@ -482,6 +496,12 @@ func (v Value) inspectWithContext(nested bool) string {
 		return "[Function (anonymous)]"
 	case TypeNativeFunction:
 		nativeFn := (*NativeFunctionObject)(v.obj)
+		if nativeFn.Name != "" {
+			return fmt.Sprintf("[Function: %s]", nativeFn.Name)
+		}
+		return "[Function (anonymous)]"
+	case TypeNativeFunctionWithProps:
+		nativeFn := (*NativeFunctionObjectWithProps)(v.obj)
 		if nativeFn.Name != "" {
 			return fmt.Sprintf("[Function: %s]", nativeFn.Name)
 		}

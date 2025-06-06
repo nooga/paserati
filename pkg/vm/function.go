@@ -58,6 +58,17 @@ type BoundNativeFunctionObject struct {
 	Name       string
 }
 
+// NativeFunctionObjectWithProps represents a native function that can also have properties
+// This is useful for constructors that need static methods (like String.fromCharCode)
+type NativeFunctionObjectWithProps struct {
+	Object
+	Arity      int
+	Variadic   bool
+	Name       string
+	Fn         func(args []Value) Value
+	Properties *PlainObject // Can have properties like static methods
+}
+
 func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk) Value {
 	fnObj := &FunctionObject{
 		Arity:        arity,
@@ -90,5 +101,16 @@ func NewNativeFunction(arity int, variadic bool, name string, fn func(args []Val
 		Variadic: variadic,
 		Name:     name,
 		Fn:       fn,
+	})}
+}
+
+func NewNativeFunctionWithProps(arity int, variadic bool, name string, fn func(args []Value) Value) Value {
+	props := NewObject(Undefined).AsPlainObject()
+	return Value{typ: TypeNativeFunctionWithProps, obj: unsafe.Pointer(&NativeFunctionObjectWithProps{
+		Arity:      arity,
+		Variadic:   variadic,
+		Name:       name,
+		Fn:         fn,
+		Properties: props,
 	})}
 }

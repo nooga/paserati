@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"paserati/pkg/builtins"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -291,21 +292,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	} else if widenedObjectType == types.String {
 		if propertyName == "length" {
 			resultType = types.Number // string.length is number
-		} else if propertyName == "charCodeAt" {
-			resultType = &types.FunctionType{
-				ParameterTypes: []types.Type{types.Number},
-				ReturnType:     types.Number,
-				IsVariadic:     false,
-			}
-		} else if propertyName == "charAt" {
-			resultType = &types.FunctionType{
-				ParameterTypes: []types.Type{types.Number},
-				ReturnType:     types.String,
-				IsVariadic:     false,
-			}
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
-			// resultType remains types.Error
+			// Check prototype registry for String methods
+			if methodType := builtins.GetPrototypeMethodType("string", propertyName); methodType != nil {
+				resultType = methodType
+			} else {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
+				// resultType remains types.Never
+			}
 		}
 	} else {
 		// Use a type switch for struct-based types
@@ -313,36 +307,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		case *types.ArrayType:
 			if propertyName == "length" {
 				resultType = types.Number // Array.length is number
-			} else if propertyName == "concat" {
-				resultType = &types.FunctionType{
-					ParameterTypes:    []types.Type{}, // No fixed parameters
-					ReturnType:        &types.ArrayType{ElementType: types.Any},
-					IsVariadic:        true,
-					RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-				}
-			} else if propertyName == "push" {
-				resultType = &types.FunctionType{
-					ParameterTypes:    []types.Type{}, // No fixed parameters
-					ReturnType:        types.Number,   // Returns new length
-					IsVariadic:        true,
-					RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-				}
-			} else if propertyName == "pop" {
-				resultType = &types.FunctionType{
-					ParameterTypes: []types.Type{},
-					ReturnType:     types.Any,
-					IsVariadic:     false,
-				}
-			} else if propertyName == "join" {
-				resultType = &types.FunctionType{
-					ParameterTypes: []types.Type{types.String}, // Optional separator parameter
-					ReturnType:     types.String,               // Returns string
-					IsVariadic:     false,
-					OptionalParams: []bool{true}, // Separator is optional
-				}
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
-				// resultType remains types.Error
+				// Check prototype registry for Array methods
+				if methodType := builtins.GetPrototypeMethodType("array", propertyName); methodType != nil {
+					resultType = methodType
+				} else {
+					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+					// resultType remains types.Never
+				}
 			}
 		case *types.ObjectType: // <<< MODIFIED CASE
 			// Look for the property in the object's fields
@@ -361,20 +333,15 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				// resultType remains types.Never
 			}
 		case *types.FunctionType:
-			// Handle static properties/methods on function types (like String.fromCharCode)
-			// Check if the object is a builtin constructor that has static methods
-			if objIdentifier, ok := node.Object.(*parser.Identifier); ok {
-				// Look for builtin static method: ConstructorName.methodName
-				staticMethodName := objIdentifier.Value + "." + propertyName
-				staticMethodType := c.getBuiltinType(staticMethodName)
-				if staticMethodType != nil {
-					resultType = staticMethodType
-				} else {
-					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
-					// resultType remains types.Never
-				}
+			// Regular function types don't have properties
+			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
+			// resultType remains types.Never
+		case *types.CallableType:
+			// Handle property access on callable types (like String.fromCharCode)
+			if propType, exists := obj.Properties[propertyName]; exists {
+				resultType = propType
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on callable type", propertyName))
 				// resultType remains types.Never
 			}
 		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)

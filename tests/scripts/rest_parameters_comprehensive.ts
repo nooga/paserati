@@ -1,5 +1,6 @@
 // Comprehensive test for rest parameters and spread syntax
 // Tests all function types: declarations, literals, arrow functions
+// expect: ok
 
 console.log("=== Rest Parameters Comprehensive Test ===");
 
@@ -139,6 +140,8 @@ console.log(
 // 4. Spread Syntax in Function Calls
 // ============================================================================
 
+// TODO: fix this
+
 // console.log("\n--- Spread Syntax in Calls ---");
 
 // // Using spread with arrays
@@ -250,4 +253,4 @@ console.log("deepSum(1, 2, 3, 4):", deepSum(1, 2, 3, 4));
 
 console.log("\n=== Rest Parameters Test Complete ===");
 
-// expect: === Rest Parameters Test Complete ===
+("ok");

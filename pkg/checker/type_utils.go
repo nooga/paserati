@@ -160,9 +160,11 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 
 	// --- End Array Type Handling ---
 
-	// --- NEW: Function Type Assignability ---
+	// --- NEW: Function Type Assignability (including CallableType) ---
 	sourceFunc, sourceIsFunc := source.(*types.FunctionType)
 	targetFunc, targetIsFunc := target.(*types.FunctionType)
+	sourceCallable, sourceIsCallable := source.(*types.CallableType)
+	targetCallable, targetIsCallable := target.(*types.CallableType)
 	sourceOverloaded, sourceIsOverloaded := source.(*types.OverloadedFunctionType)
 	targetOverloaded, targetIsOverloaded := target.(*types.OverloadedFunctionType)
 
@@ -192,6 +194,12 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 
 			// All checks passed
 			return true
+		} else if sourceIsCallable {
+			// Assigning CallableType to FunctionType: use call signature
+			if sourceCallable.CallSignature == nil {
+				return false
+			}
+			return c.isAssignable(sourceCallable.CallSignature, targetFunc)
 		} else {
 			// Assigning Non-Function to Function Target: Generally false
 			// (Unless source is Any/Unknown/Never, handled earlier)
@@ -224,6 +232,62 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 			return false
 		} else {
 			// Assigning OverloadedFunctionType to non-function type: false
+			return false
+		}
+	} else if targetIsCallable {
+		// Assigning to CallableType
+		if sourceIsFunc {
+			// Assigning FunctionType to CallableType: check against call signature
+			if targetCallable.CallSignature == nil {
+				return false
+			}
+			return c.isAssignable(sourceFunc, targetCallable.CallSignature)
+		} else if sourceIsCallable {
+			// Assigning CallableType to CallableType: check both call signature and properties
+			// Call signatures must be compatible
+			if (sourceCallable.CallSignature == nil) != (targetCallable.CallSignature == nil) {
+				return false
+			}
+			if sourceCallable.CallSignature != nil && !c.isAssignable(sourceCallable.CallSignature, targetCallable.CallSignature) {
+				return false
+			}
+			// All target properties must exist in source with compatible types
+			for propName, targetPropType := range targetCallable.Properties {
+				sourcePropType, exists := sourceCallable.Properties[propName]
+				if !exists {
+					return false // Target requires property that source doesn't have
+				}
+				if !c.isAssignable(sourcePropType, targetPropType) {
+					return false // Property type mismatch
+				}
+			}
+			return true
+		} else {
+			// Assigning Non-Callable to CallableType: false
+			return false
+		}
+	} else if sourceIsCallable {
+		// Assigning CallableType to something else (not function or callable)
+		// Maybe check if target is an ObjectType that matches the properties?
+		if targetObj, ok := target.(*types.ObjectType); ok {
+			// Check if CallableType's properties are assignable to ObjectType
+			for propName, targetPropType := range targetObj.Properties {
+				sourcePropType, exists := sourceCallable.Properties[propName]
+				if !exists {
+					// Check if this property is optional in the target
+					isOptional := targetObj.OptionalProperties != nil && targetObj.OptionalProperties[propName]
+					if !isOptional {
+						return false // Target requires property that source doesn't have
+					}
+					continue
+				}
+				if !c.isAssignable(sourcePropType, targetPropType) {
+					return false // Property type mismatch
+				}
+			}
+			return true // CallableType properties are compatible with ObjectType
+		} else {
+			// Assigning CallableType to other types: false
 			return false
 		}
 	}
@@ -325,24 +389,17 @@ func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName st
 	} else if widenedObjectType == types.String {
 		if propertyName == "length" {
 			return types.Number // string.length is number
-		} else if propertyName == "charCodeAt" {
-			return &types.FunctionType{
-				ParameterTypes: []types.Type{types.Number},
-				ReturnType:     types.Number,
-				IsVariadic:     false,
-			}
-		} else if propertyName == "charAt" {
-			return &types.FunctionType{
-				ParameterTypes: []types.Type{types.Number},
-				ReturnType:     types.String,
-				IsVariadic:     false,
-			}
 		} else {
-			if !isOptionalChaining {
-				// Only add error for regular member access, not optional chaining
-				// Note: We can't add error here since we don't have the node, but that's ok for union handling
+			// Check prototype registry for String methods
+			if methodType := builtins.GetPrototypeMethodType("string", propertyName); methodType != nil {
+				return methodType
+			} else {
+				if !isOptionalChaining {
+					// Only add error for regular member access, not optional chaining
+					// Note: We can't add error here since we don't have the node, but that's ok for union handling
+				}
+				return types.Never
 			}
-			return types.Never
 		}
 	} else {
 		// Use a type switch for struct-based types
@@ -350,26 +407,13 @@ func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName st
 		case *types.ArrayType:
 			if propertyName == "length" {
 				return types.Number // Array.length is number
-			} else if propertyName == "concat" {
-				return &types.FunctionType{
-					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-					ReturnType:     &types.ArrayType{ElementType: types.Any},
-					IsVariadic:     true,
-				}
-			} else if propertyName == "push" {
-				return &types.FunctionType{
-					ParameterTypes: []types.Type{&types.ArrayType{ElementType: types.Any}},
-					ReturnType:     types.Number,
-					IsVariadic:     true,
-				}
-			} else if propertyName == "pop" {
-				return &types.FunctionType{
-					ParameterTypes: []types.Type{},
-					ReturnType:     types.Any,
-					IsVariadic:     false,
-				}
 			} else {
-				return types.Never
+				// Check prototype registry for Array methods
+				if methodType := builtins.GetPrototypeMethodType("array", propertyName); methodType != nil {
+					return methodType
+				} else {
+					return types.Never
+				}
 			}
 		case *types.ObjectType:
 			// Look for the property in the object's fields
@@ -390,9 +434,19 @@ func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName st
 				}
 			}
 		case *types.FunctionType:
-			// For union handling, we can't easily check builtin static methods without the node
-			// Return Never for now
+			// Regular function types don't have properties
 			return types.Never
+		case *types.CallableType:
+			// Handle property access on callable types
+			if propType, exists := obj.Properties[propertyName]; exists {
+				return propType
+			} else {
+				if isOptionalChaining {
+					return types.Undefined
+				} else {
+					return types.Never
+				}
+			}
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			return types.Never

@@ -57,6 +57,25 @@ func GetAllTypes() map[string]types.Type {
 	return allTypes
 }
 
+// prototypeRegistry holds primitive prototype type information
+var prototypeRegistry = make(map[string]map[string]types.Type)
+
+// RegisterPrototypeMethod registers a prototype method type for a primitive
+func RegisterPrototypeMethod(primitiveName, methodName string, methodType types.Type) {
+	if prototypeRegistry[primitiveName] == nil {
+		prototypeRegistry[primitiveName] = make(map[string]types.Type)
+	}
+	prototypeRegistry[primitiveName][methodName] = methodType
+}
+
+// GetPrototypeMethodType returns the type of a prototype method for a primitive
+func GetPrototypeMethodType(primitiveName, methodName string) types.Type {
+	if methods, exists := prototypeRegistry[primitiveName]; exists {
+		return methods[methodName]
+	}
+	return nil
+}
+
 // InitializeRegistry populates the built-in function registry.
 func InitializeRegistry() {
 	registryOnce.Do(func() {
@@ -119,6 +138,25 @@ func register(name string, arity int, isVariadic bool, goFunc func([]vm.Value) v
 	registry[name] = BuiltinDefinition{
 		Func: runtimeFunc,
 		Type: fnType,
+	}
+}
+
+// registerValue is a helper to add any VM value to the registry with a type
+func registerValue(name string, value vm.Value, valueType types.Type) {
+	if valueType == nil {
+		panic(fmt.Sprintf("Builtin registration for '%s' requires a non-nil type", name))
+	}
+	if _, exists := registry[name]; exists {
+		panic(fmt.Sprintf("Builtin '%s' already registered.", name))
+	}
+
+	// Store the value in objectRegistry
+	objectRegistry[name] = value
+
+	// Store the type in registry (with nil Func since it's not a simple function)
+	registry[name] = BuiltinDefinition{
+		Func: nil,
+		Type: valueType,
 	}
 }
 

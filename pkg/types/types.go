@@ -176,6 +176,81 @@ func (ft *FunctionType) Equals(other Type) bool {
 	return true // All checks passed
 }
 
+// CallableType represents a type that is both callable and has properties
+// This matches TypeScript's callable interfaces:
+//
+//	interface StringConstructor {
+//	  (value?: any): string;        // Call signature
+//	  fromCharCode(...codes: number[]): string;  // Property
+//	}
+type CallableType struct {
+	CallSignature *FunctionType   // The call signature
+	Properties    map[string]Type // Properties/methods on the callable
+}
+
+func (ct *CallableType) String() string {
+	var result strings.Builder
+
+	// Show call signature
+	if ct.CallSignature != nil {
+		result.WriteString(ct.CallSignature.String())
+	} else {
+		result.WriteString("() => unknown")
+	}
+
+	// Show properties if any
+	if len(ct.Properties) > 0 {
+		result.WriteString(" & { ")
+		i := 0
+		for name, propType := range ct.Properties {
+			if i > 0 {
+				result.WriteString(", ")
+			}
+			result.WriteString(name)
+			result.WriteString(": ")
+			result.WriteString(propType.String())
+			i++
+		}
+		result.WriteString(" }")
+	}
+
+	return result.String()
+}
+
+func (ct *CallableType) typeNode() {}
+
+func (ct *CallableType) Equals(other Type) bool {
+	otherCt, ok := other.(*CallableType)
+	if !ok {
+		return false
+	}
+
+	// Check call signature
+	if (ct.CallSignature == nil) != (otherCt.CallSignature == nil) {
+		return false
+	}
+	if ct.CallSignature != nil && !ct.CallSignature.Equals(otherCt.CallSignature) {
+		return false
+	}
+
+	// Check properties
+	if len(ct.Properties) != len(otherCt.Properties) {
+		return false
+	}
+
+	for name, propType := range ct.Properties {
+		otherPropType, exists := otherCt.Properties[name]
+		if !exists {
+			return false
+		}
+		if !propType.Equals(otherPropType) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // OverloadedFunctionType represents a function with multiple overload signatures.
 type OverloadedFunctionType struct {
 	Name           string          // The function name

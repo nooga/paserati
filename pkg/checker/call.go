@@ -43,8 +43,19 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 	// --- END NEW ---
 
-	funcType, ok := funcNodeType.(*types.FunctionType)
-	if !ok {
+	// Handle both FunctionType and CallableType
+	var funcType *types.FunctionType
+	if ft, ok := funcNodeType.(*types.FunctionType); ok {
+		funcType = ft
+	} else if ct, ok := funcNodeType.(*types.CallableType); ok {
+		// Use the call signature of the callable type
+		funcType = ct.CallSignature
+		if funcType == nil {
+			c.addError(node, fmt.Sprintf("callable type has no call signature"))
+			node.SetComputedType(types.Any)
+			return
+		}
+	} else {
 		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
 		node.SetComputedType(types.Any) // Result type is unknown/error
 		return
