@@ -101,7 +101,58 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 		return ra.Alloc()
 	}
 
-	// Find a contiguous block starting from nextReg
+	// <<< NEW: Try to find a contiguous block in the free list first >>>
+	if len(ra.freeRegs) >= count {
+		// Sort the free registers to find contiguous blocks
+		sortedFree := make([]Register, len(ra.freeRegs))
+		copy(sortedFree, ra.freeRegs)
+
+		// Simple bubble sort (fine for small lists)
+		for i := 0; i < len(sortedFree)-1; i++ {
+			for j := 0; j < len(sortedFree)-i-1; j++ {
+				if sortedFree[j] > sortedFree[j+1] {
+					sortedFree[j], sortedFree[j+1] = sortedFree[j+1], sortedFree[j]
+				}
+			}
+		}
+
+		// Look for a contiguous block
+		for i := 0; i <= len(sortedFree)-count; i++ {
+			firstReg := sortedFree[i]
+			isContiguous := true
+
+			// Check if we have 'count' consecutive registers starting from firstReg
+			for j := 1; j < count; j++ {
+				if i+j >= len(sortedFree) || sortedFree[i+j] != firstReg+Register(j) {
+					isContiguous = false
+					break
+				}
+			}
+
+			if isContiguous {
+				// Found a contiguous block! Remove these registers from free list
+				for j := 0; j < count; j++ {
+					regToRemove := firstReg + Register(j)
+					for k := 0; k < len(ra.freeRegs); k++ {
+						if ra.freeRegs[k] == regToRemove {
+							ra.freeRegs = append(ra.freeRegs[:k], ra.freeRegs[k+1:]...)
+							break
+						}
+					}
+				}
+
+				if debugRegAlloc {
+					fmt.Printf("[REGALLOC] CONTIGUOUS REUSE R%d-R%d (%d registers from free list, %d remaining free)\n",
+						firstReg, firstReg+Register(count-1), count, len(ra.freeRegs))
+				}
+
+				return firstReg
+			}
+		}
+	}
+	// <<< END NEW >>>
+
+	// Original logic: allocate new contiguous block from nextReg
 	firstReg := ra.nextReg
 
 	// Check if we have enough room
@@ -120,7 +171,7 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 	ra.nextReg = firstReg + Register(count)
 
 	if debugRegAlloc {
-		fmt.Printf("[REGALLOC] CONTIGUOUS R%d-R%d (%d registers, nextReg now %d)\n",
+		fmt.Printf("[REGALLOC] CONTIGUOUS NEW R%d-R%d (%d registers, nextReg now %d)\n",
 			firstReg, firstReg+Register(count-1), count, ra.nextReg)
 	}
 

@@ -30,7 +30,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false      // <<< CHANGED back to false
+const debugCompiler = false      // <<< CHANGED back to false after fixing register leakage
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
@@ -231,6 +231,16 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		fmt.Printf("// Compiler bytes generated: %d\n", c.stats.BytesGenerated)
 	}
 
+	// <<< ADDED: Log final register allocator state for debugging register leaks >>>
+	if debugCompiler && c.enclosing == nil {
+		fmt.Printf("// [FINAL REGALLOC STATE] NextReg: R%d, MaxReg: R%d, FreeRegs: %v, Pinned: %d\n",
+			c.regAlloc.nextReg, c.regAlloc.maxReg+1, c.regAlloc.freeRegs, len(c.regAlloc.pinnedRegs))
+		if c.regAlloc.nextReg > 20 { // Only warn if we have a lot of registers allocated
+			fmt.Printf("// [REGALLOC WARNING] High register usage detected - potential leakage!\n")
+		}
+	}
+	// <<< END ADDED >>>
+
 	// Return the chunk (even if errors occurred, it might be partially useful for debugging?)
 	// and the collected errors.
 	return c.chunk, c.errors
@@ -247,6 +257,14 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		c.line = parser.GetTokenFromNode(node).Line
 		debugPrintf("// DEBUG compiling line %d (%s)\n", c.line, c.compilingFuncName)
 	}
+
+	// <<< ADDED: Enhanced node compilation logging >>>
+	if debugCompiler {
+		nodeType := fmt.Sprintf("%T", node)
+		debugPrintf("// [NODE] Compiling %s at line %d, hint=R%d, nextReg=R%d\n",
+			nodeType, c.line, hint, c.regAlloc.nextReg)
+	}
+	// <<< END ADDED >>>
 
 	switch node := node.(type) {
 	case *parser.Program:
