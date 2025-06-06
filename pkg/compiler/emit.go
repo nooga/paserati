@@ -1,6 +1,8 @@
 package compiler
 
-import "paserati/pkg/vm"
+import (
+	"paserati/pkg/vm"
+)
 
 // --- Bytecode Emission Helpers ---
 
@@ -23,6 +25,7 @@ func (c *Compiler) emitLoadConstant(dest Register, constIdx uint16, line int) {
 }
 
 func (c *Compiler) emitLoadNull(dest Register, line int) {
+	// fmt.Printf("[EMIT DEBUG] emitLoadNull called with dest=R%d, line=%d\n", dest, line)
 	c.emitOpCode(vm.OpLoadNull, line)
 	c.emitByte(byte(dest))
 }

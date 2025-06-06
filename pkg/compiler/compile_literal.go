@@ -34,23 +34,21 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			}
 			paramReg := symbol.Register
 
-			// Create a temporary register to hold undefined for comparison
+			// Create temporary registers for comparison
 			undefinedReg := funcCompiler.regAlloc.Alloc()
+			defer funcCompiler.regAlloc.Free(undefinedReg)
 			funcCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
 
-			// Create another temporary register for the comparison result
 			compareReg := funcCompiler.regAlloc.Alloc()
+			defer funcCompiler.regAlloc.Free(compareReg)
 			funcCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
 
 			// Jump if the comparison is false (parameter is not undefined, so keep original value)
 			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
 
-			// Free temporary registers
-			funcCompiler.regAlloc.Free(undefinedReg)
-			funcCompiler.regAlloc.Free(compareReg)
-
 			// Compile the default value expression
-			defaultValueReg, err := funcCompiler.compileNode(param.DefaultValue, NoHint)
+			defaultValueReg := funcCompiler.regAlloc.Alloc()
+			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
@@ -58,10 +56,9 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 				// Move the default value to the parameter register
 				if defaultValueReg != paramReg {
 					funcCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
-					// Free the temporary default value register after moving
-					funcCompiler.regAlloc.Free(defaultValueReg)
 				}
 			}
+			funcCompiler.regAlloc.Free(defaultValueReg)
 
 			// Patch the jump to come here (end of default value assignment)
 			funcCompiler.patchJump(jumpIfDefinedPos)
@@ -86,18 +83,19 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	implicitReturnNeeded := true
 	switch bodyNode := node.Body.(type) {
 	case *parser.BlockStatement:
-		_, err := funcCompiler.compileNode(bodyNode, NoHint)
+		bodyResultReg := funcCompiler.regAlloc.Alloc()
+		_, err := funcCompiler.compileNode(bodyNode, bodyResultReg)
+		funcCompiler.regAlloc.Free(bodyResultReg)
 		if err != nil {
 			funcCompiler.errors = append(funcCompiler.errors, err)
 		}
 		implicitReturnNeeded = false // Block handles its own returns or falls through
 	case parser.Expression:
-		var err errors.PaseratiError
-		returnReg, err = funcCompiler.compileNode(bodyNode, NoHint)
+		returnReg = funcCompiler.regAlloc.Alloc()
+		_, err := funcCompiler.compileNode(bodyNode, returnReg)
 		if err != nil {
 			funcCompiler.errors = append(funcCompiler.errors, err)
 			returnReg = 0 // Indicate error or inability to get result reg
-		} else {
 		}
 		implicitReturnNeeded = true // Expression body needs implicit return
 	default:
@@ -106,6 +104,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	}
 	if implicitReturnNeeded {
 		funcCompiler.emitReturn(returnReg, node.Token.Line)
+		funcCompiler.regAlloc.Free(returnReg)
 	}
 
 	// Add final implicit return for the function (catches paths that don't hit explicit/implicit returns)
@@ -126,27 +125,26 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
-	// 8. Emit OpClosure in the *enclosing* compiler (c)
-	destReg := c.regAlloc.Alloc()                                                                    // Register for the resulting closure object in the outer scope
-	debugPrintf("// [Closure %s] Allocated destReg: R%d\n", funcCompiler.compilingFuncName, destReg) // DEBUG
+	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
+	debugPrintf("// [Closure %s] Using hint register: R%d\n", funcCompiler.compilingFuncName, hint)
 	c.emitOpCode(vm.OpClosure, node.Token.Line)
-	c.emitByte(byte(destReg))
+	c.emitByte(byte(hint))
 	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
 	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
 
 	// Emit operands for each upvalue
 	for i, freeSym := range freeSymbols {
-		debugPrintf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcCompiler.compilingFuncName, i, freeSym.Name, freeSym.Register, funcCompiler.compilingFuncName) // DEBUG
+		debugPrintf("// [Closure Loop %s] Checking freeSym[%d]: %s (Reg %d) against funcNameForLookup: '%s'\n", funcCompiler.compilingFuncName, i, freeSym.Name, freeSym.Register, funcCompiler.compilingFuncName)
 
 		// --- Check for self-capture first (Simplified Check) ---
 		// If a free symbol has nilRegister, it MUST be the temporary one
 		// added for recursion resolution. It signifies self-capture.
 		if freeSym.Register == nilRegister {
 			// This is the special self-capture case identified during body compilation.
-			debugPrintf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=destReg=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, destReg) // DEBUG
-			c.emitByte(1)                                                                                                                                                          // isLocal = true (capture from the stack where the closure will be placed)
-			c.emitByte(byte(destReg))                                                                                                                                              // Index = the destination register of OpClosure
-			continue                                                                                                                                                               // Skip the normal lookup below
+			debugPrintf("// [Closure SelfCapture %s] Symbol '%s' has nilRegister. Emitting isLocal=1, index=hint=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, hint)
+			c.emitByte(1)          // isLocal = true (capture from the stack where the closure will be placed)
+			c.emitByte(byte(hint)) // Index = the hint register of OpClosure
+			continue               // Skip the normal lookup below
 		}
 		// --- END Check ---
 
@@ -160,7 +158,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		}
 
 		if enclosingTable == c.currentSymbolTable {
-			debugPrintf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register) // DEBUG
+			debugPrintf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register)
 			// The free variable is local in the *direct* enclosing scope.
 			c.emitByte(1) // isLocal = true
 			// Capture the value from the enclosing scope's actual register
@@ -169,14 +167,14 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			// The free variable is also a free variable in the enclosing scope.
 			// We need to capture it from the enclosing scope's upvalues.
 			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                                                         // Use the same helper
-			debugPrintf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex) // DEBUG
-			c.emitByte(0)                                                                                                                                                         // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex))                                                                                                                                  // Index = upvalue index in enclosing scope
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
+			debugPrintf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex)
+			c.emitByte(0)                        // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
 		}
 	}
 
-	return destReg, nil // Return nil even if there were body errors, errors are collected in c.errors
+	return hint, nil // Return hint register with the closure
 }
 
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register) (Register, errors.PaseratiError) {
@@ -185,11 +183,21 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 		return BadRegister, NewCompileError(node, "array literal exceeds maximum size of 255 elements")
 	}
 
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
 	// 1. Compile elements and store their final registers
 	elementRegs := make([]Register, elementCount)
 	elementRegsContinuous := true
 	for i, elem := range node.Elements {
-		elemReg, err := c.compileNode(elem, NoHint)
+		elemReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, elemReg)
+		_, err := c.compileNode(elem, elemReg)
 		if err != nil {
 			return BadRegister, err
 		}
@@ -204,28 +212,20 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 	if elementCount > 0 && elementRegsContinuous {
 		firstTargetReg = elementRegs[0]
 	} else if elementCount > 0 {
-		// Allocate the first register of the target contiguous block
-		firstTargetReg = c.regAlloc.Alloc()
-		// Allocate the rest of the registers needed for the contiguous block
-		for i := 1; i < elementCount; i++ {
-			// We rely on the allocator returning consecutive regs here
-			// when called consecutively. A more robust allocator might
-			// offer a specific "allocate block" function.
-			_ = c.regAlloc.Alloc()
+		// Allocate a contiguous block for all elements
+		firstTargetReg = c.regAlloc.AllocContiguous(elementCount)
+		// Mark all registers in the block for cleanup
+		for i := 0; i < elementCount; i++ {
+			tempRegs = append(tempRegs, firstTargetReg+Register(i))
 		}
 
 		// Move elements from their original registers (elementRegs)
 		// into the new contiguous block starting at firstTargetReg.
-
 		for i := 0; i < elementCount; i++ {
 			targetReg := firstTargetReg + Register(i)
 			sourceReg := elementRegs[i]
 			if sourceReg != targetReg { // Avoid redundant moves
-				c.emitMove(targetReg, sourceReg, node.Token.Line) // Use array literal's line number?
-				// Free the original element register if it was moved and not needed anymore
-				// (This assumes the sourceReg isn't needed elsewhere, which should be true
-				// if it was just the result of the element expression compilation).
-				c.regAlloc.Free(sourceReg) // Now safe with pinning mechanism
+				c.emitMove(targetReg, sourceReg, node.Token.Line)
 			}
 		}
 	} else {
@@ -233,38 +233,22 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 		firstTargetReg = 0
 	}
 
-	// 3. Allocate register for the array itself
-	arrayReg := c.regAlloc.Alloc()
-
-	// 4. Emit OpMakeArray using the contiguous block
+	// 3. Emit OpMakeArray using the contiguous block - result goes to hint
 	c.emitOpCode(vm.OpMakeArray, node.Token.Line)
-	c.emitByte(byte(arrayReg))       // DestReg: where the new array object goes
+	c.emitByte(byte(hint))           // DestReg: where the new array object goes (hint)
 	c.emitByte(byte(firstTargetReg)) // StartReg: start of the contiguous element block
 	c.emitByte(byte(elementCount))   // Count: number of elements
 
-	// Free the contiguous block registers if any were used
-	if elementCount > 0 {
-		// Free registers from firstTargetReg up to firstTargetReg + count - 1
-		for i := 0; i < elementCount; i++ {
-			// Free registers in reverse order to potentially help stack allocation reuse
-			c.regAlloc.Free(firstTargetReg + Register(elementCount-1-i))
-		}
-		// If firstTargetReg was one of the elementRegs initially and already freed,
-		// freeing again might be problematic. The current Free implementation is safe
-		// but a more complex one might need checks.
-	}
-
-	// Result (the array) is now in arrayReg
-	return arrayReg, nil
+	// Result (the array) is now in hint register
+	return hint, nil
 }
 
 func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
 	line := parser.GetTokenFromNode(node).Line
 
-	// 1. Create an empty object
-	objReg := c.regAlloc.Alloc()
-	c.emitMakeEmptyObject(objReg, line)
+	// 1. Create an empty object in hint register
+	c.emitMakeEmptyObject(hint, line)
 
 	// 2. Set properties one by one
 	for _, prop := range node.Properties {
@@ -288,23 +272,23 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 		}
 
 		// Compile Value into a temporary register
-		valueReg, err := c.compileNode(prop.Value, NoHint)
+		valueReg := c.regAlloc.Alloc()
+		_, err := c.compileNode(prop.Value, valueReg)
 		if err != nil {
+			c.regAlloc.Free(valueReg)
 			return BadRegister, err
 		}
-		debugPrintf("--- OL Value Compiled. regAlloc.Current(): %s\n", valueReg)
+		debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
 
-		// Emit OpSetProp: objReg[keyConstIdx] = valueReg
-		c.emitSetProp(objReg, valueReg, keyConstIdx, line)
+		// Emit OpSetProp: hint[keyConstIdx] = valueReg
+		c.emitSetProp(hint, valueReg, keyConstIdx, line)
 
-		// Free the temporary value register if it's safe to do so
-		// (Depends on how regAlloc and expression compilation manage registers.
-		// Assuming lastExprReg is available for freeing after use here).
-		c.regAlloc.Free(valueReg) // Free the register used for the value
+		// Free the temporary value register
+		c.regAlloc.Free(valueReg)
 	}
 
-	// The object is fully constructed in objReg
-	return objReg, nil
+	// The object is fully constructed in hint register
+	return hint, nil
 }
 
 func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Register) (Register, errors.PaseratiError) {
@@ -314,38 +298,45 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 	// Handle edge case: empty template ``
 	if len(parts) == 0 {
 		// Empty template becomes empty string
-		destReg := c.regAlloc.Alloc()
-		c.emitLoadNewConstant(destReg, vm.String(""), line)
-		return destReg, nil
+		c.emitLoadNewConstant(hint, vm.String(""), line)
+		return hint, nil
 	}
 
 	// Handle single part (just a string)
 	if len(parts) == 1 {
 		if stringPart, ok := parts[0].(*parser.TemplateStringPart); ok {
-			destReg := c.regAlloc.Alloc()
-			c.emitLoadNewConstant(destReg, vm.String(stringPart.Value), line)
-			return destReg, nil
+			c.emitLoadNewConstant(hint, vm.String(stringPart.Value), line)
+			return hint, nil
 		}
 		// Single interpolated expression: convert to string
-		exprReg, err := c.compileNode(parts[0], NoHint)
+		_, err := c.compileNode(parts[0], hint)
 		if err != nil {
 			return BadRegister, err
 		}
-		// Result is already in a register, but we might need to convert to string
+		// Result is already in hint register, but we might need to convert to string
 		// For now, assume expressions evaluate to their string representation
 		// TODO: Add explicit string conversion if needed
-		return exprReg, nil
+		return hint, nil
 	}
 
 	// Multiple parts: build up result using binary concatenation
 	var resultReg Register
 	var initialized bool = false
 
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
 	for _, part := range parts {
 		switch p := part.(type) {
 		case *parser.TemplateStringPart:
 			// String part: load as constant
 			stringReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, stringReg)
 			c.emitLoadNewConstant(stringReg, vm.String(p.Value), line)
 
 			if !initialized {
@@ -354,15 +345,16 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 			} else {
 				// Concatenate with previous result
 				newResultReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, newResultReg)
 				c.emitStringConcat(newResultReg, resultReg, stringReg, line)
-				c.regAlloc.Free(resultReg) // Free old result
-				c.regAlloc.Free(stringReg) // Free string constant
 				resultReg = newResultReg
 			}
 
 		default:
 			// Expression part: compile and concatenate
-			exprReg, err := c.compileNode(p, NoHint)
+			exprReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, exprReg)
+			_, err := c.compileNode(p, exprReg)
 			if err != nil {
 				return BadRegister, err
 			}
@@ -373,16 +365,19 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 			} else {
 				// Concatenate with previous result
 				newResultReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, newResultReg)
 				c.emitStringConcat(newResultReg, resultReg, exprReg, line)
-				c.regAlloc.Free(resultReg) // Free old result
-				c.regAlloc.Free(exprReg)   // Free expression result
 				resultReg = newResultReg
 			}
 		}
 	}
 
-	// Update register allocator state
-	return resultReg, nil
+	// Move final result to hint register if it's different
+	if resultReg != hint {
+		c.emitMove(hint, resultReg, line)
+	}
+
+	return hint, nil
 }
 
 // --- Modify signature again to return (uint16, []*Symbol, errors.PaseratiError) ---
@@ -416,12 +411,15 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 	// --- END NEW ---
 
+	debugPrintf("// [Compiling Function Literal] %s\n", determinedFuncName)
+
 	// 2. Define parameters in the function compiler's *enclosed* scope
 	for _, param := range node.Parameters {
 		reg := functionCompiler.regAlloc.Alloc()
 		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
 		// Pin the register since parameters can be captured by inner functions
 		functionCompiler.regAlloc.Pin(reg)
+		debugPrintf("// [Compiling Function Literal] %s: Parameter %s defined in R%d\n", determinedFuncName, param.Name.Value, reg)
 	}
 
 	// 3. Handle default parameters
@@ -452,7 +450,9 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			functionCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
-			defaultValueReg, err := functionCompiler.compileNode(param.DefaultValue, NoHint)
+			defaultValueReg := functionCompiler.regAlloc.Alloc()
+			fmt.Printf("[DEFAULT VALUE DEBUG] Compiling default value for param %s: %T with defaultValueReg=R%d\n", param.Name.Value, param.DefaultValue, defaultValueReg)
+			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
@@ -484,7 +484,9 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 
 	// 5. Compile the body using the function compiler
-	_, err := functionCompiler.compileNode(node.Body, NoHint)
+	bodyReg := functionCompiler.regAlloc.Alloc()
+	_, err := functionCompiler.compileNode(node.Body, bodyReg)
+	functionCompiler.regAlloc.Free(bodyReg) // Free since function body doesn't return a value
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)
 		// Proceed to create function object even if body has errors? Continue for now.

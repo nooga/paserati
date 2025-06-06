@@ -21,7 +21,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	const (
 		lhsIsIdentifier lhsInfoType = iota
 		lhsIsIndexExpr
-		lhsIsMemberExpr // <<< NEW
+		lhsIsMemberExpr
 	)
 	var lhsType lhsInfoType
 	var identInfo struct { // Info needed to store back to identifier
@@ -35,12 +35,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		arrayReg Register
 		indexReg Register
 	}
-	var memberInfo struct { // <<< NEW: Info needed for member expr
+	var memberInfo struct { // Info needed for member expr
 		objectReg    Register
 		nameConstIdx uint16
 	}
 
-	// ... (existing switch lhsNode := node.Left.(type) block remains unchanged) ...
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		// Clean up all temporary registers
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
 	switch lhsNode := node.Left.(type) {
 	case *parser.Identifier:
 		lhsType = lhsIsIdentifier
@@ -53,6 +61,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// For compound assignments, we need the current value
 			if node.Operator != "=" {
 				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
 				c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
 			} else {
 				currentValueReg = nilRegister // Not needed for simple assignment
@@ -66,6 +75,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				// For compound assignments, we need the current value
 				if node.Operator != "=" {
 					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
 					c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
 				} else {
 					currentValueReg = nilRegister // Not needed for simple assignment
@@ -82,46 +92,47 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				identInfo.isGlobal = false
 				identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
 				currentValueReg = c.regAlloc.Alloc() // Allocate temporary reg for current value
+				tempRegs = append(tempRegs, currentValueReg)
 				c.emitOpCode(vm.OpLoadFree, line)
 				c.emitByte(byte(currentValueReg))  // Destination register
 				c.emitByte(identInfo.upvalueIndex) // Upvalue index
 			}
 		}
-		// If currentValueReg is nilRegister here, it's an internal error (should be targetReg or newly allocated)
-		// EXCEPT for simple assignments to globals or member expressions where we don't need the current value
-		if currentValueReg == nilRegister && !(node.Operator == "=" && (identInfo.isGlobal || lhsType == lhsIsMemberExpr)) {
-			panic(fmt.Sprintf("Internal compiler error: currentValueReg is nilRegister for identifier '%s' (operator: %s, isGlobal: %v, lhsType: %d)", lhsNode.Value, node.Operator, identInfo.isGlobal, lhsType))
-		}
 
 	case *parser.IndexExpression:
 		lhsType = lhsIsIndexExpr
 		// Compile array expression
-		arrayReg, err := c.compileNode(lhsNode.Left, NoHint)
+		arrayReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, arrayReg)
+		_, err := c.compileNode(lhsNode.Left, arrayReg)
 		if err != nil {
 			return BadRegister, err
 		}
 		indexInfo.arrayReg = arrayReg
 
 		// Compile index expression
-		indexReg, err := c.compileNode(lhsNode.Index, NoHint)
+		indexReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, indexReg)
+		_, err = c.compileNode(lhsNode.Index, indexReg)
 		if err != nil {
-			// TODO: Consider freeing arrayReg if allocated?
 			return BadRegister, err
 		}
 		indexInfo.indexReg = indexReg
 
 		// Load the current value at the index
 		currentValueReg = c.regAlloc.Alloc()
-		c.emitOpCode(vm.OpGetIndex, line) // Use assignment token line
+		tempRegs = append(tempRegs, currentValueReg)
+		c.emitOpCode(vm.OpGetIndex, line)
 		c.emitByte(byte(currentValueReg))
 		c.emitByte(byte(indexInfo.arrayReg))
 		c.emitByte(byte(indexInfo.indexReg))
-		// Keep arrayReg and indexReg allocated for the potential SetIndex later
 
-	case *parser.MemberExpression: // <<< NEW CASE
+	case *parser.MemberExpression:
 		lhsType = lhsIsMemberExpr
 		// Compile the object expression
-		objectReg, err := c.compileNode(lhsNode.Object, NoHint)
+		objectReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, objectReg)
+		_, err := c.compileNode(lhsNode.Object, objectReg)
 		if err != nil {
 			return BadRegister, err
 		}
@@ -129,40 +140,28 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 		// For now, assume property is an Identifier (obj.prop)
 		propIdent := lhsNode.Property
-		// if !ok {
-		// 	// TODO: Handle computed properties later (obj[expr] = ...)
-		// 	return NewCompileError(lhsNode.Property, "compiler only supports identifier properties for assignment (e.g., obj.prop = ...)")
-		// }
 		propName := propIdent.Value
 		memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
 
 		// If compound or logical assignment, load the current property value
 		if node.Operator != "=" {
 			currentValueReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, currentValueReg)
 			c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
 		} else {
 			// For simple assignment '=', we don't need the current value
-			currentValueReg = nilRegister // Indicate not loaded (relevant for freeing later perhaps)
+			currentValueReg = nilRegister
 		}
-		// Keep objectReg allocated for the potential SetProp later
-
-	// case *parser.MemberExpression: // TODO: Add later
-	// 	lhsType = lhsIsMemberExpr
-	// 	// ... compile object, load property value, store info ...
 
 	default:
 		return BadRegister, NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier, index expression, or member expression, got %T", node.Left))
 	}
-	// --- End Refactored LHS Handling ---
 
-	// This register will hold the final value of the assignment expression
-	// (either the original LHS value or the RHS value depending on the operator and short-circuiting)
-	var storeOpTargetReg Register
-	// needsStore init'd true
+	// Track temporary registers used for operation results
+	var operationTempRegs []Register
 
-	var jumpPastStore int = -1 // New jump placeholder
-
-	var jumpToEnd int = -1 // Jumps past RHS eval *and* the store block
+	var jumpPastStore int = -1
+	var jumpToEnd int = -1
 
 	// --- Logical Assignment Operators (&&=, ||=, ??=) ---
 	if node.Operator == "&&=" || node.Operator == "||=" || node.Operator == "??=" {
@@ -181,264 +180,232 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// If TRUTHY -> jumpToEnd (skip RHS eval AND store)
 			jumpToEnd = c.emitPlaceholderJump(vm.OpJump, 0, line)
 		case "??=":
-			// Use efficient nullish check opcode - much more register efficient!
+			// Use efficient nullish check opcode
 			isNullishReg := c.regAlloc.Alloc()
+			operationTempRegs = append(operationTempRegs, isNullishReg)
 			c.emitIsNullish(isNullishReg, currentValueReg, line)
 			// If NOT nullish -> jumpToEnd (skip RHS eval AND store)
 			jumpToEnd = c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
-			// If IS nullish -> continue to RHS eval (jumpToEvalRhs is not needed)
-			c.regAlloc.Free(isNullishReg)
 		}
 
 		// --- Evaluate RHS Path ---
 		if jumpToEvalRhs != -1 {
-			c.patchJump(jumpToEvalRhs) // Patch jumps that lead here
+			c.patchJump(jumpToEvalRhs)
 		}
 		// This block is only reached if short-circuit didn't happen
-		rhsValueReg, err := c.compileNode(node.Value, NoHint)
+		rhsValueReg = c.regAlloc.Alloc()
+		operationTempRegs = append(operationTempRegs, rhsValueReg)
+		_, err := c.compileNode(node.Value, rhsValueReg)
 		if err != nil {
 			return BadRegister, err
 		}
 		evaluatedRhs = true
-		storeOpTargetReg = rhsValueReg // Result is RHS
-		needsStore = true              // Store IS needed
-		debugPrintf("// DEBUG Assign Logical RHS: Evaluated RHS. rhsValueReg=R%d, storeOpTargetReg=R%d, needsStore=%v\n", rhsValueReg, storeOpTargetReg, needsStore)
-		// Jump unconditionally past the merge/short-circuit logic block
+		needsStore = true
+		debugPrintf("// DEBUG Assign Logical RHS: Evaluated RHS. rhsValueReg=R%d, needsStore=%v\n", rhsValueReg, needsStore)
+
+		// Move RHS result to hint register for final result
+		if rhsValueReg != hint {
+			c.emitMove(hint, rhsValueReg, line)
+		}
+
+		// Jump past merge logic
 		jumpPastMerge := c.emitPlaceholderJump(vm.OpJump, 0, line)
 
-		// --- Skip RHS Path --- // This comment block is now conceptually skipped by the jump above
-
-		// --- Merge BEFORE Store (for Logical Ops only) ---
-		c.patchJump(jumpPastMerge) // Patch the jump from the RHS path to land AFTER this block
-		// Determine final state based on path, but store happens later
-		if !evaluatedRhs { // This block is now only reachable via short-circuit
-			storeOpTargetReg = currentValueReg // Result is original LHS value
-			needsStore = false                 // Store is NOT needed
-			debugPrintf("// DEBUG Assign Logical ShortCircuit: Path taken. currentValueReg=R%d, storeOpTargetReg set to R%d, needsStore=%v\n", currentValueReg, storeOpTargetReg, needsStore)
-			// If store is not needed, we MUST jump past the store block
-			jumpPastStore = c.emitPlaceholderJump(vm.OpJump, 0, line) // Jump past store
-		}
-		debugPrintf("// DEBUG Assign Logical End: Final decision. storeOpTargetReg=R%d, needsStore=%v\n", storeOpTargetReg, needsStore)
-
-		// Free RHS reg if evaluated and not needed for store (maybe?)
-		if evaluatedRhs && rhsValueReg != storeOpTargetReg {
-			// c.regAlloc.Free(rhsValueReg) // Revisit freeing
+		// --- Merge logic ---
+		c.patchJump(jumpPastMerge)
+		if !evaluatedRhs {
+			needsStore = false
+			// Move current value to hint register for final result
+			if currentValueReg != hint {
+				c.emitMove(hint, currentValueReg, line)
+			}
+			debugPrintf("// DEBUG Assign Logical ShortCircuit: needsStore=%v\n", needsStore)
+			jumpPastStore = c.emitPlaceholderJump(vm.OpJump, 0, line)
 		}
 
 	} else { // --- Non-Logical Assignment ---
 		// Compile RHS
-		rhsValueReg, err := c.compileNode(node.Value, NoHint)
+		rhsValueReg := c.regAlloc.Alloc()
+		operationTempRegs = append(operationTempRegs, rhsValueReg)
+		_, err := c.compileNode(node.Value, rhsValueReg)
 		if err != nil {
-			// TODO: Free registers allocated for LHS?
 			return BadRegister, NewCompileError(node, "error compiling RHS").CausedBy(err)
 		}
 
-		// Determine result register: in-place for local vars, new reg otherwise
-		var resultReg Register // Will hold result if not calculated in-place
-		needsStore = true      // Non-logical assignments always need storing
+		needsStore = true
 
 		switch node.Operator {
 		// --- Compound Arithmetic ---
 		case "+=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitAdd(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitAdd(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitAdd(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "-=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitSubtract(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitSubtract(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitSubtract(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "*=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitMultiply(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitMultiply(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitMultiply(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "/=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitDivide(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitDivide(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitDivide(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "%=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitRemainder(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitRemainder(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitRemainder(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "**=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitExponent(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitExponent(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitExponent(hint, currentValueReg, rhsValueReg, line)
 			}
 
 		// --- Compound Bitwise / Shift ---
 		case "&=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitBitwiseAnd(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitBitwiseAnd(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitBitwiseAnd(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "|=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitBitwiseOr(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitBitwiseOr(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitBitwiseOr(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "^=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitBitwiseXor(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitBitwiseXor(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitBitwiseXor(hint, currentValueReg, rhsValueReg, line)
 			}
 		case "<<=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitShiftLeft(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitShiftLeft(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitShiftLeft(hint, currentValueReg, rhsValueReg, line)
 			}
 		case ">>=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitShiftRight(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitShiftRight(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitShiftRight(hint, currentValueReg, rhsValueReg, line)
 			}
 		case ">>>=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
 				c.emitUnsignedShiftRight(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
-				storeOpTargetReg = currentValueReg
+				if currentValueReg != hint {
+					c.emitMove(hint, currentValueReg, line)
+				}
 			} else {
-				resultReg = c.regAlloc.Alloc()
-				c.emitUnsignedShiftRight(resultReg, currentValueReg, rhsValueReg, line) // To new reg
-				storeOpTargetReg = resultReg
+				c.emitUnsignedShiftRight(hint, currentValueReg, rhsValueReg, line)
 			}
 
 		// --- Simple Assignment ---
 		case "=":
-			// Simple assignment: result is just the RHS value.
-			// We use a new register for the result to simplify the store step.
-			resultReg = c.regAlloc.Alloc()
-			c.emitMove(resultReg, rhsValueReg, line)
-			storeOpTargetReg = resultReg
+			// Simple assignment: result is just the RHS value moved to hint
+			if rhsValueReg != hint {
+				c.emitMove(hint, rhsValueReg, line)
+			}
 
 		default:
-			// TODO: Free registers?
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))
 		}
-		// The final value to be stored is now in storeOpTargetReg
-
-		// Free the intermediate resultReg if it was used and is different from storeOpTargetReg
-		if resultReg != 0 && resultReg != storeOpTargetReg {
-			c.regAlloc.Free(resultReg)
-		}
-		// Free the RHS register if it's different from the final stored value
-		if rhsValueReg != storeOpTargetReg {
-			c.regAlloc.Free(rhsValueReg)
-		}
 	}
-	// --- End Operator Logic ---
+
+	// Clean up operation temporary registers
+	for _, reg := range operationTempRegs {
+		c.regAlloc.Free(reg)
+	}
 
 	// --- Store Result Back to LHS ---
-	// This block is now potentially skipped by a jump if needsStore is false
-	if needsStore { // Check flag again just before emitting store code
+	if needsStore {
 		switch lhsType {
 		case lhsIsIdentifier:
 			if identInfo.isGlobal {
 				// Global variable assignment
-				c.emitSetGlobal(identInfo.globalIdx, storeOpTargetReg, line)
+				c.emitSetGlobal(identInfo.globalIdx, hint, line)
 			} else if identInfo.isUpvalue {
-				c.emitSetUpvalue(identInfo.upvalueIndex, storeOpTargetReg, line)
+				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
 			} else {
-				if storeOpTargetReg != identInfo.targetReg {
-					debugPrintf("// DEBUG Assign Store Ident: Emitting Move R%d <- R%d\n", identInfo.targetReg, storeOpTargetReg)
-					c.emitMove(identInfo.targetReg, storeOpTargetReg, line)
+				if hint != identInfo.targetReg {
+					debugPrintf("// DEBUG Assign Store Ident: Emitting Move R%d <- R%d\n", identInfo.targetReg, hint)
+					c.emitMove(identInfo.targetReg, hint, line)
 				} else {
-					debugPrintf("// DEBUG Assign Store Ident: Skipping Move R%d <- R%d (already inplace)\n", identInfo.targetReg, storeOpTargetReg)
+					debugPrintf("// DEBUG Assign Store Ident: Skipping Move R%d <- R%d (already inplace)\n", identInfo.targetReg, hint)
 				}
 			}
 		case lhsIsIndexExpr:
-			debugPrintf("// DEBUG Assign Store Index: Emitting SetIndex [%d][%d] = R%d\n", indexInfo.arrayReg, indexInfo.indexReg, storeOpTargetReg)
+			debugPrintf("// DEBUG Assign Store Index: Emitting SetIndex [%d][%d] = R%d\n", indexInfo.arrayReg, indexInfo.indexReg, hint)
 			c.emitOpCode(vm.OpSetIndex, line)
 			c.emitByte(byte(indexInfo.arrayReg))
 			c.emitByte(byte(indexInfo.indexReg))
-			c.emitByte(byte(storeOpTargetReg))
-			// Free array and index registers after storing
-			c.regAlloc.Free(indexInfo.arrayReg)
-			c.regAlloc.Free(indexInfo.indexReg)
-		case lhsIsMemberExpr: // <<< NEW CASE
-			debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, storeOpTargetReg)
-			// Emit OpSetProp: objReg[keyConstIdx] = valueReg
-			c.emitSetProp(memberInfo.objectReg, storeOpTargetReg, memberInfo.nameConstIdx, line)
-			// Free object register after storing
-			if debugAssignment {
-				fmt.Printf("// DEBUG Assignment: About to free object register R%d (held 'this')\n", memberInfo.objectReg)
-			}
-			c.regAlloc.Free(memberInfo.objectReg)
+			c.emitByte(byte(hint))
+		case lhsIsMemberExpr:
+			debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
+			c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
 		}
 	} else {
 		debugPrintf("// DEBUG Assign Store: Skipped store operation (needsStore=false)\n")
-		// If we skipped the store, we might still need to free LHS registers
-		// (especially for index/member expressions whose parts were compiled)
-		switch lhsType {
-		case lhsIsIndexExpr:
-			c.regAlloc.Free(indexInfo.arrayReg)
-			c.regAlloc.Free(indexInfo.indexReg)
-		case lhsIsMemberExpr:
-			c.regAlloc.Free(memberInfo.objectReg)
-		}
 	}
 
 	// --- Final Merge Point & Patching ---
-	// Patch jumps that needed to skip the store block
 	if jumpPastStore != -1 {
 		c.patchJump(jumpPastStore)
 	}
-	// Patch jumps from initial short-circuit checks that needed to skip everything (RHS eval AND store)
 	if jumpToEnd != -1 {
 		c.patchJump(jumpToEnd)
 	}
 
-	// --- Finalize ---
 	if debugAssignment {
-		fmt.Printf("// DEBUG Assignment Finalize: storeOpTargetReg=R%d\n", storeOpTargetReg)
+		fmt.Printf("// DEBUG Assignment Finalize: hint=R%d\n", hint)
 	}
 
-	return storeOpTargetReg, nil
+	return hint, nil
 }

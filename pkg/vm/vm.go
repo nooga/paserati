@@ -331,6 +331,17 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 // run is the main execution loop.
 // It now returns the InterpretResult status AND the final script Value.
 func (vm *VM) run() (InterpretResult, Value) {
+	// Panic recovery for better debugging of register access issues
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "\n[VM PANIC RECOVERED]: %v\n", r)
+			vm.printFrameStack()
+			vm.printDisassemblyAroundIP()
+			// Re-panic to maintain original behavior
+			panic(r)
+		}
+	}()
+
 	// --- Caching frame variables ---
 	if vm.frameCount == 0 {
 		return InterpretOK, Undefined // Nothing to run
@@ -395,6 +406,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 		case OpLoadUndefined:
 			reg := code[ip]
 			ip++
+			// fmt.Printf("[VM DEBUG] OpLoadUndefined reg=%d at IP=%d, registers length = %d\n", reg, ip-2, len(registers))
 			registers[reg] = Undefined // Use local Undefined
 
 		case OpLoadTrue:
@@ -2178,9 +2190,10 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	}
 	vm.errors = append(vm.errors, runtimeErr)
 
-	// --- Keep stderr print temporarily for immediate feedback during refactor? ---
-	// fmt.Fprintf(os.Stderr, "[line %d] Runtime Error: %s\n", line, msg)
-	// --- Remove later ---
+	// Enhanced error reporting: print frame stack and disassembly
+	fmt.Fprintf(os.Stderr, "[VM Runtime Error]: %s\n", msg)
+	vm.printFrameStack()
+	vm.printDisassemblyAroundIP()
 
 	return InterpretRuntimeError
 }
@@ -2222,4 +2235,61 @@ func stringFromCharCodeStaticImpl(args []Value) Value {
 	}
 
 	return NewString(string(result))
+}
+
+// printFrameStack prints the current call stack for debugging
+func (vm *VM) printFrameStack() {
+	fmt.Fprintf(os.Stderr, "\n=== Frame Stack ===\n")
+	if vm.frameCount == 0 {
+		fmt.Fprintf(os.Stderr, "  (no frames)\n")
+		return
+	}
+
+	for i := vm.frameCount - 1; i >= 0; i-- {
+		frame := &vm.frames[i]
+		funcName := "<unknown>"
+		regCount := 0
+
+		if frame.closure != nil && frame.closure.Fn != nil {
+			funcName = frame.closure.Fn.Name
+			regCount = frame.closure.Fn.RegisterSize
+		}
+
+		fmt.Fprintf(os.Stderr, "  [%d] %s (ip=%d, regs=%d, regSlice=%d)\n",
+			i, funcName, frame.ip, regCount, len(frame.registers))
+	}
+	fmt.Fprintf(os.Stderr, "===================\n\n")
+}
+
+// printDisassemblyAroundIP prints disassembly around the current instruction pointer
+func (vm *VM) printDisassemblyAroundIP() {
+	if vm.frameCount == 0 {
+		fmt.Fprintf(os.Stderr, "No frame to disassemble\n")
+		return
+	}
+
+	frame := &vm.frames[vm.frameCount-1]
+	if frame.closure == nil || frame.closure.Fn == nil || frame.closure.Fn.Chunk == nil {
+		fmt.Fprintf(os.Stderr, "No chunk to disassemble\n")
+		return
+	}
+
+	chunk := frame.closure.Fn.Chunk
+	currentIP := frame.ip - 1 // Error occurred at ip-1
+
+	fmt.Fprintf(os.Stderr, "=== FULL CHUNK DISASSEMBLY (Current IP: %d) ===\n", currentIP)
+
+	// Dump the entire chunk to see the full context
+	funcName := "<unknown>"
+	if frame.closure != nil && frame.closure.Fn != nil {
+		funcName = frame.closure.Fn.Name
+	}
+
+	fullDisasm := chunk.DisassembleChunk(funcName)
+	fmt.Fprintf(os.Stderr, "%s", fullDisasm)
+
+	fmt.Fprintf(os.Stderr, "\n=== CURRENT IP MARKER ===\n")
+	fmt.Fprintf(os.Stderr, "Current IP: %d (instruction that was about to execute)\n", currentIP)
+	fmt.Fprintf(os.Stderr, "Frame registers length: %d (R0-R%d)\n", len(frame.registers), len(frame.registers)-1)
+	fmt.Fprintf(os.Stderr, "==========================\n\n")
 }

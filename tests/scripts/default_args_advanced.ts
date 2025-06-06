@@ -1,5 +1,5 @@
 // Advanced test file for default arguments
-// expect: true
+// expect: [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]
 
 // Default arguments with simple expressions (no parameter references for now)
 function addWithDefaults(a: number, b: number = 5, c: number = 10): number {
@@ -58,18 +58,20 @@ let test13 = mixed("test", 5, false, "default") === "test 5 false default";
 let test14 = processData("hello") === "[PREFIX: hello]";
 let test15 = processData("world", "LOG") === "[LOG: world]";
 
-test1 &&
-  test2 &&
-  test3 &&
-  test4 &&
-  test5 &&
-  test6 &&
-  test7 &&
-  test8 &&
-  test9 &&
-  test10 &&
-  test11 &&
-  test12 &&
-  test13 &&
-  test14 &&
-  test15;
+[
+  test1,
+  test2,
+  test3,
+  test4,
+  test5,
+  test6,
+  test7,
+  test8,
+  test9,
+  test10,
+  test11,
+  test12,
+  test13,
+  test14,
+  test15,
+];

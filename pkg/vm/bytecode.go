@@ -391,9 +391,9 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 
 	// --- NEW: Global Variable Operations Disassembly ---
 	case OpGetGlobal:
-		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx, GlobalIdx(16bit)
+		return c.registerGlobalInstruction(builder, instruction.String(), offset) // Rx, GlobalIdx(16bit)
 	case OpSetGlobal:
-		return c.constantRegisterInstruction(builder, instruction.String(), offset, "GlobalIdx") // GlobalIdx(16bit), Ry
+		return c.globalRegisterInstruction(builder, instruction.String(), offset) // GlobalIdx(16bit), Ry
 	// --- END NEW ---
 
 	default:
@@ -818,4 +818,44 @@ func (c *Chunk) newInstruction(builder *strings.Builder, name string, offset int
 	argCount := c.Code[offset+3]
 	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, Args %d\n", name, destReg, constructorReg, argCount))
 	return offset + 4 // Opcode + Rx + ConstructorReg + ArgCount
+}
+
+// registerGlobalInstruction handles OpGetGlobal Rx, GlobalIdx(16bit)
+func (c *Chunk) registerGlobalInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+
+	reg := c.Code[offset+1]
+	globalIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+
+	builder.WriteString(fmt.Sprintf("%-16s R%d, GlobalIdx %d\n", name, reg, globalIdx))
+	return offset + 4 // Opcode + Rx + GlobalIdx(2 bytes)
+}
+
+// globalRegisterInstruction handles OpSetGlobal GlobalIdx(16bit), Ry
+func (c *Chunk) globalRegisterInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+
+	globalIdx := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+	regY := c.Code[offset+3]
+
+	builder.WriteString(fmt.Sprintf("%-16s GlobalIdx %d, R%d\n", name, globalIdx, regY))
+	return offset + 4 // Opcode + GlobalIdx(2 bytes) + Ry
 }

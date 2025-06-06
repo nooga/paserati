@@ -9,7 +9,7 @@ import (
 )
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register) (Register, errors.PaseratiError) {
-	debugPrintf("// DEBUG compileLetStatement: Defining '%s' (is top-level: %v)\n", node.Name.Value, c.enclosing == nil) // <<< ADDED
+	debugPrintf("// DEBUG compileLetStatement: Defining '%s' (is top-level: %v)\n", node.Name.Value, c.enclosing == nil)
 	var valueReg Register = nilRegister
 	var err errors.PaseratiError
 	isValueFunc := false // Flag to track if value is a function literal
@@ -19,13 +19,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		// --- Handle let f = function g() {} or let f = function() {} ---
 		// 1. Define the *variable name (f)* temporarily for potential recursion
 		//    within the function body (e.g., recursive anonymous function).
-		debugPrintf("// DEBUG compileLetStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value) // <<< ADDED
+		debugPrintf("// DEBUG compileLetStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value)
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
 		// 2. Compile the function literal body.
 		//    Pass the variable name (f) as the hint for the function object's name
 		//    if the function literal itself is anonymous.
-		// <<< MODIFY Call Site >>>
 		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
 			// Error already added to c.errors by compileFunctionLiteral
@@ -33,31 +32,35 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		}
 		// 3. Create the closure object
 		closureReg := c.regAlloc.Alloc()
-		debugPrintf("// DEBUG compileLetStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols)) // <<< ADDED
-		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)                                                                                 // <<< Call emitClosure
+		defer c.regAlloc.Free(closureReg)
+		debugPrintf("// DEBUG compileLetStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols))
+		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 		// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-		debugPrintf("// DEBUG compileLetStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg) // <<< ADDED
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)                                                                   // <<< Use closureReg
+		debugPrintf("// DEBUG compileLetStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg)
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
 		// The variable's value (the closure) is now set.
 		// We don't need to assign to valueReg anymore for this path.
 
 	} else if node.Value != nil {
 		// Compile other value types normally
-		valueReg, err = c.compileNode(node.Value, NoHint)
+		valueReg = c.regAlloc.Alloc()
+		defer c.regAlloc.Free(valueReg)
+		_, err = c.compileNode(node.Value, valueReg)
 		if err != nil {
 			return BadRegister, err
 		}
 	} // else: node.Value is nil (implicit undefined handled below)
 
 	// Handle implicit undefined (`let x;`)
-	if valueReg == nilRegister && !isValueFunc { // <<< Check !isValueFunc
+	if valueReg == nilRegister && !isValueFunc {
 		undefReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(undefReg)
 		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 		valueReg = undefReg
 		// Define symbol for the `let x;` case
-		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
+		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg)
 		if c.enclosing == nil {
 			// Top-level: use global variable
 			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
@@ -72,7 +75,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 	} else if !isValueFunc {
 		// Define symbol ONLY for non-function values.
 		// Function assignments were handled above by UpdateRegister.
-		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg) // <<< ADDED
+		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg)
 		if c.enclosing == nil {
 			// Top-level: use global variable
 			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
@@ -117,7 +120,6 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
 		// 2. Compile the function literal body, passing const name as hint.
-		// <<< MODIFY Call Site >>>
 		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
 		if err != nil {
 			// Error already added to c.errors by compileFunctionLiteral
@@ -125,17 +127,20 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		}
 		// 3. Create the closure object
 		closureReg := c.regAlloc.Alloc()
-		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
+		defer c.regAlloc.Free(closureReg)
+		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 		// 4. Update the temporary definition for the *const name (f)* with the closure register.
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg) // <<< Use closureReg
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
 		// The constant's value (the closure) is now set.
 		// We don't need to assign to valueReg anymore for this path.
 
 	} else {
 		// Compile other value types normally
-		valueReg, err = c.compileNode(node.Value, NoHint)
+		valueReg = c.regAlloc.Alloc()
+		defer c.regAlloc.Free(valueReg)
+		_, err = c.compileNode(node.Value, valueReg)
 		if err != nil {
 			return BadRegister, err
 		}
@@ -180,7 +185,6 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 		if funcLit, ok := node.ReturnValue.(*parser.FunctionLiteral); ok {
 			// Compile directly, bypassing the compileNode case for declarations.
 			// Pass empty hint as it's an anonymous function expression here.
-			// <<< MODIFY Call Site >>>
 			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, "")
 			if err != nil {
 				// Error already added to c.errors by compileFunctionLiteral
@@ -188,12 +192,15 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 			}
 			// Create the closure object
 			closureReg := c.regAlloc.Alloc()
-			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
-			returnReg = closureReg                                          // <<< Closure is the value to return
+			defer c.regAlloc.Free(closureReg)
+			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
+			returnReg = closureReg
 
 		} else {
 			// Compile other expression types normally via compileNode
-			returnReg, err = c.compileNode(node.ReturnValue, NoHint)
+			returnReg = c.regAlloc.Alloc()
+			defer c.regAlloc.Free(returnReg)
+			_, err = c.compileNode(node.ReturnValue, returnReg)
 			if err != nil {
 				return BadRegister, err
 			}
@@ -206,8 +213,8 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 			return BadRegister, err
 		}
 		// Emit return using the register holding the final value (closure or other expression result)
-		c.emitReturn(returnReg, node.Token.Line) // <<< Use potentially updated returnReg
-		return returnReg, nil                    // Return the register containing the returned value
+		c.emitReturn(returnReg, node.Token.Line)
+		return returnReg, nil // Return the register containing the returned value
 	} else {
 		// Return undefined implicitly using the optimized opcode
 		c.emitOpCode(vm.OpReturnUndefined, node.Token.Line)
@@ -232,7 +239,9 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Regis
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
 	// --- Compile Condition ---
-	conditionReg, err := c.compileNode(node.Condition, NoHint)
+	conditionReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(conditionReg)
+	_, err := c.compileNode(node.Condition, conditionReg)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
 		return BadRegister, NewCompileError(node, "error compiling while condition").CausedBy(err)
@@ -242,8 +251,9 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Regis
 	jumpToEndPlaceholderPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
 
 	// --- Compile Body ---
-	// FIXME REGALLOC is this ok?
-	_, err = c.compileNode(node.Body, NoHint)
+	bodyReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(bodyReg)
+	_, err = c.compileNode(node.Body, bodyReg)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
 		return BadRegister, NewCompileError(node, "error compiling while body").CausedBy(err)
@@ -283,11 +293,19 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Regis
 }
 
 func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register) (Register, errors.PaseratiError) {
-	// No new scope for initializer, it shares the outer scope
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
 
 	// 1. Initializer
 	if node.Initializer != nil {
-		if _, err := c.compileNode(node.Initializer, NoHint); err != nil {
+		initReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, initReg)
+		if _, err := c.compileNode(node.Initializer, initReg); err != nil {
 			return BadRegister, err
 		}
 	}
@@ -305,7 +323,9 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 	// --- 2. Condition (Optional) ---
 	var conditionExitJumpPlaceholderPos int = -1
 	if node.Condition != nil {
-		conditionReg, err := c.compileNode(node.Condition, NoHint)
+		conditionReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, conditionReg)
+		_, err := c.compileNode(node.Condition, conditionReg)
 		if err != nil {
 			// Clean up loop context if condition compilation fails
 			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
@@ -316,7 +336,9 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 
 	// --- 3. Body ---
 	// Continue placeholders will be added to loopContext here
-	if _, err := c.compileNode(node.Body, NoHint); err != nil {
+	bodyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, bodyReg)
+	if _, err := c.compileNode(node.Body, bodyReg); err != nil {
 		// Clean up loop context if body compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, err
@@ -326,14 +348,15 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 
 	// *** Patch Continue Jumps ***
 	// Patch continue jumps to land here, *before* the update expression
-	// updateStartPos := len(c.chunk.Code) // REMOVED - patchJump uses current position
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList { // Use context on stack
 		c.patchJump(continuePos) // Patch placeholder to jump to current position
 	}
 
 	// *** Compile Update Expression (Optional) ***
 	if node.Update != nil {
-		if _, err := c.compileNode(node.Update, NoHint); err != nil {
+		updateReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, updateReg)
+		if _, err := c.compileNode(node.Update, updateReg); err != nil {
 			// Clean up loop context if update compilation fails
 			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 			return BadRegister, err
@@ -350,7 +373,6 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 	// --- 6. Loop End & Patch Condition/Breaks ---
 
 	// Position *after* the loop (target for breaks/condition exit) is implicitly len(c.chunk.Code)
-	// loopEndPos := len(c.chunk.Code) // REMOVED - Not needed if patchJump uses current len()
 
 	// Pop loop context
 	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
@@ -410,6 +432,14 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
 	// 1. Mark Loop Start (before body)
 	loopStartPos := len(c.chunk.Code)
 
@@ -422,7 +452,9 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
 	// 3. Compile Body (executes at least once)
-	if _, err := c.compileNode(node.Body, NoHint); err != nil {
+	bodyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, bodyReg)
+	if _, err := c.compileNode(node.Body, bodyReg); err != nil {
 		// Pop context if body compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, NewCompileError(node, "error compiling do-while body").CausedBy(err)
@@ -432,7 +464,9 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 	_ = len(c.chunk.Code) // conditionPos := len(c.chunk.Code)
 
 	// 5. Compile Condition
-	conditionReg, err := c.compileNode(node.Condition, NoHint)
+	conditionReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, conditionReg)
+	_, err := c.compileNode(node.Condition, conditionReg)
 	if err != nil {
 		// Pop context if condition compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
@@ -443,6 +477,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 	// We need OpJumpIfTrue, but we only have OpJumpIfFalse.
 	// So, we invert the condition and use OpJumpIfFalse.
 	invertedConditionReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, invertedConditionReg)
 	c.emitNot(invertedConditionReg, conditionReg, line)
 
 	// Now jump back if the *inverted* condition is FALSE (i.e., original was TRUE)
@@ -454,9 +489,6 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 	c.emitOpCode(vm.OpJumpIfFalse, line)    // Use OpJumpIfFalse on inverted result
 	c.emitByte(byte(invertedConditionReg))  // Jump based on the inverted condition
 	c.emitUint16(uint16(int16(backOffset))) // Emit calculated signed offset
-
-	// Free the temporary inverted condition register
-	c.regAlloc.Free(invertedConditionReg)
 
 	// --- 7. Loop End & Patching ---
 	// Position after the loop (target for breaks) is implicitly len(c.chunk.Code)
@@ -506,8 +538,18 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 //  3. Handle default: If reached (all cases failed), execute default body.
 //  4. Patch all jumps.
 func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Register) (Register, errors.PaseratiError) {
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
 	// 1. Compile the expression being switched on
-	switchExprReg, err := c.compileNode(node.Expression, NoHint)
+	switchExprReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, switchExprReg)
+	_, err := c.compileNode(node.Expression, switchExprReg)
 	if err != nil {
 		return BadRegister, err
 	}
@@ -552,27 +594,29 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 
 		if caseClause.Condition != nil { // Regular 'case expr:'
 			// Compile the case condition
-			caseCondReg, err := c.compileNode(caseClause.Condition, NoHint)
+			caseCondReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, caseCondReg)
+			_, err := c.compileNode(caseClause.Condition, caseCondReg)
 			if err != nil {
 				return BadRegister, err
 			}
 
 			// Compare switch expression value with case condition value
-			// Use Alloc() instead of Allocate()
 			matchReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, matchReg)
 			c.emitStrictEqual(matchReg, switchExprReg, caseCondReg, caseLine)
 
 			// If no match, jump to the next case test (or default/end)
 			jumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, matchReg, caseLine)
 			caseTestFailJumps = append(caseTestFailJumps, jumpPos)
-			// Remove Free(), not available in current allocator
-			c.regAlloc.Free(matchReg)
 
 			// Record the start position of the body for potential jumps
 			caseBodyStartPositions[i] = c.currentPosition()
 
 			// Compile the case body
-			_, err = c.compileNode(caseClause.Body, NoHint)
+			caseBodyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, caseBodyReg)
+			_, err = c.compileNode(caseClause.Body, caseBodyReg)
 			if err != nil {
 				return BadRegister, err
 			}
@@ -588,7 +632,9 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 			caseBodyStartPositions[i] = c.currentPosition()
 
 			// Compile the default case body
-			_, err = c.compileNode(caseClause.Body, NoHint)
+			defaultBodyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, defaultBodyReg)
+			_, err = c.compileNode(caseClause.Body, defaultBodyReg)
 			if err != nil {
 				return BadRegister, err
 			}
@@ -602,9 +648,6 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	for _, jumpPos := range caseTestFailJumps {
 		c.patchJump(jumpPos)
 	}
-
-	// Remove unused variable
-	// endSwitchPos := c.currentPosition()
 
 	// Patch all break jumps and end-of-case jumps
 	loopCtx := c.currentLoopContext()
@@ -620,15 +663,22 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	// Pop the break context
 	c.popLoopContext()
 
-	// Remove Free(), not available in current allocator
-	c.regAlloc.Free(switchExprReg)
-
 	return BadRegister, nil
 }
 
 func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Register) (Register, errors.PaseratiError) {
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
 	// 1. Compile the iterable expression first
-	iterableReg, err := c.compileNode(node.Iterable, NoHint)
+	iterableReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iterableReg)
+	_, err := c.compileNode(node.Iterable, iterableReg)
 	if err != nil {
 		return BadRegister, err
 	}
@@ -636,8 +686,11 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 	// 2. Set up iteration variables
 	// For arrays: we need an index counter and length
 	indexReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, indexReg)
 	lengthReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, lengthReg)
 	elementReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, elementReg)
 
 	// Initialize index to 0
 	c.emitLoadNewConstant(indexReg, vm.Number(0), node.Token.Line)
@@ -661,6 +714,7 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 
 	// 3. Check if index < length (loop condition)
 	conditionReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, conditionReg)
 	c.emitOpCode(vm.OpLess, node.Token.Line)
 	c.emitByte(byte(conditionReg)) // destination
 	c.emitByte(byte(indexReg))     // left operand (index)
@@ -703,7 +757,9 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 	}
 
 	// 6. Compile loop body
-	if _, err := c.compileNode(node.Body, NoHint); err != nil {
+	bodyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, bodyReg)
+	if _, err := c.compileNode(node.Body, bodyReg); err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, err
 	}
@@ -715,14 +771,12 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 
 	// 8. Increment index
 	oneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, oneReg)
 	c.emitLoadNewConstant(oneReg, vm.Number(1), node.Token.Line)
 	c.emitOpCode(vm.OpAdd, node.Token.Line)
 	c.emitByte(byte(indexReg)) // destination (reuse indexReg)
 	c.emitByte(byte(indexReg)) // left operand (current index)
 	c.emitByte(byte(oneReg))   // right operand (1)
-
-	// Free the temporary constant register
-	c.regAlloc.Free(oneReg)
 
 	// 9. Jump back to loop start
 	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2

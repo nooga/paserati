@@ -180,9 +180,16 @@ func (ra *RegisterAllocator) Peek() Register {
 // (representing the number of register slots needed).
 func (ra *RegisterAllocator) MaxRegs() Register {
 	if ra.nextReg == 0 {
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC] MaxRegs = 0 (no registers allocated)\n")
+		}
 		return 0 // No registers allocated
 	}
-	return ra.maxReg + 1
+	result := ra.maxReg + 1
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] MaxRegs = %d (maxReg=%d + 1)\n", result, ra.maxReg)
+	}
+	return result
 }
 
 // Reset prepares the allocator for a new scope (e.g., a new function).

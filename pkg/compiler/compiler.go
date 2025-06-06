@@ -198,8 +198,10 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	}
 	// --- END Hoisted Global Function Processing ---
 
+	resultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(resultReg)
 	// Use the already type-checked program node.
-	resultReg, err := c.compileNode(program, NoHint)
+	resultReg, err := c.compileNode(program, resultReg)
 	if err != nil {
 		// An error occurred during compilation. addError should have already been called
 		// when the error was generated lower down. The returned `err` is mainly for control flow.
@@ -243,19 +245,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	switch node := node.(type) {
 	case *parser.Program:
 		debugPrintf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
-		var lastMeaningfulReg Register = Register(0)                // Default to R0 for empty programs
 		for i, stmt := range node.Statements {
 			debugPrintf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
-			tlReg, err := c.compileNode(stmt, NoHint)
+			tlReg, err := c.compileNode(stmt, hint)
 			if err != nil {
 				debugPrintf("// DEBUG Program: Error compiling statement %d: %v\n", i, err) // <<< ADDED
 				return BadRegister, err                                                     // Propagate errors up
-			}
-
-			// Only update the result if this statement produced a meaningful value
-			// (i.e., not BadRegister which means "no meaningful result")
-			if tlReg != BadRegister {
-				lastMeaningfulReg = tlReg
 			}
 
 			// <<< ADDED vvv
@@ -271,73 +266,62 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			}
 			// <<< ADDED ^^^
 		}
-		debugPrintf("// DEBUG Program: Finished statement loop. Final result: R%d\n", lastMeaningfulReg) // <<< ADDED
-		return lastMeaningfulReg, nil                                                                    // Return the last meaningful result
+		debugPrintf("// DEBUG Program: Finished statement loop. Final result: R%d\n", hint) // <<< ADDED
+		return hint, nil                                                                    // Return the last meaningful result
 
 	// --- NEW: Handle Function Literal as an EXPRESSION first ---
 	// This handles anonymous/named functions used in assignments, arguments, etc.
 	case *parser.FunctionLiteral:
 		debugPrintf("// DEBUG Node-FunctionLiteral: Compiling function literal used as expression '%s'.\n", node.Name) // <<< DEBUG
 		// Determine hint: empty for anonymous, Name.Value if named (though named exprs are rare)
-		hint := ""
+		nameHint := ""
 		if node.Name != nil {
-			hint = node.Name.Value
+			nameHint = node.Name.Value
 		}
 		// <<< MODIFY Call Site >>>
-		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(node, hint)
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(node, nameHint)
 		if err != nil {
 			// Error already added to c.errors by compileFunctionLiteral
 			return BadRegister, nil // Return nil error here, main error is tracked
 		}
 
 		// Allocate register for the closure and emit OpClosure
-		closureReg := c.regAlloc.Alloc()
-		c.emitClosure(closureReg, funcConstIndex, node, freeSymbols) // <<< Call emitClosure
+		//closureReg := c.regAlloc.Alloc()
+		c.emitClosure(hint, funcConstIndex, node, freeSymbols) // <<< Call emitClosure
 
 		// emitClosure now handles setting lastExprReg/Valid correctly.
-		return closureReg, nil // <<< Return nil error
+		return hint, nil // <<< Return nil error
 
 	// --- NEW: Handle Shorthand Method as an EXPRESSION ---
 	// This handles shorthand methods in object literals like { method() { ... } }
 	case *parser.ShorthandMethod:
 		debugPrintf("// DEBUG Node-ShorthandMethod: Compiling shorthand method '%s'.\n", node.Name.Value)
 		// Shorthand methods are essentially function expressions with a known name
-		hint := ""
+		nameHint := ""
 		if node.Name != nil {
-			hint = node.Name.Value
+			nameHint = node.Name.Value
 		}
 
-		funcConstIndex, freeSymbols, err := c.compileShorthandMethod(node, hint)
+		funcConstIndex, freeSymbols, err := c.compileShorthandMethod(node, nameHint)
 		if err != nil {
 			return BadRegister, err
 		}
 
 		// Allocate register for the closure and emit OpClosure using the generic emitClosureGeneric
-		closureReg := c.regAlloc.Alloc()
-		c.emitClosureGeneric(closureReg, funcConstIndex, node.Token.Line, node.Name, freeSymbols)
+		c.emitClosureGeneric(hint, funcConstIndex, node.Token.Line, node.Name, freeSymbols)
 
-		return closureReg, nil
+		return hint, nil
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
 		for _, stmt := range node.Statements {
-			_, err := c.compileNode(stmt, NoHint)
+			// For statements in blocks, allocate a temporary register if needed
+			stmtReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(stmt, stmtReg)
+			c.regAlloc.Free(stmtReg) // Free immediately since block statements don't return values
 			if err != nil {
 				return BadRegister, err // Propagate errors up
 			}
-			// DISABLED: Register freeing was causing infinite loops
-			// Conservative register freeing - only inside functions and only if register is not pinned
-			// Also check that the register is not in the symbol table (holding a variable)
-			// if c.enclosing != nil && c.regAlloc.CurrentSet() {
-			// 	currentReg := c.regAlloc.Current()
-			// 	if !c.regAlloc.IsPinned(currentReg) && !c.isRegisterInSymbolTable(currentReg) {
-			// 		debugPrintf("// DEBUG BlockStatement: Freeing register R%d after statement (in function, not pinned, not in symbol table)\n", currentReg)
-			// 		c.regAlloc.Free(currentReg)
-			// 	} else {
-			// 		debugPrintf("// DEBUG BlockStatement: NOT freeing register R%d (pinned=%v, inSymbolTable=%v)\n",
-			// 			currentReg, c.regAlloc.IsPinned(currentReg), c.isRegisterInSymbolTable(currentReg))
-			// 	}
-			// }
 		}
 		return BadRegister, nil // ADDED: Explicit return
 
@@ -382,97 +366,91 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			}
 
 			// 3. Create the closure object in a register
-			closureReg := c.regAlloc.Alloc()
-			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
+			c.emitClosure(hint, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
 
 			// 4. Update the symbol table entry with the register holding the closure.
-			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, closureReg) // <<< Use closureReg
+			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, hint) // <<< Use closureReg
 
 			// Function declarations don't produce a value for the script result
-			return closureReg, nil // Handled
+			return hint, nil // Handled
 		}
 
 		// Original ExpressionStatement logic for other expressions
 		debugPrintf("// DEBUG ExprStmt: Compiling non-func-decl expression %T.\n", node.Expression)
-		tlReg, err := c.compileNode(node.Expression, NoHint)
+		hint, err := c.compileNode(node.Expression, hint)
 		if err != nil {
 			return BadRegister, err
 		}
-		debugPrintf("// DEBUG ExprStmt: Top Level. CurrentReg: R%d.\n", tlReg) // <<< ADDED
+		debugPrintf("// DEBUG ExprStmt: Top Level. CurrentReg: R%d.\n", hint) // <<< ADDED
 		// Result register is left allocated, potentially unused otherwise.
 		// TODO: Consider freeing registers?
-		return tlReg, nil // ADDED: Explicit return
+		return hint, nil // ADDED: Explicit return
 
 	case *parser.LetStatement:
-		return c.compileLetStatement(node, NoHint) // TODO: Fix this
+		return c.compileLetStatement(node, hint) // TODO: Fix this
 
 	case *parser.ConstStatement:
-		return c.compileConstStatement(node, NoHint) // TODO: Fix this
+		return c.compileConstStatement(node, hint) // TODO: Fix this
 
 	case *parser.ReturnStatement: // Although less relevant for top-level script return
-		return c.compileReturnStatement(node, NoHint) // TODO: Fix this
+		return c.compileReturnStatement(node, hint) // TODO: Fix this
 
 	case *parser.WhileStatement:
-		return c.compileWhileStatement(node, NoHint) // TODO: Fix this
+		return c.compileWhileStatement(node, hint) // TODO: Fix this
 
 	case *parser.ForStatement:
-		return c.compileForStatement(node, NoHint) // TODO: Fix this
+		return c.compileForStatement(node, hint) // TODO: Fix this
 
 	case *parser.ForOfStatement:
-		return c.compileForOfStatement(node, NoHint) // TODO: Fix this
+		return c.compileForOfStatement(node, hint) // TODO: Fix this
 
 	case *parser.BreakStatement:
-		return c.compileBreakStatement(node, NoHint) // TODO: Fix this
+		return c.compileBreakStatement(node, hint) // TODO: Fix this
 
 	case *parser.ContinueStatement:
-		return c.compileContinueStatement(node, NoHint) // TODO: Fix this
+		return c.compileContinueStatement(node, hint) // TODO: Fix this
 
 	case *parser.DoWhileStatement:
-		return c.compileDoWhileStatement(node, NoHint) // TODO: Fix this
+		return c.compileDoWhileStatement(node, hint) // TODO: Fix this
 
 	case *parser.SwitchStatement: // Added
-		return c.compileSwitchStatement(node, NoHint) // TODO: Fix this
+		return c.compileSwitchStatement(node, hint) // TODO: Fix this
 
 	// --- Expressions (excluding FunctionLiteral which is handled above) ---
 	case *parser.NumberLiteral:
-		destReg := c.regAlloc.Alloc()
-		c.emitLoadNewConstant(destReg, vm.Number(node.Value), node.Token.Line)
-		return destReg, nil // ADDED: Explicit return
+		//fmt.Printf("[NUMBER LITERAL DEBUG] Compiling NumberLiteral value=%f with hint=R%d\n", node.Value, hint)
+		c.emitLoadNewConstant(hint, vm.Number(node.Value), node.Token.Line)
+		return hint, nil // ADDED: Explicit return
 
 	case *parser.StringLiteral:
 		// Handle string literals by adding them to constants
-		destReg := c.regAlloc.Alloc()
-		c.emitLoadNewConstant(destReg, vm.String(node.Value), node.Token.Line)
-		return destReg, nil
+		c.emitLoadNewConstant(hint, vm.String(node.Value), node.Token.Line)
+		return hint, nil
 
 	case *parser.TemplateLiteral:
-		return c.compileTemplateLiteral(node, NoHint) // TODO: Fix this
+		return c.compileTemplateLiteral(node, hint) // TODO: Fix this
 
 	case *parser.BooleanLiteral:
 		// Handle boolean literals by using appropriate opcode
-		reg := c.regAlloc.Alloc()
 		if node.Value {
-			c.emitLoadTrue(reg, node.Token.Line)
+			c.emitLoadTrue(hint, node.Token.Line)
 		} else {
-			c.emitLoadFalse(reg, node.Token.Line)
+			c.emitLoadFalse(hint, node.Token.Line)
 		}
-		return reg, nil
+		return hint, nil
 
 	case *parser.NullLiteral:
-		destReg := c.regAlloc.Alloc()
-		c.emitLoadNull(destReg, node.Token.Line)
-		return destReg, nil // ADDED: Explicit return
+		c.emitLoadNull(hint, node.Token.Line)
+		return hint, nil // ADDED: Explicit return
 
 	case *parser.UndefinedLiteral: // Added
-		destReg := c.regAlloc.Alloc()
-		c.emitLoadUndefined(destReg, node.Token.Line)
-		return destReg, nil // ADDED: Explicit return
+		c.emitLoadUndefined(hint, node.Token.Line)
+		return hint, nil // ADDED: Explicit return
 
 	case *parser.ThisExpression: // Added for this keyword
 		// Load 'this' value from current call context
-		destReg := c.regAlloc.Alloc()
-		c.emitLoadThis(destReg, node.Token.Line)
-		return destReg, nil
+		c.emitLoadThis(hint, node.Token.Line)
+		return hint, nil
 
 	case *parser.Identifier:
 		// <<< ADDED: Check for built-in first >>>
@@ -483,10 +461,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			constIdx := c.chunk.AddConstant(builtinValue) // Add vm.Value to constant pool
 
 			// Allocate register and load the constant
-			destReg := c.regAlloc.Alloc()
-			c.emitLoadConstant(destReg, constIdx, node.Token.Line) // Use existing emitter
+			c.emitLoadConstant(hint, constIdx, node.Token.Line) // Use existing emitter
 
-			return destReg, nil // Built-in handled successfully
+			return hint, nil // Built-in handled successfully
 		}
 
 		// <<< ADDED: Check for built-in objects >>>
@@ -496,10 +473,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			constIdx := c.chunk.AddConstant(builtinObj) // Add the object to constant pool
 
 			// Allocate register and load the constant
-			destReg := c.regAlloc.Alloc()
-			c.emitLoadConstant(destReg, constIdx, node.Token.Line) // Use existing emitter
+			c.emitLoadConstant(hint, constIdx, node.Token.Line) // Use existing emitter
 
-			return destReg, nil // Built-in object handled successfully
+			return hint, nil // Built-in object handled successfully
 		}
 		// <<< END ADDED >>>
 
@@ -515,9 +491,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// Variable not found in any scope, treat as a global variable access
 			// This will return undefined at runtime if the global doesn't exist
 			globalIdx := c.getOrAssignGlobalIndex(node.Value)
-			destReg := c.regAlloc.Alloc()
-			c.emitGetGlobal(destReg, globalIdx, node.Token.Line)
-			return destReg, nil // Handle as global access
+			c.emitGetGlobal(hint, globalIdx, node.Token.Line)
+			return hint, nil // Handle as global access
 		}
 		isLocal := definingTable == c.currentSymbolTable
 		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
@@ -528,27 +503,23 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			symbolRef.Register == nilRegister && // Is it our temporary definition?
 			scopeName == "Function" // Are we compiling inside a function? // Removed check against c.compilingFuncName
 
-		var destReg Register
 		if isRecursiveSelfCall {
 			debugPrintf("// DEBUG Identifier '%s': Identified as RECURSIVE SELF CALL\n", node.Value) // <<< ADDED
 			// Treat as a free variable that captures the closure itself.
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-			destReg = c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
-			c.emitByte(byte(destReg))
+			c.emitByte(byte(hint))
 			c.emitByte(byte(freeVarIndex))
 		} else if symbolRef.IsGlobal {
 			// This is a global variable, use OpGetGlobal
 			debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED
-			destReg = c.regAlloc.Alloc()
-			c.emitGetGlobal(destReg, symbolRef.GlobalIndex, node.Token.Line)
+			c.emitGetGlobal(hint, symbolRef.GlobalIndex, node.Token.Line)
 		} else if !isLocal {
 			debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
 			// This is a regular free variable (defined in an outer scope that's not global)
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-			destReg = c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
-			c.emitByte(byte(destReg))
+			c.emitByte(byte(hint))
 			c.emitByte(byte(freeVarIndex))
 		} else {
 			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED
@@ -560,60 +531,59 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// during its temporary definition phase inappropriately.
 				panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
 			}
-			destReg = c.regAlloc.Alloc()
-			debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, destReg, srcReg)
-			c.emitMove(destReg, srcReg, node.Token.Line)
+			debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, hint, srcReg)
+			c.emitMove(hint, srcReg, node.Token.Line)
 		}
-		return destReg, nil // ADDED: Explicit return
+		return hint, nil // ADDED: Explicit return
 
 	case *parser.PrefixExpression:
-		return c.compilePrefixExpression(node, NoHint) // TODO: Fix this
+		return c.compilePrefixExpression(node, hint) // TODO: Fix this
 
 	case *parser.TypeofExpression:
-		return c.compileTypeofExpression(node, NoHint) // TODO: Fix this
+		return c.compileTypeofExpression(node, hint) // TODO: Fix this
 
 	case *parser.InfixExpression:
-		return c.compileInfixExpression(node, NoHint) // TODO: Fix this
+		return c.compileInfixExpression(node, hint) // TODO: Fix this
 
 	case *parser.ArrowFunctionLiteral: // Keep this separate
-		return c.compileArrowFunctionLiteral(node, NoHint) // TODO: Fix this
+		return c.compileArrowFunctionLiteral(node, hint) // TODO: Fix this
 
 	case *parser.CallExpression:
-		return c.compileCallExpression(node, NoHint) // TODO: Fix this
+		return c.compileCallExpression(node, hint) // TODO: Fix this
 
 	case *parser.IfExpression:
-		return c.compileIfExpression(node, NoHint) // TODO: Fix this
+		return c.compileIfExpression(node, hint) // TODO: Fix this
 
 	case *parser.TernaryExpression:
-		return c.compileTernaryExpression(node, NoHint) // TODO: Fix this
+		return c.compileTernaryExpression(node, hint) // TODO: Fix this
 
 	case *parser.AssignmentExpression:
-		return c.compileAssignmentExpression(node, NoHint) // TODO: Fix this
+		return c.compileAssignmentExpression(node, hint) // TODO: Fix this
 
 	case *parser.UpdateExpression:
-		return c.compileUpdateExpression(node, NoHint) // TODO: Fix this
+		return c.compileUpdateExpression(node, hint) // TODO: Fix this
 
 	// --- NEW: Array/Index ---
 	case *parser.ArrayLiteral:
-		return c.compileArrayLiteral(node, NoHint) // TODO: Fix this
+		return c.compileArrayLiteral(node, hint) // TODO: Fix this
 	case *parser.ObjectLiteral: // <<< NEW
-		return c.compileObjectLiteral(node, NoHint) // TODO: Fix this
+		return c.compileObjectLiteral(node, hint) // TODO: Fix this
 	case *parser.IndexExpression:
-		return c.compileIndexExpression(node, NoHint) // TODO: Fix this
+		return c.compileIndexExpression(node, hint) // TODO: Fix this
 		// --- End Array/Index ---
 
 		// --- Member Expression ---
 	case *parser.MemberExpression:
-		return c.compileMemberExpression(node, NoHint) // TODO: Fix this
+		return c.compileMemberExpression(node, hint) // TODO: Fix this
 		// --- END Member Expression ---
 
 		// --- Optional Chaining Expression ---
 	case *parser.OptionalChainingExpression:
-		return c.compileOptionalChainingExpression(node, NoHint) // TODO: Fix this
+		return c.compileOptionalChainingExpression(node, hint) // TODO: Fix this
 		// --- END Optional Chaining Expression ---
 
 	case *parser.NewExpression:
-		return c.compileNewExpression(node, NoHint) // TODO: Fix this
+		return c.compileNewExpression(node, hint) // TODO: Fix this
 
 	// --- NEW: Rest Parameters and Spread Syntax ---
 	case *parser.SpreadElement:
@@ -700,7 +670,8 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 			functionCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
-			defaultValueReg, err := functionCompiler.compileNode(param.DefaultValue, NoHint)
+			defaultValueReg := functionCompiler.regAlloc.Alloc()
+			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
@@ -730,7 +701,9 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 
 	// 7. Compile the body using the function compiler
-	_, err := functionCompiler.compileNode(node.Body, NoHint)
+	bodyReg := functionCompiler.regAlloc.Alloc()
+	_, err := functionCompiler.compileNode(node.Body, bodyReg)
+	functionCompiler.regAlloc.Free(bodyReg) // Free since function body doesn't return a value
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)
 	}
@@ -763,99 +736,74 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 }
 
 // compileArgumentsWithOptionalHandling compiles the provided arguments and pads missing optional
-// parameters with undefined values. Returns the register list and total argument count.
-func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpression) ([]Register, int, errors.PaseratiError) {
-	// 1. Compile the provided arguments, handling spread elements
-	argRegs := []Register{}
-	hasSpread := false
+// parameters with undefined values. Uses contiguous allocation to place arguments in their final positions.
+func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpression, firstTargetReg Register) ([]Register, int, errors.PaseratiError) {
+	// 1. Determine the expected argument count including optional parameters
+	providedArgCount := len(node.Arguments)
 
-	for _, arg := range node.Arguments {
-		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
-			hasSpread = true
-			// Compile the expression being spread (should be an array)
-			arrayReg, err := c.compileNode(spreadElement.Argument, NoHint)
-			if err != nil {
-				return nil, 0, err
-			}
-
-			// Note: Length access removed - spread syntax not fully implemented yet
-			// This is just a placeholder to mark the spread element
-			// The VM currently treats spread args the same as regular args
-
-			// For now, we'll mark this as needing special handling later
-			// Store the register that contains the array to be spread
-			argRegs = append(argRegs, arrayReg)
-
-			// Early return since spread is not fully implemented
-			return argRegs, 1, NewCompileError(spreadElement, "spread syntax in function calls not fully implemented yet")
-		}
-
-		// Regular argument
-		argReg, err := c.compileNode(arg, NoHint)
-		if err != nil {
-			return nil, 0, err
-		}
-		argRegs = append(argRegs, argReg)
-	}
-
-	// If we have spread elements, we need special handling in the VM
-	if hasSpread {
-		// For now, return the registers as-is and let the VM handle spreading
-		// This is a simplified implementation - a full implementation would
-		// need more sophisticated bytecode generation
-		return argRegs, len(argRegs), nil
-	}
-
-	providedArgCount := len(argRegs)
-
-	// 2. Check if we need to handle optional parameters (only if no spread)
-	// Get the function type from the call expression to see if it has optional parameters
+	// Get function type to check for optional parameters
 	functionType := node.Function.GetComputedType()
-	if functionType == nil {
-		// No type information available, use provided arguments as-is
-		return argRegs, providedArgCount, nil
-	}
-
 	var expectedParamCount int
 	var optionalParams []bool
 
-	// Extract parameter information based on function type
-	switch ft := functionType.(type) {
-	case *types.FunctionType:
-		expectedParamCount = len(ft.ParameterTypes)
-		optionalParams = ft.OptionalParams
-	case *types.OverloadedFunctionType:
-		// For overloaded functions, use the implementation signature
-		if ft.Implementation != nil {
-			expectedParamCount = len(ft.Implementation.ParameterTypes)
-			optionalParams = ft.Implementation.OptionalParams
-		} else {
-			// No implementation info, use provided arguments as-is
-			return argRegs, providedArgCount, nil
-		}
-	default:
-		// Unknown function type, use provided arguments as-is
-		return argRegs, providedArgCount, nil
-	}
-
-	// 3. If we have fewer arguments than expected parameters, pad with undefined for optional params
-	if providedArgCount < expectedParamCount && len(optionalParams) == expectedParamCount {
-		for i := providedArgCount; i < expectedParamCount; i++ {
-			// Only pad if the parameter is optional
-			if i < len(optionalParams) && optionalParams[i] {
-				// Allocate register and load undefined
-				undefinedReg := c.regAlloc.Alloc()
-				c.emitLoadUndefined(undefinedReg, node.Token.Line)
-				argRegs = append(argRegs, undefinedReg)
-			} else {
-				// Required parameter missing - this should have been caught by type checker
-				// but let's not pad it to avoid masking errors
-				break
+	if functionType != nil {
+		switch ft := functionType.(type) {
+		case *types.FunctionType:
+			expectedParamCount = len(ft.ParameterTypes)
+			optionalParams = ft.OptionalParams
+		case *types.OverloadedFunctionType:
+			if ft.Implementation != nil {
+				expectedParamCount = len(ft.Implementation.ParameterTypes)
+				optionalParams = ft.Implementation.OptionalParams
 			}
 		}
 	}
 
-	return argRegs, len(argRegs), nil
+	// Determine final argument count (provided args + undefined padding for optional params)
+	finalArgCount := providedArgCount
+	if len(optionalParams) == expectedParamCount && providedArgCount < expectedParamCount {
+		// Count how many optional parameters we need to pad
+		for i := providedArgCount; i < expectedParamCount; i++ {
+			if i < len(optionalParams) && optionalParams[i] {
+				finalArgCount++
+			} else {
+				break // Stop at first required parameter
+			}
+		}
+	}
+
+	// 2. Build register list for arguments without reserving them
+	// The hint-based compilation will handle register allocation correctly
+	var argRegs []Register
+	if finalArgCount > 0 {
+		for i := 0; i < finalArgCount; i++ {
+			targetReg := firstTargetReg + Register(i)
+			argRegs = append(argRegs, targetReg)
+		}
+	}
+
+	// 3. Compile provided arguments directly into their target positions
+	for i, arg := range node.Arguments {
+		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+			// Clean up allocated registers
+			return nil, 0, NewCompileError(spreadElement, "spread syntax in function calls not fully implemented yet")
+		}
+
+		// Compile argument directly into its target register
+		targetReg := argRegs[i]
+		_, err := c.compileNode(arg, targetReg)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+
+	// 4. Pad missing optional parameters with undefined
+	for i := providedArgCount; i < finalArgCount; i++ {
+		targetReg := argRegs[i]
+		c.emitLoadUndefined(targetReg, node.Token.Line)
+	}
+
+	return argRegs, finalArgCount, nil
 }
 
 // addFreeSymbol adds a symbol identified as a free variable to the compiler's list.
@@ -1274,7 +1222,7 @@ func (c *Compiler) resolveCycle(cycle []Register, moves map[Register]Register, l
 	// Move each register to the next in sequence
 	for i := 0; i < len(cycle)-1; i++ {
 		sourceReg := cycle[i+1]
-		targetReg := moves[cycle[i+1]]
+		targetReg := moves[cycle[i]] // Fix: use moves[cycle[i]], not moves[cycle[i+1]]
 		debugPrintf("// DEBUG ResolveCycle: Move R%d -> R%d (chain move %d)\n", sourceReg, targetReg, i)
 		c.emitMove(targetReg, sourceReg, line)
 	}
