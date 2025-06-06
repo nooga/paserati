@@ -30,10 +30,10 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = true       // <<< CHANGED back to false
+const debugCompiler = false      // <<< CHANGED back to false
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
-const debugPrint = true // Enable debug output
+const debugPrint = false // Enable debug output
 
 func debugPrintf(format string, args ...interface{}) {
 	if debugCompiler {
@@ -237,42 +237,36 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	switch node := node.(type) {
 	case *parser.Program:
 		debugPrintf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
-		var tlReg Register
-		var err errors.PaseratiError
+		var lastMeaningfulReg Register = Register(0)                // Default to R0 for empty programs
 		for i, stmt := range node.Statements {
 			debugPrintf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
-			tlReg, err = c.compileNode(stmt, NoHint)
+			tlReg, err := c.compileNode(stmt, NoHint)
 			if err != nil {
 				debugPrintf("// DEBUG Program: Error compiling statement %d: %v\n", i, err) // <<< ADDED
 				return BadRegister, err                                                     // Propagate errors up
 			}
+
+			// Only update the result if this statement produced a meaningful value
+			// (i.e., not BadRegister which means "no meaningful result")
+			if tlReg != BadRegister {
+				lastMeaningfulReg = tlReg
+			}
+
 			// <<< ADDED vvv
 			if c.enclosing == nil {
-				debugPrintf("// DEBUG Program: After compiling statement %d (%T).\n", i, stmt)
+				debugPrintf("// DEBUG Program: After compiling statement %d (%T). Result: R%d\n", i, stmt, tlReg)
 				// For top level, be conservative - don't free registers between statements
 				// The VM will handle cleanup when the program ends
 			} else {
 				// Inside function body - be more aggressive about freeing registers
 				// But only free if we have more than a reasonable number allocated
 				// DISABLED: Focus on expression-level freeing instead
-				// if c.regAlloc.MaxRegs() > 10 {
-				// 	// Find registers that are not pinned and not in the symbol table
-				// 	for reg := Register(0); reg < Register(c.regAlloc.MaxRegs()); reg++ {
-				// 		if !c.regAlloc.IsPinned(reg) && !c.isRegisterInSymbolTable(reg) {
-				// 			// Check if it's in the free list already
-				// 			if !c.regAlloc.IsInFreeList(reg) {
-				// 				debugPrintf("// DEBUG Program: Freeing register R%d after statement %d (in function, safe cleanup)\n", reg, i)
-				// 				c.regAlloc.Free(reg)
-				// 			}
-				// 		}
-				// 	}
-				// }
 				debugPrintf("// DEBUG Program: Inside function, but inter-statement freeing disabled\n")
 			}
 			// <<< ADDED ^^^
 		}
-		debugPrintf("// DEBUG Program: Finished statement loop.\n") // <<< ADDED
-		return tlReg, nil                                           // ADDED: Explicit return for Program case
+		debugPrintf("// DEBUG Program: Finished statement loop. Final result: R%d\n", lastMeaningfulReg) // <<< ADDED
+		return lastMeaningfulReg, nil                                                                    // Return the last meaningful result
 
 	// --- NEW: Handle Function Literal as an EXPRESSION first ---
 	// This handles anonymous/named functions used in assignments, arguments, etc.

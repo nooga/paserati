@@ -207,11 +207,13 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 		}
 		// Emit return using the register holding the final value (closure or other expression result)
 		c.emitReturn(returnReg, node.Token.Line) // <<< Use potentially updated returnReg
+		return returnReg, nil                    // Return the register containing the returned value
 	} else {
 		// Return undefined implicitly using the optimized opcode
 		c.emitOpCode(vm.OpReturnUndefined, node.Token.Line)
+		// For undefined returns, we could allocate a register with undefined, but for now return BadRegister
+		return BadRegister, nil
 	}
-	return BadRegister, nil
 }
 
 // --- Loop Compilation (Updated) ---

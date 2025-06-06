@@ -1,5 +1,5 @@
 // Test file for object type literals
-// expect: [Function: createPoint]
+// expect: {x: 10, y: 20}
 
 // Basic object type literal
 let person: { name: string; age: number } = { name: "John", age: 30 };
@@ -36,3 +36,5 @@ function createPoint(): { x: number; y: number } {
 }
 
 let point: { x: number; y: number } = createPoint();
+
+point;
