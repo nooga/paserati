@@ -30,7 +30,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false      // <<< CHANGED back to false
+const debugCompiler = true       // <<< CHANGED back to false
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
 const debugPrint = true // Enable debug output
@@ -53,8 +53,6 @@ type Compiler struct {
 	enclosing          *Compiler
 	freeSymbols        []*Symbol
 	errors             []errors.PaseratiError
-	lastExprReg        Register
-	lastExprRegValid   bool
 	loopContextStack   []*LoopContext
 	compilingFuncName  string
 	typeChecker        *checker.Checker // Holds the checker instance
@@ -76,7 +74,6 @@ func NewCompiler() *Compiler {
 		enclosing:          nil,
 		freeSymbols:        []*Symbol{},
 		errors:             []errors.PaseratiError{},
-		lastExprRegValid:   false,
 		loopContextStack:   make([]*LoopContext, 0),
 		compilingFuncName:  "<script>",
 		typeChecker:        nil, // Initialized to nil, can be set externally
@@ -183,8 +180,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			}
 
 			// 3. Create the Closure with the actual freeSymbols (not nil)
-			closureReg := c.regAlloc.Alloc()                                // Allocate register for the closure object
-			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols) // Use actual freeSymbols
+			closureReg := c.emitClosure(c.regAlloc.Alloc(), funcConstIndex, funcLit, freeSymbols) // Use actual freeSymbols
 
 			// 4. Update the symbol table entry with the register holding the closure
 			c.currentSymbolTable.UpdateRegister(name, closureReg) // Update from nilRegister to actual register
@@ -195,14 +191,12 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 
 			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d, stored at global index %d\n", name, len(freeSymbols), closureReg, globalIdx)
 
-			// Invalidate lastExprReg, as the hoisted function definition itself isn't the result.
-			c.lastExprRegValid = false
 		}
 	}
 	// --- END Hoisted Global Function Processing ---
 
 	// Use the already type-checked program node.
-	_, err := c.compileNode(program, NoHint)
+	resultReg, err := c.compileNode(program, NoHint)
 	if err != nil {
 		// An error occurred during compilation. addError should have already been called
 		// when the error was generated lower down. The returned `err` is mainly for control flow.
@@ -213,14 +207,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// (Type errors were caught earlier and returned).
 	if len(c.errors) == 0 {
 		if c.enclosing == nil { // Top-level script
-			// <<< ADD DEBUG PRINT HERE >>>
-			debugPrintf("// DEBUG Compile End: Final Return Check. lastExprRegValid: %v, lastExprReg: R%d\n", c.lastExprRegValid, c.lastExprReg)
-			if c.lastExprRegValid {
-				c.emitReturn(c.lastExprReg, 0) // Use line 0 for implicit final return
-			} else {
-				debugPrintf("// DEBUG Compile End: Emitting OpReturnUndefined because lastExprRegValid is false.\n") // <<< ADDED
-				c.emitOpCode(vm.OpReturnUndefined, 0)                                                                // Use line 0 for implicit final return
-			}
+			c.emitReturn(resultReg, 0)
 		} else {
 			// Inside a function, OpReturn or OpReturnUndefined should have been emitted.
 			// Add one just in case of missing return paths (though type checker might catch this).
@@ -249,21 +236,19 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	switch node := node.(type) {
 	case *parser.Program:
-		if c.enclosing == nil {
-			debugPrintf("// DEBUG Program Start: Resetting lastExprRegValid.\n") // <<< ADDED
-			c.lastExprRegValid = false                                           // Reset for the program start
-		}
 		debugPrintf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
+		var tlReg Register
+		var err errors.PaseratiError
 		for i, stmt := range node.Statements {
 			debugPrintf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
-			_, err := c.compileNode(stmt, NoHint)
+			tlReg, err = c.compileNode(stmt, NoHint)
 			if err != nil {
 				debugPrintf("// DEBUG Program: Error compiling statement %d: %v\n", i, err) // <<< ADDED
 				return BadRegister, err                                                     // Propagate errors up
 			}
 			// <<< ADDED vvv
 			if c.enclosing == nil {
-				debugPrintf("// DEBUG Program: After compiling statement %d (%T). lastExprRegValid: %v, lastExprReg: R%d\n", i, stmt, c.lastExprRegValid, c.lastExprReg)
+				debugPrintf("// DEBUG Program: After compiling statement %d (%T).\n", i, stmt)
 				// For top level, be conservative - don't free registers between statements
 				// The VM will handle cleanup when the program ends
 			} else {
@@ -287,7 +272,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// <<< ADDED ^^^
 		}
 		debugPrintf("// DEBUG Program: Finished statement loop.\n") // <<< ADDED
-		return BadRegister, nil                                     // ADDED: Explicit return for Program case
+		return tlReg, nil                                           // ADDED: Explicit return for Program case
 
 	// --- NEW: Handle Function Literal as an EXPRESSION first ---
 	// This handles anonymous/named functions used in assignments, arguments, etc.
@@ -310,7 +295,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		c.emitClosure(closureReg, funcConstIndex, node, freeSymbols) // <<< Call emitClosure
 
 		// emitClosure now handles setting lastExprReg/Valid correctly.
-		return BadRegister, nil // <<< Return nil error
+		return closureReg, nil // <<< Return nil error
 
 	// --- NEW: Handle Shorthand Method as an EXPRESSION ---
 	// This handles shorthand methods in object literals like { method() { ... } }
@@ -331,15 +316,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		closureReg := c.regAlloc.Alloc()
 		c.emitClosureGeneric(closureReg, funcConstIndex, node.Token.Line, node.Name, freeSymbols)
 
-		return BadRegister, nil
+		return closureReg, nil
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
-		// Block statements don't affect the top-level last expression directly
-		// (unless maybe the block IS the top level? Edge case?)
-		// The last statement *within* the block might matter if it's the consequence
-		// of an if-expression, but let's handle that there.
-		originalLastExprValid := c.lastExprRegValid // Save state if inside top-level
 		for _, stmt := range node.Statements {
 			_, err := c.compileNode(stmt, NoHint)
 			if err != nil {
@@ -359,11 +339,6 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// 	}
 			// }
 		}
-		if c.enclosing == nil {
-			// Restore previous state unless the block *itself* should provide the value?
-			// Let's assume block statements themselves don't provide the final script value.
-			c.lastExprRegValid = originalLastExprValid
-		}
 		return BadRegister, nil // ADDED: Explicit return
 
 	// --- Statements ---
@@ -376,11 +351,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return BadRegister, nil
 
 	case *parser.FunctionSignature: // Added
-		// Function signatures are handled during type checking and don't need compilation
-		// They are processed in the checker to build overloaded function types
-		if c.enclosing == nil {
-			c.lastExprRegValid = false // Signatures don't produce a value
-		}
+
 		return BadRegister, nil
 
 	case *parser.ExpressionStatement:
@@ -395,9 +366,6 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			if symbolRef, _, found := c.currentSymbolTable.Resolve(funcLit.Name.Value); found && symbolRef.Register != nilRegister {
 				debugPrintf("// DEBUG ExprStmt: Function '%s' already hoisted, skipping duplicate processing.\n", funcLit.Name.Value)
 				// Function was already hoisted and processed, skip it
-				if c.enclosing == nil {
-					c.lastExprRegValid = false // Function declarations don't produce a value
-				}
 				return BadRegister, nil
 			}
 
@@ -421,109 +389,61 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, closureReg) // <<< Use closureReg
 
 			// Function declarations don't produce a value for the script result
-			if c.enclosing == nil {
-				c.lastExprRegValid = false
-			}
-			return BadRegister, nil // Handled
+			return closureReg, nil // Handled
 		}
 
 		// Original ExpressionStatement logic for other expressions
 		debugPrintf("// DEBUG ExprStmt: Compiling non-func-decl expression %T.\n", node.Expression)
-		_, err := c.compileNode(node.Expression, NoHint)
+		tlReg, err := c.compileNode(node.Expression, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		if c.enclosing == nil { // If at top level, track this as potential final value
-			currentReg := c.regAlloc.Current()                                                               // <<< ADDED
-			debugPrintf("// DEBUG ExprStmt: Top Level. CurrentReg: R%d. Setting lastExprReg.\n", currentReg) // <<< ADDED
-			c.lastExprReg = currentReg                                                                       // <<< MODIFIED (was c.regAlloc.Current())
-			c.lastExprRegValid = true
-			debugPrintf("// DEBUG ExprStmt: Top Level. Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg) // <<< ADDED
-		} else { // <<< ADDED vvv
-			debugPrintf("// DEBUG ExprStmt: Not Top Level. lastExprRegValid remains unchanged.\n")
-		} // <<< ADDED ^^^
+		debugPrintf("// DEBUG ExprStmt: Top Level. CurrentReg: R%d.\n", tlReg) // <<< ADDED
 		// Result register is left allocated, potentially unused otherwise.
 		// TODO: Consider freeing registers?
-		return BadRegister, nil // ADDED: Explicit return
+		return tlReg, nil // ADDED: Explicit return
 
 	case *parser.LetStatement:
-		if c.enclosing == nil {
-			debugPrintf("// DEBUG LetStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false                                                    // Declarations don't provide final value
-		}
 		return c.compileLetStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ConstStatement:
-		if c.enclosing == nil {
-			debugPrintf("// DEBUG ConstStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false                                                      // Declarations don't provide final value
-		}
 		return c.compileConstStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ReturnStatement: // Although less relevant for top-level script return
-		if c.enclosing == nil {
-			debugPrintf("// DEBUG ReturnStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false                                                       // Explicit return overrides implicit
-		}
 		return c.compileReturnStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.WhileStatement:
-		if c.enclosing == nil {
-			debugPrintf("// DEBUG WhileStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false
-		}
 		return c.compileWhileStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ForStatement:
-		if c.enclosing == nil {
-			debugPrintf("// DEBUG ForStmt: Top Level. Setting lastExprRegValid=false.\n") // <<< ADDED
-			c.lastExprRegValid = false
-		}
 		return c.compileForStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ForOfStatement:
-		if c.enclosing == nil {
-			debugPrintf("// DEBUG ForOfStmt: Top Level. Setting lastExprRegValid=false.\n")
-			c.lastExprRegValid = false
-		}
 		return c.compileForOfStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.BreakStatement:
-		if c.enclosing == nil {
-			c.lastExprRegValid = false
-		}
 		return c.compileBreakStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.ContinueStatement:
-		if c.enclosing == nil {
-			c.lastExprRegValid = false
-		}
 		return c.compileContinueStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.DoWhileStatement:
-		if c.enclosing == nil {
-			c.lastExprRegValid = false // Loops don't produce a value
-		}
 		return c.compileDoWhileStatement(node, NoHint) // TODO: Fix this
 
 	case *parser.SwitchStatement: // Added
-		if c.enclosing == nil {
-			c.lastExprRegValid = false // Switch statements don't produce a value
-		}
 		return c.compileSwitchStatement(node, NoHint) // TODO: Fix this
 
 	// --- Expressions (excluding FunctionLiteral which is handled above) ---
 	case *parser.NumberLiteral:
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNewConstant(destReg, vm.Number(node.Value), node.Token.Line)
-		return BadRegister, nil // ADDED: Explicit return
+		return destReg, nil // ADDED: Explicit return
 
 	case *parser.StringLiteral:
 		// Handle string literals by adding them to constants
-		c.emitLoadNewConstant(c.regAlloc.Alloc(), vm.String(node.Value), node.Token.Line)
-		c.lastExprReg = c.regAlloc.Current()
-		c.lastExprRegValid = true
-		return BadRegister, nil
+		destReg := c.regAlloc.Alloc()
+		c.emitLoadNewConstant(destReg, vm.String(node.Value), node.Token.Line)
+		return destReg, nil
 
 	case *parser.TemplateLiteral:
 		return c.compileTemplateLiteral(node, NoHint) // TODO: Fix this
@@ -536,26 +456,23 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		} else {
 			c.emitLoadFalse(reg, node.Token.Line)
 		}
-		c.lastExprReg = reg
-		c.lastExprRegValid = true
-		return BadRegister, nil
+		return reg, nil
 
 	case *parser.NullLiteral:
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNull(destReg, node.Token.Line)
-		return BadRegister, nil // ADDED: Explicit return
+		return destReg, nil // ADDED: Explicit return
 
 	case *parser.UndefinedLiteral: // Added
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadUndefined(destReg, node.Token.Line)
-		return BadRegister, nil // ADDED: Explicit return
+		return destReg, nil // ADDED: Explicit return
 
 	case *parser.ThisExpression: // Added for this keyword
 		// Load 'this' value from current call context
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadThis(destReg, node.Token.Line)
-		c.regAlloc.SetCurrent(destReg) // Fix: Set current register
-		return BadRegister, nil
+		return destReg, nil
 
 	case *parser.Identifier:
 		// <<< ADDED: Check for built-in first >>>
@@ -568,14 +485,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// Allocate register and load the constant
 			destReg := c.regAlloc.Alloc()
 			c.emitLoadConstant(destReg, constIdx, node.Token.Line) // Use existing emitter
-			c.regAlloc.SetCurrent(destReg)                         // Update allocator state
 
-			// Set last expression tracking state (consistent with other expressions)
-			// Note: This might be adjusted based on overall expression handling logic
-			c.lastExprReg = destReg
-			c.lastExprRegValid = true
-
-			return BadRegister, nil // Built-in handled successfully
+			return destReg, nil // Built-in handled successfully
 		}
 
 		// <<< ADDED: Check for built-in objects >>>
@@ -587,13 +498,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// Allocate register and load the constant
 			destReg := c.regAlloc.Alloc()
 			c.emitLoadConstant(destReg, constIdx, node.Token.Line) // Use existing emitter
-			c.regAlloc.SetCurrent(destReg)                         // Update allocator state
 
-			// Set last expression tracking state
-			c.lastExprReg = destReg
-			c.lastExprRegValid = true
-
-			return BadRegister, nil // Built-in object handled successfully
+			return destReg, nil // Built-in object handled successfully
 		}
 		// <<< END ADDED >>>
 
@@ -611,11 +517,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			globalIdx := c.getOrAssignGlobalIndex(node.Value)
 			destReg := c.regAlloc.Alloc()
 			c.emitGetGlobal(destReg, globalIdx, node.Token.Line)
-			c.regAlloc.SetCurrent(destReg) // Update allocator state
-			// Set last expression tracking state
-			c.lastExprReg = destReg
-			c.lastExprRegValid = true
-			return BadRegister, nil // Handle as global access
+			return destReg, nil // Handle as global access
 		}
 		isLocal := definingTable == c.currentSymbolTable
 		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
@@ -626,30 +528,28 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			symbolRef.Register == nilRegister && // Is it our temporary definition?
 			scopeName == "Function" // Are we compiling inside a function? // Removed check against c.compilingFuncName
 
+		var destReg Register
 		if isRecursiveSelfCall {
 			debugPrintf("// DEBUG Identifier '%s': Identified as RECURSIVE SELF CALL\n", node.Value) // <<< ADDED
 			// Treat as a free variable that captures the closure itself.
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-			destReg := c.regAlloc.Alloc()
+			destReg = c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
-			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else if symbolRef.IsGlobal {
 			// This is a global variable, use OpGetGlobal
 			debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED
-			destReg := c.regAlloc.Alloc()
+			destReg = c.regAlloc.Alloc()
 			c.emitGetGlobal(destReg, symbolRef.GlobalIndex, node.Token.Line)
-			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else if !isLocal {
 			debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
 			// This is a regular free variable (defined in an outer scope that's not global)
 			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-			destReg := c.regAlloc.Alloc()
+			destReg = c.regAlloc.Alloc()
 			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 			c.emitByte(byte(destReg))
 			c.emitByte(byte(freeVarIndex))
-			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		} else {
 			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED
 			// This is a standard local variable (handled by current stack frame)
@@ -660,15 +560,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// during its temporary definition phase inappropriately.
 				panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
 			}
-			destReg := c.regAlloc.Alloc()
+			destReg = c.regAlloc.Alloc()
 			debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, destReg, srcReg)
 			c.emitMove(destReg, srcReg, node.Token.Line)
-			c.regAlloc.SetCurrent(destReg) // Update allocator state
 		}
-		// Set last expression tracking state for identifiers (consistent with literals/builtins)
-		c.lastExprReg = c.regAlloc.Current() // Current() should hold destReg now
-		c.lastExprRegValid = true
-		return BadRegister, nil // ADDED: Explicit return
+		return destReg, nil // ADDED: Explicit return
 
 	case *parser.PrefixExpression:
 		return c.compilePrefixExpression(node, NoHint) // TODO: Fix this
@@ -708,34 +604,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 		// --- Member Expression ---
 	case *parser.MemberExpression:
-		// <<< UPDATED: Call the new helper function >>>
-		_, err := c.compileMemberExpression(node, NoHint) // TODO: Fix this
-		if err == nil {
-			// If successful, the result register is already set by compileMemberExpression
-			// We just need to update the lastExpr tracking for top-level scripts
-			if c.enclosing == nil {
-				c.lastExprReg = c.regAlloc.Current()
-				c.lastExprRegValid = true
-				debugPrintf("// DEBUG MemberExpr (Top Level): Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg)
-			}
-		}
-		return BadRegister, err // Return any error encountered during compilation
+		return c.compileMemberExpression(node, NoHint) // TODO: Fix this
 		// --- END Member Expression ---
 
 		// --- Optional Chaining Expression ---
 	case *parser.OptionalChainingExpression:
-		// <<< NEW: Call the new helper function >>>
-		_, err := c.compileOptionalChainingExpression(node, NoHint) // TODO: Fix this
-		if err == nil {
-			// If successful, the result register is already set by compileOptionalChainingExpression
-			// We just need to update the lastExpr tracking for top-level scripts
-			if c.enclosing == nil {
-				c.lastExprReg = c.regAlloc.Current()
-				c.lastExprRegValid = true
-				debugPrintf("// DEBUG OptionalChaining (Top Level): Set lastExprRegValid=%v, lastExprReg=R%d.\n", c.lastExprRegValid, c.lastExprReg)
-			}
-		}
-		return BadRegister, err // Return any error encountered during compilation
+		return c.compileOptionalChainingExpression(node, NoHint) // TODO: Fix this
 		// --- END Optional Chaining Expression ---
 
 	case *parser.NewExpression:
@@ -826,13 +700,12 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 			functionCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
-			_, err := functionCompiler.compileNode(param.DefaultValue, NoHint)
+			defaultValueReg, err := functionCompiler.compileNode(param.DefaultValue, NoHint)
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
 			} else {
 				// Move the default value to the parameter register
-				defaultValueReg := functionCompiler.regAlloc.Current()
 				if defaultValueReg != paramReg {
 					functionCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
 				}
@@ -900,11 +773,10 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
 			hasSpread = true
 			// Compile the expression being spread (should be an array)
-			_, err := c.compileNode(spreadElement.Argument, NoHint)
+			arrayReg, err := c.compileNode(spreadElement.Argument, NoHint)
 			if err != nil {
 				return nil, 0, err
 			}
-			arrayReg := c.regAlloc.Current()
 
 			// Note: Length access removed - spread syntax not fully implemented yet
 			// This is just a placeholder to mark the spread element
@@ -919,11 +791,11 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 		}
 
 		// Regular argument
-		_, err := c.compileNode(arg, NoHint)
+		argReg, err := c.compileNode(arg, NoHint)
 		if err != nil {
 			return nil, 0, err
 		}
-		argRegs = append(argRegs, c.regAlloc.Current())
+		argRegs = append(argRegs, argReg)
 	}
 
 	// If we have spread elements, we need special handling in the VM
@@ -1266,17 +1138,14 @@ func (c *Compiler) currentPosition() int {
 // It handles resolving free variables from the *enclosing* scope (c)
 // based on the freeSymbols list collected during the function body's compilation.
 // OPTIMIZATION: If there are no upvalues, just load the function constant directly.
-func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *parser.FunctionLiteral, freeSymbols []*Symbol) {
+func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *parser.FunctionLiteral, freeSymbols []*Symbol) Register {
 	line := node.Token.Line // Use function literal token line
 
 	// OPTIMIZATION: If no upvalues, just load the function constant
 	if len(freeSymbols) == 0 {
 		debugPrintf("// [emitClosure OPTIMIZED] No upvalues, using OpLoadConstant instead of OpClosure\n")
 		c.emitLoadConstant(destReg, funcConstIndex, line)
-		c.regAlloc.SetCurrent(destReg)
-		c.lastExprReg = destReg
-		c.lastExprRegValid = true
-		return
+		return destReg
 	}
 
 	c.emitOpCode(vm.OpClosure, line)
@@ -1330,25 +1199,19 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 		}
 	}
 
-	// Set the compiler's current register state to reflect the closure object
-	c.regAlloc.SetCurrent(destReg)
-	c.lastExprReg = destReg
-	c.lastExprRegValid = true
 	debugPrintf("// [emitClosure %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
+	return destReg
 }
 
 // emitClosureGeneric is a generic version of emitClosure that works with any node type
 // that has Token.Line and Name fields (like ShorthandMethod)
 // OPTIMIZATION: If there are no upvalues, just load the function constant directly.
-func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, line int, nameNode *parser.Identifier, freeSymbols []*Symbol) {
+func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, line int, nameNode *parser.Identifier, freeSymbols []*Symbol) Register {
 	// OPTIMIZATION: If no upvalues, just load the function constant
 	if len(freeSymbols) == 0 {
 		debugPrintf("// [emitClosureGeneric OPTIMIZED] No upvalues, using OpLoadConstant instead of OpClosure\n")
 		c.emitLoadConstant(destReg, funcConstIndex, line)
-		c.regAlloc.SetCurrent(destReg)
-		c.lastExprReg = destReg
-		c.lastExprRegValid = true
-		return
+		return destReg
 	}
 
 	c.emitOpCode(vm.OpClosure, line)
@@ -1396,11 +1259,8 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 		}
 	}
 
-	// Set the compiler's current register state to reflect the closure object
-	c.regAlloc.SetCurrent(destReg)
-	c.lastExprReg = destReg
-	c.lastExprRegValid = true
 	debugPrintf("// [emitClosureGeneric %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
+	return destReg
 }
 
 // resolveRegisterMoves handles moving values from sourceRegs to consecutive target registers

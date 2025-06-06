@@ -13,9 +13,6 @@ func TestNewRegisterAllocator(t *testing.T) {
 	if ra.maxReg != 0 {
 		t.Errorf("Expected maxReg to be 0, got %d", ra.maxReg)
 	}
-	if ra.currentSet {
-		t.Errorf("Expected currentSet to be false")
-	}
 	if len(ra.freeRegs) != 0 {
 		t.Errorf("Expected empty free list, got %v", ra.freeRegs)
 	}
@@ -41,14 +38,6 @@ func TestBasicAllocation(t *testing.T) {
 	reg3 := ra.Alloc()
 	if reg3 != 2 {
 		t.Errorf("Expected third register to be 2, got %d", reg3)
-	}
-
-	// Check that current is set correctly
-	if !ra.CurrentSet() {
-		t.Errorf("Expected CurrentSet to be true")
-	}
-	if ra.Current() != 2 {
-		t.Errorf("Expected current register to be 2, got %d", ra.Current())
 	}
 }
 
@@ -180,34 +169,6 @@ func TestPinning(t *testing.T) {
 	}
 }
 
-func TestFreeInvalidatesCurrentReg(t *testing.T) {
-	ra := NewRegisterAllocator()
-
-	reg1 := ra.Alloc()
-	reg2 := ra.Alloc()
-
-	// Current should be reg2
-	if ra.Current() != reg2 {
-		t.Errorf("Expected current to be %d, got %d", reg2, ra.Current())
-	}
-	if !ra.CurrentSet() {
-		t.Errorf("Expected CurrentSet to be true")
-	}
-
-	// Free current register
-	ra.Free(reg2)
-	if ra.CurrentSet() {
-		t.Errorf("Expected CurrentSet to be false after freeing current register")
-	}
-
-	// Free non-current register (should not affect currentSet)
-	ra.SetCurrent(reg1)
-	ra.Free(reg2) // reg2 is already freed, but this tests the logic
-	if !ra.CurrentSet() {
-		t.Errorf("Expected CurrentSet to remain true when freeing non-current register")
-	}
-}
-
 func TestReuseFromFreeList(t *testing.T) {
 	ra := NewRegisterAllocator()
 
@@ -323,7 +284,6 @@ func TestReset(t *testing.T) {
 	reg2 := ra.Alloc()
 	ra.Pin(reg1)
 	ra.Free(reg2)
-	ra.SetCurrent(reg1)
 
 	// Reset
 	ra.Reset()
@@ -335,44 +295,11 @@ func TestReset(t *testing.T) {
 	if ra.maxReg != 0 {
 		t.Errorf("Expected maxReg to be reset to 0, got %d", ra.maxReg)
 	}
-	if ra.currentSet {
-		t.Errorf("Expected currentSet to be reset to false")
-	}
 	if len(ra.freeRegs) != 0 {
 		t.Errorf("Expected free list to be empty after reset, got %v", ra.freeRegs)
 	}
 	if len(ra.pinnedRegs) != 0 {
 		t.Errorf("Expected pinned registers to be empty after reset, got %v", ra.pinnedRegs)
-	}
-}
-
-func TestCurrentRegisterTracking(t *testing.T) {
-	ra := NewRegisterAllocator()
-
-	// Initially current should not be set
-	if ra.CurrentSet() {
-		t.Errorf("Expected CurrentSet to be false initially")
-	}
-
-	// Current() should fall back to nextReg - 1 when not set
-	if ra.Current() != 0 {
-		t.Errorf("Expected Current() fallback to be 0, got %d", ra.Current())
-	}
-
-	// After allocation, current should be set
-	reg1 := ra.Alloc()
-	if !ra.CurrentSet() {
-		t.Errorf("Expected CurrentSet to be true after allocation")
-	}
-	if ra.Current() != reg1 {
-		t.Errorf("Expected Current() to be %d, got %d", reg1, ra.Current())
-	}
-
-	// SetCurrent should work
-	_ = ra.Alloc()
-	ra.SetCurrent(reg1)
-	if ra.Current() != reg1 {
-		t.Errorf("Expected Current() to be %d after SetCurrent, got %d", reg1, ra.Current())
 	}
 }
 

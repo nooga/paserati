@@ -10,20 +10,19 @@ import (
 
 func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the constructor expression
-	_, err := c.compileNode(node.Constructor, NoHint)
+	constructorReg, err := c.compileNode(node.Constructor, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	constructorReg := c.regAlloc.Current() // Register holding the constructor function
 
 	// 2. Compile arguments
 	argRegs := []Register{}
 	for _, arg := range node.Arguments {
-		_, err = c.compileNode(arg, NoHint)
+		argReg, err := c.compileNode(arg, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		argRegs = append(argRegs, c.regAlloc.Current())
+		argRegs = append(argRegs, argReg)
 	}
 	argCount := len(argRegs)
 
@@ -52,17 +51,16 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 	c.regAlloc.Free(constructorReg)
 
 	// The result of the new operation is now in resultReg
-	return BadRegister, nil
+	return resultReg, nil
 }
 
 // compileMemberExpression compiles expressions like obj.prop or obj['prop'] (latter is future work)
 func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the object part
-	_, err := c.compileNode(node.Object, NoHint)
+	objectReg, err := c.compileNode(node.Object, NoHint)
 	if err != nil {
 		return BadRegister, NewCompileError(node.Object, "error compiling object part of member expression").CausedBy(err)
 	}
-	objectReg := c.regAlloc.Current() // Register holding the object
 
 	// 2. Get Property Name (Assume Identifier for now: obj.prop)
 	propIdent := node.Property
@@ -91,10 +89,9 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			// Emit specialized OpGetLength
 			destReg := c.regAlloc.Alloc()
 			c.emitGetLength(destReg, objectReg, node.Token.Line)
-			c.regAlloc.SetCurrent(destReg) // Result is now in destReg
 			// Free objectReg? Maybe not needed if GetLength copies or doesn't invalidate.
 			// c.regAlloc.Free(objectReg)
-			return BadRegister, nil // Handled by OpGetLength
+			return destReg, nil // Handled by OpGetLength
 		}
 		// If type doesn't support .length, fall through to generic OpGetProp
 		// The type checker *should* have caught this, but OpGetProp will likely return undefined/error at runtime.
@@ -117,20 +114,18 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	// c.regAlloc.Free(objectReg)
 
 	// Result is now in destReg
-	c.regAlloc.SetCurrent(destReg) // Set current register
 	// Note: We don't need to set lastExprReg/Valid here, as compileNode will handle it.
-	return BadRegister, nil
+	return destReg, nil
 }
 
 // compileOptionalChainingExpression compiles optional chaining property access (e.g., obj?.prop)
 // This is similar to compileMemberExpression but adds null/undefined checks
 func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChainingExpression, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the object part
-	_, err := c.compileNode(node.Object, NoHint)
+	objectReg, err := c.compileNode(node.Object, NoHint)
 	if err != nil {
 		return BadRegister, NewCompileError(node.Object, "error compiling object part of optional chaining expression").CausedBy(err)
 	}
-	objectReg := c.regAlloc.Current() // Register holding the object
 
 	// 2. Check if the object is null or undefined
 	// If so, return undefined immediately
@@ -183,8 +178,7 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 				c.emitGetLength(destReg, objectReg, node.Token.Line)
 				c.patchJump(endJumpPos1)
 				c.patchJump(endJumpPos2)
-				c.regAlloc.SetCurrent(destReg)
-				return BadRegister, nil
+				return destReg, nil
 			}
 		}
 	}
@@ -202,8 +196,7 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 	c.patchJump(endJumpPos2)
 
 	// Result is now in destReg
-	c.regAlloc.SetCurrent(destReg)
-	return BadRegister, nil
+	return destReg, nil
 }
 
 func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Register) (Register, errors.PaseratiError) {
@@ -212,34 +205,22 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Reg
 
 	// 1. Compile the expression being indexed (the base: array/object/string)
 	debugPrintf("--- Compiling Base: %s\n", node.Left.String()) // <<< DEBUG
-	_, err := c.compileNode(node.Left, NoHint)
+	arrayReg, err := c.compileNode(node.Left, NoHint)
 	if err != nil {
 		debugPrintf("<<< Exit compileIndexExpression (Error compiling base)\n") // <<< DEBUG EXIT
 		return BadRegister, NewCompileError(node.Left, "error compiling base of index expression").CausedBy(err)
 	}
-	// <<< DEBUG BASE RESULT >>>
-	baseRegFromState := c.lastExprReg
-	baseRegFromCurrent := c.regAlloc.Current()
-	debugPrintf("--- Base Compiled. lastExprReg: %s, lastExprRegValid: %t, regAlloc.Current(): %s\n", baseRegFromState, c.lastExprRegValid, baseRegFromCurrent)
-	// --- Temporarily use Current() as per existing code for testing ---
-	arrayReg := c.regAlloc.Current()                                  // Keep existing logic for now
-	debugPrintf("--- Using arrayReg = %s (from Current)\n", arrayReg) // <<< DEBUG WHICH REGISTER IS CHOSEN
 
 	// 2. Compile the index expression
 	debugPrintf("--- Compiling Index: %s\n", node.Index.String()) // <<< DEBUG
-	_, err = c.compileNode(node.Index, NoHint)
+	indexReg, err := c.compileNode(node.Index, NoHint)
 	if err != nil {
 		debugPrintf("<<< Exit compileIndexExpression (Error compiling index)\n") // <<< DEBUG EXIT
 		// Note: Need to consider freeing baseReg here if it was allocated and valid
 		return BadRegister, NewCompileError(node.Index, "error compiling index part of index expression").CausedBy(err)
 	}
 	// <<< DEBUG INDEX RESULT >>>
-	indexRegFromState := c.lastExprReg
-	indexRegFromCurrent := c.regAlloc.Current()
-	debugPrintf("--- Index Compiled. lastExprReg: %s, lastExprRegValid: %t, regAlloc.Current(): %s\n", indexRegFromState, c.lastExprRegValid, indexRegFromCurrent)
-	// --- Temporarily use Current() as per existing code for testing ---
-	indexReg := c.regAlloc.Current()                                  // Keep existing logic for now
-	debugPrintf("--- Using indexReg = %s (from Current)\n", indexReg) // <<< DEBUG WHICH REGISTER IS CHOSEN
+	debugPrintf("--- Index Compiled. regAlloc.Current(): %s\n", indexReg)
 
 	// 3. Allocate register for the result
 	destReg := c.regAlloc.Alloc()
@@ -262,14 +243,8 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Reg
 	}
 
 	// Result is now in destReg
-	c.regAlloc.SetCurrent(destReg) // Existing logic might rely on this?
-
-	// --- Missing state update for the overall expression ---
-	// c.lastExprReg = destReg
-	// c.lastExprRegValid = true
-
 	debugPrintf("<<< Exit compileIndexExpression (Success)\n") // <<< DEBUG EXIT
-	return BadRegister, nil
+	return destReg, nil
 }
 
 func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint Register) (Register, errors.PaseratiError) {
@@ -339,11 +314,11 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 	case *parser.MemberExpression:
 		lvalueKind = lvalueMemberExpr
 		// Compile the object part
-		_, err := c.compileNode(argNode.Object, NoHint)
+		objectReg, err := c.compileNode(argNode.Object, NoHint)
 		if err != nil {
 			return BadRegister, NewCompileError(argNode.Object, "error compiling object part of member expression").CausedBy(err)
 		}
-		memberInfo.objectReg = c.regAlloc.Current()
+		memberInfo.objectReg = objectReg
 
 		// Get property name (assume identifier property for now: obj.prop)
 		propIdent := argNode.Property
@@ -357,18 +332,18 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 	case *parser.IndexExpression:
 		lvalueKind = lvalueIndexExpr
 		// Compile array expression
-		_, err := c.compileNode(argNode.Left, NoHint)
+		arrayReg, err := c.compileNode(argNode.Left, NoHint)
 		if err != nil {
 			return BadRegister, NewCompileError(argNode.Left, "error compiling array part of index expression").CausedBy(err)
 		}
-		indexInfo.arrayReg = c.regAlloc.Current()
+		indexInfo.arrayReg = arrayReg
 
 		// Compile index expression
-		_, err = c.compileNode(argNode.Index, NoHint)
+		indexReg, err := c.compileNode(argNode.Index, NoHint)
 		if err != nil {
 			return BadRegister, NewCompileError(argNode.Index, "error compiling index part of index expression").CausedBy(err)
 		}
-		indexInfo.indexReg = c.regAlloc.Current()
+		indexInfo.indexReg = indexReg
 
 		// Load the current value at the index
 		currentValueReg = c.regAlloc.Alloc()
@@ -433,19 +408,16 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		c.regAlloc.Free(indexInfo.indexReg)
 	}
 
-	// 5. Set compiler's current register to the expression result
-	c.regAlloc.SetCurrent(resultReg)
-	return BadRegister, nil
+	return resultReg, nil
 }
 
 // compileTernaryExpression compiles condition ? consequence : alternative
 func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile condition
-	_, err := c.compileNode(node.Condition, NoHint)
+	conditionReg, err := c.compileNode(node.Condition, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	conditionReg := c.regAlloc.Current()
 
 	// 2. Jump if false
 	jumpFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
@@ -454,11 +426,10 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 
 	// --- Consequence Path ---
 	// 3. Compile consequence
-	_, err = c.compileNode(node.Consequence, NoHint)
+	consequenceReg, err := c.compileNode(node.Consequence, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	consequenceReg := c.regAlloc.Current() // Result is here for this path
 
 	// 4. Allocate result register NOW
 	resultReg := c.regAlloc.Alloc()
@@ -475,11 +446,10 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 	c.patchJump(jumpFalsePos)
 
 	// 8. Compile alternative
-	_, err = c.compileNode(node.Alternative, NoHint)
+	alternativeReg, err := c.compileNode(node.Alternative, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	alternativeReg := c.regAlloc.Current() // Result is here for this path
 
 	// 9. Move alternative to result (OVERWRITE resultReg)
 	c.emitMove(resultReg, alternativeReg, node.Token.Line)
@@ -501,8 +471,7 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 	c.regAlloc.Free(resultReg)
 
 	// Now Current() correctly points to finalReg which holds the unified result.
-	c.regAlloc.SetCurrent(finalReg) // Set current explicitly
-	return BadRegister, nil
+	return finalReg, nil
 }
 
 func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Register) (Register, errors.PaseratiError) {
@@ -510,17 +479,15 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 
 	// --- Standard binary operators (arithmetic, comparison, bitwise, shift) ---
 	if node.Operator != "&&" && node.Operator != "||" && node.Operator != "??" {
-		_, err := c.compileNode(node.Left, NoHint)
+		leftReg, err := c.compileNode(node.Left, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		leftReg := c.regAlloc.Current()
 
-		_, err = c.compileNode(node.Right, NoHint)
+		rightReg, err := c.compileNode(node.Right, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		rightReg := c.regAlloc.Current()
 
 		destReg := c.regAlloc.Alloc() // Allocate dest register *before* emitting op
 
@@ -580,7 +547,6 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unknown standard infix operator '%s'", node.Operator))
 		}
 		// Result is now in destReg (allocator current is destReg)
-		c.regAlloc.SetCurrent(destReg) // Explicitly set current
 
 		// DISABLED: Register freeing was too aggressive and causing correctness issues
 		// Free operand registers after use (check against destReg for safety)
@@ -591,7 +557,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		// 	c.regAlloc.Free(rightReg)
 		// }
 
-		return BadRegister, nil
+		return destReg, nil
 	}
 
 	// --- Logical Operators (&&, ||, ??) with Short-Circuiting ---
@@ -599,11 +565,10 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 	destReg := c.regAlloc.Alloc()
 
 	if node.Operator == "||" { // a || b
-		_, err := c.compileNode(node.Left, NoHint)
+		leftReg, err := c.compileNode(node.Left, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		leftReg := c.regAlloc.Current()
 
 		// Jump to right eval if left is FALSEY
 		jumpToRightPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
@@ -618,11 +583,10 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		c.patchJump(jumpToRightPlaceholder)
 
 		// Compile right operand (only executed if left was falsey)
-		_, err = c.compileNode(node.Right, NoHint)
+		rightReg, err := c.compileNode(node.Right, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		rightReg := c.regAlloc.Current()
 		// Result is right, move to destReg
 		c.emitMove(destReg, rightReg, line)
 		// Free rightReg after moving its value
@@ -631,25 +595,22 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		// Patch jumpToEndPlaceholder to land here
 		c.patchJump(jumpToEndPlaceholder)
 		// Result is now unified in destReg
-		c.regAlloc.SetCurrent(destReg)
-		return BadRegister, nil
+		return destReg, nil
 
 	} else if node.Operator == "&&" { // a && b
-		_, err := c.compileNode(node.Left, NoHint)
+		leftReg, err := c.compileNode(node.Left, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		leftReg := c.regAlloc.Current()
 
 		// If left is FALSEY, jump to end, result is left
 		jumpToEndPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
 
 		// If left was TRUTHY (didn't jump), compile right operand
-		_, err = c.compileNode(node.Right, NoHint)
+		rightReg, err := c.compileNode(node.Right, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		rightReg := c.regAlloc.Current()
 		// Result is right, move rightReg to destReg
 		c.emitMove(destReg, rightReg, line) // If true path, result is right
 		// Free rightReg after move
@@ -667,15 +628,13 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		c.patchJump(jumpSkipFalseMovePlaceholder)
 
 		// Result is now unified in destReg
-		c.regAlloc.SetCurrent(destReg)
-		return BadRegister, nil
+		return destReg, nil
 
 	} else if node.Operator == "??" { // a ?? b
-		_, err := c.compileNode(node.Left, NoHint)
+		leftReg, err := c.compileNode(node.Left, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		leftReg := c.regAlloc.Current()
 
 		// Temp registers for checks
 		isNullReg := c.regAlloc.Alloc()
@@ -713,11 +672,10 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 
 		// --- Eval Right Path ---
 		// Compile right operand
-		_, err = c.compileNode(node.Right, NoHint)
+		rightReg, err := c.compileNode(node.Right, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		rightReg := c.regAlloc.Current()
 		// Move result to destReg
 		c.emitMove(destReg, rightReg, line)
 		// Free rightReg after move
@@ -742,8 +700,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		c.regAlloc.Free(isUndefReg)
 
 		// Unified result is now in destReg
-		c.regAlloc.SetCurrent(destReg)
-		return BadRegister, nil
+		return destReg, nil
 	}
 
 	return BadRegister, NewCompileError(node, fmt.Sprintf("logical/coalescing operator '%s' compilation fell through", node.Operator))
@@ -751,11 +708,10 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 
 func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint Register) (Register, errors.PaseratiError) {
 	// Compile the right operand first
-	_, err := c.compileNode(node.Right, NoHint)
+	rightReg, err := c.compileNode(node.Right, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	rightReg := c.regAlloc.Current() // Register holding the operand value
 
 	// Allocate a new register for the result
 	destReg := c.regAlloc.Alloc()
@@ -786,17 +742,15 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 	c.regAlloc.Free(rightReg)
 
 	// The result is now in destReg
-	c.regAlloc.SetCurrent(destReg) // Explicitly set current for clarity
-	return BadRegister, nil
+	return destReg, nil
 }
 
 func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint Register) (Register, errors.PaseratiError) {
 	// Compile the operand being typeof
-	_, err := c.compileNode(node.Operand, NoHint)
+	exprReg, err := c.compileNode(node.Operand, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	exprReg := c.regAlloc.Current()
 
 	// Allocate a new register for the result
 	resultReg := c.regAlloc.Alloc()
@@ -808,8 +762,7 @@ func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint R
 	c.regAlloc.Free(exprReg)
 
 	// The result of the typeof operation is now in resultReg
-	c.regAlloc.SetCurrent(resultReg)
-	return BadRegister, nil
+	return resultReg, nil
 }
 
 func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Register) (Register, errors.PaseratiError) {
@@ -817,18 +770,16 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Method call: obj.method(args...)
 		// 1. Compile the object part
-		_, err := c.compileNode(memberExpr.Object, NoHint)
+		thisReg, err := c.compileNode(memberExpr.Object, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		thisReg := c.regAlloc.Current() // Register holding the 'this' object
 
 		// 2. Compile the method property access to get the function
-		_, err = c.compileMemberExpression(memberExpr, NoHint)
+		funcReg, err := c.compileMemberExpression(memberExpr, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		funcReg := c.regAlloc.Current() // Register holding the method function
 
 		// 3. Compile arguments and handle optional parameters
 		argRegs, totalArgCount, err := c.compileArgumentsWithOptionalHandling(node)
@@ -859,16 +810,15 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		c.emitCallMethod(resultReg, funcReg, thisReg, byte(totalArgCount), node.Token.Line)
 
 		// The result of the method call is now in resultReg
-		return BadRegister, nil
+		return resultReg, nil
 	}
 
 	// Regular function call: func(args...)
 	// 1. Compile the expression being called (e.g., function name)
-	_, err := c.compileNode(node.Function, NoHint)
+	funcReg, err := c.compileNode(node.Function, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	funcReg := c.regAlloc.Current() // Register holding the function value
 
 	// 2. Compile arguments and handle optional parameters
 	argRegs, totalArgCount, err := c.compileArgumentsWithOptionalHandling(node)
@@ -898,16 +848,15 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	c.emitCall(resultReg, funcReg, byte(totalArgCount), node.Token.Line)
 
 	// The result of the call is now in resultReg
-	return BadRegister, nil
+	return resultReg, nil
 }
 
 func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the condition
-	_, err := c.compileNode(node.Condition, NoHint)
+	conditionReg, err := c.compileNode(node.Condition, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	conditionReg := c.regAlloc.Current() // Register holding the condition result
 
 	// 2. Emit placeholder jump for false condition
 	jumpIfFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)

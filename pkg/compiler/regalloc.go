@@ -19,11 +19,6 @@ type RegisterAllocator struct {
 	maxReg  Register // Highest register index allocated so far
 	// Could add a free list later for more complex allocation
 	freeRegs []Register // Stack of available registers to reuse
-
-	// New fields for tracking logical current/result register
-	currentReg Register
-	currentSet bool
-
 	// Pinning mechanism to prevent important registers from being freed
 	pinnedRegs map[Register]bool // Set of pinned registers
 }
@@ -34,8 +29,6 @@ func NewRegisterAllocator() *RegisterAllocator {
 		nextReg:    0,
 		maxReg:     0,
 		freeRegs:   make([]Register, 0, 16), // Initialize with some capacity
-		currentReg: 0,                       // Initialize
-		currentSet: false,                   // Initialize
 		pinnedRegs: make(map[Register]bool), // Initialize pinned registers map
 	}
 }
@@ -75,10 +68,6 @@ func (ra *RegisterAllocator) Alloc() Register {
 		}
 	}
 
-	// Update logical current register on allocation
-	ra.currentReg = reg
-	ra.currentSet = true
-
 	return reg
 }
 
@@ -91,9 +80,6 @@ func (ra *RegisterAllocator) AllocHinted(hint Register) Register {
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC] HINT USED R%d\n", hint)
 		}
-		// Update logical current register
-		ra.currentReg = hint
-		ra.currentSet = true
 		return hint
 	}
 
@@ -137,10 +123,6 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 		fmt.Printf("[REGALLOC] CONTIGUOUS R%d-R%d (%d registers, nextReg now %d)\n",
 			firstReg, firstReg+Register(count-1), count, ra.nextReg)
 	}
-
-	// Update logical current register to the first of the block
-	ra.currentReg = firstReg
-	ra.currentSet = true
 
 	return firstReg
 }
@@ -194,37 +176,6 @@ func (ra *RegisterAllocator) Peek() Register {
 	return ra.nextReg
 }
 
-// Current returns the index of the register holding the most recent logical result.
-// Falls back to the highest allocated register if not explicitly set.
-func (ra *RegisterAllocator) Current() Register {
-	if ra.currentSet {
-		return ra.currentReg
-	} else if ra.nextReg > 0 {
-		// Fallback: return highest allocated if nothing set (matches old behavior)
-		return ra.nextReg - 1
-	} else {
-		// Nothing allocated yet
-		return 0 // Or handle as error?
-	}
-}
-
-// SetCurrent explicitly sets the register considered to hold the current/result value.
-func (ra *RegisterAllocator) SetCurrent(reg Register) {
-	// Optional: Add check? if reg > ra.maxReg { panic(...) }
-	if debugRegAlloc {
-		oldReg := ra.currentReg
-		oldSet := ra.currentSet
-		fmt.Printf("[REGALLOC] SET_CURRENT R%d (was R%d, set=%v)\n", reg, oldReg, oldSet)
-	}
-	ra.currentReg = reg
-	ra.currentSet = true
-}
-
-// CurrentSet returns whether a current register has been explicitly set.
-func (ra *RegisterAllocator) CurrentSet() bool {
-	return ra.currentSet
-}
-
 // MaxRegs returns the maximum register index allocated by this allocator + 1
 // (representing the number of register slots needed).
 func (ra *RegisterAllocator) MaxRegs() Register {
@@ -238,9 +189,7 @@ func (ra *RegisterAllocator) MaxRegs() Register {
 func (ra *RegisterAllocator) Reset() {
 	ra.nextReg = 0
 	ra.maxReg = 0
-	ra.freeRegs = ra.freeRegs[:0] // Clear free list (keeps allocated capacity)
-	ra.currentReg = 0
-	ra.currentSet = false
+	ra.freeRegs = ra.freeRegs[:0]           // Clear free list (keeps allocated capacity)
 	ra.pinnedRegs = make(map[Register]bool) // Clear pinned registers
 }
 
@@ -260,15 +209,6 @@ func (ra *RegisterAllocator) Free(reg Register) {
 		fmt.Printf("[REGALLOC] FREE R%d (free list will have %d registers)\n", reg, len(ra.freeRegs)+1)
 	}
 	ra.freeRegs = append(ra.freeRegs, reg)
-
-	// If the register being freed is the one currently marked as holding
-	// the latest result, then that marking is no longer valid.
-	if ra.currentSet && ra.currentReg == reg {
-		ra.currentSet = false
-		if debugRegAlloc {
-			fmt.Printf("[REGALLOC] CurrentReg R%d was freed, unsetting currentSet.\n", reg)
-		}
-	}
 }
 
 // Pin marks a register as pinned, preventing it from being freed.

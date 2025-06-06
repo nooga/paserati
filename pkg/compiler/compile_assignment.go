@@ -96,19 +96,19 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	case *parser.IndexExpression:
 		lhsType = lhsIsIndexExpr
 		// Compile array expression
-		_, err := c.compileNode(lhsNode.Left, NoHint)
+		arrayReg, err := c.compileNode(lhsNode.Left, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		indexInfo.arrayReg = c.regAlloc.Current()
+		indexInfo.arrayReg = arrayReg
 
 		// Compile index expression
-		_, err = c.compileNode(lhsNode.Index, NoHint)
+		indexReg, err := c.compileNode(lhsNode.Index, NoHint)
 		if err != nil {
 			// TODO: Consider freeing arrayReg if allocated?
 			return BadRegister, err
 		}
-		indexInfo.indexReg = c.regAlloc.Current()
+		indexInfo.indexReg = indexReg
 
 		// Load the current value at the index
 		currentValueReg = c.regAlloc.Alloc()
@@ -121,11 +121,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	case *parser.MemberExpression: // <<< NEW CASE
 		lhsType = lhsIsMemberExpr
 		// Compile the object expression
-		_, err := c.compileNode(lhsNode.Object, NoHint)
+		objectReg, err := c.compileNode(lhsNode.Object, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		memberInfo.objectReg = c.regAlloc.Current()
+		memberInfo.objectReg = objectReg
 
 		// For now, assume property is an Identifier (obj.prop)
 		propIdent := lhsNode.Property
@@ -207,12 +207,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			c.patchJump(jumpToEvalRhs) // Patch jumps that lead here
 		}
 		// This block is only reached if short-circuit didn't happen
-		_, err := c.compileNode(node.Value, NoHint)
+		rhsValueReg, err := c.compileNode(node.Value, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
 		evaluatedRhs = true
-		rhsValueReg = c.regAlloc.Current()
 		storeOpTargetReg = rhsValueReg // Result is RHS
 		needsStore = true              // Store IS needed
 		debugPrintf("// DEBUG Assign Logical RHS: Evaluated RHS. rhsValueReg=R%d, storeOpTargetReg=R%d, needsStore=%v\n", rhsValueReg, storeOpTargetReg, needsStore)
@@ -240,12 +239,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 	} else { // --- Non-Logical Assignment ---
 		// Compile RHS
-		_, err := c.compileNode(node.Value, NoHint)
+		rhsValueReg, err := c.compileNode(node.Value, NoHint)
 		if err != nil {
 			// TODO: Free registers allocated for LHS?
 			return BadRegister, NewCompileError(node, "error compiling RHS").CausedBy(err)
 		}
-		rhsValueReg := c.regAlloc.Current() // RHS Value is in this register
 
 		// Determine result register: in-place for local vars, new reg otherwise
 		var resultReg Register // Will hold result if not calculated in-place
@@ -451,19 +449,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 	// --- Finalize ---
 	if debugAssignment {
-		fmt.Printf("// DEBUG Assignment Finalize: Before SetCurrent, storeOpTargetReg=R%d, current=R%d\n", storeOpTargetReg, c.regAlloc.Current())
+		fmt.Printf("// DEBUG Assignment Finalize: storeOpTargetReg=R%d\n", storeOpTargetReg)
 	}
 
-	// EXPERIMENTAL FIX: Don't set current register for assignment statements
-	// Assignment expressions need the current register set for their result,
-	// but assignment statements should not affect subsequent register allocation
-	// TODO: This is a temporary fix - we need a better way to distinguish
-	// between assignments used as expressions vs statements
-	c.regAlloc.SetCurrent(storeOpTargetReg)
-
-	if debugAssignment {
-		fmt.Printf("// DEBUG Assignment Finalize: After SetCurrent, current=R%d\n", c.regAlloc.Current())
-	}
-
-	return BadRegister, nil
+	return storeOpTargetReg, nil
 }

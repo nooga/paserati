@@ -45,11 +45,10 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 
 	} else if node.Value != nil {
 		// Compile other value types normally
-		_, err = c.compileNode(node.Value, NoHint)
+		valueReg, err = c.compileNode(node.Value, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		valueReg = c.regAlloc.Current()
 	} // else: node.Value is nil (implicit undefined handled below)
 
 	// Handle implicit undefined (`let x;`)
@@ -136,11 +135,10 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 
 	} else {
 		// Compile other value types normally
-		_, err = c.compileNode(node.Value, NoHint)
+		valueReg, err = c.compileNode(node.Value, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		valueReg = c.regAlloc.Current()
 	}
 
 	// Define symbol ONLY for non-function values.
@@ -195,11 +193,10 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 
 		} else {
 			// Compile other expression types normally via compileNode
-			_, err = c.compileNode(node.ReturnValue, NoHint)
+			returnReg, err = c.compileNode(node.ReturnValue, NoHint)
 			if err != nil {
 				return BadRegister, err
 			}
-			returnReg = c.regAlloc.Current() // Value to return is in the last allocated reg
 		}
 
 		// Error check should cover both paths now
@@ -233,17 +230,17 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Regis
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
 	// --- Compile Condition ---
-	_, err := c.compileNode(node.Condition, NoHint)
+	conditionReg, err := c.compileNode(node.Condition, NoHint)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
 		return BadRegister, NewCompileError(node, "error compiling while condition").CausedBy(err)
 	}
-	conditionReg := c.regAlloc.Current()
 
 	// --- Jump Out If False ---
 	jumpToEndPlaceholderPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
 
 	// --- Compile Body ---
+	// FIXME REGALLOC is this ok?
 	_, err = c.compileNode(node.Body, NoHint)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
@@ -306,12 +303,12 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 	// --- 2. Condition (Optional) ---
 	var conditionExitJumpPlaceholderPos int = -1
 	if node.Condition != nil {
-		if _, err := c.compileNode(node.Condition, NoHint); err != nil {
+		conditionReg, err := c.compileNode(node.Condition, NoHint)
+		if err != nil {
 			// Clean up loop context if condition compilation fails
 			c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 			return BadRegister, err
 		}
-		conditionReg := c.regAlloc.Current()
 		conditionExitJumpPlaceholderPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
 	} // If no condition, it's an infinite loop (handled by break/return)
 
@@ -433,12 +430,12 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 	_ = len(c.chunk.Code) // conditionPos := len(c.chunk.Code)
 
 	// 5. Compile Condition
-	if _, err := c.compileNode(node.Condition, NoHint); err != nil {
+	conditionReg, err := c.compileNode(node.Condition, NoHint)
+	if err != nil {
 		// Pop context if condition compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, NewCompileError(node, "error compiling do-while condition").CausedBy(err)
 	}
-	conditionReg := c.regAlloc.Current()
 
 	// 6. Conditional Jump back to Loop Start
 	// We need OpJumpIfTrue, but we only have OpJumpIfFalse.
@@ -508,11 +505,10 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 //  4. Patch all jumps.
 func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the expression being switched on
-	_, err := c.compileNode(node.Expression, NoHint)
+	switchExprReg, err := c.compileNode(node.Expression, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
-	switchExprReg := c.regAlloc.Current()
 	// Keep this register allocated until the end of the switch
 
 	// List to hold the positions of OpJumpIfFalse instructions for each case test.
@@ -554,12 +550,10 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 
 		if caseClause.Condition != nil { // Regular 'case expr:'
 			// Compile the case condition
-			_, err = c.compileNode(caseClause.Condition, NoHint)
+			caseCondReg, err := c.compileNode(caseClause.Condition, NoHint)
 			if err != nil {
 				return BadRegister, err
 			}
-			// Use Current() as CurrentAndFree is not available
-			caseCondReg := c.regAlloc.Current()
 
 			// Compare switch expression value with case condition value
 			// Use Alloc() instead of Allocate()
@@ -632,10 +626,10 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 
 func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the iterable expression first
-	if _, err := c.compileNode(node.Iterable, NoHint); err != nil {
+	iterableReg, err := c.compileNode(node.Iterable, NoHint)
+	if err != nil {
 		return BadRegister, err
 	}
-	iterableReg := c.regAlloc.Current()
 
 	// 2. Set up iteration variables
 	// For arrays: we need an index counter and length

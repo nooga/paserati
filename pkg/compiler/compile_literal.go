@@ -50,13 +50,12 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			funcCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
-			_, err := funcCompiler.compileNode(param.DefaultValue, NoHint)
+			defaultValueReg, err := funcCompiler.compileNode(param.DefaultValue, NoHint)
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
 			} else {
 				// Move the default value to the parameter register
-				defaultValueReg := funcCompiler.regAlloc.Current()
 				if defaultValueReg != paramReg {
 					funcCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
 					// Free the temporary default value register after moving
@@ -93,12 +92,12 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		}
 		implicitReturnNeeded = false // Block handles its own returns or falls through
 	case parser.Expression:
-		_, err := funcCompiler.compileNode(bodyNode, NoHint)
+		var err errors.PaseratiError
+		returnReg, err = funcCompiler.compileNode(bodyNode, NoHint)
 		if err != nil {
 			funcCompiler.errors = append(funcCompiler.errors, err)
 			returnReg = 0 // Indicate error or inability to get result reg
 		} else {
-			returnReg = funcCompiler.regAlloc.Current()
 		}
 		implicitReturnNeeded = true // Expression body needs implicit return
 	default:
@@ -177,11 +176,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		}
 	}
 
-	// 8. Set the result register for the caller
-	c.lastExprReg = destReg
-	c.lastExprRegValid = true
-
-	return BadRegister, nil // Return nil even if there were body errors, errors are collected in c.errors
+	return destReg, nil // Return nil even if there were body errors, errors are collected in c.errors
 }
 
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register) (Register, errors.PaseratiError) {
@@ -194,11 +189,11 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 	elementRegs := make([]Register, elementCount)
 	elementRegsContinuous := true
 	for i, elem := range node.Elements {
-		_, err := c.compileNode(elem, NoHint)
+		elemReg, err := c.compileNode(elem, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		elementRegs[i] = c.regAlloc.Current() // Store the register holding the final result of this element
+		elementRegs[i] = elemReg // Store the register holding the final result of this element
 		if i > 0 && elementRegs[i] != elementRegs[i-1]+1 {
 			elementRegsContinuous = false
 		}
@@ -260,8 +255,7 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 	}
 
 	// Result (the array) is now in arrayReg
-	c.regAlloc.SetCurrent(arrayReg)
-	return BadRegister, nil
+	return arrayReg, nil
 }
 
 func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Register) (Register, errors.PaseratiError) {
@@ -294,15 +288,11 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 		}
 
 		// Compile Value into a temporary register
-		_, err := c.compileNode(prop.Value, NoHint)
+		valueReg, err := c.compileNode(prop.Value, NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
-		// if !c.lastExprRegValid {
-		// 	return NewCompileError(prop.Value, "expected expression for object property value")
-		// }
-		valueReg := c.regAlloc.Current() // Register holding the compiled value
-		debugPrintf("--- OL Value Compiled. lastExprReg: %s, lastExprRegValid: %t, regAlloc.Current(): %s\n", valueReg, c.lastExprRegValid, c.regAlloc.Current())
+		debugPrintf("--- OL Value Compiled. regAlloc.Current(): %s\n", valueReg)
 
 		// Emit OpSetProp: objReg[keyConstIdx] = valueReg
 		c.emitSetProp(objReg, valueReg, keyConstIdx, line)
@@ -314,10 +304,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 	}
 
 	// The object is fully constructed in objReg
-	c.regAlloc.SetCurrent(objReg)
-	c.lastExprReg = objReg
-	c.lastExprRegValid = true
-	return BadRegister, nil
+	return objReg, nil
 }
 
 func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Register) (Register, errors.PaseratiError) {
@@ -329,7 +316,7 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 		// Empty template becomes empty string
 		destReg := c.regAlloc.Alloc()
 		c.emitLoadNewConstant(destReg, vm.String(""), line)
-		return BadRegister, nil
+		return destReg, nil
 	}
 
 	// Handle single part (just a string)
@@ -337,17 +324,17 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 		if stringPart, ok := parts[0].(*parser.TemplateStringPart); ok {
 			destReg := c.regAlloc.Alloc()
 			c.emitLoadNewConstant(destReg, vm.String(stringPart.Value), line)
-			return BadRegister, nil
+			return destReg, nil
 		}
 		// Single interpolated expression: convert to string
-		_, err := c.compileNode(parts[0], NoHint)
+		exprReg, err := c.compileNode(parts[0], NoHint)
 		if err != nil {
 			return BadRegister, err
 		}
 		// Result is already in a register, but we might need to convert to string
 		// For now, assume expressions evaluate to their string representation
 		// TODO: Add explicit string conversion if needed
-		return BadRegister, nil
+		return exprReg, nil
 	}
 
 	// Multiple parts: build up result using binary concatenation
@@ -375,11 +362,10 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 
 		default:
 			// Expression part: compile and concatenate
-			_, err := c.compileNode(p, NoHint)
+			exprReg, err := c.compileNode(p, NoHint)
 			if err != nil {
 				return BadRegister, err
 			}
-			exprReg := c.regAlloc.Current()
 
 			if !initialized {
 				resultReg = exprReg
@@ -396,8 +382,7 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 	}
 
 	// Update register allocator state
-	c.regAlloc.SetCurrent(resultReg)
-	return BadRegister, nil
+	return resultReg, nil
 }
 
 // --- Modify signature again to return (uint16, []*Symbol, errors.PaseratiError) ---
@@ -467,13 +452,12 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			functionCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
-			_, err := functionCompiler.compileNode(param.DefaultValue, NoHint)
+			defaultValueReg, err := functionCompiler.compileNode(param.DefaultValue, NoHint)
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
 			} else {
 				// Move the default value to the parameter register
-				defaultValueReg := functionCompiler.regAlloc.Current()
 				if defaultValueReg != paramReg {
 					functionCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
 					// Free the temporary default value register after moving
