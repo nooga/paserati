@@ -235,8 +235,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		panic("Compiler internal error: typeChecker is nil during compileNode")
 	}
 
-	if c.line != GetTokenFromNode(node).Line {
-		c.line = GetTokenFromNode(node).Line
+	if c.line != parser.GetTokenFromNode(node).Line {
+		c.line = parser.GetTokenFromNode(node).Line
 		debugPrintf("// DEBUG compiling line %d (%s)\n", c.line, c.compilingFuncName)
 	}
 
@@ -970,7 +970,7 @@ func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInf
 
 // addError creates a CompileError and appends it to the compiler's error list.
 func (c *Compiler) addError(node parser.Node, msg string) {
-	token := GetTokenFromNode(node)
+	token := parser.GetTokenFromNode(node)
 	compileErr := &errors.CompileError{
 		Position: errors.Position{
 			Line:     token.Line,
@@ -984,7 +984,7 @@ func (c *Compiler) addError(node parser.Node, msg string) {
 }
 
 func NewCompileError(node parser.Node, msg string) *errors.CompileError {
-	token := GetTokenFromNode(node)
+	token := parser.GetTokenFromNode(node)
 	return &errors.CompileError{
 		Position: errors.Position{
 			Line:     token.Line,
@@ -995,110 +995,6 @@ func NewCompileError(node parser.Node, msg string) *errors.CompileError {
 		Msg: msg,
 	}
 }
-
-// GetTokenFromNode attempts to extract the primary lexical token associated with an AST node.
-// TODO: Consolidate this with the one in checker/checker.go? Put it in ast?
-func GetTokenFromNode(node parser.Node) lexer.Token {
-	switch n := node.(type) {
-	// Statements
-	case *parser.LetStatement:
-		return n.Token
-	case *parser.ConstStatement:
-		return n.Token
-	case *parser.ReturnStatement:
-		return n.Token
-	case *parser.ExpressionStatement:
-		if n.Expression != nil {
-			return GetTokenFromNode(n.Expression) // Use expression's token
-		}
-		return n.Token // Fallback to statement token (often start of expression)
-	case *parser.BlockStatement:
-		return n.Token // '{'
-	case *parser.WhileStatement:
-		return n.Token // 'while'
-	case *parser.ForStatement:
-		return n.Token // 'for'
-	case *parser.DoWhileStatement:
-		return n.Token // 'do'
-	case *parser.BreakStatement:
-		return n.Token // 'break'
-	case *parser.ContinueStatement:
-		return n.Token // 'continue'
-	case *parser.TypeAliasStatement:
-		return n.Token // 'type'
-	case *parser.InterfaceDeclaration:
-		return n.Token // 'interface'
-
-	// Expressions
-	case *parser.Identifier:
-		return n.Token
-	case *parser.NumberLiteral:
-		return n.Token
-	case *parser.StringLiteral:
-		return n.Token
-	case *parser.BooleanLiteral:
-		return n.Token
-	case *parser.NullLiteral:
-		return n.Token
-	case *parser.UndefinedLiteral:
-		return n.Token
-	case *parser.ThisExpression:
-		return n.Token
-	case *parser.PrefixExpression:
-		return n.Token // Operator token
-	case *parser.TypeofExpression:
-		return n.Token // Operator token
-	case *parser.InfixExpression:
-		return n.Token // Operator token
-	case *parser.IfExpression:
-		return n.Token // 'if' token
-	case *parser.FunctionLiteral:
-		return n.Token // 'function' token
-	case *parser.FunctionSignature:
-		return n.Token // 'function' token
-	case *parser.ArrowFunctionLiteral:
-		return n.Token // '=>' token
-	case *parser.CallExpression:
-		return n.Token // '(' token
-	case *parser.NewExpression:
-		return n.Token // 'new' token
-	case *parser.AssignmentExpression:
-		return n.Token // Assignment operator token
-	case *parser.UpdateExpression:
-		return n.Token // Update operator token
-	case *parser.TernaryExpression:
-		return n.Token // '?' token
-	case *parser.ArrayLiteral:
-		return n.Token // '[' token
-	case *parser.ObjectLiteral:
-		return n.Token // '{' token
-	case *parser.IndexExpression:
-		return n.Token // '[' token
-	case *parser.MemberExpression:
-		return n.Token // '.' token
-	case *parser.OptionalChainingExpression:
-		return n.Token // '?.' token
-
-	// Program node doesn't have a single token, return a dummy?
-	case *parser.Program:
-		if len(n.Statements) > 0 {
-			return GetTokenFromNode(n.Statements[0]) // Use first statement's token
-		}
-		return lexer.Token{Type: lexer.ILLEGAL, Line: 1, Column: 1} // Dummy token
-
-	// Add other node types as needed
-	default:
-		fmt.Printf("Warning: GetTokenFromNode unhandled type: %T\n", n)
-		// Return a dummy token if type is unhandled
-		return lexer.Token{Type: lexer.ILLEGAL, Line: 1, Column: 1}
-	}
-}
-
-// --- NEW: Switch Statement Compilation ---
-
-// --- REVISED: compileObjectLiteral (One-by-One Property Set) ---
-
-// --- NEW: Loop Context Helpers ---
 
 // pushLoopContext adds a new loop context to the stack.
 func (c *Compiler) pushLoopContext(loopStartPos, continueTargetPos int) {
@@ -1421,28 +1317,3 @@ func (c *Compiler) getOrAssignGlobalIndex(name string) uint16 {
 
 	return uint16(idx)
 }
-
-// isRegisterInSymbolTable checks if a register contains a variable that's still in the symbol table.
-// This helps us avoid freeing registers that contain variables that might be used later.
-func (c *Compiler) isRegisterInSymbolTable(reg Register) bool {
-	debugPrintf("// DEBUG isRegisterInSymbolTable: Checking R%d\n", reg)
-	// Check if any symbol in the current symbol table uses this register
-	for name, symbol := range c.currentSymbolTable.store {
-		debugPrintf("// DEBUG isRegisterInSymbolTable: Symbol '%s' uses R%d (checking against R%d)\n", name, symbol.Register, reg)
-		if symbol.Register == reg {
-			debugPrintf("// DEBUG isRegisterInSymbolTable: Found R%d in symbol table (variable '%s')\n", reg, name)
-			return true
-		}
-	}
-
-	// If we have an enclosing scope, check there too for free variables
-	if c.enclosing != nil {
-		debugPrintf("// DEBUG isRegisterInSymbolTable: Checking enclosing scope for R%d\n", reg)
-		return c.enclosing.isRegisterInSymbolTable(reg)
-	}
-
-	debugPrintf("// DEBUG isRegisterInSymbolTable: R%d not found in symbol table\n", reg)
-	return false
-}
-
-// compileTemplateLiteral compiles template literals using the simple binary OpStringConcat approach

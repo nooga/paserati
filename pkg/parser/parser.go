@@ -1234,6 +1234,7 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			if restParam == nil {
 				return nil, nil, fmt.Errorf("failed to parse rest parameter")
 			}
+			// Expect closing parenthesis after rest parameter
 			if !p.expectPeek(lexer.RPAREN) {
 				return nil, nil, fmt.Errorf("expected closing parenthesis after rest parameter")
 			}
@@ -3483,4 +3484,126 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 	}
 
 	return funcType
+}
+
+// GetTokenFromNode attempts to extract the primary token associated with a parser node.
+// This is useful for getting line numbers for error reporting.
+// Returns the zero value of lexer.Token if no specific token can be easily extracted.
+func GetTokenFromNode(node Node) lexer.Token {
+	switch n := node.(type) {
+	// Statements (use the primary keyword/token)
+	case *LetStatement:
+		return n.Token
+	case *ConstStatement:
+		return n.Token
+	case *VarStatement:
+		return n.Token
+	case *ReturnStatement:
+		return n.Token
+	case *ExpressionStatement:
+		if n.Expression != nil {
+			return GetTokenFromNode(n.Expression) // Use expression's token recursively
+		}
+		return n.Token // Fallback to statement token (often start of expression)
+	case *BlockStatement:
+		return n.Token // The '{' token
+	case *IfExpression:
+		return n.Token // The 'if' token
+	case *WhileStatement:
+		return n.Token // 'while' token
+	case *ForStatement:
+		return n.Token // 'for' token
+	case *ForOfStatement:
+		return n.Token // 'for' token
+	case *BreakStatement:
+		return n.Token // 'break' token
+	case *ContinueStatement:
+		return n.Token // 'continue' token
+	case *DoWhileStatement:
+		return n.Token // 'do' token
+	case *TypeAliasStatement:
+		return n.Token // 'type' token
+	case *InterfaceDeclaration:
+		return n.Token // 'interface' token
+	case *SwitchStatement:
+		return n.Token // 'switch' token
+
+	// Expressions (use the primary token where available)
+	case *Identifier:
+		return n.Token
+	case *NumberLiteral:
+		return n.Token
+	case *StringLiteral:
+		return n.Token
+	case *TemplateLiteral:
+		return n.Token
+	case *BooleanLiteral:
+		return n.Token
+	case *NullLiteral:
+		return n.Token
+	case *UndefinedLiteral:
+		return n.Token
+	case *ThisExpression:
+		return n.Token
+	case *ObjectLiteral:
+		return n.Token // The '{' token
+	case *ShorthandMethod:
+		return n.Token // The method name token
+	case *FunctionLiteral:
+		return n.Token // The 'function' token
+	case *FunctionSignature:
+		return n.Token // The 'function' token
+	case *ArrowFunctionLiteral:
+		return n.Token // The '=>' token
+	case *PrefixExpression:
+		return n.Token // The operator token
+	case *TypeofExpression:
+		return n.Token // The 'typeof' token
+	case *InfixExpression:
+		return n.Token // The operator token
+	case *TernaryExpression:
+		return n.Token // The '?' token
+	case *CallExpression:
+		return n.Token // The '(' token
+	case *NewExpression:
+		return n.Token // The 'new' token
+	case *IndexExpression:
+		return n.Token // The '[' token
+	case *ArrayLiteral:
+		return n.Token // The '[' token
+	case *MemberExpression:
+		return n.Token // The '.' token
+	case *OptionalChainingExpression:
+		return n.Token // The '?.' token
+	case *AssignmentExpression:
+		return n.Token // The assignment operator token
+	case *UpdateExpression:
+		return n.Token // The update operator token
+	case *SpreadElement:
+		return n.Token // The '...' token
+
+	// Type expressions
+	case *UnionTypeExpression:
+		return n.Token // The '|' token
+	case *ArrayTypeExpression:
+		return n.Token // The '[' token
+	case *FunctionTypeExpression:
+		return n.Token // The '(' token
+	case *ObjectTypeExpression:
+		return n.Token // The '{' token
+	case *ConstructorTypeExpression:
+		return n.Token // The 'new' token
+
+	// Special cases
+	case *Program:
+		if len(n.Statements) > 0 {
+			return GetTokenFromNode(n.Statements[0]) // Use first statement's token
+		}
+		return lexer.Token{} // Empty program, return zero value
+
+	// Add other node types as needed
+	default:
+		// Cannot easily determine a representative token
+		return lexer.Token{} // Return zero value
+	}
 }

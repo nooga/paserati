@@ -194,7 +194,7 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 }
 
 func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Register) (Register, errors.PaseratiError) {
-	line := GetTokenFromNode(node).Line                                  // Use '[' token line
+	line := parser.GetTokenFromNode(node).Line                           // Use '[' token line
 	debugPrintf(">>> Enter compileIndexExpression: %s\n", node.String()) // <<< DEBUG ENTRY
 
 	// 1. Compile the expression being indexed (the base: array/object/string)

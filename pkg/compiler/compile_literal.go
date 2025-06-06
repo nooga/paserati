@@ -260,7 +260,7 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 
 func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
-	line := GetTokenFromNode(node).Line
+	line := parser.GetTokenFromNode(node).Line
 
 	// 1. Create an empty object
 	objReg := c.regAlloc.Alloc()
