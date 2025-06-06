@@ -824,12 +824,17 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return resultReg, nil
 	}
 
-	// Regular function call: func(args...)
+	// --- OPTIMIZED: Regular function call with register groups ---
+	// Create a register group to manage all call-related registers
+	callGroup := c.regAlloc.NewGroup()
+	defer callGroup.Release() // Ensure cleanup even if there's an error
+
 	// 1. Compile the expression being called (e.g., function name)
 	funcReg, err := c.compileNode(node.Function, NoHint)
 	if err != nil {
 		return BadRegister, err
 	}
+	callGroup.Add(funcReg) // Add to group for automatic cleanup
 
 	// 2. Compile arguments and handle optional parameters
 	argRegs, totalArgCount, err := c.compileArgumentsWithOptionalHandling(node)
@@ -837,27 +842,52 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return BadRegister, err
 	}
 
-	// Ensure arguments are in the correct registers for the call convention.
-	// Convention: Args must be in registers funcReg+1, funcReg+2, ...
-	// FIXED: Handle register cycles properly using a temporary register approach
+	// Add all argument registers to the group
+	for _, argReg := range argRegs {
+		callGroup.Add(argReg)
+	}
+
+	// 3. Optimize argument layout using linearization
 	if totalArgCount > 0 {
-		c.resolveRegisterMoves(argRegs, funcReg+1, node.Token.Line)
-		// Free the original argument registers after resolving moves
+		// Create a subgroup for just the arguments
+		argGroup := callGroup.SubGroup()
 		for _, argReg := range argRegs {
-			// Only free if it's different from the target register
-			targetReg := funcReg + 1 + Register(totalArgCount-1) // Last target register
-			if argReg > targetReg || argReg < funcReg+1 {
-				c.regAlloc.Free(argReg)
+			argGroup.Add(argReg)
+		}
+
+		// Try to linearize arguments for optimal register layout
+		linearizedFirstArg, err := argGroup.Linearize()
+		if err != nil {
+			// Linearization failed, fall back to register moves
+			c.resolveRegisterMoves(argRegs, funcReg+1, node.Token.Line)
+		} else {
+			// Check if linearization used existing registers or allocated new ones
+			argumentsAlreadyContiguous := (len(argRegs) > 0 && argRegs[0] == linearizedFirstArg)
+
+			if !argumentsAlreadyContiguous {
+				// Linearization allocated NEW registers, we need to move our argument values there first
+				for i := 0; i < totalArgCount; i++ {
+					c.emitMove(linearizedFirstArg+Register(i), argRegs[i], node.Token.Line)
+				}
+			}
+
+			// Now check if the linearized block is in the right position for the call convention
+			if linearizedFirstArg != funcReg+1 {
+				// Move the entire linearized argument block to the correct position
+				for i := 0; i < totalArgCount; i++ {
+					c.emitMove(funcReg+1+Register(i), linearizedFirstArg+Register(i), node.Token.Line)
+				}
 			}
 		}
 	}
 
-	// 3. Allocate register for the return value
+	// 4. Allocate register for the return value (not managed by callGroup since it's the result)
 	resultReg := c.regAlloc.Alloc()
 
-	// 4. Emit OpCall (regular function call)
+	// 5. Emit OpCall (regular function call)
 	c.emitCall(resultReg, funcReg, byte(totalArgCount), node.Token.Line)
 
+	// The call group will be automatically released by defer, freeing all temporary registers
 	// The result of the call is now in resultReg
 	return resultReg, nil
 }

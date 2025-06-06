@@ -308,9 +308,10 @@ func (rg *RegisterGroup) Count() int {
 	return len(rg.registers)
 }
 
-// Linearize allocates a contiguous block of registers and returns the first one.
+// Linearize ensures registers are in a contiguous block and returns the first one.
 // This is useful for function calls that require arguments in consecutive registers.
-// Note: In a full implementation, this would also emit move instructions.
+// If registers are already contiguous, no new allocation is needed.
+// If not, allocates a new contiguous block that the caller should move values to.
 func (rg *RegisterGroup) Linearize() (Register, error) {
 	if rg.released {
 		return 0, fmt.Errorf("cannot linearize released group")
@@ -322,20 +323,37 @@ func (rg *RegisterGroup) Linearize() (Register, error) {
 		return rg.registers[0], nil // Already "linear"
 	}
 
-	// Allocate contiguous block
-	firstReg := rg.allocator.AllocContiguous(len(rg.registers))
-
-	if debugRegAlloc {
-		fmt.Printf("[REGGROUP] LINEARIZE %d registers starting at R%d\n", len(rg.registers), firstReg)
+	// Check if registers are already contiguous
+	firstReg := rg.registers[0]
+	isContiguous := true
+	for i := 1; i < len(rg.registers); i++ {
+		if rg.registers[i] != firstReg+Register(i) {
+			isContiguous = false
+			break
+		}
 	}
 
-	// In a real implementation, this would emit move instructions:
+	if isContiguous {
+		if debugRegAlloc {
+			fmt.Printf("[REGGROUP] LINEARIZE OPTIMIZED: %d registers already contiguous starting at R%d\n", len(rg.registers), firstReg)
+		}
+		return firstReg, nil
+	}
+
+	// Not contiguous, allocate new contiguous block
+	newFirstReg := rg.allocator.AllocContiguous(len(rg.registers))
+
+	if debugRegAlloc {
+		fmt.Printf("[REGGROUP] LINEARIZE %d registers: not contiguous, allocated new block starting at R%d\n", len(rg.registers), newFirstReg)
+	}
+
+	// Note: The caller needs to emit move instructions to transfer values:
 	// for i, srcReg := range rg.registers {
-	//     targetReg := firstReg + Register(i)
+	//     targetReg := newFirstReg + Register(i)
 	//     compiler.emitMove(targetReg, srcReg, line)
 	// }
 
-	return firstReg, nil
+	return newFirstReg, nil
 }
 
 // Release frees all registers in this group and all subgroups.
