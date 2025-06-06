@@ -181,25 +181,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// If TRUTHY -> jumpToEnd (skip RHS eval AND store)
 			jumpToEnd = c.emitPlaceholderJump(vm.OpJump, 0, line)
 		case "??=":
-			isNullReg := c.regAlloc.Alloc()
-			isUndefReg := c.regAlloc.Alloc()
-			nullConstReg := c.regAlloc.Alloc()
-			undefConstReg := c.regAlloc.Alloc()
-			c.emitLoadNewConstant(nullConstReg, vm.Null, line)
-			c.emitLoadNewConstant(undefConstReg, vm.Undefined, line)
-			c.emitStrictEqual(isNullReg, currentValueReg, nullConstReg, line)
-			jumpIfNotNull := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullReg, line)
-			// If IS null -> jumpToEvalRhs
-			jumpToEvalRhs = c.emitPlaceholderJump(vm.OpJump, 0, line)
-			c.patchJump(jumpIfNotNull)
-			c.emitStrictEqual(isUndefReg, currentValueReg, undefConstReg, line)
+			// Use efficient nullish check opcode - much more register efficient!
+			isNullishReg := c.regAlloc.Alloc()
+			c.emitIsNullish(isNullishReg, currentValueReg, line)
 			// If NOT nullish -> jumpToEnd (skip RHS eval AND store)
-			jumpToEnd = c.emitPlaceholderJump(vm.OpJumpIfFalse, isUndefReg, line)
-			c.patchJump(jumpToEvalRhs) // Patch jump from null check TO start of RHS eval
-			c.regAlloc.Free(isNullReg)
-			c.regAlloc.Free(isUndefReg)
-			c.regAlloc.Free(nullConstReg)
-			c.regAlloc.Free(undefConstReg)
+			jumpToEnd = c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
+			// If IS nullish -> continue to RHS eval (jumpToEvalRhs is not needed)
+			c.regAlloc.Free(isNullishReg)
 		}
 
 		// --- Evaluate RHS Path ---

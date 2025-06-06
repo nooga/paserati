@@ -8,6 +8,17 @@ import (
 	"paserati/pkg/vm"
 )
 
+// Helper functions for detecting null and undefined literals
+func isNullLiteral(node parser.Expression) bool {
+	_, ok := node.(*parser.NullLiteral)
+	return ok
+}
+
+func isUndefinedLiteral(node parser.Expression) bool {
+	_, ok := node.(*parser.UndefinedLiteral)
+	return ok
+}
+
 func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Register) (Register, errors.PaseratiError) {
 	// 1. Compile the constructor expression
 	constructorReg, err := c.compileNode(node.Constructor, NoHint)
@@ -133,37 +144,22 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 	// Allocate destination register first
 	destReg := c.regAlloc.Alloc()
 
-	// Check if object is null
-	nullReg := c.regAlloc.Alloc()
-	c.emitLoadNull(nullReg, node.Token.Line)
-	nullCheckReg := c.regAlloc.Alloc()
-	c.emitStrictEqual(nullCheckReg, objectReg, nullReg, node.Token.Line)
+	// Use efficient nullish check opcode - much more register efficient!
+	isNullishReg := c.regAlloc.Alloc()
+	c.emitIsNullish(isNullishReg, objectReg, node.Token.Line)
 
-	// Check if object is undefined
-	undefinedReg := c.regAlloc.Alloc()
-	c.emitLoadUndefined(undefinedReg, node.Token.Line)
-	undefinedCheckReg := c.regAlloc.Alloc()
-	c.emitStrictEqual(undefinedCheckReg, objectReg, undefinedReg, node.Token.Line)
+	// If object is NOT nullish, jump to normal property access
+	jumpToPropertyAccessPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, node.Token.Line)
 
-	// If object is null, jump to return undefined
-	nullJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, nullCheckReg, node.Token.Line)
+	// Object IS nullish - return undefined
 	c.emitLoadUndefined(destReg, node.Token.Line)
-	endJumpPos1 := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
-
-	// If object is undefined, jump to return undefined
-	c.patchJump(nullJumpPos) // Patch the null check jump to here
-	undefinedJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, undefinedCheckReg, node.Token.Line)
-	c.emitLoadUndefined(destReg, node.Token.Line)
-	endJumpPos2 := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+	endJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 
 	// Object is not null/undefined - do normal property access
-	c.patchJump(undefinedJumpPos)
+	c.patchJump(jumpToPropertyAccessPos)
 
-	// Free temporary registers as they're no longer needed
-	c.regAlloc.Free(nullReg)
-	c.regAlloc.Free(nullCheckReg)
-	c.regAlloc.Free(undefinedReg)
-	c.regAlloc.Free(undefinedCheckReg)
+	// Free temporary register as it's no longer needed
+	c.regAlloc.Free(isNullishReg)
 
 	// 3. Get Property Name
 	propertyName := node.Property.Value
@@ -176,8 +172,7 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 			_, isArray := widenedObjectType.(*types.ArrayType)
 			if isArray || widenedObjectType == types.String {
 				c.emitGetLength(destReg, objectReg, node.Token.Line)
-				c.patchJump(endJumpPos1)
-				c.patchJump(endJumpPos2)
+				c.patchJump(endJumpPos)
 				return destReg, nil
 			}
 		}
@@ -191,9 +186,8 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 	// Free the object register after the property access
 	// c.regAlloc.Free(objectReg)
 
-	// 6. Patch the end jumps
-	c.patchJump(endJumpPos1)
-	c.patchJump(endJumpPos2)
+	// 6. Patch the end jump
+	c.patchJump(endJumpPos)
 
 	// Result is now in destReg
 	return destReg, nil
@@ -479,6 +473,51 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 
 	// --- Standard binary operators (arithmetic, comparison, bitwise, shift) ---
 	if node.Operator != "&&" && node.Operator != "||" && node.Operator != "??" {
+		// --- OPTIMIZATION: Special handling for null/undefined comparisons ---
+		if node.Operator == "===" || node.Operator == "!==" {
+			// Check if one operand is a null or undefined literal
+			leftIsNull := isNullLiteral(node.Left)
+			leftIsUndefined := isUndefinedLiteral(node.Left)
+			rightIsNull := isNullLiteral(node.Right)
+			rightIsUndefined := isUndefinedLiteral(node.Right)
+
+			if leftIsNull || leftIsUndefined || rightIsNull || rightIsUndefined {
+				// One side is null/undefined literal - use efficient opcodes!
+				var valueReg Register
+				var err errors.PaseratiError
+				var isNullCheck bool
+
+				if leftIsNull || leftIsUndefined {
+					// Compile the non-literal side (right)
+					valueReg, err = c.compileNode(node.Right, NoHint)
+					isNullCheck = leftIsNull
+				} else {
+					// Compile the non-literal side (left)
+					valueReg, err = c.compileNode(node.Left, NoHint)
+					isNullCheck = rightIsNull
+				}
+
+				if err != nil {
+					return BadRegister, err
+				}
+
+				destReg := c.regAlloc.Alloc()
+
+				if isNullCheck {
+					c.emitIsNull(destReg, valueReg, line)
+				} else {
+					c.emitIsUndefined(destReg, valueReg, line)
+				}
+
+				// If this is !== (strict not equal), we need to negate the result
+				if node.Operator == "!==" {
+					c.emitNot(destReg, destReg, line)
+				}
+
+				return destReg, nil
+			}
+		}
+
 		leftReg, err := c.compileNode(node.Left, NoHint)
 		if err != nil {
 			return BadRegister, err
@@ -636,42 +675,18 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			return BadRegister, err
 		}
 
-		// Temp registers for checks
-		isNullReg := c.regAlloc.Alloc()
-		isUndefReg := c.regAlloc.Alloc()
-		nullConstReg := c.regAlloc.Alloc()
-		undefConstReg := c.regAlloc.Alloc()
+		// Use efficient nullish check opcode - much more register efficient!
+		isNullishReg := c.regAlloc.Alloc()
+		c.emitIsNullish(isNullishReg, leftReg, line)
 
-		// Load null and undefined constants
-		c.emitLoadNewConstant(nullConstReg, vm.Null, line)
-		c.emitLoadNewConstant(undefConstReg, vm.Undefined, line)
+		// Jump if *NOT* nullish (jump if false) to skip the right side eval
+		jumpSkipRightPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
 
-		// Check if left == null
-		c.emitStrictEqual(isNullReg, leftReg, nullConstReg, line)
-		// Jump if *NOT* null (jump if false) to the undefined check
-		jumpCheckUndefPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullReg, line)
-
-		// If left IS null. Jump straight to evaluating the right side.
-		jumpEvalRightPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
-
-		// Land here if left was NOT null. Patch the first jump.
-		c.patchJump(jumpCheckUndefPlaceholder)
-
-		// Check if left == undefined
-		c.emitStrictEqual(isUndefReg, leftReg, undefConstReg, line)
-
-		// Free constant registers early since we don't need them anymore
-		c.regAlloc.Free(nullConstReg)
-		c.regAlloc.Free(undefConstReg)
-
-		// Jump if *NOT* undefined (and also not null) to skip the right side eval.
-		jumpSkipRightPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, isUndefReg, line)
-
-		// Land here if left *was* null OR undefined. Patch the jump from the null check.
-		c.patchJump(jumpEvalRightPlaceholder)
+		// Free the check register early since we don't need it anymore
+		c.regAlloc.Free(isNullishReg)
 
 		// --- Eval Right Path ---
-		// Compile right operand
+		// Compile right operand (only executed if left was nullish)
 		rightReg, err := c.compileNode(node.Right, NoHint)
 		if err != nil {
 			return BadRegister, err
@@ -685,19 +700,15 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		jumpEndPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
 
 		// --- Skip Right Path ---
-		// Land here if left was NOT nullish. Patch the jump from the undefined check.
+		// Land here if left was NOT nullish. Patch the jump from the nullish check.
 		c.patchJump(jumpSkipRightPlaceholder)
-		// Result is already correctly in leftReg. Move it to destReg.
+		// Result is left (not nullish), move it to destReg.
 		c.emitMove(destReg, leftReg, line)
 		// Free leftReg after move
 		c.regAlloc.Free(leftReg)
 
 		// Land here after either path finishes. Patch the jump from the right-eval path.
 		c.patchJump(jumpEndPlaceholder)
-
-		// Release temporary registers
-		c.regAlloc.Free(isNullReg)
-		c.regAlloc.Free(isUndefReg)
 
 		// Unified result is now in destReg
 		return destReg, nil
