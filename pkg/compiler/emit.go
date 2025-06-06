@@ -157,7 +157,7 @@ func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte
 	c.emitByte(argCount)
 }
 
-// emitNew emits OpNew to create a new instance using a constructor
+// emitNew emits OpNew with constructor register and argument count
 func (c *Compiler) emitNew(dest, constructorReg Register, argCount byte, line int) {
 	c.emitOpCode(vm.OpNew, line)
 	c.emitByte(byte(dest))
@@ -329,3 +329,49 @@ func (c *Compiler) emitToNumber(dest, src Register, line int) {
 	c.emitByte(byte(dest))
 	c.emitByte(byte(src))
 }
+
+// --- NEW: Efficient Nullish Check Emitters ---
+
+// emitIsNull emits OpIsNull instruction: dest = (src === null)
+func (c *Compiler) emitIsNull(dest, src Register, line int) {
+	c.emitOpCode(vm.OpIsNull, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
+// emitIsUndefined emits OpIsUndefined instruction: dest = (src === undefined)
+func (c *Compiler) emitIsUndefined(dest, src Register, line int) {
+	c.emitOpCode(vm.OpIsUndefined, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
+// emitIsNullish emits OpIsNullish instruction: dest = (src === null || src === undefined)
+func (c *Compiler) emitIsNullish(dest, src Register, line int) {
+	c.emitOpCode(vm.OpIsNullish, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
+// emitJumpIfNull emits OpJumpIfNull instruction: jump to offset if src === null
+func (c *Compiler) emitJumpIfNull(src Register, offset int16, line int) {
+	c.emitOpCode(vm.OpJumpIfNull, line)
+	c.emitByte(byte(src))
+	c.emitUint16(uint16(offset))
+}
+
+// emitJumpIfUndefined emits OpJumpIfUndefined instruction: jump to offset if src === undefined
+func (c *Compiler) emitJumpIfUndefined(src Register, offset int16, line int) {
+	c.emitOpCode(vm.OpJumpIfUndefined, line)
+	c.emitByte(byte(src))
+	c.emitUint16(uint16(offset))
+}
+
+// emitJumpIfNullish emits OpJumpIfNullish instruction: jump to offset if src is null or undefined
+func (c *Compiler) emitJumpIfNullish(src Register, offset int16, line int) {
+	c.emitOpCode(vm.OpJumpIfNullish, line)
+	c.emitByte(byte(src))
+	c.emitUint16(uint16(offset))
+}
+
+// --- END NEW ---

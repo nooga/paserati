@@ -2013,6 +2013,58 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// Direct array assignment - much faster than map assignment
 			vm.globals[globalIdx] = registers[srcReg]
 
+		// --- NEW: Efficient Nullish Checks ---
+		case OpIsNull:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			registers[destReg] = BooleanValue(registers[srcReg].Type() == TypeNull)
+
+		case OpIsUndefined:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			registers[destReg] = BooleanValue(registers[srcReg].Type() == TypeUndefined)
+
+		case OpIsNullish:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			val := registers[srcReg]
+			registers[destReg] = BooleanValue(val.Type() == TypeNull || val.Type() == TypeUndefined)
+
+		case OpJumpIfNull:
+			condReg := code[ip]
+			offsetHi := code[ip+1]
+			offsetLo := code[ip+2]
+			ip += 3
+			if registers[condReg].Type() == TypeNull {
+				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
+				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
+			}
+
+		case OpJumpIfUndefined:
+			condReg := code[ip]
+			offsetHi := code[ip+1]
+			offsetLo := code[ip+2]
+			ip += 3
+			if registers[condReg].Type() == TypeUndefined {
+				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
+				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
+			}
+
+		case OpJumpIfNullish:
+			condReg := code[ip]
+			offsetHi := code[ip+1]
+			offsetLo := code[ip+2]
+			ip += 3
+			val := registers[condReg]
+			if val.Type() == TypeNull || val.Type() == TypeUndefined {
+				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
+				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
+			}
+		// --- END NEW ---
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)

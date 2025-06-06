@@ -100,6 +100,17 @@ const (
 	OpGetGlobal OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
 	OpSetGlobal OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
 	// --- END NEW ---
+
+	// --- NEW: Efficient Nullish Checks ---
+	OpIsNull      OpCode = 51 // Rx Ry: Rx = (Ry === null) - efficient null check
+	OpIsUndefined OpCode = 52 // Rx Ry: Rx = (Ry === undefined) - efficient undefined check
+	OpIsNullish   OpCode = 53 // Rx Ry: Rx = (Ry === null || Ry === undefined) - efficient nullish check
+
+	// Jump variants for control flow optimization
+	OpJumpIfNull      OpCode = 54 // Ry Offset(16bit): Jump if Ry === null
+	OpJumpIfUndefined OpCode = 55 // Ry Offset(16bit): Jump if Ry === undefined
+	OpJumpIfNullish   OpCode = 56 // Ry Offset(16bit): Jump if Ry is null or undefined
+	// --- END NEW ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -214,6 +225,21 @@ func (op OpCode) String() string {
 		return "OpSetGlobal"
 	// --- END NEW ---
 
+	// --- NEW: Nullish Check Op Cases ---
+	case OpIsNull:
+		return "OpIsNull"
+	case OpIsUndefined:
+		return "OpIsUndefined"
+	case OpIsNullish:
+		return "OpIsNullish"
+	case OpJumpIfNull:
+		return "OpJumpIfNull"
+	case OpJumpIfUndefined:
+		return "OpJumpIfUndefined"
+	case OpJumpIfNullish:
+		return "OpJumpIfNullish"
+	// --- END NEW ---
+
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}
@@ -310,7 +336,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
 	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
-	case OpNegate, OpNot, OpTypeof, OpToNumber, OpBitwiseNot, OpGetLength:
+	case OpNegate, OpNot, OpTypeof, OpToNumber, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
@@ -339,6 +365,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.jumpInstruction(builder, instruction.String(), offset, true) // Has register operand
 	case OpJump:
 		return c.jumpInstruction(builder, instruction.String(), offset, false) // No register operand
+	case OpJumpIfNull, OpJumpIfUndefined, OpJumpIfNullish:
+		return c.jumpInstruction(builder, instruction.String(), offset, true) // Has register operand
 
 	// Array Operations
 	case OpMakeArray:

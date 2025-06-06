@@ -63,6 +63,8 @@ type Compiler struct {
 	globalIndices map[string]int
 	// Count of global variables assigned so far (only for top-level compiler)
 	globalCount int
+	// line tracking
+	line int
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -80,6 +82,7 @@ func NewCompiler() *Compiler {
 		stats:              &CompilerStats{},
 		globalIndices:      make(map[string]int),
 		globalCount:        0,
+		line:               -1,
 	}
 }
 
@@ -232,7 +235,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		panic("Compiler internal error: typeChecker is nil during compileNode")
 	}
 
-	fmt.Printf("// DEBUG compiling line %d (%s)\n", GetTokenFromNode(node).Line, c.compilingFuncName)
+	if c.line != GetTokenFromNode(node).Line {
+		c.line = GetTokenFromNode(node).Line
+		debugPrintf("// DEBUG compiling line %d (%s)\n", c.line, c.compilingFuncName)
+	}
 
 	switch node := node.(type) {
 	case *parser.Program:
