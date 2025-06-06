@@ -98,6 +98,9 @@ func InitializeRegistry() {
 		// Register Array prototype methods
 		registerArray()
 
+		// Register Date constructor and methods
+		registerDate()
+
 		// TODO: Register other built-ins here
 	})
 }

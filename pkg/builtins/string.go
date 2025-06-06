@@ -58,6 +58,62 @@ func registerStringPrototypeMethods() {
 		ReturnType:     types.Number,
 		IsVariadic:     false,
 	})
+
+	// Register substring method
+	vm.RegisterStringPrototypeMethod("substring",
+		vm.NewNativeFunction(2, false, "substring", stringSubstringImpl))
+	RegisterPrototypeMethod("string", "substring", &types.FunctionType{
+		ParameterTypes: []types.Type{types.Number, types.Number},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+		OptionalParams: []bool{false, true}, // start required, end optional
+	})
+
+	// Register slice method
+	vm.RegisterStringPrototypeMethod("slice",
+		vm.NewNativeFunction(2, false, "slice", stringSliceImpl))
+	RegisterPrototypeMethod("string", "slice", &types.FunctionType{
+		ParameterTypes: []types.Type{types.Number, types.Number},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+		OptionalParams: []bool{false, true}, // start required, end optional
+	})
+
+	// Register indexOf method
+	vm.RegisterStringPrototypeMethod("indexOf",
+		vm.NewNativeFunction(1, false, "indexOf", stringIndexOfImpl))
+	RegisterPrototypeMethod("string", "indexOf", &types.FunctionType{
+		ParameterTypes: []types.Type{types.String},
+		ReturnType:     types.Number,
+		IsVariadic:     false,
+	})
+
+	// Register includes method
+	vm.RegisterStringPrototypeMethod("includes",
+		vm.NewNativeFunction(1, false, "includes", stringIncludesImpl))
+	RegisterPrototypeMethod("string", "includes", &types.FunctionType{
+		ParameterTypes: []types.Type{types.String},
+		ReturnType:     types.Boolean,
+		IsVariadic:     false,
+	})
+
+	// Register startsWith method
+	vm.RegisterStringPrototypeMethod("startsWith",
+		vm.NewNativeFunction(1, false, "startsWith", stringStartsWithImpl))
+	RegisterPrototypeMethod("string", "startsWith", &types.FunctionType{
+		ParameterTypes: []types.Type{types.String},
+		ReturnType:     types.Boolean,
+		IsVariadic:     false,
+	})
+
+	// Register endsWith method
+	vm.RegisterStringPrototypeMethod("endsWith",
+		vm.NewNativeFunction(1, false, "endsWith", stringEndsWithImpl))
+	RegisterPrototypeMethod("string", "endsWith", &types.FunctionType{
+		ParameterTypes: []types.Type{types.String},
+		ReturnType:     types.Boolean,
+		IsVariadic:     false,
+	})
 }
 
 // stringCharAtImpl implements String.prototype.charAt
@@ -92,6 +148,156 @@ func stringCharCodeAtImpl(args []vm.Value) vm.Value {
 	}
 
 	return vm.Number(float64(str[index]))
+}
+
+// stringSubstringImpl implements String.prototype.substring
+func stringSubstringImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	start := int(args[1].ToFloat())
+
+	// Default end to string length if not provided
+	end := len(str)
+	if len(args) > 2 && args[2].Type() != vm.TypeUndefined {
+		end = int(args[2].ToFloat())
+	}
+
+	// Clamp values
+	if start < 0 {
+		start = 0
+	}
+	if end < 0 {
+		end = 0
+	}
+	if start > len(str) {
+		start = len(str)
+	}
+	if end > len(str) {
+		end = len(str)
+	}
+
+	// Swap if start > end
+	if start > end {
+		start, end = end, start
+	}
+
+	return vm.NewString(str[start:end])
+}
+
+// stringSliceImpl implements String.prototype.slice
+func stringSliceImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	start := int(args[1].ToFloat())
+
+	// Default end to string length if not provided
+	end := len(str)
+	if len(args) > 2 && args[2].Type() != vm.TypeUndefined {
+		end = int(args[2].ToFloat())
+	}
+
+	// Handle negative indices
+	if start < 0 {
+		start = len(str) + start
+		if start < 0 {
+			start = 0
+		}
+	}
+	if end < 0 {
+		end = len(str) + end
+		if end < 0 {
+			end = 0
+		}
+	}
+
+	// Clamp to string bounds
+	if start > len(str) {
+		start = len(str)
+	}
+	if end > len(str) {
+		end = len(str)
+	}
+
+	// Return empty string if start >= end
+	if start >= end {
+		return vm.NewString("")
+	}
+
+	return vm.NewString(str[start:end])
+}
+
+// stringIndexOfImpl implements String.prototype.indexOf
+func stringIndexOfImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.Number(-1)
+	}
+
+	str := args[0].ToString()
+	searchStr := args[1].ToString()
+
+	for i := 0; i <= len(str)-len(searchStr); i++ {
+		if str[i:i+len(searchStr)] == searchStr {
+			return vm.Number(float64(i))
+		}
+	}
+
+	return vm.Number(-1)
+}
+
+// stringIncludesImpl implements String.prototype.includes
+func stringIncludesImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.BooleanValue(false)
+	}
+
+	str := args[0].ToString()
+	searchStr := args[1].ToString()
+
+	for i := 0; i <= len(str)-len(searchStr); i++ {
+		if str[i:i+len(searchStr)] == searchStr {
+			return vm.BooleanValue(true)
+		}
+	}
+
+	return vm.BooleanValue(false)
+}
+
+// stringStartsWithImpl implements String.prototype.startsWith
+func stringStartsWithImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.BooleanValue(false)
+	}
+
+	str := args[0].ToString()
+	searchStr := args[1].ToString()
+
+	if len(searchStr) > len(str) {
+		return vm.BooleanValue(false)
+	}
+
+	return vm.BooleanValue(str[:len(searchStr)] == searchStr)
+}
+
+// stringEndsWithImpl implements String.prototype.endsWith
+func stringEndsWithImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.BooleanValue(false)
+	}
+
+	str := args[0].ToString()
+	searchStr := args[1].ToString()
+
+	if len(searchStr) > len(str) {
+		return vm.BooleanValue(false)
+	}
+
+	return vm.BooleanValue(str[len(str)-len(searchStr):] == searchStr)
 }
 
 // stringConstructor implements the String() constructor

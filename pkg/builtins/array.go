@@ -53,6 +53,63 @@ func registerArrayPrototypeMethods() {
 		IsVariadic:     false,
 		OptionalParams: []bool{true}, // Separator is optional
 	})
+
+	// Register map method
+	vm.RegisterArrayPrototypeMethod("map",
+		vm.NewNativeFunction(1, false, "map", arrayPrototypeMapImpl))
+	RegisterPrototypeMethod("array", "map", &types.FunctionType{
+		ParameterTypes: []types.Type{&types.FunctionType{
+			ParameterTypes: []types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}},
+			ReturnType:     types.Any,
+			IsVariadic:     false,
+		}},
+		ReturnType: &types.ArrayType{ElementType: types.Any},
+		IsVariadic: false,
+	})
+
+	// Register filter method
+	vm.RegisterArrayPrototypeMethod("filter",
+		vm.NewNativeFunction(1, false, "filter", arrayPrototypeFilterImpl))
+	RegisterPrototypeMethod("array", "filter", &types.FunctionType{
+		ParameterTypes: []types.Type{&types.FunctionType{
+			ParameterTypes: []types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}},
+			ReturnType:     types.Boolean,
+			IsVariadic:     false,
+		}},
+		ReturnType: &types.ArrayType{ElementType: types.Any},
+		IsVariadic: false,
+	})
+
+	// Register forEach method
+	vm.RegisterArrayPrototypeMethod("forEach",
+		vm.NewNativeFunction(1, false, "forEach", arrayPrototypeForEachImpl))
+	RegisterPrototypeMethod("array", "forEach", &types.FunctionType{
+		ParameterTypes: []types.Type{&types.FunctionType{
+			ParameterTypes: []types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}},
+			ReturnType:     types.Void,
+			IsVariadic:     false,
+		}},
+		ReturnType: types.Void,
+		IsVariadic: false,
+	})
+
+	// Register includes method
+	vm.RegisterArrayPrototypeMethod("includes",
+		vm.NewNativeFunction(1, false, "includes", arrayPrototypeIncludesImpl))
+	RegisterPrototypeMethod("array", "includes", &types.FunctionType{
+		ParameterTypes: []types.Type{types.Any},
+		ReturnType:     types.Boolean,
+		IsVariadic:     false,
+	})
+
+	// Register indexOf method
+	vm.RegisterArrayPrototypeMethod("indexOf",
+		vm.NewNativeFunction(1, false, "indexOf", arrayPrototypeIndexOfImpl))
+	RegisterPrototypeMethod("array", "indexOf", &types.FunctionType{
+		ParameterTypes: []types.Type{types.Any},
+		ReturnType:     types.Number,
+		IsVariadic:     false,
+	})
 }
 
 // arrayPrototypeConcatImpl implements Array.prototype.concat
@@ -166,4 +223,163 @@ func arrayPrototypeJoinImpl(args []vm.Value) vm.Value {
 
 	result := strings.Join(parts, separator)
 	return vm.NewString(result)
+}
+
+// arrayPrototypeMapImpl implements Array.prototype.map
+func arrayPrototypeMapImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.NewArray()
+	}
+
+	thisArray := args[0]
+	if !thisArray.IsArray() {
+		return vm.Undefined
+	}
+
+	callback := args[1]
+	if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+		return vm.Undefined
+	}
+
+	arr := thisArray.AsArray()
+	newArray := vm.NewArray()
+	newArrayObj := newArray.AsArray()
+
+	for i := 0; i < arr.Length(); i++ {
+		element := arr.Get(i)
+		// Call callback with (element, index, array)
+		callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+		var result vm.Value
+		if callback.IsNativeFunction() {
+			nativeFn := callback.AsNativeFunction()
+			result = nativeFn.Fn(callArgs)
+		} else {
+			// For compiled functions, we'd need VM support - skip for now
+			result = vm.Undefined
+		}
+		newArrayObj.Append(result)
+	}
+
+	return newArray
+}
+
+// arrayPrototypeFilterImpl implements Array.prototype.filter
+func arrayPrototypeFilterImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.NewArray()
+	}
+
+	thisArray := args[0]
+	if !thisArray.IsArray() {
+		return vm.Undefined
+	}
+
+	callback := args[1]
+	if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+		return vm.Undefined
+	}
+
+	arr := thisArray.AsArray()
+	newArray := vm.NewArray()
+	newArrayObj := newArray.AsArray()
+
+	for i := 0; i < arr.Length(); i++ {
+		element := arr.Get(i)
+		// Call callback with (element, index, array)
+		callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+		var result vm.Value
+		if callback.IsNativeFunction() {
+			nativeFn := callback.AsNativeFunction()
+			result = nativeFn.Fn(callArgs)
+		} else {
+			// For compiled functions, we'd need VM support - skip for now
+			result = vm.Undefined
+		}
+		if result.IsTruthy() {
+			newArrayObj.Append(element)
+		}
+	}
+
+	return newArray
+}
+
+// arrayPrototypeForEachImpl implements Array.prototype.forEach
+func arrayPrototypeForEachImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.Undefined
+	}
+
+	thisArray := args[0]
+	if !thisArray.IsArray() {
+		return vm.Undefined
+	}
+
+	callback := args[1]
+	if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+		return vm.Undefined
+	}
+
+	arr := thisArray.AsArray()
+
+	for i := 0; i < arr.Length(); i++ {
+		element := arr.Get(i)
+		// Call callback with (element, index, array)
+		callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+		if callback.IsNativeFunction() {
+			nativeFn := callback.AsNativeFunction()
+			nativeFn.Fn(callArgs)
+		} else {
+			// For compiled functions, we'd need VM support - skip for now
+		}
+	}
+
+	return vm.Undefined
+}
+
+// arrayPrototypeIncludesImpl implements Array.prototype.includes
+func arrayPrototypeIncludesImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.BooleanValue(false)
+	}
+
+	thisArray := args[0]
+	if !thisArray.IsArray() {
+		return vm.Undefined
+	}
+
+	searchElement := args[1]
+	arr := thisArray.AsArray()
+
+	for i := 0; i < arr.Length(); i++ {
+		element := arr.Get(i)
+		if element.Equals(searchElement) {
+			return vm.BooleanValue(true)
+		}
+	}
+
+	return vm.BooleanValue(false)
+}
+
+// arrayPrototypeIndexOfImpl implements Array.prototype.indexOf
+func arrayPrototypeIndexOfImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.Number(-1)
+	}
+
+	thisArray := args[0]
+	if !thisArray.IsArray() {
+		return vm.Undefined
+	}
+
+	searchElement := args[1]
+	arr := thisArray.AsArray()
+
+	for i := 0; i < arr.Length(); i++ {
+		element := arr.Get(i)
+		if element.Equals(searchElement) {
+			return vm.Number(float64(i))
+		}
+	}
+
+	return vm.Number(-1)
 }
