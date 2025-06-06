@@ -3,6 +3,8 @@ package builtins
 import (
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"strings"
+	"unicode"
 )
 
 // registerString registers the String constructor and static methods
@@ -113,6 +115,89 @@ func registerStringPrototypeMethods() {
 		ParameterTypes: []types.Type{types.String},
 		ReturnType:     types.Boolean,
 		IsVariadic:     false,
+	})
+
+	// Register toLowerCase method
+	vm.RegisterStringPrototypeMethod("toLowerCase",
+		vm.NewNativeFunction(0, false, "toLowerCase", stringToLowerCaseImpl))
+	RegisterPrototypeMethod("string", "toLowerCase", &types.FunctionType{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+	})
+
+	// Register toUpperCase method
+	vm.RegisterStringPrototypeMethod("toUpperCase",
+		vm.NewNativeFunction(0, false, "toUpperCase", stringToUpperCaseImpl))
+	RegisterPrototypeMethod("string", "toUpperCase", &types.FunctionType{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+	})
+
+	// Register trim method
+	vm.RegisterStringPrototypeMethod("trim",
+		vm.NewNativeFunction(0, false, "trim", stringTrimImpl))
+	RegisterPrototypeMethod("string", "trim", &types.FunctionType{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+	})
+
+	// Register trimStart method
+	vm.RegisterStringPrototypeMethod("trimStart",
+		vm.NewNativeFunction(0, false, "trimStart", stringTrimStartImpl))
+	RegisterPrototypeMethod("string", "trimStart", &types.FunctionType{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+	})
+
+	// Register trimEnd method
+	vm.RegisterStringPrototypeMethod("trimEnd",
+		vm.NewNativeFunction(0, false, "trimEnd", stringTrimEndImpl))
+	RegisterPrototypeMethod("string", "trimEnd", &types.FunctionType{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+	})
+
+	// Register repeat method
+	vm.RegisterStringPrototypeMethod("repeat",
+		vm.NewNativeFunction(1, false, "repeat", stringRepeatImpl))
+	RegisterPrototypeMethod("string", "repeat", &types.FunctionType{
+		ParameterTypes: []types.Type{types.Number},
+		ReturnType:     types.String,
+		IsVariadic:     false,
+	})
+
+	// Register lastIndexOf method
+	vm.RegisterStringPrototypeMethod("lastIndexOf",
+		vm.NewNativeFunction(1, false, "lastIndexOf", stringLastIndexOfImpl))
+	RegisterPrototypeMethod("string", "lastIndexOf", &types.FunctionType{
+		ParameterTypes: []types.Type{types.String},
+		ReturnType:     types.Number,
+		IsVariadic:     false,
+	})
+
+	// Register concat method
+	vm.RegisterStringPrototypeMethod("concat",
+		vm.NewNativeFunction(-1, true, "concat", stringConcatImpl))
+	RegisterPrototypeMethod("string", "concat", &types.FunctionType{
+		ParameterTypes:    []types.Type{}, // No fixed parameters
+		ReturnType:        types.String,
+		IsVariadic:        true,
+		RestParameterType: &types.ArrayType{ElementType: types.String}, // Accept any number of strings
+	})
+
+	// Register split method
+	vm.RegisterStringPrototypeMethod("split",
+		vm.NewNativeFunction(1, false, "split", stringSplitImpl))
+	RegisterPrototypeMethod("string", "split", &types.FunctionType{
+		ParameterTypes: []types.Type{types.String}, // separator parameter
+		ReturnType:     &types.ArrayType{ElementType: types.String},
+		IsVariadic:     false,
+		OptionalParams: []bool{true}, // separator is optional
 	})
 }
 
@@ -298,6 +383,155 @@ func stringEndsWithImpl(args []vm.Value) vm.Value {
 	}
 
 	return vm.BooleanValue(str[len(str)-len(searchStr):] == searchStr)
+}
+
+// stringToLowerCaseImpl implements String.prototype.toLowerCase
+func stringToLowerCaseImpl(args []vm.Value) vm.Value {
+	if len(args) < 1 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	return vm.NewString(strings.ToLower(str))
+}
+
+// stringToUpperCaseImpl implements String.prototype.toUpperCase
+func stringToUpperCaseImpl(args []vm.Value) vm.Value {
+	if len(args) < 1 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	return vm.NewString(strings.ToUpper(str))
+}
+
+// stringTrimImpl implements String.prototype.trim
+func stringTrimImpl(args []vm.Value) vm.Value {
+	if len(args) < 1 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	return vm.NewString(strings.TrimSpace(str))
+}
+
+// stringTrimStartImpl implements String.prototype.trimStart
+func stringTrimStartImpl(args []vm.Value) vm.Value {
+	if len(args) < 1 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	return vm.NewString(strings.TrimLeftFunc(str, unicode.IsSpace))
+}
+
+// stringTrimEndImpl implements String.prototype.trimEnd
+func stringTrimEndImpl(args []vm.Value) vm.Value {
+	if len(args) < 1 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	return vm.NewString(strings.TrimRightFunc(str, unicode.IsSpace))
+}
+
+// stringRepeatImpl implements String.prototype.repeat
+func stringRepeatImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	count := int(args[1].ToFloat())
+
+	if count < 0 {
+		return vm.NewString("") // In JS this would throw RangeError, but we'll be lenient
+	}
+	if count == 0 {
+		return vm.NewString("")
+	}
+
+	return vm.NewString(strings.Repeat(str, count))
+}
+
+// stringLastIndexOfImpl implements String.prototype.lastIndexOf
+func stringLastIndexOfImpl(args []vm.Value) vm.Value {
+	if len(args) < 2 {
+		return vm.Number(-1)
+	}
+
+	str := args[0].ToString()
+	searchStr := args[1].ToString()
+
+	// Find last occurrence
+	lastIndex := -1
+	searchLen := len(searchStr)
+	if searchLen == 0 {
+		return vm.Number(float64(len(str))) // Empty string found at end
+	}
+
+	for i := len(str) - searchLen; i >= 0; i-- {
+		if str[i:i+searchLen] == searchStr {
+			lastIndex = i
+			break
+		}
+	}
+
+	return vm.Number(float64(lastIndex))
+}
+
+// stringConcatImpl implements String.prototype.concat
+func stringConcatImpl(args []vm.Value) vm.Value {
+	if len(args) < 1 {
+		return vm.NewString("")
+	}
+
+	str := args[0].ToString()
+	var result strings.Builder
+	result.WriteString(str)
+
+	// Concatenate all additional arguments
+	for i := 1; i < len(args); i++ {
+		result.WriteString(args[i].ToString())
+	}
+
+	return vm.NewString(result.String())
+}
+
+// stringSplitImpl implements String.prototype.split
+func stringSplitImpl(args []vm.Value) vm.Value {
+	if len(args) < 1 {
+		return vm.NewArray()
+	}
+
+	str := args[0].ToString()
+
+	// If no separator provided, return array with the whole string
+	if len(args) < 2 || args[1].Type() == vm.TypeUndefined {
+		result := vm.NewArray()
+		result.AsArray().Append(vm.NewString(str))
+		return result
+	}
+
+	separator := args[1].ToString()
+
+	// Handle empty separator - split into individual characters
+	if separator == "" {
+		result := vm.NewArray()
+		for _, char := range str {
+			result.AsArray().Append(vm.NewString(string(char)))
+		}
+		return result
+	}
+
+	// Normal split
+	parts := strings.Split(str, separator)
+	result := vm.NewArray()
+	for _, part := range parts {
+		result.AsArray().Append(vm.NewString(part))
+	}
+
+	return result
 }
 
 // stringConstructor implements the String() constructor

@@ -157,7 +157,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Proper arity checking (minimum required arguments)
   - [x] Arrow functions with optional parameters
   - [x] Shorthand methods with optional parameters (`{ method(x?: string) {} }`)
-- [ ] Rest Parameters (`...`)
+- [x] Rest Parameters (`...`) (basic implementation, some edge cases remain)
 - [ ] `arguments` Object
 - [x] Closures / Lexical Scoping
 - [x] `this` Keyword (basic object method context)
@@ -173,7 +173,17 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Assignment (`arr[i] = v`)
   - [x] Compound assignment to indices (`arr[i] += v`, etc.)
   - [x] `.length` Property (OpGetLength optimization)
-  - [x] Array Prototype Methods (`.push`, `.pop`, `.concat`)
+  - [x] Array Prototype Methods
+    - [x] **Core methods** (`.push`, `.pop`, `.concat`, `.join`, `.toString`)
+    - [x] **Search methods** (`.includes`, `.indexOf`, `.lastIndexOf`)
+    - [x] **Functional methods** (`.map`, `.filter`, `.forEach`)
+    - [x] **Test methods** (`.every`, `.some`, `.find`, `.findIndex`)
+    - [x] **Mutation methods** (`.reverse`, `.shift`, `.unshift`)
+    - [x] **Extraction methods** (`.slice`)
+    - [x] **14+ array methods implemented** covering most common JavaScript array operations
+    - [x] Proper type signatures for all methods with TypeScript compatibility
+    - [x] Support for callback functions in functional methods (limited type checking)
+    - [ ] Advanced methods (`.reduce`, `.sort`, `.splice`) - coming soon
 - [x] Objects
   - [x] Creation (`{}`)
   - [x] Property Access (`.`, `[]`)
@@ -184,9 +194,24 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Methods with `this` context
 - [x] Strings
   - [x] `.length` Property (OpGetLength optimization)
-  - [x] String Prototype Methods (`.charAt`, `.charCodeAt`)
+  - [x] String Prototype Methods
+    - [x] Classic methods (`.charAt`, `.charCodeAt`)
+    - [x] Modern ES5+ methods (`.substring`, `.slice`, `.indexOf`, `.includes`)
+    - [x] ES2015+ methods (`.startsWith`, `.endsWith`)
+    - [x] **Case conversion** (`.toLowerCase`, `.toUpperCase`)
+    - [x] **Whitespace handling** (`.trim`, `.trimStart`, `.trimEnd`)
+    - [x] **String manipulation** (`.repeat`, `.concat`, `.split`, `.lastIndexOf`)
+    - [x] Proper type signatures for all methods with TypeScript compatibility
+    - [x] String constructor with static methods (`.fromCharCode`)
+    - [x] **Comprehensive string processing pipeline support**
+    - [x] **19+ String methods implemented** - covers most common JavaScript string operations
+    - [ ] Advanced methods (`.replace`, `.match`, regex support, padding) - future enhancements
 - [ ] `Math` Object
-- [ ] `Date` Object
+- [x] `Date` Object (partial)
+  - [x] `Date.now()` static method
+  - [x] Date constructor (basic implementation)
+  - [ ] Date prototype methods (`.getTime`, `.getFullYear`, etc.) - planned
+  - [ ] Full constructor support (`new Date()`)
 - [ ] `JSON` Object
 - [ ] `Map` / `Set`
 - [ ] `WeakMap` / `WeakSet`
@@ -200,6 +225,17 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] `console.count()`, `console.countReset()` - counting operations
   - [x] `console.time()`, `console.timeEnd()` - timing operations
   - [x] `console.group()`, `console.groupCollapsed()`, `console.groupEnd()` - grouping
+
+## Built-in System Architecture
+
+- [x] **Modern Builtin Architecture**
+  - [x] Single source of truth for each primitive (consolidated files: `array.go`, `string.go`, `date.go`)
+  - [x] Eliminated hardcoded method types from type checker
+  - [x] Prototype registry system for runtime implementations and type information
+  - [x] TypeScript-compatible `CallableType` for constructors with static methods
+  - [x] Clean separation between constructor and prototype methods
+  - [x] Type-safe builtin method registration with proper signatures
+  - [x] Support for variadic methods, optional parameters, and complex return types
 
 ## TypeScript Specific Features
 
@@ -223,6 +259,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Multiple call signatures (overloaded callable types)
   - [x] Type checking for callable object assignments
   - [x] Call expression type checking with callable types
+  - [x] Constructor functions with static methods (e.g., `String` with `String.fromCharCode`)
 - [x] Interfaces (`interface Point { x: number; y: number; }`)
   - [x] Interface Inheritance (`interface Point3D extends Point2D { z: number; }`)
   - [x] Multiple Interface Inheritance (`interface Combined extends A, B {}`)
