@@ -629,7 +629,7 @@ func (v Value) Is(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction:
+	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps:
 		// Objects (including arrays, functions, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:

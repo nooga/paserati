@@ -65,6 +65,10 @@ type Compiler struct {
 	globalCount int
 	// line tracking
 	line int
+
+	// --- NEW: Constant Register Cache for Performance ---
+	// Maps constant index to register that currently holds it
+	constantCache map[uint16]Register
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -83,6 +87,7 @@ func NewCompiler() *Compiler {
 		globalIndices:      make(map[string]int),
 		globalCount:        0,
 		line:               -1,
+		constantCache:      make(map[uint16]Register),
 	}
 }
 
@@ -106,6 +111,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		compilingFuncName:  "",
 		typeChecker:        enclosingCompiler.typeChecker, // Inherit checker from enclosing
 		stats:              enclosingCompiler.stats,
+		constantCache:      make(map[uint16]Register), // Each function has its own constant cache
 	}
 }
 

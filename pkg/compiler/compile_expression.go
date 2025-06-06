@@ -811,11 +811,10 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			tempRegs = append(tempRegs, funcReg+Register(i))
 		}
 
-		// 3. Compile the method property access to get the function
-		_, err = c.compileMemberExpression(memberExpr, funcReg)
-		if err != nil {
-			return BadRegister, err
-		}
+		// 3. OPTIMIZATION: Reuse thisReg for getting the property instead of compiling the object again
+		propertyName := memberExpr.Property.Value
+		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
 
 		// 4. Compile arguments directly into their target positions (funcReg+1, funcReg+2, ...)
 		_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)

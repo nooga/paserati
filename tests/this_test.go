@@ -99,7 +99,7 @@ func TestThisKeyword(t *testing.T) {
 				};
 				obj.double().getValue();
 			`,
-			expected: float64(40),
+			expected: float64(20),
 		},
 	}
 

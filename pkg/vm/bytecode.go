@@ -295,8 +295,16 @@ func (c *Chunk) WriteUint16(val uint16) {
 
 // AddConstant adds a value to the chunk's constant pool and returns its index.
 // Returns a uint16 as we might need more than 256 constants.
+// Deduplicates constants to avoid storing the same value multiple times.
 func (c *Chunk) AddConstant(v Value) uint16 {
-	// TODO: Check if constant already exists to avoid duplicates
+	// Check if constant already exists to avoid duplicates
+	for i, existing := range c.Constants {
+		if existing.Is(v) {
+			return uint16(i)
+		}
+	}
+
+	// Constant doesn't exist, add it
 	c.Constants = append(c.Constants, v)
 	idx := len(c.Constants) - 1
 	if idx > 65535 {

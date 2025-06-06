@@ -13,7 +13,7 @@ import (
 	// Add
 )
 
-const scriptsDebug = false
+const scriptsDebug = true
 
 // Expectation represents the expected outcome of a script.
 type Expectation struct {
