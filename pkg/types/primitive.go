@@ -85,41 +85,50 @@ func (lt *LiteralType) Equals(other Type) bool {
 	}
 }
 
-// --- Type Widening ---
-
-// GetWidenedType converts literal types to their corresponding primitive base types.
-// Other types are returned unchanged.
-func GetWidenedType(t Type) Type {
-	if litType, ok := t.(*LiteralType); ok {
-		switch litType.Value.Type() {
-		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			return Number
-		case vm.TypeString:
-			return String
-		case vm.TypeBoolean:
-			return Boolean
-		case vm.TypeNull:
-			return Null // Null widens to null
-		case vm.TypeUndefined:
-			return Undefined // Undefined widens to undefined
-		default:
-			// Should not happen for valid literal types (like Function/Closure)
-			return t // Return original if unexpected underlying type
-		}
-	}
-	// TODO: Should unions containing only literals of the same base type also widen?
-	// e.g., should (1 | 2 | 3) widen to number? Probably.
-	// This would require more complex logic here or in NewUnionType.
-	return t // Not a literal type, return as is
-}
-
-// WidenType converts literal types to their primitive equivalents
-func WidenType(t Type) Type {
-	return GetWidenedType(t) // Use existing function
-}
-
 // IsPrimitive returns true if the type is a primitive type
 func IsPrimitive(t Type) bool {
 	_, ok := t.(*Primitive)
 	return ok
+}
+
+// IsNullOrUndefined returns true if the type is null or undefined
+func IsNullOrUndefined(t Type) bool {
+	return t == Null || t == Undefined
+}
+
+// IsLiteral returns true if the type is a literal type
+func IsLiteral(t Type) bool {
+	_, ok := t.(*LiteralType)
+	return ok
+}
+
+// GetTypeofResult returns the TypeScript-compatible string literal representing 
+// the result of the typeof operator when applied to a value of the given type
+func GetTypeofResult(t Type) Type {
+	// Widen the type first
+	widened := GetWidenedType(t)
+	
+	switch widened {
+	case String:
+		return &LiteralType{Value: vm.String("string")}
+	case Number:
+		return &LiteralType{Value: vm.String("number")}
+	case Boolean:
+		return &LiteralType{Value: vm.String("boolean")}
+	case Undefined:
+		return &LiteralType{Value: vm.String("undefined")}
+	case Null:
+		return &LiteralType{Value: vm.String("object")} // typeof null === "object" in JS
+	}
+	
+	// Handle other types
+	switch widened.(type) {
+	case *FunctionType, *CallableType, *OverloadedFunctionType:
+		return &LiteralType{Value: vm.String("function")}
+	case *ObjectType, *ArrayType:
+		return &LiteralType{Value: vm.String("object")}
+	default:
+		// For unknown types, default to "object" (most conservative approach)
+		return &LiteralType{Value: vm.String("object")}
+	}
 }

@@ -18,7 +18,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 		} // Handle error
 
 		// --- Use deeplyWidenType on each element ---
-		generalizedType := deeplyWidenType(elemType)
+		generalizedType := types.DeeplyWidenType(elemType)
 		// --- End Deep Widen ---
 
 		generalizedElementTypes = append(generalizedElementTypes, generalizedType)
@@ -386,7 +386,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		case *types.ArrayType:
 			// Base is ArrayType
 			// 4. Check index type (must be number for array)
-			if !c.isAssignable(indexType, types.Number) {
+			if !types.IsAssignable(indexType, types.Number) {
 				c.addError(node.Index, fmt.Sprintf("array index must be of type number, got %s", indexType.String()))
 				// Proceed with Any as result type
 			} else {
@@ -441,7 +441,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			// Allow indexing on strings?
 			if base == types.String {
 				// 4. Check index type (must be number for string)
-				if !c.isAssignable(indexType, types.Number) {
+				if !types.IsAssignable(indexType, types.Number) {
 					c.addError(node.Index, fmt.Sprintf("string index must be of type number, got %s", indexType.String()))
 				}
 				// Result of indexing a string is always a string (or potentially undefined)
@@ -670,7 +670,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 					argType = types.Any
 				}
 				expectedType := constructorTypeVal.ParameterTypes[i]
-				if !c.isAssignable(argType, expectedType) {
+				if !types.IsAssignable(argType, expectedType) {
 					c.addError(arg, fmt.Sprintf("argument %d: cannot assign %s to %s",
 						i+1, argType.String(), expectedType.String()))
 				}
@@ -693,7 +693,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 							argType = types.Any
 						}
 						expectedType := ctorType.ParameterTypes[i]
-						if !c.isAssignable(argType, expectedType) {
+						if !types.IsAssignable(argType, expectedType) {
 							c.addError(arg, fmt.Sprintf("argument %d: cannot assign %s to %s",
 								i+1, argType.String(), expectedType.String()))
 						}
@@ -723,4 +723,34 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	}
 
 	node.SetComputedType(resultType)
+}
+
+// checkTypeofExpression checks the type of a typeof expression.
+// This handles TypeScript's typeof operator, which returns a string literal
+// like "string", "number", "boolean", "undefined", "object", or "function".
+func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
+	// Visit the operand first to ensure it has a computed type
+	c.visit(node.Operand)
+	
+	// Get the operand type
+	operandType := node.Operand.GetComputedType()
+	if operandType == nil {
+		// Set a default if operand type is unknown (shouldn't normally happen)
+		node.Operand.SetComputedType(types.Any)
+		operandType = types.Any
+	}
+	
+	// Try to get a more precise literal type for the typeof result
+	// if the operand type is known
+	if operandType != types.Unknown && operandType != types.Any {
+		// Get a more precise result using the helper from types package
+		resultType := types.GetTypeofResult(operandType)
+		if resultType != nil {
+			node.SetComputedType(resultType)
+			return
+		}
+	}
+	
+	// Default to the general union of all possible typeof results
+	node.SetComputedType(types.TypeofResultType)
 }

@@ -105,7 +105,7 @@ func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 
 		// --- NEW: Check expression body type against annotation ---
 		if expectedReturnType != nil {
-			if !c.isAssignable(bodyType, expectedReturnType) {
+			if !types.IsAssignable(bodyType, expectedReturnType) {
 				// TODO: Get line number from exprBody token if possible
 				c.addError(exprBody, fmt.Sprintf("cannot return expression of type '%s' from arrow function with return type annotation '%s'", bodyType.String(), expectedReturnType.String()))
 			}

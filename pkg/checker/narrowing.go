@@ -131,7 +131,7 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 				originalType.String(), guard.NarrowedType.String())
 			return nil
 		}
-	} else if c.isAssignable(guard.NarrowedType, originalType) {
+	} else if types.IsAssignable(guard.NarrowedType, originalType) {
 		// Allow narrowing if the narrowed type is assignable to the original type
 		// This handles cases like narrowing 'string' to '"foo"' (literal type)
 		canNarrow = true
@@ -245,6 +245,24 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 	if type1 == types.Any || type2 == types.Any || type1 == types.Unknown || type2 == types.Unknown {
 		return true
 	}
+	
+	// Special case for typeof checks: always allow checking against string literals "string", "number", etc.
+	// This is a common pattern in TypeScript: typeof x === "string"
+	if lit1, isLit1 := type1.(*types.LiteralType); isLit1 && lit1.Value.IsString() {
+		strValue := lit1.Value.ToString()
+		if strValue == "string" || strValue == "number" || strValue == "boolean" || 
+		   strValue == "undefined" || strValue == "function" || strValue == "object" {
+			return true // Allow typeof pattern
+		}
+	}
+	
+	if lit2, isLit2 := type2.(*types.LiteralType); isLit2 && lit2.Value.IsString() {
+		strValue := lit2.Value.ToString()
+		if strValue == "string" || strValue == "number" || strValue == "boolean" || 
+		   strValue == "undefined" || strValue == "function" || strValue == "object" {
+			return true // Allow typeof pattern
+		}
+	}
 
 	// Handle union types - check if any member of one union overlaps with the other type
 	if union1, ok := type1.(*types.UnionType); ok {
@@ -266,22 +284,22 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 	}
 
 	// Handle literal types
-	literal1, isLiteral1 := type1.(*types.LiteralType)
-	literal2, isLiteral2 := type2.(*types.LiteralType)
+	isLiteral1 := types.IsLiteral(type1)
+	isLiteral2 := types.IsLiteral(type2)
 
 	if isLiteral1 && isLiteral2 {
 		// Both are literal types - they overlap only if they have the same value
-		return c.areLiteralValuesEqual(literal1.Value, literal2.Value)
+		return type1.Equals(type2)
 	}
 
 	if isLiteral1 {
 		// Check if literal type1 is assignable to type2
-		return c.isLiteralAssignableToType(literal1, type2)
+		return types.IsAssignable(type1, type2)
 	}
 
 	if isLiteral2 {
 		// Check if literal type2 is assignable to type1
-		return c.isLiteralAssignableToType(literal2, type1)
+		return types.IsAssignable(type2, type1)
 	}
 
 	// Handle basic types - for strict equality, different primitive types don't overlap
@@ -290,6 +308,23 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 		return true // Allow comparisons with null/undefined
 	}
 
+	// Special case: Allow string comparison with object for typeof checks (common pattern)
+	_, isObject1 := type1.(*types.ObjectType)
+	_, isObject2 := type2.(*types.ObjectType)
+	if (isObject1 && type2 == types.String) || (isObject2 && type1 == types.String) {
+		return true // Allow object to be compared with string (for typeof checks)
+	}
+	
+	// Special case: Allow number comparison with object for typeof checks (common pattern)
+	if (isObject1 && type2 == types.Number) || (isObject2 && type1 == types.Number) {
+		return true // Allow object to be compared with number (for typeof checks)
+	}
+	
+	// Special case: Allow boolean comparison with object for typeof checks (common pattern)
+	if (isObject1 && type2 == types.Boolean) || (isObject2 && type1 == types.Boolean) {
+		return true // Allow object to be compared with boolean (for typeof checks)
+	}
+	
 	widenedType1 := types.GetWidenedType(type1)
 	widenedType2 := types.GetWidenedType(type2)
 	return widenedType1 == widenedType2

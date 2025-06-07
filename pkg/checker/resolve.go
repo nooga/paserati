@@ -382,7 +382,7 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 			c.env = originalEnv             // Restore original environment
 
 			defaultValueType := paramNode.DefaultValue.GetComputedType()
-			if defaultValueType != nil && !c.isAssignable(defaultValueType, resolvedParamType) {
+			if defaultValueType != nil && !types.IsAssignable(defaultValueType, resolvedParamType) {
 				c.addError(paramNode.DefaultValue, fmt.Sprintf("default value type '%s' is not assignable to parameter type '%s'", defaultValueType.String(), resolvedParamType.String()))
 			}
 		}

@@ -254,7 +254,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		var elementType types.Type
 		if arrayType, ok := iterableType.(*types.ArrayType); ok {
 			elementType = arrayType.ElementType
-		} else if iterableType == types.String || c.isAssignable(iterableType, types.String) {
+		} else if iterableType == types.String || types.IsAssignable(iterableType, types.String) {
 			// String iteration yields individual characters (strings)
 			// This handles both the general string type and string literal types
 			elementType = types.String
@@ -290,7 +290,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 						varType, _, exists := c.env.Resolve(ident.Value)
 						if !exists {
 							c.addError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
-						} else if !c.isAssignable(elementType, varType) {
+						} else if !types.IsAssignable(elementType, varType) {
 							c.addError(ident, fmt.Sprintf("cannot assign element type '%s' to variable type '%s'", elementType.String(), varType.String()))
 						}
 						ident.SetComputedType(elementType)

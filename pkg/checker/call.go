@@ -43,8 +43,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 	// --- END NEW ---
 
-	// Handle both FunctionType and CallableType
+	// Handle various callable types
 	var funcType *types.FunctionType
+	
 	if ft, ok := funcNodeType.(*types.FunctionType); ok {
 		funcType = ft
 	} else if ct, ok := funcNodeType.(*types.CallableType); ok {
@@ -52,6 +53,24 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		funcType = ct.CallSignature
 		if funcType == nil {
 			c.addError(node, fmt.Sprintf("callable type has no call signature"))
+			node.SetComputedType(types.Any)
+			return
+		}
+	} else if ot, ok := funcNodeType.(*types.ObjectType); ok && ot.IsCallable() {
+		// Handle new unified ObjectType with call signatures
+		// Currently, just use the first call signature (later we could add overload resolution)
+		if len(ot.CallSignatures) > 0 {
+			// Convert Signature to FunctionType for now (will be updated in later phases)
+			sig := ot.CallSignatures[0]
+			funcType = &types.FunctionType{
+				ParameterTypes:    sig.ParameterTypes,
+				ReturnType:        sig.ReturnType,
+				OptionalParams:    sig.OptionalParams,
+				IsVariadic:        sig.IsVariadic,
+				RestParameterType: sig.RestParameterType,
+			}
+		} else {
+			c.addError(node, fmt.Sprintf("callable object has no call signatures"))
 			node.SetComputedType(types.Any)
 			return
 		}
@@ -108,7 +127,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 					fixedArgsOk = false
 					continue
 				}
-				if !c.isAssignable(argType, paramType) {
+				if !types.IsAssignable(argType, paramType) {
 					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
 					fixedArgsOk = false
 				}
@@ -137,12 +156,12 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 						// --- NEW: Handle spread elements specially ---
 						if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
 							// For spread elements, check that the spread argument is assignable to the rest parameter type
-							if !c.isAssignable(argType, variadicParamType) {
+							if !types.IsAssignable(argType, variadicParamType) {
 								c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), variadicParamType.String()))
 							}
 						} else {
 							// For regular arguments, check against element type
-							if !c.isAssignable(argType, variadicElementType) {
+							if !types.IsAssignable(argType, variadicElementType) {
 								c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
 							}
 						}
@@ -185,7 +204,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 					continue
 				}
 
-				if !c.isAssignable(argType, paramType) {
+				if !types.IsAssignable(argType, paramType) {
 					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
 				}
 			}

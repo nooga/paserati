@@ -140,7 +140,7 @@ func (c *Checker) isImplementationCompatible(implementation, overload *types.Fun
 		debugPrintf("// [Checker isImplementationCompatible] Checking param %d: overload %s assignable to impl %s\n", i, overloadParam.String(), implParam.String())
 		// The overload parameter must be assignable to the implementation parameter
 		// This means the implementation parameter is a union or supertype that can handle the overload parameter
-		if !c.isAssignable(overloadParam, implParam) {
+		if !types.IsAssignable(overloadParam, implParam) {
 			debugPrintf("// [Checker isImplementationCompatible] Parameter %d incompatible: %s not assignable to %s\n", i, overloadParam.String(), implParam.String())
 			return false
 		}
@@ -155,7 +155,7 @@ func (c *Checker) isImplementationCompatible(implementation, overload *types.Fun
 	if implUnion, isUnion := implementation.ReturnType.(*types.UnionType); isUnion {
 		// Check if the overload return type is assignable to any of the union types
 		for _, unionMember := range implUnion.Types {
-			if c.isAssignable(overload.ReturnType, unionMember) {
+			if types.IsAssignable(overload.ReturnType, unionMember) {
 				debugPrintf("// [Checker isImplementationCompatible] Return type compatible via union member %s\n", unionMember.String())
 				return true
 			}
@@ -165,7 +165,7 @@ func (c *Checker) isImplementationCompatible(implementation, overload *types.Fun
 		return false
 	} else {
 		// Non-union implementation return type - use standard assignability
-		result := c.isAssignable(implementation.ReturnType, overload.ReturnType)
+		result := types.IsAssignable(implementation.ReturnType, overload.ReturnType)
 		debugPrintf("// [Checker isImplementationCompatible] Return type compatible: %t\n", result)
 		return result
 	}
@@ -200,7 +200,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 				// Check fixed parameters first
 				fixedMatch := true
 				for j := 0; j < minRequiredArgs; j++ {
-					if !c.isAssignable(argTypes[j], overload.ParameterTypes[j]) {
+					if !types.IsAssignable(argTypes[j], overload.ParameterTypes[j]) {
 						fixedMatch = false
 						break
 					}
@@ -218,7 +218,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 						// Check all remaining arguments against element type
 						variadicMatch := true
 						for j := minRequiredArgs; j < len(argTypes); j++ {
-							if !c.isAssignable(argTypes[j], elementType) {
+							if !types.IsAssignable(argTypes[j], elementType) {
 								variadicMatch = false
 								break
 							}
@@ -239,7 +239,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 			allMatch := true
 			for j, argType := range argTypes {
 				paramType := overload.ParameterTypes[j]
-				if !c.isAssignable(argType, paramType) {
+				if !types.IsAssignable(argType, paramType) {
 					allMatch = false
 					break
 				}
@@ -299,7 +299,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 			if i < len(argTypes) {
 				argType := argTypes[i]
 				paramType := matchedOverload.ParameterTypes[i]
-				if !c.isAssignable(argType, paramType) {
+				if !types.IsAssignable(argType, paramType) {
 					argNode := node.Arguments[i]
 					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'",
 						i+1, argType.String(), paramType.String()))
@@ -316,7 +316,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 			for i := fixedParamCount; i < len(argTypes); i++ {
 				argType := argTypes[i]
-				if !c.isAssignable(argType, elementType) {
+				if !types.IsAssignable(argType, elementType) {
 					argNode := node.Arguments[i]
 					c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to rest parameter element type '%s'",
 						i+1, argType.String(), elementType.String()))
@@ -333,7 +333,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 		for i, argType := range argTypes {
 			paramType := matchedOverload.ParameterTypes[i]
-			if !c.isAssignable(argType, paramType) {
+			if !types.IsAssignable(argType, paramType) {
 				// This shouldn't happen if overload matching worked correctly
 				argNode := node.Arguments[i]
 				c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'",

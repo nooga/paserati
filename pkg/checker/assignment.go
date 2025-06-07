@@ -103,13 +103,13 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 		}
 
-		if !c.isAssignable(rhsType, targetType) { // <<< Use targetType (usually widened LHS)
+		if !types.IsAssignable(rhsType, targetType) { // <<< Use targetType (usually widened LHS)
 			// Special case for ??= handled within isAssignable now?
 			// Let's keep the explicit check here for clarity just for ??=
 			allowAssignment := false
 			if node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
 				// Allow ??= if LHS is null/undefined, check if RHS assignable to WIDENED LHS
-				if c.isAssignable(rhsType, widenedLhsType) { // Check assignability to widened target
+				if types.IsAssignable(rhsType, widenedLhsType) { // Check assignability to widened target
 					allowAssignment = true
 				}
 				// If RHS is not assignable even to widened LHS, error will be reported below

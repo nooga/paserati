@@ -411,7 +411,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 
 				// Perform assignability check using the type from env (e.g., Any or annotation)
-				assignable := c.isAssignable(computedInitializerType, variableType)
+				assignable := types.IsAssignable(computedInitializerType, variableType)
 
 				// Handle special case for assigning [] (unknown[]) to T[]
 				isEmptyArrayAssignment := false
@@ -438,7 +438,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					if isEmptyArrayAssignment {
 						finalInferredType = computedInitializerType // Keep unknown[] type
 					} else {
-						finalInferredType = deeplyWidenType(computedInitializerType) // Use the deep widen helper
+						finalInferredType = types.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
 					}
 
 					// Update the environment only if the refined type is different from the current one
@@ -616,7 +616,7 @@ func (c *Checker) visit(node parser.Node) {
 
 			if computedInitializerType != nil {
 				// Check if initializer is assignable to the declared type for error reporting
-				assignable := c.isAssignable(computedInitializerType, declaredType)
+				assignable := types.IsAssignable(computedInitializerType, declaredType)
 
 				// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 				isEmptyArrayAssignment := false
@@ -701,7 +701,7 @@ func (c *Checker) visit(node parser.Node) {
 			finalType = declaredType
 
 			// Check if initializer is assignable to the declared type for error reporting
-			assignable := c.isAssignable(computedInitializerType, declaredType)
+			assignable := types.IsAssignable(computedInitializerType, declaredType)
 
 			// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 			isEmptyArrayAssignment := false
@@ -750,7 +750,7 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Check against expected type if available
 		if c.currentExpectedReturnType != nil {
-			if !c.isAssignable(actualReturnType, c.currentExpectedReturnType) {
+			if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
 				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
 					actualReturnType, c.currentExpectedReturnType)
 				// Report the error at the return value expression node
@@ -976,20 +976,8 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(resultType)
 
 	case *parser.TypeofExpression:
-		// --- NEW: Handle TypeofExpression ---
-		// Visit the operand first to ensure it has a computed type
-		c.visit(node.Operand)
-
-		// typeof always returns a string, regardless of the operand type
-		// The operand type doesn't affect the result type, but we still need to check it exists
-		operandType := node.Operand.GetComputedType()
-		if operandType == nil {
-			// Set a default if operand type is unknown (shouldn't normally happen)
-			node.Operand.SetComputedType(types.Any)
-		}
-
-		// typeof expression always evaluates to a specific union of string literals
-		node.SetComputedType(types.TypeofResultType)
+		// --- UPDATED: Handle TypeofExpression ---
+		c.checkTypeofExpression(node)
 
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
@@ -1419,7 +1407,7 @@ func (c *Checker) visit(node parser.Node) {
 				c.env = originalEnv         // Restore original environment
 
 				defaultValueType := param.DefaultValue.GetComputedType()
-				if defaultValueType != nil && !c.isAssignable(defaultValueType, resolvedParamType) {
+				if defaultValueType != nil && !types.IsAssignable(defaultValueType, resolvedParamType) {
 					c.addError(param.DefaultValue, fmt.Sprintf("default value type '%s' is not assignable to parameter type '%s'", defaultValueType.String(), resolvedParamType.String()))
 				}
 			}
