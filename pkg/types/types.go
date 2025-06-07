@@ -606,6 +606,31 @@ func (ut *UnionType) Equals(other Type) bool {
 	return true
 }
 
+// ContainsType checks if the union contains a type that equals the given type
+func (ut *UnionType) ContainsType(target Type) bool {
+	for _, t := range ut.Types {
+		if t.Equals(target) {
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveType returns a new union with the specified type removed
+// Returns the modified union type, or the single remaining type if only one remains
+func (ut *UnionType) RemoveType(target Type) Type {
+	var remainingTypes []Type
+
+	for _, t := range ut.Types {
+		if !t.Equals(target) {
+			remainingTypes = append(remainingTypes, t)
+		}
+	}
+
+	// Use NewUnionType to handle simplification (single type, etc.)
+	return NewUnionType(remainingTypes...)
+}
+
 // --- NEW: LiteralType ---
 
 // LiteralType represents a specific literal value used as a type.

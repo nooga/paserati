@@ -295,7 +295,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Optional methods in interfaces (`interface Service { connect(): void; disconnect?(): void }`)
   - [x] Proper type checking for optional vs required properties
   - [x] Structural typing compatibility with optional properties
-- [x] Type Narrowing (Control Flow Analysis) (basic typeof guards implemented with proper scoping)
+- [x] Type Narrowing (Control Flow Analysis)
+  - [x] `typeof` guards for `unknown` types (`if (typeof x === "string")`)
+  - [x] `typeof` guards for union types (`string | number` → `string` in then branch, `number` in else branch)
+  - [x] Proper scoped type environments (narrowed types only visible in respective branches)
+  - [x] Sequential narrowing support (`if/else if` chains)
+  - [x] Function parameter narrowing
 - [ ] Type Guards (`typeof`, `instanceof`, custom)
 - [ ] Strict Null Checks (`strictNullChecks` compiler option)
 

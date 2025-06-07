@@ -86,10 +86,31 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 		return nil
 	}
 
-	// Only narrow unknown types for now (we could extend this to union types later)
-	if originalType != types.Unknown {
-		debugPrintf("// [TypeNarrowing] Variable '%s' has type '%s', not unknown - skipping narrowing\n",
-			guard.VariableName, originalType.String())
+	// Handle unknown types and union types
+	var canNarrow bool
+	var narrowedType types.Type
+
+	if originalType == types.Unknown {
+		// Unknown can be narrowed to any specific type
+		canNarrow = true
+		narrowedType = guard.NarrowedType
+	} else if unionType, ok := originalType.(*types.UnionType); ok {
+		// Union types can be narrowed if they contain the target type
+		if unionType.ContainsType(guard.NarrowedType) {
+			canNarrow = true
+			narrowedType = guard.NarrowedType
+		} else {
+			debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
+				originalType.String(), guard.NarrowedType.String())
+			return nil
+		}
+	} else {
+		debugPrintf("// [TypeNarrowing] Variable '%s' has type '%s', cannot narrow to '%s'\n",
+			guard.VariableName, originalType.String(), guard.NarrowedType.String())
+		return nil
+	}
+
+	if !canNarrow {
 		return nil
 	}
 
@@ -98,14 +119,14 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 
 	// Define the variable with the narrowed type in the new environment
 	// We redefine rather than update to shadow the outer scope
-	success := narrowedEnv.Define(guard.VariableName, guard.NarrowedType, isConst)
+	success := narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
 	if !success {
 		debugPrintf("// [TypeNarrowing] Failed to define narrowed type for '%s'\n", guard.VariableName)
 		return nil
 	}
 
 	debugPrintf("// [TypeNarrowing] Narrowed variable '%s' from '%s' to '%s'\n",
-		guard.VariableName, originalType.String(), guard.NarrowedType.String())
+		guard.VariableName, originalType.String(), narrowedType.String())
 
 	return narrowedEnv
 }
@@ -118,37 +139,45 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 	}
 
 	// Check if the variable exists in the current environment
-	originalType, _, found := c.env.Resolve(guard.VariableName)
+	originalType, isConst, found := c.env.Resolve(guard.VariableName)
 	if !found {
 		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' not found\n", guard.VariableName)
 		return nil
 	}
 
-	// For unknown types, the else branch doesn't provide much additional type information yet
+	// Handle union types: remove the narrowed type from the union
+	if unionType, ok := originalType.(*types.UnionType); ok {
+		if unionType.ContainsType(guard.NarrowedType) {
+			remainingType := unionType.RemoveType(guard.NarrowedType)
+
+			// Create environment with the remaining type(s)
+			narrowedEnv := NewEnclosedEnvironment(c.env)
+			success := narrowedEnv.Define(guard.VariableName, remainingType, isConst)
+			if !success {
+				debugPrintf("// [InvertedTypeNarrowing] Failed to define inverted narrowed type for '%s'\n", guard.VariableName)
+				return nil
+			}
+
+			debugPrintf("// [InvertedTypeNarrowing] Variable '%s' narrowed from '%s' to '%s' in else branch\n",
+				guard.VariableName, originalType.String(), remainingType.String())
+			return narrowedEnv
+		} else {
+			debugPrintf("// [InvertedTypeNarrowing] Union '%s' does not contain type '%s' - no inverted narrowing\n",
+				originalType.String(), guard.NarrowedType.String())
+			return nil
+		}
+	}
+
+	// For unknown types, the else branch doesn't provide much additional type information
 	// (x is still unknown, but we know it's not the narrowed type)
-	// This sets up infrastructure for future union type support
 	if originalType == types.Unknown {
 		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' remains unknown in else branch (but not %s)\n",
 			guard.VariableName, guard.NarrowedType.String())
 		return nil // No environment change needed for unknown
 	}
 
-	// Future: Handle union types here
-	// if originalType is (string | number) and guard.NarrowedType is string,
-	// then in else branch it should be narrowed to number
-	//
-	// Example future code:
-	// if unionType, ok := originalType.(*types.UnionType); ok {
-	//     remainingTypes := unionType.RemoveType(guard.NarrowedType)
-	//     if len(remainingTypes) == 1 {
-	//         // Create environment with single remaining type
-	//         narrowedEnv := NewEnclosedEnvironment(c.env)
-	//         narrowedEnv.Define(guard.VariableName, remainingTypes[0], isConst)
-	//         return narrowedEnv
-	//     }
-	// }
-
-	return nil // No narrowing applied for non-unknown types yet
+	debugPrintf("// [InvertedTypeNarrowing] No inverted narrowing applied for type '%s'\n", originalType.String())
+	return nil
 }
 
 // --- END: Type narrowing support ---
