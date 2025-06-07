@@ -565,10 +565,10 @@ func TestValuesNullUndefined(t *testing.T) {
 		// Equality (Strict)
 		{"return null == null;", "true"},
 		// {"return undefined == undefined;", "true"}, // Cannot use 'undefined' keyword
-		{"return null == false;", "false"},
-		{"return null == true;", "false"},
-		{"return null == 0;", "false"},
-		{"return null == \"\";", "false"},
+		{"let x = null; let y = false; return x == y;", "false"},
+		{"let x = null; let y = true; return x == y;", "false"},
+		{"let x = null; let y = 0; return x == y;", "false"},
+		{"let x = null; let y = \"\"; return x == y;", "false"},
 		// {"return undefined == false;", "false"},  // Cannot use 'undefined' keyword
 		// {"return undefined == 0;", "false"},     // Cannot use 'undefined' keyword
 
@@ -576,8 +576,8 @@ func TestValuesNullUndefined(t *testing.T) {
 		{"return null != null;", "false"},
 		// {"return undefined != undefined;", "false"}, // Cannot use 'undefined' keyword
 		// {"return null != undefined;", "true"},    // Cannot use 'undefined' keyword
-		{"return 0 != null;", "true"},
-		{"return false != null;", "true"},
+		{"let x = 0; let y = null; return x != y;", "true"},
+		{"let x = false; let y = null; return x != y;", "true"},
 
 		// Truthiness
 		{"return !null;", "true"},

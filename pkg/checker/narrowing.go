@@ -1,0 +1,319 @@
+package checker
+
+import (
+	"fmt"
+	"paserati/pkg/parser"
+	"paserati/pkg/types"
+	"paserati/pkg/vm"
+)
+
+// TypeGuard represents a detected type guard pattern
+type TypeGuard struct {
+	VariableName string     // The variable being narrowed (e.g., "x")
+	NarrowedType types.Type // The type it's narrowed to (e.g., types.String)
+}
+
+// detectTypeGuard analyzes a condition expression to detect type guard patterns like:
+// typeof x === "string"
+// typeof obj === "number"
+// x === "foo" (literal narrowing)
+// "bar" === y (literal narrowing)
+func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
+	// Look for infix comparison patterns
+	if infix, ok := condition.(*parser.InfixExpression); ok {
+		if infix.Operator == "===" || infix.Operator == "==" {
+
+			// Pattern 1: typeof identifier === "literal"
+			if typeofExpr, ok := infix.Left.(*parser.TypeofExpression); ok {
+				if ident, ok := typeofExpr.Operand.(*parser.Identifier); ok {
+					if stringLit, ok := infix.Right.(*parser.StringLiteral); ok {
+						// Map string literal to corresponding type
+						var narrowedType types.Type
+						switch stringLit.Value {
+						case "string":
+							narrowedType = types.String
+						case "number":
+							narrowedType = types.Number
+						case "boolean":
+							narrowedType = types.Boolean
+						case "object":
+							// For simplicity, we'll skip object narrowing for now
+							// as it's more complex (could be null, array, etc.)
+							return nil
+						case "function":
+							// For now, we'll skip function narrowing
+							return nil
+						case "undefined":
+							narrowedType = types.Undefined
+						default:
+							return nil // Unknown type string
+						}
+
+						return &TypeGuard{
+							VariableName: ident.Value,
+							NarrowedType: narrowedType,
+						}
+					}
+				}
+			}
+
+			// Pattern 2: identifier === literal (e.g., x === "foo")
+			if ident, ok := infix.Left.(*parser.Identifier); ok {
+				if narrowedType := c.literalToType(infix.Right); narrowedType != nil {
+					return &TypeGuard{
+						VariableName: ident.Value,
+						NarrowedType: narrowedType,
+					}
+				}
+			}
+
+			// Pattern 3: literal === identifier (e.g., "foo" === x)
+			if ident, ok := infix.Right.(*parser.Identifier); ok {
+				if narrowedType := c.literalToType(infix.Left); narrowedType != nil {
+					return &TypeGuard{
+						VariableName: ident.Value,
+						NarrowedType: narrowedType,
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// literalToType converts a literal expression to its corresponding literal type
+func (c *Checker) literalToType(expr parser.Expression) types.Type {
+	switch lit := expr.(type) {
+	case *parser.StringLiteral:
+		return &types.LiteralType{Value: vm.NewString(lit.Value)}
+	case *parser.NumberLiteral:
+		return &types.LiteralType{Value: vm.NumberValue(lit.Value)}
+	case *parser.BooleanLiteral:
+		return &types.LiteralType{Value: vm.BooleanValue(lit.Value)}
+	case *parser.NullLiteral:
+		return types.Null
+	case *parser.UndefinedLiteral:
+		return types.Undefined
+	default:
+		return nil // Not a literal we can narrow to
+	}
+}
+
+// applyTypeNarrowing applies type narrowing to the current environment
+// Returns a new environment with the narrowed types, or nil if no narrowing was applied
+func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
+	if guard == nil {
+		return nil
+	}
+
+	// Check if the variable exists in the current environment
+	originalType, isConst, found := c.env.Resolve(guard.VariableName)
+	if !found {
+		debugPrintf("// [TypeNarrowing] Variable '%s' not found for narrowing\n", guard.VariableName)
+		return nil
+	}
+
+	// Handle unknown types and union types
+	var canNarrow bool
+	var narrowedType types.Type
+
+	if originalType == types.Unknown {
+		// Unknown can be narrowed to any specific type
+		canNarrow = true
+		narrowedType = guard.NarrowedType
+	} else if unionType, ok := originalType.(*types.UnionType); ok {
+		// Union types can be narrowed if they contain the target type
+		if unionType.ContainsType(guard.NarrowedType) {
+			canNarrow = true
+			narrowedType = guard.NarrowedType
+		} else {
+			debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
+				originalType.String(), guard.NarrowedType.String())
+			return nil
+		}
+	} else if c.isAssignable(guard.NarrowedType, originalType) {
+		// Allow narrowing if the narrowed type is assignable to the original type
+		// This handles cases like narrowing 'string' to '"foo"' (literal type)
+		canNarrow = true
+		narrowedType = guard.NarrowedType
+		debugPrintf("// [TypeNarrowing] Narrowing '%s' from '%s' to more specific type '%s'\n",
+			guard.VariableName, originalType.String(), guard.NarrowedType.String())
+	} else {
+		debugPrintf("// [TypeNarrowing] Variable '%s' has type '%s', cannot narrow to '%s'\n",
+			guard.VariableName, originalType.String(), guard.NarrowedType.String())
+		return nil
+	}
+
+	if !canNarrow {
+		return nil
+	}
+
+	// Create a new environment that inherits from the current one
+	narrowedEnv := NewEnclosedEnvironment(c.env)
+
+	// Define the variable with the narrowed type in the new environment
+	// We redefine rather than update to shadow the outer scope
+	success := narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+	if !success {
+		debugPrintf("// [TypeNarrowing] Failed to define narrowed type for '%s'\n", guard.VariableName)
+		return nil
+	}
+
+	debugPrintf("// [TypeNarrowing] Narrowed variable '%s' from '%s' to '%s'\n",
+		guard.VariableName, originalType.String(), narrowedType.String())
+
+	return narrowedEnv
+}
+
+// applyInvertedTypeNarrowing creates an environment for the else branch with inverted type constraints
+// For "if (typeof x === 'string')", the else branch knows x is NOT a string
+func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
+	if guard == nil {
+		return nil
+	}
+
+	// Check if the variable exists in the current environment
+	originalType, isConst, found := c.env.Resolve(guard.VariableName)
+	if !found {
+		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' not found\n", guard.VariableName)
+		return nil
+	}
+
+	// Handle union types: remove the narrowed type from the union
+	if unionType, ok := originalType.(*types.UnionType); ok {
+		if unionType.ContainsType(guard.NarrowedType) {
+			remainingType := unionType.RemoveType(guard.NarrowedType)
+
+			// Create environment with the remaining type(s)
+			narrowedEnv := NewEnclosedEnvironment(c.env)
+			success := narrowedEnv.Define(guard.VariableName, remainingType, isConst)
+			if !success {
+				debugPrintf("// [InvertedTypeNarrowing] Failed to define inverted narrowed type for '%s'\n", guard.VariableName)
+				return nil
+			}
+
+			debugPrintf("// [InvertedTypeNarrowing] Variable '%s' narrowed from '%s' to '%s' in else branch\n",
+				guard.VariableName, originalType.String(), remainingType.String())
+			return narrowedEnv
+		} else {
+			debugPrintf("// [InvertedTypeNarrowing] Union '%s' does not contain type '%s' - no inverted narrowing\n",
+				originalType.String(), guard.NarrowedType.String())
+			return nil
+		}
+	}
+
+	// For literal narrowing on non-union types, the else branch doesn't provide useful narrowing
+	// (if x is string and we check x === "foo", in the else branch x is still string, just not "foo")
+	// But for typeof narrowing on unknown, the else branch is still useful
+	if originalType == types.Unknown {
+		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' remains unknown in else branch (but not %s)\n",
+			guard.VariableName, guard.NarrowedType.String())
+		return nil // No environment change needed for unknown
+	}
+
+	debugPrintf("// [InvertedTypeNarrowing] No inverted narrowing applied for type '%s'\n", originalType.String())
+	return nil
+}
+
+// checkImpossibleComparison detects when two types have no overlap and comparison is impossible
+// For example: comparing literal "foo" with literal "bar", or string with number
+func (c *Checker) checkImpossibleComparison(leftType, rightType types.Type, operator string, node parser.Node) {
+	// Only check strict equality and inequality operators
+	if operator != "===" && operator != "!==" && operator != "==" && operator != "!=" {
+		return
+	}
+
+	// Skip if either type is Any - anything can be compared to Any
+	if leftType == types.Any || rightType == types.Any || leftType == types.Unknown || rightType == types.Unknown {
+		return
+	}
+
+	// Check if the types have any overlap
+	if !c.typesHaveOverlap(leftType, rightType) {
+		c.addError(node, fmt.Sprintf("This comparison appears to be unintentional because the types '%s' and '%s' have no overlap.", leftType.String(), rightType.String()))
+	}
+}
+
+// typesHaveOverlap checks if two types have any possible overlap
+func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
+	// Same types always overlap
+	if type1.Equals(type2) {
+		return true
+	}
+
+	// Any and Unknown overlap with everything
+	if type1 == types.Any || type2 == types.Any || type1 == types.Unknown || type2 == types.Unknown {
+		return true
+	}
+
+	// Handle union types - check if any member of one union overlaps with the other type
+	if union1, ok := type1.(*types.UnionType); ok {
+		for _, memberType := range union1.Types {
+			if c.typesHaveOverlap(memberType, type2) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if union2, ok := type2.(*types.UnionType); ok {
+		for _, memberType := range union2.Types {
+			if c.typesHaveOverlap(type1, memberType) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Handle literal types
+	literal1, isLiteral1 := type1.(*types.LiteralType)
+	literal2, isLiteral2 := type2.(*types.LiteralType)
+
+	if isLiteral1 && isLiteral2 {
+		// Both are literal types - they overlap only if they have the same value
+		return c.areLiteralValuesEqual(literal1.Value, literal2.Value)
+	}
+
+	if isLiteral1 {
+		// Check if literal type1 is assignable to type2
+		return c.isLiteralAssignableToType(literal1, type2)
+	}
+
+	if isLiteral2 {
+		// Check if literal type2 is assignable to type1
+		return c.isLiteralAssignableToType(literal2, type1)
+	}
+
+	// Handle basic types - for strict equality, different primitive types don't overlap
+	// Exception: allow comparisons with null/undefined as these are common runtime checks
+	if type1 == types.Null || type1 == types.Undefined || type2 == types.Null || type2 == types.Undefined {
+		return true // Allow comparisons with null/undefined
+	}
+
+	widenedType1 := types.GetWidenedType(type1)
+	widenedType2 := types.GetWidenedType(type2)
+	return widenedType1 == widenedType2
+}
+
+// isLiteralAssignableToType checks if a literal type is assignable to another type
+func (c *Checker) isLiteralAssignableToType(literal *types.LiteralType, targetType types.Type) bool {
+	// A string literal is assignable to string type
+	if literal.Value.IsString() && targetType == types.String {
+		return true
+	}
+	// A number literal is assignable to number type
+	if literal.Value.IsNumber() && targetType == types.Number {
+		return true
+	}
+	// A boolean literal is assignable to boolean type
+	if literal.Value.IsBoolean() && targetType == types.Boolean {
+		return true
+	}
+	return false
+}
+
+// areLiteralValuesEqual checks if two literal values are equal
+func (c *Checker) areLiteralValuesEqual(val1, val2 vm.Value) bool {
+	// Use the vm.Value's built-in comparison methods
+	return val1.StrictlyEquals(val2)
+}

@@ -298,9 +298,21 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Type Narrowing (Control Flow Analysis)
   - [x] `typeof` guards for `unknown` types (`if (typeof x === "string")`)
   - [x] `typeof` guards for union types (`string | number` → `string` in then branch, `number` in else branch)
+  - [x] Literal value narrowing (`x === "foo"` narrows `x` to literal type `"foo"`)
+  - [x] Ternary expression narrowing (type guards work in `condition ? consequent : alternative`)
+  - [x] Support for all literal types (string, number, boolean, null, undefined)
+  - [x] Bidirectional literal comparisons (`x === "foo"` and `"foo" === x`)
   - [x] Proper scoped type environments (narrowed types only visible in respective branches)
   - [x] Sequential narrowing support (`if/else if` chains)
   - [x] Function parameter narrowing
+  - [x] Combined typeof and literal narrowing in nested conditions
+  - [x] Modular architecture (narrowing logic separated into `pkg/checker/narrowing.go`)
+  - [x] **Impossible Comparison Detection** (TypeScript-compliant)
+    - [x] Detects comparisons with no type overlap (`"foo" === "bar"` after narrowing)
+    - [x] Flags mixed type comparisons (`number === string`) with proper error messages
+    - [x] Allows defensive null/undefined checks for practical programming
+    - [x] Works with all comparison operators (`===`, `!==`, `==`, `!=`)
+    - [x] Integrated with union type analysis for precise overlap detection
 - [ ] Type Guards (`typeof`, `instanceof`, custom)
 - [ ] Strict Null Checks (`strictNullChecks` compiler option)
 

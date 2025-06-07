@@ -17,171 +17,6 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
-// --- NEW: Type narrowing support ---
-
-// TypeGuard represents a detected type guard pattern
-type TypeGuard struct {
-	VariableName string     // The variable being narrowed (e.g., "x")
-	NarrowedType types.Type // The type it's narrowed to (e.g., types.String)
-}
-
-// detectTypeGuard analyzes a condition expression to detect type guard patterns like:
-// typeof x === "string"
-// typeof obj === "number"
-func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
-	// Look for pattern: typeof identifier === "literal"
-	if infix, ok := condition.(*parser.InfixExpression); ok {
-		if infix.Operator == "===" || infix.Operator == "==" {
-			// Check if left side is typeof expression
-			if typeofExpr, ok := infix.Left.(*parser.TypeofExpression); ok {
-				// Check if operand is an identifier
-				if ident, ok := typeofExpr.Operand.(*parser.Identifier); ok {
-					// Check if right side is a string literal
-					if stringLit, ok := infix.Right.(*parser.StringLiteral); ok {
-						// Map string literal to corresponding type
-						var narrowedType types.Type
-						switch stringLit.Value {
-						case "string":
-							narrowedType = types.String
-						case "number":
-							narrowedType = types.Number
-						case "boolean":
-							narrowedType = types.Boolean
-						case "object":
-							// For simplicity, we'll skip object narrowing for now
-							// as it's more complex (could be null, array, etc.)
-							return nil
-						case "function":
-							// For now, we'll skip function narrowing
-							return nil
-						case "undefined":
-							narrowedType = types.Undefined
-						default:
-							return nil // Unknown type string
-						}
-
-						return &TypeGuard{
-							VariableName: ident.Value,
-							NarrowedType: narrowedType,
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// applyTypeNarrowing applies type narrowing to the current environment
-// Returns a new environment with the narrowed types, or nil if no narrowing was applied
-func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
-	if guard == nil {
-		return nil
-	}
-
-	// Check if the variable exists in the current environment
-	originalType, isConst, found := c.env.Resolve(guard.VariableName)
-	if !found {
-		debugPrintf("// [TypeNarrowing] Variable '%s' not found for narrowing\n", guard.VariableName)
-		return nil
-	}
-
-	// Handle unknown types and union types
-	var canNarrow bool
-	var narrowedType types.Type
-
-	if originalType == types.Unknown {
-		// Unknown can be narrowed to any specific type
-		canNarrow = true
-		narrowedType = guard.NarrowedType
-	} else if unionType, ok := originalType.(*types.UnionType); ok {
-		// Union types can be narrowed if they contain the target type
-		if unionType.ContainsType(guard.NarrowedType) {
-			canNarrow = true
-			narrowedType = guard.NarrowedType
-		} else {
-			debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
-				originalType.String(), guard.NarrowedType.String())
-			return nil
-		}
-	} else {
-		debugPrintf("// [TypeNarrowing] Variable '%s' has type '%s', cannot narrow to '%s'\n",
-			guard.VariableName, originalType.String(), guard.NarrowedType.String())
-		return nil
-	}
-
-	if !canNarrow {
-		return nil
-	}
-
-	// Create a new environment that inherits from the current one
-	narrowedEnv := NewEnclosedEnvironment(c.env)
-
-	// Define the variable with the narrowed type in the new environment
-	// We redefine rather than update to shadow the outer scope
-	success := narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
-	if !success {
-		debugPrintf("// [TypeNarrowing] Failed to define narrowed type for '%s'\n", guard.VariableName)
-		return nil
-	}
-
-	debugPrintf("// [TypeNarrowing] Narrowed variable '%s' from '%s' to '%s'\n",
-		guard.VariableName, originalType.String(), narrowedType.String())
-
-	return narrowedEnv
-}
-
-// applyInvertedTypeNarrowing creates an environment for the else branch with inverted type constraints
-// For "if (typeof x === 'string')", the else branch knows x is NOT a string
-func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
-	if guard == nil {
-		return nil
-	}
-
-	// Check if the variable exists in the current environment
-	originalType, isConst, found := c.env.Resolve(guard.VariableName)
-	if !found {
-		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' not found\n", guard.VariableName)
-		return nil
-	}
-
-	// Handle union types: remove the narrowed type from the union
-	if unionType, ok := originalType.(*types.UnionType); ok {
-		if unionType.ContainsType(guard.NarrowedType) {
-			remainingType := unionType.RemoveType(guard.NarrowedType)
-
-			// Create environment with the remaining type(s)
-			narrowedEnv := NewEnclosedEnvironment(c.env)
-			success := narrowedEnv.Define(guard.VariableName, remainingType, isConst)
-			if !success {
-				debugPrintf("// [InvertedTypeNarrowing] Failed to define inverted narrowed type for '%s'\n", guard.VariableName)
-				return nil
-			}
-
-			debugPrintf("// [InvertedTypeNarrowing] Variable '%s' narrowed from '%s' to '%s' in else branch\n",
-				guard.VariableName, originalType.String(), remainingType.String())
-			return narrowedEnv
-		} else {
-			debugPrintf("// [InvertedTypeNarrowing] Union '%s' does not contain type '%s' - no inverted narrowing\n",
-				originalType.String(), guard.NarrowedType.String())
-			return nil
-		}
-	}
-
-	// For unknown types, the else branch doesn't provide much additional type information
-	// (x is still unknown, but we know it's not the narrowed type)
-	if originalType == types.Unknown {
-		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' remains unknown in else branch (but not %s)\n",
-			guard.VariableName, guard.NarrowedType.String())
-		return nil // No environment change needed for unknown
-	}
-
-	debugPrintf("// [InvertedTypeNarrowing] No inverted narrowing applied for type '%s'\n", originalType.String())
-	return nil
-}
-
-// --- END: Type narrowing support ---
-
 // Checker performs static type checking on the AST.
 type Checker struct {
 	program *parser.Program // Root AST node
@@ -1251,6 +1086,8 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Boolean // Comparison errors still result in boolean
 				}
 			case "==", "!=", "===", "!==":
+				// Check for impossible comparisons before setting result type
+				c.checkImpossibleComparison(leftType, rightType, node.Operator, node)
 				// Comparison always results in boolean, even with 'any'
 				resultType = types.Boolean
 			case "&&", "||":
@@ -1369,17 +1206,43 @@ func (c *Checker) visit(node parser.Node) {
 		// 5. IfStatement doesn't have a value/type (it's a statement, not expression)
 
 	case *parser.TernaryExpression:
-		// --- NEW: Handle TernaryExpression ---
+		// --- UPDATED: Handle TernaryExpression with Type Narrowing ---
+		// 1. Check Condition
 		c.visit(node.Condition)
-		// TODO: Check if condition is boolean?
+
+		// 2. Detect type guards in the condition
+		typeGuard := c.detectTypeGuard(node.Condition)
+
+		// 3. Check Consequence expression (potentially with narrowed environment)
+		originalEnv := c.env
+		narrowedEnv := c.applyTypeNarrowing(typeGuard)
+
+		if narrowedEnv != nil {
+			debugPrintf("// [Checker TernaryExpr] Applying type narrowing in consequence expression\n")
+			c.env = narrowedEnv // Use narrowed environment for consequence
+		}
 
 		c.visit(node.Consequence)
-		c.visit(node.Alternative)
-
 		consType := node.Consequence.GetComputedType()
+
+		// Restore original environment before checking alternative
+		c.env = originalEnv
+
+		// 4. Check Alternative expression - potentially with inverted type narrowing
+		invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
+
+		if invertedEnv != nil {
+			debugPrintf("// [Checker TernaryExpr] Applying inverted type narrowing in alternative expression\n")
+			c.env = invertedEnv // Use inverted narrowed environment for alternative
+		}
+
+		c.visit(node.Alternative)
 		altType := node.Alternative.GetComputedType()
 
-		// Handle nil types from potential errors during visit
+		// Restore original environment after alternative
+		c.env = originalEnv
+
+		// 5. Handle nil types from potential errors during visit
 		if consType == nil {
 			consType = types.Any
 		}
