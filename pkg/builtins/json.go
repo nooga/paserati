@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"encoding/json"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strings"
@@ -49,17 +48,16 @@ func jsonParseImpl(args []vm.Value) vm.Value {
 
 	text := args[0].ToString()
 
-	// Parse the JSON string using Go's json package
-	var result any
-	err := json.Unmarshal([]byte(text), &result)
+	// Use the efficient UnmarshalJSON method directly on vm.Value
+	var result vm.Value
+	err := result.UnmarshalJSON([]byte(text))
 	if err != nil {
 		// In real JavaScript this would throw a SyntaxError
 		// For now, we'll return undefined
 		return vm.Undefined
 	}
 
-	// Convert the Go value to a VM value
-	return convertGoValueToVMValue(result)
+	return result
 }
 
 // jsonStringifyImpl implements JSON.stringify(value, replacer?, space?)
@@ -70,95 +68,14 @@ func jsonStringifyImpl(args []vm.Value) vm.Value {
 
 	value := args[0]
 
-	// Convert VM value to Go value for JSON marshaling
-	goValue := convertVMValueToGoValue(value)
-
-	// Marshal to JSON bytes
-	jsonBytes, err := json.Marshal(goValue)
+	// Use the efficient MarshalJSON method directly on vm.Value
+	jsonBytes, err := value.MarshalJSON()
 	if err != nil {
 		// In case of circular references or other issues, return "null"
 		return vm.NewString("null")
 	}
 
 	return vm.NewString(string(jsonBytes))
-}
-
-// convertGoValueToVMValue converts a Go any value from json.Unmarshal to a VM value
-func convertGoValueToVMValue(value any) vm.Value {
-	switch v := value.(type) {
-	case nil:
-		return vm.Null
-	case bool:
-		return vm.BooleanValue(v)
-	case float64:
-		return vm.NumberValue(v)
-	case string:
-		return vm.NewString(v)
-	case []any:
-		// Create an array
-		arr := vm.NewArray()
-		arrayObj := arr.AsArray()
-		for i, elem := range v {
-			arrayObj.Set(i, convertGoValueToVMValue(elem))
-		}
-		return arr
-	case map[string]any:
-		// Create an object
-		obj := vm.NewObject(vm.Undefined)
-		plainObj := obj.AsPlainObject()
-		for key, val := range v {
-			plainObj.SetOwn(key, convertGoValueToVMValue(val))
-		}
-		return obj
-	default:
-		// Fallback for unknown types
-		return vm.Undefined
-	}
-}
-
-// convertVMValueToGoValue converts a VM value to a Go any for JSON marshaling
-func convertVMValueToGoValue(value vm.Value) any {
-	switch value.Type() {
-	case vm.TypeNull:
-		return nil
-	case vm.TypeUndefined:
-		return nil // JSON doesn't have undefined, so convert to null
-	case vm.TypeBoolean:
-		return value.AsBoolean()
-	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-		num := value.ToFloat()
-		// Check if it's an integer
-		if num == float64(int64(num)) {
-			return int64(num)
-		}
-		return num
-	case vm.TypeString:
-		return value.ToString()
-	case vm.TypeArray:
-		arr := value.AsArray()
-		length := arr.Length()
-		result := make([]any, length)
-		for i := 0; i < length; i++ {
-			elem := arr.Get(i)
-			result[i] = convertVMValueToGoValue(elem)
-		}
-		return result
-	case vm.TypeObject:
-		obj := value.AsPlainObject()
-		result := make(map[string]any)
-
-		// Get all own properties using public API
-		keys := obj.OwnKeys()
-		for _, key := range keys {
-			if prop, exists := obj.GetOwn(key); exists {
-				result[key] = convertVMValueToGoValue(prop)
-			}
-		}
-		return result
-	default:
-		// For functions and other non-serializable types, return null
-		return nil
-	}
 }
 
 // Helper function to format JSON with proper indentation (for future use with space parameter)
