@@ -244,7 +244,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Basic Types (`number`, `string`, `boolean`, `null`, `undefined`)
 - [x] `any` Type (Implicitly used in checker)
 - [x] `void` Type (Function return type inference)
-- [ ] `unknown` Type
+- [x] `unknown` Type (assignment restrictions enforced, type narrowing not yet implemented)
 - [x] `never` Type
 - [x] Array Types (`T[]`)
 - [x] Tuple Types (`[string, number]`) - including optional elements and rest elements
