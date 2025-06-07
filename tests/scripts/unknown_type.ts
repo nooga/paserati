@@ -44,8 +44,8 @@ let unknown1: unknown = "test string";
 // This currently fails but should work with type narrowing:
 if (typeof unknown1 === "string") {
   // In TypeScript, unknown1 should be narrowed to string here
-  // console.log(unknown1.length); // Should work after narrowing
-  console.log("Type check passed, but narrowing not implemented yet");
+  console.log(unknown1.length); // Should work after narrowing
+  console.log("Type check passed, narrowing should work!");
 }
 
 // Test 6: Function parameters
@@ -55,7 +55,7 @@ function acceptsUnknown(param: unknown): void {
 
   // With type checking (when narrowing is implemented):
   if (typeof param === "string") {
-    // console.log(param.length); // Should work
+    console.log(param.length); // Should work
     console.log("Function param type checking works");
   }
 }
