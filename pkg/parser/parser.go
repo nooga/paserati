@@ -341,6 +341,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseVarStatement()
 	case lexer.RETURN:
 		return p.parseReturnStatement()
+	case lexer.IF:
+		return p.parseIfStatement()
 	case lexer.WHILE:
 		return p.parseWhileStatement()
 	case lexer.DO:
@@ -898,6 +900,94 @@ func (p *Parser) parseReturnStatement() *ReturnStatement {
 		// Optional semicolon - Consume it here
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken()
+		}
+	}
+
+	return stmt
+}
+
+func (p *Parser) parseIfStatement() *IfStatement {
+	stmt := &IfStatement{Token: p.curToken} // 'if' token
+
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+
+	p.nextToken() // Consume '(', move to condition
+	stmt.Condition = p.parseExpression(LOWEST)
+	if stmt.Condition == nil {
+		return nil
+	}
+
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil
+	}
+
+	// --- MODIFIED: Handle both block statements and single statements ---
+	if p.peekTokenIs(lexer.LBRACE) {
+		// Block statement case: if (condition) { ... }
+		if !p.expectPeek(lexer.LBRACE) {
+			return nil
+		}
+		stmt.Consequence = p.parseBlockStatement()
+	} else {
+		// Single statement case: if (condition) statement
+		p.nextToken() // Move to the start of the statement
+		consequenceStmt := p.parseStatement()
+		if consequenceStmt == nil {
+			return nil
+		}
+		// Wrap the single statement in a BlockStatement
+		stmt.Consequence = &BlockStatement{
+			Token:               p.curToken,
+			Statements:          []Statement{consequenceStmt},
+			HoistedDeclarations: make(map[string]Expression),
+		}
+	}
+	// --- END MODIFICATION ---
+
+	if stmt.Consequence == nil {
+		return nil
+	}
+
+	// Check for 'else' clause
+	if p.peekTokenIs(lexer.ELSE) {
+		p.nextToken() // Consume 'else'
+
+		if p.peekTokenIs(lexer.IF) {
+			// Handle 'else if' by recursively parsing another if statement
+			p.nextToken() // Move to 'if'
+			elseIfStmt := p.parseIfStatement()
+			if elseIfStmt == nil {
+				return nil
+			}
+			// Wrap the else-if in a block statement for consistency
+			stmt.Alternative = &BlockStatement{
+				Token:               elseIfStmt.Token,
+				Statements:          []Statement{elseIfStmt},
+				HoistedDeclarations: make(map[string]Expression),
+			}
+		} else if p.peekTokenIs(lexer.LBRACE) {
+			// Standard 'else' block
+			p.nextToken() // Move to '{'
+			stmt.Alternative = p.parseBlockStatement()
+			if stmt.Alternative == nil {
+				return nil
+			}
+		} else {
+			// --- NEW: Single statement case: else statement ---
+			p.nextToken() // Move to the start of the else statement
+			elseStmt := p.parseStatement()
+			if elseStmt == nil {
+				return nil
+			}
+			// Wrap the single statement in a BlockStatement
+			stmt.Alternative = &BlockStatement{
+				Token:               p.curToken,
+				Statements:          []Statement{elseStmt},
+				HoistedDeclarations: make(map[string]Expression),
+			}
+			// --- END NEW ---
 		}
 	}
 

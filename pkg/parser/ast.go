@@ -614,6 +614,36 @@ func (ie *IfExpression) String() string {
 	return out.String()
 }
 
+// --- New: IfStatement ---
+
+// IfStatement represents a 'if (condition) { consequence } else { alternative }' statement.
+type IfStatement struct {
+	Token       lexer.Token // The 'if' token
+	Condition   Expression
+	Consequence *BlockStatement
+	Alternative *BlockStatement // Optional
+}
+
+func (is *IfStatement) statementNode()       {}
+func (is *IfStatement) TokenLiteral() string { return is.Token.Literal }
+func (is *IfStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("if")
+	out.WriteString("(")
+	if is.Condition != nil {
+		out.WriteString(is.Condition.String())
+	}
+	out.WriteString(") ")
+	if is.Consequence != nil {
+		out.WriteString(is.Consequence.String())
+	}
+	if is.Alternative != nil {
+		out.WriteString("else ")
+		out.WriteString(is.Alternative.String())
+	}
+	return out.String()
+}
+
 // --- New: WhileStatement ---
 
 // WhileStatement represents a 'while (condition) { body }' statement.

@@ -110,6 +110,47 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 	return narrowedEnv
 }
 
+// applyInvertedTypeNarrowing creates an environment for the else branch with inverted type constraints
+// For "if (typeof x === 'string')", the else branch knows x is NOT a string
+func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
+	if guard == nil {
+		return nil
+	}
+
+	// Check if the variable exists in the current environment
+	originalType, _, found := c.env.Resolve(guard.VariableName)
+	if !found {
+		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' not found\n", guard.VariableName)
+		return nil
+	}
+
+	// For unknown types, the else branch doesn't provide much additional type information yet
+	// (x is still unknown, but we know it's not the narrowed type)
+	// This sets up infrastructure for future union type support
+	if originalType == types.Unknown {
+		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' remains unknown in else branch (but not %s)\n",
+			guard.VariableName, guard.NarrowedType.String())
+		return nil // No environment change needed for unknown
+	}
+
+	// Future: Handle union types here
+	// if originalType is (string | number) and guard.NarrowedType is string,
+	// then in else branch it should be narrowed to number
+	//
+	// Example future code:
+	// if unionType, ok := originalType.(*types.UnionType); ok {
+	//     remainingTypes := unionType.RemoveType(guard.NarrowedType)
+	//     if len(remainingTypes) == 1 {
+	//         // Create environment with single remaining type
+	//         narrowedEnv := NewEnclosedEnvironment(c.env)
+	//         narrowedEnv.Define(guard.VariableName, remainingTypes[0], isConst)
+	//         return narrowedEnv
+	//     }
+	// }
+
+	return nil // No narrowing applied for non-unknown types yet
+}
+
 // --- END: Type narrowing support ---
 
 // Checker performs static type checking on the AST.
@@ -1234,9 +1275,20 @@ func (c *Checker) visit(node parser.Node) {
 		// Restore original environment before checking alternative
 		c.env = originalEnv
 
-		// 4. Check Alternative block (if it exists)
+		// 4. Check Alternative block (if it exists) - potentially with inverted type narrowing
 		if node.Alternative != nil {
+			// Apply inverted type narrowing for else branch
+			invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
+
+			if invertedEnv != nil {
+				debugPrintf("// [Checker IfExpr] Applying inverted type narrowing in alternative block\n")
+				c.env = invertedEnv // Use inverted narrowed environment for alternative
+			}
+
 			c.visit(node.Alternative)
+
+			// Restore original environment after alternative
+			c.env = originalEnv
 		}
 
 		// 5. Determine overall type (tricky! depends on return/break/continue)
@@ -1245,6 +1297,47 @@ func (c *Checker) visit(node parser.Node) {
 		// A more advanced checker might determine if both branches *must* return/throw,
 		// or compute a union type of the last expressions if they are treated as values.
 		node.SetComputedType(types.Void) // Use checker's method
+
+	case *parser.IfStatement:
+		// --- NEW: Handle IfStatement with Type Narrowing ---
+		// Similar to IfExpression but for statement context
+		// 1. Check Condition
+		c.visit(node.Condition)
+
+		// 2. Detect type guards in the condition
+		typeGuard := c.detectTypeGuard(node.Condition)
+
+		// 3. Check Consequence block (potentially with narrowed environment)
+		originalEnv := c.env
+		narrowedEnv := c.applyTypeNarrowing(typeGuard)
+
+		if narrowedEnv != nil {
+			debugPrintf("// [Checker IfStmt] Applying type narrowing in consequence block\n")
+			c.env = narrowedEnv // Use narrowed environment for consequence
+		}
+
+		c.visit(node.Consequence)
+
+		// Restore original environment before checking alternative
+		c.env = originalEnv
+
+		// 4. Check Alternative block (if it exists) - potentially with inverted type narrowing
+		if node.Alternative != nil {
+			// Apply inverted type narrowing for else branch
+			invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
+
+			if invertedEnv != nil {
+				debugPrintf("// [Checker IfStmt] Applying inverted type narrowing in alternative block\n")
+				c.env = invertedEnv // Use inverted narrowed environment for alternative
+			}
+
+			c.visit(node.Alternative)
+
+			// Restore original environment after alternative
+			c.env = originalEnv
+		}
+
+		// 5. IfStatement doesn't have a value/type (it's a statement, not expression)
 
 	case *parser.TernaryExpression:
 		// --- NEW: Handle TernaryExpression ---

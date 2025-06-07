@@ -578,6 +578,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.IfExpression:
 		return c.compileIfExpression(node, hint) // TODO: Fix this
 
+	case *parser.IfStatement:
+		// Handle if statements - reuse IfExpression compilation but ignore return value
+		// Convert IfStatement to IfExpression for compilation
+		ifExpr := &parser.IfExpression{
+			Token:       node.Token,
+			Condition:   node.Condition,
+			Consequence: node.Consequence,
+			Alternative: node.Alternative,
+		}
+		_, err := c.compileIfExpression(ifExpr, hint)
+		return hint, err // IfStatement doesn't produce a value
+
 	case *parser.TernaryExpression:
 		return c.compileTernaryExpression(node, hint) // TODO: Fix this
 
