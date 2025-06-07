@@ -674,23 +674,32 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 		debugPrint("parseTupleTypeExpression: Parsing element, cur='%s'", p.curToken.Literal)
 
 		// Check for rest element syntax (...T[])
-		if p.curTokenIs(lexer.DOT) && p.peekTokenIs(lexer.DOT) {
-			// Parse rest element
-			p.nextToken() // Consume first '.'
-			if !p.expectPeek(lexer.DOT) || !p.expectPeek(lexer.DOT) {
-				p.addError(p.curToken, "invalid rest element syntax, expected '...'")
-				return nil
-			}
-			p.nextToken() // Move to rest element type
+		if p.curTokenIs(lexer.SPREAD) {
+			// Parse rest element: '...T[]'
+			p.nextToken() // Move past '...' to the type
 
 			restType := p.parseTypeExpression()
 			if restType == nil {
+				p.addError(p.curToken, "expected type after '...' in tuple rest element")
 				return nil
 			}
 			tupleTypeExp.RestElement = restType
 			debugPrint("parseTupleTypeExpression: Parsed rest element: %s", restType.String())
 
-			// Rest element must be last, break out
+			// After rest element, we must have either ',' followed by ']' or just ']'
+			if p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // Consume ','
+				if !p.peekTokenIs(lexer.RBRACKET) {
+					p.addError(p.peekToken, "rest element must be the last element in tuple type")
+					return nil
+				}
+				p.nextToken() // Move to ']'
+			} else if !p.peekTokenIs(lexer.RBRACKET) {
+				p.addError(p.peekToken, "expected ',' or ']' after rest element in tuple type")
+				return nil
+			} else {
+				p.nextToken() // Move to ']'
+			}
 			break
 		}
 

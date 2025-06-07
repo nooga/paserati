@@ -109,7 +109,15 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			if restType == nil {
 				return nil // Error resolving rest element type
 			}
-			restElementType = restType
+
+			// Validate that rest element type is an array type
+			if _, isArrayType := restType.(*types.ArrayType); !isArrayType {
+				c.addError(node.RestElement, fmt.Sprintf("rest element in tuple type must be an array type, got '%s'", restType.String()))
+				// Use any[] as fallback
+				restElementType = &types.ArrayType{ElementType: types.Any}
+			} else {
+				restElementType = restType
+			}
 		}
 
 		tupleType := &types.TupleType{

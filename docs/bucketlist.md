@@ -247,7 +247,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [ ] `unknown` Type
 - [x] `never` Type
 - [x] Array Types (`T[]`)
-- [ ] Tuple Types (`[string, number]`)
+- [x] Tuple Types (`[string, number]`) - including optional elements and rest elements
 - [ ] Enum Types (`enum Color { Red, Green }`)
 - [x] Literal Types (`'hello'`, `123`, `true`)
 - [x] Union Types (`string | number`)
