@@ -65,6 +65,112 @@ var TypeofResultType = NewUnionType(
 
 // --- Simple Composite Types (Placeholder Structs) ---
 
+// Signature represents a function or constructor signature
+type Signature struct {
+	ParameterTypes    []Type
+	ReturnType        Type
+	OptionalParams    []bool // Tracks which parameters are optional
+	IsVariadic        bool   // Indicates if the function accepts variable arguments
+	RestParameterType Type   // Type of the rest parameter (...args), if present
+}
+
+func (sig *Signature) String() string {
+	var params strings.Builder
+	params.WriteString("(")
+	numParams := len(sig.ParameterTypes)
+	for i, p := range sig.ParameterTypes {
+		if sig.IsVariadic && i == numParams-1 {
+			params.WriteString("...")
+			if p != nil {
+				params.WriteString(p.String())
+			} else {
+				params.WriteString("<nil>")
+			}
+		} else {
+			if p != nil {
+				params.WriteString(p.String())
+			} else {
+				params.WriteString("<nil>")
+			}
+			// Add optional marker if this parameter is optional
+			if i < len(sig.OptionalParams) && sig.OptionalParams[i] {
+				params.WriteString("?")
+			}
+		}
+		if i < numParams-1 {
+			params.WriteString(", ")
+		}
+	}
+
+	// Add rest parameter if present
+	if sig.RestParameterType != nil {
+		if numParams > 0 {
+			params.WriteString(", ")
+		}
+		params.WriteString("...")
+		params.WriteString(sig.RestParameterType.String())
+	}
+
+	params.WriteString(")")
+
+	retTypeStr := "void"
+	if sig.ReturnType != nil {
+		retTypeStr = sig.ReturnType.String()
+	}
+
+	return fmt.Sprintf("%s => %s", params.String(), retTypeStr)
+}
+
+func (sig *Signature) Equals(other *Signature) bool {
+	if sig == nil || other == nil {
+		return sig == other
+	}
+	if len(sig.ParameterTypes) != len(other.ParameterTypes) {
+		return false
+	}
+	if sig.IsVariadic != other.IsVariadic {
+		return false
+	}
+	if len(sig.OptionalParams) != len(other.OptionalParams) {
+		return false
+	}
+
+	// Check parameter types
+	for i, p1 := range sig.ParameterTypes {
+		p2 := other.ParameterTypes[i]
+		if (p1 == nil) != (p2 == nil) {
+			return false
+		}
+		if p1 != nil && !p1.Equals(p2) {
+			return false
+		}
+	}
+
+	// Check optional parameter markers
+	for i, opt1 := range sig.OptionalParams {
+		if opt1 != other.OptionalParams[i] {
+			return false
+		}
+	}
+
+	// Check rest parameter type
+	if (sig.RestParameterType == nil) != (other.RestParameterType == nil) {
+		return false
+	}
+	if sig.RestParameterType != nil && !sig.RestParameterType.Equals(other.RestParameterType) {
+		return false
+	}
+
+	// Check return type
+	if (sig.ReturnType == nil) != (other.ReturnType == nil) {
+		return false
+	}
+	if sig.ReturnType != nil && !sig.ReturnType.Equals(other.ReturnType) {
+		return false
+	}
+	return true
+}
+
 // FunctionType represents the type of a function.
 type FunctionType struct {
 	ParameterTypes    []Type
@@ -480,6 +586,12 @@ type ObjectType struct {
 	// Using a map for simplicity now. Consider ordered map or slice for stability.
 	Properties         map[string]Type
 	OptionalProperties map[string]bool // Tracks which properties are optional
+
+	// NEW: Unified callable/constructor support
+	CallSignatures      []*Signature // Object call signatures: obj(args)
+	ConstructSignatures []*Signature // Object constructor signatures: new obj(args)
+	BaseTypes           []Type       // For inheritance (classes, interfaces)
+
 	// TODO: Index Signatures?
 }
 
@@ -513,18 +625,10 @@ func (ot *ObjectType) Equals(other Type) bool {
 		return ot == otherOt // Both must be nil or non-nil
 	}
 
-	// Use reflect.DeepEqual for comparing the maps of properties recursively.
-	// This relies on the Equals methods of the contained types.
-	// Note: This assumes map iteration order doesn't matter for equality.
-	// It also handles nil maps correctly.
+	// Check properties
 	if len(ot.Properties) != len(otherOt.Properties) {
 		return false // Different number of properties
 	}
-	if len(ot.Properties) == 0 {
-		return true // Both are empty objects
-	}
-
-	// Check each property
 	for key, t1 := range ot.Properties {
 		t2, exists := otherOt.Properties[key]
 		if !exists {
@@ -545,7 +649,43 @@ func (ot *ObjectType) Equals(other Type) bool {
 		}
 	}
 
-	return true // All properties and optionality flags match
+	// Check call signatures
+	if len(ot.CallSignatures) != len(otherOt.CallSignatures) {
+		return false
+	}
+	for i, sig1 := range ot.CallSignatures {
+		sig2 := otherOt.CallSignatures[i]
+		if !sig1.Equals(sig2) {
+			return false
+		}
+	}
+
+	// Check constructor signatures
+	if len(ot.ConstructSignatures) != len(otherOt.ConstructSignatures) {
+		return false
+	}
+	for i, sig1 := range ot.ConstructSignatures {
+		sig2 := otherOt.ConstructSignatures[i]
+		if !sig1.Equals(sig2) {
+			return false
+		}
+	}
+
+	// Check base types
+	if len(ot.BaseTypes) != len(otherOt.BaseTypes) {
+		return false
+	}
+	for i, base1 := range ot.BaseTypes {
+		base2 := otherOt.BaseTypes[i]
+		if (base1 == nil) != (base2 == nil) {
+			return false
+		}
+		if base1 != nil && !base1.Equals(base2) {
+			return false
+		}
+	}
+
+	return true // All properties, signatures, and base types match
 }
 
 // --- NEW: UnionType ---
@@ -1023,4 +1163,417 @@ func (ct *ConstructorType) Equals(other Type) bool {
 	}
 
 	return true
+}
+
+// --- NEW: ObjectType Helper Methods ---
+
+// IsCallable returns true if this ObjectType has call signatures
+func (ot *ObjectType) IsCallable() bool {
+	return len(ot.CallSignatures) > 0
+}
+
+// IsConstructable returns true if this ObjectType has constructor signatures
+func (ot *ObjectType) IsConstructable() bool {
+	return len(ot.ConstructSignatures) > 0
+}
+
+// IsPureFunction returns true if this ObjectType is callable but has no properties
+// (i.e., it's a pure function)
+func (ot *ObjectType) IsPureFunction() bool {
+	return ot.IsCallable() && len(ot.Properties) == 0
+}
+
+// GetCallSignatures returns the call signatures of this ObjectType
+func (ot *ObjectType) GetCallSignatures() []*Signature {
+	return ot.CallSignatures
+}
+
+// GetConstructSignatures returns the constructor signatures of this ObjectType
+func (ot *ObjectType) GetConstructSignatures() []*Signature {
+	return ot.ConstructSignatures
+}
+
+// GetEffectiveProperties returns all properties including inherited ones from base types
+func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
+	result := make(map[string]Type)
+
+	// First, add properties from base types (in reverse order for proper precedence)
+	for i := len(ot.BaseTypes) - 1; i >= 0; i-- {
+		baseType := ot.BaseTypes[i]
+		if baseObj, ok := baseType.(*ObjectType); ok {
+			baseProps := baseObj.GetEffectiveProperties()
+			for name, typ := range baseProps {
+				result[name] = typ
+			}
+		}
+	}
+
+	// Then add our own properties (these override base type properties)
+	for name, typ := range ot.Properties {
+		result[name] = typ
+	}
+
+	return result
+}
+
+// AddCallSignature adds a call signature to this ObjectType
+func (ot *ObjectType) AddCallSignature(sig *Signature) {
+	ot.CallSignatures = append(ot.CallSignatures, sig)
+}
+
+// AddConstructSignature adds a constructor signature to this ObjectType
+func (ot *ObjectType) AddConstructSignature(sig *Signature) {
+	ot.ConstructSignatures = append(ot.ConstructSignatures, sig)
+}
+
+// AddBaseType adds a base type for inheritance
+func (ot *ObjectType) AddBaseType(baseType Type) {
+	ot.BaseTypes = append(ot.BaseTypes, baseType)
+}
+
+// --- NEW: Type-Level Operations (moved from checker) ---
+
+// IsPrimitive returns true if the type is a primitive type
+func IsPrimitive(t Type) bool {
+	_, ok := t.(*Primitive)
+	return ok
+}
+
+// GetEffectiveType resolves aliases and returns the actual type
+func GetEffectiveType(t Type) Type {
+	if aliasType, ok := t.(*AliasType); ok && aliasType.ResolvedType != nil {
+		return GetEffectiveType(aliasType.ResolvedType)
+	}
+	return t
+}
+
+// WidenType converts literal types to their primitive equivalents
+func WidenType(t Type) Type {
+	return GetWidenedType(t) // Use existing function
+}
+
+// IsAssignable checks if a value of type `source` can be assigned to a variable
+// of type `target`. This is moved from checker to types package for clean separation.
+func IsAssignable(source, target Type) bool {
+	if source == nil || target == nil {
+		return false
+	}
+
+	// Basic rules:
+	if target == Any || source == Any {
+		return true
+	}
+
+	if target == Unknown {
+		return true
+	}
+	if source == Unknown {
+		return target == Unknown
+	}
+
+	if source == Never {
+		return true
+	}
+
+	// Check for identical types
+	if source == target {
+		return true
+	}
+
+	// Union type handling
+	sourceUnion, sourceIsUnion := source.(*UnionType)
+	targetUnion, targetIsUnion := target.(*UnionType)
+
+	if targetIsUnion {
+		if sourceIsUnion {
+			// Union to union: every type in source must be assignable to at least one in target
+			for _, sType := range sourceUnion.Types {
+				assignable := false
+				for _, tType := range targetUnion.Types {
+					if IsAssignable(sType, tType) {
+						assignable = true
+						break
+					}
+				}
+				if !assignable {
+					return false
+				}
+			}
+			return true
+		} else {
+			// Non-union to union: source must be assignable to at least one type in target
+			for _, tType := range targetUnion.Types {
+				if IsAssignable(source, tType) {
+					return true
+				}
+			}
+			return false
+		}
+	} else if sourceIsUnion {
+		// Union to non-union: every type in source must be assignable to target
+		for _, sType := range sourceUnion.Types {
+			if !IsAssignable(sType, target) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Intersection type handling
+	sourceIntersection, sourceIsIntersection := source.(*IntersectionType)
+	targetIntersection, targetIsIntersection := target.(*IntersectionType)
+
+	if targetIsIntersection {
+		// Source must be assignable to ALL types in target intersection
+		for _, tType := range targetIntersection.Types {
+			if !IsAssignable(source, tType) {
+				return false
+			}
+		}
+		return true
+	} else if sourceIsIntersection {
+		// At least one type in source intersection must be assignable to target
+		for _, sType := range sourceIntersection.Types {
+			if IsAssignable(sType, target) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Literal type handling
+	sourceLiteral, sourceIsLiteral := source.(*LiteralType)
+	targetLiteral, targetIsLiteral := target.(*LiteralType)
+
+	if sourceIsLiteral && targetIsLiteral {
+		// Both literals: values must be equal
+		if sourceLiteral.Value.Type() != targetLiteral.Value.Type() {
+			return false
+		}
+		switch sourceLiteral.Value.Type() {
+		case vm.TypeNull, vm.TypeUndefined:
+			return true
+		case vm.TypeBoolean:
+			return sourceLiteral.Value.AsBoolean() == targetLiteral.Value.AsBoolean()
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			return vm.AsNumber(sourceLiteral.Value) == vm.AsNumber(targetLiteral.Value)
+		case vm.TypeString:
+			return vm.AsString(sourceLiteral.Value) == vm.AsString(targetLiteral.Value)
+		default:
+			return false
+		}
+	} else if sourceIsLiteral {
+		// Literal to non-literal: check if literal's primitive type is assignable
+		var primitiveType Type
+		switch sourceLiteral.Value.Type() {
+		case vm.TypeString:
+			primitiveType = String
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			primitiveType = Number
+		case vm.TypeBoolean:
+			primitiveType = Boolean
+		default:
+			return false
+		}
+		return IsAssignable(primitiveType, target)
+	} else if targetIsLiteral {
+		// Non-literal to literal: generally false except for special cases
+		return false
+	}
+
+	// Array type handling
+	sourceArray, sourceIsArray := source.(*ArrayType)
+	targetArray, targetIsArray := target.(*ArrayType)
+
+	if sourceIsArray && targetIsArray {
+		if sourceArray.ElementType == nil || targetArray.ElementType == nil {
+			return false
+		}
+		return IsAssignable(sourceArray.ElementType, targetArray.ElementType)
+	}
+
+	// Tuple type handling
+	sourceTuple, sourceIsTuple := source.(*TupleType)
+	targetTuple, targetIsTuple := target.(*TupleType)
+
+	if sourceIsTuple && targetIsTuple {
+		sourceLen := len(sourceTuple.ElementTypes)
+		targetLen := len(targetTuple.ElementTypes)
+
+		// Check each target element against source
+		for i := 0; i < targetLen; i++ {
+			targetElementType := targetTuple.ElementTypes[i]
+			targetIsOptional := i < len(targetTuple.OptionalElements) && targetTuple.OptionalElements[i]
+
+			if i < sourceLen {
+				sourceElementType := sourceTuple.ElementTypes[i]
+				if !IsAssignable(sourceElementType, targetElementType) {
+					return false
+				}
+			} else if !targetIsOptional {
+				// Target element is required but source doesn't have it
+				return false
+			}
+		}
+
+		// Check if source has extra elements that target can't handle
+		if sourceLen > targetLen && targetTuple.RestElementType == nil {
+			return false
+		}
+
+		return true
+	}
+
+	// Object type handling
+	sourceObj, sourceIsObj := source.(*ObjectType)
+	targetObj, targetIsObj := target.(*ObjectType)
+
+	if sourceIsObj && targetIsObj {
+		// Check that all required properties in target exist in source and are assignable
+		targetProps := targetObj.GetEffectiveProperties()
+		sourceProps := sourceObj.GetEffectiveProperties()
+
+		for propName, targetPropType := range targetProps {
+			sourcePropType, exists := sourceProps[propName]
+			if !exists {
+				// Check if property is optional in target
+				isOptional := targetObj.OptionalProperties != nil && targetObj.OptionalProperties[propName]
+				if !isOptional {
+					return false
+				}
+			} else {
+				if !IsAssignable(sourcePropType, targetPropType) {
+					return false
+				}
+			}
+		}
+
+		// Check call signatures
+		if len(targetObj.CallSignatures) > 0 {
+			if len(sourceObj.CallSignatures) == 0 {
+				return false
+			}
+			// For now, require at least one compatible signature
+			// TODO: More sophisticated overload matching
+			compatible := false
+			for _, targetSig := range targetObj.CallSignatures {
+				for _, sourceSig := range sourceObj.CallSignatures {
+					if isSignatureAssignable(sourceSig, targetSig) {
+						compatible = true
+						break
+					}
+				}
+				if compatible {
+					break
+				}
+			}
+			if !compatible {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	// Function type compatibility with ObjectType
+	sourceFn, sourceIsFn := source.(*FunctionType)
+	if sourceIsFn && targetIsObj && targetObj.IsCallable() {
+		// Function can be assigned to callable object if signatures match
+		for _, targetSig := range targetObj.CallSignatures {
+			if isSignatureAssignable(functionTypeToSignature(sourceFn), targetSig) {
+				return true
+			}
+		}
+		return false
+	}
+
+	targetFn, targetIsFn := target.(*FunctionType)
+	if sourceIsObj && sourceObj.IsCallable() && targetIsFn {
+		// Callable object can be assigned to function if signatures match
+		for _, sourceSig := range sourceObj.CallSignatures {
+			if isSignatureAssignable(sourceSig, functionTypeToSignature(targetFn)) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if sourceIsFn && targetIsFn {
+		return isSignatureAssignable(functionTypeToSignature(sourceFn), functionTypeToSignature(targetFn))
+	}
+
+	return false
+}
+
+// Helper function to check signature assignability
+func isSignatureAssignable(source, target *Signature) bool {
+	if source == nil || target == nil {
+		return source == target
+	}
+
+	// Check parameter count compatibility
+	sourceParamCount := len(source.ParameterTypes)
+	targetParamCount := len(target.ParameterTypes)
+
+	// For now, require exact parameter count match (can be relaxed later)
+	if sourceParamCount != targetParamCount {
+		return false
+	}
+
+	// Check parameter types (contravariant)
+	for i, targetParam := range target.ParameterTypes {
+		sourceParam := source.ParameterTypes[i]
+		if !IsAssignable(targetParam, sourceParam) { // Note: reversed for contravariance
+			return false
+		}
+	}
+
+	// Check return type (covariant)
+	return IsAssignable(source.ReturnType, target.ReturnType)
+}
+
+// Helper function to convert FunctionType to Signature
+func functionTypeToSignature(ft *FunctionType) *Signature {
+	return &Signature{
+		ParameterTypes:    ft.ParameterTypes,
+		ReturnType:        ft.ReturnType,
+		OptionalParams:    ft.OptionalParams,
+		IsVariadic:        ft.IsVariadic,
+		RestParameterType: ft.RestParameterType,
+	}
+}
+
+// --- NEW: Constructor Functions ---
+
+// NewFunctionType creates an ObjectType representing a pure function
+func NewFunctionType(sig *Signature) *ObjectType {
+	return &ObjectType{
+		Properties:          make(map[string]Type),
+		OptionalProperties:  make(map[string]bool),
+		CallSignatures:      []*Signature{sig},
+		ConstructSignatures: []*Signature{},
+		BaseTypes:           []Type{},
+	}
+}
+
+// NewOverloadedFunctionType creates an ObjectType representing an overloaded function
+func NewOverloadedFunctionType(sigs []*Signature) *ObjectType {
+	return &ObjectType{
+		Properties:          make(map[string]Type),
+		OptionalProperties:  make(map[string]bool),
+		CallSignatures:      sigs,
+		ConstructSignatures: []*Signature{},
+		BaseTypes:           []Type{},
+	}
+}
+
+// NewConstructorType creates an ObjectType representing a pure constructor
+func NewConstructorType(sig *Signature) *ObjectType {
+	return &ObjectType{
+		Properties:          make(map[string]Type),
+		OptionalProperties:  make(map[string]bool),
+		CallSignatures:      []*Signature{},
+		ConstructSignatures: []*Signature{sig},
+		BaseTypes:           []Type{},
+	}
 }
