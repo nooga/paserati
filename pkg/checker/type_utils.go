@@ -160,6 +160,81 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 
 	// --- End Array Type Handling ---
 
+	// --- NEW: Tuple Type Assignability ---
+	sourceTuple, sourceIsTuple := source.(*types.TupleType)
+	targetTuple, targetIsTuple := target.(*types.TupleType)
+
+	if targetIsTuple && sourceIsTuple {
+		// Both are tuples. Check structural compatibility.
+		// Tuple-to-tuple assignment rules:
+		// 1. Target must have at most as many elements as source (or rest element)
+		// 2. Each corresponding element must be assignable
+		// 3. Optional elements in target can be missing in source
+
+		sourceLen := len(sourceTuple.ElementTypes)
+		targetLen := len(targetTuple.ElementTypes)
+
+		// Check each target element against source
+		for i := 0; i < targetLen; i++ {
+			targetElementType := targetTuple.ElementTypes[i]
+			targetIsOptional := i < len(targetTuple.OptionalElements) && targetTuple.OptionalElements[i]
+
+			if i < sourceLen {
+				// Source has this element - check assignability
+				sourceElementType := sourceTuple.ElementTypes[i]
+				if !c.isAssignable(sourceElementType, targetElementType) {
+					return false // Element type mismatch
+				}
+			} else if targetTuple.RestElementType != nil {
+				// Source doesn't have this element, but target has rest - check against rest type
+				if !c.isAssignable(targetTuple.RestElementType, targetElementType) {
+					return false // Rest element not assignable to target element
+				}
+			} else if !targetIsOptional {
+				// Source doesn't have this required element and no rest type
+				return false // Missing required element
+			}
+			// If element is optional and missing, that's okay
+		}
+
+		// Check if source has extra elements that target can't handle
+		if sourceLen > targetLen && targetTuple.RestElementType == nil {
+			return false // Source has more elements than target can accept
+		}
+
+		return true // All compatibility checks passed
+	} else if targetIsTuple && sourceIsArray {
+		// Assigning array to tuple - this is generally not allowed in TypeScript
+		// Arrays are mutable and have unknown length, tuples are fixed
+		return false
+	} else if targetIsArray && sourceIsTuple {
+		// Assigning tuple to array - this should be allowed!
+		// Tuple [string, number] should be assignable to (string | number)[]
+		// For now, let's check if all tuple elements are assignable to array element type
+
+		for _, tupleElementType := range sourceTuple.ElementTypes {
+			if !c.isAssignable(tupleElementType, targetArray.ElementType) {
+				return false // Tuple element not assignable to array element type
+			}
+		}
+
+		// Also check rest element if present
+		if sourceTuple.RestElementType != nil {
+			// Rest element type should be T[], so we need to check T against array element type
+			if restArrayType, ok := sourceTuple.RestElementType.(*types.ArrayType); ok {
+				if !c.isAssignable(restArrayType.ElementType, targetArray.ElementType) {
+					return false // Rest element type not assignable to array element type
+				}
+			} else {
+				// Rest element is not an array type - this shouldn't happen, but be safe
+				return false
+			}
+		}
+
+		return true // All tuple elements are assignable to array element type
+	}
+	// --- End Tuple Type Handling ---
+
 	// --- NEW: Function Type Assignability (including CallableType) ---
 	sourceFunc, sourceIsFunc := source.(*types.FunctionType)
 	targetFunc, targetIsFunc := target.(*types.FunctionType)

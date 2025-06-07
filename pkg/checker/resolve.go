@@ -91,6 +91,34 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		// No need to set computed type on the type annotation node itself
 		return arrayType
 
+	// --- NEW: Handle TupleTypeExpression ---
+	case *parser.TupleTypeExpression:
+		elementTypes := []types.Type{}
+		for _, elemNode := range node.ElementTypes {
+			elemType := c.resolveTypeAnnotation(elemNode)
+			if elemType == nil {
+				return nil // Error resolving element type
+			}
+			elementTypes = append(elementTypes, elemType)
+		}
+
+		// Handle rest element if present
+		var restElementType types.Type
+		if node.RestElement != nil {
+			restType := c.resolveTypeAnnotation(node.RestElement)
+			if restType == nil {
+				return nil // Error resolving rest element type
+			}
+			restElementType = restType
+		}
+
+		tupleType := &types.TupleType{
+			ElementTypes:     elementTypes,
+			OptionalElements: node.OptionalFlags, // Copy the optional flags directly
+			RestElementType:  restElementType,
+		}
+		return tupleType
+
 	// --- NEW: Handle Literal Type Nodes ---
 	case *parser.StringLiteral:
 		return &types.LiteralType{Value: vm.String(node.Value)}

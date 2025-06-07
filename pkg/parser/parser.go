@@ -266,6 +266,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.LPAREN, p.parseFunctionTypeExpression) // Starts with '(', e.g., '() => number'
 	// Object type literals that start with '{'
 	p.registerTypePrefix(lexer.LBRACE, p.parseObjectTypeExpression) // NEW: Object type literals like { name: string; age: number }
+	// --- NEW: Tuple type literals that start with '[' ---
+	p.registerTypePrefix(lexer.LBRACKET, p.parseTupleTypeExpression) // NEW: Tuple type literals like [string, number, boolean?]
 
 	// --- Register TYPE Infix Functions ---
 	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)     // TYPE context: '|' is union
@@ -645,6 +647,95 @@ func (p *Parser) parseArrayTypeExpression(elementType Expression) Expression {
 		return nil // Expected ']' after '[' for array type
 	}
 	return arrayTypeExp
+}
+
+// --- NEW: Helper for parsing tuple types [T, U, V] ---
+func (p *Parser) parseTupleTypeExpression() Expression {
+	tupleTypeExp := &TupleTypeExpression{
+		Token:         p.curToken, // The '[' token
+		ElementTypes:  []Expression{},
+		OptionalFlags: []bool{},
+		RestElement:   nil,
+	}
+
+	debugPrint("parseTupleTypeExpression: Starting, cur='%s'", p.curToken.Literal)
+
+	// Check if this is an empty tuple []
+	if p.peekTokenIs(lexer.RBRACKET) {
+		p.nextToken() // Move to ']'
+		debugPrint("parseTupleTypeExpression: Empty tuple")
+		return tupleTypeExp
+	}
+
+	// Parse element list - advance to the first element
+	p.nextToken() // Move past '['
+
+	for !p.curTokenIs(lexer.RBRACKET) {
+		debugPrint("parseTupleTypeExpression: Parsing element, cur='%s'", p.curToken.Literal)
+
+		// Check for rest element syntax (...T[])
+		if p.curTokenIs(lexer.DOT) && p.peekTokenIs(lexer.DOT) {
+			// Parse rest element
+			p.nextToken() // Consume first '.'
+			if !p.expectPeek(lexer.DOT) || !p.expectPeek(lexer.DOT) {
+				p.addError(p.curToken, "invalid rest element syntax, expected '...'")
+				return nil
+			}
+			p.nextToken() // Move to rest element type
+
+			restType := p.parseTypeExpression()
+			if restType == nil {
+				return nil
+			}
+			tupleTypeExp.RestElement = restType
+			debugPrint("parseTupleTypeExpression: Parsed rest element: %s", restType.String())
+
+			// Rest element must be last, break out
+			break
+		}
+
+		// Parse regular element type
+		elemType := p.parseTypeExpression()
+		if elemType == nil {
+			return nil
+		}
+
+		tupleTypeExp.ElementTypes = append(tupleTypeExp.ElementTypes, elemType)
+
+		// Check for optional marker '?'
+		isOptional := false
+		if p.peekTokenIs(lexer.QUESTION) {
+			isOptional = true
+			p.nextToken() // Consume '?'
+		}
+		tupleTypeExp.OptionalFlags = append(tupleTypeExp.OptionalFlags, isOptional)
+
+		debugPrint("parseTupleTypeExpression: Parsed element %d: %s (optional: %v)",
+			len(tupleTypeExp.ElementTypes)-1, elemType.String(), isOptional)
+
+		// Check for comma or closing bracket
+		if p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			p.nextToken() // Move to next element
+		} else if p.peekTokenIs(lexer.RBRACKET) {
+			p.nextToken() // Move to ']'
+			break
+		} else {
+			p.addError(p.peekToken, "expected ',' or ']' in tuple type")
+			return nil
+		}
+	}
+
+	// We should now be at ']'
+	if !p.curTokenIs(lexer.RBRACKET) {
+		p.addError(p.curToken, "expected ']' to close tuple type")
+		return nil
+	}
+
+	debugPrint("parseTupleTypeExpression: Completed, elements: %d, rest: %v",
+		len(tupleTypeExp.ElementTypes), tupleTypeExp.RestElement != nil)
+
+	return tupleTypeExp
 }
 
 func (p *Parser) parseLetStatement() *LetStatement {

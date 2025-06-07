@@ -1009,6 +1009,56 @@ func (ate *ArrayTypeExpression) String() string {
 	return out.String()
 }
 
+// --- NEW: TupleTypeExpression ---
+
+// TupleTypeExpression represents a tuple type syntax (e.g., [string, number, boolean?]).
+type TupleTypeExpression struct {
+	BaseExpression              // Embed base for ComputedType (types.TupleType)
+	Token          lexer.Token  // The '[' token
+	ElementTypes   []Expression // The type expressions for each element
+	OptionalFlags  []bool       // Which elements are optional (same length as ElementTypes)
+	RestElement    Expression   // Optional rest element type (...T[])
+}
+
+func (tte *TupleTypeExpression) expressionNode()      {}
+func (tte *TupleTypeExpression) TokenLiteral() string { return tte.Token.Literal }
+func (tte *TupleTypeExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("[")
+
+	for i, elemType := range tte.ElementTypes {
+		if elemType != nil {
+			out.WriteString(elemType.String())
+		} else {
+			out.WriteString("<nil>")
+		}
+
+		// Add optional marker if this element is optional
+		if i < len(tte.OptionalFlags) && tte.OptionalFlags[i] {
+			out.WriteString("?")
+		}
+
+		if i < len(tte.ElementTypes)-1 {
+			out.WriteString(", ")
+		}
+	}
+
+	// Add rest element if present
+	if tte.RestElement != nil {
+		if len(tte.ElementTypes) > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString("...")
+		out.WriteString(tte.RestElement.String())
+	}
+
+	out.WriteString("]")
+	if tte.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", tte.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // --- NEW: IndexExpression ---
 
 // IndexExpression represents accessing an element by index (e.g., myArray[i]).
