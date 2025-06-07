@@ -251,7 +251,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [ ] Enum Types (`enum Color { Red, Green }`)
 - [x] Literal Types (`'hello'`, `123`, `true`)
 - [x] Union Types (`string | number`)
-- [ ] Intersection Types (`A & B`)
+- [x] Intersection Types (`A & B`)
 - [x] Function Types (`(a: number) => string`)
 - [x] Object Type Literals (`{ name: string; age: number }`)
 - [x] Callable Types (`{ (param: Type): ReturnType }`)

@@ -72,9 +72,9 @@ const (
 const (
 	_ int = iota
 	TYPE_LOWEST
-	TYPE_UNION // |
-	TYPE_ARRAY // [] (Higher precedence than union)
-	// Potentially TYPE_INTERSECTION (&) later
+	TYPE_UNION        // |
+	TYPE_INTERSECTION // &  (Higher precedence than union)
+	TYPE_ARRAY        // [] (Higher precedence than intersection)
 )
 
 // Precedences map for VALUE operator tokens
@@ -152,8 +152,9 @@ var precedences = map[lexer.TokenType]int{
 
 // --- NEW: Precedences map for TYPE operator tokens ---
 var typePrecedences = map[lexer.TokenType]int{
-	lexer.PIPE:     TYPE_UNION,
-	lexer.LBRACKET: TYPE_ARRAY,
+	lexer.PIPE:        TYPE_UNION,
+	lexer.BITWISE_AND: TYPE_INTERSECTION,
+	lexer.LBRACKET:    TYPE_ARRAY,
 }
 
 // NewParser creates a new Parser.
@@ -270,8 +271,9 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.LBRACKET, p.parseTupleTypeExpression) // NEW: Tuple type literals like [string, number, boolean?]
 
 	// --- Register TYPE Infix Functions ---
-	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)     // TYPE context: '|' is union
-	p.registerTypeInfix(lexer.LBRACKET, p.parseArrayTypeExpression) // TYPE context: 'T[]'
+	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)               // TYPE context: '|' is union
+	p.registerTypeInfix(lexer.BITWISE_AND, p.parseIntersectionTypeExpression) // TYPE context: '&' is intersection
+	p.registerTypeInfix(lexer.LBRACKET, p.parseArrayTypeExpression)           // TYPE context: 'T[]'
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -623,6 +625,23 @@ func (p *Parser) parseUnionTypeExpression(left Expression) Expression {
 		return nil // Error parsing right side
 	}
 	return unionExp
+}
+
+// --- NEW: Helper for infix intersection type parsing ---
+// This function handles intersection types like A & B
+func (p *Parser) parseIntersectionTypeExpression(left Expression) Expression {
+	intersectionExp := &IntersectionTypeExpression{
+		Token: p.curToken, // The '&' token
+		Left:  left,
+	}
+	// Use the precedence of the INTERSECTION operator itself for the recursive call
+	precedence := TYPE_INTERSECTION
+	p.nextToken()                                                      // Consume the token starting the right-hand side type
+	intersectionExp.Right = p.parseTypeExpressionRecursive(precedence) // Recursive call uses type precedence
+	if intersectionExp.Right == nil {
+		return nil // Error parsing right side
+	}
+	return intersectionExp
 }
 
 // --- NEW: Precedence helper for type operators ---

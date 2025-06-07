@@ -81,6 +81,19 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		// This handles flattening and duplicate removal automatically.
 		return types.NewUnionType(leftType, rightType)
 
+	case *parser.IntersectionTypeExpression: // NEW: Handle intersection types
+		leftType := c.resolveTypeAnnotation(node.Left)
+		rightType := c.resolveTypeAnnotation(node.Right)
+
+		if leftType == nil || rightType == nil {
+			// Error occurred resolving one of the sides
+			return nil
+		}
+
+		// Use NewIntersectionType constructor
+		// This handles flattening and simplification automatically.
+		return types.NewIntersectionType(leftType, rightType)
+
 	// --- NEW: Handle ArrayTypeExpression ---
 	case *parser.ArrayTypeExpression:
 		elemType := c.resolveTypeAnnotation(node.ElementType)

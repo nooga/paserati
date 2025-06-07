@@ -83,6 +83,21 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 
 	// --- End Union Type Handling ---
 
+	// --- NEW: Intersection Type Handling ---
+	sourceIntersection, sourceIsIntersection := source.(*types.IntersectionType)
+	targetIntersection, targetIsIntersection := target.(*types.IntersectionType)
+
+	if targetIsIntersection {
+		// Assigning TO an intersection: Source must be assignable to ALL types in the target intersection.
+		return c.isAssignableToIntersection(source, targetIntersection)
+	} else if sourceIsIntersection {
+		// Assigning FROM an intersection TO a non-intersection:
+		// At least one type in the intersection must be assignable to the target.
+		return c.isIntersectionAssignableTo(sourceIntersection, target)
+	}
+
+	// --- End Intersection Type Handling ---
+
 	// --- NEW: Literal Type Handling ---
 	sourceLiteral, sourceIsLiteral := source.(*types.LiteralType)
 	targetLiteral, targetIsLiteral := target.(*types.LiteralType)
@@ -522,6 +537,9 @@ func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName st
 					return types.Never
 				}
 			}
+		case *types.IntersectionType:
+			// Handle property access on intersection types
+			return c.getPropertyTypeFromIntersection(obj, propertyName)
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			return types.Never

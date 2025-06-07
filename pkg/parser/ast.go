@@ -960,6 +960,32 @@ func (ute *UnionTypeExpression) String() string {
 	return out.String()
 }
 
+// --- NEW: IntersectionTypeExpression ---
+
+// IntersectionTypeExpression represents an intersection type (e.g., A & B).
+// For now, just binary intersections (A & B). Can be nested for more types.
+type IntersectionTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType (which will be an IntersectionType)
+	Token          lexer.Token // The '&' token
+	Left           Expression  // The type expression on the left
+	Right          Expression  // The type expression on the right
+}
+
+func (ite *IntersectionTypeExpression) expressionNode()      {}
+func (ite *IntersectionTypeExpression) TokenLiteral() string { return ite.Token.Literal }
+func (ite *IntersectionTypeExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(ite.Left.String())
+	out.WriteString(" & ")
+	out.WriteString(ite.Right.String())
+	out.WriteString(")")
+	if ite.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ite.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // --- NEW: ArrayLiteral ---
 
 // ArrayLiteral represents an array literal expression (e.g., [1, "two"]).

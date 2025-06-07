@@ -344,6 +344,13 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on callable type", propertyName))
 				// resultType remains types.Never
 			}
+		case *types.IntersectionType:
+			// Handle property access on intersection types
+			propType := c.getPropertyTypeFromIntersection(obj, propertyName)
+			if propType == types.Never {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on intersection type %s", propertyName, obj.String()))
+			}
+			resultType = propType
 		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
