@@ -153,66 +153,62 @@ console.log(
 // 7. Higher-Order Function Scenarios
 // ============================================================================
 
-// TODO: fix this
+console.log("\n--- Higher-Order Functions ---");
 
-// console.log("\n--- Higher-Order Functions ---");
+// Function that accepts a variadic callback
+function processWithCallback(
+  callback: (...args: any[]) => void,
+  ...data: any[]
+): void {
+  callback(...data);
+}
 
-// // Function that accepts a variadic callback
-// function processWithCallback(
-//   callback: (...args: any[]) => void,
-//   ...data: any[]
-// ): void {
-//   callback(...data);
-// }
+// Test callback
+function testCallback(...args: any[]): void {
+  console.log("Callback received", args.length, "arguments");
+}
 
-// // Test callback
-// function testCallback(...args: any[]): void {
-//   console.log("Callback received", args.length, "arguments");
-// }
+processWithCallback(testCallback, "hello", 42, true);
 
-// processWithCallback(testCallback, "hello", 42, true);
+// Function returning variadic function
+function createVariadicProcessor(
+  prefix: string
+): (...items: string[]) => string {
+  return function (...items: string[]): string {
+    return prefix + ": " + items.join(", ");
+  };
+}
 
-// // Function returning variadic function
-// function createVariadicProcessor(
-//   prefix: string
-// ): (...items: string[]) => string {
-//   return function (...items: string[]): string {
-//     return prefix + ": " + items.join(", ");
-//   };
-// }
-
-// let processor2 = createVariadicProcessor("PROCESSED");
-// console.log('processor2("a", "b", "c"):', processor2("a", "b", "c"));
+let processor2 = createVariadicProcessor("PROCESSED");
+console.log('processor2("a", "b", "c"):', processor2("a", "b", "c"));
 
 // ============================================================================
 // 8. Rest Parameters in Methods
 // ============================================================================
 
-// TODO: fix this
+console.log("\n--- Rest Parameters in Methods ---");
 
-// console.log("\n--- Rest Parameters in Methods ---");
+// Object with variadic methods
+let calculator = {
+  add: function (...nums: number[]): number {
+    let sum = 0;
+    for (let i = 0; i < nums.length; i++) {
+      sum += nums[i];
+    }
+    return sum;
+  },
 
-// // Object with variadic methods
-// let calculator = {
-//   add: function (...nums: number[]): number {
-//     let sum = 0;
-//     for (let i = 0; i < nums.length; i++) {
-//       sum += nums[i];
-//     }
-//     return sum;
-//   },
+  multiply: (...nums: number[]) => {
+    let product = 1;
+    for (let i = 0; i < nums.length; i++) {
+      product *= nums[i];
+    }
+    return product;
+  },
+};
 
-//   multiply: (...nums: number[]) => {
-//     let product = 1;
-//     for (let i = 0; i < nums.length; i++) {
-//       product *= nums[i];
-//     }
-//     return product;
-//   },
-// };
-
-// console.log("calculator.add(1, 2, 3):", calculator.add(1, 2, 3));
-// console.log("calculator.multiply(2, 3, 4):", calculator.multiply(2, 3, 4));
+console.log("calculator.add(1, 2, 3):", calculator.add(1, 2, 3));
+console.log("calculator.multiply(2, 3, 4):", calculator.multiply(2, 3, 4));
 
 // ============================================================================
 // 9. Type Inference with Rest Parameters

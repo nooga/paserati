@@ -1677,10 +1677,22 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// Method call on closure
 				calleeClosure := AsClosure(calleeVal)
 				calleeFunc := calleeClosure.Fn
-				if argCount != calleeFunc.Arity {
-					frame.ip = callerIP
-					status := vm.runtimeError("Method expected %d arguments but got %d.", calleeFunc.Arity, argCount)
-					return status, Undefined
+
+				// Updated arity check for variadic functions
+				if calleeFunc.Variadic {
+					// For variadic functions, must have at least base parameters
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Method expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					// For non-variadic functions, exact arity match required
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Method expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
 				}
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
@@ -1704,9 +1716,9 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
-				// Copy arguments to new frame (starting from register 0)
+				// Copy fixed arguments to new frame (starting from register 0)
 				argStartRegInCaller := funcReg + 1
-				for i := 0; i < argCount; i++ {
+				for i := 0; i < calleeFunc.Arity; i++ {
 					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
 						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
 					} else {
@@ -1714,6 +1726,33 @@ func (vm *VM) run() (InterpretResult, Value) {
 						frame.ip = callerIP
 						status := vm.runtimeError("Internal Error: Argument register index out of bounds during method call setup.")
 						return status, Undefined
+					}
+				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+
+					if extraArgCount == 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							}
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
 					}
 				}
 				vm.frameCount++
@@ -1733,10 +1772,21 @@ func (vm *VM) run() (InterpretResult, Value) {
 				calleeClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
 				calleeFunc := calleeClosure.Fn
 
-				if argCount != calleeFunc.Arity {
-					frame.ip = callerIP
-					status := vm.runtimeError("Method expected %d arguments but got %d.", calleeFunc.Arity, argCount)
-					return status, Undefined
+				// Updated arity check for variadic functions
+				if calleeFunc.Variadic {
+					// For variadic functions, must have at least base parameters
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Method expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					// For non-variadic functions, exact arity match required
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Method expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
 				}
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
@@ -1760,9 +1810,9 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
-				// Copy arguments to new frame
+				// Copy fixed arguments to new frame
 				argStartRegInCaller := funcReg + 1
-				for i := 0; i < argCount; i++ {
+				for i := 0; i < calleeFunc.Arity; i++ {
 					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
 						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
 					} else {
@@ -1770,6 +1820,33 @@ func (vm *VM) run() (InterpretResult, Value) {
 						frame.ip = callerIP
 						status := vm.runtimeError("Internal Error: Argument register index out of bounds during method call setup.")
 						return status, Undefined
+					}
+				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+
+					if extraArgCount == 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							}
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
 					}
 				}
 				vm.frameCount++
