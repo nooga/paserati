@@ -377,79 +377,85 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 	var resultType types.Type = types.Any // Default result type on error
 
 	// 3. Check base type (allow Array for now)
-	switch base := leftType.(type) {
-	case *types.ArrayType:
-		// Base is ArrayType
-		// 4. Check index type (must be number for array)
-		if !c.isAssignable(indexType, types.Number) {
-			c.addError(node.Index, fmt.Sprintf("array index must be of type number, got %s", indexType.String()))
-			// Proceed with Any as result type
-		} else {
-			// Index type is valid, result type is the array's element type
-			if base.ElementType != nil {
-				resultType = base.ElementType
+	// First handle the special case of 'any'
+	if leftType == types.Any {
+		// Indexing into 'any' always returns 'any' - this is standard TypeScript behavior
+		resultType = types.Any
+	} else {
+		switch base := leftType.(type) {
+		case *types.ArrayType:
+			// Base is ArrayType
+			// 4. Check index type (must be number for array)
+			if !c.isAssignable(indexType, types.Number) {
+				c.addError(node.Index, fmt.Sprintf("array index must be of type number, got %s", indexType.String()))
+				// Proceed with Any as result type
 			} else {
-				resultType = types.Unknown
+				// Index type is valid, result type is the array's element type
+				if base.ElementType != nil {
+					resultType = base.ElementType
+				} else {
+					resultType = types.Unknown
+				}
 			}
-		}
 
-	case *types.ObjectType: // <<< NEW CASE
-		// Base is ObjectType
-		// Index must be string or number (or any)
-		isIndexStringLiteral := false
-		var indexStringValue string
-		if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.Type() == vm.TypeString {
-			isIndexStringLiteral = true
-			indexStringValue = vm.AsString(litIndex.Value)
-		}
+		case *types.ObjectType: // <<< NEW CASE
+			// Base is ObjectType
+			// Index must be string or number (or any)
+			isIndexStringLiteral := false
+			var indexStringValue string
+			if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.Type() == vm.TypeString {
+				isIndexStringLiteral = true
+				indexStringValue = vm.AsString(litIndex.Value)
+			}
 
-		widenedIndexType := types.GetWidenedType(indexType)
+			widenedIndexType := types.GetWidenedType(indexType)
 
-		if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Any {
-			if isIndexStringLiteral {
-				// Index is a specific string literal, look it up directly
-				propType, exists := base.Properties[indexStringValue]
-				if exists {
-					if propType == nil { // Safety check
-						resultType = types.Never
-						c.addError(node.Index, fmt.Sprintf("internal checker error: property '%s' has nil type", indexStringValue))
+			if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Any {
+				if isIndexStringLiteral {
+					// Index is a specific string literal, look it up directly
+					propType, exists := base.Properties[indexStringValue]
+					if exists {
+						if propType == nil { // Safety check
+							resultType = types.Never
+							c.addError(node.Index, fmt.Sprintf("internal checker error: property '%s' has nil type", indexStringValue))
+						} else {
+							resultType = propType
+						}
 					} else {
-						resultType = propType
+						c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, base.String()))
+						// resultType remains Error
 					}
 				} else {
-					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, base.String()))
-					// resultType remains Error
+					// Index is a general string/number/any - cannot determine specific property type.
+					// TODO: Support index signatures later?
+					// For now, result is 'any' as we don't know which property is accessed.
+					resultType = types.Any
 				}
 			} else {
-				// Index is a general string/number/any - cannot determine specific property type.
-				// TODO: Support index signatures later?
-				// For now, result is 'any' as we don't know which property is accessed.
-				resultType = types.Any
+				// Invalid index type for object
+				c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', or 'any', got '%s'", indexType.String()))
+				// resultType remains Error
 			}
-		} else {
-			// Invalid index type for object
-			c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', or 'any', got '%s'", indexType.String()))
-			// resultType remains Error
-		}
 
-	case *types.Primitive:
-		// Allow indexing on strings?
-		if base == types.String {
-			// 4. Check index type (must be number for string)
-			if !c.isAssignable(indexType, types.Number) {
-				c.addError(node.Index, fmt.Sprintf("string index must be of type number, got %s", indexType.String()))
+		case *types.Primitive:
+			// Allow indexing on strings?
+			if base == types.String {
+				// 4. Check index type (must be number for string)
+				if !c.isAssignable(indexType, types.Number) {
+					c.addError(node.Index, fmt.Sprintf("string index must be of type number, got %s", indexType.String()))
+				}
+				// Result of indexing a string is always a string (or potentially undefined)
+				// Let's use string | undefined? Or just string?
+				// For simplicity now, let's say string.
+				// A more precise type might be: types.NewUnionType(types.String, types.Undefined)
+				resultType = types.String
+			} else {
+				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 			}
-			// Result of indexing a string is always a string (or potentially undefined)
-			// Let's use string | undefined? Or just string?
-			// For simplicity now, let's say string.
-			// A more precise type might be: types.NewUnionType(types.String, types.Undefined)
-			resultType = types.String
-		} else {
+
+		default:
 			c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 		}
-
-	default:
-		c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 	}
 
 	// Set computed type on the IndexExpression node

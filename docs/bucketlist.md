@@ -206,13 +206,26 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] **Comprehensive string processing pipeline support**
     - [x] **19+ String methods implemented** - covers most common JavaScript string operations
     - [ ] Advanced methods (`.replace`, `.match`, regex support, padding) - future enhancements
-- [ ] `Math` Object
+- [x] `Math` Object
+  - [x] **All standard Math constants** (`PI`, `E`, `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT1_2`, `SQRT2`)
+  - [x] **Trigonometric functions** (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`)
+  - [x] **Logarithmic functions** (`log`, `log10`, `log2`, `log1p`, `exp`, `expm1`)
+  - [x] **Power and root functions** (`pow`, `sqrt`, `cbrt`)
+  - [x] **Rounding functions** (`round`, `floor`, `ceil`, `trunc`)
+  - [x] **Utility functions** (`abs`, `sign`, `max`, `min`, `random`)
+  - [x] **Advanced functions** (`hypot`, `fround`, `imul`, `clz32`)
+  - [x] **30+ Math methods implemented** - comprehensive mathematical operations support
 - [x] `Date` Object (partial)
   - [x] `Date.now()` static method
   - [x] Date constructor (basic implementation)
   - [ ] Date prototype methods (`.getTime`, `.getFullYear`, etc.) - planned
   - [ ] Full constructor support (`new Date()`)
-- [ ] `JSON` Object
+- [x] `JSON` Object
+  - [x] `JSON.parse()` - converts JSON strings to JavaScript objects/arrays/primitives
+  - [x] `JSON.stringify()` - converts JavaScript values to JSON strings
+  - [x] **Complete JSON serialization/deserialization support**
+  - [x] Proper type conversion between VM values and JSON representation
+  - [x] Handles all standard JavaScript types (objects, arrays, primitives)
 - [ ] `Map` / `Set`
 - [ ] `WeakMap` / `WeakSet`
 - [ ] Typed Arrays

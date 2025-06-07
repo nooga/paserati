@@ -63,9 +63,9 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "InfixLTE_T1", input: "5 <= 10;", expect: "true"},
 		{name: "InfixLTE_T2", input: "10 <= 10;", expect: "true"},
 		{name: "InfixLTE_F", input: "10 <= 5;", expect: "false"},
-		// {name: "InfixGTE_T1", input: "10 >= 5;", expect: "true"}, // Need GTE operator
-		// {name: "InfixGTE_T2", input: "10 >= 10;", expect: "true"},
-		// {name: "InfixGTE_F", input: "5 >= 10;", expect: "false"},
+		{name: "InfixGTE_T1", input: "10 >= 5;", expect: "true"},
+		{name: "InfixGTE_T2", input: "10 >= 10;", expect: "true"},
+		{name: "InfixGTE_F", input: "5 >= 10;", expect: "false"},
 
 		// Infix Equality (==, !=)
 		{name: "InfixEqNum_T", input: "10 == 10;", expect: "true"},

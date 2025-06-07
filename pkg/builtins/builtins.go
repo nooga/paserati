@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"fmt"
+	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"sync"
@@ -100,6 +101,16 @@ func InitializeRegistry() {
 
 		// Register Date constructor and methods
 		registerDate()
+
+		// Register Math object with methods and constants
+		registerMath()
+
+		// Register JSON object with parse and stringify methods
+		registerJSON()
+
+		// Register global constants
+		registerValue("Infinity", vm.Number(math.Inf(1)), types.Number)
+		registerValue("NaN", vm.Number(math.NaN()), types.Number)
 
 		// TODO: Register other built-ins here
 	})
