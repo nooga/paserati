@@ -1,3 +1,5 @@
+// expect: ok
+
 // Basic for...of with number array
 let numbers = [1, 2, 3, 4, 5];
 console.log("Numbers:");
@@ -67,3 +69,5 @@ for (let fruit of fruits) {
   console.log(index + ": " + fruit);
   index++;
 }
+
+("ok");
