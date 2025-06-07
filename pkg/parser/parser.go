@@ -258,6 +258,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.NULL, p.parseNullLiteral)           // 'null' type
 	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // 'undefined' type
 	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)       // 'void' type
+	// NEW: Constructor types that start with 'new'
+	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // NEW: Constructor types like 'new () => T'
 	// Literal types in TYPE context too
 	p.registerTypePrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerTypePrefix(lexer.NUMBER, p.parseNumberLiteral)
@@ -2875,19 +2877,36 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 			IsConstructorSignature: true,
 		}
 
-		// Parse constructor type expression
-		constructorType := p.parseConstructorTypeExpression()
+		// Parse interface constructor signature (uses ':' syntax)
+		constructorType := p.parseInterfaceConstructorSignature()
 		if constructorType == nil {
-			return nil // Error parsing constructor type
+			return nil // Error parsing constructor signature
 		}
 
 		prop.Type = constructorType
 		return prop
 	}
 
+	// Check for call signature first: `(): T`
+	if p.curTokenIs(lexer.LPAREN) {
+		// This is a call signature: (param: type, ...): returnType
+		prop := &InterfaceProperty{
+			// No name for call signatures
+		}
+
+		// Parse method type signature (interfaces use ':' syntax, not '=>')
+		funcType := p.parseMethodTypeSignature()
+		if funcType == nil {
+			return nil // Error parsing method type
+		}
+
+		prop.Type = funcType
+		return prop
+	}
+
 	// Check for shorthand method syntax first (identifier followed by '(')
 	if !p.curTokenIs(lexer.IDENT) {
-		p.addError(p.curToken, "expected property name (identifier) in interface")
+		p.addError(p.curToken, "expected property name (identifier) or call signature '(' in interface")
 		return nil
 	}
 
@@ -2955,7 +2974,43 @@ func (p *Parser) parseConstructorTypeExpression() Expression {
 	cte.Parameters = params
 	// Note: Constructor types don't typically use rest parameters, but we parse them anyway
 
-	// Expect ':' for return type
+	// Expect '=>' for return type (constructor types use arrow syntax)
+	if !p.expectPeek(lexer.ARROW) {
+		return nil
+	}
+
+	// Parse the constructed type
+	p.nextToken() // Move to the start of the return type expression
+	cte.ReturnType = p.parseTypeExpression()
+	if cte.ReturnType == nil {
+		return nil // Error should have been added by parseTypeExpression
+	}
+
+	return cte
+}
+
+// parseInterfaceConstructorSignature parses constructor signatures in interfaces like `new (): T`
+// This is different from parseConstructorTypeExpression which uses arrow syntax for type aliases
+func (p *Parser) parseInterfaceConstructorSignature() Expression {
+	cte := &ConstructorTypeExpression{
+		Token: p.curToken, // The 'new' token
+	}
+
+	// Expect '(' for parameters
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+
+	// Parse parameter types (similar to function type parameters)
+	params, _, err := p.parseFunctionTypeParameterList()
+	if err != nil {
+		p.addError(p.curToken, err.Error())
+		return nil
+	}
+	cte.Parameters = params
+	// Note: Constructor types don't typically use rest parameters, but we parse them anyway
+
+	// Expect ':' for return type (interface constructor signatures use colon syntax)
 	if !p.expectPeek(lexer.COLON) {
 		return nil
 	}

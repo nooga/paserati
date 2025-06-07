@@ -250,13 +250,48 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 	}
 	// --- End Tuple Type Handling ---
 
-	// --- NEW: Function Type Assignability (including CallableType) ---
+	// --- Cross-Type Compatibility Check (ObjectType ↔ FunctionType/ConstructorType) ---
+	// Handle ObjectType to FunctionType/ConstructorType compatibility early
+	if sourceObj, sourceIsObj := source.(*types.ObjectType); sourceIsObj {
+		if targetFunc, targetIsFunc := target.(*types.FunctionType); targetIsFunc {
+			if callProp, hasCall := sourceObj.Properties["__call"]; hasCall {
+				return c.isAssignable(callProp, targetFunc)
+			}
+			return false
+		}
+		if targetConstructor, targetIsConstructor := target.(*types.ConstructorType); targetIsConstructor {
+			if newProp, hasNew := sourceObj.Properties["new"]; hasNew {
+				return c.isAssignable(newProp, targetConstructor)
+			}
+			return false
+		}
+	}
+
+	// Handle FunctionType/ConstructorType to ObjectType compatibility
+	if targetObj, targetIsObj := target.(*types.ObjectType); targetIsObj {
+		if sourceFunc, sourceIsFunc := source.(*types.FunctionType); sourceIsFunc {
+			if callProp, hasCall := targetObj.Properties["__call"]; hasCall {
+				return c.isAssignable(sourceFunc, callProp)
+			}
+			return false
+		}
+		if sourceConstructor, sourceIsConstructor := source.(*types.ConstructorType); sourceIsConstructor {
+			if newProp, hasNew := targetObj.Properties["new"]; hasNew {
+				return c.isAssignable(sourceConstructor, newProp)
+			}
+			return false
+		}
+	}
+
+	// --- NEW: Function Type Assignability (including CallableType and ConstructorType) ---
 	sourceFunc, sourceIsFunc := source.(*types.FunctionType)
 	targetFunc, targetIsFunc := target.(*types.FunctionType)
 	sourceCallable, sourceIsCallable := source.(*types.CallableType)
 	targetCallable, targetIsCallable := target.(*types.CallableType)
 	sourceOverloaded, sourceIsOverloaded := source.(*types.OverloadedFunctionType)
 	targetOverloaded, targetIsOverloaded := target.(*types.OverloadedFunctionType)
+	sourceConstructor, sourceIsConstructor := source.(*types.ConstructorType)
+	targetConstructor, targetIsConstructor := target.(*types.ConstructorType)
 
 	if targetIsFunc {
 		if sourceIsFunc {
@@ -380,39 +415,61 @@ func (c *Checker) isAssignable(source, target types.Type) bool {
 			// Assigning CallableType to other types: false
 			return false
 		}
+	} else if targetIsConstructor {
+		// Assigning to ConstructorType
+		if sourceIsConstructor {
+			// Assigning ConstructorType to ConstructorType: check parameter and constructed types
+			if len(sourceConstructor.ParameterTypes) != len(targetConstructor.ParameterTypes) {
+				return false // Arity mismatch
+			}
+			// Check parameter types (contravariance for parameters)
+			for i, targetParamType := range targetConstructor.ParameterTypes {
+				sourceParamType := sourceConstructor.ParameterTypes[i]
+				if !c.isAssignable(sourceParamType, targetParamType) {
+					return false // Parameter type mismatch
+				}
+			}
+			// Check constructed type (covariance for return type)
+			return c.isAssignable(sourceConstructor.ConstructedType, targetConstructor.ConstructedType)
+		} else {
+			// Assigning Non-Constructor to ConstructorType: false
+			return false
+		}
+	} else if sourceIsConstructor {
+		// Assigning ConstructorType to something else (non-object targets handled above)
+		return false
 	}
 	// --- End Function Type Handling ---
 
-	// --- NEW: Object Type Assignability ---
-	sourceObject, sourceIsObject := source.(*types.ObjectType)
-	targetObject, targetIsObject := target.(*types.ObjectType)
+	// --- Object Type to Object Type Assignability ---
+	if sourceObj, sourceIsObj := source.(*types.ObjectType); sourceIsObj {
+		if targetObj, targetIsObj := target.(*types.ObjectType); targetIsObj {
+			// Both are objects. Check structural compatibility.
+			// For source to be assignable to target:
+			// - All REQUIRED properties in target must exist in source with compatible types
+			// - Optional properties in target don't need to exist in source
+			// - Source can have additional properties (structural typing)
 
-	if targetIsObject && sourceIsObject {
-		// Both are objects. Check structural compatibility.
-		// For source to be assignable to target:
-		// - All REQUIRED properties in target must exist in source with compatible types
-		// - Optional properties in target don't need to exist in source
-		// - Source can have additional properties (structural typing)
-
-		for targetPropName, targetPropType := range targetObject.Properties {
-			sourcePropType, exists := sourceObject.Properties[targetPropName]
-			if !exists {
-				// Check if this property is optional in the target
-				isOptional := targetObject.OptionalProperties != nil && targetObject.OptionalProperties[targetPropName]
-				if !isOptional {
-					// Target requires property that source doesn't have
+			for targetPropName, targetPropType := range targetObj.Properties {
+				sourcePropType, exists := sourceObj.Properties[targetPropName]
+				if !exists {
+					// Check if this property is optional in the target
+					isOptional := targetObj.OptionalProperties != nil && targetObj.OptionalProperties[targetPropName]
+					if !isOptional {
+						// Target requires property that source doesn't have
+						return false
+					}
+					// Property is optional, so it's okay that source doesn't have it
+					continue
+				}
+				if !c.isAssignable(sourcePropType, targetPropType) {
+					// Property type mismatch
 					return false
 				}
-				// Property is optional, so it's okay that source doesn't have it
-				continue
 			}
-			if !c.isAssignable(sourcePropType, targetPropType) {
-				// Property type mismatch
-				return false
-			}
+			// All required target properties found and compatible in source
+			return true
 		}
-		// All required target properties found and compatible in source
-		return true
 	}
 	// --- End Object Type Handling ---
 

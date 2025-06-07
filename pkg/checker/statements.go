@@ -90,6 +90,28 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 			properties["new"] = constructorType
 			// Constructor signatures are always required (not optional)
+		} else if prop.Name == nil {
+			// This is a call signature: (): T
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				debugPrintf("// [Checker Interface P1] Failed to resolve call signature type in interface '%s'. Using Any.\n", node.Name.Value)
+				propType = types.Any
+			}
+			// For now, we'll treat this as a callable interface by storing the call signature
+			// In a more sophisticated implementation, we'd use CallableType
+			// For simplicity, we'll just convert this to a function type and return it directly
+			// TODO: Handle multiple call signatures and mixed callable/object interfaces
+			debugPrintf("// [Checker Interface P1] Interface '%s' has call signature: %s\n", node.Name.Value, propType.String())
+
+			// For now, if an interface has a call signature, we'll make it the primary type
+			// This is a simplification - TypeScript allows both call signatures and properties
+			if len(properties) == 0 {
+				// Pure callable interface - we'll handle this after the loop
+				properties["__call"] = propType
+			} else {
+				// Mixed interface - add as special property
+				properties["__call"] = propType
+			}
 		} else {
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
