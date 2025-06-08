@@ -10,10 +10,6 @@ for (key in obj) {
 
 console.log("After loop, key:", key);
 
-// Current behavior - existing variable assignment not working correctly 
-// expect: Before loop, key: undefined
-// expect: null
-// expect: In loop, key: undefined
-// expect: null
-// expect: After loop, key: undefined
-// expect: null
+// expect: a
+// Now working correctly with existing variable assignment
+key

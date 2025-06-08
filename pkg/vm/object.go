@@ -105,6 +105,55 @@ func (o *PlainObject) OwnKeys() []string {
 	return keys
 }
 
+// Get looks up a property by name, walking the prototype chain if necessary.
+func (o *PlainObject) Get(name string) (Value, bool) {
+	// Check own properties first
+	if value, exists := o.GetOwn(name); exists {
+		return value, true
+	}
+
+	// Walk prototype chain
+	current := o.prototype
+	for current.typ != TypeNull && current.typ != TypeUndefined {
+		if current.IsObject() {
+			if proto := current.AsPlainObject(); proto != nil {
+				if value, exists := proto.GetOwn(name); exists {
+					return value, true
+				}
+				current = proto.prototype
+			} else if dict := current.AsDictObject(); dict != nil {
+				if value, exists := dict.GetOwn(name); exists {
+					return value, true
+				}
+				current = dict.prototype
+			} else {
+				break
+			}
+		} else {
+			break
+		}
+	}
+
+	return Undefined, false
+}
+
+// Has reports whether a property with the given name exists (own or inherited).
+func (o *PlainObject) Has(name string) bool {
+	_, exists := o.Get(name)
+	return exists
+}
+
+// GetPrototype returns the object's prototype.
+func (o *PlainObject) GetPrototype() Value {
+	return o.prototype
+}
+
+// SetPrototype sets the object's prototype.
+func (o *PlainObject) SetPrototype(proto Value) {
+	o.prototype = proto
+	// TODO: Invalidate related caches
+}
+
 type DictObject struct {
 	Object
 	prototype  Value
@@ -151,19 +200,69 @@ func (d *DictObject) OwnKeys() []string {
 	return keys
 }
 
+// Get looks up a property by name, walking the prototype chain if necessary.
+func (d *DictObject) Get(name string) (Value, bool) {
+	// Check own properties first
+	if value, exists := d.GetOwn(name); exists {
+		return value, true
+	}
+
+	// Walk prototype chain
+	current := d.prototype
+	for current.typ != TypeNull && current.typ != TypeUndefined {
+		if current.IsObject() {
+			if proto := current.AsPlainObject(); proto != nil {
+				if value, exists := proto.GetOwn(name); exists {
+					return value, true
+				}
+				current = proto.prototype
+			} else if dict := current.AsDictObject(); dict != nil {
+				if value, exists := dict.GetOwn(name); exists {
+					return value, true
+				}
+				current = dict.prototype
+			} else {
+				break
+			}
+		} else {
+			break
+		}
+	}
+
+	return Undefined, false
+}
+
+// Has reports whether a property with the given name exists (own or inherited).
+func (d *DictObject) Has(name string) bool {
+	_, exists := d.Get(name)
+	return exists
+}
+
+// GetPrototype returns the object's prototype.
+func (d *DictObject) GetPrototype() Value {
+	return d.prototype
+}
+
+// SetPrototype sets the object's prototype.
+func (d *DictObject) SetPrototype(proto Value) {
+	d.prototype = proto
+	// TODO: Invalidate related caches
+}
+
 // Define the shared default prototype for plain objects
 var DefaultObjectPrototype Value
 var RootShape *Shape
 
 // Initialize the DefaultObjectPrototype once at package initialization
 func init() {
-	// The default prototype is an object whose own prototype is Null.
-	protoObj := &PlainObject{prototype: Null}
-	DefaultObjectPrototype = Value{typ: TypeObject, obj: unsafe.Pointer(protoObj)}
+	// Initialize RootShape first
 	RootShape = &Shape{
 		fields:      []Field{},
 		transitions: make(map[string]*Shape),
 	}
+	// The default prototype is an object whose own prototype is Null.
+	protoObj := &PlainObject{prototype: Null, shape: RootShape}
+	DefaultObjectPrototype = Value{typ: TypeObject, obj: unsafe.Pointer(protoObj)}
 }
 
 func NewObject(proto Value) Value {

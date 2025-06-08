@@ -6,8 +6,6 @@ for (key in obj) {
     console.log(key);
 }
 
-// Current behavior - existing variable assignment not working correctly
-// expect: undefined
-// expect: null
-// expect: undefined
-// expect: null
+// expect: y
+// Now working correctly with existing variable assignment
+key

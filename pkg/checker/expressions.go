@@ -393,20 +393,27 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				}
 			}
 		case *types.ObjectType: // <<< MODIFIED CASE
-			// Look for the property in the object's fields
-			fieldType, exists := obj.Properties[propertyName]
-			if exists {
-				// Property found
-				if fieldType == nil { // Should ideally not happen if checker populates correctly
-					c.addError(node.Property, fmt.Sprintf("internal checker error: property '%s' has nil type in ObjectType", propertyName))
-					resultType = types.Never
-				} else {
-					resultType = fieldType
-				}
+			// Check if this is a function and we're accessing 'prototype'
+			if propertyName == "prototype" && obj != nil && obj.IsCallable() {
+				// Function.prototype returns 'any' in TypeScript to allow dynamic assignment
+				resultType = types.Any
+				debugPrintf("// [Checker MemberExpr] Function.prototype access, returning 'any' type\n")
 			} else {
-				// Property not found
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
-				// resultType remains types.Never
+				// Look for the property in the object's fields
+				fieldType, exists := obj.Properties[propertyName]
+				if exists {
+					// Property found
+					if fieldType == nil { // Should ideally not happen if checker populates correctly
+						c.addError(node.Property, fmt.Sprintf("internal checker error: property '%s' has nil type in ObjectType", propertyName))
+						resultType = types.Never
+					} else {
+						resultType = fieldType
+					}
+				} else {
+					// Property not found
+					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+					// resultType remains types.Never
+				}
 			}
 		case *types.IntersectionType:
 			// Handle property access on intersection types
@@ -677,8 +684,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			// Use the first constructor signature's return type
 			resultType = objType.ConstructSignatures[0].ReturnType
 		} else {
-			// Callable object but no constructor signatures - assume it returns an object
-			resultType = &types.ObjectType{Properties: make(map[string]types.Type)}
+			// Callable object but no constructor signatures - return any (matches TypeScript behavior)
+			resultType = types.Any
 		}
 	} else if constructorType == types.Any {
 		// If constructor type is Any, result is also Any
@@ -819,3 +826,25 @@ func (c *Checker) isObjectType(t types.Type) bool {
 		return t == types.Any
 	}
 }
+
+// checkInstanceofOperator checks the instanceof operator usage
+func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
+	// Left operand can be any value (the object to check)
+	// No specific type checking needed for left operand
+	
+	// Right operand must be a constructor function
+	if rightType != types.Any && !c.isConstructorType(rightType) {
+		c.addError(node.Right, fmt.Sprintf("Cannot use '%s' as a constructor.", rightType.String()))
+	}
+}
+
+// isConstructorType checks if a type represents a constructor function
+func (c *Checker) isConstructorType(t types.Type) bool {
+	if objType, ok := t.(*types.ObjectType); ok {
+		// In TypeScript, any callable type can be used as a constructor with 'new'
+		// unless it explicitly has no construct signatures
+		return objType.IsCallable()
+	}
+	return false
+}
+

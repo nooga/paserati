@@ -24,9 +24,10 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		// No, let's calculate the final type below and set it once.
 	}
 
-	// 2. Save outer return context
+	// 2. Save outer context
 	outerExpectedReturnType := c.currentExpectedReturnType
 	outerInferredReturnTypes := c.currentInferredReturnTypes
+	outerThisType := c.currentThisType
 
 	// 3. Set context for BODY CHECK based ONLY on explicit return annotation.
 	//    resolvedSignature.ReturnType can be nil if not annotated.
@@ -36,7 +37,32 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		c.currentInferredReturnTypes = []types.Type{}
 	}
 
-	// 4. Create function's inner scope & define parameters using resolved signature param types
+	// 4. Handle explicit 'this' parameter
+	var thisParamIndex = -1
+	if len(node.Parameters) > 0 && node.Parameters[0].IsThis {
+		thisParamIndex = 0
+		// Set the 'this' context from the first parameter's type
+		if thisParamIndex < len(resolvedSignature.ParameterTypes) {
+			c.currentThisType = resolvedSignature.ParameterTypes[thisParamIndex]
+			debugPrintf("// [Checker FuncLit] Setting this type from explicit parameter: %s\n", c.currentThisType.String())
+		} else {
+			// Should not happen if resolution worked correctly
+			c.currentThisType = types.Any
+		}
+	} else {
+		// No explicit 'this' parameter
+		if c.currentThisType == nil {
+			// No outer context - this is a top-level function that could be a constructor
+			// Set 'this' to 'any' to allow property access
+			c.currentThisType = types.Any
+			debugPrintf("// [Checker FuncLit] No explicit this parameter and no outer context, setting this to any\n")
+		} else {
+			// Preserve the outer 'this' context (for object methods)
+			debugPrintf("// [Checker FuncLit] No explicit this parameter, preserving outer context: %v\n", c.currentThisType)
+		}
+	}
+
+	// 5. Create function's inner scope & define parameters using resolved signature param types
 	funcNameForLog := "<anonymous>"
 	if node.Name != nil {
 		funcNameForLog = node.Name.Value
@@ -46,6 +72,15 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	funcEnv := NewEnclosedEnvironment(originalEnv)
 	c.env = funcEnv
 	for i, paramNode := range node.Parameters { // Iterate over parser nodes
+		// Skip the 'this' parameter - it doesn't go into the function scope
+		if paramNode.IsThis {
+			// Set computed type on the 'this' parameter node itself
+			if i < len(resolvedSignature.ParameterTypes) {
+				paramNode.ComputedType = resolvedSignature.ParameterTypes[i]
+			}
+			continue
+		}
+		
 		if i < len(resolvedSignature.ParameterTypes) { // Safety check using resolved signature
 			paramType := resolvedSignature.ParameterTypes[i]
 			if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
@@ -159,4 +194,5 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	c.env = originalEnv
 	c.currentExpectedReturnType = outerExpectedReturnType
 	c.currentInferredReturnTypes = outerInferredReturnTypes
+	c.currentThisType = outerThisType
 }

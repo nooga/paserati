@@ -364,7 +364,10 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 
 		// Add this parameter to the temporary environment BEFORE checking its default value
 		// This way, the next parameter's default value can reference this parameter
-		tempEnv.Define(paramNode.Name.Value, resolvedParamType, false) // false = not const
+		// Skip 'this' parameters as they don't have names and don't go into the scope
+		if !paramNode.IsThis {
+			tempEnv.Define(paramNode.Name.Value, resolvedParamType, false) // false = not const
+		}
 
 		// Validate default value if present (skip if we already visited it for inference)
 		if paramNode.DefaultValue != nil && paramNode.TypeAnnotation != nil {

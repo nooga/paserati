@@ -627,6 +627,58 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			registers[destReg] = BooleanValue(hasProperty)
 
+		case OpInstanceof:
+			// OpInstanceof: Rx Ry Rz - Rx = (Ry instanceof Rz) - instance check
+			destReg := code[ip]
+			objReg := code[ip+1]
+			constructorReg := code[ip+2]
+			ip += 3
+
+			objVal := registers[objReg]
+			constructorVal := registers[constructorReg]
+
+			// Get constructor's .prototype property (may create it lazily)
+			var constructorPrototype Value = Undefined
+			if constructorVal.Type() == TypeFunction {
+				fn := AsFunction(constructorVal)
+				constructorPrototype = fn.getOrCreatePrototype()
+			} else if constructorVal.Type() == TypeClosure {
+				closure := AsClosure(constructorVal)
+				constructorPrototype = closure.Fn.getOrCreatePrototype()
+			}
+
+			// Walk prototype chain of object
+			result := false
+			if objVal.IsObject() {
+				var current Value
+				if objVal.Type() == TypeObject {
+					current = objVal.AsPlainObject().GetPrototype()
+				} else if objVal.Type() == TypeDictObject {
+					current = objVal.AsDictObject().GetPrototype()
+				}
+				
+				// Walk the prototype chain
+				for current.typ != TypeNull && current.typ != TypeUndefined {
+					if current.Equals(constructorPrototype) {
+						result = true
+						break
+					}
+					if current.IsObject() {
+						if current.Type() == TypeObject {
+							current = current.AsPlainObject().GetPrototype()
+						} else if current.Type() == TypeDictObject {
+							current = current.AsDictObject().GetPrototype()
+						} else {
+							break
+						}
+					} else {
+						break
+					}
+				}
+			}
+
+			registers[destReg] = BooleanValue(result)
+
 		case OpJump:
 			offsetHi := code[ip]
 			offsetLo := code[ip+1]
@@ -1504,6 +1556,51 @@ func (vm *VM) run() (InterpretResult, Value) {
 				}
 			}
 
+			// Handle property access on functions (including lazy .prototype)
+			if objVal.Type() == TypeFunction {
+				fn := AsFunction(objVal)
+
+				// Special handling for "prototype" property
+				if propName == "prototype" {
+					registers[destReg] = fn.getOrCreatePrototype()
+					continue
+				}
+
+				// Other function properties (if any)
+				if fn.Properties != nil {
+					if prop, exists := fn.Properties.GetOwn(propName); exists {
+						registers[destReg] = prop
+						continue
+					}
+				}
+
+				registers[destReg] = Undefined
+				continue
+			}
+
+			// Handle property access on closures (delegate to underlying function)
+			if objVal.Type() == TypeClosure {
+				closure := AsClosure(objVal)
+				fn := closure.Fn
+
+				// Special handling for "prototype" property
+				if propName == "prototype" {
+					registers[destReg] = fn.getOrCreatePrototype()
+					continue
+				}
+
+				// Other function properties (if any)
+				if fn.Properties != nil {
+					if prop, exists := fn.Properties.GetOwn(propName); exists {
+						registers[destReg] = prop
+						continue
+					}
+				}
+
+				registers[destReg] = Undefined
+				continue
+			}
+
 			// General property lookup
 			if !objVal.IsObject() {
 				frame.ip = ip
@@ -1546,15 +1643,20 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 				// Cache miss - do slow path lookup and update cache
 				vm.cacheStats.totalMisses++
-				if fv, ok := po.GetOwn(propName); ok {
+				// Use prototype-aware Get instead of GetOwn
+				if fv, ok := po.Get(propName); ok {
 					registers[destReg] = fv
-					// Update cache: find the offset for this property in the shape
-					for _, field := range po.shape.fields {
-						if field.name == propName {
-							cache.updateCache(po.shape, field.offset)
-							break
+					// Update cache only if property was found on the object itself (not prototype)
+					if _, ownExists := po.GetOwn(propName); ownExists {
+						// Property exists on the object itself, cache it
+						for _, field := range po.shape.fields {
+							if field.name == propName {
+								cache.updateCache(po.shape, field.offset)
+								break
+							}
 						}
 					}
+					// TODO: Implement prototype chain caching for inherited properties
 				} else {
 					registers[destReg] = Undefined
 					// Don't cache undefined lookups for now
@@ -1567,7 +1669,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			switch objVal.Type() {
 			case TypeDictObject:
 				dict := AsDictObject(objVal)
-				if fv, ok := dict.GetOwn(propName); ok {
+				// Use prototype-aware Get instead of GetOwn
+				if fv, ok := dict.Get(propName); ok {
 					registers[destReg] = fv
 				} else {
 					registers[destReg] = Undefined
@@ -1575,7 +1678,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			default:
 				// PlainObject or other object types (should not reach here due to continue above)
 				po := AsPlainObject(objVal)
-				if fv, ok := po.GetOwn(propName); ok {
+				// Use prototype-aware Get instead of GetOwn
+				if fv, ok := po.Get(propName); ok {
 					registers[destReg] = fv
 				} else {
 					registers[destReg] = Undefined
@@ -1622,6 +1726,46 @@ func (vm *VM) run() (InterpretResult, Value) {
 					state: CacheStateUninitialized,
 				}
 				vm.propCache[cacheKey] = cache
+			}
+
+			// Handle property setting on functions
+			if objVal.Type() == TypeFunction {
+				fn := AsFunction(objVal)
+
+				// Ensure Properties object exists
+				if fn.Properties == nil {
+					fn.Properties = NewObject(Undefined).AsPlainObject()
+				}
+
+				// Special handling for "prototype" property - ensure it exists first
+				if propName == "prototype" {
+					// If setting prototype to a new value, just set it
+					fn.Properties.SetOwn("prototype", valueToSet)
+				} else {
+					// For other properties, just set them
+					fn.Properties.SetOwn(propName, valueToSet)
+				}
+				continue
+			}
+
+			// Handle property setting on closures (delegate to underlying function)
+			if objVal.Type() == TypeClosure {
+				closure := AsClosure(objVal)
+				fn := closure.Fn
+
+				// Ensure Properties object exists
+				if fn.Properties == nil {
+					fn.Properties = NewObject(Undefined).AsPlainObject()
+				}
+
+				// Special handling for "prototype" property
+				if propName == "prototype" {
+					fn.Properties.SetOwn("prototype", valueToSet)
+				} else {
+					// For other properties, just set them
+					fn.Properties.SetOwn(propName, valueToSet)
+				}
+				continue
 			}
 
 			// Check if the base is actually an object
@@ -1976,8 +2120,11 @@ func (vm *VM) run() (InterpretResult, Value) {
 					return status, Undefined
 				}
 
-				// Create new instance object as 'this'
-				newInstance := NewObject(DefaultObjectPrototype)
+				// Get constructor's .prototype property (create lazily if needed)
+				instancePrototype := constructorFunc.getOrCreatePrototype()
+				
+				// Create new instance object with constructor's prototype
+				newInstance := NewObject(instancePrototype)
 
 				frame.ip = callerIP // Store return IP
 
@@ -2042,8 +2189,11 @@ func (vm *VM) run() (InterpretResult, Value) {
 					return status, Undefined
 				}
 
-				// Create new instance object as 'this'
-				newInstance := NewObject(DefaultObjectPrototype)
+				// Get constructor's .prototype property (create lazily if needed)
+				instancePrototype := constructorFunc.getOrCreatePrototype()
+				
+				// Create new instance object with constructor's prototype
+				newInstance := NewObject(instancePrototype)
 
 				frame.ip = callerIP
 

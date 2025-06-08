@@ -107,6 +107,9 @@ func InitializeRegistry() {
 		// Register JSON object with parse and stringify methods
 		registerJSON()
 
+		// Register Object constructor
+		registerObjectConstructor()
+
 		// Register global constants
 		registerValue("Infinity", vm.Number(math.Inf(1)), types.Number)
 		registerValue("NaN", vm.Number(math.NaN()), types.Number)

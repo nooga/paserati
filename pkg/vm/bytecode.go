@@ -46,6 +46,7 @@ const (
 	OpLess           OpCode = 17 // Rx Ry Rz: Rx = (Ry < Rz)
 	OpLessEqual      OpCode = 18 // Rx Ry Rz: Rx = (Ry <= Rz)
 	OpIn             OpCode = 59 // Rx Ry Rz: Rx = (Ry in Rz) - property existence check
+	OpInstanceof     OpCode = 61 // Rx Ry Rz: Rx = (Ry instanceof Rz) - instance check
 	// Add GreaterEqual later if needed
 
 	// --- NEW: Remainder and Exponent Opcodes ---

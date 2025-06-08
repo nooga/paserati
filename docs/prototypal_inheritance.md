@@ -258,6 +258,256 @@ func (c *Checker) checkInstanceofExpression(node *parser.BinaryExpression) {
 
 ### **Implementation Strategy for Type Checker**
 
+#### **Phase 0: Explicit This Parameter Support** - **PREREQUISITE**
+
+**Goal**: Implement TypeScript-compliant explicit `this` parameter syntax to properly type constructor functions.
+
+**Problem**: Standard TypeScript requires explicit typing for constructor functions:
+
+```typescript
+// ❌ Current issue - 'this' implicitly has type 'any'
+function Person(name: string) {
+    this.name = name; // Error: 'this' implicitly has type 'any'
+}
+
+// ✅ TypeScript-compliant solutions:
+// Option 1: Explicit this parameter
+function Person(this: { name: string }, name: string) {
+    this.name = name;
+}
+
+// Option 2: Interface + constructor signature
+interface PersonConstructor {
+    new(name: string): { name: string };
+    prototype: { name: string };
+}
+declare const Person: PersonConstructor;
+
+// Option 3: Classes (future work)
+class Person {
+    constructor(name: string) {
+        this.name = name;
+    }
+}
+```
+
+**Implementation Plan**:
+
+##### **0.1 Parser Support for This Parameter**
+
+**File**: `pkg/parser/parser.go` and `pkg/parser/ast.go`
+
+```go
+// Extend Parameter struct to support 'this' parameter
+type Parameter struct {
+    BaseExpression
+    Token           lexer.Token
+    Name            *Identifier
+    TypeAnnotation  Expression
+    DefaultValue    Expression  // For default parameters
+    IsThis          bool        // NEW: Mark this as 'this' parameter
+    IsOptional      bool
+}
+
+// Update function parsing to detect 'this' parameter
+func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter) {
+    // Check if first parameter is 'this'
+    if p.curTokenIs(lexer.THIS) {
+        thisParam := &Parameter{
+            Token:          p.curToken,
+            IsThis:         true,
+            TypeAnnotation: nil, // Will be parsed after ':'
+        }
+        
+        p.nextToken() // consume 'this'
+        
+        if p.expectPeek(lexer.COLON) {
+            p.nextToken()
+            thisParam.TypeAnnotation = p.parseTypeExpression()
+        }
+        
+        // 'this' parameter must be followed by comma if there are other params
+        if p.peekTokenIs(lexer.COMMA) {
+            p.nextToken() // consume comma
+        }
+        
+        // Parse remaining regular parameters
+        regularParams, restParam := p.parseRegularParameters()
+        
+        // Insert 'this' parameter at the beginning
+        allParams := make([]*Parameter, len(regularParams)+1)
+        allParams[0] = thisParam
+        copy(allParams[1:], regularParams)
+        
+        return allParams, restParam
+    }
+    
+    // No 'this' parameter, parse normally
+    return p.parseRegularParameters()
+}
+```
+
+##### **0.2 Type Checker Support for This Parameter**
+
+**File**: `pkg/checker/function.go`
+
+```go
+func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
+    // ... existing code ...
+    
+    // Handle explicit 'this' parameter
+    var thisType types.Type = types.Any // Default 'this' type
+    regularParams := node.Parameters
+    
+    if len(node.Parameters) > 0 && node.Parameters[0].IsThis {
+        thisParam := node.Parameters[0]
+        
+        // Resolve 'this' parameter type annotation
+        if thisParam.TypeAnnotation != nil {
+            c.visit(thisParam.TypeAnnotation)
+            thisType = c.resolveTypeExpression(thisParam.TypeAnnotation, c.env)
+            if thisType == nil {
+                thisType = types.Any
+                c.addError(thisParam.TypeAnnotation, "invalid 'this' parameter type")
+            }
+        }
+        
+        // Remove 'this' parameter from regular parameter list
+        regularParams = node.Parameters[1:]
+    }
+    
+    // Set 'this' context for function body checking
+    c.currentThisType = thisType
+    defer func() { c.currentThisType = types.Any }() // Reset after function
+    
+    // ... continue with regular parameter processing using regularParams ...
+}
+
+// Update 'this' expression checking
+func (c *Checker) checkThisExpression(node *parser.ThisExpression) {
+    // Use the current 'this' type context
+    node.SetComputedType(c.currentThisType)
+    
+    if c.currentThisType == types.Any {
+        c.addWarning(node, "'this' implicitly has type 'any' because it does not have a type annotation")
+    }
+}
+```
+
+##### **0.3 Checker State for This Context**
+
+**File**: `pkg/checker/checker.go`
+
+```go
+type Checker struct {
+    // ... existing fields ...
+    
+    // NEW: Track current 'this' type context
+    currentThisType types.Type
+}
+
+func NewChecker() *Checker {
+    return &Checker{
+        // ... existing initialization ...
+        currentThisType: types.Any, // Default 'this' type
+    }
+}
+```
+
+##### **0.4 Property Access on This**
+
+**File**: `pkg/checker/checker.go` - in visit method for property access
+
+```go
+// Handle 'this.property' access
+case *parser.MemberExpression:
+    if thisExpr, isThis := node.Object.(*parser.ThisExpression); isThis {
+        // Property access on 'this'
+        c.visit(thisExpr) // Sets thisExpr type to currentThisType
+        
+        thisType := thisExpr.GetComputedType()
+        if objType, ok := thisType.(*types.ObjectType); ok {
+            propType := types.GetPropertyType(objType, node.Property.(*parser.Identifier).Value)
+            node.SetComputedType(propType)
+        } else {
+            node.SetComputedType(types.Any)
+        }
+    } else {
+        // Regular member access
+        // ... existing logic ...
+    }
+```
+
+##### **0.5 Assignment to This Properties**
+
+```go
+// Handle 'this.property = value' assignment
+case *parser.AssignmentExpression:
+    if memberExpr, isMember := node.Left.(*parser.MemberExpression); isMember {
+        if thisExpr, isThis := memberExpr.Object.(*parser.ThisExpression); isThis {
+            // Assignment to 'this.property'
+            propName := memberExpr.Property.(*parser.Identifier).Value
+            
+            c.visit(node.Value) // Check the assigned value
+            valueType := node.Value.GetComputedType()
+            
+            // Verify assignment is valid for current 'this' type
+            if objType, ok := c.currentThisType.(*types.ObjectType); ok {
+                if existingPropType := types.GetPropertyType(objType, propName); existingPropType != types.Never {
+                    // Property exists, check assignment compatibility
+                    if !c.isAssignableTo(valueType, existingPropType) {
+                        c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to property '%s' of type '%s'", 
+                            valueType.String(), propName, existingPropType.String()))
+                    }
+                } else {
+                    // Property doesn't exist in 'this' type - this is a type error for explicit 'this' types
+                    c.addError(node.Left, fmt.Sprintf("property '%s' does not exist on type '%s'", 
+                        propName, c.currentThisType.String()))
+                }
+            }
+            
+            node.SetComputedType(valueType)
+        }
+    }
+    // ... existing assignment logic ...
+```
+
+##### **0.6 Test Cases for This Parameter**
+
+**File**: `tests/scripts/this_parameter_basic.ts`
+
+```typescript
+// Explicit this parameter - should work
+function Person(this: { name: string }, name: string) {
+    this.name = name;
+}
+
+// Add method with explicit this
+function greet(this: { name: string }) {
+    return "Hello, " + this.name;
+}
+
+// Bind method to constructor prototype
+Person.prototype = { greet: greet };
+
+let john = new Person("John");
+console.log(john.greet()); // expect: Hello, John
+```
+
+**Benefits of This Approach**:
+
+1. **TypeScript Compliance**: Follows standard TypeScript semantics
+2. **Explicit Typing**: Developers must explicitly declare constructor intent
+3. **Type Safety**: Full type checking for 'this' property access
+4. **Cross-Module Support**: Types are explicit, work across module boundaries
+5. **No Magic**: No auto-detection that could lead to surprising behavior
+
+**Next Steps After Phase 0**:
+- Once explicit `this` parameters work, constructor functions are properly typed
+- Can then implement automatic `.prototype` property type generation
+- Can verify `instanceof` operator type checking
+- Foundation for all subsequent prototype-related type checking
+
 #### **Phase 1: Constructor Function Types**
 
 **File**: `pkg/checker/functions.go`

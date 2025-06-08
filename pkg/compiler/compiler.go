@@ -771,7 +771,14 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 
 	// 10. Add the function object to the outer compiler's constant pool
-	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk)
+	// Count parameters excluding 'this' parameters for arity calculation
+	arity := 0
+	for _, param := range node.Parameters {
+		if !param.IsThis {
+			arity++
+		}
+	}
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil

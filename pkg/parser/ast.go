@@ -238,13 +238,16 @@ type Parameter struct {
 	ComputedType   types.Type // Stores the resolved type from TypeAnnotation
 	Optional       bool       // Whether this parameter is optional (param?)
 	DefaultValue   Expression // Default value expression (param = defaultValue)
+	IsThis         bool       // Whether this is an explicit 'this' parameter
 }
 
 func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
 func (p *Parameter) TokenLiteral() string { return p.Token.Literal }
 func (p *Parameter) String() string {
 	var out bytes.Buffer
-	if p.Name != nil {
+	if p.IsThis {
+		out.WriteString("this")
+	} else if p.Name != nil {
 		out.WriteString(p.Name.String())
 	}
 	if p.Optional {

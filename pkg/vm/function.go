@@ -13,6 +13,7 @@ type FunctionObject struct {
 	Name         string
 	UpvalueCount int
 	RegisterSize int
+	Properties   *PlainObject // For properties like .prototype (created lazily)
 }
 
 type Upvalue struct {
@@ -77,8 +78,35 @@ func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name stri
 		Name:         name,
 		UpvalueCount: upvalueCount,
 		RegisterSize: registerSize,
+		Properties:   nil, // Start with nil - create lazily
 	}
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}
+}
+
+// getOrCreatePrototype lazily creates and returns the function's prototype property
+func (fn *FunctionObject) getOrCreatePrototype() Value {
+	// Ensure Properties object exists
+	if fn.Properties == nil {
+		fn.Properties = NewObject(Undefined).AsPlainObject()
+	}
+
+	// Check if prototype already exists
+	if proto, exists := fn.Properties.GetOwn("prototype"); exists {
+		return proto
+	}
+
+	// Create prototype lazily
+	prototypeObj := NewObject(DefaultObjectPrototype)
+	fn.Properties.SetOwn("prototype", prototypeObj)
+
+	// Set constructor property on prototype (circular reference)
+	if prototypeObj.IsObject() {
+		protoPlain := prototypeObj.AsPlainObject()
+		constructorVal := Value{typ: TypeFunction, obj: unsafe.Pointer(fn)}
+		protoPlain.SetOwn("constructor", constructorVal)
+	}
+
+	return prototypeObj
 }
 
 func NewClosure(fn *FunctionObject, upvalues []*Upvalue) Value {

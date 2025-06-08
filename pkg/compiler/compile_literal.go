@@ -122,7 +122,14 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	functionChunk := funcCompiler.chunk
 
 	// 6. Create the function object directly using vm.NewFunction
-	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk)
+	// Count parameters excluding 'this' parameters for arity calculation
+	arity := 0
+	for _, param := range node.Parameters {
+		if !param.IsThis {
+			arity++
+		}
+	}
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
@@ -415,6 +422,10 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 	// 2. Define parameters in the function compiler's *enclosed* scope
 	for _, param := range node.Parameters {
+		// Skip 'this' parameters - they don't have names and don't get compiled as regular parameters
+		if param.IsThis {
+			continue
+		}
 		reg := functionCompiler.regAlloc.Alloc()
 		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
 		// Pin the register since parameters can be captured by inner functions
@@ -424,6 +435,10 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 	// 3. Handle default parameters
 	for _, param := range node.Parameters {
+		// Skip 'this' parameters - they don't have default values and aren't in the symbol table
+		if param.IsThis {
+			continue
+		}
 		if param.DefaultValue != nil {
 			// Get the parameter's register
 			symbol, _, exists := functionCompiler.currentSymbolTable.Resolve(param.Name.Value)
@@ -515,7 +530,14 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 
 	// 8. Add the function object to the *outer* compiler's constant pool.
-	funcValue := vm.NewFunction(len(node.Parameters), len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk)
+	// Count parameters excluding 'this' parameters for arity calculation
+	arity := 0
+	for _, param := range node.Parameters {
+		if !param.IsThis {
+			arity++
+		}
+	}
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// <<< REMOVE OpClosure EMISSION FROM HERE (should already be removed) >>>

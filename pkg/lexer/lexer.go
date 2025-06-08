@@ -170,6 +170,8 @@ const (
 	AS TokenType = "AS"
 	// IN keyword
 	IN TokenType = "IN"
+	// INSTANCEOF keyword
+	INSTANCEOF TokenType = "INSTANCEOF"
 )
 
 var keywords = map[string]TokenType{
@@ -199,9 +201,10 @@ var keywords = map[string]TokenType{
 	"extends":   EXTENDS,   // Added for extends keyword
 	"typeof":    TYPEOF,    // Added for typeof operator
 	"void":      VOID,      // Added for void operator
-	"of":        OF,        // Added for for...of loops
-	"as":        AS,        // Added for type assertions
-	"in":        IN,        // Added for in operator
+	"of":         OF,         // Added for for...of loops
+	"as":         AS,         // Added for type assertions
+	"in":         IN,         // Added for in operator
+	"instanceof": INSTANCEOF, // Added for instanceof operator
 }
 
 // LookupIdent checks the keywords table for an identifier.

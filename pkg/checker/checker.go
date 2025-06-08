@@ -49,6 +49,7 @@ func NewChecker() *Checker {
 		// Initialize function context fields to nil/empty
 		currentExpectedReturnType:  nil,
 		currentInferredReturnTypes: nil,
+		currentThisType:            nil, // Initialize this type context
 	}
 }
 
@@ -255,10 +256,27 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		// Save outer context & Set context for body check
 		outerExpectedReturnType := c.currentExpectedReturnType
 		outerInferredReturnTypes := c.currentInferredReturnTypes
+		outerThisType := c.currentThisType
 		c.currentExpectedReturnType = funcSignature.ReturnType // Use return type from initial signature
 		c.currentInferredReturnTypes = nil
 		if c.currentExpectedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
+		}
+
+		// Handle explicit 'this' parameter
+		if len(funcLit.Parameters) > 0 && funcLit.Parameters[0].IsThis {
+			// Set the 'this' context from the first parameter's type
+			if len(funcSignature.ParameterTypes) > 0 {
+				c.currentThisType = funcSignature.ParameterTypes[0]
+				debugPrintf("// [Checker Pass 3] Setting this type from explicit parameter: %s\n", c.currentThisType.String())
+			} else {
+				// Should not happen if resolution worked correctly
+				c.currentThisType = types.Any
+			}
+		} else {
+			// No explicit 'this' parameter - set to 'any' for top-level functions
+			c.currentThisType = types.Any
+			debugPrintf("// [Checker Pass 3] No explicit this parameter, setting this to any for potential constructor function\n")
 		}
 
 		// Create function's inner scope & define parameters
@@ -269,8 +287,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		for i, paramNode := range funcLit.Parameters {
 			if i < len(funcSignature.ParameterTypes) {
 				paramType := funcSignature.ParameterTypes[i]
-				if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
-					c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
+				// Skip 'this' parameters as they don't have names and don't go into the scope
+				if !paramNode.IsThis {
+					if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
+						c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
+					}
 				}
 				paramNode.ComputedType = paramType // Set type on parameter node
 			} else {
@@ -359,6 +380,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.env = originalEnv
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
+		c.currentThisType = outerThisType
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
 
@@ -1135,6 +1157,10 @@ func (c *Checker) visit(node parser.Node) {
 			case "in":
 				// Property existence check: "prop" in obj
 				c.checkInOperator(leftType, rightType, node)
+				resultType = types.Boolean
+			case "instanceof":
+				// Instance check: obj instanceof Constructor
+				c.checkInstanceofOperator(leftType, rightType, node)
 				resultType = types.Boolean
 			case "&&", "||":
 				// TODO: Implement Union types. For now, default to Any.

@@ -751,8 +751,14 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 			if !found {
 				return BadRegister, NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
 			}
-			// Store element value in the existing variable's register
-			c.emitMove(symbolRef.Register, elementReg, node.Token.Line)
+			// Check if this is a global variable or local register
+			if symbolRef.IsGlobal {
+				// Store element value using OpSetGlobal for global variables
+				c.emitSetGlobal(symbolRef.GlobalIndex, elementReg, node.Token.Line)
+			} else {
+				// Store element value in the existing variable's register for local variables
+				c.emitMove(symbolRef.Register, elementReg, node.Token.Line)
+			}
 		}
 	}
 
@@ -890,8 +896,14 @@ func (c *Compiler) compileForInStatement(node *parser.ForInStatement, hint Regis
 			if !found {
 				return BadRegister, NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
 			}
-			// Store key value in the existing variable's register
-			c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
+			// Check if this is a global variable or local register
+			if symbolRef.IsGlobal {
+				// Store key value using OpSetGlobal for global variables
+				c.emitSetGlobal(symbolRef.GlobalIndex, currentKeyReg, node.Token.Line)
+			} else {
+				// Store key value in the existing variable's register for local variables
+				c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
+			}
 		}
 	}
 

@@ -10,7 +10,5 @@ for (item of arr) {
 
 console.log("After loop, item:", item);
 
-// expect: Before loop, item: undefined
-// expect: In loop, item: x
-// expect: In loop, item: y
-// expect: After loop, item: y
+// expect: y
+item

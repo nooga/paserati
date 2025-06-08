@@ -116,11 +116,12 @@ var precedences = map[lexer.TokenType]int{
 	lexer.STRICT_NOT_EQ: EQUALS,
 
 	// Comparison
-	lexer.LT: LESSGREATER,
-	lexer.GT: LESSGREATER,
-	lexer.LE: LESSGREATER,
-	lexer.GE: LESSGREATER,
-	lexer.IN: LESSGREATER,
+	lexer.LT:         LESSGREATER,
+	lexer.GT:         LESSGREATER,
+	lexer.LE:         LESSGREATER,
+	lexer.GE:         LESSGREATER,
+	lexer.IN:         LESSGREATER,
+	lexer.INSTANCEOF: LESSGREATER,
 
 	// Shift
 	lexer.LEFT_SHIFT:           SHIFT, // New
@@ -220,6 +221,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.LE, p.parseInfixExpression)
 	p.registerInfix(lexer.GE, p.parseInfixExpression)
 	p.registerInfix(lexer.IN, p.parseInfixExpression)
+	p.registerInfix(lexer.INSTANCEOF, p.parseInfixExpression)
 	p.registerInfix(lexer.LOGICAL_AND, p.parseInfixExpression)
 	p.registerInfix(lexer.LOGICAL_OR, p.parseInfixExpression)
 	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)
@@ -1401,20 +1403,43 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 		return parameters, restParam, nil
 	}
 
-	// Parse first regular parameter
-	if !p.curTokenIs(lexer.IDENT) {
-		msg := fmt.Sprintf("expected identifier for parameter name, got %s", p.curToken.Type)
+	// Parse first regular parameter (could be 'this' parameter)
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) {
+		msg := fmt.Sprintf("expected identifier or 'this' for parameter name, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
 		return nil, nil, fmt.Errorf("%s", msg)
 	}
 	param := &Parameter{Token: p.curToken}
-	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	// Check if this is an explicit 'this' parameter
+	if p.curTokenIs(lexer.THIS) {
+		param.IsThis = true
+		param.Name = nil // 'this' parameters don't have a name field
+		
+		// 'this' parameters are never optional
+		if p.peekTokenIs(lexer.QUESTION) {
+			p.addError(p.peekToken, "'this' parameter cannot be optional")
+			return nil, nil, fmt.Errorf("'this' parameter cannot be optional")
+		}
+		
+		// 'this' parameters must have a type annotation
+		if !p.peekTokenIs(lexer.COLON) {
+			p.addError(p.peekToken, "'this' parameter must have a type annotation")
+			return nil, nil, fmt.Errorf("'this' parameter must have a type annotation")
+		}
+	} else {
+		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
 
 	// Check for optional parameter (?)
 	if p.peekTokenIs(lexer.QUESTION) {
-		p.nextToken() // Consume '?'
-		param.Optional = true
+		if param.IsThis {
+			// Already handled above
+		} else {
+			p.nextToken() // Consume '?'
+			param.Optional = true
+		}
 	}
 
 	// Check for Type Annotation
@@ -1426,17 +1451,26 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			return nil, nil, fmt.Errorf("failed to parse type annotation for parameter")
 		} // Propagate error
 	} else {
-		param.TypeAnnotation = nil
+		if param.IsThis {
+			// Already handled above
+		} else {
+			param.TypeAnnotation = nil
+		}
 	}
 
 	// Check for Default Value
 	if p.peekTokenIs(lexer.ASSIGN) {
-		p.nextToken() // Consume '='
-		p.nextToken() // Move to expression
-		param.DefaultValue = p.parseExpression(LOWEST)
-		if param.DefaultValue == nil {
-			p.addError(p.curToken, "expected expression after '=' in parameter default value")
-			return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+		if param.IsThis {
+			p.addError(p.peekToken, "'this' parameter cannot have a default value")
+			return nil, nil, fmt.Errorf("'this' parameter cannot have a default value")
+		} else {
+			p.nextToken() // Consume '='
+			p.nextToken() // Move to expression
+			param.DefaultValue = p.parseExpression(LOWEST)
+			if param.DefaultValue == nil {
+				p.addError(p.curToken, "expected expression after '=' in parameter default value")
+				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+			}
 		}
 	}
 
@@ -1461,6 +1495,12 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			return parameters, restParam, nil
 		}
 
+		// 'this' can only be the first parameter
+		if p.curTokenIs(lexer.THIS) {
+			p.addError(p.curToken, "'this' parameter can only be the first parameter")
+			return nil, nil, fmt.Errorf("'this' parameter can only be the first parameter")
+		}
+		
 		if !p.curTokenIs(lexer.IDENT) {
 			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
