@@ -6,6 +6,171 @@ import (
 	"paserati/pkg/types"
 )
 
+// calculateEffectiveArgCount calculates the effective number of arguments,
+// expanding spread elements based on tuple types (following TypeScript behavior)
+func (c *Checker) calculateEffectiveArgCount(arguments []parser.Expression) int {
+	count := 0
+	for i, arg := range arguments {
+		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+			debugPrintf("// [Checker EffectiveArgCount] Found spread element at index %d\n", i)
+			// Visit the spread argument to get its type
+			c.visit(spreadElement.Argument)
+			argType := spreadElement.Argument.GetComputedType()
+			debugPrintf("// [Checker EffectiveArgCount] Spread argument type: %T (%v)\n", argType, argType)
+			
+			if argType != nil {
+				// Check for tuple types first (they have known length)
+				if tupleType, isTuple := argType.(*types.TupleType); isTuple {
+					elemCount := len(tupleType.ElementTypes)
+					debugPrintf("// [Checker EffectiveArgCount] Tuple type with %d elements\n", elemCount)
+					count += elemCount
+				} else if _, isArray := argType.(*types.ArrayType); isArray {
+					// For direct array literals, TypeScript allows them (infers as tuple)
+					if arrayLit, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
+						elemCount := len(arrayLit.Elements)
+						debugPrintf("// [Checker EffectiveArgCount] Array literal with %d elements (treated as tuple)\n", elemCount)
+						count += elemCount
+					} else {
+						// For array variables/expressions, this should be an error
+						// But for counting purposes, we can't determine length
+						debugPrintf("// [Checker EffectiveArgCount] Array type (not tuple) - will error later\n")
+						count += 1 // Conservative estimate for error checking
+					}
+				} else {
+					// Spread on non-array/tuple type - error
+					debugPrintf("// [Checker EffectiveArgCount] Spread on non-array type %T, adding 1\n", argType)
+					count += 1
+				}
+			} else {
+				// Error getting type - count as 1 to continue error checking
+				debugPrintf("// [Checker EffectiveArgCount] Error getting spread type, adding 1\n")
+				count += 1
+			}
+		} else {
+			// Regular argument
+			debugPrintf("// [Checker EffectiveArgCount] Regular argument at index %d\n", i)
+			count += 1
+		}
+	}
+	debugPrintf("// [Checker EffectiveArgCount] Total effective count: %d\n", count)
+	return count
+}
+
+// validateSpreadArgument checks if a spread argument is valid according to TypeScript rules
+func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, isVariadicFunction bool) bool {
+	// Visit the spread argument to get its type
+	c.visit(spreadElement.Argument)
+	argType := spreadElement.Argument.GetComputedType()
+	
+	if argType == nil {
+		return false // Error already reported
+	}
+	
+	// Check if it's a tuple type (always valid)
+	if _, isTuple := argType.(*types.TupleType); isTuple {
+		return true
+	}
+	
+	// Check if it's a direct array literal (TypeScript treats as tuple)
+	if _, isArray := argType.(*types.ArrayType); isArray {
+		if _, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
+			return true // Direct array literals are treated as tuples
+		}
+	}
+	
+	// If it's a variadic function, arrays are allowed (rest parameters)
+	if isVariadicFunction {
+		if _, isArray := argType.(*types.ArrayType); isArray {
+			return true
+		}
+	}
+	
+	// Otherwise, this is an error - spread must have tuple type or be passed to rest parameter
+	if _, isArray := argType.(*types.ArrayType); isArray {
+		c.addError(spreadElement, "A spread argument must either have a tuple type or be passed to a rest parameter")
+	} else {
+		c.addError(spreadElement, fmt.Sprintf("spread syntax can only be applied to arrays or tuples, got '%s'", argType.String()))
+	}
+	
+	return false
+}
+
+// checkFixedArgumentsWithSpread checks fixed parameters against arguments,
+// properly expanding spread elements
+func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, paramTypes []types.Type, isVariadicFunction bool) bool {
+	allOk := true
+	effectiveArgIndex := 0
+	
+	for _, argNode := range arguments {
+		if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
+			// Validate the spread argument first
+			if !c.validateSpreadArgument(spreadElement, isVariadicFunction) {
+				allOk = false
+				effectiveArgIndex += 1 // Conservative estimate for error recovery
+				continue
+			}
+			
+			// Handle spread element type checking
+			argType := spreadElement.Argument.GetComputedType()
+			
+			if tupleType, isTuple := argType.(*types.TupleType); isTuple {
+				// Check each tuple element against the corresponding parameter
+				for j, elemType := range tupleType.ElementTypes {
+					if effectiveArgIndex+j < len(paramTypes) {
+						paramType := paramTypes[effectiveArgIndex+j]
+						if !types.IsAssignable(elemType, paramType) {
+							c.addError(spreadElement, fmt.Sprintf("spread element %d: cannot assign type '%s' to parameter of type '%s'", j+1, elemType.String(), paramType.String()))
+							allOk = false
+						}
+					}
+				}
+				effectiveArgIndex += len(tupleType.ElementTypes)
+			} else if _, isArray := argType.(*types.ArrayType); isArray {
+				// Must be a direct array literal (validated above)
+				if arrayLit, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
+					// Check each element against the corresponding parameter
+					for j, element := range arrayLit.Elements {
+						if effectiveArgIndex+j < len(paramTypes) {
+							c.visit(element)
+							elemType := element.GetComputedType()
+							paramType := paramTypes[effectiveArgIndex+j]
+							
+							if elemType != nil && !types.IsAssignable(elemType, paramType) {
+								c.addError(element, fmt.Sprintf("spread element %d: cannot assign type '%s' to parameter of type '%s'", j+1, elemType.String(), paramType.String()))
+								allOk = false
+							}
+						}
+					}
+					effectiveArgIndex += len(arrayLit.Elements)
+				} else {
+					// This should not happen due to validation above
+					allOk = false
+					effectiveArgIndex += 1
+				}
+			} else {
+				// This should not happen due to validation above
+				allOk = false
+				effectiveArgIndex += 1
+			}
+		} else {
+			// Regular argument
+			c.visit(argNode)
+			argType := argNode.GetComputedType()
+			
+			if effectiveArgIndex < len(paramTypes) {
+				paramType := paramTypes[effectiveArgIndex]
+				if argType != nil && !types.IsAssignable(argType, paramType) {
+					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
+					allOk = false
+				}
+			}
+			effectiveArgIndex += 1
+		}
+	}
+	
+	return allOk
+}
+
 func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// --- UPDATED: Handle CallExpression with Overload Support ---
 	// 1. Check the expression being called
@@ -68,7 +233,25 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	debugPrintf("// [Checker CallExpr] Processing function signature: %s, IsVariadic: %t\n", funcSignature.String(), funcSignature.IsVariadic)
 
 	// --- MODIFIED Arity and Argument Type Checking ---
-	actualArgCount := len(node.Arguments)
+	// First validate all spread arguments
+	hasSpreadErrors := false
+	for _, arg := range node.Arguments {
+		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+			if !c.validateSpreadArgument(spreadElement, funcSignature.IsVariadic) {
+				hasSpreadErrors = true
+			}
+		}
+	}
+	
+	// If there are spread errors, skip detailed arity checking as it's meaningless
+	if hasSpreadErrors {
+		node.SetComputedType(funcSignature.ReturnType)
+		return
+	}
+	
+	// Calculate effective argument count, expanding spread elements
+	actualArgCount := c.calculateEffectiveArgCount(node.Arguments)
+	debugPrintf("// [Checker CallExpr] actualArgCount after spread expansion: %d (from %d raw arguments)\n", actualArgCount, len(node.Arguments))
 
 	if funcSignature.IsVariadic {
 		// --- Variadic Function Check ---
@@ -96,27 +279,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			c.addError(node, fmt.Sprintf("expected at least %d arguments for variadic function, but got %d", minExpectedArgs, actualArgCount))
 			// Don't check args if minimum count isn't met.
 		} else {
-			// Check fixed arguments - check all provided fixed parameters, not just minimum required
-			fixedArgsOk := true
-			fixedArgCount := len(funcSignature.ParameterTypes)
-			if actualArgCount < fixedArgCount {
-				fixedArgCount = actualArgCount // Don't check more arguments than provided
-			}
-
-			for i := 0; i < fixedArgCount; i++ {
-				argNode := node.Arguments[i]
-				c.visit(argNode)
-				argType := argNode.GetComputedType()
-				paramType := funcSignature.ParameterTypes[i]
-				if argType == nil { // Error visiting arg
-					fixedArgsOk = false
-					continue
-				}
-				if !types.IsAssignable(argType, paramType) {
-					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
-					fixedArgsOk = false
-				}
-			}
+			// Check fixed arguments with spread expansion support
+			fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic)
 
 			// Check variadic arguments
 			if fixedArgsOk { // Only check variadic part if fixed part was okay
@@ -130,27 +294,38 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 						variadicElementType = types.Any
 					}
 					// Check remaining arguments against the element type - start after all fixed parameters
-					for i := len(funcSignature.ParameterTypes); i < actualArgCount; i++ {
+					for i := len(funcSignature.ParameterTypes); i < len(node.Arguments); i++ {
 						argNode := node.Arguments[i]
-						c.visit(argNode)
-						argType := argNode.GetComputedType()
-						if argType == nil { // Error visiting arg
-							continue
-						}
-
-						// --- NEW: Handle spread elements specially ---
+						
+						// --- Handle spread elements in variadic functions ---
 						if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
-							// For spread elements, check that the spread argument is assignable to the rest parameter type
+							// Validate the spread argument for variadic functions
+							if !c.validateSpreadArgument(spreadElement, true) {
+								continue // Error already reported
+							}
+							
+							c.visit(spreadElement.Argument)
+							argType := spreadElement.Argument.GetComputedType()
+							if argType == nil {
+								continue
+							}
+							
+							// For variadic functions, spread arrays should match the rest parameter type
 							if !types.IsAssignable(argType, variadicParamType) {
 								c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), variadicParamType.String()))
 							}
 						} else {
-							// For regular arguments, check against element type
+							// Regular arguments in variadic part
+							c.visit(argNode)
+							argType := argNode.GetComputedType()
+							if argType == nil {
+								continue
+							}
+							
 							if !types.IsAssignable(argType, variadicElementType) {
 								c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
 							}
 						}
-						// --- END NEW ---
 					}
 				}
 			}
@@ -178,21 +353,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		} else if actualArgCount > expectedArgCount {
 			c.addError(node, fmt.Sprintf("expected at most %d arguments, but got %d", expectedArgCount, actualArgCount))
 		} else {
-			// Check Argument Types (only for provided arguments)
-			for i, argNode := range node.Arguments {
-				c.visit(argNode) // Visit argument to compute its type
-				argType := argNode.GetComputedType()
-				paramType := funcSignature.ParameterTypes[i]
-
-				if argType == nil {
-					// Error computing argument type, can't check assignability
-					continue
-				}
-
-				if !types.IsAssignable(argType, paramType) {
-					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", i+1, argType.String(), paramType.String()))
-				}
-			}
+			// Check argument types with spread expansion support
+			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic)
 		}
 	}
 	// --- END MODIFIED Checking ---

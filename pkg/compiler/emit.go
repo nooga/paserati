@@ -160,6 +160,23 @@ func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte
 	c.emitByte(argCount)
 }
 
+// emitSpreadCall emits OpSpreadCall for function calls with spread arguments
+func (c *Compiler) emitSpreadCall(dest, funcReg, spreadArgReg Register, line int) {
+	c.emitOpCode(vm.OpSpreadCall, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(funcReg))
+	c.emitByte(byte(spreadArgReg))
+}
+
+// emitSpreadCallMethod emits OpSpreadCallMethod for method calls with spread arguments
+func (c *Compiler) emitSpreadCallMethod(dest, funcReg, thisReg, spreadArgReg Register, line int) {
+	c.emitOpCode(vm.OpSpreadCallMethod, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(funcReg))
+	c.emitByte(byte(thisReg))
+	c.emitByte(byte(spreadArgReg))
+}
+
 // emitNew emits OpNew with constructor register and argument count
 func (c *Compiler) emitNew(dest, constructorReg Register, argCount byte, line int) {
 	c.emitOpCode(vm.OpNew, line)

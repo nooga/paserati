@@ -110,6 +110,10 @@ const (
 	OpJumpIfNull      OpCode = 54 // Ry Offset(16bit): Jump if Ry === null
 	OpJumpIfUndefined OpCode = 55 // Ry Offset(16bit): Jump if Ry === undefined
 	OpJumpIfNullish   OpCode = 56 // Ry Offset(16bit): Jump if Ry is null or undefined
+	
+	// --- NEW: Spread Call Support ---
+	OpSpreadCall       OpCode = 57 // Rx FuncReg SpreadArgReg: Call function with spread array as arguments, result in Rx
+	OpSpreadCallMethod OpCode = 58 // Rx FuncReg ThisReg SpreadArgReg: Call method with spread array as arguments, result in Rx
 	// --- END NEW ---
 )
 
@@ -238,6 +242,10 @@ func (op OpCode) String() string {
 		return "OpJumpIfUndefined"
 	case OpJumpIfNullish:
 		return "OpJumpIfNullish"
+	case OpSpreadCall:
+		return "OpSpreadCall"
+	case OpSpreadCallMethod:
+		return "OpSpreadCallMethod"
 	// --- END NEW ---
 
 	default:
@@ -391,6 +399,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpCallMethod:
 		return c.callMethodInstruction(builder, instruction.String(), offset)
+	case OpSpreadCall:
+		return c.spreadCallInstruction(builder, instruction.String(), offset)
+	case OpSpreadCallMethod:
+		return c.spreadCallMethodInstruction(builder, instruction.String(), offset)
 	case OpLoadThis:
 		return c.loadThisInstruction(builder, instruction.String(), offset)
 	case OpNew:
@@ -826,6 +838,48 @@ func (c *Chunk) newInstruction(builder *strings.Builder, name string, offset int
 	argCount := c.Code[offset+3]
 	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, Args %d\n", name, destReg, constructorReg, argCount))
 	return offset + 4 // Opcode + Rx + ConstructorReg + ArgCount
+}
+
+// spreadCallInstruction handles OpSpreadCall Rx, FuncReg, SpreadArgReg
+func (c *Chunk) spreadCallInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+3 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	funcReg := c.Code[offset+2]
+	spreadArgReg := c.Code[offset+3]
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, SpreadR%d\n", name, destReg, funcReg, spreadArgReg))
+	return offset + 4 // Opcode + Rx + FuncReg + SpreadArgReg
+}
+
+// spreadCallMethodInstruction handles OpSpreadCallMethod Rx, FuncReg, ThisReg, SpreadArgReg
+func (c *Chunk) spreadCallMethodInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+3 < len(c.Code) {
+			return offset + 4
+		}
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	funcReg := c.Code[offset+2]
+	thisReg := c.Code[offset+3]
+	spreadArgReg := c.Code[offset+4]
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d, SpreadR%d\n", name, destReg, funcReg, thisReg, spreadArgReg))
+	return offset + 5 // Opcode + Rx + FuncReg + ThisReg + SpreadArgReg
 }
 
 // registerGlobalInstruction handles OpGetGlobal Rx, GlobalIdx(16bit)

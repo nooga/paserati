@@ -842,18 +842,24 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 		}
 	}
 
-	// 3. Compile provided arguments directly into their target positions
-	for i, arg := range node.Arguments {
+	// 3. Compile provided arguments, handling spread syntax
+	effectiveArgIndex := 0
+	for _, arg := range node.Arguments {
 		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
-			// Clean up allocated registers
-			return nil, 0, NewCompileError(spreadElement, "spread syntax in function calls not fully implemented yet")
-		}
-
-		// Compile argument directly into its target register
-		targetReg := argRegs[i]
-		_, err := c.compileNode(arg, targetReg)
-		if err != nil {
-			return nil, 0, err
+			// For now, spread syntax should be handled by the new spread call instructions
+			// This path should not be reached with proper compiler flow
+			return nil, 0, NewCompileError(spreadElement, "spread syntax should be handled by spread call instructions")
+		} else {
+			// Regular argument - compile directly into its target register
+			if effectiveArgIndex >= len(argRegs) {
+				return nil, 0, NewCompileError(arg, "too many arguments provided")
+			}
+			targetReg := argRegs[effectiveArgIndex]
+			_, err := c.compileNode(arg, targetReg)
+			if err != nil {
+				return nil, 0, err
+			}
+			effectiveArgIndex++
 		}
 	}
 
@@ -865,6 +871,7 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 
 	return argRegs, finalArgCount, nil
 }
+
 
 // addFreeSymbol adds a symbol identified as a free variable to the compiler's list.
 // It ensures the symbol is added only once and returns its index in the freeSymbols slice.

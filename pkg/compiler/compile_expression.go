@@ -744,9 +744,42 @@ func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint R
 	return hint, nil
 }
 
+// calculateEffectiveArgCount calculates the effective number of arguments,
+// expanding spread elements based on array literal lengths
+func (c *Compiler) calculateEffectiveArgCount(arguments []parser.Expression) int {
+	count := 0
+	for _, arg := range arguments {
+		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+			// For direct array literals, count the elements
+			if arrayLit, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
+				count += len(arrayLit.Elements)
+			} else {
+				// For non-literal arrays, we can't determine the exact count at compile time
+				// This case should be handled by the type checker, but add 1 for error recovery
+				count += 1
+			}
+		} else {
+			// Regular argument
+			count += 1
+		}
+	}
+	return count
+}
+
+// hasSpreadArgument checks if any argument is a spread element
+func (c *Compiler) hasSpreadArgument(arguments []parser.Expression) bool {
+	for _, arg := range arguments {
+		if _, isSpread := arg.(*parser.SpreadElement); isSpread {
+			return true
+		}
+	}
+	return false
+}
+
 // Helper function to determine total argument count including optional parameters
 func (c *Compiler) determineTotalArgCount(node *parser.CallExpression) int {
-	providedArgCount := len(node.Arguments)
+	// Calculate effective argument count, expanding spread elements
+	providedArgCount := c.calculateEffectiveArgCount(node.Arguments)
 
 	// Get function type to check for optional parameters
 	functionType := node.Function.GetComputedType()
@@ -815,6 +848,12 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		}
 	}()
 
+	// Check if any argument uses spread syntax
+	hasSpread := c.hasSpreadArgument(node.Arguments)
+	if hasSpread {
+		return c.compileSpreadCallExpression(node, hint, &tempRegs)
+	}
+
 	// Check if this is a method call (function is a member expression like obj.method())
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Method call: obj.method(args...)
@@ -880,6 +919,75 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
 
 	return hint, nil
+}
+
+// compileSpreadCallExpression handles function calls that contain spread syntax
+func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
+	// For now, only support calls with a single spread argument (the most common case)
+	if len(node.Arguments) != 1 {
+		return BadRegister, NewCompileError(node, "spread calls currently only support a single spread argument")
+	}
+	
+	spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement)
+	if !isSpread {
+		return BadRegister, NewCompileError(node, "expected spread argument")
+	}
+	
+	// Check if this is a method call
+	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
+		// Method call with spread: obj.method(...args)
+		
+		// 1. Compile the object part (this value)
+		thisReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, thisReg)
+		_, err := c.compileNode(memberExpr.Object, thisReg)
+		if err != nil {
+			return BadRegister, err
+		}
+		
+		// 2. Compile the method function
+		funcReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, funcReg)
+		propertyName := memberExpr.Property.Value
+		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
+		
+		// 3. Compile the spread argument (array to spread)
+		spreadArgReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, spreadArgReg)
+		_, err = c.compileNode(spreadElement.Argument, spreadArgReg)
+		if err != nil {
+			return BadRegister, err
+		}
+		
+		// 4. Emit OpSpreadCallMethod
+		c.emitSpreadCallMethod(hint, funcReg, thisReg, spreadArgReg, node.Token.Line)
+		
+		return hint, nil
+	} else {
+		// Regular function call with spread: func(...args)
+		
+		// 1. Compile the function
+		funcReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, funcReg)
+		_, err := c.compileNode(node.Function, funcReg)
+		if err != nil {
+			return BadRegister, err
+		}
+		
+		// 2. Compile the spread argument (array to spread)
+		spreadArgReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, spreadArgReg)
+		_, err = c.compileNode(spreadElement.Argument, spreadArgReg)
+		if err != nil {
+			return BadRegister, err
+		}
+		
+		// 3. Emit OpSpreadCall
+		c.emitSpreadCall(hint, funcReg, spreadArgReg, node.Token.Line)
+		
+		return hint, nil
+	}
 }
 
 func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register) (Register, errors.PaseratiError) {

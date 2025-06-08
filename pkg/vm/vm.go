@@ -281,7 +281,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	// Wrap the main script chunk in a dummy function and closure
 	// Use a reasonable default register size for the script body.
 	// TODO: Should the compiler determine the required registers for the top level?
-	scriptRegSize := RegFileSize // Default to max for now
+	scriptRegSize := 128 // Large enough for complex expressions but leaves room for function calls
 	// Wrap the main script chunk in a dummy FunctionObject and ClosureObject
 	mainFuncObj := &FunctionObject{
 		Arity:        0,
@@ -2182,6 +2182,530 @@ func (vm *VM) run() (InterpretResult, Value) {
 			}
 		// --- END NEW ---
 
+		// --- NEW: Spread Call Instructions ---
+		case OpSpreadCall:
+			destReg := code[ip]        // Where the result should go in the caller
+			funcReg := code[ip+1]      // Register holding the function to call
+			spreadArgReg := code[ip+2] // Register holding the array to spread
+			ip += 3
+
+			// Capture caller context before potential frame switch
+			callerRegisters := registers
+			callerIP := ip
+
+			calleeVal := callerRegisters[funcReg]
+			spreadArrayVal := callerRegisters[spreadArgReg]
+
+			// Extract arguments from the spread array
+			spreadArgs, err := vm.extractSpreadArguments(spreadArrayVal)
+			if err != nil {
+				frame.ip = callerIP
+				status := vm.runtimeError("Spread call error: %s", err.Error())
+				return status, Undefined
+			}
+
+			argCount := len(spreadArgs)
+
+			switch calleeVal.Type() {
+			case TypeClosure:
+				calleeClosure := AsClosure(calleeVal)
+				calleeFunc := calleeClosure.Fn
+
+				// Check arity
+				if calleeFunc.Variadic {
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				}
+
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow.")
+					return status, Undefined
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during call.")
+					return status, Undefined
+				}
+
+				frame.ip = callerIP // Store return IP in the outgoing frame
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = calleeClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = Undefined // Regular function call has no 'this' context
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy fixed arguments first (up to the function's arity)
+				fixedArgCount := calleeFunc.Arity
+				if fixedArgCount > argCount {
+					fixedArgCount = argCount
+				}
+				
+				for i := 0; i < fixedArgCount; i++ {
+					if i < len(newFrame.registers) {
+						newFrame.registers[i] = spreadArgs[i]
+					} else {
+						// Rollback frame setup before erroring
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Spread argument index out of bounds during call setup.")
+						return status, Undefined
+					}
+				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+
+					if extraArgCount <= 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if argIndex < len(spreadArgs) {
+								restArrayObj.Append(spreadArgs[argIndex])
+							}
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
+					}
+				}
+
+				// Initialize remaining registers to undefined
+				startIndex := calleeFunc.Arity
+				if calleeFunc.Variadic {
+					startIndex++ // Skip the rest parameter register
+				}
+				for i := startIndex; i < len(newFrame.registers); i++ {
+					newFrame.registers[i] = Undefined
+				}
+
+				vm.frameCount++
+
+				// Switch context (update cached variables)
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeFunction:
+				// Handle bare functions by creating a temporary closure
+				calleeFunc := calleeVal.AsFunction()
+
+				// Check arity
+				if calleeFunc.Variadic {
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				}
+
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow.")
+					return status, Undefined
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during call.")
+					return status, Undefined
+				}
+
+				frame.ip = callerIP // Store return IP in the outgoing frame
+
+				newFrame := &vm.frames[vm.frameCount]
+				// Create a temporary closure for bare functions
+				tempClosure := &ClosureObject{Fn: calleeFunc, Upvalues: []*Upvalue{}}
+				newFrame.closure = tempClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = Undefined
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy fixed arguments first (up to the function's arity)
+				fixedArgCount := calleeFunc.Arity
+				if fixedArgCount > argCount {
+					fixedArgCount = argCount
+				}
+				
+				for i := 0; i < fixedArgCount; i++ {
+					if i < len(newFrame.registers) {
+						newFrame.registers[i] = spreadArgs[i]
+					} else {
+						// Rollback frame setup before erroring
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Spread argument index out of bounds during call setup.")
+						return status, Undefined
+					}
+				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+
+					if extraArgCount <= 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if argIndex < len(spreadArgs) {
+								restArrayObj.Append(spreadArgs[argIndex])
+							}
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
+					}
+				}
+
+				// Initialize remaining registers to undefined
+				startIndex := calleeFunc.Arity
+				if calleeFunc.Variadic {
+					startIndex++ // Skip the rest parameter register
+				}
+				for i := startIndex; i < len(newFrame.registers); i++ {
+					newFrame.registers[i] = Undefined
+				}
+
+				vm.frameCount++
+
+				// Switch context (update cached variables)
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeNativeFunction:
+				// Call native function with spread arguments
+				nativeFunc := calleeVal.AsNativeFunction()
+
+				// Check arity for native functions
+				if nativeFunc.Arity >= 0 && argCount != nativeFunc.Arity {
+					frame.ip = callerIP
+					status := vm.runtimeError("Native function expected %d arguments but got %d.", nativeFunc.Arity, argCount)
+					return status, Undefined
+				}
+
+				// Call the native function directly
+				result := nativeFunc.Fn(spreadArgs)
+				callerRegisters[destReg] = result
+
+			default:
+				frame.ip = callerIP
+				status := vm.runtimeError("Cannot call value of type %s.", calleeVal.TypeName())
+				return status, Undefined
+			}
+
+		case OpSpreadCallMethod:
+			destReg := code[ip]        // Where the result should go in the caller
+			funcReg := code[ip+1]      // Register holding the method function
+			thisReg := code[ip+2]      // Register holding the 'this' object
+			spreadArgReg := code[ip+3] // Register holding the array to spread
+			ip += 4
+
+			// Capture caller context before potential frame switch
+			callerRegisters := registers
+			callerIP := ip
+
+			calleeVal := callerRegisters[funcReg]
+			thisVal := callerRegisters[thisReg]
+			spreadArrayVal := callerRegisters[spreadArgReg]
+
+			// Extract arguments from the spread array
+			spreadArgs, err := vm.extractSpreadArguments(spreadArrayVal)
+			if err != nil {
+				frame.ip = callerIP
+				status := vm.runtimeError("Spread method call error: %s", err.Error())
+				return status, Undefined
+			}
+
+			argCount := len(spreadArgs)
+
+			switch calleeVal.Type() {
+			case TypeClosure:
+				calleeClosure := AsClosure(calleeVal)
+				calleeFunc := calleeClosure.Fn
+
+				// Check arity
+				if calleeFunc.Variadic {
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				}
+
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow.")
+					return status, Undefined
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during call.")
+					return status, Undefined
+				}
+
+				frame.ip = callerIP // Store return IP in the outgoing frame
+
+				newFrame := &vm.frames[vm.frameCount]
+				newFrame.closure = calleeClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = thisVal // Set 'this' context for the method
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy fixed arguments first (up to the function's arity)
+				fixedArgCount := calleeFunc.Arity
+				if fixedArgCount > argCount {
+					fixedArgCount = argCount
+				}
+				
+				for i := 0; i < fixedArgCount; i++ {
+					if i < len(newFrame.registers) {
+						newFrame.registers[i] = spreadArgs[i]
+					} else {
+						// Rollback frame setup before erroring
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Spread argument index out of bounds during method call setup.")
+						return status, Undefined
+					}
+				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+
+					if extraArgCount <= 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if argIndex < len(spreadArgs) {
+								restArrayObj.Append(spreadArgs[argIndex])
+							}
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
+					}
+				}
+
+				// Initialize remaining registers to undefined
+				startIndex := calleeFunc.Arity
+				if calleeFunc.Variadic {
+					startIndex++ // Skip the rest parameter register
+				}
+				for i := startIndex; i < len(newFrame.registers); i++ {
+					newFrame.registers[i] = Undefined
+				}
+
+				vm.frameCount++
+				// Switch context (update cached variables)
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeFunction:
+				// Handle bare functions by creating a temporary closure
+				calleeFunc := calleeVal.AsFunction()
+
+				// Check arity
+				if calleeFunc.Variadic {
+					if argCount < calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected at least %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				} else {
+					if argCount != calleeFunc.Arity {
+						frame.ip = callerIP
+						status := vm.runtimeError("Expected %d arguments but got %d.", calleeFunc.Arity, argCount)
+						return status, Undefined
+					}
+				}
+
+				if vm.frameCount == MaxFrames {
+					frame.ip = callerIP
+					status := vm.runtimeError("Stack overflow.")
+					return status, Undefined
+				}
+				requiredRegs := calleeFunc.RegisterSize
+				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+					frame.ip = callerIP
+					status := vm.runtimeError("Register stack overflow during call.")
+					return status, Undefined
+				}
+
+				frame.ip = callerIP // Store return IP in the outgoing frame
+
+				newFrame := &vm.frames[vm.frameCount]
+				// Create a temporary closure for bare functions
+				tempClosure := &ClosureObject{Fn: calleeFunc, Upvalues: []*Upvalue{}}
+				newFrame.closure = tempClosure
+				newFrame.ip = 0
+				newFrame.targetRegister = destReg
+				newFrame.thisValue = thisVal
+				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				vm.nextRegSlot += requiredRegs
+
+				// Copy fixed arguments first (up to the function's arity)
+				fixedArgCount := calleeFunc.Arity
+				if fixedArgCount > argCount {
+					fixedArgCount = argCount
+				}
+				
+				for i := 0; i < fixedArgCount; i++ {
+					if i < len(newFrame.registers) {
+						newFrame.registers[i] = spreadArgs[i]
+					} else {
+						// Rollback frame setup before erroring
+						vm.nextRegSlot -= requiredRegs
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Spread argument index out of bounds during method call setup.")
+						return status, Undefined
+					}
+				}
+
+				// Handle rest parameters if the function is variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+
+					if extraArgCount <= 0 {
+						// Optimization: reuse singleton empty array when no extra arguments
+						restArray = vm.emptyRestArray
+					} else {
+						// Create new array and collect extra arguments
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if argIndex < len(spreadArgs) {
+								restArrayObj.Append(spreadArgs[argIndex])
+							}
+						}
+					}
+
+					// Store the rest array in the next available register (after fixed parameters)
+					if calleeFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[calleeFunc.Arity] = restArray
+					}
+				}
+
+				// Initialize remaining registers to undefined
+				startIndex := calleeFunc.Arity
+				if calleeFunc.Variadic {
+					startIndex++ // Skip the rest parameter register
+				}
+				for i := startIndex; i < len(newFrame.registers); i++ {
+					newFrame.registers[i] = Undefined
+				}
+
+				vm.frameCount++
+				// Switch context (update cached variables)
+				frame = newFrame
+				closure = frame.closure
+				function = closure.Fn
+
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
+			case TypeNativeFunction:
+				// Call native function with spread arguments
+				nativeFunc := calleeVal.AsNativeFunction()
+
+				// Check arity for native functions
+				if nativeFunc.Arity >= 0 && argCount != nativeFunc.Arity {
+					frame.ip = callerIP
+					status := vm.runtimeError("Native function expected %d arguments but got %d.", nativeFunc.Arity, argCount)
+					return status, Undefined
+				}
+
+				// Call the native function directly
+				result := nativeFunc.Fn(spreadArgs)
+				callerRegisters[destReg] = result
+
+			default:
+				frame.ip = callerIP
+				status := vm.runtimeError("Cannot call value of type %s.", calleeVal.TypeName())
+				return status, Undefined
+			}
+		// --- END NEW ---
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
@@ -2384,4 +2908,17 @@ func (vm *VM) printDisassemblyAroundIP() {
 	fmt.Fprintf(os.Stderr, "Current IP: %d (instruction that was about to execute)\n", currentIP)
 	fmt.Fprintf(os.Stderr, "Frame registers length: %d (R0-R%d)\n", len(frame.registers), len(frame.registers)-1)
 	fmt.Fprintf(os.Stderr, "==========================\n\n")
+}
+
+// extractSpreadArguments extracts arguments from a spread array value
+func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
+	if arrayVal.Type() != TypeArray {
+		return nil, fmt.Errorf("spread argument must be an array, got %T", arrayVal.Type())
+	}
+
+	arrayObj := AsArray(arrayVal)
+	args := make([]Value, len(arrayObj.elements))
+	copy(args, arrayObj.elements)
+
+	return args, nil
 }

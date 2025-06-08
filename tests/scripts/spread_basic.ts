@@ -1,4 +1,4 @@
-// expect_compile_error: expected at least 3 arguments, but got 1
+// expect_compile_error: A spread argument must either have a tuple type or be passed to a rest parameter
 
 // ============================================================================
 // Basic Spread Syntax Test - Shows Type Error
