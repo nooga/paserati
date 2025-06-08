@@ -1,11 +1,7 @@
 package vm
 
-import "unicode/utf8"
-
 func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
-
-	// FIX: Use hash-based cache key to avoid collisions
-	// Combine instruction pointer with property name hash
+	// Generate cache key
 	propNameHash := 0
 	for _, b := range []byte(propName) {
 		propNameHash = propNameHash*31 + int(b)
@@ -22,41 +18,19 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	// Initialize prototypes if needed
 	initPrototypes()
 
-	// --- Special handling for .length ---
-	// Check the *original* value type before checking if it's an Object type
-	if propName == "length" {
-		switch objVal.Type() {
-		case TypeArray:
-			arr := AsArray(*objVal)
-			*dest = Number(float64(len(arr.elements)))
-			return true, InterpretOK, *dest
-		case TypeString:
-			str := AsString(*objVal)
-			// Use rune count for correct length of multi-byte strings
-			*dest = Number(float64(utf8.RuneCountInString(str)))
-			return true, InterpretOK, *dest
-		}
-		// If not Array or String, fall through to general object property lookup
+	// 1. Special properties (.length, etc.)
+	if result, handled := vm.handleSpecialProperties(*objVal, propName); handled {
+		*dest = result
+		return true, InterpretOK, *dest
 	}
 
-	// --- Handle prototype methods for primitives ---
-	// Handle String prototype methods
-	if objVal.IsString() {
-		if method, exists := StringPrototype.GetOwn(propName); exists {
-			*dest = createBoundMethod(*objVal, method)
-			return true, InterpretOK, *dest
-		}
+	// 2. Primitive prototype methods (String.prototype, Array.prototype)
+	if result, handled := vm.handlePrimitiveMethod(*objVal, propName); handled {
+		*dest = result
+		return true, InterpretOK, *dest
 	}
 
-	// Handle Array prototype methods
-	if objVal.IsArray() {
-		if method, exists := ArrayPrototype.GetOwn(propName); exists {
-			*dest = createBoundMethod(*objVal, method)
-			return true, InterpretOK, *dest
-		}
-	}
-
-	// Handle property access on NativeFunctionWithProps (like String.fromCharCode)
+	// 3. NativeFunctionWithProps (like String.fromCharCode)
 	if objVal.Type() == TypeNativeFunctionWithProps {
 		nativeFnWithProps := objVal.AsNativeFunctionWithProps()
 		if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
@@ -65,70 +39,16 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		}
 	}
 
-	// Handle property access on functions (including lazy .prototype)
-	if objVal.Type() == TypeFunction {
-		fn := AsFunction(*objVal)
-
-		// Special handling for "prototype" property
-		if propName == "prototype" {
-			*dest = fn.getOrCreatePrototype()
+	// 4. Functions and Closures (unified handling)
+	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure {
+		if result, handled := vm.handleCallableProperty(*objVal, propName); handled {
+			*dest = result
 			return true, InterpretOK, *dest
 		}
-
-		// Other function properties (if any)
-		if fn.Properties != nil {
-			if prop, exists := fn.Properties.GetOwn(propName); exists {
-				*dest = prop
-				return true, InterpretOK, *dest
-			}
-		}
-
-		// Check function prototype methods
-		if FunctionPrototype != nil {
-			if method, exists := FunctionPrototype.GetOwn(propName); exists {
-				*dest = createBoundMethod(*objVal, method)
-				return true, InterpretOK, *dest
-			}
-		}
-
-		*dest = Undefined
-		return true, InterpretOK, *dest
 	}
 
-	// Handle property access on closures (delegate to underlying function)
-	if objVal.Type() == TypeClosure {
-		closure := AsClosure(*objVal)
-		fn := closure.Fn
-
-		// Special handling for "prototype" property
-		if propName == "prototype" {
-			*dest = fn.getOrCreatePrototype()
-			return true, InterpretOK, *dest
-		}
-
-		// Other function properties (if any)
-		if fn.Properties != nil {
-			if prop, exists := fn.Properties.GetOwn(propName); exists {
-				*dest = prop
-				return true, InterpretOK, *dest
-			}
-		}
-
-		// Check function prototype methods
-		if FunctionPrototype != nil {
-			if method, exists := FunctionPrototype.GetOwn(propName); exists {
-				*dest = createBoundMethod(*objVal, method)
-				return true, InterpretOK, *dest
-			}
-		}
-
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// General property lookup
+	// 5. General object property lookup
 	if !objVal.IsObject() {
-		//frame.ip = ip // what is this for???
 		// Check for null/undefined specifically for a better error message
 		switch objVal.Type() {
 		case TypeNull, TypeUndefined:
@@ -141,7 +61,7 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		}
 	}
 
-	// --- INLINE CACHE CHECK (PlainObjects only for now) ---
+	// 6. PlainObject with inline cache
 	if objVal.Type() == TypeObject {
 		po := AsPlainObject(*objVal)
 
@@ -166,11 +86,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			// Cached offset is out of bounds - cache is stale, fall through to slow path
 		}
 
-		// Cache miss - do slow path lookup and update cache
+		// Cache miss - do slow path lookup
 		vm.cacheStats.totalMisses++
-		// Use prototype-aware Get instead of GetOwn
-		if fv, ok := po.Get(propName); ok {
-			*dest = fv
+		
+		// Use enhanced property resolution with prototype caching
+		if result, found := vm.resolvePropertyWithCache(*objVal, propName, cache, cacheKey); found {
+			*dest = result
+			
 			// Update cache only if property was found on the object itself (not prototype)
 			if _, ownExists := po.GetOwn(propName); ownExists {
 				// Property exists on the object itself, cache it
@@ -181,18 +103,16 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 					}
 				}
 			}
-			// TODO: Implement prototype chain caching for inherited properties
-		} else {
-			*dest = Undefined
-			// Don't cache undefined lookups for now
+			
+			return true, InterpretOK, *dest
 		}
+		
+		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
 
-	// --- Fallback for DictObject (no caching) ---
-	// Dispatch to PlainObject or DictObject lookup
-	switch objVal.Type() {
-	case TypeDictObject:
+	// 7. DictObject fallback (no caching)
+	if objVal.Type() == TypeDictObject {
 		dict := AsDictObject(*objVal)
 		// Use prototype-aware Get instead of GetOwn
 		if fv, ok := dict.Get(propName); ok {
@@ -200,16 +120,10 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		} else {
 			*dest = Undefined
 		}
-	default:
-		// PlainObject or other object types (should not reach here due to continue above)
-		po := AsPlainObject(*objVal)
-		// Use prototype-aware Get instead of GetOwn
-		if fv, ok := po.Get(propName); ok {
-			*dest = fv
-		} else {
-			*dest = Undefined
-		}
+		return true, InterpretOK, *dest
 	}
 
+	// Shouldn't reach here, but handle as undefined
+	*dest = Undefined
 	return true, InterpretOK, *dest
 }

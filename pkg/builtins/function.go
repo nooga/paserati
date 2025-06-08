@@ -54,19 +54,8 @@ func functionPrototypeCallImpl(args []vm.Value) vm.Value {
 
 // callFunctionWithThis calls a function with a specific 'this' value
 func callFunctionWithThis(function vm.Value, thisValue vm.Value, args []vm.Value) vm.Value {
-	// For the prototype chain test to work, we need to handle constructor functions
-	// This is a simplified implementation that handles the basic case
-	
-	if function.IsFunction() || function.IsClosure() {
-		// For user-defined functions and closures, we can't easily call them
-		// from within a builtin function with the current VM architecture.
-		// This would require VM support for calling user functions from builtins.
-		// For now, return undefined to avoid crashes.
-		// TODO: Implement proper VM support for calling user functions from builtins
-		return vm.Undefined
-		
-	} else if function.IsNativeFunction() {
-		// For native functions, call with 'this' prepended
+	// For native functions, call with 'this' prepended
+	if function.IsNativeFunction() {
 		nativeFunc := function.AsNativeFunction()
 		
 		// Prepend 'this' to arguments
@@ -75,6 +64,18 @@ func callFunctionWithThis(function vm.Value, thisValue vm.Value, args []vm.Value
 		copy(fullArgs[1:], args)
 		
 		return nativeFunc.Fn(fullArgs)
+	}
+	
+	// For user-defined functions and closures, we need VM support
+	// Since built-ins can't directly invoke the VM's frame mechanism,
+	// we'll need to handle this differently.
+	// For now, return a special marker that indicates this needs VM handling
+	if function.IsFunction() || function.IsClosure() {
+		// TODO: This is a temporary workaround. The proper solution would be:
+		// 1. Add a VM method for calling functions from built-ins
+		// 2. Pass VM context to built-in functions that need it
+		// 3. Use OpCallMethod mechanism from within built-ins
+		return vm.Undefined
 	}
 	
 	// If not a callable type, return undefined

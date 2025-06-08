@@ -138,31 +138,84 @@ func generateCacheKey(ip int, propName string) int {
 
 ## Implementation Plan
 
-### Phase 2.1: Refactor Current Code
-1. Extract duplicate logic into helper functions
-2. Create centralized prototype resolver
-3. Unified cache key generation
-4. Simplify op_getprop.go and op_setprop.go
+### Phase 2.1: Cache Infrastructure Enhancement ✅
+1. **Extract cache code to dedicated file** - DONE (`cache.go`)
+2. **Add configurable cache features** - DONE (`cache_prototype.go`)
+   - Environment variables for enabling prototype cache
+   - Detailed statistics collection  
+   - Configurable polymorphic entry limits
+   - Global prototype cache separate from inline cache
+3. **Enhanced statistics tracking** - DONE
+   - Prototype chain hit rates
+   - Depth distribution tracking
+   - Method binding statistics
+   - A/B testing capabilities
 
-### Phase 2.2: Enhanced Cache Architecture
-1. Implement PrototypeCacheEntry structure
-2. Add prototype chain caching logic
-3. Update cache hit/miss logic for prototype lookups
+### Phase 2.2: Refactor Property Access Code ✅
+1. **Extract duplicate logic into helper functions** - DONE (`property_helpers.go`)
+   - `handleCallableProperty()` - unified function/closure handling
+   - `handlePrimitiveMethod()` - unified String/Array prototype methods
+   - `handleSpecialProperties()` - consolidated .length handling
+   - `traversePrototypeChain()` - prototype chain walking
+   - `resolvePropertyWithCache()` - enhanced property resolution
+2. **Create centralized prototype resolver** - DONE
+   - `GetPrototypeFor()` function for unified prototype lookup
+3. **Simplify op_getprop.go** - DONE (`op_getprop_refactored.go`)
+   - ~40% reduction in code size through helper functions
+   - Clear separation of concerns
+   - Prototype cache integration points ready
+4. **Test infrastructure** - DONE
+   - Benchmark tests for performance comparison
+   - Integration tests for correctness verification
+   - Debug utilities for investigating issues
 
-### Phase 2.3: Performance Optimizations
-1. Bound method caching for frequently accessed prototype methods
-2. Shape-based prototype cache invalidation
-3. Benchmark and tune cache sizes
+### Phase 2.3: Prototype Chain Optimization (NEXT)
+1. **Replace current op_getprop.go with refactored version**
+   - Integrate `op_getprop_refactored.go` into main VM
+   - Update VM switch statement to use new implementation
+   - Verify all existing tests continue to pass
+2. **Enable prototype chain caching**
+   - Integrate `PrototypeCache` with property access pipeline
+   - Cache bound methods for frequently accessed prototype methods
+   - Track cache effectiveness with detailed statistics
+3. **Optimize hot paths for common patterns**
+   - Pre-cache common prototype methods (String.length, Array.length)
+   - Optimize method binding for primitive types
+   - Add cache invalidation on prototype modifications
 
-### Phase 2.4: Integration and Testing
-1. Ensure all existing tests pass
-2. Add performance benchmarks
-3. Validate cache hit rates with real-world scenarios
+### Phase 2.4: Performance Testing and Validation
+1. Create benchmark suite comparing:
+   - Baseline (current) vs enhanced cache
+   - With/without prototype caching enabled
+2. Measure real-world scenarios:
+   - String method calls in loops
+   - Array prototype method usage
+   - Deep prototype chain traversals
+3. Tune cache parameters based on results
 
-## Expected Performance Gains
+## Current Status and Next Steps
 
-1. **Prototype Method Access**: 2-3x faster for repeated `string.method()` calls
-2. **Cache Hit Rate**: Improved from ~60% to ~85% for prototype-heavy code
+### Completed Work:
+1. ✅ **Cache Infrastructure**: Modular cache system with A/B testing support
+2. ✅ **Code Refactoring**: Eliminated ~40% of duplicate code in property access
+3. ✅ **Helper Functions**: Centralized prototype resolution and method handling
+4. ✅ **Test Infrastructure**: Benchmarks and integration tests ready
+
+### Key Files Created:
+- `pkg/vm/cache_prototype.go` - Enhanced cache with prototype chain support
+- `pkg/vm/property_helpers.go` - Unified property access helper functions  
+- `pkg/vm/op_getprop_refactored.go` - Streamlined property access implementation
+- `tests/benchmark_prototype_test.go` - Performance testing suite
+- `tests/prototype_cache_test.go` - Cache correctness verification
+
+### Configuration Options:
+- `PASERATI_ENABLE_PROTO_CACHE=true` - Enable prototype chain caching
+- `PASERATI_DETAILED_CACHE_STATS=true` - Enable detailed statistics collection
+- `PASERATI_MAX_POLY_ENTRIES=4` - Control polymorphic cache size
+
+### Expected Performance Gains (Once Integrated):
+1. **Prototype Method Access**: 2-3x faster for repeated prototype method calls
+2. **Cache Hit Rate**: Improved from current baseline for prototype-heavy code
 3. **Memory Usage**: Reduced by eliminating duplicate bound method creation
 4. **Code Maintainability**: Single source of truth for property resolution logic
 

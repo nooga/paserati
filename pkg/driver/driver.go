@@ -321,3 +321,8 @@ func (p *Paserati) RunCode(source string, options RunOptions) (vm.Value, []error
 
 	return finalValue, runtimeErrs
 }
+
+// GetCacheStats returns extended cache statistics from the VM instance
+func (p *Paserati) GetCacheStats() vm.ExtendedCacheStats {
+	return vm.GetExtendedStatsFromVM(p.vmInstance)
+}

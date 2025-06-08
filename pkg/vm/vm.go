@@ -595,6 +595,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg // Store target register for return
 				newFrame.thisValue = Undefined    // Regular function call has no 'this' context
+				newFrame.isConstructorCall = false // Explicitly mark as NOT a constructor call
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
@@ -1423,6 +1424,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = thisVal // Set 'this' context for the method
+				newFrame.isConstructorCall = false // Explicitly mark as NOT a constructor call
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
@@ -1517,6 +1519,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = thisVal // Set 'this' context for the method
+				newFrame.isConstructorCall = false // Explicitly mark as NOT a constructor call
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
@@ -2224,6 +2227,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = thisVal // Set 'this' context for the method
+				newFrame.isConstructorCall = false // Explicitly mark as NOT a constructor call
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
