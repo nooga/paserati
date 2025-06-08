@@ -99,7 +99,11 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Grouping Operator (`()`)
 - [x] Nullish Coalescing Operator (`??`)
 - [x] Optional Chaining (`?.`)
-- [ ] Spread Syntax (`...`) (Lexer token exists, not fully implemented in parser/compiler)
+- [x] Spread Syntax (`...`) - **Major Enhancement!**
+  - [x] Spread in function calls (`func(...args)`)
+  - [x] Contextual typing for spread array literals (`sum(...[1, 2, 3])`)
+  - [x] TypeScript-compliant error handling for non-tuple spreads
+  - [x] Integration with tuple types and parameter type inference
 - [ ] `yield` / `yield*` (Generators)
 - [ ] `await` (Async/Await)
 - [ ] Destructuring Assignment
@@ -260,7 +264,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `unknown` Type (assignment restrictions enforced, type narrowing not yet implemented)
 - [x] `never` Type
 - [x] Array Types (`T[]`)
-- [x] Tuple Types (`[string, number]`) - including optional elements and rest elements
+- [x] Tuple Types (`[string, number]`) - **Enhanced!**
+  - [x] Basic tuple types with fixed-length elements
+  - [x] Optional elements (`[string, number?]`)
+  - [x] Rest elements (`[string, ...number[]]`)
+  - [x] **Contextual typing integration** - array literals infer as tuples when expected
+  - [x] **Spread syntax compatibility** - tuples work perfectly with function spread calls
 - [ ] Enum Types (`enum Color { Red, Green }`)
 - [x] Literal Types (`'hello'`, `123`, `true`)
 - [x] Union Types (`string | number`)
@@ -291,7 +300,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 - [x] Variable Initialization (`let x = 10;` // infers number)
 - [x] Function Return Type Inference
-- [ ] Contextual Typing
+- [x] Contextual Typing - **Major Enhancement!**
+  - [x] Array literal to tuple type inference (`let t: [number, string] = [1, "a"]`)
+  - [x] Spread argument contextual typing (`sum(...[1, 2, 3])` infers `[1, 2, 3]` as tuple)
+  - [x] Function parameter type propagation to arguments
+  - [x] Assignment context type inference
+  - [x] Integration with tuple types and spread syntax
 
 ### Type Checking Features
 

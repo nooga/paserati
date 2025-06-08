@@ -57,8 +57,46 @@ func (c *Checker) calculateEffectiveArgCount(arguments []parser.Expression) int 
 }
 
 // validateSpreadArgument checks if a spread argument is valid according to TypeScript rules
-func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, isVariadicFunction bool) bool {
-	// Visit the spread argument to get its type
+// It now supports contextual typing to infer array literals as tuples when appropriate
+func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, isVariadicFunction bool, expectedParamTypes []types.Type, currentParamIndex int) bool {
+	// Try contextual typing for array literals in non-variadic functions
+	if !isVariadicFunction {
+		if arrayLit, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
+			// Calculate how many parameters remain from current position
+			remainingParamCount := len(expectedParamTypes) - currentParamIndex
+			if remainingParamCount > 0 && len(arrayLit.Elements) <= remainingParamCount {
+				// Create a tuple type from the remaining parameter types
+				var tupleElementTypes []types.Type
+				for i := 0; i < len(arrayLit.Elements) && currentParamIndex+i < len(expectedParamTypes); i++ {
+					tupleElementTypes = append(tupleElementTypes, expectedParamTypes[currentParamIndex+i])
+				}
+				
+				if len(tupleElementTypes) == len(arrayLit.Elements) {
+					// Create tuple type for contextual typing
+					expectedTupleType := &types.TupleType{
+						ElementTypes: tupleElementTypes,
+					}
+					
+					debugPrintf("// [Checker SpreadValidation] Using contextual tuple type: %s for array literal\n", expectedTupleType.String())
+					
+					// Use contextual typing to check the array literal
+					c.visitWithContext(spreadElement.Argument, &ContextualType{
+						ExpectedType: expectedTupleType,
+						IsContextual: true,
+					})
+					
+					argType := spreadElement.Argument.GetComputedType()
+					if argType != nil {
+						if _, isTuple := argType.(*types.TupleType); isTuple {
+							return true // Successfully inferred as tuple
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Fallback: visit normally and check traditional rules
 	c.visit(spreadElement.Argument)
 	argType := spreadElement.Argument.GetComputedType()
 	
@@ -104,7 +142,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 	for _, argNode := range arguments {
 		if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
 			// Validate the spread argument first
-			if !c.validateSpreadArgument(spreadElement, isVariadicFunction) {
+			if !c.validateSpreadArgument(spreadElement, isVariadicFunction, paramTypes, effectiveArgIndex) {
 				allOk = false
 				effectiveArgIndex += 1 // Conservative estimate for error recovery
 				continue
@@ -235,12 +273,15 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// --- MODIFIED Arity and Argument Type Checking ---
 	// First validate all spread arguments
 	hasSpreadErrors := false
+	currentArgIndex := 0
 	for _, arg := range node.Arguments {
 		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
-			if !c.validateSpreadArgument(spreadElement, funcSignature.IsVariadic) {
+			if !c.validateSpreadArgument(spreadElement, funcSignature.IsVariadic, funcSignature.ParameterTypes, currentArgIndex) {
 				hasSpreadErrors = true
 			}
 		}
+		// For simplicity, assume each argument takes one slot for this validation pass
+		currentArgIndex += 1
 	}
 	
 	// If there are spread errors, skip detailed arity checking as it's meaningless
@@ -300,7 +341,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 						// --- Handle spread elements in variadic functions ---
 						if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
 							// Validate the spread argument for variadic functions
-							if !c.validateSpreadArgument(spreadElement, true) {
+							// For variadic functions, pass empty slice since we don't use contextual typing
+							if !c.validateSpreadArgument(spreadElement, true, []types.Type{}, 0) {
 								continue // Error already reported
 							}
 							

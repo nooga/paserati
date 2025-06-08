@@ -43,6 +43,82 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	debugPrintf("// [Checker ArrayLit] Computed ElementType: %s, Full ArrayType: %s\n", finalElementType.String(), arrayType.String())
 }
 
+// checkArrayLiteralWithContext checks array literals with contextual type information
+func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, context *ContextualType) {
+	expectedType := context.ExpectedType
+	debugPrintf("// [Checker ArrayLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
+
+	// Check if expected type is a tuple type
+	if tupleType, isTuple := expectedType.(*types.TupleType); isTuple {
+		debugPrintf("// [Checker ArrayLitContext] Expected tuple with %d element types\n", len(tupleType.ElementTypes))
+		
+		// For tuple context, we need the array literal to have exactly the right number of elements
+		if len(node.Elements) != len(tupleType.ElementTypes) {
+			// If length doesn't match, fall back to regular array literal checking
+			debugPrintf("// [Checker ArrayLitContext] Element count mismatch: expected %d, got %d. Using regular array checking.\n", len(tupleType.ElementTypes), len(node.Elements))
+			c.checkArrayLiteral(node)
+			return
+		}
+		
+		// Check each element against the corresponding tuple element type
+		elementTypesMatch := true
+		for i, elemNode := range node.Elements {
+			expectedElemType := tupleType.ElementTypes[i]
+			// Use contextual typing for each element
+			c.visitWithContext(elemNode, &ContextualType{
+				ExpectedType: expectedElemType,
+				IsContextual: true,
+			})
+			
+			actualElemType := elemNode.GetComputedType()
+			if actualElemType == nil {
+				actualElemType = types.Any
+			}
+			
+			// Check if the element type is assignable to the expected tuple element type
+			if !types.IsAssignable(actualElemType, expectedElemType) {
+				elementTypesMatch = false
+				debugPrintf("// [Checker ArrayLitContext] Element %d type mismatch: expected %s, got %s\n", i, expectedElemType.String(), actualElemType.String())
+			}
+		}
+		
+		if elementTypesMatch {
+			// All elements match - use the tuple type
+			node.SetComputedType(tupleType)
+			debugPrintf("// [Checker ArrayLitContext] All elements match tuple. Set type to: %s\n", tupleType.String())
+			return
+		} else {
+			// Elements don't match - fall back to regular array checking but don't return error
+			// (the regular checking will handle type errors)
+			debugPrintf("// [Checker ArrayLitContext] Element types don't match tuple. Falling back to regular array checking.\n")
+			c.checkArrayLiteral(node)
+			return
+		}
+	}
+
+	// Check if expected type is an array type
+	if arrayType, isArray := expectedType.(*types.ArrayType); isArray {
+		debugPrintf("// [Checker ArrayLitContext] Expected array with element type: %s\n", arrayType.ElementType.String())
+		
+		// Check each element against the expected element type
+		for _, elemNode := range node.Elements {
+			c.visitWithContext(elemNode, &ContextualType{
+				ExpectedType: arrayType.ElementType,
+				IsContextual: true,
+			})
+		}
+		
+		// Use the expected array type as the result
+		node.SetComputedType(arrayType)
+		debugPrintf("// [Checker ArrayLitContext] Set type to expected array type: %s\n", arrayType.String())
+		return
+	}
+
+	// For other expected types, fall back to regular array literal checking
+	debugPrintf("// [Checker ArrayLitContext] Expected type is not array or tuple (%T). Using regular array checking.\n", expectedType)
+	c.checkArrayLiteral(node)
+}
+
 // checkObjectLiteral checks the type of an object literal expression.
 func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	fields := make(map[string]types.Type)

@@ -17,6 +17,12 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
+// ContextualType represents type information that flows from context to sub-expressions
+type ContextualType struct {
+	ExpectedType types.Type // The type expected in this context
+	IsContextual bool       // Whether this is a contextual hint vs. required type
+}
+
 // Checker performs static type checking on the AST.
 type Checker struct {
 	program *parser.Program // Root AST node
@@ -411,17 +417,28 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			if initializer != nil {
 				// Initializer exists and wasn't a function literal handled before
 				debugPrintf("// [Checker Pass 4] Checking initializer for variable '%s'\n", varName.Value)
-				c.visit(initializer) // Visit initializer expression
-				computedInitializerType := initializer.GetComputedType()
-				if computedInitializerType == nil {
-					computedInitializerType = types.Any
-				}
-
-				// Get the variable's type defined in Pass 2 (might be Any)
+				
+				// Get the variable's type defined in Pass 2 to check if we have a type annotation
 				variableType, _, found := globalEnv.Resolve(varName.Value)
 				if !found { // Should not happen
 					debugPrintf("// [Checker Pass 4] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
 					continue
+				}
+				
+				// Use contextual typing if we have a type annotation (not Any)
+				if typeAnnotation != nil && variableType != types.Any {
+					debugPrintf("// [Checker Pass 4] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
+					c.visitWithContext(initializer, &ContextualType{
+						ExpectedType: variableType,
+						IsContextual: true,
+					})
+				} else {
+					c.visit(initializer) // Regular visit if no type annotation
+				}
+				
+				computedInitializerType := initializer.GetComputedType()
+				if computedInitializerType == nil {
+					computedInitializerType = types.Any
 				}
 
 				// Perform assignability check using the type from env (e.g., Any or annotation)
@@ -589,7 +606,15 @@ func (c *Checker) visit(node parser.Node) {
 		// 2. Handle Initializer (if present)
 		var computedInitializerType types.Type
 		if node.Value != nil { // Use node.Value directly
-			c.visit(node.Value) // Visits the FunctionLiteral
+			// Use contextual typing if we have a declared type
+			if declaredType != nil {
+				c.visitWithContext(node.Value, &ContextualType{
+					ExpectedType: declaredType,
+					IsContextual: true,
+				})
+			} else {
+				c.visit(node.Value) // Regular visit if no type annotation
+			}
 
 			// <<< IMMEDIATE CHECK AFTER RETURN >>>
 			if node.Name == nil {
@@ -701,7 +726,15 @@ func (c *Checker) visit(node parser.Node) {
 		// 2. Handle Initializer (Must be present for const)
 		var computedInitializerType types.Type
 		if node.Value != nil {
-			c.visit(node.Value)                                    // Compute type of the initializer
+			// Use contextual typing if we have a declared type
+			if declaredType != nil {
+				c.visitWithContext(node.Value, &ContextualType{
+					ExpectedType: declaredType,
+					IsContextual: true,
+				})
+			} else {
+				c.visit(node.Value) // Regular visit if no type annotation
+			}
 			computedInitializerType = node.Value.GetComputedType() // <<< USE NODE METHOD
 		} else {
 			// Constants MUST be initialized
@@ -1563,5 +1596,33 @@ func (c *Checker) visit(node parser.Node) {
 		// Optional: Add error for unhandled node types
 		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
 		break
+	}
+}
+
+// visitWithContext is the context-aware dispatch method for AST traversal.
+// It passes expected type information to expressions that can benefit from contextual typing.
+func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
+	if node == nil {
+		return
+	}
+	
+	// If no context provided, fall back to regular visit
+	if context == nil || context.ExpectedType == nil {
+		c.visit(node)
+		return
+	}
+	
+	debugPrintf("// [Checker VisitContext] Node: %T, Expected: %s\n", node, context.ExpectedType.String())
+	
+	// Handle specific node types that benefit from contextual typing
+	switch node := node.(type) {
+	case *parser.ArrayLiteral:
+		c.checkArrayLiteralWithContext(node, context)
+	case *parser.ObjectLiteral:
+		// TODO: Add contextual typing for object literals
+		c.visit(node)
+	default:
+		// For other node types, use regular visit for now
+		c.visit(node)
 	}
 }
