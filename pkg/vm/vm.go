@@ -6,7 +6,6 @@ import (
 	"os"
 	"paserati/pkg/errors"
 	"strconv"
-	"unicode/utf8"
 	"unsafe"
 )
 
@@ -24,40 +23,6 @@ type CallFrame struct {
 	targetRegister    byte  // Which register in the CALLER the result should go into
 	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
 	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
-}
-
-// PropCacheState represents the different states of inline cache
-type PropCacheState uint8
-
-const (
-	CacheStateUninitialized PropCacheState = iota
-	CacheStateMonomorphic                  // Single shape cached
-	CacheStatePolymorphic                  // Multiple shapes cached (up to 4)
-	CacheStateMegamorphic                  // Too many shapes, fallback to map lookup
-)
-
-// PropCacheEntry represents a single shape+offset entry in the cache
-type PropCacheEntry struct {
-	shape  *Shape // The shape this cache entry is valid for
-	offset int    // The property offset in the object's properties slice
-}
-
-// PropInlineCache represents the inline cache for a property access site
-type PropInlineCache struct {
-	state      PropCacheState
-	entries    [4]PropCacheEntry // Support up to 4 shapes (polymorphic)
-	entryCount int               // Number of active entries
-	hitCount   uint32            // For debugging/metrics
-	missCount  uint32            // For debugging/metrics
-}
-
-// ICacheStats holds statistics about inline cache performance
-type ICacheStats struct {
-	totalHits       uint64
-	totalMisses     uint64
-	monomorphicHits uint64
-	polymorphicHits uint64
-	megamorphicHits uint64
 }
 
 // VM represents the virtual machine state.
@@ -91,126 +56,6 @@ type VM struct {
 
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
-}
-
-// lookupInCache performs a property lookup using the inline cache
-func (ic *PropInlineCache) lookupInCache(shape *Shape) (int, bool) {
-	switch ic.state {
-	case CacheStateUninitialized:
-		return -1, false
-	case CacheStateMonomorphic:
-		if ic.entries[0].shape == shape {
-			ic.hitCount++
-			return ic.entries[0].offset, true
-		}
-		ic.missCount++
-		return -1, false
-	case CacheStatePolymorphic:
-		for i := 0; i < ic.entryCount; i++ {
-			if ic.entries[i].shape == shape {
-				ic.hitCount++
-				// Move hit entry to front for better cache locality
-				if i > 0 {
-					entry := ic.entries[i]
-					copy(ic.entries[1:i+1], ic.entries[0:i])
-					ic.entries[0] = entry
-				}
-				return ic.entries[0].offset, true
-			}
-		}
-		ic.missCount++
-		return -1, false
-	case CacheStateMegamorphic:
-		// Always miss in megamorphic state - forces full lookup
-		ic.missCount++
-		return -1, false
-	}
-	return -1, false
-}
-
-// updateCache updates the inline cache with a new shape+offset entry
-func (ic *PropInlineCache) updateCache(shape *Shape, offset int) {
-	switch ic.state {
-	case CacheStateUninitialized:
-		// First entry - transition to monomorphic
-		ic.state = CacheStateMonomorphic
-		ic.entries[0] = PropCacheEntry{shape: shape, offset: offset}
-		ic.entryCount = 1
-	case CacheStateMonomorphic:
-		// Check if it's the same shape (update offset)
-		if ic.entries[0].shape == shape {
-			ic.entries[0].offset = offset
-			return
-		}
-		// Different shape - transition to polymorphic
-		ic.state = CacheStatePolymorphic
-		ic.entries[1] = PropCacheEntry{shape: shape, offset: offset}
-		ic.entryCount = 2
-	case CacheStatePolymorphic:
-		// Check if shape already exists
-		for i := 0; i < ic.entryCount; i++ {
-			if ic.entries[i].shape == shape {
-				ic.entries[i].offset = offset
-				return
-			}
-		}
-		// New shape
-		if ic.entryCount < 4 {
-			ic.entries[ic.entryCount] = PropCacheEntry{shape: shape, offset: offset}
-			ic.entryCount++
-		} else {
-			// Too many shapes - transition to megamorphic
-			ic.state = CacheStateMegamorphic
-			ic.entryCount = 0
-		}
-	case CacheStateMegamorphic:
-		// Don't cache in megamorphic state
-		return
-	}
-}
-
-// resetCache clears the inline cache (used when shapes change)
-func (ic *PropInlineCache) resetCache() {
-	ic.state = CacheStateUninitialized
-	ic.entryCount = 0
-	// Don't reset hit/miss counts for debugging
-}
-
-// GetCacheStats returns the current inline cache statistics
-func (vm *VM) GetCacheStats() ICacheStats {
-	return vm.cacheStats
-}
-
-// PrintCacheStats prints detailed cache performance information for debugging
-func (vm *VM) PrintCacheStats() {
-	stats := vm.cacheStats
-	total := stats.totalHits + stats.totalMisses
-	if total == 0 {
-		fmt.Printf("IC Stats: No cache activity\n")
-		return
-	}
-
-	hitRate := float64(stats.totalHits) / float64(total) * 100.0
-	fmt.Printf("IC Stats: Total: %d, Hits: %d (%.1f%%), Misses: %d\n",
-		total, stats.totalHits, hitRate, stats.totalMisses)
-	fmt.Printf("  Monomorphic: %d, Polymorphic: %d, Megamorphic: %d\n",
-		stats.monomorphicHits, stats.polymorphicHits, stats.megamorphicHits)
-
-	// Print per-site cache information
-	fmt.Printf("  Cache sites: %d\n", len(vm.propCache))
-	for ip, cache := range vm.propCache {
-		stateStr := "UNINITIALIZED"
-		switch cache.state {
-		case CacheStateMonomorphic:
-			stateStr = "MONOMORPHIC"
-		case CacheStatePolymorphic:
-			stateStr = fmt.Sprintf("POLYMORPHIC(%d)", cache.entryCount)
-		case CacheStateMegamorphic:
-			stateStr = "MEGAMORPHIC"
-		}
-		fmt.Printf("    IP %d: %s (hits: %d, misses: %d)\n",
-			ip, stateStr, cache.hitCount, cache.missCount)
-	}
 }
 
 // InterpretResult represents the outcome of an interpretation.
@@ -656,7 +501,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				} else if objVal.Type() == TypeDictObject {
 					current = objVal.AsDictObject().GetPrototype()
 				}
-				
+
 				// Walk the prototype chain
 				for current.typ != TypeNull && current.typ != TypeUndefined {
 					if current.Equals(constructorPrototype) {
@@ -1478,9 +1323,6 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// Calculate cache key based on instruction pointer (before advancing ip)
 			ip += 4
 
-			// Get object and property name values
-			objVal := registers[objReg]
-
 			// Get property name from constants
 			if int(nameConstIdx) >= len(constants) {
 				frame.ip = ip
@@ -1495,211 +1337,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			}
 			propName := AsString(nameVal)
 
-			// FIX: Use hash-based cache key to avoid collisions
-			// Combine instruction pointer with property name hash
-			propNameHash := 0
-			for _, b := range []byte(propName) {
-				propNameHash = propNameHash*31 + int(b)
-			}
-			cacheKey := (ip-5)*100000 + (propNameHash & 0xFFFF) // Use ip-5 since ip was advanced by 4
-			cache, exists := vm.propCache[cacheKey]
-			if !exists {
-				cache = &PropInlineCache{
-					state: CacheStateUninitialized,
-				}
-				vm.propCache[cacheKey] = cache
-			}
-
-			// Initialize prototypes if needed
-			initPrototypes()
-
-			// --- Special handling for .length ---
-			// Check the *original* value type before checking if it's an Object type
-			if propName == "length" {
-				switch objVal.Type() {
-				case TypeArray:
-					arr := AsArray(objVal)
-					registers[destReg] = Number(float64(len(arr.elements)))
-					continue // Skip general object lookup
-				case TypeString:
-					str := AsString(objVal)
-					// Use rune count for correct length of multi-byte strings
-					registers[destReg] = Number(float64(utf8.RuneCountInString(str)))
-					continue // Skip general object lookup
-				}
-				// If not Array or String, fall through to general object property lookup
-			}
-
-			// --- Handle prototype methods for primitives ---
-			// Handle String prototype methods
-			if objVal.IsString() {
-				if method, exists := StringPrototype.GetOwn(propName); exists {
-					registers[destReg] = createBoundMethod(objVal, method)
-					continue // Skip object lookup
-				}
-			}
-
-			// Handle Array prototype methods
-			if objVal.IsArray() {
-				if method, exists := ArrayPrototype.GetOwn(propName); exists {
-					registers[destReg] = createBoundMethod(objVal, method)
-					continue // Skip object lookup
-				}
-			}
-
-			// Handle property access on NativeFunctionWithProps (like String.fromCharCode)
-			if objVal.Type() == TypeNativeFunctionWithProps {
-				nativeFnWithProps := objVal.AsNativeFunctionWithProps()
-				if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
-					registers[destReg] = prop
-					continue // Skip object lookup
-				}
-			}
-
-			// Handle property access on functions (including lazy .prototype)
-			if objVal.Type() == TypeFunction {
-				fn := AsFunction(objVal)
-
-				// Special handling for "prototype" property
-				if propName == "prototype" {
-					registers[destReg] = fn.getOrCreatePrototype()
-					continue
-				}
-
-				// Other function properties (if any)
-				if fn.Properties != nil {
-					if prop, exists := fn.Properties.GetOwn(propName); exists {
-						registers[destReg] = prop
-						continue
-					}
-				}
-
-				// Check function prototype methods
-				if FunctionPrototype != nil {
-					if method, exists := FunctionPrototype.GetOwn(propName); exists {
-						registers[destReg] = createBoundMethod(objVal, method)
-						continue
-					}
-				}
-
-				registers[destReg] = Undefined
-				continue
-			}
-
-			// Handle property access on closures (delegate to underlying function)
-			if objVal.Type() == TypeClosure {
-				closure := AsClosure(objVal)
-				fn := closure.Fn
-
-				// Special handling for "prototype" property
-				if propName == "prototype" {
-					registers[destReg] = fn.getOrCreatePrototype()
-					continue
-				}
-
-				// Other function properties (if any)
-				if fn.Properties != nil {
-					if prop, exists := fn.Properties.GetOwn(propName); exists {
-						registers[destReg] = prop
-						continue
-					}
-				}
-
-				// Check function prototype methods
-				if FunctionPrototype != nil {
-					if method, exists := FunctionPrototype.GetOwn(propName); exists {
-						registers[destReg] = createBoundMethod(objVal, method)
-						continue
-					}
-				}
-
-				registers[destReg] = Undefined
-				continue
-			}
-
-			// General property lookup
-			if !objVal.IsObject() {
-				frame.ip = ip
-				// Check for null/undefined specifically for a better error message
-				switch objVal.Type() {
-				case TypeNull, TypeUndefined:
-					status := vm.runtimeError("Cannot read property '%s' of %s", propName, objVal.TypeName())
-					return status, Undefined
-				default:
-					// Generic error for other non-object types
-					status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())
-					return status, Undefined
-				}
-			}
-
-			// --- INLINE CACHE CHECK (PlainObjects only for now) ---
-			if objVal.Type() == TypeObject {
-				po := AsPlainObject(objVal)
-
-				// Try cache lookup first
-				if offset, hit := cache.lookupInCache(po.shape); hit {
-					// Cache hit! Use cached offset directly (fast path)
-					vm.cacheStats.totalHits++
-					switch cache.state {
-					case CacheStateMonomorphic:
-						vm.cacheStats.monomorphicHits++
-					case CacheStatePolymorphic:
-						vm.cacheStats.polymorphicHits++
-					case CacheStateMegamorphic:
-						vm.cacheStats.megamorphicHits++
-					}
-
-					if offset < len(po.properties) {
-						result := po.properties[offset]
-						registers[destReg] = result
-						continue // Skip slow path lookup
-					}
-					// Cached offset is out of bounds - cache is stale, fall through to slow path
-				}
-
-				// Cache miss - do slow path lookup and update cache
-				vm.cacheStats.totalMisses++
-				// Use prototype-aware Get instead of GetOwn
-				if fv, ok := po.Get(propName); ok {
-					registers[destReg] = fv
-					// Update cache only if property was found on the object itself (not prototype)
-					if _, ownExists := po.GetOwn(propName); ownExists {
-						// Property exists on the object itself, cache it
-						for _, field := range po.shape.fields {
-							if field.name == propName {
-								cache.updateCache(po.shape, field.offset)
-								break
-							}
-						}
-					}
-					// TODO: Implement prototype chain caching for inherited properties
-				} else {
-					registers[destReg] = Undefined
-					// Don't cache undefined lookups for now
-				}
-				continue // Skip the old dispatch logic below
-			}
-
-			// --- Fallback for DictObject (no caching) ---
-			// Dispatch to PlainObject or DictObject lookup
-			switch objVal.Type() {
-			case TypeDictObject:
-				dict := AsDictObject(objVal)
-				// Use prototype-aware Get instead of GetOwn
-				if fv, ok := dict.Get(propName); ok {
-					registers[destReg] = fv
-				} else {
-					registers[destReg] = Undefined
-				}
-			default:
-				// PlainObject or other object types (should not reach here due to continue above)
-				po := AsPlainObject(objVal)
-				// Use prototype-aware Get instead of GetOwn
-				if fv, ok := po.Get(propName); ok {
-					registers[destReg] = fv
-				} else {
-					registers[destReg] = Undefined
-				}
+			if ok, status, value := vm.opGetProp(ip, &registers[objReg], propName, &registers[destReg]); !ok {
+				return status, value
 			}
 
 		case OpSetProp:
@@ -1711,10 +1350,6 @@ func (vm *VM) run() (InterpretResult, Value) {
 			// Calculate cache key based on instruction pointer (before advancing ip)
 			ip += 4
 
-			// Get object, property name, and value
-			objVal := registers[objReg]
-			valueToSet := registers[valReg]
-
 			// Get property name from constants
 			if int(nameConstIdx) >= len(constants) {
 				frame.ip = ip
@@ -1729,132 +1364,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			}
 			propName := AsString(nameVal)
 
-			// FIX: Use hash-based cache key to avoid collisions
-			// Combine instruction pointer with property name hash
-			propNameHash := 0
-			for _, b := range []byte(propName) {
-				propNameHash = propNameHash*31 + int(b)
-			}
-			cacheKey := (ip-5)*100000 + (propNameHash & 0xFFFF) // Use ip-5 since ip was advanced by 4
-			cache, exists := vm.propCache[cacheKey]
-			if !exists {
-				cache = &PropInlineCache{
-					state: CacheStateUninitialized,
-				}
-				vm.propCache[cacheKey] = cache
-			}
-
-			// Handle property setting on functions
-			if objVal.Type() == TypeFunction {
-				fn := AsFunction(objVal)
-
-				// Ensure Properties object exists
-				if fn.Properties == nil {
-					fn.Properties = NewObject(Undefined).AsPlainObject()
-				}
-
-				// Special handling for "prototype" property - ensure it exists first
-				if propName == "prototype" {
-					// If setting prototype to a new value, just set it
-					fn.Properties.SetOwn("prototype", valueToSet)
-				} else {
-					// For other properties, just set them
-					fn.Properties.SetOwn(propName, valueToSet)
-				}
-				continue
-			}
-
-			// Handle property setting on closures (delegate to underlying function)
-			if objVal.Type() == TypeClosure {
-				closure := AsClosure(objVal)
-				fn := closure.Fn
-
-				// Ensure Properties object exists
-				if fn.Properties == nil {
-					fn.Properties = NewObject(Undefined).AsPlainObject()
-				}
-
-				// Special handling for "prototype" property
-				if propName == "prototype" {
-					fn.Properties.SetOwn("prototype", valueToSet)
-				} else {
-					// For other properties, just set them
-					fn.Properties.SetOwn(propName, valueToSet)
-				}
-				continue
-			}
-
-			// Check if the base is actually an object
-			if !objVal.IsObject() {
-				frame.ip = ip
-				// Error setting property on non-object
-				status := vm.runtimeError("Cannot set property '%s' on non-object type '%s'", propName, objVal.TypeName())
-				return status, Undefined
-			}
-
-			// --- INLINE CACHE CHECK FOR PROPERTY WRITES (PlainObjects only) ---
-			if objVal.Type() == TypeObject {
-				po := AsPlainObject(objVal)
-
-				// Try cache lookup for existing property write
-				if offset, hit := cache.lookupInCache(po.shape); hit {
-					// Cache hit! Check if this is an existing property update (fast path)
-					vm.cacheStats.totalHits++
-					switch cache.state {
-					case CacheStateMonomorphic:
-						vm.cacheStats.monomorphicHits++
-					case CacheStatePolymorphic:
-						vm.cacheStats.polymorphicHits++
-					case CacheStateMegamorphic:
-						vm.cacheStats.megamorphicHits++
-					}
-
-					// Check if property exists in current shape
-					for _, field := range po.shape.fields {
-						if field.name == propName && field.offset == offset {
-							// Existing property - fast update path
-							if offset < len(po.properties) {
-								po.properties[offset] = valueToSet
-								continue // Skip slow path
-							}
-							break
-						}
-					}
-					// Cache was stale or property layout changed, fall through to slow path
-				}
-
-				// Cache miss or new property - use slow path and update cache
-				vm.cacheStats.totalMisses++
-				originalShape := po.shape
-				po.SetOwn(propName, valueToSet)
-
-				// Update cache if shape didn't change (existing property)
-				// or if shape changed (new property added)
-				for _, field := range po.shape.fields {
-					if field.name == propName {
-						cache.updateCache(po.shape, field.offset)
-						break
-					}
-				}
-
-				// If shape changed significantly, we might want to invalidate related caches
-				// This is a trade-off between cache accuracy and performance
-				if originalShape != po.shape {
-					// Shape transition occurred - could invalidate other caches
-					// For now, just update this cache
-				}
-				continue // Skip the old dispatch logic below
-			}
-
-			// --- Fallback for DictObject (no caching) ---
-			// Set property on DictObject or PlainObject
-			switch objVal.Type() {
-			case TypeDictObject:
-				d := AsDictObject(objVal)
-				d.SetOwn(propName, valueToSet)
-			default:
-				po := AsPlainObject(objVal)
-				po.SetOwn(propName, valueToSet)
+			if ok, status, value := vm.opSetProp(ip, &registers[objReg], propName, &registers[valReg]); !ok {
+				return status, value
 			}
 
 		case OpCallMethod:
@@ -2138,7 +1649,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 				// Get constructor's .prototype property (create lazily if needed)
 				instancePrototype := constructorFunc.getOrCreatePrototype()
-				
+
 				// Create new instance object with constructor's prototype
 				newInstance := NewObject(instancePrototype)
 
@@ -2207,7 +1718,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 				// Get constructor's .prototype property (create lazily if needed)
 				instancePrototype := constructorFunc.getOrCreatePrototype()
-				
+
 				// Create new instance object with constructor's prototype
 				newInstance := NewObject(instancePrototype)
 
@@ -2458,7 +1969,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if fixedArgCount > argCount {
 					fixedArgCount = argCount
 				}
-				
+
 				for i := 0; i < fixedArgCount; i++ {
 					if i < len(newFrame.registers) {
 						newFrame.registers[i] = spreadArgs[i]
@@ -2567,7 +2078,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if fixedArgCount > argCount {
 					fixedArgCount = argCount
 				}
-				
+
 				for i := 0; i < fixedArgCount; i++ {
 					if i < len(newFrame.registers) {
 						newFrame.registers[i] = spreadArgs[i]
@@ -2721,7 +2232,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if fixedArgCount > argCount {
 					fixedArgCount = argCount
 				}
-				
+
 				for i := 0; i < fixedArgCount; i++ {
 					if i < len(newFrame.registers) {
 						newFrame.registers[i] = spreadArgs[i]
@@ -2829,7 +2340,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if fixedArgCount > argCount {
 					fixedArgCount = argCount
 				}
-				
+
 				for i := 0; i < fixedArgCount; i++ {
 					if i < len(newFrame.registers) {
 						newFrame.registers[i] = spreadArgs[i]
@@ -2917,7 +2428,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 			ip += 2
 
 			objValue := registers[objReg]
-			
+
 			// Get object keys based on object type
 			var keys []string
 			switch objValue.Type() {
@@ -2938,13 +2449,13 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// For primitive types, return empty array
 				keys = []string{}
 			}
-			
+
 			// Convert string keys to Value array
 			keyValues := make([]Value, len(keys))
 			for i, key := range keys {
 				keyValues[i] = String(key)
 			}
-			
+
 			// Create array with the keys
 			keysArray := NewArrayWithArgs(keyValues)
 			registers[destReg] = keysArray
