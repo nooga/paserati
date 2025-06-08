@@ -741,6 +741,37 @@ func (fos *ForOfStatement) String() string {
 	return out.String()
 }
 
+// --- New: ForInStatement ---
+
+// ForInStatement represents a 'for (<variable> in <object>) { body }' statement.
+// Variable can be either a *Identifier (e.g., for (key in obj)) or
+// a variable declaration like *LetStatement (e.g., for (let key in obj))
+type ForInStatement struct {
+	Token    lexer.Token     // The 'for' token
+	Variable Statement       // Can be *LetStatement or *ConstStatement or *ExpressionStatement with *Identifier
+	Object   Expression      // The object being iterated over
+	Body     *BlockStatement // The loop body
+}
+
+func (fis *ForInStatement) statementNode()       {}
+func (fis *ForInStatement) TokenLiteral() string { return fis.Token.Literal }
+func (fis *ForInStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("for (")
+	if fis.Variable != nil {
+		out.WriteString(fis.Variable.String())
+	}
+	out.WriteString(" in ")
+	if fis.Object != nil {
+		out.WriteString(fis.Object.String())
+	}
+	out.WriteString(") ")
+	if fis.Body != nil {
+		out.WriteString(fis.Body.String())
+	}
+	return out.String()
+}
+
 // --- New: Break Statement ---
 type BreakStatement struct {
 	Token lexer.Token // The 'break' token

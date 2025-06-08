@@ -1382,6 +1382,9 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.ForOfStatement:
 		c.checkForOfStatement(node)
+
+	case *parser.ForInStatement:
+		c.checkForInStatement(node)
 	// --- Loop Control (No specific type checking needed?) ---
 	case *parser.BreakStatement:
 		break // Nothing to check type-wise

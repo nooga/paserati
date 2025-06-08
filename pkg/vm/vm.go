@@ -2745,6 +2745,44 @@ func (vm *VM) run() (InterpretResult, Value) {
 			}
 		// --- END NEW ---
 
+		case OpGetOwnKeys:
+			destReg := code[ip]
+			objReg := code[ip+1]
+			ip += 2
+
+			objValue := registers[objReg]
+			
+			// Get object keys based on object type
+			var keys []string
+			switch objValue.Type() {
+			case TypeObject:
+				obj := objValue.AsPlainObject()
+				keys = obj.OwnKeys()
+			case TypeDictObject:
+				dict := objValue.AsDictObject()
+				keys = dict.OwnKeys()
+			case TypeArray:
+				arr := objValue.AsArray()
+				// Arrays enumerate their indices as strings
+				keys = make([]string, arr.Length())
+				for i := 0; i < arr.Length(); i++ {
+					keys[i] = strconv.Itoa(i)
+				}
+			default:
+				// For primitive types, return empty array
+				keys = []string{}
+			}
+			
+			// Convert string keys to Value array
+			keyValues := make([]Value, len(keys))
+			for i, key := range keys {
+				keyValues[i] = String(key)
+			}
+			
+			// Create array with the keys
+			keysArray := NewArrayWithArgs(keyValues)
+			registers[destReg] = keysArray
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)

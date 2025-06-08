@@ -321,3 +321,83 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 	debugPrintf("// [Checker ForOfStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
 
 }
+
+func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
+	// Handle for...in statement scope
+	if node == nil {
+		c.addError(nil, "nil ForInStatement node")
+		return
+	}
+
+	originalEnv := c.env
+	loopEnv := NewEnclosedEnvironment(originalEnv)
+	c.env = loopEnv
+	debugPrintf("// [Checker ForInStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
+
+	// Visit the object first to determine its type
+	if node.Object != nil {
+		c.visit(node.Object)
+		objectType := node.Object.GetComputedType()
+		if objectType == nil {
+			objectType = types.Any
+		}
+
+		// For...in loops always yield property names as strings
+		// This is true for objects, arrays, and other enumerable types
+		elementType := types.String
+
+		// Validate that the object type is enumerable
+		// In JavaScript/TypeScript, most object types are enumerable
+		switch objectType {
+		case types.Null, types.Undefined:
+			c.addError(node.Object, fmt.Sprintf("cannot iterate over '%s'", objectType.String()))
+		default:
+			// Most types are enumerable in for...in (objects, arrays, etc.)
+			// Even primitives like numbers and strings are allowed (though they may have no enumerable properties)
+		}
+
+		// Handle the variable declaration/assignment
+		if node.Variable != nil {
+			if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
+				// Define the loop variable with string type (property names)
+				if letStmt.Name != nil {
+					c.env.Define(letStmt.Name.Value, elementType, false)
+					letStmt.ComputedType = elementType
+					letStmt.Name.SetComputedType(elementType)
+				}
+			} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
+				// Define the loop variable with string type (property names)
+				if constStmt.Name != nil {
+					c.env.Define(constStmt.Name.Value, elementType, true) // const = true
+					constStmt.ComputedType = elementType
+					constStmt.Name.SetComputedType(elementType)
+				}
+			} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
+				// This is an existing variable being assigned to
+				if exprStmt.Expression != nil {
+					if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
+						// Check if the variable exists and is assignable to string
+						varType, _, exists := c.env.Resolve(ident.Value)
+						if !exists {
+							c.addError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+						} else if !types.IsAssignable(elementType, varType) {
+							c.addError(ident, fmt.Sprintf("cannot assign property name type '%s' to variable type '%s'", elementType.String(), varType.String()))
+						}
+						ident.SetComputedType(elementType)
+					}
+				}
+			}
+		}
+
+		// Visit the body
+		if node.Body != nil {
+			c.visit(node.Body)
+		}
+	} else {
+		c.addError(node, "for...in statement missing object expression")
+	}
+
+	// Restore the outer environment
+	c.env = originalEnv
+	debugPrintf("// [Checker ForInStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
+}

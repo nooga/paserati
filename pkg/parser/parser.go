@@ -3488,7 +3488,7 @@ func (p *Parser) parseForOfStatement() *ForStatement {
 	return (*ForStatement)(unsafe.Pointer(stmt))
 }
 
-// parseForStatementOrForOf determines if this is for...of and parses accordingly
+// parseForStatementOrForOf determines if this is for...of, for...in, or regular for and parses accordingly
 func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 	// We're positioned at the variable declaration or identifier
 	// Parse the variable part and see what comes next
@@ -3542,6 +3542,27 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 		stmt.Body = p.parseForBody()
 
 		// Return ForOfStatement properly
+		return stmt
+	} else if p.peekTokenIs(lexer.IN) {
+		// This is a for...in loop!
+		p.nextToken() // consume variable name, cur='in'
+
+		stmt := &ForInStatement{Token: forToken}
+		stmt.Variable = varStmt
+
+		// Parse object
+		p.nextToken() // consume 'in', move to object
+		stmt.Object = p.parseExpression(LOWEST)
+
+		// Expect ')'
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+
+		// Parse body
+		stmt.Body = p.parseForBody()
+
+		// Return ForInStatement properly
 		return stmt
 	} else {
 		// This is a regular for loop with variable declaration

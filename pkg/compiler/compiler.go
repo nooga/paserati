@@ -428,6 +428,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.ForOfStatement:
 		return c.compileForOfStatement(node, hint) // TODO: Fix this
 
+	case *parser.ForInStatement:
+		return c.compileForInStatement(node, hint)
+
 	case *parser.BreakStatement:
 		return c.compileBreakStatement(node, hint) // TODO: Fix this
 

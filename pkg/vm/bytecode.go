@@ -116,6 +116,10 @@ const (
 	OpSpreadCall       OpCode = 57 // Rx FuncReg SpreadArgReg: Call function with spread array as arguments, result in Rx
 	OpSpreadCallMethod OpCode = 58 // Rx FuncReg ThisReg SpreadArgReg: Call method with spread array as arguments, result in Rx
 	// --- END NEW ---
+
+	// --- NEW: Object Enumeration Support ---
+	OpGetOwnKeys OpCode = 60 // Rx Ry: Get own enumerable property names of object in Ry, store array in Rx
+	// --- END NEW ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -249,6 +253,8 @@ func (op OpCode) String() string {
 		return "OpSpreadCall"
 	case OpSpreadCallMethod:
 		return "OpSpreadCallMethod"
+	case OpGetOwnKeys:
+		return "OpGetOwnKeys"
 	// --- END NEW ---
 
 	default:

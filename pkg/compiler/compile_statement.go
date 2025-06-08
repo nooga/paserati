@@ -798,3 +798,142 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 
 	return BadRegister, nil
 }
+
+func (c *Compiler) compileForInStatement(node *parser.ForInStatement, hint Register) (Register, errors.PaseratiError) {
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
+	// 1. Compile the object expression first
+	objectReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, objectReg)
+	_, err := c.compileNode(node.Object, objectReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. Get object keys using OpGetOwnKeys
+	keysReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, keysReg)
+	c.emitOpCode(vm.OpGetOwnKeys, node.Token.Line)
+	c.emitByte(byte(keysReg))   // destination register
+	c.emitByte(byte(objectReg)) // object register
+
+	// 3. Set up iteration variables (mirroring for...of pattern)
+	// We need a key index counter and keys array length
+	keyIndexReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, keyIndexReg)
+	lengthReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, lengthReg)
+	currentKeyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, currentKeyReg)
+
+	// Initialize key index to 0
+	c.emitLoadNewConstant(keyIndexReg, vm.Number(0), node.Token.Line)
+
+	// Get length of keys array
+	c.emitOpCode(vm.OpGetProp, node.Token.Line)
+	c.emitByte(byte(lengthReg)) // destination register
+	c.emitByte(byte(keysReg))   // keys array register
+	lengthConstIdx := c.chunk.AddConstant(vm.String("length"))
+	c.emitUint16(lengthConstIdx) // property name constant index
+
+	// --- Loop Start & Context Setup ---
+	loopStartPos := len(c.chunk.Code)
+	loopContext := &LoopContext{
+		LoopStartPos:               loopStartPos,
+		BreakPlaceholderPosList:    make([]int, 0),
+		ContinuePlaceholderPosList: make([]int, 0),
+	}
+	c.loopContextStack = append(c.loopContextStack, loopContext)
+
+	// 4. Check if keyIndex < length (loop condition)
+	conditionReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, conditionReg)
+	c.emitOpCode(vm.OpLess, node.Token.Line)
+	c.emitByte(byte(conditionReg)) // destination
+	c.emitByte(byte(keyIndexReg))  // left operand (key index)
+	c.emitByte(byte(lengthReg))    // right operand (length)
+
+	// Jump out of loop if condition is false
+	conditionExitJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+
+	// 5. Get current key: keys[keyIndex]
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+	c.emitByte(byte(currentKeyReg)) // destination
+	c.emitByte(byte(keysReg))       // keys array
+	c.emitByte(byte(keyIndexReg))   // index
+
+	// 6. Assign current key to loop variable
+	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
+		// Define the loop variable in symbol table
+		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
+		// Pin the register since loop variables can be captured by closures in the loop body
+		c.regAlloc.Pin(symbol.Register)
+		// Store key value in the variable's register
+		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
+	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
+		// Define the loop variable in symbol table
+		symbol := c.currentSymbolTable.Define(constStmt.Name.Value, c.regAlloc.Alloc())
+		// Pin the register since loop variables can be captured by closures in the loop body
+		c.regAlloc.Pin(symbol.Register)
+		// Store key value in the variable's register
+		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
+	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
+		// This is an existing variable being assigned to
+		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
+			symbolRef, _, found := c.currentSymbolTable.Resolve(ident.Value)
+			if !found {
+				return BadRegister, NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+			}
+			// Store key value in the existing variable's register
+			c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
+		}
+	}
+
+	// 7. Compile loop body
+	bodyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, bodyReg)
+	if _, err := c.compileNode(node.Body, bodyReg); err != nil {
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+		return BadRegister, err
+	}
+
+	// 8. Patch continue jumps to land here (before increment)
+	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
+		c.patchJump(continuePos)
+	}
+
+	// 9. Increment key index
+	oneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, oneReg)
+	c.emitLoadNewConstant(oneReg, vm.Number(1), node.Token.Line)
+	c.emitOpCode(vm.OpAdd, node.Token.Line)
+	c.emitByte(byte(keyIndexReg)) // destination (reuse keyIndexReg)
+	c.emitByte(byte(keyIndexReg)) // left operand (current key index)
+	c.emitByte(byte(oneReg))      // right operand (1)
+
+	// 10. Jump back to loop start
+	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2
+	backOffset := loopStartPos - jumpBackInstructionEndPos
+	c.emitOpCode(vm.OpJump, node.Body.Token.Line)
+	c.emitUint16(uint16(int16(backOffset)))
+
+	// 11. Clean up loop context and patch jumps
+	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
+	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+
+	// Patch condition exit jump
+	c.patchJump(conditionExitJumpPos)
+
+	// Patch all break jumps
+	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
+		c.patchJump(breakPos)
+	}
+
+	return BadRegister, nil
+}
