@@ -409,6 +409,16 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					} else {
 						resultType = fieldType
 					}
+				} else if obj.IsCallable() {
+					// Check for function prototype methods if this is a callable object
+					if methodType := builtins.GetPrototypeMethodType("function", propertyName); methodType != nil {
+						resultType = methodType
+						debugPrintf("// [Checker MemberExpr] Found function prototype method '%s': %s\n", propertyName, methodType.String())
+					} else {
+						// Property not found
+						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+						// resultType remains types.Never
+					}
 				} else {
 					// Property not found
 					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
@@ -628,6 +638,16 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 					baseResultType = types.Never
 				} else {
 					baseResultType = fieldType
+				}
+			} else if obj.IsCallable() {
+				// Check for function prototype methods if this is a callable object
+				if methodType := builtins.GetPrototypeMethodType("function", propertyName); methodType != nil {
+					baseResultType = methodType
+					debugPrintf("// [Checker OptionalChaining] Found function prototype method '%s': %s\n", propertyName, methodType.String())
+				} else {
+					// Property not found - for optional chaining, this is OK, just return undefined
+					// Don't add an error like regular member access would
+					baseResultType = types.Undefined
 				}
 			} else {
 				// Property not found - for optional chaining, this is OK, just return undefined

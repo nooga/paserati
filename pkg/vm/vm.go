@@ -1574,6 +1574,14 @@ func (vm *VM) run() (InterpretResult, Value) {
 					}
 				}
 
+				// Check function prototype methods
+				if FunctionPrototype != nil {
+					if method, exists := FunctionPrototype.GetOwn(propName); exists {
+						registers[destReg] = createBoundMethod(objVal, method)
+						continue
+					}
+				}
+
 				registers[destReg] = Undefined
 				continue
 			}
@@ -1593,6 +1601,14 @@ func (vm *VM) run() (InterpretResult, Value) {
 				if fn.Properties != nil {
 					if prop, exists := fn.Properties.GetOwn(propName); exists {
 						registers[destReg] = prop
+						continue
+					}
+				}
+
+				// Check function prototype methods
+				if FunctionPrototype != nil {
+					if method, exists := FunctionPrototype.GetOwn(propName); exists {
+						registers[destReg] = createBoundMethod(objVal, method)
 						continue
 					}
 				}

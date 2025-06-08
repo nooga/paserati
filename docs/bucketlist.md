@@ -92,7 +92,11 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Conditional (Ternary) Operator (`? :`)
 - [x] Comma Operator (in specific contexts like `for` loops, array literals)
 - [x] `typeof` Operator
-- [ ] `instanceof` Operator
+- [x] `instanceof` Operator - **New!**
+  - [x] Basic instanceof checks (`obj instanceof Constructor`)
+  - [x] Constructor function validation (callable types with construct signatures)
+  - [x] TypeScript-compliant error handling for invalid constructors
+  - [x] Integration with prototypal inheritance system
 - [x] `in` Operator - **New!**
   - [x] Basic property existence checking (`"prop" in obj`)
   - [x] Support for string and number keys
@@ -128,8 +132,14 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `while` Loops
 - [x] `do...while` Loops
 - [x] `for` Loops (C-style)
-- [x] `for...in` Loops
-- [x] `for...of` Loops
+- [x] `for...in` Loops - **Enhanced!**
+  - [x] Basic for...in iteration over object properties
+  - [x] Support for existing variable assignment (not just declaration)
+  - [x] Proper global variable handling in loop assignment
+- [x] `for...of` Loops - **Enhanced!**
+  - [x] Basic for...of iteration over arrays
+  - [x] Support for existing variable assignment (not just declaration)  
+  - [x] Proper global variable handling in loop assignment
 - [x] `break` Statement
 - [x] `continue` Statement
 - [ ] Labeled Statements
@@ -176,8 +186,26 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Rest Parameters (`...`) (basic implementation, some edge cases remain)
 - [ ] `arguments` Object
 - [x] Closures / Lexical Scoping
-- [x] `this` Keyword (basic object method context)
-- [x] `new` Operator / Constructor Functions (OpNew implemented)
+- [x] `this` Keyword (comprehensive object method context)
+  - [x] Basic object method context
+  - [x] Explicit `this` parameter syntax (`function(this: SomeType)`)
+  - [x] Context preservation in nested function literals
+  - [x] Constructor function `this` binding with `new` operator
+- [x] `new` Operator / Constructor Functions - **Enhanced!**
+  - [x] OpNew bytecode implementation
+  - [x] Constructor function prototype property creation
+  - [x] Instance prototype chain establishment
+  - [x] TypeScript-compliant constructor type checking
+- [x] Prototypal Inheritance - **New Major Feature!**
+  - [x] Function prototype property support (`.prototype`)
+  - [x] Constructor property relationships
+  - [x] Function.prototype methods
+    - [x] `Function.prototype.call()` for explicit `this` binding
+  - [x] Object.getPrototypeOf() static method
+  - [x] Prototype chain traversal and method resolution
+  - [x] Runtime prototype object management
+  - [x] TypeScript-compliant prototype type checking
+  - [x] Integration with instanceof operator
 - [ ] Generator Functions (`function*`)
 - [ ] Async Functions (`async function`)
 
@@ -208,6 +236,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Method shorthand syntax (`{ add(a, b) { return a + b; } }`)
   - [x] Property shorthand syntax (`{ name, age }` for `{ name: name, age: age }`)
   - [x] Methods with `this` context
+  - [x] Constructor functions and prototype relationships
+  - [x] Object.getPrototypeOf() static method for prototype introspection
 - [x] Strings
   - [x] `.length` Property (OpGetLength optimization)
   - [x] String Prototype Methods
@@ -265,6 +295,9 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Clean separation between constructor and prototype methods
   - [x] Type-safe builtin method registration with proper signatures
   - [x] Support for variadic methods, optional parameters, and complex return types
+  - [x] **Function and Object prototype support** - Function.prototype and Object static methods
+  - [x] **Enhanced object type definitions** - callable types with static properties
+  - [x] **Prototype method binding** - proper `this` context for prototype methods
 
 ## TypeScript Specific Features
 

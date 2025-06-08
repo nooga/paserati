@@ -6,6 +6,9 @@ var StringPrototype *PlainObject
 // ArrayPrototype holds the prototype object for Array
 var ArrayPrototype *PlainObject
 
+// FunctionPrototype holds the prototype object for Function
+var FunctionPrototype *PlainObject
+
 // initPrototypes initializes the built-in prototype objects as empty PlainObjects
 func initPrototypes() {
 	if StringPrototype != nil {
@@ -15,6 +18,7 @@ func initPrototypes() {
 	// Create empty prototype objects
 	StringPrototype = NewObject(Undefined).AsPlainObject()
 	ArrayPrototype = NewObject(Undefined).AsPlainObject()
+	FunctionPrototype = NewObject(Undefined).AsPlainObject()
 }
 
 // RegisterStringPrototypeMethod allows external packages to register String prototype methods
@@ -27,6 +31,12 @@ func RegisterStringPrototypeMethod(methodName string, method Value) {
 func RegisterArrayPrototypeMethod(methodName string, method Value) {
 	initPrototypes() // Ensure prototypes are initialized
 	ArrayPrototype.SetOwn(methodName, method)
+}
+
+// RegisterFunctionPrototypeMethod allows external packages to register Function prototype methods
+func RegisterFunctionPrototypeMethod(methodName string, method Value) {
+	initPrototypes() // Ensure prototypes are initialized
+	FunctionPrototype.SetOwn(methodName, method)
 }
 
 // createBoundMethod creates a method bound to a specific 'this' value

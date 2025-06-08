@@ -907,3 +907,9 @@ func (a *ArrayObject) Append(value Value) {
 	a.elements = append(a.elements, value)
 	a.length++
 }
+
+// NewValueFromPlainObject creates a Value from a PlainObject pointer
+// This is useful for returning prototype objects from built-in functions
+func NewValueFromPlainObject(plainObj *PlainObject) Value {
+	return Value{typ: TypeObject, obj: unsafe.Pointer(plainObj)}
+}

@@ -7,26 +7,23 @@ import (
 
 // registerObjectConstructor registers the Object constructor and prototype methods
 func registerObjectConstructor() {
-	// Object constructor - can be called with new or without
-	// In TypeScript, Object(value) converts the value to an object
-	// new Object(value) creates a new object wrapper
-	objectType := types.NewFunctionType(&types.Signature{
-		ParameterTypes: []types.Type{types.Any},
-		ReturnType:     types.Any, // Returns any type when called with new
-		OptionalParams: []bool{true}, // Parameter is optional
-	})
+	// Create Object type with static methods using ObjectType pattern
+	objectType := types.NewObjectType().
+		WithCallSignature(types.Sig([]types.Type{types.Any}, types.Any).
+			WithOptional(true)).
+		WithConstructSignature(types.Sig([]types.Type{types.Any}, types.Any).
+			WithOptional(true)).
+		WithProperty("getPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any}, types.Any))
 	
-	// Also add a construct signature to make instanceof work
-	objectType.ConstructSignatures = append(objectType.ConstructSignatures, &types.Signature{
-		ParameterTypes: []types.Type{types.Any},
-		ReturnType:     types.Any,
-		OptionalParams: []bool{true},
-	})
+	// Create the runtime Object function with properties
+	objectValue := vm.NewNativeFunctionWithProps(0, true, "Object", objectConstructor)
+	objectObj := objectValue.AsNativeFunctionWithProps()
 	
-	// Register the Object constructor
-	register("Object", 0, true, objectConstructor, objectType)
+	// Add the getPrototypeOf method to the runtime Object
+	objectObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOf))
 	
-	// TODO: Add Object static methods like Object.create, Object.keys, etc.
+	// Register using registerObject since it's a function with properties
+	registerObject("Object", objectValue, objectType)
 }
 
 // objectConstructor implements the Object constructor
@@ -52,5 +49,46 @@ func objectConstructor(args []vm.Value) vm.Value {
 		// For now, just return a new object
 		obj := vm.NewObject(vm.DefaultObjectPrototype)
 		return obj
+	}
+}
+
+// objectGetPrototypeOf implements Object.getPrototypeOf() static method
+func objectGetPrototypeOf(args []vm.Value) vm.Value {
+	if len(args) == 0 {
+		return vm.Undefined
+	}
+	
+	obj := args[0]
+	
+	// For objects with prototypes, return their prototype
+	switch obj.Type() {
+	case vm.TypeObject:
+		// For plain objects, get their actual prototype
+		plainObj := obj.AsPlainObject()
+		if plainObj != nil {
+			return plainObj.GetPrototype()
+		}
+		return vm.Null
+	case vm.TypeArray:
+		// For arrays, return Array.prototype if available
+		if vm.ArrayPrototype != nil {
+			return vm.NewValueFromPlainObject(vm.ArrayPrototype)
+		}
+		return vm.DefaultObjectPrototype
+	case vm.TypeString:
+		// For strings, return String.prototype if available
+		if vm.StringPrototype != nil {
+			return vm.NewValueFromPlainObject(vm.StringPrototype)
+		}
+		return vm.Null
+	case vm.TypeFunction, vm.TypeClosure:
+		// For functions, return Function.prototype if available
+		if vm.FunctionPrototype != nil {
+			return vm.NewValueFromPlainObject(vm.FunctionPrototype)
+		}
+		return vm.Null
+	default:
+		// For primitive values, return null
+		return vm.Null
 	}
 }
