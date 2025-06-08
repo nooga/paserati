@@ -588,6 +588,45 @@ func (vm *VM) run() (InterpretResult, Value) {
 				registers[destReg] = BooleanValue(result)
 			}
 
+		case OpIn:
+			// OpIn: Rx Ry Rz - Rx = (Ry in Rz) - property existence check
+			destReg := code[ip]
+			propReg := code[ip+1]
+			objReg := code[ip+2]
+			ip += 3
+
+			propVal := registers[propReg]
+			objVal := registers[objReg]
+
+			// Check if property exists in object
+			var hasProperty bool
+			propKey := propVal.ToString()
+
+			switch objVal.Type() {
+			case TypeObject:
+				plainObj := objVal.AsPlainObject()
+				hasProperty = plainObj.HasOwn(propKey)
+			case TypeDictObject:
+				dictObj := objVal.AsDictObject()
+				hasProperty = dictObj.HasOwn(propKey)
+			case TypeArray:
+				// For arrays, check if the property is a valid index
+				arrayObj := objVal.AsArray()
+				if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
+					// Check if index is within bounds
+					hasProperty = index < arrayObj.Length()
+				} else {
+					// Non-numeric property on array (e.g., "length")
+					// For simplicity, we'll check for "length" property
+					hasProperty = propKey == "length"
+				}
+			default:
+				// TypeError: Right-hand side of 'in' is not an object
+				hasProperty = false
+			}
+
+			registers[destReg] = BooleanValue(hasProperty)
+
 		case OpJump:
 			offsetHi := code[ip]
 			offsetLo := code[ip+1]

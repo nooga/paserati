@@ -120,6 +120,7 @@ var precedences = map[lexer.TokenType]int{
 	lexer.GT: LESSGREATER,
 	lexer.LE: LESSGREATER,
 	lexer.GE: LESSGREATER,
+	lexer.IN: LESSGREATER,
 
 	// Shift
 	lexer.LEFT_SHIFT:           SHIFT, // New
@@ -218,6 +219,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.GT, p.parseInfixExpression)
 	p.registerInfix(lexer.LE, p.parseInfixExpression)
 	p.registerInfix(lexer.GE, p.parseInfixExpression)
+	p.registerInfix(lexer.IN, p.parseInfixExpression)
 	p.registerInfix(lexer.LOGICAL_AND, p.parseInfixExpression)
 	p.registerInfix(lexer.LOGICAL_OR, p.parseInfixExpression)
 	p.registerInfix(lexer.COALESCE, p.parseInfixExpression)

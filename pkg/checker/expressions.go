@@ -780,3 +780,42 @@ func (c *Checker) isPrimitiveType(t types.Type) bool {
 	return t == types.String || t == types.Number || t == types.Boolean || 
 		   t == types.Null || t == types.Undefined
 }
+
+// checkInOperator handles type checking for the 'in' operator ("prop" in obj)
+func (c *Checker) checkInOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
+	// Left operand (property name) should be string, number, or symbol
+	// For now, we'll focus on string and number (symbol support can be added later)
+	if leftType != types.Any && leftType != types.String && leftType != types.Number {
+		// Check if it's a literal string or number type
+		if !c.isStringOrNumberLiteralType(leftType) {
+			c.addError(node.Left, fmt.Sprintf("the left-hand side of 'in' must be of type 'string' or 'number', but got '%s'", leftType.String()))
+		}
+	}
+	
+	// Right operand (object) should be an object type
+	if rightType != types.Any && !c.isObjectType(rightType) {
+		c.addError(node.Right, fmt.Sprintf("the right-hand side of 'in' must be an object, but got '%s'", rightType.String()))
+	}
+}
+
+// isStringOrNumberLiteralType checks if a type is a string or number literal type
+func (c *Checker) isStringOrNumberLiteralType(t types.Type) bool {
+	// Check for literal types (e.g., "hello", 42)
+	if lit, ok := t.(*types.LiteralType); ok {
+		// Determine the base type from the literal value
+		valueType := lit.Value.Type()
+		return valueType == vm.TypeString || valueType == vm.TypeFloatNumber || valueType == vm.TypeIntegerNumber
+	}
+	return false
+}
+
+// isObjectType checks if a type represents an object (not primitive)
+func (c *Checker) isObjectType(t types.Type) bool {
+	switch t.(type) {
+	case *types.ObjectType, *types.ArrayType:
+		return true
+	default:
+		// Check for any type that could represent an object
+		return t == types.Any
+	}
+}

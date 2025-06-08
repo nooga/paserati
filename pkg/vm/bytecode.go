@@ -45,6 +45,7 @@ const (
 	OpGreater        OpCode = 16 // Rx Ry Rz: Rx = (Ry > Rz)
 	OpLess           OpCode = 17 // Rx Ry Rz: Rx = (Ry < Rz)
 	OpLessEqual      OpCode = 18 // Rx Ry Rz: Rx = (Ry <= Rz)
+	OpIn             OpCode = 59 // Rx Ry Rz: Rx = (Ry in Rz) - property existence check
 	// Add GreaterEqual later if needed
 
 	// --- NEW: Remainder and Exponent Opcodes ---
@@ -180,6 +181,8 @@ func (op OpCode) String() string {
 		return "OpJump"
 	case OpLessEqual:
 		return "OpLessEqual"
+	case OpIn:
+		return "OpIn"
 	case OpRemainder:
 		return "OpRemainder"
 	case OpExponent:

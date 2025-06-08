@@ -1132,6 +1132,10 @@ func (c *Checker) visit(node parser.Node) {
 				c.checkImpossibleComparison(leftType, rightType, node.Operator, node)
 				// Comparison always results in boolean, even with 'any'
 				resultType = types.Boolean
+			case "in":
+				// Property existence check: "prop" in obj
+				c.checkInOperator(leftType, rightType, node)
+				resultType = types.Boolean
 			case "&&", "||":
 				// TODO: Implement Union types. For now, default to Any.
 				// If one operand is any, result is any.

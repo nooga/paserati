@@ -93,7 +93,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Comma Operator (in specific contexts like `for` loops, array literals)
 - [x] `typeof` Operator
 - [ ] `instanceof` Operator
-- [ ] `in` Operator
+- [x] `in` Operator - **New!**
+  - [x] Basic property existence checking (`"prop" in obj`)
+  - [x] Support for string and number keys
+  - [x] Array index checking (`"0" in arr`, `"length" in arr`)
+  - [x] Type checking with compile-time validation
+  - [x] Works with PlainObject, DictObject, and ArrayObject
+  - [x] TypeScript-compliant error messages for invalid operands
 - [ ] `delete` Operator
 - [x] `void` Operator
 - [x] Grouping Operator (`()`)

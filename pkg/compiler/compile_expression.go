@@ -545,6 +545,8 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			c.emitLess(hint, leftReg, rightReg, line)
 		case ">":
 			c.emitGreater(hint, leftReg, rightReg, line)
+		case "in":
+			c.emitIn(hint, leftReg, rightReg, line)
 		case "===":
 			c.emitStrictEqual(hint, leftReg, rightReg, line)
 		case "!==":

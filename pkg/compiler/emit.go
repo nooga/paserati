@@ -144,6 +144,13 @@ func (c *Compiler) emitLessEqual(dest, left, right Register, line int) {
 	c.emitByte(byte(right))
 }
 
+func (c *Compiler) emitIn(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpIn, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
 func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
 	c.emitOpCode(vm.OpCall, line)
 	c.emitByte(byte(dest))
