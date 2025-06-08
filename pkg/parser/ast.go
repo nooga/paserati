@@ -830,6 +830,33 @@ func (te *TypeofExpression) String() string {
 	return out.String()
 }
 
+// TypeAssertionExpression represents a type assertion expression (value as Type)
+type TypeAssertionExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'as' token
+	Expression     Expression  // The expression being asserted
+	TargetType     Expression  // The target type annotation
+}
+
+func (tae *TypeAssertionExpression) expressionNode()      {}
+func (tae *TypeAssertionExpression) TokenLiteral() string { return tae.Token.Literal }
+func (tae *TypeAssertionExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	if tae.Expression != nil {
+		out.WriteString(tae.Expression.String())
+	}
+	out.WriteString(" as ")
+	if tae.TargetType != nil {
+		out.WriteString(tae.TargetType.String())
+	}
+	out.WriteString(")")
+	if tae.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", tae.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // InfixExpression represents an infix operator expression.
 // <Left> <operator> <Right>
 // e.g., 5 + 5, x == y

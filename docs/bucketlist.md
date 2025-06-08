@@ -99,6 +99,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Grouping Operator (`()`)
 - [x] Nullish Coalescing Operator (`??`)
 - [x] Optional Chaining (`?.`)
+- [x] Type Assertions (`as` operator) - **New!**
+  - [x] Basic type assertions (`value as Type`)
+  - [x] Compile-time validation with TypeScript-compliant error checking
+  - [x] Runtime behavior (assertions are no-ops after type checking)
+  - [x] Support for primitive types, interfaces, and complex types
+  - [x] Integration with union types and contextual typing
 - [x] Spread Syntax (`...`) - **Major Enhancement!**
   - [x] Spread in function calls (`func(...args)`)
   - [x] Contextual typing for spread array literals (`sum(...[1, 2, 3])`)

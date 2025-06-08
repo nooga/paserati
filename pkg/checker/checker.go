@@ -1029,6 +1029,10 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle TypeofExpression ---
 		c.checkTypeofExpression(node)
 
+	case *parser.TypeAssertionExpression:
+		// --- NEW: Handle TypeAssertionExpression ---
+		c.checkTypeAssertionExpression(node)
+
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
 		c.visit(node.Left)

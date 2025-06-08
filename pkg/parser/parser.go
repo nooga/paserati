@@ -63,6 +63,7 @@ const (
 	POWER       // ** (Right-associative handled in parseInfix)
 	PREFIX      // -X or !X or ++X or --X or ~X
 	POSTFIX     // X++ or X--
+	ASSERTION   // value as Type
 	CALL        // myFunction(X)
 	INDEX       // array[index]
 	MEMBER      // object.property
@@ -138,6 +139,9 @@ var precedences = map[lexer.TokenType]int{
 	// lexer.BITWISE_NOT does not need precedence here (uses PREFIX in parsePrefix)
 	// lexer.INC prefix/postfix handled by registration
 	// lexer.DEC prefix/postfix handled by registration
+
+	// Type Assertion
+	lexer.AS: ASSERTION,
 
 	// Call, Index, Member Access
 	lexer.LPAREN:            CALL,
@@ -224,6 +228,9 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.LEFT_SHIFT, p.parseInfixExpression)
 	p.registerInfix(lexer.RIGHT_SHIFT, p.parseInfixExpression)
 	p.registerInfix(lexer.UNSIGNED_RIGHT_SHIFT, p.parseInfixExpression)
+	// Type Assertion
+	p.registerInfix(lexer.AS, p.parseTypeAssertionExpression)
+	
 	// Call, Index, Member, Ternary
 	p.registerInfix(lexer.LPAREN, p.parseCallExpression)    // Value context: function call
 	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression) // Value context: array/member index
@@ -1686,6 +1693,25 @@ func (p *Parser) parseTypeofExpression() Expression {
 	expression.Operand = p.parseExpression(PREFIX)
 	if expression.Operand == nil {
 		p.addError(p.curToken, "expected expression after 'typeof'")
+		return nil
+	}
+
+	return expression
+}
+
+// parseTypeAssertionExpression handles type assertion expressions like (value as Type)
+func (p *Parser) parseTypeAssertionExpression(left Expression) Expression {
+	expression := &TypeAssertionExpression{
+		Token:      p.curToken, // The 'as' token
+		Expression: left,       // The expression being asserted
+	}
+
+	p.nextToken() // Move past 'as'
+
+	// Parse the target type expression
+	expression.TargetType = p.parseTypeExpression()
+	if expression.TargetType == nil {
+		p.addError(p.curToken, "expected type after 'as'")
 		return nil
 	}
 

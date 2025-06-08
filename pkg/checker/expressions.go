@@ -721,3 +721,62 @@ func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
 	// Default to the general union of all possible typeof results
 	node.SetComputedType(types.TypeofResultType)
 }
+
+// checkTypeAssertionExpression handles type assertion expressions (value as Type)
+func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpression) {
+	// Visit the expression being asserted
+	c.visit(node.Expression)
+	sourceType := node.Expression.GetComputedType()
+	if sourceType == nil {
+		sourceType = types.Any
+	}
+	
+	// Resolve the target type
+	targetType := c.resolveTypeAnnotation(node.TargetType)
+	if targetType == nil {
+		c.addError(node.TargetType, "invalid type in type assertion")
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Validate the type assertion according to TypeScript rules
+	if !c.isValidTypeAssertion(sourceType, targetType) {
+		c.addError(node, fmt.Sprintf("conversion of type '%s' to type '%s' may be a mistake because neither type sufficiently overlaps with the other", 
+			sourceType.String(), targetType.String()))
+	}
+	
+	// The result type is always the target type
+	node.SetComputedType(targetType)
+}
+
+// isValidTypeAssertion checks if a type assertion is valid according to TypeScript rules
+func (c *Checker) isValidTypeAssertion(sourceType, targetType types.Type) bool {
+	// Allow any assertion involving 'any' or 'unknown'
+	if sourceType == types.Any || sourceType == types.Unknown ||
+		targetType == types.Any || targetType == types.Unknown {
+		return true
+	}
+	
+	// Check if either type is assignable to the other
+	if types.IsAssignable(targetType, sourceType) || types.IsAssignable(sourceType, targetType) {
+		return true
+	}
+	
+	// Check for obvious mismatches between primitive types
+	// TypeScript allows assertions between primitives only if there's some potential overlap
+	if c.isPrimitiveType(sourceType) && c.isPrimitiveType(targetType) {
+		// Disallow assertions between completely different primitive types
+		if sourceType != targetType {
+			return false
+		}
+	}
+	
+	// Allow other assertions (interfaces, objects, etc.) as they might have overlap
+	return true
+}
+
+// isPrimitiveType checks if a type is a primitive type
+func (c *Checker) isPrimitiveType(t types.Type) bool {
+	return t == types.String || t == types.Number || t == types.Boolean || 
+		   t == types.Null || t == types.Undefined
+}

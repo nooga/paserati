@@ -744,6 +744,16 @@ func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint R
 	return hint, nil
 }
 
+// compileTypeAssertionExpression compiles type assertion expressions (value as Type)
+// At runtime, type assertions are essentially no-ops since TypeScript type checking
+// has already validated them at compile time.
+func (c *Compiler) compileTypeAssertionExpression(node *parser.TypeAssertionExpression, hint Register) (Register, errors.PaseratiError) {
+	// For type assertions, we simply compile the underlying expression
+	// The type checking has already been done by the checker, so at runtime
+	// this is just the value itself
+	return c.compileNode(node.Expression, hint)
+}
+
 // calculateEffectiveArgCount calculates the effective number of arguments,
 // expanding spread elements based on array literal lengths
 func (c *Compiler) calculateEffectiveArgCount(arguments []parser.Expression) int {
