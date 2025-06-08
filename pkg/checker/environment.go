@@ -19,32 +19,32 @@ type Environment struct {
 	typeAliases map[string]types.Type // Stores resolved types for type aliases
 	outer       *Environment          // Pointer to the enclosing environment
 
-	// --- NEW: Function overload support ---
+	// --- Function overload support ---
 	// Maps function names to their collected overload signatures (before implementation is found)
 	pendingOverloads map[string][]*parser.FunctionSignature
-	// Maps function names to their completed overloaded function types
-	overloadedFunctions map[string]*types.OverloadedFunctionType
+	// Maps function names to their completed ObjectType with call signatures
+	overloadedFunctions map[string]*types.ObjectType
 }
 
 // NewEnvironment creates a new top-level type environment.
 func NewEnvironment() *Environment {
 	return &Environment{
-		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases:         make(map[string]types.Type), // Initialize
-		outer:               nil,
+		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:               make(map[string]types.Type), // Initialize
+		outer:                     nil,
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
-		overloadedFunctions: make(map[string]*types.OverloadedFunctionType),
+		overloadedFunctions: make(map[string]*types.ObjectType),
 	}
 }
 
 // NewEnclosedEnvironment creates a new environment nested within an outer one.
 func NewEnclosedEnvironment(outer *Environment) *Environment {
 	return &Environment{
-		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases:         make(map[string]types.Type), // Initialize
+		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:               make(map[string]types.Type), // Initialize
 		outer:               outer,
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
-		overloadedFunctions: make(map[string]*types.OverloadedFunctionType),
+		overloadedFunctions: make(map[string]*types.ObjectType),
 	}
 }
 
@@ -53,11 +53,11 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 func NewGlobalEnvironment() *Environment {
 	builtins.InitializeRegistry()
 	env := &Environment{
-		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases:         make(map[string]types.Type), // Initialize
+		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:               make(map[string]types.Type), // Initialize
 		outer:               nil,
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
-		overloadedFunctions: make(map[string]*types.OverloadedFunctionType),
+		overloadedFunctions: make(map[string]*types.ObjectType),
 	}
 
 	// Define built-in primitive types (if not already globally available elsewhere)
@@ -214,19 +214,18 @@ func (e *Environment) GetPendingOverloads(name string) []*parser.FunctionSignatu
 	return e.pendingOverloads[name]
 }
 
-// CompleteOverloadedFunction creates an OverloadedFunctionType from pending signatures and implementation,
+// CompleteOverloadedFunction creates a unified ObjectType from pending signatures,
 // then stores it and clears the pending overloads.
-func (e *Environment) CompleteOverloadedFunction(name string, overloadTypes []*types.FunctionType, implementation *types.FunctionType) bool {
-	// Create the overloaded function type
-	overloadedFunc := &types.OverloadedFunctionType{
-		Name:           name,
-		Overloads:      overloadTypes,
-		Implementation: implementation,
+func (e *Environment) CompleteOverloadedFunction(name string, overloadSignatures []*types.Signature) bool {
+	// Create the unified overloaded function type as ObjectType with multiple call signatures
+	overloadedFunc := &types.ObjectType{
+		Properties:     make(map[string]types.Type),
+		CallSignatures: overloadSignatures,
 	}
 
 	// Store it
 	if e.overloadedFunctions == nil {
-		e.overloadedFunctions = make(map[string]*types.OverloadedFunctionType)
+		e.overloadedFunctions = make(map[string]*types.ObjectType)
 	}
 	e.overloadedFunctions[name] = overloadedFunc
 
@@ -235,12 +234,33 @@ func (e *Environment) CompleteOverloadedFunction(name string, overloadTypes []*t
 		delete(e.pendingOverloads, name)
 	}
 
-	// Define the function in the environment with the overloaded type
+	// Define the function in the environment with the unified overloaded type
 	return e.Update(name, overloadedFunc)
 }
 
+// --- NEW: Unified Type System Helpers ---
+
+// CompleteOverloadedFunctionUTS creates an ObjectType with multiple call signatures
+// from pending signatures and implementation, then stores it and clears the pending overloads.
+// This is the UTS replacement for CompleteOverloadedFunction.
+func (e *Environment) CompleteOverloadedFunctionUTS(name string, overloadSignatures []*types.Signature, implementation *types.Signature) bool {
+	// Create a new ObjectType with all call signatures
+	obj := &types.ObjectType{
+		Properties:     make(map[string]types.Type),
+		CallSignatures: append(overloadSignatures, implementation),
+	}
+
+	// Clear pending overloads for this function
+	if e.pendingOverloads != nil {
+		delete(e.pendingOverloads, name)
+	}
+
+	// Define the function in the environment with the unified object type
+	return e.Update(name, obj)
+}
+
 // ResolveOverloadedFunction looks up an overloaded function by name in this environment and outer scopes.
-func (e *Environment) ResolveOverloadedFunction(name string) (*types.OverloadedFunctionType, bool) {
+func (e *Environment) ResolveOverloadedFunction(name string) (*types.ObjectType, bool) {
 	// Check current scope
 	if e.overloadedFunctions != nil {
 		if overloaded, exists := e.overloadedFunctions[name]; exists {
@@ -256,12 +276,23 @@ func (e *Environment) ResolveOverloadedFunction(name string) (*types.OverloadedF
 	return nil, false
 }
 
+
 // IsOverloadedFunction checks if a function name has overloads (either pending or completed).
 func (e *Environment) IsOverloadedFunction(name string) bool {
-	// Check completed overloads
+	// Check completed overloads (legacy or unified)
 	if e.overloadedFunctions != nil {
 		if _, exists := e.overloadedFunctions[name]; exists {
 			return true
+		}
+	}
+	
+	// Check if the function has multiple call signatures (indicating overloads)
+	if e.overloadedFunctions != nil {
+		if unified, exists := e.overloadedFunctions[name]; exists {
+			// Verify it actually has multiple call signatures
+			if len(unified.CallSignatures) > 1 {
+				return true
+			}
 		}
 	}
 

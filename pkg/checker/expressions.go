@@ -115,23 +115,23 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 		// Create preliminary function signatures for function properties
 		if funcLit, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); isFunctionLiteral {
-			preliminaryFuncType := c.resolveFunctionLiteralType(funcLit, c.env)
-			if preliminaryFuncType == nil {
-				preliminaryFuncType = &types.FunctionType{
+			preliminaryFuncSig := c.resolveFunctionLiteralSignature(funcLit, c.env)
+			if preliminaryFuncSig == nil {
+				preliminaryFuncSig = &types.Signature{
 					ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
 					ReturnType:     types.Any,
 				}
-				for i := range preliminaryFuncType.ParameterTypes {
-					preliminaryFuncType.ParameterTypes[i] = types.Any
+				for i := range preliminaryFuncSig.ParameterTypes {
+					preliminaryFuncSig.ParameterTypes[i] = types.Any
 				}
 			}
-			preliminaryObjType.Properties[keyName] = preliminaryFuncType
+			preliminaryObjType.Properties[keyName] = types.NewFunctionType(preliminaryFuncSig)
 		} else if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); isArrowFunction {
 			// For arrow functions, we can use a generic function type temporarily
-			preliminaryObjType.Properties[keyName] = &types.FunctionType{
+			preliminaryObjType.Properties[keyName] = types.NewFunctionType(&types.Signature{
 				ParameterTypes: []types.Type{}, // We'll refine this later
 				ReturnType:     types.Any,
-			}
+			})
 		} else if shorthandMethod, isShorthandMethod := prop.Value.(*parser.ShorthandMethod); isShorthandMethod {
 			// Create preliminary function signature for shorthand methods
 			paramTypes := make([]types.Type, len(shorthandMethod.Parameters))
@@ -156,11 +156,11 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				returnType = types.Any // We'll infer this later during body checking
 			}
 
-			preliminaryFuncType := &types.FunctionType{
+			preliminaryFuncSig := &types.Signature{
 				ParameterTypes: paramTypes,
 				ReturnType:     returnType,
 			}
-			preliminaryObjType.Properties[keyName] = preliminaryFuncType
+			preliminaryObjType.Properties[keyName] = types.NewFunctionType(preliminaryFuncSig)
 		}
 	}
 
@@ -332,18 +332,6 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
 				// resultType remains types.Never
 			}
-		case *types.FunctionType:
-			// Regular function types don't have properties
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
-			// resultType remains types.Never
-		case *types.CallableType:
-			// Handle property access on callable types (like String.fromCharCode)
-			if propType, exists := obj.Properties[propertyName]; exists {
-				resultType = propType
-			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on callable type", propertyName))
-				// resultType remains types.Never
-			}
 		case *types.IntersectionType:
 			// Handle property access on intersection types
 			propType := c.getPropertyTypeFromIntersection(obj, propertyName)
@@ -351,7 +339,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on intersection type %s", propertyName, obj.String()))
 			}
 			resultType = propType
-		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
+		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			// e.g., trying to access property on number, boolean, null, undefined
@@ -491,21 +479,14 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	} else if widenedObjectType == types.String {
 		if propertyName == "length" {
 			baseResultType = types.Number // string.length is number
-		} else if propertyName == "charCodeAt" {
-			baseResultType = &types.FunctionType{
-				ParameterTypes: []types.Type{types.Number},
-				ReturnType:     types.Number,
-				IsVariadic:     false,
-			}
-		} else if propertyName == "charAt" {
-			baseResultType = &types.FunctionType{
-				ParameterTypes: []types.Type{types.Number},
-				ReturnType:     types.String,
-				IsVariadic:     false,
-			}
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
-			// baseResultType remains types.Never
+			// Check prototype registry for String methods
+			if methodType := builtins.GetPrototypeMethodType("string", propertyName); methodType != nil {
+				baseResultType = methodType
+			} else {
+				// Property not found - for optional chaining, this is OK, just return undefined
+				baseResultType = types.Undefined
+			}
 		}
 	} else {
 		// Use a type switch for struct-based types
@@ -549,34 +530,8 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 		case *types.ArrayType:
 			if propertyName == "length" {
 				baseResultType = types.Number // Array.length is number
-			} else if propertyName == "concat" {
-				baseResultType = &types.FunctionType{
-					ParameterTypes:    []types.Type{}, // No fixed parameters
-					ReturnType:        &types.ArrayType{ElementType: types.Any},
-					IsVariadic:        true,
-					RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-				}
-			} else if propertyName == "push" {
-				baseResultType = &types.FunctionType{
-					ParameterTypes:    []types.Type{}, // No fixed parameters
-					ReturnType:        types.Number,   // Returns new length
-					IsVariadic:        true,
-					RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-				}
-			} else if propertyName == "pop" {
-				baseResultType = &types.FunctionType{
-					ParameterTypes: []types.Type{},
-					ReturnType:     types.Any,
-					IsVariadic:     false,
-				}
-			} else if propertyName == "join" {
-				baseResultType = &types.FunctionType{
-					ParameterTypes: []types.Type{types.String}, // Optional separator parameter
-					ReturnType:     types.String,               // Returns string
-					IsVariadic:     false,
-					OptionalParams: []bool{true}, // Separator is optional
-				}
 			} else {
+				// Array methods should be resolved through the builtins system
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
 				// baseResultType remains types.Never
 			}
@@ -595,23 +550,6 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				// Property not found - for optional chaining, this is OK, just return undefined
 				// Don't add an error like regular member access would
 				baseResultType = types.Undefined
-			}
-		case *types.FunctionType:
-			// Handle static properties/methods on function types (like String.fromCharCode)
-			// Check if the object is a builtin constructor that has static methods
-			if objIdentifier, ok := node.Object.(*parser.Identifier); ok {
-				// Look for builtin static method: ConstructorName.methodName
-				staticMethodName := objIdentifier.Value + "." + propertyName
-				staticMethodType := c.getBuiltinType(staticMethodName)
-				if staticMethodType != nil {
-					baseResultType = staticMethodType
-				} else {
-					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
-					// baseResultType remains types.Never
-				}
-			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on function type", propertyName))
-				// baseResultType remains types.Never
 			}
 		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
 		default:
@@ -655,64 +593,17 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		c.visit(arg)
 	}
 
-	// Determine the result type based on the constructor type
+	// Determine the result type based on the constructor type (unified ObjectType system)
 	var resultType types.Type
-	if constructorTypeVal, ok := constructorType.(*types.ConstructorType); ok {
-		// Direct constructor type
-		if len(node.Arguments) != len(constructorTypeVal.ParameterTypes) {
-			c.addError(node, fmt.Sprintf("constructor expects %d arguments but got %d",
-				len(constructorTypeVal.ParameterTypes), len(node.Arguments)))
+	if objType, ok := constructorType.(*types.ObjectType); ok {
+		// For unified ObjectType constructors, check if they have constructor signatures
+		if len(objType.ConstructSignatures) > 0 {
+			// Use the first constructor signature's return type
+			resultType = objType.ConstructSignatures[0].ReturnType
 		} else {
-			// Check argument types
-			for i, arg := range node.Arguments {
-				argType := arg.GetComputedType()
-				if argType == nil {
-					argType = types.Any
-				}
-				expectedType := constructorTypeVal.ParameterTypes[i]
-				if !types.IsAssignable(argType, expectedType) {
-					c.addError(arg, fmt.Sprintf("argument %d: cannot assign %s to %s",
-						i+1, argType.String(), expectedType.String()))
-				}
-			}
+			// Callable object but no constructor signatures - assume it returns an object
+			resultType = &types.ObjectType{Properties: make(map[string]types.Type)}
 		}
-		resultType = constructorTypeVal.ConstructedType
-	} else if objType, ok := constructorType.(*types.ObjectType); ok {
-		// Check if this object type has a constructor signature ("new" property)
-		if newProp, hasNew := objType.Properties["new"]; hasNew {
-			if ctorType, isConstructor := newProp.(*types.ConstructorType); isConstructor {
-				// Validate arguments against constructor signature
-				if len(node.Arguments) != len(ctorType.ParameterTypes) {
-					c.addError(node, fmt.Sprintf("constructor expects %d arguments but got %d",
-						len(ctorType.ParameterTypes), len(node.Arguments)))
-				} else {
-					// Check argument types
-					for i, arg := range node.Arguments {
-						argType := arg.GetComputedType()
-						if argType == nil {
-							argType = types.Any
-						}
-						expectedType := ctorType.ParameterTypes[i]
-						if !types.IsAssignable(argType, expectedType) {
-							c.addError(arg, fmt.Sprintf("argument %d: cannot assign %s to %s",
-								i+1, argType.String(), expectedType.String()))
-						}
-					}
-				}
-				resultType = ctorType.ConstructedType
-			} else {
-				c.addError(node.Constructor, fmt.Sprintf("'new' property is not a constructor type"))
-				resultType = types.Any
-			}
-		} else {
-			c.addError(node.Constructor, fmt.Sprintf("object type does not have a constructor signature"))
-			resultType = types.Any
-		}
-	} else if _, ok := constructorType.(*types.FunctionType); ok {
-		// For function constructors, the result is typically an object
-		// In a more sophisticated implementation, we'd track constructor return types
-		// For now, we'll assume constructors return objects
-		resultType = &types.ObjectType{Properties: make(map[string]types.Type)}
 	} else if constructorType == types.Any {
 		// If constructor type is Any, result is also Any
 		resultType = types.Any

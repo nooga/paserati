@@ -229,32 +229,7 @@ func IsAssignable(source, target Type) bool {
 		return true
 	}
 
-	// Function type compatibility with ObjectType
-	sourceFn, sourceIsFn := source.(*FunctionType)
-	if sourceIsFn && targetIsObj && targetObj.IsCallable() {
-		// Function can be assigned to callable object if signatures match
-		for _, targetSig := range targetObj.CallSignatures {
-			if isSignatureAssignable(functionTypeToSignature(sourceFn), targetSig) {
-				return true
-			}
-		}
-		return false
-	}
-
-	targetFn, targetIsFn := target.(*FunctionType)
-	if sourceIsObj && sourceObj.IsCallable() && targetIsFn {
-		// Callable object can be assigned to function if signatures match
-		for _, sourceSig := range sourceObj.CallSignatures {
-			if isSignatureAssignable(sourceSig, functionTypeToSignature(targetFn)) {
-				return true
-			}
-		}
-		return false
-	}
-
-	if sourceIsFn && targetIsFn {
-		return isSignatureAssignable(functionTypeToSignature(sourceFn), functionTypeToSignature(targetFn))
-	}
+	// Legacy FunctionType compatibility removed - use ObjectType with CallSignatures instead
 
 	return false
 }
@@ -286,13 +261,4 @@ func isSignatureAssignable(source, target *Signature) bool {
 	return IsAssignable(source.ReturnType, target.ReturnType)
 }
 
-// Helper function to convert FunctionType to Signature
-func functionTypeToSignature(ft *FunctionType) *Signature {
-	return &Signature{
-		ParameterTypes:    ft.ParameterTypes,
-		ReturnType:        ft.ReturnType,
-		OptionalParams:    ft.OptionalParams,
-		IsVariadic:        ft.IsVariadic,
-		RestParameterType: ft.RestParameterType,
-	}
-}
+// Helper function removed - FunctionType deprecated, use ObjectType with CallSignatures

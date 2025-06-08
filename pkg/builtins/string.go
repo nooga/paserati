@@ -17,23 +17,13 @@ func registerString() {
 	stringConstructorObj.Properties.SetOwn("fromCharCode",
 		vm.NewNativeFunction(-1, true, "fromCharCode", stringFromCharCode))
 
-	// Register with type checker using CallableType
-	stringCallableType := &types.CallableType{
-		CallSignature: &types.FunctionType{
-			ParameterTypes:    []types.Type{}, // No fixed parameters
-			ReturnType:        types.String,
-			IsVariadic:        true,
-			RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-		},
-		Properties: map[string]types.Type{
-			"fromCharCode": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.String,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Number}, // Accept numbers only
-			},
-		},
-	}
+	// Register with type checker using the unified ObjectType system
+	stringCallableType := types.NewObjectType().
+		// Call signature for String constructor
+		WithCallSignature(types.SigVariadic([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Any})).
+		
+		// Static methods on String constructor
+		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number}))
 
 	registerValue("String", stringConstructorValue, stringCallableType)
 
@@ -46,159 +36,104 @@ func registerStringPrototypeMethods() {
 	// Register charAt method
 	vm.RegisterStringPrototypeMethod("charAt",
 		vm.NewNativeFunction(1, false, "charAt", stringCharAtImpl))
-	RegisterPrototypeMethod("string", "charAt", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Number},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "charAt", 
+		types.NewSimpleFunction([]types.Type{types.Number}, types.String))
 
 	// Register charCodeAt method
 	vm.RegisterStringPrototypeMethod("charCodeAt",
 		vm.NewNativeFunction(1, false, "charCodeAt", stringCharCodeAtImpl))
-	RegisterPrototypeMethod("string", "charCodeAt", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Number},
-		ReturnType:     types.Number,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "charCodeAt", 
+		types.NewSimpleFunction([]types.Type{types.Number}, types.Number))
 
 	// Register substring method
 	vm.RegisterStringPrototypeMethod("substring",
 		vm.NewNativeFunction(2, false, "substring", stringSubstringImpl))
-	RegisterPrototypeMethod("string", "substring", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Number, types.Number},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-		OptionalParams: []bool{false, true}, // start required, end optional
-	})
+	RegisterPrototypeMethod("string", "substring", 
+		types.NewSignature(types.Number, types.Number).WithOptional(false, true).Returns(types.String).ToFunction())
 
 	// Register slice method
 	vm.RegisterStringPrototypeMethod("slice",
 		vm.NewNativeFunction(2, false, "slice", stringSliceImpl))
-	RegisterPrototypeMethod("string", "slice", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Number, types.Number},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-		OptionalParams: []bool{false, true}, // start required, end optional
-	})
+	RegisterPrototypeMethod("string", "slice", 
+		types.NewSignature(types.Number, types.Number).WithOptional(false, true).Returns(types.String).ToFunction())
 
 	// Register indexOf method
 	vm.RegisterStringPrototypeMethod("indexOf",
 		vm.NewNativeFunction(1, false, "indexOf", stringIndexOfImpl))
-	RegisterPrototypeMethod("string", "indexOf", &types.FunctionType{
-		ParameterTypes: []types.Type{types.String},
-		ReturnType:     types.Number,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "indexOf", 
+		types.NewSimpleFunction([]types.Type{types.String}, types.Number))
 
 	// Register includes method
 	vm.RegisterStringPrototypeMethod("includes",
 		vm.NewNativeFunction(1, false, "includes", stringIncludesImpl))
-	RegisterPrototypeMethod("string", "includes", &types.FunctionType{
-		ParameterTypes: []types.Type{types.String},
-		ReturnType:     types.Boolean,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "includes", 
+		types.NewSimpleFunction([]types.Type{types.String}, types.Boolean))
 
 	// Register startsWith method
 	vm.RegisterStringPrototypeMethod("startsWith",
 		vm.NewNativeFunction(1, false, "startsWith", stringStartsWithImpl))
-	RegisterPrototypeMethod("string", "startsWith", &types.FunctionType{
-		ParameterTypes: []types.Type{types.String},
-		ReturnType:     types.Boolean,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "startsWith", 
+		types.NewSimpleFunction([]types.Type{types.String}, types.Boolean))
 
 	// Register endsWith method
 	vm.RegisterStringPrototypeMethod("endsWith",
 		vm.NewNativeFunction(1, false, "endsWith", stringEndsWithImpl))
-	RegisterPrototypeMethod("string", "endsWith", &types.FunctionType{
-		ParameterTypes: []types.Type{types.String},
-		ReturnType:     types.Boolean,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "endsWith", 
+		types.NewSimpleFunction([]types.Type{types.String}, types.Boolean))
 
 	// Register toLowerCase method
 	vm.RegisterStringPrototypeMethod("toLowerCase",
 		vm.NewNativeFunction(0, false, "toLowerCase", stringToLowerCaseImpl))
-	RegisterPrototypeMethod("string", "toLowerCase", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "toLowerCase", 
+		types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Register toUpperCase method
 	vm.RegisterStringPrototypeMethod("toUpperCase",
 		vm.NewNativeFunction(0, false, "toUpperCase", stringToUpperCaseImpl))
-	RegisterPrototypeMethod("string", "toUpperCase", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "toUpperCase", 
+		types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Register trim method
 	vm.RegisterStringPrototypeMethod("trim",
 		vm.NewNativeFunction(0, false, "trim", stringTrimImpl))
-	RegisterPrototypeMethod("string", "trim", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "trim", 
+		types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Register trimStart method
 	vm.RegisterStringPrototypeMethod("trimStart",
 		vm.NewNativeFunction(0, false, "trimStart", stringTrimStartImpl))
-	RegisterPrototypeMethod("string", "trimStart", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "trimStart", 
+		types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Register trimEnd method
 	vm.RegisterStringPrototypeMethod("trimEnd",
 		vm.NewNativeFunction(0, false, "trimEnd", stringTrimEndImpl))
-	RegisterPrototypeMethod("string", "trimEnd", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "trimEnd", 
+		types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Register repeat method
 	vm.RegisterStringPrototypeMethod("repeat",
 		vm.NewNativeFunction(1, false, "repeat", stringRepeatImpl))
-	RegisterPrototypeMethod("string", "repeat", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Number},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "repeat", 
+		types.NewSimpleFunction([]types.Type{types.Number}, types.String))
 
 	// Register lastIndexOf method
 	vm.RegisterStringPrototypeMethod("lastIndexOf",
 		vm.NewNativeFunction(1, false, "lastIndexOf", stringLastIndexOfImpl))
-	RegisterPrototypeMethod("string", "lastIndexOf", &types.FunctionType{
-		ParameterTypes: []types.Type{types.String},
-		ReturnType:     types.Number,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("string", "lastIndexOf", 
+		types.NewSimpleFunction([]types.Type{types.String}, types.Number))
 
 	// Register concat method
 	vm.RegisterStringPrototypeMethod("concat",
 		vm.NewNativeFunction(-1, true, "concat", stringConcatImpl))
-	RegisterPrototypeMethod("string", "concat", &types.FunctionType{
-		ParameterTypes:    []types.Type{}, // No fixed parameters
-		ReturnType:        types.String,
-		IsVariadic:        true,
-		RestParameterType: &types.ArrayType{ElementType: types.String}, // Accept any number of strings
-	})
+	RegisterPrototypeMethod("string", "concat", 
+		types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.String}))
 
 	// Register split method
 	vm.RegisterStringPrototypeMethod("split",
 		vm.NewNativeFunction(1, false, "split", stringSplitImpl))
-	RegisterPrototypeMethod("string", "split", &types.FunctionType{
-		ParameterTypes: []types.Type{types.String}, // separator parameter
-		ReturnType:     &types.ArrayType{ElementType: types.String},
-		IsVariadic:     false,
-		OptionalParams: []bool{true}, // separator is optional
-	})
+	RegisterPrototypeMethod("string", "split", 
+		types.NewSignature(types.String).WithOptional(true).Returns(&types.ArrayType{ElementType: types.String}).ToFunction())
 }
 
 // stringCharAtImpl implements String.prototype.charAt

@@ -1,10 +1,5 @@
 package types
 
-import (
-	"fmt"
-	"strings"
-)
-
 // Type is the interface implemented by all type representations.
 type Type interface {
 	// String returns a string representation of the type, suitable for debugging or printing.
@@ -20,7 +15,10 @@ type Type interface {
 }
 
 // --- Legacy Function Types (to be deprecated in later phases) ---
+// DEPRECATED: These types are commented out during UTS Phase 4 transition
+// Use ObjectType with CallSignatures instead
 
+/*
 // FunctionType represents the type of a function.
 type FunctionType struct {
 	ParameterTypes    []Type
@@ -131,7 +129,9 @@ func (ft *FunctionType) Equals(other Type) bool {
 	}
 	return true // All checks passed
 }
+*/
 
+/*
 // CallableType represents a type that is both callable and has properties
 // This matches TypeScript's callable interfaces:
 //
@@ -206,7 +206,9 @@ func (ct *CallableType) Equals(other Type) bool {
 
 	return true
 }
+*/
 
+/*
 // OverloadedFunctionType represents a function with multiple overload signatures.
 type OverloadedFunctionType struct {
 	Name           string          // The function name
@@ -303,7 +305,9 @@ func isAssignableSimple(source, target Type) bool {
 
 	return false
 }
+*/
 
+/*
 // ConstructorType represents a constructor function type.
 // This is used for functions that can be called with `new` to create instances.
 type ConstructorType struct {
@@ -383,3 +387,4 @@ func (ct *ConstructorType) Equals(other Type) bool {
 
 	return true
 }
+*/

@@ -8,9 +8,9 @@ import (
 
 func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	// 1. Resolve explicit annotations FIRST to get the signature contract.
-	//    Use resolveFunctionLiteralType helper, but pass the *current* env.
+	//    Use resolveFunctionLiteralSignature helper, but pass the *current* env.
 	//    This gives us the expected parameter types and *potential* return type.
-	resolvedSignature := c.resolveFunctionLiteralType(node, c.env) // Pass c.env
+	resolvedSignature := c.resolveFunctionLiteralSignature(node, c.env) // Pass c.env
 	if resolvedSignature == nil {
 		// Error resolving annotations (e.g., unknown type name)
 		// Error should have been added by resolve helper.
@@ -19,7 +19,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		for i := range paramTypes {
 			paramTypes[i] = types.Any
 		}
-		resolvedSignature = &types.FunctionType{ParameterTypes: paramTypes, ReturnType: types.Any}
+		resolvedSignature = &types.Signature{ParameterTypes: paramTypes, ReturnType: types.Any}
 		// Set dummy type on node immediately to prevent nil checks later if we proceeded?
 		// No, let's calculate the final type below and set it once.
 	}
@@ -73,12 +73,9 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	// --- Function name self-definition for recursion (if named) ---
 	// Hoisting handles top-level/block-level, but let/const needs this.
 	if node.Name != nil {
-		// Re-use the resolvedSignature for the temporary definition
+		// Re-use the resolvedSignature for the temporary definition using unified ObjectType
 		// (ReturnType might still be nil here if not annotated)
-		tempFuncTypeForRecursion := &types.FunctionType{
-			ParameterTypes: resolvedSignature.ParameterTypes,
-			ReturnType:     resolvedSignature.ReturnType, // Use potentially nil return type
-		}
+		tempFuncTypeForRecursion := types.NewFunctionType(resolvedSignature)
 		if !funcEnv.Define(node.Name.Value, tempFuncTypeForRecursion, false) {
 			// This might happen if a param has the same name - parser should likely prevent this
 			c.addError(node.Name, fmt.Sprintf("function name '%s' conflicts with a parameter", node.Name.Value))
@@ -115,11 +112,11 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 			optionalParams[i] = param.Optional || (param.DefaultValue != nil)
 		}
 
-		finalFuncTypeForRecursion := &types.FunctionType{
+		finalFuncTypeForRecursion := types.NewFunctionType(&types.Signature{
 			ParameterTypes: resolvedSignature.ParameterTypes,
 			ReturnType:     actualReturnType, // Use the inferred type now
 			OptionalParams: optionalParams,
-		}
+		})
 		// Update the function's own entry in its scope
 		if !funcEnv.Update(node.Name.Value, finalFuncTypeForRecursion) {
 			debugPrintf("// [Checker FuncLit Visit] WARNING: Failed to update self-definition for '%s'\n", node.Name.Value)
@@ -127,13 +124,14 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	}
 	// --- END Update self-definition ---
 
-	// 7. Create the FINAL FunctionType representing this literal
+	// 7. Create the FINAL function type representing this literal
 	optionalParams := make([]bool, len(node.Parameters))
 	for i, param := range node.Parameters {
 		optionalParams[i] = param.Optional || (param.DefaultValue != nil)
 	}
 
-	finalFuncType := &types.FunctionType{
+	// Create a Signature for our function
+	sig := &types.Signature{
 		ParameterTypes:    resolvedSignature.ParameterTypes, // Use types from annotation/defaults
 		ReturnType:        actualReturnType,                 // Use the explicit or inferred return type
 		OptionalParams:    optionalParams,
@@ -141,12 +139,17 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		RestParameterType: resolvedSignature.RestParameterType, // Add rest parameter type
 	}
 
+	// Create an ObjectType with call signature using the constructor
+	finalFuncType := types.NewFunctionType(sig)
+
+
 	// 8. *** ALWAYS Set the Computed Type on the FunctionLiteral node ***
 	debugPrintf("// [Checker FuncLit Visit] SETTING final computed type for '%s': %s\n", funcNameForLog, finalFuncType.String())
-	node.SetComputedType(finalFuncType) // <<< THIS IS THE KEY FIX
+	node.SetComputedType(finalFuncType) // Use the new ObjectType with call signature
 
 	// --- NEW: Check for overload completion ---
 	if node.Name != nil && len(c.env.GetPendingOverloads(node.Name.Value)) > 0 {
+		// Use the unified function type for overloads
 		c.completeOverloadedFunction(node.Name.Value, finalFuncType)
 	}
 	// --- END NEW ---

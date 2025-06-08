@@ -81,11 +81,10 @@ func GetPrototypeMethodType(primitiveName, methodName string) types.Type {
 func InitializeRegistry() {
 	registryOnce.Do(func() {
 		// Register clock
-		register("clock", 0, false, clockImpl, &types.FunctionType{
-			ParameterTypes: []types.Type{},
-			ReturnType:     types.Number,
-			IsVariadic:     false,
-		})
+		register("clock", 0, false, clockImpl, types.NewSimpleFunction(
+			[]types.Type{},
+			types.Number,
+		))
 
 		// Register Array constructor with overloads
 		registerArrayConstructor()
@@ -133,12 +132,17 @@ func arrayImpl(args []vm.Value) vm.Value {
 }
 
 // register is a helper to add a built-in function to the registry.
-func register(name string, arity int, isVariadic bool, goFunc func([]vm.Value) vm.Value, fnType *types.FunctionType) {
+func register(name string, arity int, isVariadic bool, goFunc func([]vm.Value) vm.Value, fnType types.Type) {
 	if fnType == nil {
-		panic(fmt.Sprintf("Builtin registration for '%s' requires a non-nil FunctionType", name))
+		panic(fmt.Sprintf("Builtin registration for '%s' requires a non-nil Type", name))
 	}
-	if fnType.IsVariadic != isVariadic {
-		panic(fmt.Sprintf("Builtin registration mismatch for '%s': isVariadic flag (%t) != FunctionType.IsVariadic (%t)", name, isVariadic, fnType.IsVariadic))
+	// Check if the type is callable (ObjectType with call signatures)
+	if objType, ok := fnType.(*types.ObjectType); ok {
+		if !objType.IsCallable() {
+			panic(fmt.Sprintf("Builtin registration for '%s': ObjectType must be callable", name))
+		}
+		// For now, we'll skip detailed variadic validation since ObjectType uses Signature
+		// TODO: Add proper validation of signatures if needed
 	}
 	if _, exists := registry[name]; exists {
 		panic(fmt.Sprintf("Builtin '%s' already registered.", name))
@@ -202,46 +206,18 @@ func GetObject(name string) vm.Value {
 
 // registerArrayConstructor registers the Array constructor with proper overloads
 func registerArrayConstructor() {
-	// Define the three Array constructor overloads:
+	// Define the three Array constructor overloads using the new unified ObjectType:
 	// 1. Array() - empty array
 	// 2. Array(length: number) - array with specific length
 	// 3. Array(...items: T[]) - array from rest parameters
 
-	overloads := []*types.FunctionType{
-		// Array() -> any[]
-		{
-			ParameterTypes: []types.Type{},
-			ReturnType:     &types.ArrayType{ElementType: types.Any},
-			IsVariadic:     false,
-		},
-		// Array(length: number) -> any[]
-		{
-			ParameterTypes: []types.Type{types.Number},
-			ReturnType:     &types.ArrayType{ElementType: types.Any},
-			IsVariadic:     false,
-		},
-		// Array(...items: any[]) -> any[]
-		{
-			ParameterTypes:    []types.Type{}, // No fixed parameters
-			ReturnType:        &types.ArrayType{ElementType: types.Any},
-			IsVariadic:        true,
-			RestParameterType: &types.ArrayType{ElementType: types.Any},
-		},
-	}
+	arrayType := &types.ArrayType{ElementType: types.Any}
 
-	// Implementation signature - must be compatible with all overloads
-	implementation := &types.FunctionType{
-		ParameterTypes:    []types.Type{}, // No fixed parameters
-		ReturnType:        &types.ArrayType{ElementType: types.Any},
-		IsVariadic:        true,
-		RestParameterType: &types.ArrayType{ElementType: types.Any},
-	}
-
-	overloadedArrayType := &types.OverloadedFunctionType{
-		Name:           "Array",
-		Overloads:      overloads,
-		Implementation: implementation,
-	}
+	// Create overloaded function using the smart constructor
+	overloadedArrayType := types.NewObjectType().
+		WithCallSignature(types.Sig([]types.Type{}, arrayType)).                   // Array() -> any[]
+		WithCallSignature(types.Sig([]types.Type{types.Number}, arrayType)).       // Array(length) -> any[]
+		WithCallSignature(types.SigVariadic([]types.Type{}, arrayType, arrayType)) // Array(...items) -> any[]
 
 	// Register the overloaded function
 	if _, exists := registry["Array"]; exists {

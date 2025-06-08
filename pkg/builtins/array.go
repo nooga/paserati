@@ -18,206 +18,146 @@ func registerArrayPrototypeMethods() {
 	// Register concat method
 	vm.RegisterArrayPrototypeMethod("concat",
 		vm.NewNativeFunction(-1, true, "concat", arrayPrototypeConcatImpl))
-	RegisterPrototypeMethod("array", "concat", &types.FunctionType{
-		ParameterTypes:    []types.Type{}, // No fixed parameters
-		ReturnType:        &types.ArrayType{ElementType: types.Any},
-		IsVariadic:        true,
-		RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-	})
+	RegisterPrototypeMethod("array", "concat",
+		types.NewVariadicFunction([]types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}))
 
 	// Register push method
 	vm.RegisterArrayPrototypeMethod("push",
 		vm.NewNativeFunction(-1, true, "push", arrayPrototypePushImpl))
-	RegisterPrototypeMethod("array", "push", &types.FunctionType{
-		ParameterTypes:    []types.Type{}, // No fixed parameters
-		ReturnType:        types.Number,   // Returns new length
-		IsVariadic:        true,
-		RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-	})
+	RegisterPrototypeMethod("array", "push",
+		types.NewVariadicFunction([]types.Type{}, types.Number, &types.ArrayType{ElementType: types.Any}))
 
 	// Register pop method
 	vm.RegisterArrayPrototypeMethod("pop",
 		vm.NewNativeFunction(0, false, "pop", arrayPrototypePopImpl))
-	RegisterPrototypeMethod("array", "pop", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.Any,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("array", "pop",
+		types.NewSimpleFunction([]types.Type{}, types.Any))
 
 	// Register join method
 	vm.RegisterArrayPrototypeMethod("join",
 		vm.NewNativeFunction(1, false, "join", arrayPrototypeJoinImpl))
-	RegisterPrototypeMethod("array", "join", &types.FunctionType{
-		ParameterTypes: []types.Type{types.String}, // Optional separator parameter
-		ReturnType:     types.String,               // Returns string
-		IsVariadic:     false,
-		OptionalParams: []bool{true}, // Separator is optional
-	})
+	RegisterPrototypeMethod("array", "join",
+		types.NewSignature(types.String).
+			WithOptional(true).
+			Returns(types.String).
+			ToFunction())
 
 	// Register map method
 	vm.RegisterArrayPrototypeMethod("map",
 		vm.NewNativeFunction(1, false, "map", arrayPrototypeMapImpl))
-	RegisterPrototypeMethod("array", "map", &types.FunctionType{
-		ParameterTypes: []types.Type{&types.FunctionType{
-			ParameterTypes: []types.Type{types.Any}, // Only require element parameter
-			ReturnType:     types.Any,
-			IsVariadic:     false,
-		}},
-		ReturnType: &types.ArrayType{ElementType: types.Any},
-		IsVariadic: false,
-	})
+	callbackType := types.NewSimpleFunction([]types.Type{types.Any}, types.Any)
+	RegisterPrototypeMethod("array", "map",
+		types.NewSimpleFunction([]types.Type{callbackType}, &types.ArrayType{ElementType: types.Any}))
 
 	// Register filter method
 	vm.RegisterArrayPrototypeMethod("filter",
 		vm.NewNativeFunction(1, false, "filter", arrayPrototypeFilterImpl))
-	RegisterPrototypeMethod("array", "filter", &types.FunctionType{
-		ParameterTypes: []types.Type{&types.FunctionType{
-			ParameterTypes: []types.Type{types.Any}, // Only require element parameter
-			ReturnType:     types.Any,               // Allow any return (will be converted to boolean)
-			IsVariadic:     false,
-		}},
-		ReturnType: &types.ArrayType{ElementType: types.Any},
-		IsVariadic: false,
-	})
+	filterCallbackType := types.NewSimpleFunction([]types.Type{types.Any}, types.Any)
+	RegisterPrototypeMethod("array", "filter",
+		types.NewSimpleFunction([]types.Type{filterCallbackType}, &types.ArrayType{ElementType: types.Any}))
 
 	// Register forEach method
 	vm.RegisterArrayPrototypeMethod("forEach",
 		vm.NewNativeFunction(1, false, "forEach", arrayPrototypeForEachImpl))
-	RegisterPrototypeMethod("array", "forEach", &types.FunctionType{
-		ParameterTypes: []types.Type{&types.FunctionType{
-			ParameterTypes: []types.Type{types.Any}, // Only require element parameter
-			ReturnType:     types.Any,               // Allow any return (ignored anyway)
-			IsVariadic:     false,
-		}},
-		ReturnType: types.Void,
-		IsVariadic: false,
-	})
+	forEachCallbackType := types.NewSimpleFunction([]types.Type{types.Any}, types.Any)
+	RegisterPrototypeMethod("array", "forEach",
+		types.NewSimpleFunction([]types.Type{forEachCallbackType}, types.Void))
 
 	// Register includes method
 	vm.RegisterArrayPrototypeMethod("includes",
 		vm.NewNativeFunction(1, false, "includes", arrayPrototypeIncludesImpl))
-	RegisterPrototypeMethod("array", "includes", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Any},
-		ReturnType:     types.Boolean,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("array", "includes",
+		types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean))
 
 	// Register indexOf method
 	vm.RegisterArrayPrototypeMethod("indexOf",
 		vm.NewNativeFunction(1, false, "indexOf", arrayPrototypeIndexOfImpl))
-	RegisterPrototypeMethod("array", "indexOf", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Any},
-		ReturnType:     types.Number,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("array", "indexOf",
+		types.NewSimpleFunction([]types.Type{types.Any}, types.Number))
 
 	// Register reverse method
 	vm.RegisterArrayPrototypeMethod("reverse",
 		vm.NewNativeFunction(0, false, "reverse", arrayPrototypeReverseImpl))
-	RegisterPrototypeMethod("array", "reverse", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     &types.ArrayType{ElementType: types.Any}, // Returns same array
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("array", "reverse",
+		types.NewSimpleFunction([]types.Type{}, &types.ArrayType{ElementType: types.Any}))
 
 	// Register slice method
 	vm.RegisterArrayPrototypeMethod("slice",
 		vm.NewNativeFunction(2, false, "slice", arrayPrototypeSliceImpl))
-	RegisterPrototypeMethod("array", "slice", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Number, types.Number},
-		ReturnType:     &types.ArrayType{ElementType: types.Any},
-		IsVariadic:     false,
-		OptionalParams: []bool{true, true}, // Both start and end are optional
-	})
+	RegisterPrototypeMethod("array", "slice",
+		types.NewSignature(types.Number, types.Number).
+			WithOptional(true, true).
+			Returns(&types.ArrayType{ElementType: types.Any}).
+			ToFunction())
 
 	// Register lastIndexOf method
 	vm.RegisterArrayPrototypeMethod("lastIndexOf",
 		vm.NewNativeFunction(1, false, "lastIndexOf", arrayPrototypeLastIndexOfImpl))
-	RegisterPrototypeMethod("array", "lastIndexOf", &types.FunctionType{
-		ParameterTypes: []types.Type{types.Any},
-		ReturnType:     types.Number,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("array", "lastIndexOf",
+		types.NewSignature(types.Any).
+			Returns(types.Number).
+			ToFunction())
 
 	// Register shift method
 	vm.RegisterArrayPrototypeMethod("shift",
 		vm.NewNativeFunction(0, false, "shift", arrayPrototypeShiftImpl))
-	RegisterPrototypeMethod("array", "shift", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.Any, // Returns removed element or undefined
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("array", "shift",
+		types.NewSignature().
+			Returns(types.Any).
+			ToFunction())
 
 	// Register unshift method
 	vm.RegisterArrayPrototypeMethod("unshift",
 		vm.NewNativeFunction(-1, true, "unshift", arrayPrototypeUnshiftImpl))
-	RegisterPrototypeMethod("array", "unshift", &types.FunctionType{
-		ParameterTypes:    []types.Type{}, // No fixed parameters
-		ReturnType:        types.Number,   // Returns new length
-		IsVariadic:        true,
-		RestParameterType: &types.ArrayType{ElementType: types.Any}, // Accept any values
-	})
+	RegisterPrototypeMethod("array", "unshift",
+		types.NewSignature().
+			WithRest(types.Any).
+			Returns(types.Number).
+			ToFunction())
 
 	// Register toString method
 	vm.RegisterArrayPrototypeMethod("toString",
 		vm.NewNativeFunction(0, false, "toString", arrayPrototypeToStringImpl))
-	RegisterPrototypeMethod("array", "toString", &types.FunctionType{
-		ParameterTypes: []types.Type{},
-		ReturnType:     types.String,
-		IsVariadic:     false,
-	})
+	RegisterPrototypeMethod("array", "toString",
+		types.NewSignature().
+			Returns(types.String).
+			ToFunction())
 
 	// Register every method
 	vm.RegisterArrayPrototypeMethod("every",
 		vm.NewNativeFunction(1, false, "every", arrayPrototypeEveryImpl))
-	RegisterPrototypeMethod("array", "every", &types.FunctionType{
-		ParameterTypes: []types.Type{&types.FunctionType{
-			ParameterTypes: []types.Type{types.Any}, // Only require element parameter
-			ReturnType:     types.Any,               // Allow any return (will be converted to boolean)
-			IsVariadic:     false,
-		}},
-		ReturnType: types.Boolean,
-		IsVariadic: false,
-	})
+	everyCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
+	RegisterPrototypeMethod("array", "every",
+		types.NewSignature(everyCallbackType).
+			Returns(types.Boolean).
+			ToFunction())
 
 	// Register some method
 	vm.RegisterArrayPrototypeMethod("some",
 		vm.NewNativeFunction(1, false, "some", arrayPrototypeSomeImpl))
-	RegisterPrototypeMethod("array", "some", &types.FunctionType{
-		ParameterTypes: []types.Type{&types.FunctionType{
-			ParameterTypes: []types.Type{types.Any}, // Only require element parameter
-			ReturnType:     types.Any,               // Allow any return (will be converted to boolean)
-			IsVariadic:     false,
-		}},
-		ReturnType: types.Boolean,
-		IsVariadic: false,
-	})
+	someCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
+	RegisterPrototypeMethod("array", "some",
+		types.NewSignature(someCallbackType).
+			Returns(types.Boolean).
+			ToFunction())
 
 	// Register find method
 	vm.RegisterArrayPrototypeMethod("find",
 		vm.NewNativeFunction(1, false, "find", arrayPrototypeFindImpl))
-	RegisterPrototypeMethod("array", "find", &types.FunctionType{
-		ParameterTypes: []types.Type{&types.FunctionType{
-			ParameterTypes: []types.Type{types.Any}, // Only require element parameter
-			ReturnType:     types.Any,               // Allow any return (will be converted to boolean)
-			IsVariadic:     false,
-		}},
-		ReturnType: types.Any, // Returns the found element or undefined
-		IsVariadic: false,
-	})
+	findCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
+	RegisterPrototypeMethod("array", "find",
+		types.NewSignature(findCallbackType).
+			Returns(types.Any).
+			ToFunction())
 
 	// Register findIndex method
 	vm.RegisterArrayPrototypeMethod("findIndex",
 		vm.NewNativeFunction(1, false, "findIndex", arrayPrototypeFindIndexImpl))
-	RegisterPrototypeMethod("array", "findIndex", &types.FunctionType{
-		ParameterTypes: []types.Type{&types.FunctionType{
-			ParameterTypes: []types.Type{types.Any}, // Only require element parameter
-			ReturnType:     types.Any,               // Allow any return (will be converted to boolean)
-			IsVariadic:     false,
-		}},
-		ReturnType: types.Number, // Returns index or -1
-		IsVariadic: false,
-	})
+	findIndexCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
+	RegisterPrototypeMethod("array", "findIndex",
+		types.NewSignature(findIndexCallbackType).
+			Returns(types.Number).
+			ToFunction())
 }
 
 // arrayPrototypeConcatImpl implements Array.prototype.concat

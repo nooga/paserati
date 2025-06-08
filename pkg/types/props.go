@@ -36,7 +36,7 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 					return methodType
 				}
 			}
-			
+
 			if !isOptionalChaining {
 				// Only add error for regular member access, not optional chaining
 				// Note: We can't add error here since we don't have the node, but that's ok for union handling
@@ -76,20 +76,7 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 					return Never
 				}
 			}
-		case *FunctionType:
-			// Regular function types don't have properties
-			return Never
-		case *CallableType:
-			// Handle property access on callable types
-			if propType, exists := obj.Properties[propertyName]; exists {
-				return propType
-			} else {
-				if isOptionalChaining {
-					return Undefined
-				} else {
-					return Never
-				}
-			}
+		// Legacy FunctionType and CallableType cases removed - use ObjectType with CallSignatures instead
 		case *IntersectionType:
 			// Handle property access on intersection types
 			return GetPropertyTypeFromIntersection(obj, propertyName)
@@ -225,20 +212,4 @@ func MergeObjectTypes(objectTypes []*ObjectType) *ObjectType {
 func ObjectTypeIsCallable(objType *ObjectType) bool {
 	// For now, this is a placeholder - will be implemented in the unified type system
 	return false
-}
-
-// IntersectionHasCallSignature checks if an intersection type can be called.
-// It returns true if any member of the intersection is callable.
-func IntersectionHasCallSignature(intersection *IntersectionType) (*FunctionType, bool) {
-	for _, member := range intersection.Types {
-		switch mt := member.(type) {
-		case *FunctionType:
-			return mt, true
-		case *CallableType:
-			return mt.CallSignature, true
-		case *OverloadedFunctionType:
-			return mt.Implementation, true
-		}
-	}
-	return nil, false
 }

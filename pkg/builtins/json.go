@@ -16,22 +16,10 @@ func registerJSON() {
 	jsonObject.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", jsonParseImpl))
 	jsonObject.SetOwn("stringify", vm.NewNativeFunction(-1, true, "stringify", jsonStringifyImpl))
 
-	// Define the type for JSON object with all methods
-	jsonType := &types.ObjectType{
-		Properties: map[string]types.Type{
-			"parse": &types.FunctionType{
-				ParameterTypes: []types.Type{types.String},
-				ReturnType:     types.Any,
-				IsVariadic:     false,
-			},
-			"stringify": &types.FunctionType{
-				ParameterTypes:    []types.Type{types.Any}, // First parameter: value to stringify
-				ReturnType:        types.String,            // Always returns string in our implementation
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any}, // Optional replacer and space params
-			},
-		},
-	}
+	// Define the type for JSON object using the smart constructor pattern
+	jsonType := types.NewObjectType().
+		WithProperty("parse", types.NewSimpleFunction([]types.Type{types.String}, types.Any)).
+		WithProperty("stringify", types.NewVariadicFunction([]types.Type{types.Any}, types.String, &types.ArrayType{ElementType: types.Any}))
 
 	// Register the JSON object
 	registerObject("JSON", jsonObj, jsonType)

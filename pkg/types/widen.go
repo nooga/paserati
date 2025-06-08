@@ -48,7 +48,13 @@ func DeeplyWidenType(t Type) Type {
 			// Recursively deeply widen property types? For now, just one level.
 			newFields[name] = GetWidenedType(propType)
 		}
-		return &ObjectType{Properties: newFields}
+		return &ObjectType{
+			Properties:          newFields,
+			OptionalProperties:  objType.OptionalProperties,
+			CallSignatures:      objType.CallSignatures,
+			ConstructSignatures: objType.ConstructSignatures,
+			BaseTypes:           objType.BaseTypes,
+		}
 	}
 
 	// If it was an array, maybe deeply widen its element type?

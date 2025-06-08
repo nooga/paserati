@@ -86,9 +86,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			funcLit, _ := hoistedNode.(*parser.FunctionLiteral) // Parser guarantees type
 
 			debugPrintf("// [Checker Pass 2] Processing Hoisted Function Signature: %s\n", name)
-			initialSignature := c.resolveFunctionLiteralType(funcLit, globalEnv)
+			initialSignature := c.resolveFunctionLiteralSignature(funcLit, globalEnv)
 			if initialSignature == nil { // Handle resolution error
-				initialSignature = &types.FunctionType{ // Default to Any signature on error
+				initialSignature = &types.Signature{ // Default to Any signature on error
 					ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
 					ReturnType:     types.Any,
 				}
@@ -97,10 +97,12 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 			}
 
-			if !globalEnv.Define(name, initialSignature, false) { // Define with initial (maybe incomplete) signature
+			// Convert signature to ObjectType for storage
+			initialObjectType := types.NewFunctionType(initialSignature)
+			if !globalEnv.Define(name, initialObjectType, false) { // Define with initial (maybe incomplete) signature
 				c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined (hoisted)", name))
 			}
-			funcLit.SetComputedType(initialSignature) // Set initial type on node
+			funcLit.SetComputedType(initialObjectType) // Set initial type on node
 			functionsToVisitBody = append(functionsToVisitBody, funcLit)
 			nodesProcessedPass2[funcLit] = true // Mark the FuncLit node itself
 
@@ -169,9 +171,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// Check initializer specifically for FunctionLiteral
 			if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok {
 				debugPrintf("// [Checker Pass 2] Variable '%s' initialized with FunctionLiteral\n", varName.Value)
-				initialFuncSignature := c.resolveFunctionLiteralType(funcLitInitializer, globalEnv)
+				initialFuncSignature := c.resolveFunctionLiteralSignature(funcLitInitializer, globalEnv)
 				if initialFuncSignature == nil { // Handle resolution error
-					initialFuncSignature = &types.FunctionType{ // Default to Any signature on error
+					initialFuncSignature = &types.Signature{ // Default to Any signature on error
 						ParameterTypes: make([]types.Type, len(funcLitInitializer.Parameters)),
 						ReturnType:     types.Any,
 					}
@@ -179,14 +181,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 						initialFuncSignature.ParameterTypes[i] = types.Any
 					}
 				}
-				// Use function signature type if no annotation, or check compatibility if annotation exists
+				// Convert signature to ObjectType and use function signature type if no annotation, or check compatibility if annotation exists
+				initialFuncObjectType := types.NewFunctionType(initialFuncSignature)
 				if preliminaryType == nil {
-					preliminaryType = initialFuncSignature
+					preliminaryType = initialFuncObjectType
 				} else {
-					// TODO: Check if initialFuncSignature is assignable to declaredType?
+					// TODO: Check if initialFuncObjectType is assignable to declaredType?
 					// For now, declaredType takes precedence if both exist.
 				}
-				funcLitInitializer.SetComputedType(initialFuncSignature) // Set initial type on the initializer node
+				funcLitInitializer.SetComputedType(initialFuncObjectType) // Set initial type on the initializer node
 				functionsToVisitBody = append(functionsToVisitBody, funcLitInitializer)
 				nodesProcessedPass2[funcLitInitializer] = true // Mark initializer node if it's a func lit
 				debugPrintf("// [Checker Pass 2] Added initializer func for '%s' to visit list\n", varName.Value)
@@ -224,20 +227,29 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 		debugPrintf("// [Checker Pass 3] Visiting body of func: %s (%p)\n", funcNameForLog, funcLit)
 
-		// Get the initial signature determined in Pass 2
-		initialSignature := funcLit.GetComputedType()
-		funcTypeSignature, ok := initialSignature.(*types.FunctionType)
-		if !ok || funcTypeSignature == nil {
-			debugPrintf("// [Checker Pass 3] ERROR: Could not get initial FunctionType for %s\n", funcNameForLog)
+		// Get the initial ObjectType determined in Pass 2
+		initialType := funcLit.GetComputedType()
+		funcObjectType, ok := initialType.(*types.ObjectType)
+		if !ok || funcObjectType == nil || !funcObjectType.IsCallable() {
+			debugPrintf("// [Checker Pass 3] ERROR: Could not get initial ObjectType for %s\n", funcNameForLog)
 			// Maybe try resolving again? Or skip? Let's skip for now.
 			c.addError(funcLit, fmt.Sprintf("internal checker error: failed to retrieve initial signature for %s", funcNameForLog))
 			continue
 		}
 
+		// Get the first call signature
+		if len(funcObjectType.CallSignatures) == 0 {
+			debugPrintf("// [Checker Pass 3] ERROR: ObjectType has no call signatures for %s\n", funcNameForLog)
+			c.addError(funcLit, fmt.Sprintf("internal checker error: function has no call signatures for %s", funcNameForLog))
+			continue
+		}
+
+		funcSignature := funcObjectType.CallSignatures[0]
+
 		// Save outer context & Set context for body check
 		outerExpectedReturnType := c.currentExpectedReturnType
 		outerInferredReturnTypes := c.currentInferredReturnTypes
-		c.currentExpectedReturnType = funcTypeSignature.ReturnType // Use return type from initial signature
+		c.currentExpectedReturnType = funcSignature.ReturnType // Use return type from initial signature
 		c.currentInferredReturnTypes = nil
 		if c.currentExpectedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
@@ -249,8 +261,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.env = funcEnv
 		// Define parameters using the initial signature
 		for i, paramNode := range funcLit.Parameters {
-			if i < len(funcTypeSignature.ParameterTypes) {
-				paramType := funcTypeSignature.ParameterTypes[i]
+			if i < len(funcSignature.ParameterTypes) {
+				paramType := funcSignature.ParameterTypes[i]
 				if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
 					c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
 				}
@@ -261,19 +273,19 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 
 		// --- NEW: Define rest parameter if present ---
-		if funcLit.RestParameter != nil && funcTypeSignature.RestParameterType != nil {
-			if !funcEnv.Define(funcLit.RestParameter.Name.Value, funcTypeSignature.RestParameterType, false) {
+		if funcLit.RestParameter != nil && funcSignature.RestParameterType != nil {
+			if !funcEnv.Define(funcLit.RestParameter.Name.Value, funcSignature.RestParameterType, false) {
 				c.addError(funcLit.RestParameter.Name, fmt.Sprintf("duplicate parameter name: %s", funcLit.RestParameter.Name.Value))
 			}
 			// Set computed type on the RestParameter node itself
-			funcLit.RestParameter.ComputedType = funcTypeSignature.RestParameterType
-			debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcTypeSignature.RestParameterType.String())
+			funcLit.RestParameter.ComputedType = funcSignature.RestParameterType
+			debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcSignature.RestParameterType.String())
 		}
 		// --- END NEW ---
 
 		// Define function itself within its scope for recursion (using initial signature)
 		if funcLit.Name != nil {
-			funcEnv.Define(funcLit.Name.Value, funcTypeSignature, false) // Ignore error if already defined (e.g. hoisted)
+			funcEnv.Define(funcLit.Name.Value, funcObjectType, false) // Ignore error if already defined (e.g. hoisted)
 		}
 
 		// Visit Body
@@ -281,8 +293,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// Determine Final ACTUAL Return Type
 		var actualReturnType types.Type
-		if funcTypeSignature.ReturnType != nil { // Annotation existed
-			actualReturnType = funcTypeSignature.ReturnType
+		if funcSignature.ReturnType != nil { // Annotation existed
+			actualReturnType = funcSignature.ReturnType
 		} else { // No annotation, infer
 			if len(c.currentInferredReturnTypes) == 0 {
 				actualReturnType = types.Undefined
@@ -292,14 +304,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
 		}
 
-		// Create the FINAL FunctionType
-		finalFuncType := &types.FunctionType{
-			ParameterTypes:    funcTypeSignature.ParameterTypes,
+		// Create the FINAL ObjectType with updated signature
+		finalSignature := &types.Signature{
+			ParameterTypes:    funcSignature.ParameterTypes,
 			ReturnType:        actualReturnType,
-			OptionalParams:    funcTypeSignature.OptionalParams,
-			IsVariadic:        funcTypeSignature.IsVariadic,        // Add variadic info
-			RestParameterType: funcTypeSignature.RestParameterType, // Add rest parameter type
+			OptionalParams:    funcSignature.OptionalParams,
+			IsVariadic:        funcSignature.IsVariadic,        // Add variadic info
+			RestParameterType: funcSignature.RestParameterType, // Add rest parameter type
 		}
+		finalFuncType := types.NewFunctionType(finalSignature)
 
 		// *** Update Environment & Node ***
 		// Update the function's type in the *outer* (global) environment
@@ -324,6 +337,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// --- NEW: Check for overload completion ---
 			if len(globalEnv.GetPendingOverloads(targetName)) > 0 {
 				debugPrintf("// [Checker Pass 3] Found pending overloads for '%s', completing overloaded function\n", targetName)
+				// Use unified ObjectType directly
 				c.completeOverloadedFunction(targetName, finalFuncType)
 			}
 			// --- END NEW ---
@@ -548,10 +562,12 @@ func (c *Checker) visit(node parser.Node) {
 			}
 			// Extract return type annotation (can be nil)
 			prelimReturnType := c.resolveTypeAnnotation(funcLit.ReturnTypeAnnotation)
-			preliminaryInitializerType = &types.FunctionType{
+			// Create unified ObjectType for preliminary function type
+			prelimSig := &types.Signature{
 				ParameterTypes: prelimParamTypes,
 				ReturnType:     prelimReturnType,
 			}
+			preliminaryInitializerType = types.NewFunctionType(prelimSig)
 		} // TODO: Handle ArrowFunctionLiteral similarly if needed
 
 		// Temporarily define the variable name in the current scope before visiting the value.
@@ -782,8 +798,8 @@ func (c *Checker) visit(node parser.Node) {
 				}
 
 				// Resolve the function type signature using the *current* (block) environment
-				funcType := c.resolveFunctionLiteralType(funcLit, c.env)
-				if funcType == nil {
+				funcSig := c.resolveFunctionLiteralSignature(funcLit, c.env)
+				if funcSig == nil {
 					debugPrintf("// [Checker Block Hoisting] WARNING: Failed to resolve signature for hoisted func '%s'. Defining as Any.\n", name)
 					if !c.env.Define(name, types.Any, false) {
 						c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined in this block scope", name))
@@ -791,15 +807,16 @@ func (c *Checker) visit(node parser.Node) {
 					continue
 				}
 
-				// Define the function in the block environment
-				if !c.env.Define(name, funcType, false) {
+				// Convert signature to ObjectType and define the function in the block environment
+				funcObjectType := types.NewFunctionType(funcSig)
+				if !c.env.Define(name, funcObjectType, false) {
 					// Duplicate definition error
 					c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined in this block scope", name))
 				}
 
 				// Set the computed type on the FunctionLiteral node itself NOW.
-				funcLit.SetComputedType(funcType)
-				debugPrintf("// [Checker Block Hoisting] Hoisted and defined func '%s' with type: %s\n", name, funcType.String())
+				funcLit.SetComputedType(funcObjectType)
+				debugPrintf("// [Checker Block Hoisting] Hoisted and defined func '%s' with type: %s\n", name, funcObjectType.String())
 			}
 		}
 		// --- END Block Hoisted Declarations Processing ---
@@ -1499,14 +1516,15 @@ func (c *Checker) visit(node parser.Node) {
 			debugPrintf("// [Checker ShorthandMethod] Inferred return type for '%s': %s\n", methodNameForLog, actualReturnType.String())
 		}
 
-		// 7. Create the final function type with optional parameters
-		finalMethodType := &types.FunctionType{
+		// 7. Create the final function type with optional parameters using unified ObjectType
+		methodSignature := &types.Signature{
 			ParameterTypes:    paramTypes,
 			ReturnType:        actualReturnType,
 			OptionalParams:    optionalParams,
 			IsVariadic:        node.RestParameter != nil, // Add variadic info
 			RestParameterType: restParameterType,         // Add rest parameter type
 		}
+		finalMethodType := types.NewFunctionType(methodSignature)
 
 		// 8. Set the computed type on the ShorthandMethod node
 		debugPrintf("// [Checker ShorthandMethod] Setting computed type for '%s': %s\n", methodNameForLog, finalMethodType.String())

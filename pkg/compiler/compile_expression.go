@@ -754,15 +754,39 @@ func (c *Compiler) determineTotalArgCount(node *parser.CallExpression) int {
 	var optionalParams []bool
 
 	if functionType != nil {
-		switch ft := functionType.(type) {
-		case *types.FunctionType:
-			expectedParamCount = len(ft.ParameterTypes)
-			optionalParams = ft.OptionalParams
-		case *types.OverloadedFunctionType:
-			if ft.Implementation != nil {
-				expectedParamCount = len(ft.Implementation.ParameterTypes)
-				optionalParams = ft.Implementation.OptionalParams
+		if objType, ok := functionType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
+			// TODO: This is a temporary solution. The checker should resolve overloads during type checking
+			// and attach the specific selected signature to the call expression.
+			// For now, try to pick the best matching signature based on argument count
+			sig := objType.CallSignatures[0] // Default to first signature
+			bestMatch := sig
+			bestScore := -1
+			
+			for _, candidateSig := range objType.CallSignatures {
+				score := 0
+				// Prefer exact parameter count match
+				if len(candidateSig.ParameterTypes) == providedArgCount {
+					score += 10
+				}
+				// Or compatible with optional parameters
+				requiredParams := 0
+				for i, isOptional := range candidateSig.OptionalParams {
+					if i < len(candidateSig.ParameterTypes) && !isOptional {
+						requiredParams++
+					}
+				}
+				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
+					score += 5
+				}
+				
+				if score > bestScore {
+					bestScore = score
+					bestMatch = candidateSig
+				}
 			}
+			
+			expectedParamCount = len(bestMatch.ParameterTypes)
+			optionalParams = bestMatch.OptionalParams
 		}
 	}
 

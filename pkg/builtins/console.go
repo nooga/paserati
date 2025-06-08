@@ -29,93 +29,25 @@ func registerConsole() {
 	console.SetOwn("groupCollapsed", vm.NewNativeFunction(-1, true, "groupCollapsed", consoleGroupCollapsedImpl))
 	console.SetOwn("groupEnd", vm.NewNativeFunction(0, false, "groupEnd", consoleGroupEndImpl))
 
-	// Define the type for console object with all methods
-	consoleType := &types.ObjectType{
-		Properties: map[string]types.Type{
-			"log": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"error": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"warn": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"info": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"debug": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"trace": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"clear": &types.FunctionType{
-				ParameterTypes: []types.Type{},
-				ReturnType:     types.Void,
-				IsVariadic:     false,
-			},
-			"count": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"countReset": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"time": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"timeEnd": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"group": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"groupCollapsed": &types.FunctionType{
-				ParameterTypes:    []types.Type{}, // No fixed parameters
-				ReturnType:        types.Void,
-				IsVariadic:        true,
-				RestParameterType: &types.ArrayType{ElementType: types.Any},
-			},
-			"groupEnd": &types.FunctionType{
-				ParameterTypes: []types.Type{},
-				ReturnType:     types.Void,
-				IsVariadic:     false,
-			},
-		},
-	}
+	// Define the type for console object using the smart constructor pattern
+	consoleType := types.NewObjectType().
+		// Variadic console methods
+		WithProperty("log", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("error", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("warn", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("info", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("debug", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("trace", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("count", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("countReset", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("time", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("timeEnd", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("group", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("groupCollapsed", types.NewVariadicFunction([]types.Type{}, types.Void, &types.ArrayType{ElementType: types.Any})).
+		
+		// Simple console methods
+		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
+		WithProperty("groupEnd", types.NewSimpleFunction([]types.Type{}, types.Void))
 
 	// Register the console object
 	registerObject("console", consoleObj, consoleType)

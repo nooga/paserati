@@ -38,9 +38,9 @@ func (c *Checker) getPropertyTypeFromIntersection(intersection *types.Intersecti
 
 // intersectionHasCallSignature checks if an intersection type can be called.
 // This is now a wrapper around the implementation in the types package.
-func (c *Checker) intersectionHasCallSignature(intersection *types.IntersectionType) (*types.FunctionType, bool) {
-	return types.IntersectionHasCallSignature(intersection)
-}
+// func (c *Checker) intersectionHasCallSignature(intersection *types.IntersectionType) (*types.FunctionType, bool) {
+// 	return types.IntersectionHasCallSignature(intersection)
+// }
 
 // simplifyIntersectionWithObjects attempts to merge object types in an intersection.
 // This is now a wrapper around the implementation in the types package.

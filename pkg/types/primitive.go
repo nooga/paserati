@@ -102,12 +102,12 @@ func IsLiteral(t Type) bool {
 	return ok
 }
 
-// GetTypeofResult returns the TypeScript-compatible string literal representing 
+// GetTypeofResult returns the TypeScript-compatible string literal representing
 // the result of the typeof operator when applied to a value of the given type
 func GetTypeofResult(t Type) Type {
 	// Widen the type first
 	widened := GetWidenedType(t)
-	
+
 	switch widened {
 	case String:
 		return &LiteralType{Value: vm.String("string")}
@@ -120,12 +120,15 @@ func GetTypeofResult(t Type) Type {
 	case Null:
 		return &LiteralType{Value: vm.String("object")} // typeof null === "object" in JS
 	}
-	
+
 	// Handle other types
 	switch widened.(type) {
-	case *FunctionType, *CallableType, *OverloadedFunctionType:
-		return &LiteralType{Value: vm.String("function")}
-	case *ObjectType, *ArrayType:
+	case *ObjectType:
+		if ObjectTypeIsCallable(widened.(*ObjectType)) {
+			return &LiteralType{Value: vm.String("function")}
+		}
+		return &LiteralType{Value: vm.String("object")}
+	case *ArrayType:
 		return &LiteralType{Value: vm.String("object")}
 	default:
 		// For unknown types, default to "object" (most conservative approach)

@@ -35,71 +35,56 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		return
 	}
 
-	// --- NEW: Check for overloaded functions ---
-	if overloadedFunc, ok := funcNodeType.(*types.OverloadedFunctionType); ok {
-		debugPrintf("// [Checker CallExpr] Processing overloaded function: %s\n", overloadedFunc.Name)
-		c.checkOverloadedCall(node, overloadedFunc)
-		return
-	}
-	// --- END NEW ---
-
-	// Handle various callable types
-	var funcType *types.FunctionType
-	
-	if ft, ok := funcNodeType.(*types.FunctionType); ok {
-		funcType = ft
-	} else if ct, ok := funcNodeType.(*types.CallableType); ok {
-		// Use the call signature of the callable type
-		funcType = ct.CallSignature
-		if funcType == nil {
-			c.addError(node, fmt.Sprintf("callable type has no call signature"))
-			node.SetComputedType(types.Any)
-			return
-		}
-	} else if ot, ok := funcNodeType.(*types.ObjectType); ok && ot.IsCallable() {
-		// Handle new unified ObjectType with call signatures
-		// Currently, just use the first call signature (later we could add overload resolution)
-		if len(ot.CallSignatures) > 0 {
-			// Convert Signature to FunctionType for now (will be updated in later phases)
-			sig := ot.CallSignatures[0]
-			funcType = &types.FunctionType{
-				ParameterTypes:    sig.ParameterTypes,
-				ReturnType:        sig.ReturnType,
-				OptionalParams:    sig.OptionalParams,
-				IsVariadic:        sig.IsVariadic,
-				RestParameterType: sig.RestParameterType,
-			}
-		} else {
-			c.addError(node, fmt.Sprintf("callable object has no call signatures"))
-			node.SetComputedType(types.Any)
-			return
-		}
-	} else {
+	// Handle callable ObjectType with unified approach
+	objType, ok := funcNodeType.(*types.ObjectType)
+	if !ok {
 		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
-		node.SetComputedType(types.Any) // Result type is unknown/error
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	if !objType.IsCallable() {
+		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
+		node.SetComputedType(types.Any)
 		return
 	}
 
-	debugPrintf("// [Checker CallExpr] Processing regular function type: %s, IsVariadic: %t\n", funcType.String(), funcType.IsVariadic)
+	if len(objType.CallSignatures) == 0 {
+		c.addError(node, fmt.Sprintf("callable object has no call signatures"))
+		node.SetComputedType(types.Any)
+		return
+	}
+
+	// Handle overloaded functions (multiple call signatures)
+	if len(objType.CallSignatures) > 1 {
+		debugPrintf("// [Checker CallExpr] Processing overloaded function with %d signatures\n", len(objType.CallSignatures))
+		c.checkOverloadedCallUnified(node, objType)
+		return
+	}
+
+	// Handle single call signature
+	funcSignature := objType.CallSignatures[0]
+
+	debugPrintf("// [Checker CallExpr] Processing function signature: %s, IsVariadic: %t\n", funcSignature.String(), funcSignature.IsVariadic)
 
 	// --- MODIFIED Arity and Argument Type Checking ---
 	actualArgCount := len(node.Arguments)
 
-	if funcType.IsVariadic {
+	if funcSignature.IsVariadic {
 		// --- Variadic Function Check ---
-		debugPrintf("// [Checker CallExpr] Checking variadic function, RestParameterType: %T (%v)\n", funcType.RestParameterType, funcType.RestParameterType)
-		if funcType.RestParameterType == nil {
+		debugPrintf("// [Checker CallExpr] Checking variadic function, RestParameterType: %T (%v)\n", funcSignature.RestParameterType, funcSignature.RestParameterType)
+		if funcSignature.RestParameterType == nil {
 			c.addError(node, "internal checker error: variadic function type must have a rest parameter type")
 			node.SetComputedType(types.Any) // Error state
 			return
 		}
 
 		// Calculate minimum required arguments (excluding optional parameters)
-		minExpectedArgs := len(funcType.ParameterTypes)
-		if len(funcType.OptionalParams) == len(funcType.ParameterTypes) {
+		minExpectedArgs := len(funcSignature.ParameterTypes)
+		if len(funcSignature.OptionalParams) == len(funcSignature.ParameterTypes) {
 			// Count required parameters from the end
-			for i := len(funcType.ParameterTypes) - 1; i >= 0; i-- {
-				if funcType.OptionalParams[i] {
+			for i := len(funcSignature.ParameterTypes) - 1; i >= 0; i-- {
+				if funcSignature.OptionalParams[i] {
 					minExpectedArgs--
 				} else {
 					break // Stop at first required parameter from the end
@@ -113,7 +98,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		} else {
 			// Check fixed arguments - check all provided fixed parameters, not just minimum required
 			fixedArgsOk := true
-			fixedArgCount := len(funcType.ParameterTypes)
+			fixedArgCount := len(funcSignature.ParameterTypes)
 			if actualArgCount < fixedArgCount {
 				fixedArgCount = actualArgCount // Don't check more arguments than provided
 			}
@@ -122,7 +107,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 				argNode := node.Arguments[i]
 				c.visit(argNode)
 				argType := argNode.GetComputedType()
-				paramType := funcType.ParameterTypes[i]
+				paramType := funcSignature.ParameterTypes[i]
 				if argType == nil { // Error visiting arg
 					fixedArgsOk = false
 					continue
@@ -135,7 +120,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 			// Check variadic arguments
 			if fixedArgsOk { // Only check variadic part if fixed part was okay
-				variadicParamType := funcType.RestParameterType
+				variadicParamType := funcSignature.RestParameterType
 				arrayType, isArray := variadicParamType.(*types.ArrayType)
 				if !isArray {
 					c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", variadicParamType.String()))
@@ -145,7 +130,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 						variadicElementType = types.Any
 					}
 					// Check remaining arguments against the element type - start after all fixed parameters
-					for i := len(funcType.ParameterTypes); i < actualArgCount; i++ {
+					for i := len(funcSignature.ParameterTypes); i < actualArgCount; i++ {
 						argNode := node.Arguments[i]
 						c.visit(argNode)
 						argType := argNode.GetComputedType()
@@ -172,14 +157,14 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	} else {
 		// --- Non-Variadic Function Check (Updated for Optional Parameters) ---
-		expectedArgCount := len(funcType.ParameterTypes)
+		expectedArgCount := len(funcSignature.ParameterTypes)
 
 		// Calculate minimum required arguments (non-optional parameters)
 		minRequiredArgs := expectedArgCount
-		if len(funcType.OptionalParams) == expectedArgCount {
+		if len(funcSignature.OptionalParams) == expectedArgCount {
 			// Count required parameters from the end
 			for i := expectedArgCount - 1; i >= 0; i-- {
-				if funcType.OptionalParams[i] {
+				if funcSignature.OptionalParams[i] {
 					minRequiredArgs--
 				} else {
 					break // Stop at first required parameter from the end
@@ -197,7 +182,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			for i, argNode := range node.Arguments {
 				c.visit(argNode) // Visit argument to compute its type
 				argType := argNode.GetComputedType()
-				paramType := funcType.ParameterTypes[i]
+				paramType := funcSignature.ParameterTypes[i]
 
 				if argType == nil {
 					// Error computing argument type, can't check assignability
@@ -213,7 +198,128 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// --- END MODIFIED Checking ---
 
 	// Set Result Type (unchanged)
-	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), funcType.ReturnType, funcType.ReturnType)
-	node.SetComputedType(funcType.ReturnType)
+	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), funcSignature.ReturnType, funcSignature.ReturnType)
+	node.SetComputedType(funcSignature.ReturnType)
 
+}
+
+// checkOverloadedCallUnified handles function calls to overloaded functions using unified ObjectType
+func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objType *types.ObjectType) {
+	// Visit all arguments first
+	var argTypes []types.Type
+	for _, argNode := range node.Arguments {
+		c.visit(argNode)
+		argType := argNode.GetComputedType()
+		if argType == nil {
+			argType = types.Any
+		}
+		argTypes = append(argTypes, argType)
+	}
+
+	// Try to find the best matching signature
+	signatureIndex := -1
+	var resultType types.Type
+
+	for i, signature := range objType.CallSignatures {
+		// Check if this signature can accept the given arguments
+		var isMatching bool
+
+		if signature.IsVariadic {
+			// For variadic signatures, check minimum required arguments (fixed parameters)
+			minRequiredArgs := len(signature.ParameterTypes)
+			if len(argTypes) >= minRequiredArgs {
+				// Check fixed parameters first
+				fixedMatch := true
+				for j := 0; j < minRequiredArgs; j++ {
+					if !types.IsAssignable(argTypes[j], signature.ParameterTypes[j]) {
+						fixedMatch = false
+						break
+					}
+				}
+
+				if fixedMatch {
+					// Check remaining arguments against rest parameter type
+					if signature.RestParameterType != nil {
+						// Extract element type from rest parameter array type
+						var elementType types.Type = types.Any
+						if arrayType, ok := signature.RestParameterType.(*types.ArrayType); ok {
+							elementType = arrayType.ElementType
+						}
+
+						// Check all remaining arguments against element type
+						variadicMatch := true
+						for j := minRequiredArgs; j < len(argTypes); j++ {
+							if !types.IsAssignable(argTypes[j], elementType) {
+								variadicMatch = false
+								break
+							}
+						}
+						isMatching = variadicMatch
+					} else {
+						isMatching = true // No rest parameter type specified, assume compatible
+					}
+				}
+			}
+		} else {
+			// For non-variadic signatures, argument count must match exactly
+			if len(argTypes) != len(signature.ParameterTypes) {
+				continue // Argument count mismatch
+			}
+
+			// Check if all argument types are assignable to parameter types
+			allMatch := true
+			for j, argType := range argTypes {
+				paramType := signature.ParameterTypes[j]
+				if !types.IsAssignable(argType, paramType) {
+					allMatch = false
+					break
+				}
+			}
+			isMatching = allMatch
+		}
+
+		if isMatching {
+			signatureIndex = i
+			resultType = signature.ReturnType
+			break // Found the first matching signature
+		}
+	}
+
+	if signatureIndex == -1 {
+		// No matching signature found
+		var signatureStrs []string
+		for _, signature := range objType.CallSignatures {
+			signatureStrs = append(signatureStrs, signature.String())
+		}
+
+		// Build argument type string for error message
+		var argTypeStrs []string
+		for _, argType := range argTypes {
+			argTypeStrs = append(argTypeStrs, argType.String())
+		}
+
+		// Format signatures nicely - each on its own line with proper indentation
+		signatureList := ""
+		for i, sig := range signatureStrs {
+			if i > 0 {
+				signatureList += "\n"
+			}
+			signatureList += "  " + sig
+		}
+
+		c.addError(node, fmt.Sprintf("no overload matches call with arguments (%v). Available signatures:\n%s",
+			argTypeStrs, signatureList))
+
+		node.SetComputedType(types.Any)
+		return
+	}
+
+	// Found a matching signature
+	matchedSignature := objType.CallSignatures[signatureIndex]
+	debugPrintf("// [Checker OverloadCall] Found matching signature %d: %s for call with args (%v)\n",
+		signatureIndex, matchedSignature.String(), argTypes)
+
+	// Set the result type from the matched signature
+	node.SetComputedType(resultType)
+	debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
 }

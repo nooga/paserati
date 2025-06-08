@@ -8,22 +8,17 @@ import (
 
 // registerDate registers the Date constructor and prototype methods
 func registerDate() {
-	// Register Date constructor
-	dateCallableType := &types.CallableType{
-		CallSignature: &types.FunctionType{
-			ParameterTypes:    []types.Type{},                                         // Can accept various arguments
-			ReturnType:        &types.ObjectType{Properties: map[string]types.Type{}}, // Returns Date object
-			IsVariadic:        true,
-			RestParameterType: types.Any,
-		},
-		Properties: map[string]types.Type{
-			"now": &types.FunctionType{
-				ParameterTypes: []types.Type{},
-				ReturnType:     types.Number,
-				IsVariadic:     false,
-			},
-		},
-	}
+	// Create Date object type and Date constructor type using the unified system
+	dateObjectType := types.NewObjectType() // The type of Date instances
+	
+	// Register Date constructor using the smart constructor pattern
+	dateCallableType := types.NewObjectType().
+		// Call signatures for Date constructor (overloaded)
+		WithCallSignature(types.Sig([]types.Type{}, dateObjectType)).                                 // Date() -> Date
+		WithCallSignature(types.SigVariadic([]types.Type{}, dateObjectType, &types.ArrayType{ElementType: types.Any})). // Date(...args) -> Date
+		
+		// Static methods on Date constructor
+		WithProperty("now", types.NewSimpleFunction([]types.Type{}, types.Number))
 
 	dateConstructorValue := vm.NewNativeFunctionWithProps(-1, true, "Date", dateConstructor)
 	// Add static methods to the constructor

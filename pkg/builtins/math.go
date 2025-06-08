@@ -60,61 +60,60 @@ func registerMath() {
 	mathObject.SetOwn("tanh", vm.NewNativeFunction(1, false, "tanh", mathTanhImpl))
 	mathObject.SetOwn("trunc", vm.NewNativeFunction(1, false, "trunc", mathTruncImpl))
 
-	// Define the type for Math object with all methods and constants
-	mathType := &types.ObjectType{Properties: map[string]types.Type{
+	// Define the type for Math object using the smart constructor pattern
+	mathType := types.NewObjectType().
 		// Constants
-		"E":       types.Number,
-		"LN10":    types.Number,
-		"LN2":     types.Number,
-		"LOG10E":  types.Number,
-		"LOG2E":   types.Number,
-		"PI":      types.Number,
-		"SQRT1_2": types.Number,
-		"SQRT2":   types.Number,
+		WithProperty("E", types.Number).
+		WithProperty("LN10", types.Number).
+		WithProperty("LN2", types.Number).
+		WithProperty("LOG10E", types.Number).
+		WithProperty("LOG2E", types.Number).
+		WithProperty("PI", types.Number).
+		WithProperty("SQRT1_2", types.Number).
+		WithProperty("SQRT2", types.Number).
 
-		// Methods - single parameter functions
-		"abs":    &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"acos":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"acosh":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"asin":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"asinh":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"atan":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"atanh":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"cbrt":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"ceil":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"clz32":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"cos":    &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"cosh":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"exp":    &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"expm1":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"floor":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"fround": &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"log":    &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"log1p":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"log10":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"log2":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"round":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"sign":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"sin":    &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"sinh":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"sqrt":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"tan":    &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"tanh":   &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"trunc":  &types.FunctionType{ParameterTypes: []types.Type{types.Number}, ReturnType: types.Number, IsVariadic: false},
+		// Single parameter methods
+		WithProperty("abs", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("acos", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("acosh", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("asin", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("asinh", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("atan", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("atanh", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("cbrt", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("ceil", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("clz32", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("cos", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("cosh", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("exp", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("expm1", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("floor", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("fround", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("log", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("log1p", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("log10", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("log2", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("round", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("sign", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("sin", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("sinh", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("sqrt", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("tan", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("tanh", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("trunc", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
 
-		// Two parameter functions
-		"atan2": &types.FunctionType{ParameterTypes: []types.Type{types.Number, types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"imul":  &types.FunctionType{ParameterTypes: []types.Type{types.Number, types.Number}, ReturnType: types.Number, IsVariadic: false},
-		"pow":   &types.FunctionType{ParameterTypes: []types.Type{types.Number, types.Number}, ReturnType: types.Number, IsVariadic: false},
+		// Two parameter methods
+		WithProperty("atan2", types.NewSimpleFunction([]types.Type{types.Number, types.Number}, types.Number)).
+		WithProperty("imul", types.NewSimpleFunction([]types.Type{types.Number, types.Number}, types.Number)).
+		WithProperty("pow", types.NewSimpleFunction([]types.Type{types.Number, types.Number}, types.Number)).
 
-		// Zero parameter functions
-		"random": &types.FunctionType{ParameterTypes: []types.Type{}, ReturnType: types.Number, IsVariadic: false},
+		// Zero parameter methods
+		WithProperty("random", types.NewSimpleFunction([]types.Type{}, types.Number)).
 
-		// Variadic functions
-		"hypot": &types.FunctionType{ParameterTypes: []types.Type{}, ReturnType: types.Number, IsVariadic: true, RestParameterType: &types.ArrayType{ElementType: types.Number}},
-		"max":   &types.FunctionType{ParameterTypes: []types.Type{}, ReturnType: types.Number, IsVariadic: true, RestParameterType: &types.ArrayType{ElementType: types.Number}},
-		"min":   &types.FunctionType{ParameterTypes: []types.Type{}, ReturnType: types.Number, IsVariadic: true, RestParameterType: &types.ArrayType{ElementType: types.Number}},
-	}}
+		// Variadic methods
+		WithProperty("hypot", types.NewVariadicFunction([]types.Type{}, types.Number, &types.ArrayType{ElementType: types.Number})).
+		WithProperty("max", types.NewVariadicFunction([]types.Type{}, types.Number, &types.ArrayType{ElementType: types.Number})).
+		WithProperty("min", types.NewVariadicFunction([]types.Type{}, types.Number, &types.ArrayType{ElementType: types.Number}))
 
 	// Register the Math object
 	registerObject("Math", mathObj, mathType)

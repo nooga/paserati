@@ -55,20 +55,32 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 		optionalParams = append(optionalParams, param.Optional || (param.DefaultValue != nil))
 	}
 
-	funcType := &types.FunctionType{
+	// Create a signature for the function type
+	sig := &types.Signature{
 		ParameterTypes: paramTypes,
 		ReturnType:     returnType,
 		OptionalParams: optionalParams,
 	}
 
+	// Create a unified ObjectType with call signature
+	funcType := types.NewFunctionType(sig)
+
+	// For backward compatibility, create legacy FunctionType
+	// funcType := &types.FunctionType{
+	// 	ParameterTypes: paramTypes,
+	// 	ReturnType:     returnType,
+	// 	OptionalParams: optionalParams,
+	// }
+
 	// Set the computed type on the signature node
+	// For now, continue using FunctionType for overloads until we update the entire overload system
 	node.SetComputedType(funcType)
 	debugPrintf("// [Checker] Added overload signature for '%s': %s\n", functionName, funcType.String())
 }
 
-// completeOverloadedFunction creates an OverloadedFunctionType when we encounter
+// completeOverloadedFunction creates an ObjectType with multiple call signatures when we encounter
 // a function implementation that has pending overload signatures.
-func (c *Checker) completeOverloadedFunction(functionName string, implementation *types.FunctionType) {
+func (c *Checker) completeOverloadedFunction(functionName string, implementation *types.ObjectType) {
 	debugPrintf("// [Checker completeOverloadedFunction] Starting completion for '%s'\n", functionName)
 	debugPrintf("// [Checker completeOverloadedFunction] Checking env %p\n", c.env)
 
@@ -88,92 +100,116 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 
 	debugPrintf("// [Checker completeOverloadedFunction] Found %d pending overloads for '%s'\n", len(pendingSignatures), functionName)
 
-	// Convert signatures to function types
-	var overloadTypes []*types.FunctionType
+	// Convert signatures to call signatures for unified ObjectType
+	var overloadSignatures []*types.Signature
 	for _, sig := range pendingSignatures {
 		if sigType := sig.GetComputedType(); sigType != nil {
-			if funcType, ok := sigType.(*types.FunctionType); ok {
-				overloadTypes = append(overloadTypes, funcType)
-				debugPrintf("// [Checker completeOverloadedFunction] Added overload type: %s\n", funcType.String())
+			if objType, ok := sigType.(*types.ObjectType); ok && objType.IsCallable() {
+				// Extract call signatures from unified ObjectType
+				if len(objType.CallSignatures) > 0 {
+					overloadSignatures = append(overloadSignatures, objType.CallSignatures[0])
+					debugPrintf("// [Checker completeOverloadedFunction] Added overload signature: %s\n", objType.CallSignatures[0].String())
+				}
 			}
 		}
 	}
 
-	debugPrintf("// [Checker completeOverloadedFunction] Converted %d overload types\n", len(overloadTypes))
+	debugPrintf("// [Checker completeOverloadedFunction] Converted %d overload signatures\n", len(overloadSignatures))
+
+	// Convert implementation ObjectType to Signature
+	if len(implementation.CallSignatures) == 0 {
+		debugPrintf("// [Checker completeOverloadedFunction] Implementation has no call signatures\n")
+		return
+	}
+	implementationSig := implementation.CallSignatures[0] // Use first call signature
 
 	// Validate that implementation is compatible with all overloads
-	for i, overloadType := range overloadTypes {
-		if !c.isImplementationCompatible(implementation, overloadType) {
+	for i, overloadSig := range overloadSignatures {
+		if !c.isSignatureCompatible(implementationSig, overloadSig) {
 			sig := pendingSignatures[i]
 			c.addError(sig, fmt.Sprintf("function implementation signature '%s' is not compatible with overload signature '%s'",
-				implementation.String(), overloadType.String()))
+				implementationSig.String(), overloadSig.String()))
 		}
 	}
 
-	// Complete the overloaded function in the environment
-	if globalEnv.CompleteOverloadedFunction(functionName, overloadTypes, implementation) {
-		debugPrintf("// [Checker] Completed overloaded function '%s' with %d overloads\n",
-			functionName, len(overloadTypes))
+	// Complete the overloaded function in the environment using unified approach
+	if globalEnv.CompleteOverloadedFunctionUTS(functionName, overloadSignatures, implementationSig) {
+		debugPrintf("// [Checker] Completed unified overloaded function '%s' with %d overloads\n",
+			functionName, len(overloadSignatures))
 	} else {
-		debugPrintf("// [Checker] FAILED to complete overloaded function '%s'\n", functionName)
+		debugPrintf("// [Checker] FAILED to complete unified overloaded function '%s'\n", functionName)
 		c.addError(nil, fmt.Sprintf("failed to complete overloaded function '%s'", functionName))
 	}
 }
 
 // isImplementationCompatible checks if an implementation signature is compatible
 // with an overload signature. This is a simplified check.
-func (c *Checker) isImplementationCompatible(implementation, overload *types.FunctionType) bool {
+// DEPRECATED: Use isSignatureCompatible instead for unified ObjectType system.
+func (c *Checker) isImplementationCompatible(implementation, overload *types.ObjectType) bool {
 	debugPrintf("// [Checker isImplementationCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
 
-	// The implementation must be able to accept all the parameter types from the overload
-	// For now, we'll use a simple check that the implementation has compatible parameter types
+	// Extract call signatures from ObjectTypes
+	if len(implementation.CallSignatures) == 0 || len(overload.CallSignatures) == 0 {
+		debugPrintf("// [Checker isImplementationCompatible] Missing call signatures\n")
+		return false
+	}
 
+	implSig := implementation.CallSignatures[0]
+	overloadSig := overload.CallSignatures[0]
+
+	// Delegate to unified signature compatibility check
+	return c.isSignatureCompatible(implSig, overloadSig)
+
+}
+
+// isSignatureCompatible checks if an implementation signature is compatible
+// with an overload signature. This is the unified version for Signature types.
+func (c *Checker) isSignatureCompatible(implementation, overload *types.Signature) bool {
+	debugPrintf("// [Checker isSignatureCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
+
+	// The implementation must be able to accept all the parameter types from the overload
 	if len(implementation.ParameterTypes) != len(overload.ParameterTypes) {
-		debugPrintf("// [Checker isImplementationCompatible] Parameter count mismatch: impl %d vs overload %d\n", len(implementation.ParameterTypes), len(overload.ParameterTypes))
+		debugPrintf("// [Checker isSignatureCompatible] Parameter count mismatch: impl %d vs overload %d\n", len(implementation.ParameterTypes), len(overload.ParameterTypes))
 		return false
 	}
 
 	// Check that each overload parameter type is assignable to the corresponding implementation parameter
-	// For overloaded functions, the implementation parameter must be able to accept the overload parameter
 	for i, overloadParam := range overload.ParameterTypes {
 		implParam := implementation.ParameterTypes[i]
-		debugPrintf("// [Checker isImplementationCompatible] Checking param %d: overload %s assignable to impl %s\n", i, overloadParam.String(), implParam.String())
-		// The overload parameter must be assignable to the implementation parameter
-		// This means the implementation parameter is a union or supertype that can handle the overload parameter
+		debugPrintf("// [Checker isSignatureCompatible] Checking param %d: overload %s assignable to impl %s\n", i, overloadParam.String(), implParam.String())
 		if !types.IsAssignable(overloadParam, implParam) {
-			debugPrintf("// [Checker isImplementationCompatible] Parameter %d incompatible: %s not assignable to %s\n", i, overloadParam.String(), implParam.String())
+			debugPrintf("// [Checker isSignatureCompatible] Parameter %d incompatible: %s not assignable to %s\n", i, overloadParam.String(), implParam.String())
 			return false
 		}
-		debugPrintf("// [Checker isImplementationCompatible] Parameter %d compatible\n", i)
+		debugPrintf("// [Checker isSignatureCompatible] Parameter %d compatible\n", i)
 	}
 
-	// Check return type compatibility - for overloads, we need more flexible checking
-	// The implementation return type can be a union that includes the overload return type
-	debugPrintf("// [Checker isImplementationCompatible] Checking return types: impl %s vs overload %s\n", implementation.ReturnType.String(), overload.ReturnType.String())
+	// Check return type compatibility
+	debugPrintf("// [Checker isSignatureCompatible] Checking return types: impl %s vs overload %s\n", implementation.ReturnType.String(), overload.ReturnType.String())
 
 	// For overloads, if the implementation return type is a union, check if the overload return type is one of the union members
 	if implUnion, isUnion := implementation.ReturnType.(*types.UnionType); isUnion {
 		// Check if the overload return type is assignable to any of the union types
 		for _, unionMember := range implUnion.Types {
 			if types.IsAssignable(overload.ReturnType, unionMember) {
-				debugPrintf("// [Checker isImplementationCompatible] Return type compatible via union member %s\n", unionMember.String())
+				debugPrintf("// [Checker isSignatureCompatible] Return type compatible via union member %s\n", unionMember.String())
 				return true
 			}
 		}
-		// If no union member is compatible, it's not compatible
-		debugPrintf("// [Checker isImplementationCompatible] Return type incompatible: overload %s not found in union %s\n", overload.ReturnType.String(), implUnion.String())
+		debugPrintf("// [Checker isSignatureCompatible] Return type incompatible: overload %s not found in union %s\n", overload.ReturnType.String(), implUnion.String())
 		return false
 	} else {
 		// Non-union implementation return type - use standard assignability
 		result := types.IsAssignable(implementation.ReturnType, overload.ReturnType)
-		debugPrintf("// [Checker isImplementationCompatible] Return type compatible: %t\n", result)
+		debugPrintf("// [Checker isSignatureCompatible] Return type compatible: %t\n", result)
 		return result
 	}
 }
 
 // checkOverloadedCall handles function calls to overloaded functions by finding
 // the best matching overload and using its return type.
-func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFunc *types.OverloadedFunctionType) {
+// DEPRECATED: This function is replaced by checkOverloadedCallUnified in call.go
+func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFunc *types.ObjectType) {
 	// Visit all arguments first
 	var argTypes []types.Type
 	for _, argNode := range node.Arguments {
@@ -189,7 +225,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 	overloadIndex := -1
 	var resultType types.Type
 
-	for i, overload := range overloadedFunc.Overloads {
+	for i, overload := range overloadedFunc.CallSignatures {
 		// Check if this overload can accept the given arguments
 		var isMatching bool
 
@@ -257,7 +293,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 	if overloadIndex == -1 {
 		// No matching overload found
 		var overloadSigs []string
-		for _, overload := range overloadedFunc.Overloads {
+		for _, overload := range overloadedFunc.CallSignatures {
 			overloadSigs = append(overloadSigs, overload.String())
 		}
 
@@ -285,7 +321,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 	}
 
 	// Found a matching overload
-	matchedOverload := overloadedFunc.Overloads[overloadIndex]
+	matchedOverload := overloadedFunc.CallSignatures[overloadIndex]
 	debugPrintf("// [Checker OverloadCall] Found matching overload %d: %s for call with args (%v)\n",
 		overloadIndex, matchedOverload.String(), argTypes)
 

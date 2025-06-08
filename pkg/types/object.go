@@ -130,24 +130,47 @@ type ObjectType struct {
 }
 
 func (ot *ObjectType) String() string {
-	props := ""
-	i := 0
+	// If this is a pure function (callable with no properties), show it as a function signature
+	if ot.IsPureFunction() && len(ot.CallSignatures) == 1 {
+		return ot.CallSignatures[0].String()
+	}
+
+	// If this is a pure constructor, show it as a constructor signature
+	if len(ot.Properties) == 0 && len(ot.CallSignatures) == 0 && len(ot.ConstructSignatures) == 1 {
+		return fmt.Sprintf("new %s", ot.ConstructSignatures[0].String())
+	}
+
+	// Build object type representation
+	var parts []string
+
+	// Add call signatures
+	for _, sig := range ot.CallSignatures {
+		parts = append(parts, sig.String())
+	}
+
+	// Add constructor signatures
+	for _, sig := range ot.ConstructSignatures {
+		parts = append(parts, fmt.Sprintf("new %s", sig.String()))
+	}
+
+	// Add properties
 	for name, typ := range ot.Properties {
-		if i > 0 {
-			props += "; "
-		}
 		typStr := "<nil>"
-		if typ != nil { // Add nil check
+		if typ != nil {
 			typStr = typ.String()
 		}
 		optional := ""
 		if ot.OptionalProperties != nil && ot.OptionalProperties[name] {
 			optional = "?"
 		}
-		props += fmt.Sprintf("%s%s: %s", name, optional, typStr)
-		i++
+		parts = append(parts, fmt.Sprintf("%s%s: %s", name, optional, typStr))
 	}
-	return fmt.Sprintf("{ %s }", props)
+
+	if len(parts) == 0 {
+		return "{ }"
+	}
+
+	return fmt.Sprintf("{ %s }", strings.Join(parts, "; "))
 }
 func (ot *ObjectType) typeNode() {}
 func (ot *ObjectType) Equals(other Type) bool {
@@ -226,7 +249,7 @@ func (ot *ObjectType) Equals(other Type) bool {
 
 // IsCallable returns true if this ObjectType has call signatures
 func (ot *ObjectType) IsCallable() bool {
-	return len(ot.CallSignatures) > 0
+	return ot != nil && ot.CallSignatures != nil && len(ot.CallSignatures) > 0
 }
 
 // IsConstructable returns true if this ObjectType has constructor signatures
@@ -288,37 +311,221 @@ func (ot *ObjectType) AddBaseType(baseType Type) {
 	ot.BaseTypes = append(ot.BaseTypes, baseType)
 }
 
-// --- Constructor Functions ---
+// --- Smart Constructors/Builder Pattern ---
 
-// NewFunctionType creates an ObjectType representing a pure function
-func NewFunctionType(sig *Signature) *ObjectType {
-	return &ObjectType{
-		Properties:          make(map[string]Type),
-		OptionalProperties:  make(map[string]bool),
-		CallSignatures:      []*Signature{sig},
-		ConstructSignatures: []*Signature{},
-		BaseTypes:           []Type{},
-	}
-}
-
-// NewOverloadedFunctionType creates an ObjectType representing an overloaded function
-func NewOverloadedFunctionType(sigs []*Signature) *ObjectType {
-	return &ObjectType{
-		Properties:          make(map[string]Type),
-		OptionalProperties:  make(map[string]bool),
-		CallSignatures:      sigs,
-		ConstructSignatures: []*Signature{},
-		BaseTypes:           []Type{},
-	}
-}
-
-// NewConstructorType creates an ObjectType representing a pure constructor
-func NewConstructorType(sig *Signature) *ObjectType {
+// NewObjectType creates a new ObjectType with empty properties and signatures
+func NewObjectType() *ObjectType {
 	return &ObjectType{
 		Properties:          make(map[string]Type),
 		OptionalProperties:  make(map[string]bool),
 		CallSignatures:      []*Signature{},
-		ConstructSignatures: []*Signature{sig},
+		ConstructSignatures: []*Signature{},
 		BaseTypes:           []Type{},
 	}
+}
+
+// WithProperty adds a required property to the ObjectType and returns the same instance for chaining
+func (ot *ObjectType) WithProperty(name string, propType Type) *ObjectType {
+	ot.Properties[name] = propType
+	return ot
+}
+
+// WithOptionalProperty adds an optional property to the ObjectType and returns the same instance for chaining
+func (ot *ObjectType) WithOptionalProperty(name string, propType Type) *ObjectType {
+	ot.Properties[name] = propType
+	ot.OptionalProperties[name] = true
+	return ot
+}
+
+// WithCallSignature adds a call signature to the ObjectType and returns the same instance for chaining
+func (ot *ObjectType) WithCallSignature(sig *Signature) *ObjectType {
+	ot.CallSignatures = append(ot.CallSignatures, sig)
+	return ot
+}
+
+// WithSimpleCallSignature adds a simple call signature (params->return) and returns the same instance for chaining
+func (ot *ObjectType) WithSimpleCallSignature(paramTypes []Type, returnType Type) *ObjectType {
+	sig := &Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		OptionalParams:    make([]bool, len(paramTypes)),
+		IsVariadic:        false,
+		RestParameterType: nil,
+	}
+	return ot.WithCallSignature(sig)
+}
+
+// WithVariadicCallSignature adds a variadic call signature and returns the same instance for chaining
+func (ot *ObjectType) WithVariadicCallSignature(paramTypes []Type, returnType Type, restType Type) *ObjectType {
+	sig := &Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		OptionalParams:    make([]bool, len(paramTypes)),
+		IsVariadic:        true,
+		RestParameterType: restType,
+	}
+	return ot.WithCallSignature(sig)
+}
+
+// WithConstructSignature adds a constructor signature to the ObjectType and returns the same instance for chaining
+func (ot *ObjectType) WithConstructSignature(sig *Signature) *ObjectType {
+	ot.ConstructSignatures = append(ot.ConstructSignatures, sig)
+	return ot
+}
+
+// WithSimpleConstructSignature adds a simple constructor signature and returns the same instance for chaining
+func (ot *ObjectType) WithSimpleConstructSignature(paramTypes []Type, returnType Type) *ObjectType {
+	sig := &Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		OptionalParams:    make([]bool, len(paramTypes)),
+		IsVariadic:        false,
+		RestParameterType: nil,
+	}
+	return ot.WithConstructSignature(sig)
+}
+
+// Inherits adds a base type for inheritance and returns the same instance for chaining
+func (ot *ObjectType) Inherits(baseType Type) *ObjectType {
+	ot.BaseTypes = append(ot.BaseTypes, baseType)
+	return ot
+}
+
+// --- Convenience constructors for common patterns ---
+
+// NewSimpleFunction creates a function type: (params) => returnType
+func NewSimpleFunction(paramTypes []Type, returnType Type) *ObjectType {
+	return NewObjectType().WithSimpleCallSignature(paramTypes, returnType)
+}
+
+// NewVariadicFunction creates a variadic function type: (params, ...rest) => returnType
+func NewVariadicFunction(paramTypes []Type, returnType Type, restType Type) *ObjectType {
+	return NewObjectType().WithVariadicCallSignature(paramTypes, returnType, restType)
+}
+
+// NewSimpleConstructor creates a constructor type: new (params) => returnType
+func NewSimpleConstructor(paramTypes []Type, returnType Type) *ObjectType {
+	return NewObjectType().WithSimpleConstructSignature(paramTypes, returnType)
+}
+
+// NewOptionalFunction creates a function type with optional parameters: (param1, param2?) => returnType
+func NewOptionalFunction(paramTypes []Type, returnType Type, optionalParams []bool) *ObjectType {
+	return NewObjectType().WithCallSignature(SigOptional(paramTypes, returnType, optionalParams))
+}
+
+// --- Helper functions for complex types ---
+
+// Sig creates a Signature with the given parameters and return type
+func Sig(paramTypes []Type, returnType Type) *Signature {
+	return &Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		OptionalParams:    make([]bool, len(paramTypes)),
+		IsVariadic:        false,
+		RestParameterType: nil,
+	}
+}
+
+// SigVariadic creates a variadic Signature
+func SigVariadic(paramTypes []Type, returnType Type, restType Type) *Signature {
+	return &Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		OptionalParams:    make([]bool, len(paramTypes)),
+		IsVariadic:        true,
+		RestParameterType: restType,
+	}
+}
+
+// SigOptional creates a Signature with optional parameters
+func SigOptional(paramTypes []Type, returnType Type, optionalParams []bool) *Signature {
+	return &Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		OptionalParams:    optionalParams,
+		IsVariadic:        false,
+		RestParameterType: nil,
+	}
+}
+
+// --- Fluent Signature Builder ---
+
+// NewSignature creates a new signature builder with the given parameter types
+func NewSignature(paramTypes ...Type) *Signature {
+	return &Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        Void, // Default return type
+		OptionalParams:    make([]bool, len(paramTypes)),
+		IsVariadic:        false,
+		RestParameterType: nil,
+	}
+}
+
+// WithOptional marks specific parameters as optional (fluent interface)
+func (sig *Signature) WithOptional(mask ...bool) *Signature {
+	if len(mask) > len(sig.ParameterTypes) {
+		// Extend OptionalParams if mask is longer than parameters
+		sig.OptionalParams = make([]bool, len(mask))
+	}
+	for i, isOptional := range mask {
+		if i < len(sig.OptionalParams) {
+			sig.OptionalParams[i] = isOptional
+		}
+	}
+	return sig
+}
+
+// WithOptionalAt marks specific parameter indices as optional (fluent interface)
+func (sig *Signature) WithOptionalAt(indices ...int) *Signature {
+	for _, index := range indices {
+		if index >= 0 && index < len(sig.OptionalParams) {
+			sig.OptionalParams[index] = true
+		}
+	}
+	return sig
+}
+
+// Returns sets the return type (fluent interface)
+func (sig *Signature) Returns(returnType Type) *Signature {
+	sig.ReturnType = returnType
+	return sig
+}
+
+// WithRest adds a rest parameter type (automatically wrapped in ArrayType if needed)
+func (sig *Signature) WithRest(restType Type) *Signature {
+	sig.IsVariadic = true
+	// If restType is already an ArrayType, use it directly
+	// Otherwise, wrap it in an ArrayType
+	if _, isArray := restType.(*ArrayType); isArray {
+		sig.RestParameterType = restType
+	} else {
+		sig.RestParameterType = &ArrayType{ElementType: restType}
+	}
+	return sig
+}
+
+// ToFunction wraps this signature in an ObjectType with a single call signature
+func (sig *Signature) ToFunction() *ObjectType {
+	return NewObjectType().WithCallSignature(sig)
+}
+
+// --- Legacy Constructor Functions (for backward compatibility) ---
+
+// NewFunctionType creates an ObjectType representing a pure function
+func NewFunctionType(sig *Signature) *ObjectType {
+	return NewObjectType().WithCallSignature(sig)
+}
+
+// NewOverloadedFunctionType creates an ObjectType representing an overloaded function
+func NewOverloadedFunctionType(sigs []*Signature) *ObjectType {
+	obj := NewObjectType()
+	for _, sig := range sigs {
+		obj.WithCallSignature(sig)
+	}
+	return obj
+}
+
+// NewConstructorType creates an ObjectType representing a pure constructor
+func NewConstructorType(sig *Signature) *ObjectType {
+	return NewObjectType().WithConstructSignature(sig)
 }

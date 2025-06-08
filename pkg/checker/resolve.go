@@ -207,8 +207,8 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 		return nil // Indicate error by returning nil
 	}
 
-	// Construct the internal FunctionType representation
-	return &types.FunctionType{
+	// Create signature
+	sig := &types.Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		IsVariadic:        node.RestParameter != nil,
@@ -216,13 +216,16 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 		// Note: Function type expressions don't track optional parameters
 		// They are just type signatures, not parameter declarations
 	}
+
+	// Create a unified ObjectType with call signature
+	return types.NewFunctionType(sig)
 }
 
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
-	var callSignatures []*types.FunctionType
+	var callSignatures []*types.Signature
 
 	for _, prop := range node.Properties {
 		if prop.IsCallSignature {
@@ -241,13 +244,14 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				returnType = types.Any
 			}
 
-			funcType := &types.FunctionType{
+			// Create a signature
+			sig := &types.Signature{
 				ParameterTypes: paramTypes,
 				ReturnType:     returnType,
 				// Note: Object type call signatures don't track optional parameters for now
 			}
 
-			callSignatures = append(callSignatures, funcType)
+			callSignatures = append(callSignatures, sig)
 		} else if prop.Name != nil {
 			// Regular property or method
 			propType := c.resolveTypeAnnotation(prop.Type)
@@ -269,36 +273,22 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 		// Skip properties with nil names that aren't call signatures
 	}
 
-	// For now, if we have call signatures, we need to represent this as a callable object type
-	// Since we don't have a specific CallableObjectType yet, we'll treat a single call signature
-	// as a function type, and multiple call signatures as an overloaded function type
-	if len(callSignatures) > 0 && len(properties) == 0 {
-		// Pure callable type - convert to function type
-		if len(callSignatures) == 1 {
-			// Single call signature - return as simple function type
-			return callSignatures[0]
-		} else {
-			// Multiple call signatures - return as overloaded function type
-			return &types.OverloadedFunctionType{
-				Name:           "callable", // Anonymous callable
-				Overloads:      callSignatures,
-				Implementation: callSignatures[0], // Use first as implementation
-			}
-		}
-	} else if len(callSignatures) > 0 && len(properties) > 0 {
-		// Mixed object with both properties and call signatures
-		// For now, we'll store call signatures as special properties
-		// This is a simplification - TypeScript has more complex handling
-		for i, sig := range callSignatures {
-			callPropName := fmt.Sprintf("__call%d", i)
-			properties[callPropName] = sig
-		}
-	}
-
-	return &types.ObjectType{
+	// Create a unified ObjectType
+	objectType := &types.ObjectType{
 		Properties:         properties,
 		OptionalProperties: optionalProperties,
+		CallSignatures:     callSignatures,
 	}
+
+	// If it's a pure callable object with no properties and exactly one signature,
+	// we can make it a pure function type for better type display
+	if len(properties) == 0 && len(callSignatures) == 1 {
+		// Create a fresh object to ensure we get a "pure function" 
+		// (the IsPureFunction helper method will return true)
+		return types.NewFunctionType(callSignatures[0])
+	}
+
+	return objectType
 }
 
 // --- NEW: Helper to resolve ConstructorTypeExpression nodes ---
@@ -319,16 +309,20 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 		return nil // Indicate error by returning nil
 	}
 
-	// Construct the internal ConstructorType representation
-	return &types.ConstructorType{
-		ParameterTypes:  paramTypes,
-		ConstructedType: constructedType,
+	// Create signature
+	sig := &types.Signature{
+		ParameterTypes: paramTypes,
+		ReturnType:     constructedType,
 		// Note: Constructor type expressions don't track optional parameters
 	}
+
+	// Create a unified ObjectType with constructor signature
+	return types.NewConstructorType(sig)
 }
 
 // Resolves parameter and return type annotations within the given environment.
-func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *Environment) *types.FunctionType {
+// Returns a types.Signature for the unified type system
+func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, env *Environment) *types.Signature {
 	paramTypes := []types.Type{}
 	var optionalParams []bool
 
@@ -454,7 +448,8 @@ func (c *Checker) resolveFunctionLiteralType(node *parser.FunctionLiteral, env *
 		debugPrintf("// [Checker resolveFuncLitType] Final check: resolvedReturnType is NOT nil (Ptr=%p) for func '%s'\n", resolvedReturnType, funcNameForLog)
 	}
 
-	return &types.FunctionType{
+	// Return a unified Signature
+	return &types.Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        resolvedReturnType, // Use the value assigned outside the if
 		OptionalParams:    optionalParams,

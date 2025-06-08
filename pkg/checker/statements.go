@@ -179,8 +179,17 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 			// This is not perfect for === semantics but catches basic errors.
 			isAny := widenedSwitchExprType == types.Any || widenedCaseCondType == types.Any
 			isUnknown := widenedSwitchExprType == types.Unknown || widenedCaseCondType == types.Unknown
-			_, isSwitchFunc := widenedSwitchExprType.(*types.FunctionType)
-			_, isCaseFunc := widenedCaseCondType.(*types.FunctionType)
+			// Check for function types (unified ObjectType with call signatures)
+			switchObjCallable := false
+			caseObjCallable := false
+			if switchObj, ok := widenedSwitchExprType.(*types.ObjectType); ok {
+				switchObjCallable = switchObj.IsCallable()
+			}
+			if caseObj, ok := widenedCaseCondType.(*types.ObjectType); ok {
+				caseObjCallable = caseObj.IsCallable()
+			}
+			isSwitchFunc := switchObjCallable
+			isCaseFunc := caseObjCallable
 			_, isSwitchArray := widenedSwitchExprType.(*types.ArrayType)
 			_, isCaseArray := widenedCaseCondType.(*types.ArrayType)
 
