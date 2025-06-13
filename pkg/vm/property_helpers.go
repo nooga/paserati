@@ -29,9 +29,10 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 	
-	// Check function prototype methods
-	if FunctionPrototype != nil {
-		if method, exists := FunctionPrototype.GetOwn(propName); exists {
+	// Check function prototype methods using the VM's FunctionPrototype
+	if vm.FunctionPrototype.Type() == TypeObject {
+		funcProto := vm.FunctionPrototype.AsPlainObject()
+		if method, exists := funcProto.GetOwn(propName); exists {
 			UpdatePrototypeStats("function_proto", 1)
 			return createBoundMethod(objVal, method), true
 		}
@@ -46,9 +47,9 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 	
 	switch objVal.Type() {
 	case TypeString:
-		prototype = StringPrototype
+		prototype = vm.StringPrototype.AsPlainObject()
 	case TypeArray:
-		prototype = ArrayPrototype
+		prototype = vm.ArrayPrototype.AsPlainObject()
 	default:
 		return Undefined, false
 	}

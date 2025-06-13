@@ -42,23 +42,16 @@ func registerArrayPrototypeMethods() {
 			Returns(types.String).
 			ToFunction())
 
-	// Register map method
-	vm.RegisterArrayPrototypeMethod("map",
-		vm.NewNativeFunction(1, false, "map", arrayPrototypeMapImpl))
+	// Note: map, filter, forEach methods are now registered in setupArrayPrototype with VM support
+	// Type definitions only
 	callbackType := types.NewSimpleFunction([]types.Type{types.Any}, types.Any)
 	RegisterPrototypeMethod("array", "map",
 		types.NewSimpleFunction([]types.Type{callbackType}, &types.ArrayType{ElementType: types.Any}))
 
-	// Register filter method
-	vm.RegisterArrayPrototypeMethod("filter",
-		vm.NewNativeFunction(1, false, "filter", arrayPrototypeFilterImpl))
 	filterCallbackType := types.NewSimpleFunction([]types.Type{types.Any}, types.Any)
 	RegisterPrototypeMethod("array", "filter",
 		types.NewSimpleFunction([]types.Type{filterCallbackType}, &types.ArrayType{ElementType: types.Any}))
 
-	// Register forEach method
-	vm.RegisterArrayPrototypeMethod("forEach",
-		vm.NewNativeFunction(1, false, "forEach", arrayPrototypeForEachImpl))
 	forEachCallbackType := types.NewSimpleFunction([]types.Type{types.Any}, types.Any)
 	RegisterPrototypeMethod("array", "forEach",
 		types.NewSimpleFunction([]types.Type{forEachCallbackType}, types.Void))
@@ -123,36 +116,26 @@ func registerArrayPrototypeMethods() {
 			Returns(types.String).
 			ToFunction())
 
-	// Register every method
-	vm.RegisterArrayPrototypeMethod("every",
-		vm.NewNativeFunction(1, false, "every", arrayPrototypeEveryImpl))
+	// Note: every, some, find, findIndex methods are now registered in setupArrayPrototype with VM support
+	// Type definitions only
 	everyCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
 	RegisterPrototypeMethod("array", "every",
 		types.NewSignature(everyCallbackType).
 			Returns(types.Boolean).
 			ToFunction())
 
-	// Register some method
-	vm.RegisterArrayPrototypeMethod("some",
-		vm.NewNativeFunction(1, false, "some", arrayPrototypeSomeImpl))
 	someCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
 	RegisterPrototypeMethod("array", "some",
 		types.NewSignature(someCallbackType).
 			Returns(types.Boolean).
 			ToFunction())
 
-	// Register find method
-	vm.RegisterArrayPrototypeMethod("find",
-		vm.NewNativeFunction(1, false, "find", arrayPrototypeFindImpl))
 	findCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
 	RegisterPrototypeMethod("array", "find",
 		types.NewSignature(findCallbackType).
 			Returns(types.Any).
 			ToFunction())
 
-	// Register findIndex method
-	vm.RegisterArrayPrototypeMethod("findIndex",
-		vm.NewNativeFunction(1, false, "findIndex", arrayPrototypeFindIndexImpl))
 	findIndexCallbackType := types.NewSignature(types.Any).Returns(types.Any).ToFunction()
 	RegisterPrototypeMethod("array", "findIndex",
 		types.NewSignature(findIndexCallbackType).
@@ -775,4 +758,248 @@ func arrayPrototypeFindIndexImpl(args []vm.Value) vm.Value {
 	}
 
 	return vm.Number(-1)
+}
+
+// setupArrayPrototype sets up Array prototype methods for a specific VM instance
+// This allows array methods to call user-defined functions using the VM's CallFunctionDirectly
+func setupArrayPrototype(vmInstance *vm.VM) {
+	arrayProto := vmInstance.ArrayPrototype.AsPlainObject()
+	
+	// Helper function to call user-defined or native functions
+	callFunction := func(fn vm.Value, args []vm.Value) vm.Value {
+		if fn.IsNativeFunction() {
+			nativeFn := fn.AsNativeFunction()
+			return nativeFn.Fn(args)
+		} else if fn.IsFunction() || fn.IsClosure() {
+			result, err := vmInstance.CallFunctionDirectly(fn, vm.Undefined, args)
+			if err != nil {
+				return vm.Undefined
+			}
+			return result
+		}
+		return vm.Undefined
+	}
+	
+	// Array.prototype.map with VM support
+	mapImpl := func(args []vm.Value) vm.Value {
+		if len(args) < 2 {
+			return vm.NewArray()
+		}
+
+		thisArray := args[0]
+		if !thisArray.IsArray() {
+			return vm.Undefined
+		}
+
+		callback := args[1]
+		if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+			return vm.Undefined
+		}
+
+		arr := thisArray.AsArray()
+		newArray := vm.NewArray()
+		newArrayObj := newArray.AsArray()
+
+		for i := 0; i < arr.Length(); i++ {
+			element := arr.Get(i)
+			// Call callback with (element, index, array)
+			callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+			result := callFunction(callback, callArgs)
+			newArrayObj.Append(result)
+		}
+
+		return newArray
+	}
+	arrayProto.SetOwn("map", vm.NewNativeFunction(1, false, "map", mapImpl))
+	
+	// Array.prototype.filter with VM support
+	filterImpl := func(args []vm.Value) vm.Value {
+		if len(args) < 2 {
+			return vm.NewArray()
+		}
+
+		thisArray := args[0]
+		if !thisArray.IsArray() {
+			return vm.Undefined
+		}
+
+		callback := args[1]
+		if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+			return vm.Undefined
+		}
+
+		arr := thisArray.AsArray()
+		newArray := vm.NewArray()
+		newArrayObj := newArray.AsArray()
+
+		for i := 0; i < arr.Length(); i++ {
+			element := arr.Get(i)
+			// Call callback with (element, index, array)
+			callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+			result := callFunction(callback, callArgs)
+			if result.IsTruthy() {
+				newArrayObj.Append(element)
+			}
+		}
+
+		return newArray
+	}
+	arrayProto.SetOwn("filter", vm.NewNativeFunction(1, false, "filter", filterImpl))
+	
+	// Array.prototype.forEach with VM support
+	forEachImpl := func(args []vm.Value) vm.Value {
+		if len(args) < 2 {
+			return vm.Undefined
+		}
+
+		thisArray := args[0]
+		if !thisArray.IsArray() {
+			return vm.Undefined
+		}
+
+		callback := args[1]
+		if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+			return vm.Undefined
+		}
+
+		arr := thisArray.AsArray()
+
+		for i := 0; i < arr.Length(); i++ {
+			element := arr.Get(i)
+			// Call callback with (element, index, array)
+			callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+			callFunction(callback, callArgs)
+		}
+
+		return vm.Undefined
+	}
+	arrayProto.SetOwn("forEach", vm.NewNativeFunction(1, false, "forEach", forEachImpl))
+	
+	// Array.prototype.every with VM support
+	everyImpl := func(args []vm.Value) vm.Value {
+		if len(args) < 2 {
+			return vm.BooleanValue(true) // Empty array returns true
+		}
+
+		thisArray := args[0]
+		if !thisArray.IsArray() {
+			return vm.Undefined
+		}
+
+		callback := args[1]
+		if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+			return vm.Undefined
+		}
+
+		arr := thisArray.AsArray()
+
+		for i := 0; i < arr.Length(); i++ {
+			element := arr.Get(i)
+			// Call callback with (element, index, array)
+			callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+			result := callFunction(callback, callArgs)
+			if !result.IsTruthy() {
+				return vm.BooleanValue(false)
+			}
+		}
+
+		return vm.BooleanValue(true)
+	}
+	arrayProto.SetOwn("every", vm.NewNativeFunction(1, false, "every", everyImpl))
+	
+	// Array.prototype.some with VM support
+	someImpl := func(args []vm.Value) vm.Value {
+		if len(args) < 2 {
+			return vm.BooleanValue(false) // Empty array returns false
+		}
+
+		thisArray := args[0]
+		if !thisArray.IsArray() {
+			return vm.Undefined
+		}
+
+		callback := args[1]
+		if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+			return vm.Undefined
+		}
+
+		arr := thisArray.AsArray()
+
+		for i := 0; i < arr.Length(); i++ {
+			element := arr.Get(i)
+			// Call callback with (element, index, array)
+			callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+			result := callFunction(callback, callArgs)
+			if result.IsTruthy() {
+				return vm.BooleanValue(true)
+			}
+		}
+
+		return vm.BooleanValue(false)
+	}
+	arrayProto.SetOwn("some", vm.NewNativeFunction(1, false, "some", someImpl))
+	
+	// Array.prototype.find with VM support
+	findImpl := func(args []vm.Value) vm.Value {
+		if len(args) < 2 {
+			return vm.Undefined
+		}
+
+		thisArray := args[0]
+		if !thisArray.IsArray() {
+			return vm.Undefined
+		}
+
+		callback := args[1]
+		if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+			return vm.Undefined
+		}
+
+		arr := thisArray.AsArray()
+
+		for i := 0; i < arr.Length(); i++ {
+			element := arr.Get(i)
+			// Call callback with (element, index, array)
+			callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+			result := callFunction(callback, callArgs)
+			if result.IsTruthy() {
+				return element
+			}
+		}
+
+		return vm.Undefined
+	}
+	arrayProto.SetOwn("find", vm.NewNativeFunction(1, false, "find", findImpl))
+	
+	// Array.prototype.findIndex with VM support
+	findIndexImpl := func(args []vm.Value) vm.Value {
+		if len(args) < 2 {
+			return vm.Number(-1)
+		}
+
+		thisArray := args[0]
+		if !thisArray.IsArray() {
+			return vm.Undefined
+		}
+
+		callback := args[1]
+		if !callback.IsNativeFunction() && !callback.IsFunction() && !callback.IsClosure() {
+			return vm.Undefined
+		}
+
+		arr := thisArray.AsArray()
+
+		for i := 0; i < arr.Length(); i++ {
+			element := arr.Get(i)
+			// Call callback with (element, index, array)
+			callArgs := []vm.Value{element, vm.Number(float64(i)), thisArray}
+			result := callFunction(callback, callArgs)
+			if result.IsTruthy() {
+				return vm.Number(float64(i))
+			}
+		}
+
+		return vm.Number(-1)
+	}
+	arrayProto.SetOwn("findIndex", vm.NewNativeFunction(1, false, "findIndex", findIndexImpl))
 }

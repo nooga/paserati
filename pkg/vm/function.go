@@ -70,6 +70,22 @@ type NativeFunctionObjectWithProps struct {
 	Properties *PlainObject // Can have properties like static methods
 }
 
+// AsyncNativeFunctionObject represents a native function that can call bytecode functions
+// This uses Go channels for async communication with the VM
+type AsyncNativeFunctionObject struct {
+	Object
+	Arity      int
+	Variadic   bool
+	Name       string
+	// AsyncFn receives a VMCaller interface that can call bytecode functions
+	AsyncFn    func(caller VMCaller, args []Value) Value
+}
+
+// VMCaller provides an interface for native functions to call bytecode functions
+type VMCaller interface {
+	CallBytecode(fn Value, thisValue Value, args []Value) Value
+}
+
 func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk) Value {
 	fnObj := &FunctionObject{
 		Arity:        arity,
@@ -140,5 +156,14 @@ func NewNativeFunctionWithProps(arity int, variadic bool, name string, fn func(a
 		Name:       name,
 		Fn:         fn,
 		Properties: props,
+	})}
+}
+
+func NewAsyncNativeFunction(arity int, variadic bool, name string, asyncFn func(caller VMCaller, args []Value) Value) Value {
+	return Value{typ: TypeAsyncNativeFunction, obj: unsafe.Pointer(&AsyncNativeFunctionObject{
+		Arity:    arity,
+		Variadic: variadic,
+		Name:     name,
+		AsyncFn:  asyncFn,
 	})}
 }

@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"paserati/pkg/builtins"
 	"paserati/pkg/checker"
 	"paserati/pkg/compiler"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
-
-	_ "paserati/pkg/builtins"
 )
 
 // Paserati represents a persistent interpreter session.
@@ -30,8 +29,17 @@ func NewPaserati() *Paserati {
 	comp := compiler.NewCompiler()
 	comp.SetChecker(checker)
 
+	// Create VM and add standard builtin callbacks
+	vmInstance := vm.NewVM()
+	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
+	
+	// Run initialization now that callbacks are registered
+	if err := vmInstance.InitializeWithCallbacks(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: VM initialization failed: %v\n", err)
+	}
+
 	return &Paserati{
-		vmInstance: vm.NewVM(),
+		vmInstance: vmInstance,
 		checker:    checker,
 		compiler:   comp,
 	}
@@ -166,6 +174,10 @@ func RunStringWithOptions(source string, options RunOptions) bool {
 
 	// --- Execution (fresh VM) ---
 	vmInstance := vm.NewVM()
+	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
+	if err := vmInstance.InitializeWithCallbacks(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: VM initialization failed: %v\n", err)
+	}
 	finalValue, runtimeErrs := vmInstance.Interpret(chunk)
 	if len(runtimeErrs) > 0 {
 		errors.DisplayErrors(source, runtimeErrs)

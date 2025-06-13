@@ -63,6 +63,7 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = thisValue
 		newFrame.isConstructorCall = false
+		newFrame.isDirectCall = false
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 		
@@ -180,6 +181,35 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		
 		return false, nil
 		
+	case TypeAsyncNativeFunction:
+		// Handle async native function that can call bytecode
+		asyncNativeFunc := calleeVal.AsAsyncNativeFunction()
+		
+		// Arity checking
+		if asyncNativeFunc.Arity >= 0 {
+			if asyncNativeFunc.Variadic {
+				if argCount < asyncNativeFunc.Arity {
+					currentFrame.ip = callerIP
+					return false, fmt.Errorf("Async native function expected at least %d arguments but got %d", asyncNativeFunc.Arity, argCount)
+				}
+			} else {
+				if argCount != asyncNativeFunc.Arity {
+					currentFrame.ip = callerIP
+					return false, fmt.Errorf("Async native function expected %d arguments but got %d", asyncNativeFunc.Arity, argCount)
+				}
+			}
+		}
+		
+		// Execute async native function
+		_, err := vm.executeAsyncNativeFunction(asyncNativeFunc, args, destReg, callerRegisters)
+		if err != nil {
+			currentFrame.ip = callerIP
+			return false, err
+		}
+		
+		// Result already stored by executeAsyncNativeFunction
+		return false, nil
+		
 	default:
 		currentFrame.ip = callerIP
 		return false, fmt.Errorf("Cannot call non-function value of type %v", calleeVal.Type())
@@ -194,4 +224,17 @@ func (vm *VM) prepareMethodCall(calleeVal Value, thisValue Value, args []Value, 
 	
 	// For all function types, pass thisValue for frame setup but don't modify args
 	return vm.prepareCall(calleeVal, thisValue, args, destReg, callerRegisters, callerIP)
+}
+
+// prepareDirectCall is like prepareCall but sets the isDirectCall flag so the frame returns immediately
+func (vm *VM) prepareDirectCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
+	// First call the regular prepareCall
+	shouldSwitch, err := vm.prepareCall(calleeVal, thisValue, args, destReg, callerRegisters, callerIP)
+	
+	// If we created a new frame, mark it as a direct call
+	if shouldSwitch && vm.frameCount > 0 {
+		vm.frames[vm.frameCount-1].isDirectCall = true
+	}
+	
+	return shouldSwitch, err
 }

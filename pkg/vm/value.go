@@ -28,6 +28,7 @@ const (
 	TypeFunction
 	TypeNativeFunction
 	TypeNativeFunctionWithProps
+	TypeAsyncNativeFunction
 	TypeClosure
 
 	TypeObject
@@ -181,7 +182,7 @@ func (v Value) IsClosure() bool {
 }
 
 func (v Value) IsNativeFunction() bool {
-	return v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps
+	return v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps || v.typ == TypeAsyncNativeFunction
 }
 
 func (v Value) Type() ValueType {
@@ -204,7 +205,7 @@ func (v Value) TypeName() string {
 		return "string"
 	case TypeSymbol:
 		return "symbol"
-	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps:
+	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		return "function"
 	case TypeObject, TypeDictObject, TypeArray:
 		return "object"
@@ -304,6 +305,13 @@ func (v Value) AsNativeFunctionWithProps() *NativeFunctionObjectWithProps {
 	return (*NativeFunctionObjectWithProps)(v.obj)
 }
 
+func (v Value) AsAsyncNativeFunction() *AsyncNativeFunctionObject {
+	if v.typ != TypeAsyncNativeFunction {
+		panic("value is not an async native function")
+	}
+	return (*AsyncNativeFunctionObject)(v.obj)
+}
+
 func (v Value) AsBoolean() bool {
 	if v.typ != TypeBoolean {
 		panic("value is not a boolean")
@@ -352,6 +360,12 @@ func (v Value) ToString() string {
 			return fmt.Sprintf("<native function %s>", nativeFn.Name)
 		}
 		return "<native function>"
+	case TypeAsyncNativeFunction:
+		asyncFn := (*AsyncNativeFunctionObject)(v.obj)
+		if asyncFn.Name != "" {
+			return fmt.Sprintf("<async native function %s>", asyncFn.Name)
+		}
+		return "<async native function>"
 	case TypeObject, TypeDictObject:
 		return "[object Object]"
 	case TypeArray:
@@ -504,6 +518,12 @@ func (v Value) inspectWithContext(nested bool) string {
 		nativeFn := (*NativeFunctionObjectWithProps)(v.obj)
 		if nativeFn.Name != "" {
 			return fmt.Sprintf("[Function: %s]", nativeFn.Name)
+		}
+		return "[Function (anonymous)]"
+	case TypeAsyncNativeFunction:
+		asyncFn := (*AsyncNativeFunctionObject)(v.obj)
+		if asyncFn.Name != "" {
+			return fmt.Sprintf("[Function: %s]", asyncFn.Name)
 		}
 		return "[Function (anonymous)]"
 	case TypeObject:

@@ -23,6 +23,21 @@ type CallFrame struct {
 	targetRegister    byte  // Which register in the CALLER the result should go into
 	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
 	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
+	isDirectCall      bool  // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
+	
+	// For async native functions that can call bytecode
+	isNativeFrame   bool
+	nativeReturnCh  chan Value      // Channel to receive return values from bytecode calls
+	nativeYieldCh   chan *BytecodeCall // Channel to send bytecode calls to VM
+	nativeCompleteCh chan Value     // Channel to signal native function completion
+}
+
+// BytecodeCall represents a request from a native function to call bytecode
+type BytecodeCall struct {
+	Function  Value
+	ThisValue Value  
+	Args      []Value
+	ResultCh  chan Value // Channel to receive the result
 }
 
 // VM represents the virtual machine state.
@@ -54,6 +69,18 @@ type VM struct {
 	// Used when variadic functions are called with no extra arguments
 	emptyRestArray Value
 
+	// Built-in prototypes owned by this VM
+	ObjectPrototype   Value
+	FunctionPrototype Value
+	ArrayPrototype    Value
+	StringPrototype   Value
+	NumberPrototype   Value
+	BooleanPrototype  Value
+	ErrorPrototype    Value
+	
+	// Instance-specific initialization callbacks
+	initCallbacks []VMInitCallback
+
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
 }
@@ -69,7 +96,7 @@ const (
 
 // NewVM creates a new VM instance.
 func NewVM() *VM {
-	return &VM{
+	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
 		openUpvalues:   make([]*Upvalue, 0, 16),         // Pre-allocate slightly
 		propCache:      make(map[int]*PropInlineCache),  // Initialize inline cache
@@ -77,8 +104,20 @@ func NewVM() *VM {
 		globals:        make([]Value, 0),                // Initialize global variables table
 		globalNames:    make([]string, 0),               // Initialize global variable names
 		emptyRestArray: NewArray(),                      // Initialize singleton empty array for rest params
+		initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
 		errors:         make([]errors.PaseratiError, 0), // Initialize error list
 	}
+	
+	// Initialize built-in prototypes first
+	vm.initializePrototypes()
+	
+	// Run initialization callbacks
+	if err := vm.initializeVM(); err != nil {
+		// For now, just continue - we could add error handling later
+		fmt.Fprintf(os.Stderr, "Warning: VM initialization callback failed: %v\n", err)
+	}
+	
+	return vm
 }
 
 // Reset clears the VM state, ready for new execution.
@@ -602,6 +641,23 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// Returned from the top-level script frame.
 				// Return the result directly.
 				return InterpretOK, result
+			}
+			
+			// Check if this was a direct call frame and should return early
+			if frame.isDirectCall {
+				// Handle constructor return semantics for direct call
+				var finalResult Value
+				if isConstructor {
+					if result.IsObject() {
+						finalResult = result // Return the explicit object
+					} else {
+						finalResult = constructorThisValue // Return the instance
+					}
+				} else {
+					finalResult = result
+				}
+				// Return the result immediately instead of continuing execution
+				return InterpretOK, finalResult
 			}
 
 			// Get the caller frame (which is now the top frame)
@@ -1702,7 +1758,7 @@ func getTypeofString(val Value) string {
 		return "number"
 	case TypeString:
 		return "string"
-	case TypeFunction, TypeClosure, TypeNativeFunction:
+	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		return "function"
 	case TypeObject, TypeDictObject:
 		return "object"
@@ -1784,3 +1840,4 @@ func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
 
 	return args, nil
 }
+

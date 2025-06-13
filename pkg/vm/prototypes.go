@@ -41,25 +41,53 @@ func RegisterFunctionPrototypeMethod(methodName string, method Value) {
 
 // createBoundMethod creates a method bound to a specific 'this' value
 func createBoundMethod(thisValue Value, method Value) Value {
-	if !method.IsNativeFunction() {
-		return method // If not a native function, return as-is
-	}
+	switch method.Type() {
+	case TypeNativeFunction:
+		nativeMethod := method.AsNativeFunction()
+		boundFn := func(args []Value) Value {
+			// Prepend 'this' to the arguments
+			boundArgs := make([]Value, len(args)+1)
+			boundArgs[0] = thisValue
+			copy(boundArgs[1:], args)
+			return nativeMethod.Fn(boundArgs)
+		}
 
-	nativeMethod := method.AsNativeFunction()
-	boundFn := func(args []Value) Value {
-		// Prepend 'this' to the arguments
-		boundArgs := make([]Value, len(args)+1)
-		boundArgs[0] = thisValue
-		copy(boundArgs[1:], args)
-		return nativeMethod.Fn(boundArgs)
-	}
+		boundMethod := &NativeFunctionObject{
+			Arity:    nativeMethod.Arity,
+			Variadic: nativeMethod.Variadic,
+			Name:     nativeMethod.Name,
+			Fn:       boundFn,
+		}
 
-	boundMethod := &NativeFunctionObject{
-		Arity:    nativeMethod.Arity,
-		Variadic: nativeMethod.Variadic,
-		Name:     nativeMethod.Name,
-		Fn:       boundFn,
-	}
+		return NewNativeFunction(boundMethod.Arity, boundMethod.Variadic, boundMethod.Name, boundMethod.Fn)
 
-	return NewNativeFunction(boundMethod.Arity, boundMethod.Variadic, boundMethod.Name, boundMethod.Fn)
+	case TypeAsyncNativeFunction:
+		asyncMethod := method.AsAsyncNativeFunction()
+		boundAsyncFn := func(caller VMCaller, args []Value) Value {
+			// Prepend 'this' to the arguments
+			boundArgs := make([]Value, len(args)+1)
+			boundArgs[0] = thisValue
+			copy(boundArgs[1:], args)
+			return asyncMethod.AsyncFn(caller, boundArgs)
+		}
+
+		return NewAsyncNativeFunction(asyncMethod.Arity, asyncMethod.Variadic, asyncMethod.Name, boundAsyncFn)
+
+	case TypeNativeFunctionWithProps:
+		nativeMethodWithProps := method.AsNativeFunctionWithProps()
+		boundFn := func(args []Value) Value {
+			// Prepend 'this' to the arguments
+			boundArgs := make([]Value, len(args)+1)
+			boundArgs[0] = thisValue
+			copy(boundArgs[1:], args)
+			return nativeMethodWithProps.Fn(boundArgs)
+		}
+
+		// For props functions, we need to be careful about preserving properties
+		return NewNativeFunction(nativeMethodWithProps.Arity, nativeMethodWithProps.Variadic, nativeMethodWithProps.Name, boundFn)
+
+	default:
+		// If not a native function type, return as-is
+		return method
+	}
 }
