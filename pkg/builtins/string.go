@@ -491,3 +491,28 @@ func stringFromCharCode(args []vm.Value) vm.Value {
 
 	return vm.NewString(string(result))
 }
+
+// setupStringPrototype sets up String prototype methods for a specific VM instance  
+// This ensures string methods are available on the VM-specific prototype
+func setupStringPrototype(vmInstance *vm.VM) {
+	stringProto := vmInstance.StringPrototype.AsPlainObject()
+	
+	// Register all string prototype methods to the VM-specific prototype
+	stringProto.SetOwn("charAt", vm.NewNativeFunction(1, false, "charAt", stringCharAtImpl))
+	stringProto.SetOwn("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", stringCharCodeAtImpl))
+	stringProto.SetOwn("substring", vm.NewNativeFunction(2, false, "substring", stringSubstringImpl))
+	stringProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", stringSliceImpl))
+	stringProto.SetOwn("indexOf", vm.NewNativeFunction(1, false, "indexOf", stringIndexOfImpl))
+	stringProto.SetOwn("includes", vm.NewNativeFunction(1, false, "includes", stringIncludesImpl))
+	stringProto.SetOwn("startsWith", vm.NewNativeFunction(1, false, "startsWith", stringStartsWithImpl))
+	stringProto.SetOwn("endsWith", vm.NewNativeFunction(1, false, "endsWith", stringEndsWithImpl))
+	stringProto.SetOwn("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", stringToLowerCaseImpl))
+	stringProto.SetOwn("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", stringToUpperCaseImpl))
+	stringProto.SetOwn("trim", vm.NewNativeFunction(0, false, "trim", stringTrimImpl))
+	stringProto.SetOwn("trimStart", vm.NewNativeFunction(0, false, "trimStart", stringTrimStartImpl))
+	stringProto.SetOwn("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", stringTrimEndImpl))
+	stringProto.SetOwn("repeat", vm.NewNativeFunction(1, false, "repeat", stringRepeatImpl))
+	stringProto.SetOwn("lastIndexOf", vm.NewNativeFunction(1, false, "lastIndexOf", stringLastIndexOfImpl))
+	stringProto.SetOwn("concat", vm.NewNativeFunction(-1, true, "concat", stringConcatImpl))
+	stringProto.SetOwn("split", vm.NewNativeFunction(1, false, "split", stringSplitImpl))
+}

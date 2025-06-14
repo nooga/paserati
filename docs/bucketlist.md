@@ -10,6 +10,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Block Scoping (`{}`)
 - [x] Control Flow without braces (single statement bodies)
 - [x] Global Variables (implemented with OpGetGlobal/OpSetGlobal)
+- [x] **Enhanced Parser Robustness** - improved function declaration parsing and error recovery
 - [ ] Module System (`import`/`export`)
 - [ ] `var` keyword (legacy)
 
@@ -138,7 +139,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Proper global variable handling in loop assignment
 - [x] `for...of` Loops - **Enhanced!**
   - [x] Basic for...of iteration over arrays
-  - [x] Support for existing variable assignment (not just declaration)  
+  - [x] Support for existing variable assignment (not just declaration)
   - [x] Proper global variable handling in loop assignment
 - [x] `break` Statement
 - [x] `continue` Statement
@@ -148,7 +149,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 ## Functions
 
-- [x] Function Declarations (`function name() {}`)
+- [x] Function Declarations (`function name() {}`) **[Enhanced hoisting - fixed parser ambiguity]**
 - [x] Function Expressions (`let x = function() {}`)
 - [x] Arrow Functions (`=>`)
   - [x] Single/Multi Parameters
@@ -188,9 +189,10 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Closures / Lexical Scoping
 - [x] `this` Keyword (comprehensive object method context)
   - [x] Basic object method context
-  - [x] Explicit `this` parameter syntax (`function(this: SomeType)`)
+  - [x] Explicit `this` parameter syntax (`function(this: SomeType)`) **[Enhanced error handling]**
   - [x] Context preservation in nested function literals
   - [x] Constructor function `this` binding with `new` operator
+  - [x] **Robust `this` parameter validation** - proper error messages for missing type annotations
 - [x] `new` Operator / Constructor Functions - **Enhanced!**
   - [x] OpNew bytecode implementation
   - [x] Constructor function prototype property creation
@@ -200,12 +202,14 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Function prototype property support (`.prototype`)
   - [x] Constructor property relationships
   - [x] Function.prototype methods
-    - [x] `Function.prototype.call()` for explicit `this` binding
+    - [x] `Function.prototype.call()` for explicit `this` binding **[Fixed infinite recursion]**
+    - [x] `Function.prototype.apply()` for explicit `this` binding with array arguments
   - [x] Object.getPrototypeOf() static method
   - [x] Prototype chain traversal and method resolution
   - [x] Runtime prototype object management
   - [x] TypeScript-compliant prototype type checking
   - [x] Integration with instanceof operator
+  - [x] **Robust method binding system** - prevents infinite recursion in built-in methods
 - [ ] Generator Functions (`function*`)
 - [ ] Async Functions (`async function`)
 

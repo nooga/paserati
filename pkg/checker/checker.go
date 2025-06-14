@@ -439,14 +439,14 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			if initializer != nil {
 				// Initializer exists and wasn't a function literal handled before
 				debugPrintf("// [Checker Pass 4] Checking initializer for variable '%s'\n", varName.Value)
-				
+
 				// Get the variable's type defined in Pass 2 to check if we have a type annotation
 				variableType, _, found := globalEnv.Resolve(varName.Value)
 				if !found { // Should not happen
 					debugPrintf("// [Checker Pass 4] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
 					continue
 				}
-				
+
 				// Use contextual typing if we have a type annotation (not Any)
 				if typeAnnotation != nil && variableType != types.Any {
 					debugPrintf("// [Checker Pass 4] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
@@ -457,7 +457,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				} else {
 					c.visit(initializer) // Regular visit if no type annotation
 				}
-				
+
 				computedInitializerType := initializer.GetComputedType()
 				if computedInitializerType == nil {
 					computedInitializerType = types.Any
@@ -1642,15 +1642,15 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 	if node == nil {
 		return
 	}
-	
+
 	// If no context provided, fall back to regular visit
 	if context == nil || context.ExpectedType == nil {
 		c.visit(node)
 		return
 	}
-	
+
 	debugPrintf("// [Checker VisitContext] Node: %T, Expected: %s\n", node, context.ExpectedType.String())
-	
+
 	// Handle specific node types that benefit from contextual typing
 	switch node := node.(type) {
 	case *parser.ArrayLiteral:

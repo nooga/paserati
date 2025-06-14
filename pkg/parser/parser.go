@@ -234,7 +234,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.UNSIGNED_RIGHT_SHIFT, p.parseInfixExpression)
 	// Type Assertion
 	p.registerInfix(lexer.AS, p.parseTypeAssertionExpression)
-	
+
 	// Call, Index, Member, Ternary
 	p.registerInfix(lexer.LPAREN, p.parseCallExpression)    // Value context: function call
 	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression) // Value context: array/member index
@@ -321,12 +321,14 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 			// --- Hoisting Check ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt {
-				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
-					if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
-						// Function with this name already hoisted
-						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration: %s", funcLit.Name.Value))
-					} else {
-						program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
+				if exprStmt.Expression != nil {
+					if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+						if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
+							// Function with this name already hoisted
+							p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration: %s", funcLit.Name.Value))
+						} else {
+							program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
+						}
 					}
 				}
 			}
@@ -372,9 +374,38 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseInterfaceDeclaration()
 	case lexer.SWITCH:
 		return p.parseSwitchStatement()
+	case lexer.FUNCTION:
+		return p.parseFunctionDeclarationStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
+}
+
+// --- Function Declaration Statement Parsing ---
+func (p *Parser) parseFunctionDeclarationStatement() *ExpressionStatement {
+	// Parse the function as an expression (FunctionLiteral)
+	funcExpr := p.parseFunctionLiteral()
+	if funcExpr == nil {
+		// If function parsing failed, return an empty expression statement
+		// to avoid nil statement that would cause panic in hoisting logic
+		return &ExpressionStatement{
+			Token:      p.curToken,
+			Expression: nil,
+		}
+	}
+
+	// Wrap it in an ExpressionStatement
+	stmt := &ExpressionStatement{
+		Token:      p.curToken,
+		Expression: funcExpr,
+	}
+
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
 }
 
 // --- NEW: Type Alias Statement Parsing ---
@@ -1411,18 +1442,18 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 		return nil, nil, fmt.Errorf("%s", msg)
 	}
 	param := &Parameter{Token: p.curToken}
-	
+
 	// Check if this is an explicit 'this' parameter
 	if p.curTokenIs(lexer.THIS) {
 		param.IsThis = true
 		param.Name = nil // 'this' parameters don't have a name field
-		
+
 		// 'this' parameters are never optional
 		if p.peekTokenIs(lexer.QUESTION) {
 			p.addError(p.peekToken, "'this' parameter cannot be optional")
 			return nil, nil, fmt.Errorf("'this' parameter cannot be optional")
 		}
-		
+
 		// 'this' parameters must have a type annotation
 		if !p.peekTokenIs(lexer.COLON) {
 			p.addError(p.peekToken, "'this' parameter must have a type annotation")
@@ -1500,7 +1531,7 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			p.addError(p.curToken, "'this' parameter can only be the first parameter")
 			return nil, nil, fmt.Errorf("'this' parameter can only be the first parameter")
 		}
-		
+
 		if !p.curTokenIs(lexer.IDENT) {
 			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)

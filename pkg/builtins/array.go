@@ -764,7 +764,7 @@ func arrayPrototypeFindIndexImpl(args []vm.Value) vm.Value {
 // This allows array methods to call user-defined functions using the VM's CallFunctionDirectly
 func setupArrayPrototype(vmInstance *vm.VM) {
 	arrayProto := vmInstance.ArrayPrototype.AsPlainObject()
-	
+
 	// Helper function to call user-defined or native functions
 	callFunction := func(fn vm.Value, args []vm.Value) vm.Value {
 		if fn.IsNativeFunction() {
@@ -779,7 +779,7 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		}
 		return vm.Undefined
 	}
-	
+
 	// Array.prototype.map with VM support
 	mapImpl := func(args []vm.Value) vm.Value {
 		if len(args) < 2 {
@@ -811,7 +811,7 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		return newArray
 	}
 	arrayProto.SetOwn("map", vm.NewNativeFunction(1, false, "map", mapImpl))
-	
+
 	// Array.prototype.filter with VM support
 	filterImpl := func(args []vm.Value) vm.Value {
 		if len(args) < 2 {
@@ -845,7 +845,7 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		return newArray
 	}
 	arrayProto.SetOwn("filter", vm.NewNativeFunction(1, false, "filter", filterImpl))
-	
+
 	// Array.prototype.forEach with VM support
 	forEachImpl := func(args []vm.Value) vm.Value {
 		if len(args) < 2 {
@@ -874,7 +874,7 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		return vm.Undefined
 	}
 	arrayProto.SetOwn("forEach", vm.NewNativeFunction(1, false, "forEach", forEachImpl))
-	
+
 	// Array.prototype.every with VM support
 	everyImpl := func(args []vm.Value) vm.Value {
 		if len(args) < 2 {
@@ -906,7 +906,7 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		return vm.BooleanValue(true)
 	}
 	arrayProto.SetOwn("every", vm.NewNativeFunction(1, false, "every", everyImpl))
-	
+
 	// Array.prototype.some with VM support
 	someImpl := func(args []vm.Value) vm.Value {
 		if len(args) < 2 {
@@ -938,7 +938,7 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		return vm.BooleanValue(false)
 	}
 	arrayProto.SetOwn("some", vm.NewNativeFunction(1, false, "some", someImpl))
-	
+
 	// Array.prototype.find with VM support
 	findImpl := func(args []vm.Value) vm.Value {
 		if len(args) < 2 {
@@ -970,7 +970,7 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		return vm.Undefined
 	}
 	arrayProto.SetOwn("find", vm.NewNativeFunction(1, false, "find", findImpl))
-	
+
 	// Array.prototype.findIndex with VM support
 	findIndexImpl := func(args []vm.Value) vm.Value {
 		if len(args) < 2 {
@@ -1002,4 +1002,18 @@ func setupArrayPrototype(vmInstance *vm.VM) {
 		return vm.Number(-1)
 	}
 	arrayProto.SetOwn("findIndex", vm.NewNativeFunction(1, false, "findIndex", findIndexImpl))
+	
+	// Add basic array methods that are missing from VM-specific prototype
+	arrayProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", arrayPrototypeSliceImpl))
+	arrayProto.SetOwn("push", vm.NewNativeFunction(-1, true, "push", arrayPrototypePushImpl))
+	arrayProto.SetOwn("pop", vm.NewNativeFunction(0, false, "pop", arrayPrototypePopImpl))
+	arrayProto.SetOwn("join", vm.NewNativeFunction(1, false, "join", arrayPrototypeJoinImpl))
+	arrayProto.SetOwn("includes", vm.NewNativeFunction(1, false, "includes", arrayPrototypeIncludesImpl))
+	arrayProto.SetOwn("indexOf", vm.NewNativeFunction(1, false, "indexOf", arrayPrototypeIndexOfImpl))
+	arrayProto.SetOwn("reverse", vm.NewNativeFunction(0, false, "reverse", arrayPrototypeReverseImpl))
+	arrayProto.SetOwn("lastIndexOf", vm.NewNativeFunction(1, false, "lastIndexOf", arrayPrototypeLastIndexOfImpl))
+	arrayProto.SetOwn("shift", vm.NewNativeFunction(0, false, "shift", arrayPrototypeShiftImpl))
+	arrayProto.SetOwn("unshift", vm.NewNativeFunction(-1, true, "unshift", arrayPrototypeUnshiftImpl))
+	arrayProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", arrayPrototypeToStringImpl))
+	arrayProto.SetOwn("concat", vm.NewNativeFunction(-1, true, "concat", arrayPrototypeConcatImpl))
 }

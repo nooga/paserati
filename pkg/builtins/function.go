@@ -23,13 +23,13 @@ func registerFunctionPrototypeMethods() {
 // This is called via VM initialization callback to ensure VM isolation
 func setupFunctionPrototype(vmInstance *vm.VM) {
 	funcProto := vmInstance.FunctionPrototype.AsPlainObject()
-	
-	// Function.prototype.call - using regular native function with VM isolation
+
+	// Function.prototype.call - using closure pattern like array methods
 	callImpl := func(args []vm.Value) vm.Value {
-		return functionPrototypeCall(vmInstance, args)
+		return functionPrototypeCallWithVM(vmInstance, args)
 	}
 	funcProto.SetOwn("call", vm.NewNativeFunction(0, true, "call", callImpl))
-	
+
 	// Function.prototype.apply - using regular native function with VM isolation
 	applyImpl := func(args []vm.Value) vm.Value {
 		return functionPrototypeApply(vmInstance, args)
@@ -37,19 +37,20 @@ func setupFunctionPrototype(vmInstance *vm.VM) {
 	funcProto.SetOwn("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
 }
 
-// functionPrototypeCall implements Function.prototype.call with VM isolation
-// Syntax: func.call(thisArg, arg1, arg2, ...)
-func functionPrototypeCall(vmInstance *vm.VM, args []vm.Value) vm.Value {
+// functionPrototypeCallAsync implements Function.prototype.call using AsyncNativeFunction
+// This avoids the method binding recursion issue by handling the call directly
+func functionPrototypeCallAsync(caller vm.VMCaller, args []vm.Value) vm.Value {
+	// When called as a method (e.g., Vehicle.call), the bound method prepends the function as args[0]
 	// args[0] is 'this' (the function being called)
 	// args[1] is thisArg (the 'this' value for the function call)
 	// args[2:] are the arguments to pass to the function
-	
+
 	if len(args) < 1 {
 		return vm.Undefined // Error: no function provided
 	}
-	
+
 	thisFunction := args[0]
-	
+
 	// Determine the 'this' value for the call
 	var thisArg vm.Value
 	if len(args) > 1 {
@@ -57,7 +58,7 @@ func functionPrototypeCall(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	} else {
 		thisArg = vm.Undefined
 	}
-	
+
 	// Extract the arguments to pass to the function
 	var callArgs []vm.Value
 	if len(args) > 2 {
@@ -65,9 +66,85 @@ func functionPrototypeCall(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	} else {
 		callArgs = []vm.Value{}
 	}
-	
-	// Call the function with the specified 'this' value
-	return callFunctionWithThis(vmInstance, thisFunction, thisArg, callArgs)
+
+	// For native functions, call directly without using the VM
+	if thisFunction.IsNativeFunction() {
+		nativeFunc := thisFunction.AsNativeFunction()
+
+		// Prepend 'this' to arguments
+		fullArgs := make([]vm.Value, len(callArgs)+1)
+		fullArgs[0] = thisArg
+		copy(fullArgs[1:], callArgs)
+
+		return nativeFunc.Fn(fullArgs)
+	}
+
+	// For user-defined functions and closures, use the caller's CallBytecode method
+	// This bypasses the normal method binding process and calls the function directly
+	if thisFunction.IsFunction() || thisFunction.IsClosure() {
+		return caller.CallBytecode(thisFunction, thisArg, callArgs)
+	}
+
+	// If not a callable type, return undefined
+	return vm.Undefined
+}
+
+// functionPrototypeCallWithVM implements Function.prototype.call with VM access
+// This follows the same pattern as array methods like map, filter, etc.
+// Syntax: func.call(thisArg, arg1, arg2, ...)
+func functionPrototypeCallWithVM(vmInstance *vm.VM, args []vm.Value) vm.Value {
+	// args[0] is 'this' (the function being called) - this comes from the bound method
+	// args[1] is thisArg (the 'this' value for the function call)
+	// args[2:] are the arguments to pass to the function
+
+	if len(args) < 1 {
+		return vm.Undefined // Error: no function provided
+	}
+
+	thisFunction := args[0]
+
+	// Determine the 'this' value for the call
+	var thisArg vm.Value
+	if len(args) > 1 {
+		thisArg = args[1]
+	} else {
+		thisArg = vm.Undefined
+	}
+
+	// Extract the arguments to pass to the function
+	var callArgs []vm.Value
+	if len(args) > 2 {
+		callArgs = args[2:]
+	} else {
+		callArgs = []vm.Value{}
+	}
+
+	// For native functions, call with 'this' prepended
+	if thisFunction.IsNativeFunction() {
+		nativeFunc := thisFunction.AsNativeFunction()
+
+		// Prepend 'this' to arguments
+		fullArgs := make([]vm.Value, len(callArgs)+1)
+		fullArgs[0] = thisArg
+		copy(fullArgs[1:], callArgs)
+
+		return nativeFunc.Fn(fullArgs)
+	}
+
+	// For user-defined functions and closures, use VM's CallFunctionDirectWithoutMethodBinding
+	// This avoids the method binding recursion that was causing infinite loops
+	if thisFunction.IsFunction() || thisFunction.IsClosure() {
+		result, err := vmInstance.CallFunctionDirectWithoutMethodBinding(thisFunction, thisArg, callArgs)
+		if err != nil {
+			// For now, return undefined on error
+			// TODO: Throw proper error or propagate it properly
+			return vm.Undefined
+		}
+		return result
+	}
+
+	// If not a callable type, return undefined
+	return vm.Undefined
 }
 
 // functionPrototypeApply implements Function.prototype.apply with VM isolation
@@ -76,13 +153,13 @@ func functionPrototypeApply(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	// args[0] is 'this' (the function being called)
 	// args[1] is thisArg (the 'this' value for the function call)
 	// args[2] is argsArray (array of arguments to pass to the function)
-	
+
 	if len(args) < 1 {
 		return vm.Undefined // Error: no function provided
 	}
-	
+
 	thisFunction := args[0]
-	
+
 	// Determine the 'this' value for the call
 	var thisArg vm.Value
 	if len(args) > 1 {
@@ -90,7 +167,7 @@ func functionPrototypeApply(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	} else {
 		thisArg = vm.Undefined
 	}
-	
+
 	// Extract arguments array
 	var callArgs []vm.Value
 	if len(args) > 2 {
@@ -108,7 +185,7 @@ func functionPrototypeApply(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	} else {
 		callArgs = []vm.Value{}
 	}
-	
+
 	// Call the function with the specified 'this' value
 	return callFunctionWithThis(vmInstance, thisFunction, thisArg, callArgs)
 }
@@ -118,18 +195,19 @@ func callFunctionWithThis(vmInstance *vm.VM, function vm.Value, thisValue vm.Val
 	// For native functions, call with 'this' prepended
 	if function.IsNativeFunction() {
 		nativeFunc := function.AsNativeFunction()
-		
+
 		// Prepend 'this' to arguments
 		fullArgs := make([]vm.Value, len(args)+1)
 		fullArgs[0] = thisValue
 		copy(fullArgs[1:], args)
-		
+
 		return nativeFunc.Fn(fullArgs)
 	}
-	
-	// For user-defined functions and closures, use direct call to avoid re-entrant execution
+
+	// For user-defined functions and closures, use the VM's CallFunctionFromBuiltin
+	// This method is designed to handle calling user functions from within builtins
 	if function.IsFunction() || function.IsClosure() {
-		result, err := vmInstance.CallFunctionDirectly(function, thisValue, args)
+		result, err := vmInstance.CallFunctionFromBuiltin(function, thisValue, args)
 		if err != nil {
 			// For now, return undefined on error
 			// TODO: Throw proper error or propagate it properly
@@ -137,7 +215,7 @@ func callFunctionWithThis(vmInstance *vm.VM, function vm.Value, thisValue vm.Val
 		}
 		return result
 	}
-	
+
 	// If not a callable type, return undefined
 	return vm.Undefined
 }

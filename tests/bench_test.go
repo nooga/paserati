@@ -2,6 +2,7 @@ package tests
 
 import (
 	"os"
+	"paserati/pkg/builtins"
 	"paserati/pkg/driver"
 	"paserati/pkg/vm"
 	"strings"
@@ -35,6 +36,10 @@ func BenchmarkFibPlaceholderRun(b *testing.B) {
 	// Use the correct filename provided by the user.
 	chunk := compileFile(b, "scripts/factorial.ts")
 	vmInstance := vm.NewVM()
+	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
+	if err := vmInstance.InitializeWithCallbacks(); err != nil {
+		b.Fatalf("VM initialization failed: %v", err)
+	}
 
 	// Redirect stdout during benchmark to avoid polluting output
 	// and potential overhead from printing.
@@ -75,6 +80,10 @@ func BenchmarkMatrixMult(b *testing.B) {
 	// Compile once outside the loop.
 	chunk := compileFile(b, "scripts/matrix_mult.ts")
 	vmInstance := vm.NewVM()
+	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
+	if err := vmInstance.InitializeWithCallbacks(); err != nil {
+		b.Fatalf("VM initialization failed: %v", err)
+	}
 
 	// Redirect stdout during benchmark to avoid polluting output
 	// and potential overhead from printing.

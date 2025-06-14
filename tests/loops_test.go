@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"paserati/pkg/builtins"
 	"paserati/pkg/driver"
 	"paserati/pkg/vm"
 	"strings"
@@ -105,6 +106,10 @@ func TestWhileStatement(t *testing.T) {
 
 			// Run VM
 			vmInstance := vm.NewVM()
+			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
+			if err := vmInstance.InitializeWithCallbacks(); err != nil {
+				t.Fatalf("VM initialization failed: %v", err)
+			}
 			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
 
 			// Check results
@@ -272,6 +277,10 @@ func TestForStatement(t *testing.T) {
 
 			// Run VM
 			vmInstance := vm.NewVM()
+			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
+			if err := vmInstance.InitializeWithCallbacks(); err != nil {
+				t.Fatalf("VM initialization failed: %v", err)
+			}
 			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
 
 			// Check results
@@ -393,6 +402,10 @@ func TestDoWhileStatement(t *testing.T) {
 
 			// Run VM
 			vmInstance := vm.NewVM()
+			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
+			if err := vmInstance.InitializeWithCallbacks(); err != nil {
+				t.Fatalf("VM initialization failed: %v", err)
+			}
 			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
 
 			// Check results

@@ -28,7 +28,7 @@ func initializeBuiltinsCallback(vmInstance *vm.VM) error {
 	
 	// Set up other prototypes as needed
 	setupArrayPrototype(vmInstance)
-	// setupStringPrototype(vmInstance)
+	setupStringPrototype(vmInstance)
 	
 	return nil
 }

@@ -44,6 +44,8 @@ func createBoundMethod(thisValue Value, method Value) Value {
 	switch method.Type() {
 	case TypeNativeFunction:
 		nativeMethod := method.AsNativeFunction()
+
+		// Regular method binding for all native functions
 		boundFn := func(args []Value) Value {
 			// Prepend 'this' to the arguments
 			boundArgs := make([]Value, len(args)+1)

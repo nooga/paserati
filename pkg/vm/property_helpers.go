@@ -6,7 +6,7 @@ import "unicode/utf8"
 // This consolidates the duplicate logic for these callable types
 func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool) {
 	var fn *FunctionObject
-	
+
 	switch objVal.Type() {
 	case TypeFunction:
 		fn = AsFunction(objVal)
@@ -16,35 +16,45 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	default:
 		return Undefined, false
 	}
-	
+
 	// Special handling for "prototype" property
 	if propName == "prototype" {
 		return fn.getOrCreatePrototype(), true
 	}
-	
+
 	// Other function properties (if any)
 	if fn.Properties != nil {
 		if prop, exists := fn.Properties.GetOwn(propName); exists {
 			return prop, true
 		}
 	}
-	
+
 	// Check function prototype methods using the VM's FunctionPrototype
 	if vm.FunctionPrototype.Type() == TypeObject {
 		funcProto := vm.FunctionPrototype.AsPlainObject()
 		if method, exists := funcProto.GetOwn(propName); exists {
 			UpdatePrototypeStats("function_proto", 1)
+
+			// Special handling for Function.prototype.call and apply to prevent infinite recursion
+			// These methods need special treatment because they create bound methods that would
+			// recursively call themselves when accessed through property lookup
+			if propName == "call" || propName == "apply" {
+				// Return the raw method without binding - the method implementation
+				// will handle the 'this' binding internally
+				return method, true
+			}
+
 			return createBoundMethod(objVal, method), true
 		}
 	}
-	
+
 	return Undefined, true // Property doesn't exist, but lookup succeeded
 }
 
 // handlePrimitiveMethod handles prototype method lookup for primitive types
 func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool) {
 	var prototype *PlainObject
-	
+
 	switch objVal.Type() {
 	case TypeString:
 		prototype = vm.StringPrototype.AsPlainObject()
@@ -53,7 +63,7 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 	default:
 		return Undefined, false
 	}
-	
+
 	if prototype != nil {
 		if method, exists := prototype.GetOwn(propName); exists {
 			// Track primitive method hits if detailed stats enabled
@@ -63,7 +73,7 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			return createBoundMethod(objVal, method), true
 		}
 	}
-	
+
 	return Undefined, false
 }
 
@@ -87,23 +97,23 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 func (vm *VM) traversePrototypeChain(obj *PlainObject, propName string, cacheKey int) (Value, int, bool) {
 	depth := 0
 	current := obj
-	
+
 	for current != nil && depth < 10 { // Prevent infinite loops
 		// Check own properties
 		if val, exists := current.GetOwn(propName); exists {
 			return val, depth, true
 		}
-		
+
 		// Move up the prototype chain
 		protoVal := current.GetPrototype()
 		if !protoVal.IsObject() {
 			break
 		}
-		
+
 		current = protoVal.AsPlainObject()
 		depth++
 	}
-	
+
 	return Undefined, 0, false
 }
 
@@ -114,28 +124,28 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 	if EnablePrototypeCache {
 		protoCache = GetOrCreatePrototypeCache(cacheKey)
 	}
-	
+
 	// For PlainObjects, check both regular cache and prototype cache
 	if objVal.Type() == TypeObject {
 		po := AsPlainObject(objVal)
-		
+
 		// Check prototype cache first if enabled
 		if protoCache != nil {
 			if entry, hit := protoCache.Lookup(po.shape); hit {
 				UpdatePrototypeStats("proto_hit", entry.prototypeDepth)
-				
+
 				if entry.isMethod && entry.boundMethod.Type() != TypeUndefined {
 					UpdatePrototypeStats("bound_method_cached", 0)
 					return entry.boundMethod, true
 				}
-				
+
 				// Property found in cached prototype
 				if entry.prototypeObj != nil && entry.offset < len(entry.prototypeObj.properties) {
 					return entry.prototypeObj.properties[entry.offset], true
 				}
 			}
 		}
-		
+
 		// Fall back to traversing prototype chain
 		if val, depth, found := vm.traversePrototypeChain(po, propName, cacheKey); found {
 			// Cache the result if prototype caching is enabled
@@ -148,7 +158,7 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 						current = protoVal.AsPlainObject()
 					}
 				}
-				
+
 				if current != nil {
 					// Find offset in prototype
 					offset := -1
@@ -158,24 +168,24 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 							break
 						}
 					}
-					
+
 					if offset >= 0 {
 						protoCache.Update(po.shape, current, depth, offset, Undefined, false)
 					}
 				}
 			}
-			
+
 			if EnableDetailedCacheStats && depth > 0 {
 				UpdatePrototypeStats("proto_hit", depth)
 			}
-			
+
 			return val, true
 		}
-		
+
 		if EnableDetailedCacheStats {
 			UpdatePrototypeStats("proto_miss", 0)
 		}
 	}
-	
+
 	return Undefined, false
 }

@@ -24,18 +24,18 @@ type CallFrame struct {
 	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
 	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
 	isDirectCall      bool  // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
-	
+
 	// For async native functions that can call bytecode
-	isNativeFrame   bool
-	nativeReturnCh  chan Value      // Channel to receive return values from bytecode calls
-	nativeYieldCh   chan *BytecodeCall // Channel to send bytecode calls to VM
-	nativeCompleteCh chan Value     // Channel to signal native function completion
+	isNativeFrame    bool
+	nativeReturnCh   chan Value         // Channel to receive return values from bytecode calls
+	nativeYieldCh    chan *BytecodeCall // Channel to send bytecode calls to VM
+	nativeCompleteCh chan Value         // Channel to signal native function completion
 }
 
 // BytecodeCall represents a request from a native function to call bytecode
 type BytecodeCall struct {
 	Function  Value
-	ThisValue Value  
+	ThisValue Value
 	Args      []Value
 	ResultCh  chan Value // Channel to receive the result
 }
@@ -77,7 +77,13 @@ type VM struct {
 	NumberPrototype   Value
 	BooleanPrototype  Value
 	ErrorPrototype    Value
-	
+
+	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
+	disableMethodBinding bool
+
+	// Counter to track Function.prototype.call recursion depth
+	callDepth int
+
 	// Instance-specific initialization callbacks
 	initCallbacks []VMInitCallback
 
@@ -107,17 +113,32 @@ func NewVM() *VM {
 		initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
 		errors:         make([]errors.PaseratiError, 0), // Initialize error list
 	}
-	
+
 	// Initialize built-in prototypes first
 	vm.initializePrototypes()
-	
+
 	// Run initialization callbacks
 	if err := vm.initializeVM(); err != nil {
 		// For now, just continue - we could add error handling later
 		fmt.Fprintf(os.Stderr, "Warning: VM initialization callback failed: %v\n", err)
 	}
-	
+
 	return vm
+}
+
+// GetCallDepth returns the current call depth for Function.prototype.call recursion tracking
+func (vm *VM) GetCallDepth() int {
+	return vm.callDepth
+}
+
+// IncrementCallDepth increments the call depth counter
+func (vm *VM) IncrementCallDepth() {
+	vm.callDepth++
+}
+
+// DecrementCallDepth decrements the call depth counter
+func (vm *VM) DecrementCallDepth() {
+	vm.callDepth--
 }
 
 // Reset clears the VM state, ready for new execution.
@@ -126,6 +147,7 @@ func (vm *VM) Reset() {
 	vm.nextRegSlot = 0
 	vm.openUpvalues = vm.openUpvalues[:0] // Clear slice while keeping capacity
 	vm.errors = vm.errors[:0]             // Clear errors slice
+	vm.callDepth = 0                      // Reset call depth counter
 	// Clear inline cache
 	for k := range vm.propCache {
 		delete(vm.propCache, k)
@@ -642,7 +664,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 				// Return the result directly.
 				return InterpretOK, result
 			}
-			
+
 			// Check if this was a direct call frame and should return early
 			if frame.isDirectCall {
 				// Handle constructor return semantics for direct call
@@ -1840,4 +1862,3 @@ func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
 
 	return args, nil
 }
-
