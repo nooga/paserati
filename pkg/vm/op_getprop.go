@@ -15,9 +15,6 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		vm.propCache[cacheKey] = cache
 	}
 
-	// Initialize prototypes if needed
-	initPrototypes()
-
 	// 1. Special properties (.length, etc.)
 	if result, handled := vm.handleSpecialProperties(*objVal, propName); handled {
 		*dest = result
@@ -88,11 +85,11 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 
 		// Cache miss - do slow path lookup
 		vm.cacheStats.totalMisses++
-		
+
 		// Use enhanced property resolution with prototype caching
 		if result, found := vm.resolvePropertyWithCache(*objVal, propName, cache, cacheKey); found {
 			*dest = result
-			
+
 			// Update cache only if property was found on the object itself (not prototype)
 			if _, ownExists := po.GetOwn(propName); ownExists {
 				// Property exists on the object itself, cache it
@@ -103,10 +100,10 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 					}
 				}
 			}
-			
+
 			return true, InterpretOK, *dest
 		}
-		
+
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}

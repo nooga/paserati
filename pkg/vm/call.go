@@ -8,7 +8,7 @@ import (
 // prepareCall sets up a function call and returns whether the interpreter should switch to the new frame.
 // For native functions, it executes immediately and returns false.
 // For closures/functions, it sets up the frame and returns true to switch context.
-// 
+//
 // Parameters:
 //   - calleeVal: The function/closure to call
 //   - thisValue: The 'this' context for the call (use Undefined for regular calls)
@@ -21,12 +21,15 @@ import (
 func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
 	argCount := len(args)
 	currentFrame := &vm.frames[vm.frameCount-1]
-	
+
+	fmt.Printf("DEBUG prepareCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
+		calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
+
 	switch calleeVal.Type() {
 	case TypeClosure:
 		calleeClosure := AsClosure(calleeVal)
 		calleeFunc := calleeClosure.Fn
-		
+
 		// Arity checking
 		if calleeFunc.Variadic {
 			if argCount < calleeFunc.Arity {
@@ -39,23 +42,23 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 				return false, fmt.Errorf("Expected %d arguments but got %d", calleeFunc.Arity, argCount)
 			}
 		}
-		
+
 		// Check frame limit
 		if vm.frameCount == MaxFrames {
 			currentFrame.ip = callerIP
 			return false, fmt.Errorf("Stack overflow")
 		}
-		
+
 		// Check register stack space
 		requiredRegs := calleeFunc.RegisterSize
 		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 			currentFrame.ip = callerIP
 			return false, fmt.Errorf("Register stack overflow")
 		}
-		
+
 		// Store return IP in current frame
 		currentFrame.ip = callerIP
-		
+
 		// Set up new frame
 		newFrame := &vm.frames[vm.frameCount]
 		newFrame.closure = calleeClosure
@@ -66,7 +69,7 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		newFrame.isDirectCall = false
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
-		
+
 		// Copy fixed arguments
 		for i := 0; i < calleeFunc.Arity && i < argCount; i++ {
 			if i < len(newFrame.registers) {
@@ -78,12 +81,12 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 				return false, fmt.Errorf("Internal Error: Argument register index out of bounds")
 			}
 		}
-		
+
 		// Handle rest parameters for variadic functions
 		if calleeFunc.Variadic {
 			extraArgCount := argCount - calleeFunc.Arity
 			var restArray Value
-			
+
 			if extraArgCount == 0 {
 				restArray = vm.emptyRestArray
 			} else {
@@ -96,17 +99,17 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 					}
 				}
 			}
-			
+
 			// Store rest array at the appropriate position
 			if calleeFunc.Arity < len(newFrame.registers) {
 				newFrame.registers[calleeFunc.Arity] = restArray
 			}
 		}
-		
+
 		// Frame is ready, tell interpreter to switch to it
 		vm.frameCount++
 		return true, nil
-		
+
 	case TypeFunction:
 		// Convert bare function to closure
 		funcToCall := AsFunction(calleeVal)
@@ -116,10 +119,13 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		}
 		closureVal := Value{typ: TypeClosure, obj: unsafe.Pointer(tempClosure)}
 		return vm.prepareCall(closureVal, thisValue, args, destReg, callerRegisters, callerIP)
-		
+
 	case TypeNativeFunction:
 		nativeFunc := AsNativeFunction(calleeVal)
-		
+
+		fmt.Printf("DEBUG prepareCall: nativeFunc=%v, nativeFunc.Arity=%v, nativeFunc.Variadic=%v\n",
+			nativeFunc.Fn, nativeFunc.Arity, nativeFunc.Variadic)
+
 		// Arity checking for native functions
 		if nativeFunc.Arity >= 0 {
 			if nativeFunc.Variadic {
@@ -134,10 +140,13 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 				}
 			}
 		}
-		
+
+		fmt.Printf("DEBUG prepareCall: args=%v\n", args)
 		// Native functions execute immediately in caller's context
 		result := nativeFunc.Fn(args)
-		
+
+		fmt.Printf("DEBUG prepareCall: result=%v\n", result.Inspect())
+
 		// Store result
 		if int(destReg) < len(callerRegisters) {
 			callerRegisters[destReg] = result
@@ -145,14 +154,14 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 			currentFrame.ip = callerIP
 			return false, fmt.Errorf("Internal Error: Invalid destination register %d", destReg)
 		}
-		
+
 		// Native function completed, no frame switch needed
 		return false, nil
-		
+
 	case TypeNativeFunctionWithProps:
 		// Handle native function with properties
 		nativeFuncWithProps := calleeVal.AsNativeFunctionWithProps()
-		
+
 		// Arity checking
 		if nativeFuncWithProps.Arity >= 0 {
 			if nativeFuncWithProps.Variadic {
@@ -167,10 +176,10 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 				}
 			}
 		}
-		
+
 		// Execute immediately
 		result := nativeFuncWithProps.Fn(args)
-		
+
 		// Store result
 		if int(destReg) < len(callerRegisters) {
 			callerRegisters[destReg] = result
@@ -178,13 +187,13 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 			currentFrame.ip = callerIP
 			return false, fmt.Errorf("Internal Error: Invalid destination register %d", destReg)
 		}
-		
+
 		return false, nil
-		
+
 	case TypeAsyncNativeFunction:
 		// Handle async native function that can call bytecode
 		asyncNativeFunc := calleeVal.AsAsyncNativeFunction()
-		
+
 		// Arity checking
 		if asyncNativeFunc.Arity >= 0 {
 			if asyncNativeFunc.Variadic {
@@ -199,17 +208,17 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 				}
 			}
 		}
-		
+
 		// Execute async native function
 		_, err := vm.executeAsyncNativeFunction(asyncNativeFunc, args, destReg, callerRegisters)
 		if err != nil {
 			currentFrame.ip = callerIP
 			return false, err
 		}
-		
+
 		// Result already stored by executeAsyncNativeFunction
 		return false, nil
-		
+
 	default:
 		currentFrame.ip = callerIP
 		return false, fmt.Errorf("Cannot call non-function value of type %v", calleeVal.Type())
@@ -218,11 +227,16 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 
 // prepareMethodCall is a convenience wrapper for method calls that handles 'this' binding
 func (vm *VM) prepareMethodCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
-	// TODO: Currently native functions don't receive 'this' as first parameter
-	// This is a known limitation - see TODO comment in original OpCallMethod
-	// For now, just pass the args as-is for native functions
-	
-	// For all function types, pass thisValue for frame setup but don't modify args
+	// Debug logging
+	fmt.Printf("DEBUG prepareMethodCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
+		calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
+
+	// For native functions, they already expect 'this' as first argument
+	if calleeVal.Type() == TypeNativeFunction {
+		return vm.prepareCall(calleeVal, thisValue, args, destReg, callerRegisters, callerIP)
+	}
+
+	// For all other function types, pass thisValue for frame setup but don't modify args
 	return vm.prepareCall(calleeVal, thisValue, args, destReg, callerRegisters, callerIP)
 }
 
@@ -230,12 +244,12 @@ func (vm *VM) prepareMethodCall(calleeVal Value, thisValue Value, args []Value, 
 func (vm *VM) prepareDirectCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
 	// First call the regular prepareCall
 	shouldSwitch, err := vm.prepareCall(calleeVal, thisValue, args, destReg, callerRegisters, callerIP)
-	
+
 	// If we created a new frame, mark it as a direct call
 	if shouldSwitch && vm.frameCount > 0 {
 		vm.frames[vm.frameCount-1].isDirectCall = true
 	}
-	
+
 	return shouldSwitch, err
 }
 
@@ -244,12 +258,12 @@ func (vm *VM) prepareDirectCall(calleeVal Value, thisValue Value, args []Value, 
 func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
 	argCount := len(args)
 	currentFrame := &vm.frames[vm.frameCount-1]
-	
+
 	switch calleeVal.Type() {
 	case TypeClosure:
 		calleeClosure := AsClosure(calleeVal)
 		calleeFunc := calleeClosure.Fn
-		
+
 		// Arity checking
 		if calleeFunc.Variadic {
 			if argCount < calleeFunc.Arity {
@@ -262,23 +276,23 @@ func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, 
 				return false, fmt.Errorf("Expected %d arguments but got %d", calleeFunc.Arity, argCount)
 			}
 		}
-		
+
 		// Check frame limit
 		if vm.frameCount == MaxFrames {
 			currentFrame.ip = callerIP
 			return false, fmt.Errorf("Stack overflow")
 		}
-		
+
 		// Check register stack space
 		requiredRegs := calleeFunc.RegisterSize
 		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 			currentFrame.ip = callerIP
 			return false, fmt.Errorf("Register stack overflow")
 		}
-		
+
 		// Store return IP in current frame
 		currentFrame.ip = callerIP
-		
+
 		// Set up new frame - similar to prepareCall but bypasses method binding
 		newFrame := &vm.frames[vm.frameCount]
 		newFrame.closure = calleeClosure
@@ -289,7 +303,7 @@ func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, 
 		newFrame.isDirectCall = true
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
-		
+
 		// Copy fixed arguments
 		for i := 0; i < calleeFunc.Arity && i < argCount; i++ {
 			if i < len(newFrame.registers) {
@@ -301,12 +315,12 @@ func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, 
 				return false, fmt.Errorf("Internal Error: Argument register index out of bounds")
 			}
 		}
-		
+
 		// Handle rest parameters for variadic functions
 		if calleeFunc.Variadic {
 			extraArgCount := argCount - calleeFunc.Arity
 			var restArray Value
-			
+
 			if extraArgCount == 0 {
 				restArray = vm.emptyRestArray
 			} else {
@@ -319,17 +333,17 @@ func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, 
 					}
 				}
 			}
-			
+
 			// Store rest array at the appropriate position
 			if calleeFunc.Arity < len(newFrame.registers) {
 				newFrame.registers[calleeFunc.Arity] = restArray
 			}
 		}
-		
+
 		// Frame is ready, tell interpreter to switch to it
 		vm.frameCount++
 		return true, nil
-		
+
 	case TypeFunction:
 		// Convert bare function to closure
 		funcToCall := AsFunction(calleeVal)
@@ -339,37 +353,37 @@ func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, 
 		}
 		closureVal := Value{typ: TypeClosure, obj: unsafe.Pointer(tempClosure)}
 		return vm.prepareDirectCallWithoutBinding(closureVal, thisValue, args, destReg, callerRegisters, callerIP)
-		
+
 	case TypeNativeFunction:
 		// Execute native function immediately
 		nativeFunc := AsNativeFunction(calleeVal)
-		
+
 		// For native functions, we prepend 'this' to the arguments
 		fullArgs := make([]Value, len(args)+1)
 		fullArgs[0] = thisValue
 		copy(fullArgs[1:], args)
-		
+
 		result := nativeFunc.Fn(fullArgs)
 		if int(destReg) < len(callerRegisters) {
 			callerRegisters[destReg] = result
 		}
 		return false, nil
-		
+
 	case TypeNativeFunctionWithProps:
 		// Execute native function with properties immediately
 		nativeFuncWithProps := calleeVal.AsNativeFunctionWithProps()
-		
+
 		// For native functions, we prepend 'this' to the arguments
 		fullArgs := make([]Value, len(args)+1)
 		fullArgs[0] = thisValue
 		copy(fullArgs[1:], args)
-		
+
 		result := nativeFuncWithProps.Fn(fullArgs)
 		if int(destReg) < len(callerRegisters) {
 			callerRegisters[destReg] = result
 		}
 		return false, nil
-		
+
 	default:
 		currentFrame.ip = callerIP
 		return false, fmt.Errorf("Cannot call non-function value of type %v", calleeVal.Type())

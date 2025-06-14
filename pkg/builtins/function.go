@@ -17,6 +17,8 @@ func registerFunctionPrototypeMethods() {
 		types.NewVariadicFunction([]types.Type{}, types.Any, &types.ArrayType{ElementType: types.Any}))
 	RegisterPrototypeMethod("function", "apply",
 		types.NewSimpleFunction([]types.Type{types.Any, &types.ArrayType{ElementType: types.Any}}, types.Any))
+	RegisterPrototypeMethod("function", "bind",
+		types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any}))
 }
 
 // setupFunctionPrototype sets up Function prototype methods for a specific VM instance
@@ -35,6 +37,12 @@ func setupFunctionPrototype(vmInstance *vm.VM) {
 		return functionPrototypeApply(vmInstance, args)
 	}
 	funcProto.SetOwn("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
+
+	// Function.prototype.bind - creates a new bound function
+	bindImpl := func(args []vm.Value) vm.Value {
+		return functionPrototypeBind(vmInstance, args)
+	}
+	funcProto.SetOwn("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
 }
 
 // functionPrototypeCallAsync implements Function.prototype.call using AsyncNativeFunction
@@ -218,4 +226,83 @@ func callFunctionWithThis(vmInstance *vm.VM, function vm.Value, thisValue vm.Val
 
 	// If not a callable type, return undefined
 	return vm.Undefined
+}
+
+// functionPrototypeBind implements Function.prototype.bind
+// Syntax: func.bind(thisArg, ...args)
+// Returns a new function with 'this' bound to thisArg and optional partial arguments
+func functionPrototypeBind(vmInstance *vm.VM, args []vm.Value) vm.Value {
+	// args[0] is 'this' (the function being bound)
+	// args[1] is thisArg (the 'this' value to bind)
+	// args[2:] are partial arguments to bind
+	
+	if len(args) < 1 {
+		return vm.Undefined // Error: no function provided
+	}
+	
+	targetFunction := args[0]
+	
+	// Verify that the target is callable
+	if !targetFunction.IsFunction() && !targetFunction.IsClosure() && !targetFunction.IsNativeFunction() {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined
+	}
+	
+	// Get the 'this' value to bind
+	var boundThis vm.Value
+	if len(args) > 1 {
+		boundThis = args[1]
+	} else {
+		boundThis = vm.Undefined
+	}
+	
+	// Get partial arguments
+	var partialArgs []vm.Value
+	if len(args) > 2 {
+		partialArgs = make([]vm.Value, len(args)-2)
+		copy(partialArgs, args[2:])
+	}
+	
+	// Create the bound function
+	boundFunction := func(callArgs []vm.Value) vm.Value {
+		// When a bound function is called, callArgs[0] is the 'this' context
+		// We need to skip it and use our bound 'this' instead
+		actualArgs := callArgs
+		if len(callArgs) > 0 {
+			// Skip the 'this' argument that was passed to the bound function
+			actualArgs = callArgs[1:]
+		}
+		
+		// Combine partial arguments with call-time arguments
+		fullArgs := make([]vm.Value, len(partialArgs)+len(actualArgs))
+		copy(fullArgs, partialArgs)
+		copy(fullArgs[len(partialArgs):], actualArgs)
+		
+		// Call the original function with the bound 'this' and combined arguments
+		return callFunctionWithThis(vmInstance, targetFunction, boundThis, fullArgs)
+	}
+	
+	// Create a native function wrapper for the bound function
+	// The arity is reduced by the number of partial arguments
+	originalArity := 0
+	if targetFunction.IsNativeFunction() {
+		nf := targetFunction.AsNativeFunction()
+		originalArity = nf.Arity
+	} else if targetFunction.IsFunction() {
+		fn := targetFunction.AsFunction()
+		originalArity = fn.Arity
+	} else if targetFunction.IsClosure() {
+		cl := targetFunction.AsClosure()
+		originalArity = cl.Fn.Arity
+	}
+	
+	// Calculate new arity (original arity minus partial args, but at least 0)
+	newArity := originalArity - len(partialArgs)
+	if newArity < 0 {
+		newArity = 0
+	}
+	
+	// Create the bound function with appropriate arity
+	// Set variadic to true to handle any number of arguments
+	return vm.NewNativeFunction(newArity, true, "bound", boundFunction)
 }

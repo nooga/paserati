@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"fmt"
 	"sort"
 	"unsafe"
 )
@@ -47,15 +48,18 @@ func (o *PlainObject) GetOwn(name string) (Value, bool) {
 
 // SetOwn sets or defines an own property. Creates a new shape on first definition.
 func (o *PlainObject) SetOwn(name string, v Value) {
+	fmt.Printf("DEBUG PlainObject.SetOwn: name=%q, value=%v, shape=%p\n", name, v.Inspect(), o.shape)
 	// try to find existing field
 	for _, f := range o.shape.fields {
 		if f.name == name {
 			// existing property, overwrite value
+			fmt.Printf("DEBUG PlainObject.SetOwn: Overwriting existing property %q\n", name)
 			o.properties[f.offset] = v
 			return
 		}
 	}
 	// new property: shape transition or creation
+	fmt.Printf("DEBUG PlainObject.SetOwn: Adding new property %q\n", name)
 	cur := o.shape
 	// reuse transition if exists
 	next, ok := cur.transitions[name]
@@ -75,18 +79,24 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 		cur.transitions[name] = next
 	}
 	// adopt new shape
+	fmt.Printf("DEBUG PlainObject.SetOwn: Shape transition: %p -> %p\n", o.shape, next)
 	o.shape = next
 	// append value in properties slice
 	o.properties = append(o.properties, v)
+	fmt.Printf("DEBUG PlainObject.SetOwn: Property %q added, new shape has %d fields\n", name, len(o.shape.fields))
 }
 
 // HasOwn reports whether an own property with the given name exists.
 func (o *PlainObject) HasOwn(name string) bool {
-	for _, f := range o.shape.fields {
+	fmt.Printf("DEBUG PlainObject.HasOwn: name=%q, shape=%p, fields=%v\n", name, o.shape, o.shape.fields)
+	for i, f := range o.shape.fields {
+		fmt.Printf("DEBUG PlainObject.HasOwn: field[%d]=%q\n", i, f.name)
 		if f.name == name {
+			fmt.Printf("DEBUG PlainObject.HasOwn: found %q at index %d\n", name, i)
 			return true
 		}
 	}
+	fmt.Printf("DEBUG PlainObject.HasOwn: %q not found\n", name)
 	return false
 }
 

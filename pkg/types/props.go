@@ -69,6 +69,13 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 					return fieldType
 				}
 			} else {
+				// Property not found in object's own properties, check Object.prototype
+				if prototypeMethodResolver != nil {
+					if prototypeMethodType := prototypeMethodResolver("object", propertyName); prototypeMethodType != nil {
+						return prototypeMethodType
+					}
+				}
+				
 				// Property not found
 				if isOptionalChaining {
 					return Undefined

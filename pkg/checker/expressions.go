@@ -51,7 +51,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 	// Check if expected type is a tuple type
 	if tupleType, isTuple := expectedType.(*types.TupleType); isTuple {
 		debugPrintf("// [Checker ArrayLitContext] Expected tuple with %d element types\n", len(tupleType.ElementTypes))
-		
+
 		// For tuple context, we need the array literal to have exactly the right number of elements
 		if len(node.Elements) != len(tupleType.ElementTypes) {
 			// If length doesn't match, fall back to regular array literal checking
@@ -59,7 +59,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 			c.checkArrayLiteral(node)
 			return
 		}
-		
+
 		// Check each element against the corresponding tuple element type
 		elementTypesMatch := true
 		for i, elemNode := range node.Elements {
@@ -69,19 +69,19 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				ExpectedType: expectedElemType,
 				IsContextual: true,
 			})
-			
+
 			actualElemType := elemNode.GetComputedType()
 			if actualElemType == nil {
 				actualElemType = types.Any
 			}
-			
+
 			// Check if the element type is assignable to the expected tuple element type
 			if !types.IsAssignable(actualElemType, expectedElemType) {
 				elementTypesMatch = false
 				debugPrintf("// [Checker ArrayLitContext] Element %d type mismatch: expected %s, got %s\n", i, expectedElemType.String(), actualElemType.String())
 			}
 		}
-		
+
 		if elementTypesMatch {
 			// All elements match - use the tuple type
 			node.SetComputedType(tupleType)
@@ -99,7 +99,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 	// Check if expected type is an array type
 	if arrayType, isArray := expectedType.(*types.ArrayType); isArray {
 		debugPrintf("// [Checker ArrayLitContext] Expected array with element type: %s\n", arrayType.ElementType.String())
-		
+
 		// Check each element against the expected element type
 		for _, elemNode := range node.Elements {
 			c.visitWithContext(elemNode, &ContextualType{
@@ -107,7 +107,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				IsContextual: true,
 			})
 		}
-		
+
 		// Use the expected array type as the result
 		node.SetComputedType(arrayType)
 		debugPrintf("// [Checker ArrayLitContext] Set type to expected array type: %s\n", arrayType.String())
@@ -415,14 +415,26 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						resultType = methodType
 						debugPrintf("// [Checker MemberExpr] Found function prototype method '%s': %s\n", propertyName, methodType.String())
 					} else {
+						// NEW: Check for Object prototype methods for all objects
+						if methodType := builtins.GetPrototypeMethodType("object", propertyName); methodType != nil {
+							resultType = methodType
+							debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
+						} else {
+							// Property not found
+							c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+							// resultType remains types.Never
+						}
+					}
+				} else {
+					// NEW: Check for Object prototype methods for all objects
+					if methodType := builtins.GetPrototypeMethodType("object", propertyName); methodType != nil {
+						resultType = methodType
+						debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
+					} else {
 						// Property not found
 						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
 						// resultType remains types.Never
 					}
-				} else {
-					// Property not found
-					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
-					// resultType remains types.Never
 				}
 			}
 		case *types.IntersectionType:
@@ -725,7 +737,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
 	// Visit the operand first to ensure it has a computed type
 	c.visit(node.Operand)
-	
+
 	// Get the operand type
 	operandType := node.Operand.GetComputedType()
 	if operandType == nil {
@@ -733,7 +745,7 @@ func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
 		node.Operand.SetComputedType(types.Any)
 		operandType = types.Any
 	}
-	
+
 	// Try to get a more precise literal type for the typeof result
 	// if the operand type is known
 	if operandType != types.Unknown && operandType != types.Any {
@@ -744,7 +756,7 @@ func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
 			return
 		}
 	}
-	
+
 	// Default to the general union of all possible typeof results
 	node.SetComputedType(types.TypeofResultType)
 }
@@ -757,7 +769,7 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 	if sourceType == nil {
 		sourceType = types.Any
 	}
-	
+
 	// Resolve the target type
 	targetType := c.resolveTypeAnnotation(node.TargetType)
 	if targetType == nil {
@@ -765,13 +777,13 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 		node.SetComputedType(types.Any)
 		return
 	}
-	
+
 	// Validate the type assertion according to TypeScript rules
 	if !c.isValidTypeAssertion(sourceType, targetType) {
-		c.addError(node, fmt.Sprintf("conversion of type '%s' to type '%s' may be a mistake because neither type sufficiently overlaps with the other", 
+		c.addError(node, fmt.Sprintf("conversion of type '%s' to type '%s' may be a mistake because neither type sufficiently overlaps with the other",
 			sourceType.String(), targetType.String()))
 	}
-	
+
 	// The result type is always the target type
 	node.SetComputedType(targetType)
 }
@@ -783,12 +795,12 @@ func (c *Checker) isValidTypeAssertion(sourceType, targetType types.Type) bool {
 		targetType == types.Any || targetType == types.Unknown {
 		return true
 	}
-	
+
 	// Check if either type is assignable to the other
 	if types.IsAssignable(targetType, sourceType) || types.IsAssignable(sourceType, targetType) {
 		return true
 	}
-	
+
 	// Check for obvious mismatches between primitive types
 	// TypeScript allows assertions between primitives only if there's some potential overlap
 	if c.isPrimitiveType(sourceType) && c.isPrimitiveType(targetType) {
@@ -797,15 +809,15 @@ func (c *Checker) isValidTypeAssertion(sourceType, targetType types.Type) bool {
 			return false
 		}
 	}
-	
+
 	// Allow other assertions (interfaces, objects, etc.) as they might have overlap
 	return true
 }
 
 // isPrimitiveType checks if a type is a primitive type
 func (c *Checker) isPrimitiveType(t types.Type) bool {
-	return t == types.String || t == types.Number || t == types.Boolean || 
-		   t == types.Null || t == types.Undefined
+	return t == types.String || t == types.Number || t == types.Boolean ||
+		t == types.Null || t == types.Undefined
 }
 
 // checkInOperator handles type checking for the 'in' operator ("prop" in obj)
@@ -818,7 +830,7 @@ func (c *Checker) checkInOperator(leftType, rightType types.Type, node *parser.I
 			c.addError(node.Left, fmt.Sprintf("the left-hand side of 'in' must be of type 'string' or 'number', but got '%s'", leftType.String()))
 		}
 	}
-	
+
 	// Right operand (object) should be an object type
 	if rightType != types.Any && !c.isObjectType(rightType) {
 		c.addError(node.Right, fmt.Sprintf("the right-hand side of 'in' must be an object, but got '%s'", rightType.String()))
@@ -851,7 +863,7 @@ func (c *Checker) isObjectType(t types.Type) bool {
 func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
 	// Left operand can be any value (the object to check)
 	// No specific type checking needed for left operand
-	
+
 	// Right operand must be a constructor function
 	if rightType != types.Any && !c.isConstructorType(rightType) {
 		c.addError(node.Right, fmt.Sprintf("Cannot use '%s' as a constructor.", rightType.String()))
@@ -867,4 +879,3 @@ func (c *Checker) isConstructorType(t types.Type) bool {
 	}
 	return false
 }
-

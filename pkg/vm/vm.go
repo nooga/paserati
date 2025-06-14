@@ -1132,8 +1132,8 @@ func (vm *VM) run() (InterpretResult, Value) {
 			destReg := code[ip]
 			ip++
 			// Create a new empty object value
-			// Create a new empty object using the shape-based PlainObject
-			registers[destReg] = NewObject(Undefined)
+			// Create a new empty object using the shape-based PlainObject with VM's ObjectPrototype
+			registers[destReg] = NewObject(vm.ObjectPrototype)
 
 		case OpGetProp:
 			destReg := code[ip]
