@@ -964,44 +964,25 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 		
 		// Handle default value if present
 		if prop.Default != nil {
-			// Compile conditional assignment with default
-			defaultReg := c.regAlloc.Alloc()
-			_, err := c.compileNode(prop.Default, defaultReg)
+			// First, define the variable to reserve the name and get the target register
+			err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
 			if err != nil {
 				c.regAlloc.Free(valueReg)
-				c.regAlloc.Free(defaultReg)
 				return BadRegister, err
 			}
 			
-			// Jump to default if valueReg is undefined
-			jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
-			
-			// Define variable with extracted value
-			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				c.regAlloc.Free(defaultReg)
-				return BadRegister, err
+			// Get the target identifier for conditional assignment
+			targetIdent := &parser.Identifier{
+				Token: ident.Token,
+				Value: ident.Value,
 			}
 			
-			// Jump past default
-			jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
-			
-			// Patch jump to default
-			c.patchJump(jumpToDefault)
-			
-			// Define variable with default value
-			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, defaultReg, line)
+			// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
+			err = c.compileConditionalAssignment(targetIdent, valueReg, prop.Default, line)
 			if err != nil {
 				c.regAlloc.Free(valueReg)
-				c.regAlloc.Free(defaultReg)
 				return BadRegister, err
 			}
-			
-			// Patch jump past default
-			c.patchJump(jumpPastDefault)
-			
-			c.regAlloc.Free(defaultReg)
 		} else {
 			// Define variable with extracted value
 			err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
