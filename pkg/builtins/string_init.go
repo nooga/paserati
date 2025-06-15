@@ -409,24 +409,34 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.NewString("")
 		}
-		return vm.NewString(vmInstance.GetThis().ToString())
+		return vm.NewString(args[0].ToString())
 	})
 
 	// Make it a proper constructor with static methods
-	if ctorObj := stringCtor.AsNativeFunction(); ctorObj != nil {
-		// Convert to object with properties
-		ctorWithProps := vm.NewNativeFunctionWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
+	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "String", func(args []vm.Value) vm.Value {
+		if len(args) == 0 {
+			return vm.NewString("")
+		}
+		return vm.NewString(args[0].ToString())
+	})
 
-		// Add prototype property
-		// TODO: Uncomment when we can use Properties field
-		// ctorWithProps.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(stringProto))
+	// Add prototype property
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(stringProto))
 
-		// Add static methods
-		// TODO: Uncomment when we can use Properties field
-		// ctorWithProps.Properties.SetOwn("fromCharCode", vm.NewNativeFunction(0, true, "fromCharCode", stringFromCharCodeImpl))
+	// Add static methods
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("fromCharCode", vm.NewNativeFunction(0, true, "fromCharCode", func(args []vm.Value) vm.Value {
+		if len(args) == 0 {
+			return vm.NewString("")
+		}
+		result := make([]byte, len(args))
+		for i, arg := range args {
+			code := int(arg.ToFloat()) & 0xFFFF // Mask to 16 bits like JS
+			result[i] = byte(code)
+		}
+		return vm.NewString(string(result))
+	}))
 
-		stringCtor = ctorWithProps
-	}
+	stringCtor = ctorWithProps
 
 	// Set String prototype in VM
 	vmInstance.StringPrototype = vm.NewValueFromPlainObject(stringProto)

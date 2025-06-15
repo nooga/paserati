@@ -2,7 +2,6 @@ package builtins
 
 import (
 	"fmt"
-	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"sync"
@@ -81,41 +80,41 @@ func GetPrototypeMethodType(primitiveName, methodName string) types.Type {
 func InitializeRegistry() {
 	registryOnce.Do(func() {
 		// Register clock
-		register("clock", 0, false, clockImpl, types.NewSimpleFunction(
-			[]types.Type{},
-			types.Number,
-		))
+		// register("clock", 0, false, clockImpl, types.NewSimpleFunction(
+		// 	[]types.Type{},
+		// 	types.Number,
+		// ))
 
-		// Register Array constructor with overloads
-		registerArrayConstructor()
+		// // Register Array constructor with overloads
+		// registerArrayConstructor()
 
-		// Register console object
-		registerConsole()
+		// // Register console object
+		// registerConsole()
 
-		// Register String constructor and prototype methods
-		registerString()
+		// // Register String constructor and prototype methods
+		// registerString()
 
-		// Register Array prototype methods
-		registerArray()
+		// // Register Array prototype methods
+		// registerArray()
 
-		// Register Date constructor and methods
-		registerDate()
+		// // Register Date constructor and methods
+		// registerDate()
 
-		// Register Math object with methods and constants
-		registerMath()
+		// // Register Math object with methods and constants
+		// registerMath()
 
-		// Register JSON object with parse and stringify methods
-		registerJSON()
+		// // Register JSON object with parse and stringify methods
+		// registerJSON()
 
-		// Register Object constructor
-		registerObjectConstructor()
+		// // Register Object constructor
+		// registerObjectConstructor()
 
-		// Register Function prototype methods
-		registerFunction()
+		// // Register Function prototype methods
+		// registerFunction()
 
-		// Register global constants
-		registerValue("Infinity", vm.Number(math.Inf(1)), types.Number)
-		registerValue("NaN", vm.Number(math.NaN()), types.Number)
+		// // Register global constants
+		// registerValue("Infinity", vm.Number(math.Inf(1)), types.Number)
+		// registerValue("NaN", vm.Number(math.NaN()), types.Number)
 
 		// TODO: Register other built-ins here
 	})

@@ -1,9 +1,7 @@
 package tests
 
 import (
-	"paserati/pkg/builtins"
 	"paserati/pkg/driver"
-	"paserati/pkg/vm"
 	"strings"
 	"testing"
 )
@@ -57,12 +55,8 @@ func TestNewKeyword(t *testing.T) {
 			}
 
 			// Run the code
-			vmInstance := vm.NewVM()
-			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-			if err := vmInstance.InitializeWithCallbacks(); err != nil {
-				t.Fatalf("VM initialization failed: %v", err)
-			}
-			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
+			paserati := driver.NewPaserati()
+			finalValue, runtimeErrs := paserati.InterpretChunk(chunk)
 			if len(runtimeErrs) > 0 {
 				var allErrors strings.Builder
 				for _, rerr := range runtimeErrs {
@@ -108,12 +102,8 @@ func TestNewKeywordErrors(t *testing.T) {
 			}
 
 			// Run the code
-			vmInstance := vm.NewVM()
-			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-			if err := vmInstance.InitializeWithCallbacks(); err != nil {
-				t.Fatalf("VM initialization failed: %v", err)
-			}
-			_, runtimeErrs := vmInstance.Interpret(chunk)
+			paserati := driver.NewPaserati()
+			_, runtimeErrs := paserati.InterpretChunk(chunk)
 			if len(runtimeErrs) == 0 {
 				t.Errorf("Expected error for: %s", tt.code)
 			}

@@ -86,7 +86,7 @@ type VM struct {
 	callDepth int
 
 	// Instance-specific initialization callbacks
-	initCallbacks []VMInitCallback
+	//initCallbacks []VMInitCallback
 
 	// Current 'this' value for native function execution
 	currentThis Value
@@ -108,24 +108,24 @@ const (
 func NewVM() *VM {
 	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues:   make([]*Upvalue, 0, 16),         // Pre-allocate slightly
-		propCache:      make(map[int]*PropInlineCache),  // Initialize inline cache
-		cacheStats:     ICacheStats{},                   // Initialize cache statistics
-		globals:        make([]Value, 0),                // Initialize global variables table
-		globalNames:    make([]string, 0),               // Initialize global variable names
-		emptyRestArray: NewArray(),                      // Initialize singleton empty array for rest params
-		initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
-		errors:         make([]errors.PaseratiError, 0), // Initialize error list
+		openUpvalues:   make([]*Upvalue, 0, 16),        // Pre-allocate slightly
+		propCache:      make(map[int]*PropInlineCache), // Initialize inline cache
+		cacheStats:     ICacheStats{},                  // Initialize cache statistics
+		globals:        make([]Value, 0),               // Initialize global variables table
+		globalNames:    make([]string, 0),              // Initialize global variable names
+		emptyRestArray: NewArray(),                     // Initialize singleton empty array for rest params
+		//initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
+		errors: make([]errors.PaseratiError, 0), // Initialize error list
 	}
 
 	// Initialize built-in prototypes first
 	vm.initializePrototypes()
 
 	// Run initialization callbacks
-	if err := vm.initializeVM(); err != nil {
-		// For now, just continue - we could add error handling later
-		fmt.Fprintf(os.Stderr, "Warning: VM initialization callback failed: %v\n", err)
-	}
+	// if err := vm.initializeVM(); err != nil {
+	// 	// For now, just continue - we could add error handling later
+	// 	fmt.Fprintf(os.Stderr, "Warning: VM initialization callback failed: %v\n", err)
+	// }
 
 	return vm
 }
@@ -151,24 +151,24 @@ func (vm *VM) SetBuiltinGlobals(globals map[string]Value) error {
 	// Clear existing globals
 	vm.globals = make([]Value, 0)
 	vm.globalNames = make([]string, 0)
-	
+
 	// Sort global names for deterministic ordering
 	// This is crucial for coordination with compiler's getOrAssignGlobalIndex
 	var names []string
 	for name := range globals {
 		names = append(names, name)
 	}
-	
+
 	// Sort alphabetically for predictable indices
 	// TODO: Better coordination with compiler would be ideal
 	sort.Strings(names)
-	
+
 	// Set builtin globals in sorted order
 	for _, name := range names {
 		vm.globals = append(vm.globals, globals[name])
 		vm.globalNames = append(vm.globalNames, name)
 	}
-	
+
 	return nil
 }
 
@@ -1435,6 +1435,43 @@ func (vm *VM) run() (InterpretResult, Value) {
 					return status, Undefined
 				}
 
+			case TypeNativeFunctionWithProps:
+				// Constructor call on builtin function with properties
+				builtinWithProps := constructorVal.AsNativeFunctionWithProps()
+
+				if builtinWithProps.Arity >= 0 && builtinWithProps.Arity != argCount {
+					frame.ip = callerIP
+					status := vm.runtimeError("Built-in constructor '%s' expected %d arguments but got %d.",
+						builtinWithProps.Name, builtinWithProps.Arity, argCount)
+					return status, Undefined
+				}
+
+				// Collect arguments for builtin constructor call
+				args := make([]Value, argCount)
+				argStartRegInCaller := constructorReg + 1
+				for i := 0; i < argCount; i++ {
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						frame.ip = callerIP
+						status := vm.runtimeError("Internal Error: Argument register index %d out of bounds for builtin constructor call.", argStartRegInCaller+byte(i))
+						return status, Undefined
+					}
+				}
+
+				// Execute builtin constructor
+				// For builtins, we let them handle instance creation
+				result := builtinWithProps.Fn(args)
+
+				// Store result in caller's target register
+				if int(destReg) < len(callerRegisters) {
+					callerRegisters[destReg] = result
+				} else {
+					frame.ip = callerIP
+					status := vm.runtimeError("Internal Error: Invalid target register %d for builtin constructor return value.", destReg)
+					return status, Undefined
+				}
+
 			default:
 				frame.ip = callerIP
 				status := vm.runtimeError("Cannot use '%s' as a constructor.", constructorVal.TypeName())
@@ -1820,8 +1857,6 @@ func getTypeofString(val Value) string {
 		return "object" // Default fallback
 	}
 }
-
-// stringFromCharCodeStaticImpl implements String.fromCharCode (static method)
 
 // printFrameStack prints the current call stack for debugging
 func (vm *VM) printFrameStack() {

@@ -1,8 +1,8 @@
 package tests
 
 import (
-	"paserati/pkg/builtins"
 	"paserati/pkg/compiler"
+	"paserati/pkg/driver"
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
@@ -88,12 +88,8 @@ func TestTemplateLiteralExecution(t *testing.T) {
 			}
 
 			// Execution
-			vmInstance := vm.NewVM()
-			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-			if err := vmInstance.InitializeWithCallbacks(); err != nil {
-				t.Fatalf("VM initialization failed: %v", err)
-			}
-			result, runtimeErrors := vmInstance.Interpret(chunk)
+			paserati := driver.NewPaserati()
+			result, runtimeErrors := paserati.InterpretChunk(chunk)
 
 			if len(runtimeErrors) > 0 {
 				t.Fatalf("Runtime errors: %v", runtimeErrors)

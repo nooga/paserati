@@ -2,7 +2,6 @@ package tests
 
 import (
 	"os"
-	"paserati/pkg/builtins"
 	"paserati/pkg/driver"
 	"paserati/pkg/vm"
 	"strings"
@@ -35,11 +34,7 @@ func BenchmarkFibPlaceholderRun(b *testing.B) {
 	// Compile once outside the loop.
 	// Use the correct filename provided by the user.
 	chunk := compileFile(b, "scripts/factorial.ts")
-	vmInstance := vm.NewVM()
-	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-	if err := vmInstance.InitializeWithCallbacks(); err != nil {
-		b.Fatalf("VM initialization failed: %v", err)
-	}
+	paserati := driver.NewPaserati()
 
 	// Redirect stdout during benchmark to avoid polluting output
 	// and potential overhead from printing.
@@ -55,10 +50,10 @@ func BenchmarkFibPlaceholderRun(b *testing.B) {
 	b.ResetTimer() // Start timing after setup and compilation
 	for i := 0; i < b.N; i++ {
 		// Important: Reset the VM state for each iteration if Interpret doesn't fully reset
-		// vmInstance.Reset() // Interpret() currently calls Reset(), so this might be redundant
+		// paserati.Reset() // Interpret() currently calls Reset(), so this might be redundant
 
 		// Run the compiled code, capture value and errors
-		_, runtimeErrs := vmInstance.Interpret(chunk)
+		_, runtimeErrs := paserati.InterpretChunk(chunk)
 
 		// Fail benchmark immediately if runtime errors occur
 		if len(runtimeErrs) > 0 {
@@ -79,11 +74,7 @@ func BenchmarkFibPlaceholderRun(b *testing.B) {
 func BenchmarkMatrixMult(b *testing.B) {
 	// Compile once outside the loop.
 	chunk := compileFile(b, "scripts/matrix_mult.ts")
-	vmInstance := vm.NewVM()
-	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-	if err := vmInstance.InitializeWithCallbacks(); err != nil {
-		b.Fatalf("VM initialization failed: %v", err)
-	}
+	paserati := driver.NewPaserati()
 
 	// Redirect stdout during benchmark to avoid polluting output
 	// and potential overhead from printing.
@@ -101,7 +92,7 @@ func BenchmarkMatrixMult(b *testing.B) {
 		// Interpret() currently calls Reset(), so no explicit reset needed here yet.
 
 		// Run the compiled code, capture value and errors
-		_, runtimeErrs := vmInstance.Interpret(chunk)
+		_, runtimeErrs := paserati.InterpretChunk(chunk)
 
 		// Fail benchmark immediately if runtime errors occur
 		if len(runtimeErrs) > 0 {

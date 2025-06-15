@@ -51,7 +51,7 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithSimpleCallSignature([]types.Type{types.Number}, &types.ArrayType{ElementType: types.Any}).                                 // Array(length) -> array
 		WithVariadicCallSignature([]types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}). // Array(...elements) -> array
 		WithProperty("isArray", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
-		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any, types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any)}, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("from", types.NewOptionalFunction([]types.Type{types.Any, types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any)}, &types.ArrayType{ElementType: types.Any}, []bool{false, true})).
 		WithVariadicProperty("of", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
 		WithProperty("prototype", arrayProtoType)
 
@@ -575,27 +575,73 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Array constructor
-	arrayCtor := vm.NewNativeFunction(-1, true, "Array", func(args []vm.Value) vm.Value {
+	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Array", func(args []vm.Value) vm.Value {
+		if len(args) == 0 {
+			return vm.NewArray()
+		}
+		if len(args) == 1 {
+			// If single argument is a number, create array with that length
+			if args[0].IsNumber() {
+				length := int(args[0].ToFloat())
+				if length < 0 {
+					return vm.NewArray() // Should throw RangeError in real JS
+				}
+				result := vm.NewArray()
+				// Set length but don't populate with elements
+				for i := 0; i < length; i++ {
+					result.AsArray().Append(vm.Undefined)
+				}
+				return result
+			}
+		}
+		// Multiple arguments or single non-number argument - create array with those elements
 		return vm.NewArrayWithArgs(args)
 	})
 
-	// Make it a proper constructor with static methods
-	if ctorObj := arrayCtor.AsNativeFunction(); ctorObj != nil {
-		// Convert to object with properties
-		ctorWithProps := vm.NewNativeFunctionWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
+	// Add prototype property
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(arrayProto))
 
-		// Add prototype property
-		// TODO: Uncomment when we can use Properties field
-		// ctorWithProps.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(arrayProto))
+	// Add static methods
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("isArray", vm.NewNativeFunction(1, false, "isArray", func(args []vm.Value) vm.Value {
+		if len(args) < 1 {
+			return vm.BooleanValue(false)
+		}
+		return vm.BooleanValue(args[0].Type() == vm.TypeArray)
+	}))
 
-		// Add static methods
-		// TODO: Uncomment when we can use Properties field
-		// ctorWithProps.Properties.SetOwn("isArray", vm.NewNativeFunction(1, false, "isArray", arrayIsArrayImpl))
-		// ctorWithProps.Properties.SetOwn("from", vm.NewNativeFunction(2, false, "from", arrayFromImpl))
-		// ctorWithProps.Properties.SetOwn("of", vm.NewNativeFunction(0, true, "of", arrayOfImpl))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("from", vm.NewNativeFunction(2, false, "from", func(args []vm.Value) vm.Value {
+		if len(args) < 1 {
+			return vm.NewArray()
+		}
+		arrayLike := args[0]
 
-		arrayCtor = ctorWithProps
-	}
+		// If it's already an array, create a shallow copy
+		if sourceArray := arrayLike.AsArray(); sourceArray != nil {
+			result := vm.NewArray()
+			for i := 0; i < sourceArray.Length(); i++ {
+				element := sourceArray.Get(i)
+				// Apply mapping function if provided
+				if len(args) >= 2 && args[1].IsCallable() {
+					mapFn := args[1]
+					mappedValue, _ := vmInstance.CallFunctionDirectly(mapFn, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i))})
+					result.AsArray().Append(mappedValue)
+				} else {
+					result.AsArray().Append(element)
+				}
+			}
+			return result
+		}
+
+		// For non-arrays, try to treat as array-like (simplified implementation)
+		// In a full implementation, this would handle iterables, strings, etc.
+		return vm.NewArray()
+	}))
+
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) vm.Value {
+		return vm.NewArrayWithArgs(args)
+	}))
+
+	arrayCtor := ctorWithProps
 
 	// Set Array prototype in VM
 	vmInstance.ArrayPrototype = vm.NewValueFromPlainObject(arrayProto)

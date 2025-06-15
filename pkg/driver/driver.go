@@ -33,16 +33,18 @@ func NewPaserati() *Paserati {
 	// Create VM and initialize builtin system
 	vmInstance := vm.NewVM()
 
-	// Initialize builtins using new initializer system
-	if err := initializeBuiltinsWithCompiler(vmInstance, comp); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
-	}
-
-	return &Paserati{
+	paserati := &Paserati{
 		vmInstance: vmInstance,
 		checker:    checker,
 		compiler:   comp,
 	}
+
+	// Initialize builtins using new initializer system
+	if err := initializeBuiltins(paserati); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
+	}
+
+	return paserati
 }
 
 // RunString compiles and executes the given source code in the current session.
@@ -146,62 +148,27 @@ func CompileFile(filename string) (*vm.Chunk, []errors.PaseratiError) {
 // It prints any errors encountered (syntax, compile, runtime) and the
 // final result if execution is successful.
 // Returns true if execution completed without any errors, false otherwise.
-// This version does NOT use a persistent session.
+// This version creates a fresh Paserati session.
 func RunString(source string) bool {
 	return RunStringWithOptions(source, RunOptions{})
 }
 
 // RunStringWithOptions is like RunString but accepts options for debugging output
 func RunStringWithOptions(source string, options RunOptions) bool {
-	// Use the non-persistent CompileString (which now handles type checking internally)
-	chunk, compileOrTypeErrs := CompileString(source)
-	if len(compileOrTypeErrs) > 0 {
-		errors.DisplayErrors(source, compileOrTypeErrs)
-		return false
-	}
-	if chunk == nil {
-		// This case should ideally be covered by CompileString errors, but check defensively
-		fmt.Println("Internal Error: Compilation returned no errors but nil chunk.")
-		return false
-	}
+	// Create a new Paserati session to handle builtin initialization properly
+	paserati := NewPaserati()
 
-	// Show bytecode if requested
-	if options.ShowBytecode {
-		fmt.Println("\n=== Bytecode ===")
-		fmt.Print(chunk.DisassembleChunk("<script>"))
-		fmt.Println("================")
-	}
+	// Run the code using the session
+	value, errs := paserati.RunCode(source, options)
 
-	// --- Execution (fresh VM) ---
-	vmInstance := vm.NewVM()
-	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-	if err := vmInstance.InitializeWithCallbacks(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: VM initialization failed: %v\n", err)
-	}
-	finalValue, runtimeErrs := vmInstance.Interpret(chunk)
-	if len(runtimeErrs) > 0 {
-		errors.DisplayErrors(source, runtimeErrs)
-		return false
-	}
-
-	// Show cache statistics if requested
-	if options.ShowCacheStats {
-		fmt.Println("\n=== Inline Cache Statistics ===")
-		vmInstance.PrintCacheStats()
-		fmt.Println("===============================")
-	}
-
-	// Display result similar to the session's DisplayResult
-	if finalValue != vm.Undefined {
-		fmt.Println(finalValue.Inspect())
-	}
-	return true
+	// Display the result
+	return paserati.DisplayResult(source, value, errs)
 }
 
 // RunFile reads, compiles, and interprets a Paserati source file.
 // It prints errors and results similar to RunString.
 // Returns true if execution completed without any errors, false otherwise.
-// This version uses the non-persistent RunString.
+// This version creates a fresh Paserati session.
 func RunFile(filename string) bool {
 	sourceBytes, err := ioutil.ReadFile(filename)
 	if err != nil {
@@ -214,7 +181,7 @@ func RunFile(filename string) bool {
 		return false
 	}
 	source := string(sourceBytes)
-	// Delegate to the non-persistent RunString, which handles other errors and printing
+	// Delegate to RunString, which creates a fresh Paserati session
 	return RunString(source)
 }
 
@@ -339,48 +306,20 @@ func (p *Paserati) GetCacheStats() vm.ExtendedCacheStats {
 	return vm.GetExtendedStatsFromVM(p.vmInstance)
 }
 
-// initializeBuiltins sets up all builtin global variables in the VM using the new initializer system
-func initializeBuiltins(vmInstance *vm.VM) error {
-	// Get all standard initializers
-	initializers := builtins.GetStandardInitializers()
-
-	// Sort by priority
-	sort.Slice(initializers, func(i, j int) bool {
-		return initializers[i].Priority() < initializers[j].Priority()
-	})
-
-	// Create runtime context for VM initialization
-	globalVariables := make(map[string]vm.Value)
-
-	runtimeCtx := &builtins.RuntimeContext{
-		VM: vmInstance,
-		DefineGlobal: func(name string, value vm.Value) error {
-			globalVariables[name] = value
-			return nil
-		},
-	}
-
-	// Initialize all builtins runtime values
-	for _, init := range initializers {
-		if err := init.InitRuntime(runtimeCtx); err != nil {
-			return fmt.Errorf("failed to initialize %s runtime: %v", init.Name(), err)
-		}
-	}
-
-	// Set up global variables in VM
-	return vmInstance.SetBuiltinGlobals(globalVariables)
+// InterpretChunk executes a compiled chunk on the VM instance with initialized builtins
+func (p *Paserati) InterpretChunk(chunk *vm.Chunk) (vm.Value, []errors.PaseratiError) {
+	return p.vmInstance.Interpret(chunk)
 }
 
-// initializeBuiltinsWithCompiler sets up all builtin global variables in both the compiler and VM
+// initializeBuiltins sets up all builtin global variables in both the compiler and VM
 // ensuring they use the same global index ordering
-func initializeBuiltinsWithCompiler(vmInstance *vm.VM, comp *compiler.Compiler) error {
+func initializeBuiltins(paserati *Paserati) error {
+	vmInstance := paserati.vmInstance
+	comp := paserati.compiler
+	//checker := paserati.checker
+
 	// Get all standard initializers
 	initializers := builtins.GetStandardInitializers()
-
-	// Sort by priority
-	sort.Slice(initializers, func(i, j int) bool {
-		return initializers[i].Priority() < initializers[j].Priority()
-	})
 
 	// Create runtime context for VM initialization
 	globalVariables := make(map[string]vm.Value)

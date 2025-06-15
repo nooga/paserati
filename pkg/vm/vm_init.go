@@ -4,49 +4,49 @@ import "fmt"
 
 // VMInitCallback is a function that initializes VM-specific functionality
 // It receives the VM instance and can set up prototypes, global objects, etc.
-type VMInitCallback func(vm *VM) error
+// type VMInitCallback func(vm *VM) error
 
-// Global registry of initialization callbacks
-var (
-	globalInitCallbacks []VMInitCallback
-)
+// // Global registry of initialization callbacks
+// var (
+// 	globalInitCallbacks []VMInitCallback
+// )
 
-// RegisterGlobalInitCallback registers a callback that will be called
-// for every new VM instance during initialization
-func RegisterGlobalInitCallback(callback VMInitCallback) {
-	globalInitCallbacks = append(globalInitCallbacks, callback)
-}
+// // RegisterGlobalInitCallback registers a callback that will be called
+// // for every new VM instance during initialization
+// func RegisterGlobalInitCallback(callback VMInitCallback) {
+// 	globalInitCallbacks = append(globalInitCallbacks, callback)
+// }
 
-// initializeVM runs all registered initialization callbacks
-func (vm *VM) initializeVM() error {
-	// Run global callbacks first (if any)
-	for _, callback := range globalInitCallbacks {
-		if err := callback(vm); err != nil {
-			return err
-		}
-	}
+// // initializeVM runs all registered initialization callbacks
+// func (vm *VM) initializeVM() error {
+// 	// Run global callbacks first (if any)
+// 	for _, callback := range globalInitCallbacks {
+// 		if err := callback(vm); err != nil {
+// 			return err
+// 		}
+// 	}
 
-	// Run instance-specific callbacks
-	for _, callback := range vm.initCallbacks {
-		if err := callback(vm); err != nil {
-			return err
-		}
-	}
+// 	// Run instance-specific callbacks
+// 	for _, callback := range vm.initCallbacks {
+// 		if err := callback(vm); err != nil {
+// 			return err
+// 		}
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
-// AddStandardCallbacks adds a set of standard callbacks to this VM instance
-// This allows external packages to provide standard initialization without circular dependencies
-func (vm *VM) AddStandardCallbacks(callbacks []VMInitCallback) {
-	vm.initCallbacks = append(vm.initCallbacks, callbacks...)
-}
+// // AddStandardCallbacks adds a set of standard callbacks to this VM instance
+// // This allows external packages to provide standard initialization without circular dependencies
+// func (vm *VM) AddStandardCallbacks(callbacks []VMInitCallback) {
+// 	vm.initCallbacks = append(vm.initCallbacks, callbacks...)
+// }
 
-// InitializeWithCallbacks runs the initialization callbacks that were added to this VM
-// This is separate from the constructor to allow adding callbacks after VM creation
-func (vm *VM) InitializeWithCallbacks() error {
-	return vm.initializeVM()
-}
+// // InitializeWithCallbacks runs the initialization callbacks that were added to this VM
+// // This is separate from the constructor to allow adding callbacks after VM creation
+// func (vm *VM) InitializeWithCallbacks() error {
+// 	return vm.initializeVM()
+// }
 
 // vmCaller implements the VMCaller interface for async native functions
 type vmCaller struct {
@@ -161,9 +161,9 @@ func (vm *VM) ExecuteUserFunctionForBuiltin(fn Value, thisValue Value, args []Va
 }
 
 // RegisterInitCallback registers a callback for this specific VM instance
-func (vm *VM) RegisterInitCallback(callback VMInitCallback) {
-	vm.initCallbacks = append(vm.initCallbacks, callback)
-}
+// func (vm *VM) RegisterInitCallback(callback VMInitCallback) {
+// 	vm.initCallbacks = append(vm.initCallbacks, callback)
+// }
 
 // initializePrototypes sets up the built-in prototype objects
 func (vm *VM) initializePrototypes() {

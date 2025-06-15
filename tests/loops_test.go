@@ -1,9 +1,7 @@
 package tests
 
 import (
-	"paserati/pkg/builtins"
 	"paserati/pkg/driver"
-	"paserati/pkg/vm"
 	"strings"
 	"testing"
 )
@@ -105,12 +103,8 @@ func TestWhileStatement(t *testing.T) {
 			}
 
 			// Run VM
-			vmInstance := vm.NewVM()
-			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-			if err := vmInstance.InitializeWithCallbacks(); err != nil {
-				t.Fatalf("VM initialization failed: %v", err)
-			}
-			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
+			paserati := driver.NewPaserati()
+			finalValue, runtimeErrs := paserati.InterpretChunk(chunk)
 
 			// Check results
 			if tt.isError {
@@ -276,12 +270,8 @@ func TestForStatement(t *testing.T) {
 			}
 
 			// Run VM
-			vmInstance := vm.NewVM()
-			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-			if err := vmInstance.InitializeWithCallbacks(); err != nil {
-				t.Fatalf("VM initialization failed: %v", err)
-			}
-			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
+			paserati := driver.NewPaserati()
+			finalValue, runtimeErrs := paserati.InterpretChunk(chunk)
 
 			// Check results
 			if tt.isError {
@@ -401,12 +391,8 @@ func TestDoWhileStatement(t *testing.T) {
 			}
 
 			// Run VM
-			vmInstance := vm.NewVM()
-			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-			if err := vmInstance.InitializeWithCallbacks(); err != nil {
-				t.Fatalf("VM initialization failed: %v", err)
-			}
-			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
+			paserati := driver.NewPaserati()
+			finalValue, runtimeErrs := paserati.InterpretChunk(chunk)
 
 			// Check results
 			if tt.isError {
