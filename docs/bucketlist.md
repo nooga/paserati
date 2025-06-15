@@ -231,7 +231,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] **14+ array methods implemented** covering most common JavaScript array operations
     - [x] Proper type signatures for all methods with TypeScript compatibility
     - [x] Support for callback functions in functional methods (limited type checking)
-    - [ ] Advanced methods (`.reduce`, `.sort`, `.splice`) - coming soon
+    - [x] Advanced methods (`.reduce`, `.sort`, `.splice`)
 - [x] Objects
   - [x] Creation (`{}`)
   - [x] Property Access (`.`, `[]`)
@@ -389,7 +389,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] Allows defensive null/undefined checks for practical programming
     - [x] Works with all comparison operators (`===`, `!==`, `==`, `!=`)
     - [x] Integrated with union type analysis for precise overlap detection
-- [ ] Type Guards (`typeof`, `instanceof`, custom)
+- [x] Type Guards (`typeof`, `instanceof`, custom)
 - [ ] Strict Null Checks (`strictNullChecks` compiler option)
 
 ### Advanced Types

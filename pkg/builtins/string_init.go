@@ -48,7 +48,7 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Create String constructor type
 	stringCtorType := types.NewSimpleFunction([]types.Type{types.Any}, types.String).
-		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, types.Number)).
+		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number})).
 		WithProperty("prototype", stringProtoType)
 
 	// Define String constructor in global environment

@@ -139,10 +139,9 @@ func functionPrototypeCallWithVM(vmInstance *vm.VM, args []vm.Value) vm.Value {
 		return nativeFunc.Fn(fullArgs)
 	}
 
-	// For user-defined functions and closures, use VM's CallFunctionDirectWithoutMethodBinding
-	// This avoids the method binding recursion that was causing infinite loops
+	// For user-defined functions and closures, use VM's CallFunctionFromBuiltin
 	if thisFunction.IsFunction() || thisFunction.IsClosure() {
-		result, err := vmInstance.CallFunctionDirectWithoutMethodBinding(thisFunction, thisArg, callArgs)
+		result, err := vmInstance.CallFunctionFromBuiltin(thisFunction, thisArg, callArgs)
 		if err != nil {
 			// For now, return undefined on error
 			// TODO: Throw proper error or propagate it properly
@@ -235,19 +234,19 @@ func functionPrototypeBind(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	// args[0] is 'this' (the function being bound)
 	// args[1] is thisArg (the 'this' value to bind)
 	// args[2:] are partial arguments to bind
-	
+
 	if len(args) < 1 {
 		return vm.Undefined // Error: no function provided
 	}
-	
+
 	targetFunction := args[0]
-	
+
 	// Verify that the target is callable
 	if !targetFunction.IsFunction() && !targetFunction.IsClosure() && !targetFunction.IsNativeFunction() {
 		// TODO: Throw TypeError when error objects are implemented
 		return vm.Undefined
 	}
-	
+
 	// Get the 'this' value to bind
 	var boundThis vm.Value
 	if len(args) > 1 {
@@ -255,14 +254,14 @@ func functionPrototypeBind(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	} else {
 		boundThis = vm.Undefined
 	}
-	
+
 	// Get partial arguments
 	var partialArgs []vm.Value
 	if len(args) > 2 {
 		partialArgs = make([]vm.Value, len(args)-2)
 		copy(partialArgs, args[2:])
 	}
-	
+
 	// Create the bound function
 	boundFunction := func(callArgs []vm.Value) vm.Value {
 		// When a bound function is called, callArgs[0] is the 'this' context
@@ -272,16 +271,16 @@ func functionPrototypeBind(vmInstance *vm.VM, args []vm.Value) vm.Value {
 			// Skip the 'this' argument that was passed to the bound function
 			actualArgs = callArgs[1:]
 		}
-		
+
 		// Combine partial arguments with call-time arguments
 		fullArgs := make([]vm.Value, len(partialArgs)+len(actualArgs))
 		copy(fullArgs, partialArgs)
 		copy(fullArgs[len(partialArgs):], actualArgs)
-		
+
 		// Call the original function with the bound 'this' and combined arguments
 		return callFunctionWithThis(vmInstance, targetFunction, boundThis, fullArgs)
 	}
-	
+
 	// Create a native function wrapper for the bound function
 	// The arity is reduced by the number of partial arguments
 	originalArity := 0
@@ -295,13 +294,13 @@ func functionPrototypeBind(vmInstance *vm.VM, args []vm.Value) vm.Value {
 		cl := targetFunction.AsClosure()
 		originalArity = cl.Fn.Arity
 	}
-	
+
 	// Calculate new arity (original arity minus partial args, but at least 0)
 	newArity := originalArity - len(partialArgs)
 	if newArity < 0 {
 		newArity = 0
 	}
-	
+
 	// Create the bound function with appropriate arity
 	// Set variadic to true to handle any number of arguments
 	return vm.NewNativeFunction(newArity, true, "bound", boundFunction)

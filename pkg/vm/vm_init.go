@@ -154,6 +154,12 @@ func (vm *VM) executeUserFunctionReentrant(fn Value, thisValue Value, args []Val
 	return dummyCallerRegisters[dummyDestReg], nil
 }
 
+// ExecuteUserFunctionForBuiltin is an exported wrapper for executeUserFunctionReentrant
+// This allows builtins like bind to call user functions safely
+func (vm *VM) ExecuteUserFunctionForBuiltin(fn Value, thisValue Value, args []Value) (Value, error) {
+	return vm.executeUserFunctionReentrant(fn, thisValue, args)
+}
+
 // RegisterInitCallback registers a callback for this specific VM instance
 func (vm *VM) RegisterInitCallback(callback VMInitCallback) {
 	vm.initCallbacks = append(vm.initCallbacks, callback)
@@ -262,54 +268,6 @@ func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Val
 
 	// We have a new frame for bytecode execution with isDirectCall = true
 	// Execute the VM run loop - it will return immediately when the frame returns
-	status, result := vm.run()
-
-	if status == InterpretRuntimeError {
-		return Undefined, fmt.Errorf("runtime error during direct function execution")
-	}
-
-	return result, nil
-}
-
-// CallFunctionDirectWithoutMethodBinding calls a function directly without going through method binding
-// This is used specifically for Function.prototype.call and apply to avoid infinite recursion
-func (vm *VM) CallFunctionDirectWithoutMethodBinding(fn Value, thisValue Value, args []Value) (Value, error) {
-	// Similar to CallFunctionDirectly but bypasses property access that could trigger method binding
-
-	var expectedArity int
-	if fn.IsFunction() {
-		fnObj := fn.AsFunction()
-		expectedArity = fnObj.Arity
-	} else if fn.IsClosure() {
-		closureObj := fn.AsClosure()
-		expectedArity = closureObj.Fn.Arity
-	} else {
-		return Undefined, fmt.Errorf("not a callable function")
-	}
-
-	// Truncate arguments to match expected arity
-	adjustedArgs := args
-	if len(args) > expectedArity {
-		adjustedArgs = args[:expectedArity]
-	}
-
-	// Create registers for the call result
-	resultRegisters := make([]Value, 1)
-	dummyCallerIP := 0
-	destReg := byte(0)
-
-	// Use prepareDirectCallWithoutBinding to avoid method binding
-	shouldSwitch, err := vm.prepareDirectCallWithoutBinding(fn, thisValue, adjustedArgs, destReg, resultRegisters, dummyCallerIP)
-	if err != nil {
-		return Undefined, fmt.Errorf("failed to prepare direct call without binding: %v", err)
-	}
-
-	if !shouldSwitch {
-		// Native function was executed directly, return the result
-		return resultRegisters[destReg], nil
-	}
-
-	// Execute the VM run loop
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
