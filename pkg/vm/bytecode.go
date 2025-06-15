@@ -126,6 +126,10 @@ const (
 	// --- NEW: Array Slice Support for Rest Elements ---
 	OpArraySlice OpCode = 63 // Rx Ry Rz: Rx = Ry.slice(Rz) - slice array from start index
 	// --- END NEW ---
+
+	// --- NEW: Object Copy Support for Rest Properties ---
+	OpCopyObjectExcluding OpCode = 64 // Rx Ry Rz: Rx = copy Ry excluding properties in array Rz
+	// --- END NEW ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -265,6 +269,8 @@ func (op OpCode) String() string {
 		return "OpGetOwnKeys"
 	case OpArraySlice:
 		return "OpArraySlice"
+	case OpCopyObjectExcluding:
+		return "OpCopyObjectExcluding"
 	// --- END NEW ---
 
 	default:

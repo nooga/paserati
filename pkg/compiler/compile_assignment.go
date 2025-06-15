@@ -652,46 +652,132 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 
 // compileObjectRestProperty compiles rest property assignment for object destructuring
 func (c *Compiler) compileObjectRestProperty(objReg Register, extractedProps []*parser.DestructuringProperty, restElement *parser.DestructuringElement, line int) errors.PaseratiError {
-	// For MVP: simplified approach - create a new object and copy all properties except the extracted ones
-	// In a production implementation, we'd want a specialized VM opcode for this
+	// Use the new OpCopyObjectExcluding opcode for proper property filtering
 	
-	// Create empty object for rest properties
-	restObjReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(restObjReg)
+	// Create array of property names to exclude
+	excludeArrayReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(excludeArrayReg)
 	
-	c.emitOpCode(vm.OpMakeEmptyObject, line)
-	c.emitByte(byte(restObjReg))
-	
-	// Get all property names from source object
-	keysReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(keysReg)
-	
-	c.emitOpCode(vm.OpGetOwnKeys, line)
-	c.emitByte(byte(keysReg))  // destination for keys array
-	c.emitByte(byte(objReg))   // source object
-	
-	// Create set of extracted property names for exclusion
-	extractedNames := make(map[string]struct{})
+	// Create array with extracted property names
+	excludeNames := make([]vm.Value, 0, len(extractedProps))
 	for _, prop := range extractedProps {
 		if prop.Key != nil {
-			extractedNames[prop.Key.Value] = struct{}{}
+			excludeNames = append(excludeNames, vm.String(prop.Key.Value))
 		}
 	}
 	
-	// For MVP, we'll copy known non-extracted properties at compile time
-	// This works for simple cases where we know the object structure
-	// A full implementation would need runtime iteration over the keys array
+	if len(excludeNames) == 0 {
+		// No properties to exclude, just copy the whole object
+		c.emitOpCode(vm.OpMakeEmptyObject, line)
+		c.emitByte(byte(excludeArrayReg))
+		
+		// Create result register for the rest object
+		restObjReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(restObjReg)
+		
+		c.emitMove(restObjReg, objReg, line)
+		return c.compileSimpleAssignment(restElement.Target, restObjReg, line)
+	}
 	
-	// Since this is an MVP and runtime key iteration is complex with current opcodes,
-	// we'll use a simplified approach: assign the original object to rest
-	// This isn't perfectly correct but allows testing the basic functionality
+	// Emit code to create the exclude array
+	// First allocate contiguous registers for all elements
+	startReg := c.regAlloc.Alloc()
+	elementRegs := make([]Register, len(excludeNames))
+	elementRegs[0] = startReg
+	for i := 1; i < len(excludeNames); i++ {
+		elementRegs[i] = c.regAlloc.Alloc()
+		defer c.regAlloc.Free(elementRegs[i])
+	}
+	defer c.regAlloc.Free(startReg)
 	
-	// TODO: Implement proper property copying excluding extracted names
-	// For now, just copy the whole object (not correct but allows basic testing)
-	c.emitMove(restObjReg, objReg, line)
+	// Load each string constant into consecutive registers
+	for i, name := range excludeNames {
+		nameConstIdx := c.chunk.AddConstant(name)
+		c.emitLoadConstant(elementRegs[i], nameConstIdx, line)
+	}
+	
+	// Create array from the element registers
+	c.emitOpCode(vm.OpMakeArray, line)
+	c.emitByte(byte(excludeArrayReg))      // destination register
+	c.emitByte(byte(startReg))             // start register (first element)
+	c.emitByte(byte(len(excludeNames)))    // element count
+	
+	// Create result register for the rest object
+	restObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(restObjReg)
+	
+	// Use the new opcode: restObj = copyObjectExcluding(sourceObj, excludeArray)
+	c.emitOpCode(vm.OpCopyObjectExcluding, line)
+	c.emitByte(byte(restObjReg))     // destination register
+	c.emitByte(byte(objReg))         // source object register
+	c.emitByte(byte(excludeArrayReg)) // exclude array register
 	
 	// Assign rest object to the rest property target
 	return c.compileSimpleAssignment(restElement.Target, restObjReg, line)
+}
+
+// compileObjectRestDeclaration compiles rest property declaration for object destructuring
+func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps []*parser.DestructuringProperty, varName string, isConst bool, line int) errors.PaseratiError {
+	// Create array of property names to exclude
+	excludeArrayReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(excludeArrayReg)
+	
+	// Create array with extracted property names
+	excludeNames := make([]vm.Value, 0, len(extractedProps))
+	for _, prop := range extractedProps {
+		if prop.Key != nil {
+			excludeNames = append(excludeNames, vm.String(prop.Key.Value))
+		}
+	}
+	
+	if len(excludeNames) == 0 {
+		// No properties to exclude, just copy the whole object
+		c.emitOpCode(vm.OpMakeEmptyObject, line)
+		c.emitByte(byte(excludeArrayReg))
+		
+		// Create result register for the rest object
+		restObjReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(restObjReg)
+		
+		c.emitMove(restObjReg, objReg, line)
+		return c.defineDestructuredVariableWithValue(varName, isConst, restObjReg, line)
+	}
+	
+	// Emit code to create the exclude array
+	// First allocate contiguous registers for all elements
+	startReg := c.regAlloc.Alloc()
+	elementRegs := make([]Register, len(excludeNames))
+	elementRegs[0] = startReg
+	for i := 1; i < len(excludeNames); i++ {
+		elementRegs[i] = c.regAlloc.Alloc()
+		defer c.regAlloc.Free(elementRegs[i])
+	}
+	defer c.regAlloc.Free(startReg)
+	
+	// Load each string constant into consecutive registers
+	for i, name := range excludeNames {
+		nameConstIdx := c.chunk.AddConstant(name)
+		c.emitLoadConstant(elementRegs[i], nameConstIdx, line)
+	}
+	
+	// Create array from the element registers
+	c.emitOpCode(vm.OpMakeArray, line)
+	c.emitByte(byte(excludeArrayReg))      // destination register
+	c.emitByte(byte(startReg))             // start register (first element)
+	c.emitByte(byte(len(excludeNames)))    // element count
+	
+	// Create result register for the rest object
+	restObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(restObjReg)
+	
+	// Use the new opcode: restObj = copyObjectExcluding(sourceObj, excludeArray)
+	c.emitOpCode(vm.OpCopyObjectExcluding, line)
+	c.emitByte(byte(restObjReg))     // destination register
+	c.emitByte(byte(objReg))         // source object register
+	c.emitByte(byte(excludeArrayReg)) // exclude array register
+	
+	// Define the rest variable with the rest object
+	return c.defineDestructuredVariableWithValue(varName, isConst, restObjReg, line)
 }
 
 // compileArrayDestructuringDeclaration compiles let/const [a, b] = expr declarations
@@ -952,15 +1038,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	if node.RestProperty != nil {
 		if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
 			// Create rest object with remaining properties
-			restObjReg := c.regAlloc.Alloc()
-			defer c.regAlloc.Free(restObjReg)
-			
-			// For MVP: simplified implementation - copy the whole object
-			// TODO: Implement proper property exclusion
-			c.emitMove(restObjReg, tempReg, line)
-			
-			// Define the rest variable with the rest object
-			err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, restObjReg, line)
+			err := c.compileObjectRestDeclaration(tempReg, node.Properties, ident.Value, node.IsConst, line)
 			if err != nil {
 				return BadRegister, err
 			}

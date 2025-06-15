@@ -1831,6 +1831,81 @@ func (vm *VM) run() (InterpretResult, Value) {
 			resultArray := NewArrayWithArgs(slicedElements)
 			registers[destReg] = resultArray
 
+		case OpCopyObjectExcluding:
+			destReg := code[ip]
+			sourceReg := code[ip+1]
+			excludeReg := code[ip+2]
+			ip += 3
+
+			sourceValue := registers[sourceReg]
+			excludeValue := registers[excludeReg]
+
+			// Ensure source is an object
+			if !sourceValue.IsObject() {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot copy non-object value of type %d", int(sourceValue.Type()))
+				return status, Undefined
+			}
+
+			// Ensure exclude list is an array
+			if excludeValue.Type() != TypeArray {
+				frame.ip = ip
+				status := vm.runtimeError("Exclude list must be an array, got type %d", int(excludeValue.Type()))
+				return status, Undefined
+			}
+
+			excludeArray := excludeValue.AsArray()
+			
+			// Create set of property names to exclude
+			excludeNames := make(map[string]struct{})
+			for i := 0; i < excludeArray.Length(); i++ {
+				nameValue := excludeArray.Get(i)
+				if nameValue.Type() == TypeString {
+					excludeNames[nameValue.AsString()] = struct{}{}
+				}
+			}
+
+			// Create new object and copy properties not in exclude list
+			var resultObj Value
+			
+			switch sourceValue.Type() {
+			case TypeObject:
+				sourceObj := sourceValue.AsPlainObject()
+				resultPlainObj := NewObject(vm.ObjectPrototype)
+				resultPlainObjPtr := resultPlainObj.AsPlainObject()
+				
+				// Copy properties not in exclude list
+				for _, key := range sourceObj.OwnKeys() {
+					if _, shouldExclude := excludeNames[key]; !shouldExclude {
+						if value, exists := sourceObj.GetOwn(key); exists {
+							resultPlainObjPtr.SetOwn(key, value)
+						}
+					}
+				}
+				resultObj = resultPlainObj
+				
+			case TypeDictObject:
+				sourceDict := sourceValue.AsDictObject()
+				resultPlainObj := NewObject(vm.ObjectPrototype)
+				resultPlainObjPtr := resultPlainObj.AsPlainObject()
+				
+				// Copy properties not in exclude list
+				for _, key := range sourceDict.OwnKeys() {
+					if _, shouldExclude := excludeNames[key]; !shouldExclude {
+						if value, exists := sourceDict.GetOwn(key); exists {
+							resultPlainObjPtr.SetOwn(key, value)
+						}
+					}
+				}
+				resultObj = resultPlainObj
+				
+			default:
+				// For other object-like types, create empty object
+				resultObj = NewObject(vm.ObjectPrototype)
+			}
+
+			registers[destReg] = resultObj
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
