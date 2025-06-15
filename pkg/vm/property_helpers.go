@@ -35,16 +35,16 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		if method, exists := funcProto.GetOwn(propName); exists {
 			UpdatePrototypeStats("function_proto", 1)
 
-			// Special handling for Function.prototype.call and apply to prevent infinite recursion
+			// Special handling for Function.prototype.call, apply, and bind to prevent infinite recursion
 			// These methods need special treatment because they create bound methods that would
 			// recursively call themselves when accessed through property lookup
-			if propName == "call" || propName == "apply" {
+			if propName == "call" || propName == "apply" || propName == "bind" {
 				// Return the raw method without binding - the method implementation
 				// will handle the 'this' binding internally
 				return method, true
 			}
 
-			return createBoundMethod(objVal, method), true
+			return createBoundMethod(vm, objVal, method), true
 		}
 	}
 
@@ -70,7 +70,7 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			if EnableDetailedCacheStats {
 				UpdatePrototypeStats("primitive_method", 0)
 			}
-			return createBoundMethod(objVal, method), true
+			return createBoundMethod(vm, objVal, method), true
 		}
 	}
 

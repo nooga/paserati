@@ -933,3 +933,21 @@ func (a *ArrayObject) Append(value Value) {
 func NewValueFromPlainObject(plainObj *PlainObject) Value {
 	return Value{typ: TypeObject, obj: unsafe.Pointer(plainObj)}
 }
+
+// GetArity returns the arity (number of parameters) for callable values
+func (v Value) GetArity() int {
+	switch v.typ {
+	case TypeFunction:
+		return v.AsFunction().Arity
+	case TypeClosure:
+		return v.AsClosure().Fn.Arity
+	case TypeNativeFunction:
+		return v.AsNativeFunction().Arity
+	case TypeNativeFunctionWithProps:
+		return v.AsNativeFunctionWithProps().Arity
+	case TypeAsyncNativeFunction:
+		return v.AsAsyncNativeFunction().Arity
+	default:
+		panic("value is not callable")
+	}
+}

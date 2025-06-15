@@ -204,7 +204,11 @@ func (vm *VM) CallFunctionFromBuiltin(fn Value, thisValue Value, args []Value) (
 	case TypeClosure, TypeFunction:
 		// For user-defined functions, we create a re-entrant execution context
 		// This follows the pattern used by modern JS engines like V8's call stubs
-		return vm.executeUserFunctionReentrant(fn, thisValue, args)
+		// Save and restore currentThis to avoid corruption when calling user functions from builtins
+		prevThis := vm.currentThis
+		result, err := vm.executeUserFunctionReentrant(fn, thisValue, args)
+		vm.currentThis = prevThis
+		return result, err
 
 	default:
 		return Undefined, fmt.Errorf("cannot call non-function value of type %v", fn.Type())

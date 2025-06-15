@@ -3,6 +3,7 @@ package builtins
 import (
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"strings"
 )
 
 // FunctionInitializer implements the Function builtin
@@ -26,7 +27,7 @@ func (f *FunctionInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Function constructor type using fluent API
 	functionCtorType := types.NewObjectType().
 		// Constructor is callable (Function constructor creates functions from strings)
-		WithSimpleCallSignature([]types.Type{}, types.Any). // Function() -> function
+		WithSimpleCallSignature([]types.Type{}, types.Any).                 // Function() -> function
 		WithVariadicCallSignature([]types.Type{}, types.Any, types.String). // Function(...args, body) -> function
 		// Static properties
 		WithProperty("prototype", functionProtoType)
@@ -98,32 +99,12 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	return ctx.DefineGlobal("Function", functionCtor)
 }
 
-// Implementation methods (simplified versions of the existing ones)
+// Implementation methods
 
 func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
-	if len(args) == 0 {
-		return vm.Undefined
-	}
+	// Get 'this' from VM instead of first argument
+	thisValue := vmInstance.GetThis()
 
-	thisValue := args[0]
-	if len(args) == 1 {
-		// Only 'this' provided, no additional arguments
-		if thisValue.IsCallable() {
-			// Call with empty arguments
-			result, err := vmInstance.CallFunctionFromBuiltin(thisValue, vm.Undefined, []vm.Value{})
-			if err != nil {
-				// TODO: Proper error handling when error objects are implemented
-				return vm.Undefined
-			}
-			return result
-		}
-		return vm.Undefined
-	}
-
-	// Get the function to call (should be 'this' in the method call context)
-	// args[0] = the function being called
-	// args[1] = the 'this' value for the call
-	// args[2:] = the arguments for the call
 	if !thisValue.IsCallable() {
 		// TODO: Throw TypeError when error objects are implemented
 		return vm.Undefined
@@ -131,25 +112,35 @@ func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
 
 	newThis := vm.Undefined
 	var callArgs []vm.Value
-	if len(args) > 1 {
-		newThis = args[1]
-		callArgs = args[2:]
+
+	if len(args) > 0 {
+		newThis = args[0]
+		callArgs = args[1:]
 	}
 
-	result, err := vmInstance.CallFunctionFromBuiltin(thisValue, newThis, callArgs)
-	if err != nil {
-		// TODO: Proper error handling when error objects are implemented
-		return vm.Undefined
+	// For user-defined functions, use direct call to avoid method binding recursion
+	if thisValue.Type() == vm.TypeClosure || thisValue.Type() == vm.TypeFunction {
+		result, err := vmInstance.CallFunctionDirectWithoutMethodBinding(thisValue, newThis, callArgs)
+		if err != nil {
+			// TODO: Proper error handling when error objects are implemented
+			return vm.Undefined
+		}
+		return result
+	} else {
+		// For native functions, use the normal path
+		result, err := vmInstance.CallFunctionFromBuiltin(thisValue, newThis, callArgs)
+		if err != nil {
+			// TODO: Proper error handling when error objects are implemented
+			return vm.Undefined
+		}
+		return result
 	}
-	return result
 }
 
 func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
-	if len(args) == 0 {
-		return vm.Undefined
-	}
+	// Get 'this' from VM instead of first argument
+	thisValue := vmInstance.GetThis()
 
-	thisValue := args[0]
 	if !thisValue.IsCallable() {
 		// TODO: Throw TypeError when error objects are implemented
 		return vm.Undefined
@@ -158,12 +149,12 @@ func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
 	newThis := vm.Undefined
 	var callArgs []vm.Value
 
-	if len(args) > 1 {
-		newThis = args[1]
+	if len(args) > 0 {
+		newThis = args[0]
 	}
 
-	if len(args) > 2 {
-		argsArray := args[2]
+	if len(args) > 1 {
+		argsArray := args[1]
 		if argsArray.IsArray() {
 			arrayObj := argsArray.AsArray()
 			length := arrayObj.Length()
@@ -174,59 +165,108 @@ func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
 		}
 	}
 
-	result, err := vmInstance.CallFunctionFromBuiltin(thisValue, newThis, callArgs)
-	if err != nil {
-		// TODO: Proper error handling when error objects are implemented
-		return vm.Undefined
-	}
-	return result
-}
-
-func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
-	if len(args) == 0 {
-		return vm.Undefined
-	}
-
-	originalFunc := args[0]
-	if !originalFunc.IsCallable() {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined
-	}
-
-	var boundThis vm.Value = vm.Undefined
-	var partialArgs []vm.Value
-
-	if len(args) > 1 {
-		boundThis = args[1]
-		partialArgs = args[2:]
-	}
-
-	// Create bound function
-	boundFunction := func(additionalArgs []vm.Value) vm.Value {
-		// Combine partial args with additional args
-		finalArgs := make([]vm.Value, len(partialArgs)+len(additionalArgs))
-		copy(finalArgs, partialArgs)
-		copy(finalArgs[len(partialArgs):], additionalArgs)
-
-		result, err := vmInstance.CallFunctionFromBuiltin(originalFunc, boundThis, finalArgs)
+	// For user-defined functions, use direct call to avoid method binding recursion
+	if thisValue.Type() == vm.TypeClosure || thisValue.Type() == vm.TypeFunction {
+		result, err := vmInstance.CallFunctionDirectWithoutMethodBinding(thisValue, newThis, callArgs)
+		if err != nil {
+			// TODO: Proper error handling when error objects are implemented
+			return vm.Undefined
+		}
+		return result
+	} else {
+		// For native functions, use the normal path
+		result, err := vmInstance.CallFunctionFromBuiltin(thisValue, newThis, callArgs)
 		if err != nil {
 			// TODO: Proper error handling when error objects are implemented
 			return vm.Undefined
 		}
 		return result
 	}
+}
+
+func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
+	// Get 'this' from VM instead of first argument
+	originalFunc := vmInstance.GetThis()
+
+	if !originalFunc.IsCallable() {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined
+	}
+
+	// Check if we're trying to bind a bound function - prevent infinite recursion
+	if originalFunc.Type() == vm.TypeNativeFunction {
+		if nativeFunc := originalFunc.AsNativeFunction(); nativeFunc != nil {
+			if strings.HasPrefix(nativeFunc.Name, "bound ") {
+				// This is already a bound function - this should be allowed in JavaScript
+				// but we'll continue with the binding anyway
+			}
+		}
+	}
+
+	var boundThis vm.Value = vm.Undefined
+	var partialArgs []vm.Value
+
+	if len(args) > 0 {
+		boundThis = args[0]    // First argument is the 'this' value to bind to
+		partialArgs = args[1:] // Remaining arguments are partial arguments
+	}
 
 	// Calculate new arity
-	originalArity := 0
-	if nativeFunc := originalFunc.AsNativeFunction(); nativeFunc != nil {
-		originalArity = nativeFunc.Arity
-	}
+	originalArity := originalFunc.GetArity()
 
 	newArity := originalArity - len(partialArgs)
 	if newArity < 0 {
 		newArity = 0
 	}
 
-	// Create the bound function with appropriate arity
-	return vm.NewNativeFunction(newArity, true, "bound", boundFunction)
+	// IMPORTANT: Capture the original function value at bind-time!
+	// We cannot rely on GetThis() inside the bound function because
+	// when the bound function is called, 'this' will be the bound function itself
+	capturedOriginalFunc := originalFunc
+	capturedBoundThis := boundThis
+	capturedPartialArgs := make([]vm.Value, len(partialArgs))
+	copy(capturedPartialArgs, partialArgs)
+
+	// Create bound function
+	boundFunction := func(additionalArgs []vm.Value) vm.Value {
+		// Combine partial args with additional args
+		finalArgs := make([]vm.Value, len(capturedPartialArgs)+len(additionalArgs))
+		copy(finalArgs, capturedPartialArgs)
+		copy(finalArgs[len(capturedPartialArgs):], additionalArgs)
+
+		// For user-defined functions, we need to call them directly to avoid
+		// method binding issues that cause infinite recursion
+		if capturedOriginalFunc.Type() == vm.TypeClosure || capturedOriginalFunc.Type() == vm.TypeFunction {
+			// Create a minimal call frame directly - bypass CallFunctionFromBuiltin to avoid recursion
+			result, err := vmInstance.CallFunctionDirectWithoutMethodBinding(capturedOriginalFunc, capturedBoundThis, finalArgs)
+			if err != nil {
+				// TODO: Proper error handling when error objects are implemented
+				return vm.Undefined
+			}
+			return result
+		} else {
+			// For native functions, use the normal path
+			result, err := vmInstance.CallFunctionFromBuiltin(capturedOriginalFunc, capturedBoundThis, finalArgs)
+			if err != nil {
+				// TODO: Proper error handling when error objects are implemented
+				return vm.Undefined
+			}
+			return result
+		}
+	}
+
+	// Use a simple name to avoid infinite recursion during Inspect()
+	functionName := "bound"
+	if originalFunc.Type() == vm.TypeNativeFunction {
+		if nativeFunc := originalFunc.AsNativeFunction(); nativeFunc != nil {
+			functionName = "bound " + nativeFunc.Name
+		}
+	} else if originalFunc.Type() == vm.TypeNativeFunctionWithProps {
+		if nativeFuncWithProps := originalFunc.AsNativeFunctionWithProps(); nativeFuncWithProps != nil {
+			functionName = "bound " + nativeFuncWithProps.Name
+		}
+	}
+
+	result := vm.NewNativeFunction(newArity, false, functionName, boundFunction)
+	return result
 }

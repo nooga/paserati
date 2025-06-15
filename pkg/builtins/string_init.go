@@ -66,11 +66,11 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add String prototype methods
 	stringProto.SetOwn("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.NewString("")
 		}
-		index := int(args[1].ToFloat())
+		index := int(args[0].ToFloat())
 		if index < 0 || index >= len(thisStr) {
 			return vm.NewString("")
 		}
@@ -78,11 +78,11 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.NumberValue(float64(0x7FFFFFFF)) // NaN equivalent
 		}
-		index := int(args[1].ToFloat())
+		index := int(args[0].ToFloat())
 		if index < 0 || index >= len(thisStr) {
 			return vm.NumberValue(float64(0x7FFFFFFF)) // NaN equivalent
 		}
@@ -90,12 +90,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
-		if len(args) < 2 {
+		if len(args) < 1 {
 			return vm.NewString(thisStr)
 		}
-		start := int(args[1].ToFloat())
+		start := int(args[0].ToFloat())
 		if start < 0 {
 			start = length + start
 			if start < 0 {
@@ -105,8 +105,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			start = length
 		}
 		end := length
-		if len(args) >= 3 {
-			end = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			end = int(args[1].ToFloat())
 			if end < 0 {
 				end = length + end
 				if end < 0 {
@@ -123,20 +123,20 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
-		if len(args) < 2 {
+		if len(args) < 1 {
 			return vm.NewString(thisStr)
 		}
-		start := int(args[1].ToFloat())
+		start := int(args[0].ToFloat())
 		if start < 0 {
 			start = 0
 		} else if start > length {
 			start = length
 		}
 		end := length
-		if len(args) >= 3 {
-			end = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			end = int(args[1].ToFloat())
 			if end < 0 {
 				end = 0
 			} else if end > length {
@@ -151,12 +151,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
-		if len(args) < 2 {
+		if len(args) < 1 {
 			return vm.NewString(thisStr)
 		}
-		start := int(args[1].ToFloat())
+		start := int(args[0].ToFloat())
 		if start < 0 {
 			start = length + start
 			if start < 0 {
@@ -166,8 +166,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString("")
 		}
 		substrLength := length - start
-		if len(args) >= 3 {
-			substrLength = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			substrLength = int(args[1].ToFloat())
 			if substrLength < 0 {
 				return vm.NewString("")
 			}
@@ -180,14 +180,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.NumberValue(-1)
 		}
-		searchStr := args[1].ToString()
+		searchStr := args[0].ToString()
 		position := 0
-		if len(args) >= 3 {
-			position = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
 			}
@@ -203,14 +203,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.NumberValue(-1)
 		}
-		searchStr := args[1].ToString()
+		searchStr := args[0].ToString()
 		position := len(thisStr)
-		if len(args) >= 3 {
-			position = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
 			} else if position > len(thisStr) {
@@ -222,14 +222,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.BooleanValue(false)
 		}
-		searchStr := args[1].ToString()
+		searchStr := args[0].ToString()
 		position := 0
-		if len(args) >= 3 {
-			position = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
 			}
@@ -241,14 +241,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("startsWith", vm.NewNativeFunction(2, false, "startsWith", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.BooleanValue(false)
 		}
-		searchStr := args[1].ToString()
+		searchStr := args[0].ToString()
 		position := 0
-		if len(args) >= 3 {
-			position = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
 			}
@@ -260,14 +260,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("endsWith", vm.NewNativeFunction(2, false, "endsWith", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.BooleanValue(false)
 		}
-		searchStr := args[1].ToString()
+		searchStr := args[0].ToString()
 		length := len(thisStr)
-		if len(args) >= 3 {
-			length = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			length = int(args[1].ToFloat())
 			if length < 0 {
 				length = 0
 			} else if length > len(thisStr) {
@@ -281,36 +281,36 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.ToLower(thisStr))
 	}))
 
 	stringProto.SetOwn("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.ToUpper(thisStr))
 	}))
 
 	stringProto.SetOwn("trim", vm.NewNativeFunction(0, false, "trim", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.TrimSpace(thisStr))
 	}))
 
 	stringProto.SetOwn("trimStart", vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.TrimLeftFunc(thisStr, unicode.IsSpace))
 	}))
 
 	stringProto.SetOwn("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.TrimRightFunc(thisStr, unicode.IsSpace))
 	}))
 
 	stringProto.SetOwn("repeat", vm.NewNativeFunction(1, false, "repeat", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.NewString("")
 		}
-		count := int(args[1].ToFloat())
+		count := int(args[0].ToFloat())
 		if count < 0 {
 			// TODO: Should throw RangeError
 			return vm.NewString("")
@@ -322,24 +322,24 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
+		thisStr := vmInstance.GetThis().ToString()
 		result := thisStr
-		for i := 1; i < len(args); i++ {
+		for i := 0; i < len(args); i++ {
 			result += args[i].ToString()
 		}
 		return vm.NewString(result)
 	}))
 
 	stringProto.SetOwn("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			// No separator - return array with whole string
 			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)})
 		}
-		separator := args[1].ToString()
+		separator := args[0].ToString()
 		limit := -1
-		if len(args) >= 3 {
-			limit = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			limit = int(args[1].ToFloat())
 			if limit <= 0 {
 				return vm.NewArray()
 			}
@@ -368,23 +368,23 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("replace", vm.NewNativeFunction(2, false, "replace", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 3 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 2 {
 			return vm.NewString(thisStr)
 		}
-		searchValue := args[1].ToString()
-		replaceValue := args[2].ToString()
+		searchValue := args[0].ToString()
+		replaceValue := args[1].ToString()
 		// Simple replace - only replaces first occurrence
 		result := strings.Replace(thisStr, searchValue, replaceValue, 1)
 		return vm.NewString(result)
 	}))
 
 	stringProto.SetOwn("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.Null
 		}
-		pattern := args[1].ToString()
+		pattern := args[0].ToString()
 		// Simple match - just check if pattern exists
 		if strings.Contains(thisStr, pattern) {
 			// Return array with match
@@ -394,11 +394,11 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwn("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) vm.Value {
-		thisStr := args[0].ToString()
-		if len(args) < 2 {
+		thisStr := vmInstance.GetThis().ToString()
+		if len(args) < 1 {
 			return vm.NumberValue(-1)
 		}
-		searchValue := args[1].ToString()
+		searchValue := args[0].ToString()
 		// Simple search - just find first occurrence
 		index := strings.Index(thisStr, searchValue)
 		return vm.NumberValue(float64(index))
@@ -409,12 +409,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.NewString("")
 		}
-		return vm.NewString(args[0].ToString())
+		return vm.NewString(vmInstance.GetThis().ToString())
 	})
 
 	// Make it a proper constructor with static methods
 	if ctorObj := stringCtor.AsNativeFunction(); ctorObj != nil {
-		// Convert to object with properties  
+		// Convert to object with properties
 		ctorWithProps := vm.NewNativeFunctionWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 
 		// Add prototype property

@@ -70,18 +70,18 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add Array prototype methods
 	arrayProto.SetOwn("push", vm.NewNativeFunction(0, true, "push", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(0)
 		}
-		for i := 1; i < len(args); i++ {
+		for i := 0; i < len(args); i++ {
 			thisArray.Append(args[i])
 		}
 		return vm.NumberValue(float64(thisArray.Length()))
 	}))
 
 	arrayProto.SetOwn("pop", vm.NewNativeFunction(0, false, "pop", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || thisArray.Length() == 0 {
 			return vm.Undefined
 		}
@@ -92,7 +92,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("shift", vm.NewNativeFunction(0, false, "shift", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || thisArray.Length() == 0 {
 			return vm.Undefined
 		}
@@ -107,14 +107,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("unshift", vm.NewNativeFunction(0, true, "unshift", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(0)
 		}
 		// Create new array with unshifted elements
-		newElements := make([]vm.Value, 0, thisArray.Length()+len(args)-1)
+		newElements := make([]vm.Value, 0, thisArray.Length()+len(args))
 		// Add new elements first
-		for i := 1; i < len(args); i++ {
+		for i := 0; i < len(args); i++ {
 			newElements = append(newElements, args[i])
 		}
 		// Add existing elements
@@ -126,14 +126,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewArray()
 		}
 		length := thisArray.Length()
 		start := 0
-		if len(args) >= 2 {
-			start = int(args[1].ToFloat())
+		if len(args) >= 1 {
+			start = int(args[0].ToFloat())
 			if start < 0 {
 				start = length + start
 				if start < 0 {
@@ -144,8 +144,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		end := length
-		if len(args) >= 3 {
-			end = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			end = int(args[1].ToFloat())
 			if end < 0 {
 				end = length + end
 				if end < 0 {
@@ -166,14 +166,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("splice", vm.NewNativeFunction(2, true, "splice", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewArray()
 		}
 		length := thisArray.Length()
 		start := 0
-		if len(args) >= 2 {
-			start = int(args[1].ToFloat())
+		if len(args) >= 1 {
+			start = int(args[0].ToFloat())
 			if start < 0 {
 				start = length + start
 				if start < 0 {
@@ -184,8 +184,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		deleteCount := length - start
-		if len(args) >= 3 {
-			deleteCount = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			deleteCount = int(args[1].ToFloat())
 			if deleteCount < 0 {
 				deleteCount = 0
 			} else if deleteCount > length-start {
@@ -200,7 +200,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Remove elements and insert new ones
 		// First collect items to insert
 		itemsToInsert := make([]vm.Value, 0)
-		for i := 3; i < len(args); i++ {
+		for i := 2; i < len(args); i++ {
 			itemsToInsert = append(itemsToInsert, args[i])
 		}
 		// Perform splice operation manually
@@ -223,7 +223,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewArray()
 		}
@@ -233,7 +233,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			result.AsArray().Append(thisArray.Get(i))
 		}
 		// Add elements from arguments
-		for i := 1; i < len(args); i++ {
+		for i := 0; i < len(args); i++ {
 			if otherArray := args[i].AsArray(); otherArray != nil {
 				// If it's an array, add each element
 				for j := 0; j < otherArray.Length(); j++ {
@@ -248,13 +248,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("join", vm.NewNativeFunction(1, false, "join", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewString("")
 		}
 		separator := ","
-		if len(args) >= 2 {
-			separator = args[1].ToString()
+		if len(args) >= 1 {
+			separator = args[0].ToString()
 		}
 		// Build joined string
 		if thisArray.Length() == 0 {
@@ -268,9 +268,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("reverse", vm.NewNativeFunction(0, false, "reverse", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
-			return vm.NewArray()
+			return vmInstance.GetThis()
 		}
 		length := thisArray.Length()
 		// Reverse elements in place
@@ -281,17 +281,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			thisArray.Set(i, right)
 			thisArray.Set(j, left)
 		}
-		return args[0] // Return the same array
+		return vmInstance.GetThis() // Return the same array
 	}))
 
 	arrayProto.SetOwn("sort", vm.NewNativeFunction(1, false, "sort", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
+		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
-			return vm.NewArray()
+			return vmInstance.GetThis()
 		}
 		length := thisArray.Length()
 		if length <= 1 {
-			return args[0]
+			return vmInstance.GetThis()
 		}
 		// Extract elements to slice
 		elements := make([]vm.Value, length)
@@ -308,18 +308,18 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		// Set sorted elements back
 		thisArray.SetElements(elements)
-		return args[0] // Return the same array
+		return vmInstance.GetThis() // Return the same array
 	}))
 
 	arrayProto.SetOwn("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.NumberValue(-1)
 		}
-		searchElement := args[1]
+		searchElement := args[0]
 		fromIndex := 0
-		if len(args) >= 3 {
-			fromIndex = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			fromIndex = int(args[1].ToFloat())
 			if fromIndex < 0 {
 				fromIndex = thisArray.Length() + fromIndex
 				if fromIndex < 0 {
@@ -336,14 +336,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.NumberValue(-1)
 		}
-		searchElement := args[1]
+		searchElement := args[0]
 		fromIndex := thisArray.Length() - 1
-		if len(args) >= 3 {
-			fromIndex = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			fromIndex = int(args[1].ToFloat())
 			if fromIndex < 0 {
 				fromIndex = thisArray.Length() + fromIndex
 			} else if fromIndex >= thisArray.Length() {
@@ -359,14 +359,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.BooleanValue(false)
 		}
-		searchElement := args[1]
+		searchElement := args[0]
 		fromIndex := 0
-		if len(args) >= 3 {
-			fromIndex = int(args[2].ToFloat())
+		if len(args) >= 2 {
+			fromIndex = int(args[1].ToFloat())
 			if fromIndex < 0 {
 				fromIndex = thisArray.Length() + fromIndex
 				if fromIndex < 0 {
@@ -383,17 +383,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("find", vm.NewNativeFunction(1, false, "find", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.Undefined
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), args[0]})
+			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if result.IsTruthy() {
 				return element
 			}
@@ -402,17 +402,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("findIndex", vm.NewNativeFunction(1, false, "findIndex", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.NumberValue(-1)
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.NumberValue(-1)
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), args[0]})
+			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if result.IsTruthy() {
 				return vm.NumberValue(float64(i))
 			}
@@ -421,18 +421,18 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("filter", vm.NewNativeFunction(1, false, "filter", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.NewArray()
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.NewArray()
 		}
 		result := vm.NewArray()
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			test, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), args[0]})
+			test, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if test.IsTruthy() {
 				result.AsArray().Append(element)
 			}
@@ -441,51 +441,51 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("map", vm.NewNativeFunction(1, false, "map", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.NewArray()
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.NewArray()
 		}
 		result := vm.NewArray()
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			mappedValue, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), args[0]})
+			mappedValue, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			result.AsArray().Append(mappedValue)
 		}
 		return result
 	}))
 
 	arrayProto.SetOwn("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.Undefined
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), args[0]})
+			vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 		}
 		return vm.Undefined
 	}))
 
 	arrayProto.SetOwn("every", vm.NewNativeFunction(1, false, "every", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.BooleanValue(true)
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.BooleanValue(true)
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), args[0]})
+			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if !result.IsTruthy() {
 				return vm.BooleanValue(false)
 			}
@@ -494,17 +494,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("some", vm.NewNativeFunction(1, false, "some", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.BooleanValue(false)
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.BooleanValue(false)
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), args[0]})
+			result, _ := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if result.IsTruthy() {
 				return vm.BooleanValue(true)
 			}
@@ -513,63 +513,63 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("reduce", vm.NewNativeFunction(2, false, "reduce", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.Undefined
 		}
 		length := thisArray.Length()
 		if length == 0 {
-			if len(args) >= 3 {
-				return args[2] // Return initial value
+			if len(args) >= 2 {
+				return args[1] // Return initial value
 			}
 			return vm.Undefined // Should throw TypeError
 		}
 		accumulator := vm.Undefined
 		startIndex := 0
-		if len(args) >= 3 {
-			accumulator = args[2]
+		if len(args) >= 2 {
+			accumulator = args[1]
 		} else {
 			accumulator = thisArray.Get(0)
 			startIndex = 1
 		}
 		for i := startIndex; i < length; i++ {
 			element := thisArray.Get(i)
-			accumulator, _ = vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), args[0]})
+			accumulator, _ = vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 		}
 		return accumulator
 	}))
 
 	arrayProto.SetOwn("reduceRight", vm.NewNativeFunction(2, false, "reduceRight", func(args []vm.Value) vm.Value {
-		thisArray := args[0].AsArray()
-		if thisArray == nil || len(args) < 2 {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined
 		}
-		callback := args[1]
+		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.Undefined
 		}
 		length := thisArray.Length()
 		if length == 0 {
-			if len(args) >= 3 {
-				return args[2] // Return initial value
+			if len(args) >= 2 {
+				return args[1] // Return initial value
 			}
 			return vm.Undefined // Should throw TypeError
 		}
 		accumulator := vm.Undefined
 		startIndex := length - 1
-		if len(args) >= 3 {
-			accumulator = args[2]
+		if len(args) >= 2 {
+			accumulator = args[1]
 		} else {
 			accumulator = thisArray.Get(length - 1)
 			startIndex = length - 2
 		}
 		for i := startIndex; i >= 0; i-- {
 			element := thisArray.Get(i)
-			accumulator, _ = vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), args[0]})
+			accumulator, _ = vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 		}
 		return accumulator
 	}))

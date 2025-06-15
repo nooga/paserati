@@ -40,18 +40,22 @@ package vm
 // }
 
 // // createBoundMethod creates a method bound to a specific 'this' value
-func createBoundMethod(thisValue Value, method Value) Value {
+func createBoundMethod(vm *VM, thisValue Value, method Value) Value {
 	switch method.Type() {
 	case TypeNativeFunction:
 		nativeMethod := method.AsNativeFunction()
 
-		// Regular method binding for all native functions
+		// Create a bound method that sets 'this' in the VM context
 		boundFn := func(args []Value) Value {
-			// Prepend 'this' to the arguments
-			boundArgs := make([]Value, len(args)+1)
-			boundArgs[0] = thisValue
-			copy(boundArgs[1:], args)
-			return nativeMethod.Fn(boundArgs)
+			// Set the current 'this' value in the VM context
+			oldThis := vm.currentThis
+			vm.currentThis = thisValue
+			defer func() {
+				vm.currentThis = oldThis
+			}()
+
+			// Call the method with the new calling convention
+			return nativeMethod.Fn(args)
 		}
 
 		boundMethod := &NativeFunctionObject{
@@ -66,11 +70,14 @@ func createBoundMethod(thisValue Value, method Value) Value {
 	case TypeAsyncNativeFunction:
 		asyncMethod := method.AsAsyncNativeFunction()
 		boundAsyncFn := func(caller VMCaller, args []Value) Value {
-			// Prepend 'this' to the arguments
-			boundArgs := make([]Value, len(args)+1)
-			boundArgs[0] = thisValue
-			copy(boundArgs[1:], args)
-			return asyncMethod.AsyncFn(caller, boundArgs)
+			// Set the current 'this' value in the VM context
+			oldThis := vm.currentThis
+			vm.currentThis = thisValue
+			defer func() {
+				vm.currentThis = oldThis
+			}()
+
+			return asyncMethod.AsyncFn(caller, args)
 		}
 
 		return NewAsyncNativeFunction(asyncMethod.Arity, asyncMethod.Variadic, asyncMethod.Name, boundAsyncFn)
@@ -78,11 +85,14 @@ func createBoundMethod(thisValue Value, method Value) Value {
 	case TypeNativeFunctionWithProps:
 		nativeMethodWithProps := method.AsNativeFunctionWithProps()
 		boundFn := func(args []Value) Value {
-			// Prepend 'this' to the arguments
-			boundArgs := make([]Value, len(args)+1)
-			boundArgs[0] = thisValue
-			copy(boundArgs[1:], args)
-			return nativeMethodWithProps.Fn(boundArgs)
+			// Set the current 'this' value in the VM context
+			oldThis := vm.currentThis
+			vm.currentThis = thisValue
+			defer func() {
+				vm.currentThis = oldThis
+			}()
+
+			return nativeMethodWithProps.Fn(args)
 		}
 
 		// For props functions, we need to be careful about preserving properties

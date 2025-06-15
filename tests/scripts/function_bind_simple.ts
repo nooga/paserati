@@ -5,5 +5,5 @@ function add(a: number, b: number) {
   return a + b;
 }
 
-// let add5 = add.bind(null, 5);
-// add5(5);
+let add5 = add.bind(null, 5);
+add5(5);

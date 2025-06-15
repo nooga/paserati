@@ -1,9 +1,14 @@
 package tests
 
 import (
+	"fmt"
 	"paserati/pkg/builtins"
-	"paserati/pkg/driver"
+	"paserati/pkg/compiler"
+	"paserati/pkg/errors"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 	"paserati/pkg/vm"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -136,8 +141,8 @@ func TestUnionTypeNarrowing(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// 1. Compile using the driver
-			chunk, compileErrs := driver.CompileString(tc.input)
+			// 1. Use coordinated compilation and VM initialization like scripts_test.go
+			chunk, vmInstance, compileErrs := compileAndInitializeVMFromString(tc.input)
 
 			// Handle expected compile errors
 			if tc.expectCompileError {
@@ -170,12 +175,7 @@ func TestUnionTypeNarrowing(t *testing.T) {
 				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
 			}
 
-			// 2. Run VM
-			vmInstance := vm.NewVM()
-			vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-			if err := vmInstance.InitializeWithCallbacks(); err != nil {
-				t.Fatalf("VM initialization failed: %v", err)
-			}
+			// 2. Run VM (already initialized with coordinated globals)
 			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
 
 			// 3. Check Results
@@ -211,4 +211,76 @@ func TestUnionTypeNarrowing(t *testing.T) {
 			}
 		})
 	}
+}
+
+// compileAndInitializeVMFromString compiles a string and creates a VM with coordinated global indices
+// This is similar to compileAndInitializeVM from scripts_test.go but works with strings instead of files
+func compileAndInitializeVMFromString(source string) (*vm.Chunk, *vm.VM, []errors.PaseratiError) {
+	// Parse
+	l := lexer.NewLexer(source)
+	p := parser.NewParser(l)
+	program, parseErrs := p.ParseProgram()
+	if len(parseErrs) > 0 {
+		return nil, nil, parseErrs
+	}
+
+	// Create compiler and VM
+	comp := compiler.NewCompiler()
+	vmInstance := vm.NewVM()
+
+	// Get all standard initializers for coordination
+	initializers := builtins.GetStandardInitializers()
+	sort.Slice(initializers, func(i, j int) bool {
+		return initializers[i].Priority() < initializers[j].Priority()
+	})
+
+	// Initialize runtime context
+	globalVariables := make(map[string]vm.Value)
+	runtimeCtx := &builtins.RuntimeContext{
+		VM: vmInstance,
+		DefineGlobal: func(name string, value vm.Value) error {
+			globalVariables[name] = value
+			return nil
+		},
+	}
+
+	// Initialize all builtins runtime values
+	for _, init := range initializers {
+		if err := init.InitRuntime(runtimeCtx); err != nil {
+			compileErr := &errors.CompileError{
+				Position: errors.Position{Line: 0, Column: 0},
+				Msg:      fmt.Sprintf("Failed to initialize %s runtime: %v", init.Name(), err),
+			}
+			return nil, nil, []errors.PaseratiError{compileErr}
+		}
+	}
+
+	// Pre-populate compiler global indices in alphabetical order to match VM
+	var globalNames []string
+	for name := range globalVariables {
+		globalNames = append(globalNames, name)
+	}
+	sort.Strings(globalNames)
+
+	// Pre-assign global indices in the compiler to match VM ordering
+	for _, name := range globalNames {
+		comp.GetOrAssignGlobalIndex(name)
+	}
+
+	// Set up global variables in VM
+	if err := vmInstance.SetBuiltinGlobals(globalVariables); err != nil {
+		compileErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Failed to set VM globals: %v", err),
+		}
+		return nil, nil, []errors.PaseratiError{compileErr}
+	}
+
+	// Compile
+	chunk, compileAndTypeErrs := comp.Compile(program)
+	if len(compileAndTypeErrs) > 0 {
+		return nil, vmInstance, compileAndTypeErrs
+	}
+
+	return chunk, vmInstance, nil
 }

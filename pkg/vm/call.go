@@ -357,12 +357,10 @@ func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, 
 		// Execute native function immediately
 		nativeFunc := AsNativeFunction(calleeVal)
 
-		// For native functions, we prepend 'this' to the arguments
-		fullArgs := make([]Value, len(args)+1)
-		fullArgs[0] = thisValue
-		copy(fullArgs[1:], args)
-
-		result := nativeFunc.Fn(fullArgs)
+		// Set the current 'this' value for native function access
+		vm.currentThis = thisValue
+		// Native functions now use GetThis() instead of receiving 'this' as first argument
+		result := nativeFunc.Fn(args)
 		if int(destReg) < len(callerRegisters) {
 			callerRegisters[destReg] = result
 		}
@@ -372,12 +370,10 @@ func (vm *VM) prepareDirectCallWithoutBinding(calleeVal Value, thisValue Value, 
 		// Execute native function with properties immediately
 		nativeFuncWithProps := calleeVal.AsNativeFunctionWithProps()
 
-		// For native functions, we prepend 'this' to the arguments
-		fullArgs := make([]Value, len(args)+1)
-		fullArgs[0] = thisValue
-		copy(fullArgs[1:], args)
-
-		result := nativeFuncWithProps.Fn(fullArgs)
+		// Set the current 'this' value for native function access
+		vm.currentThis = thisValue
+		// Native functions now use GetThis() instead of receiving 'this' as first argument
+		result := nativeFuncWithProps.Fn(args)
 		if int(destReg) < len(callerRegisters) {
 			callerRegisters[destReg] = result
 		}
