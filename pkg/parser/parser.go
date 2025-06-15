@@ -2451,8 +2451,36 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 	}
 	
 	// Convert object properties to destructuring properties
-	for _, pair := range objectLit.Properties {
-		// For Phase 2, we support simple property destructuring
+	for i, pair := range objectLit.Properties {
+		// Check if this is a spread element (rest property)
+		if spreadElement, ok := pair.Key.(*SpreadElement); ok {
+			// This is a rest property: ...rest
+			if destructure.RestProperty != nil {
+				p.addError(objectLit.Token, "multiple rest elements in object destructuring pattern")
+				return nil
+			}
+			
+			// Rest property must be the last property
+			if i != len(objectLit.Properties)-1 {
+				p.addError(objectLit.Token, "rest element must be last element in object destructuring pattern")
+				return nil
+			}
+			
+			// Validate that the spread argument is an identifier
+			if ident, ok := spreadElement.Argument.(*Identifier); ok {
+				destructure.RestProperty = &DestructuringElement{
+					Target:  ident,
+					Default: nil,
+					IsRest:  true,
+				}
+			} else {
+				p.addError(objectLit.Token, "rest element target must be an identifier")
+				return nil
+			}
+			continue
+		}
+		
+		// For regular properties, we support simple property destructuring
 		// {name, age} = obj (shorthand) or {name: localName} = obj (explicit target)
 		
 		// The key should be an identifier for simple property access
@@ -2663,7 +2691,35 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 	}
 	
 	// Convert object properties to destructuring properties
-	for _, pair := range objectLit.Properties {
+	for i, pair := range objectLit.Properties {
+		// Check if this is a spread element (rest property)
+		if spreadElement, ok := pair.Key.(*SpreadElement); ok {
+			// This is a rest property: ...rest
+			if decl.RestProperty != nil {
+				p.addError(objectLit.Token, "multiple rest elements in object destructuring pattern")
+				return nil
+			}
+			
+			// Rest property must be the last property
+			if i != len(objectLit.Properties)-1 {
+				p.addError(objectLit.Token, "rest element must be last element in object destructuring pattern")
+				return nil
+			}
+			
+			// Validate that the spread argument is an identifier
+			if ident, ok := spreadElement.Argument.(*Identifier); ok {
+				decl.RestProperty = &DestructuringElement{
+					Target:  ident,
+					Default: nil,
+					IsRest:  true,
+				}
+			} else {
+				p.addError(objectLit.Token, "rest element target must be an identifier")
+				return nil
+			}
+			continue
+		}
+		
 		// The key should be an identifier for simple property access
 		keyIdent, ok := pair.Key.(*Identifier)
 		if !ok {
@@ -3172,6 +3228,40 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken() // Consume '{' or ',' to get to the key
+
+		// --- NEW: Check for spread syntax (...identifier) ---
+		if p.curTokenIs(lexer.SPREAD) {
+			// Parse spread element: ...identifier
+			p.nextToken() // Consume '...' to get to the identifier
+			
+			if !p.curTokenIs(lexer.IDENT) {
+				p.addError(p.curToken, "expected identifier after '...' in object literal")
+				return nil
+			}
+			
+			// Create a SpreadElement 
+			spreadElement := &SpreadElement{
+				Token: lexer.Token{Type: lexer.SPREAD, Literal: "..."},
+				Argument: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+			}
+			
+			// Add as a special property (we'll handle this in destructuring conversion)
+			objLit.Properties = append(objLit.Properties, &ObjectProperty{
+				Key:   spreadElement,  // Use spread element as key to mark it
+				Value: spreadElement.Argument, // The identifier being spread
+			})
+			
+			// Check for comma or closing brace
+			if p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // Consume comma
+				continue
+			} else if p.peekTokenIs(lexer.RBRACE) {
+				break // End of object
+			} else {
+				p.addError(p.curToken, "expected ',' or '}' after spread element")
+				return nil
+			}
+		}
 
 		// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
 		propName := p.parsePropertyName()

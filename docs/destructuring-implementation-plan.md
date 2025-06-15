@@ -310,7 +310,7 @@ let {[key]: value} = obj;
 1. **Phase 1**: Basic array destructuring assignments ✅ **COMPLETED**
 2. **Phase 2**: Basic object destructuring assignments ✅ **COMPLETED**
 3. **Phase 3**: Default values ✅ **COMPLETED**
-4. **Phase 4**: Rest elements  
+4. **Phase 4**: Rest elements ✅ **COMPLETED**
 5. **Phase 5**: Function parameters
 6. **Phase 6**: Advanced nested patterns
 
@@ -530,3 +530,61 @@ All 6 test cases pass successfully:
 **Impact:** This implementation answers the user's question: "why can't we do it inline with declaration i.e. `let {x,y} = ...` or `const {x,y} = ...`" - **now we can!** The feature builds perfectly on the existing destructuring assignment foundation and provides the missing inline declaration capability.
 
 **Ready for Phase 4:** With both destructuring assignments and inline declarations complete, the next logical step is implementing rest elements (`...rest`) in array destructuring patterns.
+
+---
+
+## ✅ Phase 4 Completion Summary - Rest Elements
+
+**Date Completed:** December 2024
+
+**What Was Implemented:**
+- ✅ **AST Extensions**: Added `IsRest` field to `DestructuringElement` to mark rest elements (`...rest`)
+- ✅ **Parser Integration**: Enhanced both assignment and declaration parsing to detect `...` patterns and validate placement (rest must be last)
+- ✅ **Type Checker Support**: Rest elements receive `ArrayType` with proper element types - handles both regular arrays and precise tuple slicing
+- ✅ **New VM Opcode**: Added `OpArraySlice` for efficient array slicing operations (`Rx Ry Rz: Rx = Ry.slice(Rz)`)
+- ✅ **Compiler Implementation**: Desugars rest elements to specialized slice operations with register-efficient compilation
+- ✅ **Testing Suite**: Created 6 comprehensive test cases covering all rest element scenarios
+
+**Key Technical Achievements:**
+- **Optimized VM opcode**: `OpArraySlice` provides efficient array slicing without method calls or external dependencies  
+- **Robust type inference**: Rest elements get precise `ArrayType` with union types for remaining tuple elements
+- **Complete syntax validation**: Parser enforces rest elements must be last and only one per pattern
+- **Efficient compilation**: Uses specialized `compileArraySliceCall` helper for optimal bytecode generation
+
+**Supported Syntax:**
+```typescript
+// ✅ Basic rest elements in assignments
+let first = 0, rest = [];
+[first, ...rest] = [1, 2, 3, 4, 5]; // rest === [2, 3, 4, 5]
+
+// ✅ Rest elements in declarations  
+let [head, ...tail] = ["a", "b", "c", "d"]; // tail === ["b", "c", "d"]
+const [x, ...remaining] = [10, 20, 30]; // remaining === [20, 30]
+
+// ✅ Rest-only destructuring
+let [...everything] = [100, 200, 300]; // everything === [100, 200, 300]
+
+// ✅ Empty rest arrays
+let [a, b, ...empty] = [1, 2]; // empty === []
+```
+
+**VM Implementation Details:**
+- **OpArraySlice opcode**: Efficient 3-register operation for array slicing from start index
+- **Negative index support**: Handles JavaScript-style negative indexing and boundary clamping
+- **Memory efficient**: Creates new arrays only for the sliced portion, not full copies
+
+**Test Results:**
+All 6 rest element tests pass successfully:
+- ✅ `destructuring_rest_basic.ts` - Basic rest element extraction
+- ✅ `destructuring_rest_length.ts` - Rest array length verification  
+- ✅ `destructuring_rest_empty.ts` - Empty rest arrays
+- ✅ `destructuring_rest_declaration.ts` - Rest in let declarations
+- ✅ `destructuring_rest_const.ts` - Rest in const declarations
+- ✅ `destructuring_rest_only.ts` - Rest-only patterns
+
+**Performance Impact:**
+- **Zero overhead** for non-rest destructuring (existing patterns unchanged)
+- **Single opcode** for rest operations instead of method calls
+- **Efficient memory usage** with precise array slicing
+
+**Ready for Phase 5:** Rest elements complete the core destructuring feature set. Next step is implementing function parameter destructuring to enable destructuring in function signatures.

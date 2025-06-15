@@ -1806,6 +1806,17 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				}
 			}
 		}
+		
+		// Handle rest property without initializer
+		if node.RestProperty != nil {
+			if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
+				if !c.env.Define(ident.Value, types.Undefined, node.IsConst) {
+					c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+				}
+				ident.SetComputedType(types.Undefined)
+			}
+		}
+		
 		return
 	}
 
@@ -1872,6 +1883,47 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
 			}
 			ident.SetComputedType(propType)
+		}
+	}
+
+	// Handle rest property if present
+	if node.RestProperty != nil {
+		// Rest property gets an object type containing all remaining properties
+		var restType types.Type
+		
+		if valueType == types.Any {
+			// If RHS is Any, rest property is also Any
+			restType = types.Any
+		} else if objType != nil {
+			// Create a new object type excluding the destructured properties
+			extractedProps := make(map[string]struct{})
+			for _, prop := range node.Properties {
+				if prop.Key != nil {
+					extractedProps[prop.Key.Value] = struct{}{}
+				}
+			}
+			
+			// Build remaining properties map
+			remainingProps := make(map[string]types.Type)
+			for propName, propType := range objType.Properties {
+				if _, wasExtracted := extractedProps[propName]; !wasExtracted {
+					remainingProps[propName] = propType
+				}
+			}
+			
+			// Create object type with remaining properties
+			restType = &types.ObjectType{Properties: remainingProps}
+		} else {
+			// For other types, rest gets an empty object type
+			restType = &types.ObjectType{Properties: make(map[string]types.Type)}
+		}
+		
+		// Define the rest variable
+		if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
+			if !c.env.Define(ident.Value, restType, node.IsConst) {
+				c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+			}
+			ident.SetComputedType(restType)
 		}
 	}
 }

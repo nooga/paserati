@@ -382,6 +382,43 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 		}
 	}
 
+	// 5. Handle rest property if present
+	if node.RestProperty != nil {
+		// Rest property gets an object type containing all remaining properties
+		var restType types.Type
+		
+		if widenedRhsType == types.Any {
+			// If RHS is Any, rest property is also Any
+			restType = types.Any
+		} else if objType, ok := rhsType.(*types.ObjectType); ok {
+			// Create a new object type excluding the destructured properties
+			extractedProps := make(map[string]struct{})
+			for _, prop := range node.Properties {
+				extractedProps[prop.Key.Value] = struct{}{}
+			}
+			
+			// Build remaining properties map
+			remainingProps := make(map[string]types.Type)
+			for propName, propType := range objType.Properties {
+				if _, wasExtracted := extractedProps[propName]; !wasExtracted {
+					remainingProps[propName] = propType
+				}
+			}
+			
+			// Create object type with remaining properties
+			restType = &types.ObjectType{Properties: remainingProps}
+		} else {
+			// For other types, rest gets an empty object type
+			restType = &types.ObjectType{Properties: make(map[string]types.Type)}
+		}
+		
+		// Set type for rest property target
+		if identTarget, ok := node.RestProperty.Target.(*parser.Identifier); ok {
+			identTarget.SetComputedType(restType)
+			c.env.Update(identTarget.Value, restType)
+		}
+	}
+
 	// Set computed type for the overall expression (evaluates to RHS value)
 	node.SetComputedType(rhsType)
 }

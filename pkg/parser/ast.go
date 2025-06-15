@@ -1689,6 +1689,7 @@ type ObjectDestructuringAssignment struct {
 	BaseExpression                       // Embed base for ComputedType
 	Token          lexer.Token           // The '{' token
 	Properties     []*DestructuringProperty // Target properties/patterns
+	RestProperty   *DestructuringElement // Rest property (...rest) - optional
 	Value          Expression            // RHS expression to destructure
 }
 
@@ -1701,6 +1702,9 @@ func (oda *ObjectDestructuringAssignment) String() string {
 		if prop != nil {
 			properties = append(properties, prop.String())
 		}
+	}
+	if oda.RestProperty != nil {
+		properties = append(properties, "..."+oda.RestProperty.String())
 	}
 	out.WriteString("{")
 	out.WriteString(strings.Join(properties, ", "))
@@ -1762,6 +1766,7 @@ type ObjectDestructuringDeclaration struct {
 	Token          lexer.Token           // The 'let', 'const', or 'var' token
 	IsConst        bool                  // true for const, false for let/var
 	Properties     []*DestructuringProperty // Target properties/patterns
+	RestProperty   *DestructuringElement // Rest property (...rest) - optional
 	TypeAnnotation Expression            // Optional type annotation (e.g., : {a: number, b: string})
 	Value          Expression            // RHS expression to destructure
 }
@@ -1778,6 +1783,9 @@ func (odd *ObjectDestructuringDeclaration) String() string {
 		if prop != nil {
 			properties = append(properties, prop.String())
 		}
+	}
+	if odd.RestProperty != nil {
+		properties = append(properties, "..."+odd.RestProperty.String())
 	}
 	out.WriteString("{")
 	out.WriteString(strings.Join(properties, ", "))
