@@ -309,6 +309,34 @@ func (p *Parser) nextToken() {
 	debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 }
 
+
+// expectPeekGT is like expectPeek(GT) but handles >> and >>> in generic contexts
+// If peek is >>, it splits the token and consumes one >
+func (p *Parser) expectPeekGT() bool {
+	if p.peekToken.Type == lexer.GT {
+		p.nextToken()
+		return true
+	} else if p.peekToken.Type == lexer.RIGHT_SHIFT {
+		// Split >> into > and > using lexer's split method
+		splitToken := p.l.SplitRightShiftToken(p.peekToken)
+		// Update peek to be the first > and advance
+		p.peekToken = splitToken
+		p.nextToken() // This will make current = first >, peek = second >
+		return true
+	} else if p.peekToken.Type == lexer.UNSIGNED_RIGHT_SHIFT {
+		// Split >>> into > and >> using lexer's split method
+		splitToken := p.l.SplitUnsignedRightShiftToken(p.peekToken)
+		// Update peek to be the first > and advance
+		p.peekToken = splitToken
+		p.nextToken() // This will make current = first >, peek = >>
+		return true
+	}
+	
+	p.peekError(lexer.GT)
+	return false
+}
+
+
 // ParseProgram parses the entire input and returns the root Program node and any errors.
 func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program := &Program{}
@@ -4022,12 +4050,10 @@ func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 		typeArgs = append(typeArgs, arg)
 	}
 	
-	// Expect closing '>'
-	if !p.peekTokenIs(lexer.GT) {
-		p.addError(p.peekToken, fmt.Sprintf("Expected '>' after type arguments, got %s", p.peekToken.Type))
+	// Expect closing '>' - handle >> and >>> splitting
+	if !p.expectPeekGT() {
 		return name
 	}
-	p.nextToken() // consume '>'
 	
 	// Success! Create generic type ref
 	return &GenericTypeRef{
@@ -5507,3 +5533,4 @@ func (p *Parser) isValidDestructuringTarget(expr Expression) bool {
 		return false
 	}
 }
+

@@ -231,6 +231,9 @@ type Lexer struct {
 	inTemplate    bool // true when we're inside a template literal
 	braceDepth    int  // tracks nested braces inside ${...} interpolations
 	templateStart int  // position where current template started (for error reporting)
+	
+	// --- NEW: Token pushback for >> splitting in generics ---
+	pushedToken *Token // Single token pushback buffer
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -264,6 +267,63 @@ func NewLexer(input string) *Lexer {
 	l := &Lexer{input: input, line: 1, column: 1} // Start at line 1, column 1
 	l.readChar()                                  // Initialize l.ch, l.position, l.readPosition, and potentially update line/column if input starts with newline
 	return l
+}
+
+// SplitRightShiftToken converts a >> token into > and pushes the second > back
+// This is used for nested generics like Array<Array<T>>
+func (l *Lexer) SplitRightShiftToken(rsToken Token) Token {
+	// Create the first > token
+	firstGT := Token{
+		Type:     GT,
+		Literal:  ">",
+		Line:     rsToken.Line,
+		Column:   rsToken.Column,
+		StartPos: rsToken.StartPos,
+		EndPos:   rsToken.StartPos + 1,
+	}
+	
+	// Create the second > token and push it back
+	secondGT := Token{
+		Type:     GT,
+		Literal:  ">",
+		Line:     rsToken.Line,
+		Column:   rsToken.Column + 1,
+		StartPos: rsToken.StartPos + 1,
+		EndPos:   rsToken.EndPos,
+	}
+	
+	l.pushedToken = &secondGT
+	debugPrintf("SplitRightShiftToken: split >> into > and pushed > back")
+	
+	return firstGT
+}
+
+// SplitUnsignedRightShiftToken converts a >>> token into > and pushes >> back
+func (l *Lexer) SplitUnsignedRightShiftToken(ursToken Token) Token {
+	// Create the first > token
+	firstGT := Token{
+		Type:     GT,
+		Literal:  ">",
+		Line:     ursToken.Line,
+		Column:   ursToken.Column,
+		StartPos: ursToken.StartPos,
+		EndPos:   ursToken.StartPos + 1,
+	}
+	
+	// Create the remaining >> token and push it back
+	remainingRS := Token{
+		Type:     RIGHT_SHIFT,
+		Literal:  ">>",
+		Line:     ursToken.Line,
+		Column:   ursToken.Column + 1,
+		StartPos: ursToken.StartPos + 1,
+		EndPos:   ursToken.EndPos,
+	}
+	
+	l.pushedToken = &remainingRS
+	debugPrintf("SplitUnsignedRightShiftToken: split >>> into > and pushed >> back")
+	
+	return firstGT
 }
 
 // readChar gives us the next character and advances our position in the input string.
@@ -305,6 +365,14 @@ func (l *Lexer) skipWhitespace() {
 
 // NextToken scans the input and returns the next token.
 func (l *Lexer) NextToken() Token {
+	// --- NEW: Check pushback buffer first ---
+	if l.pushedToken != nil {
+		tok := *l.pushedToken
+		l.pushedToken = nil
+		debugPrintf("NextToken: returning pushed token %s", tok.Type)
+		return tok
+	}
+
 	var tok Token
 
 	// --- MODIFIED: Don't skip whitespace inside template literals ---
