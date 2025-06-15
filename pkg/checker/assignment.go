@@ -169,33 +169,17 @@ func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructur
 			continue // Skip malformed elements
 		}
 
-		// For Phase 1, only support Identifier targets
-		if identTarget, ok := element.Target.(*parser.Identifier); ok {
-			// Check if target variable is const
-			_, isConst, found := c.env.Resolve(identTarget.Value)
-			if found && isConst {
-				c.addError(identTarget, fmt.Sprintf("cannot assign to constant variable '%s'", identTarget.Value))
-			}
-
-			var targetType types.Type
-			if element.IsRest {
-				// Rest element gets an array type containing the remaining elements
-				targetType = &types.ArrayType{ElementType: elementType}
-			} else {
-				// Regular element gets the element type
-				targetType = elementType
-			}
-
-			// Set the computed type for the target
-			identTarget.SetComputedType(targetType)
-			
-			// Update the variable's type in the environment
-			c.env.Update(identTarget.Value, targetType)
-			
+		var targetType types.Type
+		if element.IsRest {
+			// Rest element gets an array type containing the remaining elements
+			targetType = &types.ArrayType{ElementType: elementType}
 		} else {
-			// Only identifiers supported in Phase 1
-			c.addError(element.Target, fmt.Sprintf("destructuring target at position %d must be an identifier", i))
+			// Regular element gets the element type
+			targetType = elementType
 		}
+
+		// Recursively check the target (supports nested patterns)
+		c.checkDestructuringTarget(element.Target, targetType, i)
 	}
 
 	// 4. Set computed type for the overall expression (evaluates to RHS value)
@@ -267,24 +251,8 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 			}
 		}
 
-		// Only support Identifier targets
-		if identTarget, ok := element.Target.(*parser.Identifier); ok {
-			// Check if target variable is const
-			_, isConst, found := c.env.Resolve(identTarget.Value)
-			if found && isConst {
-				c.addError(identTarget, fmt.Sprintf("cannot assign to constant variable '%s'", identTarget.Value))
-			}
-
-			// Set the computed type for the target
-			identTarget.SetComputedType(finalTargetType)
-			
-			// Update the variable's type in the environment
-			c.env.Update(identTarget.Value, finalTargetType)
-			
-		} else {
-			// Only identifiers supported
-			c.addError(element.Target, fmt.Sprintf("destructuring target at position %d must be an identifier", i))
-		}
+		// Recursively check the target (supports nested patterns)
+		c.checkDestructuringTarget(element.Target, finalTargetType, i)
 	}
 
 	// Set computed type for the overall expression (evaluates to RHS value)
@@ -368,18 +336,8 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			}
 		}
 
-		// Set the computed type for the target variable
-		if identTarget, ok := prop.Target.(*parser.Identifier); ok {
-			// Set the computed type for the target
-			identTarget.SetComputedType(finalPropType)
-			
-			// Update the variable's type in the environment
-			c.env.Update(identTarget.Value, finalPropType)
-			
-		} else {
-			// Only identifiers supported
-			c.addError(prop.Target, fmt.Sprintf("destructuring target for property '%s' must be an identifier", propName))
-		}
+		// Recursively check the target (supports nested patterns)
+		c.checkDestructuringTargetForProperty(prop.Target, finalPropType, propName)
 	}
 
 	// 5. Handle rest property if present

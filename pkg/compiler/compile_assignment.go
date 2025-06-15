@@ -514,14 +514,33 @@ func (c *Compiler) compileArraySliceCall(arrayReg Register, startIndex int, resu
 	return nil
 }
 
-// compileSimpleAssignment handles assignment to a single target (identifier only for Phase 1)
+// compileSimpleAssignment handles assignment to a single target (supports nested patterns)
 func (c *Compiler) compileSimpleAssignment(target parser.Expression, valueReg Register, line int) errors.PaseratiError {
-	// For Phase 1, only support Identifier targets
-	identTarget, ok := target.(*parser.Identifier)
-	if !ok {
-		return NewCompileError(target, "destructuring target must be an identifier")
-	}
+	return c.compileRecursiveAssignment(target, valueReg, line)
+}
 
+// compileRecursiveAssignment handles assignment to various target types including nested patterns
+func (c *Compiler) compileRecursiveAssignment(target parser.Expression, valueReg Register, line int) errors.PaseratiError {
+	switch targetNode := target.(type) {
+	case *parser.Identifier:
+		// Simple variable assignment: a = value
+		return c.compileIdentifierAssignment(targetNode, valueReg, line)
+		
+	case *parser.ArrayLiteral:
+		// Nested array destructuring: [a, b] = value
+		return c.compileNestedArrayDestructuring(targetNode, valueReg, line)
+		
+	case *parser.ObjectLiteral:
+		// Nested object destructuring: {a, b} = value
+		return c.compileNestedObjectDestructuring(targetNode, valueReg, line)
+		
+	default:
+		return NewCompileError(target, fmt.Sprintf("unsupported destructuring target type: %T", target))
+	}
+}
+
+// compileIdentifierAssignment handles simple variable assignment
+func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, valueReg Register, line int) errors.PaseratiError {
 	// Resolve the identifier to determine how to store it
 	symbol, _, found := c.currentSymbolTable.Resolve(identTarget.Value)
 	if !found {
@@ -538,6 +557,224 @@ func (c *Compiler) compileSimpleAssignment(target parser.Expression, valueReg Re
 		}
 	}
 
+	return nil
+}
+
+// compileNestedArrayDestructuring compiles nested array patterns like [a, [b, c]] = value
+func (c *Compiler) compileNestedArrayDestructuring(arrayLit *parser.ArrayLiteral, valueReg Register, line int) errors.PaseratiError {
+	// Convert ArrayLiteral to ArrayDestructuringAssignment for reuse of existing logic
+	destructureAssign := &parser.ArrayDestructuringAssignment{
+		Token: arrayLit.Token,
+		Value: nil, // Will not be used since we already have the valueReg
+	}
+	
+	// Convert array elements to destructuring elements
+	for i, element := range arrayLit.Elements {
+		var target parser.Expression
+		var defaultValue parser.Expression
+		var isRest bool
+		
+		// Check if this element is a rest element (...rest)
+		if spreadExpr, ok := element.(*parser.SpreadElement); ok {
+			// This is a rest element: [...rest]
+			target = spreadExpr.Argument
+			defaultValue = nil
+			isRest = true
+		} else if assignExpr, ok := element.(*parser.AssignmentExpression); ok && assignExpr.Operator == "=" {
+			// This is a default value: [a = 5]
+			target = assignExpr.Left
+			defaultValue = assignExpr.Value
+			isRest = false
+		} else {
+			// This is a simple element: [a] or nested pattern: [[a, b]]
+			target = element
+			defaultValue = nil
+			isRest = false
+		}
+		
+		destElement := &parser.DestructuringElement{
+			Target:  target,
+			Default: defaultValue,
+			IsRest:  isRest,
+		}
+		
+		// Validate rest element placement
+		if isRest && i != len(arrayLit.Elements)-1 {
+			return NewCompileError(arrayLit, "rest element must be last element in destructuring pattern")
+		}
+		
+		destructureAssign.Elements = append(destructureAssign.Elements, destElement)
+	}
+	
+	// Reuse existing compilation logic but with direct value register
+	return c.compileArrayDestructuringWithValueReg(destructureAssign, valueReg, line)
+}
+
+// compileNestedObjectDestructuring compiles nested object patterns like {user: {name, age}} = value
+func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLiteral, valueReg Register, line int) errors.PaseratiError {
+	// Convert ObjectLiteral to ObjectDestructuringAssignment for reuse of existing logic
+	destructureAssign := &parser.ObjectDestructuringAssignment{
+		Token: objectLit.Token,
+		Value: nil, // Will not be used since we already have the valueReg
+	}
+	
+	// Convert object properties to destructuring properties
+	for _, pair := range objectLit.Properties {
+		// The key should be an identifier for simple property access
+		keyIdent, ok := pair.Key.(*parser.Identifier)
+		if !ok {
+			return NewCompileError(objectLit, fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", pair.Key.String()))
+		}
+		
+		var target parser.Expression
+		var defaultValue parser.Expression
+		
+		// Check for different patterns:
+		// 1. {name} - shorthand without default
+		// 2. {name = defaultVal} - shorthand with default (value is assignment expr)
+		// 3. {name: localVar} - explicit target without default
+		// 4. {name: localVar = defaultVal} - explicit target with default
+		// 5. {name: [a, b]} - nested pattern target (NEW)
+		// 6. {name: {x, y}} - nested pattern target (NEW)
+		
+		if valueIdent, ok := pair.Value.(*parser.Identifier); ok && valueIdent.Value == keyIdent.Value {
+			// Pattern 1: Shorthand without default {name}
+			target = keyIdent
+			defaultValue = nil
+		} else if assignExpr, ok := pair.Value.(*parser.AssignmentExpression); ok && assignExpr.Operator == "=" {
+			// Check if this is shorthand with default or explicit with default
+			if leftIdent, ok := assignExpr.Left.(*parser.Identifier); ok && leftIdent.Value == keyIdent.Value {
+				// Pattern 2: Shorthand with default {name = defaultVal}
+				target = keyIdent
+				defaultValue = assignExpr.Value
+			} else {
+				// Pattern 4: Explicit target with default {name: localVar = defaultVal}
+				target = assignExpr.Left
+				defaultValue = assignExpr.Value
+			}
+		} else {
+			// Pattern 3, 5, 6: Explicit target without default {name: localVar} or {name: [a, b]} or {name: {x, y}}
+			target = pair.Value
+			defaultValue = nil
+		}
+		
+		destProperty := &parser.DestructuringProperty{
+			Key:     keyIdent,
+			Target:  target,
+			Default: defaultValue,
+		}
+		
+		destructureAssign.Properties = append(destructureAssign.Properties, destProperty)
+	}
+	
+	// Reuse existing compilation logic but with direct value register
+	return c.compileObjectDestructuringWithValueReg(destructureAssign, valueReg, line)
+}
+
+// compileArrayDestructuringWithValueReg compiles array destructuring using an existing value register
+func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestructuringAssignment, valueReg Register, line int) errors.PaseratiError {
+	// Reuse existing array destructuring logic but skip RHS compilation
+	// 2. For each element, compile: target = valueReg[index] or target = valueReg.slice(index)
+	for i, element := range node.Elements {
+		if element.Target == nil {
+			continue // Skip malformed elements
+		}
+
+		var extractedReg Register
+		
+		if element.IsRest {
+			// Rest element: compile valueReg.slice(i) to get remaining elements
+			extractedReg = c.regAlloc.Alloc()
+			
+			// Call valueReg.slice(i) to get the rest of the array
+			err := c.compileArraySliceCall(valueReg, i, extractedReg, line)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				return err
+			}
+		} else {
+			// Regular element: compile valueReg[i]
+			indexReg := c.regAlloc.Alloc()
+			extractedReg = c.regAlloc.Alloc()
+			
+			// Load the index as a constant
+			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
+			c.emitLoadConstant(indexReg, indexConstIdx, line)
+			
+			// Get valueReg[i] using GetIndex operation
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(extractedReg)) // destination register
+			c.emitByte(byte(valueReg))     // array register
+			c.emitByte(byte(indexReg))     // index register
+			
+			c.regAlloc.Free(indexReg)
+		}
+		
+		// Handle assignment with potential default value (recursive assignment)
+		if element.Default != nil {
+			// Compile conditional assignment: target = extractedReg !== undefined ? extractedReg : default
+			err := c.compileConditionalAssignment(element.Target, extractedReg, element.Default, line)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				return err
+			}
+		} else {
+			// Recursive assignment: target = extractedReg (may be nested pattern)
+			err := c.compileRecursiveAssignment(element.Target, extractedReg, line)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				return err
+			}
+		}
+		
+		// Clean up temporary registers
+		c.regAlloc.Free(extractedReg)
+	}
+	
+	return nil
+}
+
+// compileObjectDestructuringWithValueReg compiles object destructuring using an existing value register
+func (c *Compiler) compileObjectDestructuringWithValueReg(node *parser.ObjectDestructuringAssignment, valueReg Register, line int) errors.PaseratiError {
+	// Reuse existing object destructuring logic but skip RHS compilation
+	// 2. For each property, compile: target = valueReg.propertyName
+	for _, prop := range node.Properties {
+		if prop.Target == nil {
+			continue // Skip malformed properties
+		}
+
+		// Allocate register for extracted property value
+		extractedReg := c.regAlloc.Alloc()
+		
+		// Add property name as a constant
+		propNameIdx := c.chunk.AddConstant(vm.String(prop.Key.Value))
+		
+		// Get valueReg.propertyName using GetProp operation
+		c.emitGetProp(extractedReg, valueReg, propNameIdx, line)
+		
+		// Handle assignment with potential default value (recursive assignment)
+		if prop.Default != nil {
+			// Compile conditional assignment: target = extractedReg !== undefined ? extractedReg : default
+			err := c.compileConditionalAssignment(prop.Target, extractedReg, prop.Default, line)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				return err
+			}
+		} else {
+			// Recursive assignment: target = extractedReg (may be nested pattern)
+			err := c.compileRecursiveAssignment(prop.Target, extractedReg, line)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				return err
+			}
+		}
+		
+		// Clean up temporary register
+		c.regAlloc.Free(extractedReg)
+	}
+	
+	// TODO: Handle rest property if present (for future enhancement)
+	
 	return nil
 }
 
@@ -821,11 +1058,7 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			continue // Skip malformed elements
 		}
 
-		// Only support identifier targets for now
-		ident, ok := element.Target.(*parser.Identifier)
-		if !ok {
-			return BadRegister, NewCompileError(element.Target, "destructuring declaration target must be an identifier")
-		}
+		// Support both identifier and nested pattern targets
 
 		var valueReg Register
 		
@@ -857,33 +1090,53 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			c.regAlloc.Free(indexReg)
 		}
 		
-		// Handle default value if present
-		if element.Default != nil {
-			// First, define the variable to reserve the name and get the target register
-			err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
-			}
-			
-			// Get the target identifier for conditional assignment
-			targetIdent := &parser.Identifier{
-				Token: ident.Token,
-				Value: ident.Value,
-			}
-			
-			// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
-			err = c.compileConditionalAssignment(targetIdent, valueReg, element.Default, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
+		// Handle assignment based on target type (identifier vs nested pattern)
+		if ident, ok := element.Target.(*parser.Identifier); ok {
+			// Simple identifier target
+			if element.Default != nil {
+				// First, define the variable to reserve the name and get the target register
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
+				
+				// Get the target identifier for conditional assignment
+				targetIdent := &parser.Identifier{
+					Token: ident.Token,
+					Value: ident.Value,
+				}
+				
+				// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
+				err = c.compileConditionalAssignment(targetIdent, valueReg, element.Default, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
+			} else {
+				// Define variable with extracted value
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
 			}
 		} else {
-			// Define variable with extracted value
-			err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
+			// Nested pattern target (ArrayLiteral or ObjectLiteral)
+			if element.Default != nil {
+				// Handle conditional assignment for nested patterns: target = valueReg !== undefined ? valueReg : defaultExpr
+				err := c.compileConditionalAssignmentForDeclaration(element.Target, valueReg, element.Default, node.IsConst, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
+			} else {
+				// Direct nested pattern assignment using recursive compilation
+				err := c.compileNestedPatternDeclaration(element.Target, valueReg, node.IsConst, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
 			}
 		}
 		
@@ -946,11 +1199,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 			continue // Skip malformed properties
 		}
 
-		// Only support identifier targets for now
-		ident, ok := prop.Target.(*parser.Identifier)
-		if !ok {
-			return BadRegister, NewCompileError(prop.Target, "destructuring declaration target must be an identifier")
-		}
+		// Support both identifier and nested pattern targets
 
 		// Allocate register for extracted value
 		valueReg := c.regAlloc.Alloc()
@@ -962,33 +1211,53 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 		c.emitByte(byte(tempReg))    // object register
 		c.emitUint16(propNameIdx)    // property name constant index
 		
-		// Handle default value if present
-		if prop.Default != nil {
-			// First, define the variable to reserve the name and get the target register
-			err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
-			}
-			
-			// Get the target identifier for conditional assignment
-			targetIdent := &parser.Identifier{
-				Token: ident.Token,
-				Value: ident.Value,
-			}
-			
-			// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
-			err = c.compileConditionalAssignment(targetIdent, valueReg, prop.Default, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
+		// Handle assignment based on target type (identifier vs nested pattern)
+		if ident, ok := prop.Target.(*parser.Identifier); ok {
+			// Simple identifier target
+			if prop.Default != nil {
+				// First, define the variable to reserve the name and get the target register
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
+				
+				// Get the target identifier for conditional assignment
+				targetIdent := &parser.Identifier{
+					Token: ident.Token,
+					Value: ident.Value,
+				}
+				
+				// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
+				err = c.compileConditionalAssignment(targetIdent, valueReg, prop.Default, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
+			} else {
+				// Define variable with extracted value
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
 			}
 		} else {
-			// Define variable with extracted value
-			err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
+			// Nested pattern target (ArrayLiteral or ObjectLiteral)
+			if prop.Default != nil {
+				// Handle conditional assignment for nested patterns
+				err := c.compileConditionalAssignmentForDeclaration(prop.Target, valueReg, prop.Default, node.IsConst, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
+			} else {
+				// Direct nested pattern assignment using recursive compilation
+				err := c.compileNestedPatternDeclaration(prop.Target, valueReg, node.IsConst, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
 			}
 		}
 		

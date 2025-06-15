@@ -2,6 +2,12 @@
 
 This list tracks the implemented and planned features for the Paserati TypeScript/JavaScript compiler, based on common language features.
 
+**Recent Major Updates (hoisting branch):**
+
+- **Complete Destructuring Implementation** - Full support for array/object destructuring with rest elements, defaults, and nested patterns
+- **Built-in System Refactor** - Modernized builtin architecture and cleaned up legacy code
+- **Function.prototype.bind()** - Work in progress (failing tests indicate incomplete implementation)
+
 ## Core Syntax & Basics
 
 - [x] Variable Declarations (`let`, `const`)
@@ -130,8 +136,32 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Integration with tuple types and parameter type inference
 - [ ] `yield` / `yield*` (Generators)
 - [ ] `await` (Async/Await)
-- [ ] Destructuring Assignment
-- [ ] Destructuring in function parameters
+- [x] Destructuring Assignment - **Complete Implementation!**
+  - [x] **Array Destructuring** - Full support with rest elements
+    - [x] Basic array destructuring (`let [a, b] = [1, 2]`)
+    - [x] Rest elements in arrays (`let [first, ...rest] = array`)
+    - [x] Nested array destructuring (`let [a, [b, c]] = [1, [2, 3]]`)
+    - [x] Default values in array destructuring (`let [a = 10, b = 20] = []`)
+    - [x] Mixed patterns with defaults and rest elements
+  - [x] **Object Destructuring** - Full support with rest elements
+    - [x] Basic object destructuring (`let {name, age} = person`)
+    - [x] Object rest elements (`let {name, ...rest} = person`)
+    - [x] Property exclusion in rest elements (proper key filtering)
+    - [x] Nested object destructuring (`let {person: {name}} = data`)
+    - [x] Default values in object destructuring (`let {name = "Unknown"} = {}`)
+    - [x] Mixed patterns with defaults and rest elements
+  - [x] **Declaration Context Support**
+    - [x] `const` declarations with destructuring
+    - [x] `let` declarations with destructuring
+    - [x] Variable assignment destructuring (non-declaration)
+  - [x] **Advanced Features**
+    - [x] Complex nested patterns (`let {a: [b, {c}]} = complex`)
+    - [x] Function parameter destructuring (both object and array)
+    - [x] Default values in function parameter destructuring
+    - [x] Rest elements in function parameter destructuring
+    - [x] TypeScript-compliant type checking for all destructuring patterns
+    - [x] Comprehensive error handling and validation
+  - [x] **46+ test cases** covering all destructuring scenarios and edge cases
 
 ## Control Flow
 
@@ -211,6 +241,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Function.prototype methods
     - [x] `Function.prototype.call()` for explicit `this` binding **[Fixed infinite recursion]**
     - [x] `Function.prototype.apply()` for explicit `this` binding with array arguments
+    - [ ] `Function.prototype.bind()` for creating bound functions **[Work in Progress]**
   - [x] Object.getPrototypeOf() static method
   - [x] Prototype chain traversal and method resolution
   - [x] Runtime prototype object management
@@ -298,7 +329,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 ## Built-in System Architecture
 
-- [x] **Modern Builtin Architecture**
+- [x] **Modern Builtin Architecture** - **Recently Refactored!**
   - [x] Single source of truth for each primitive (consolidated files: `array.go`, `string.go`, `date.go`)
   - [x] Eliminated hardcoded method types from type checker
   - [x] Prototype registry system for runtime implementations and type information
@@ -309,6 +340,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] **Function and Object prototype support** - Function.prototype and Object static methods
   - [x] **Enhanced object type definitions** - callable types with static properties
   - [x] **Prototype method binding** - proper `this` context for prototype methods
+  - [x] **Legacy Code Removal** - cleaned up outdated initialization patterns
+  - [x] **Improved Initializer System** - streamlined builtin initialization process
 
 ## TypeScript Specific Features
 

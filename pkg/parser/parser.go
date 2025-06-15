@@ -1835,13 +1835,25 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 		}
 	}
 	
-	// Parse target (must be identifier in parameter context)
-	if !p.curTokenIs(lexer.IDENT) {
-		p.addError(p.curToken, "parameter destructuring target must be an identifier")
+	// Parse target (support nested patterns in parameter context)
+	if p.curTokenIs(lexer.IDENT) {
+		element.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curTokenIs(lexer.LBRACKET) {
+		// Nested array destructuring in parameter: function f([a, [b, c]]) { ... }
+		element.Target = p.parseArrayLiteral()
+		if element.Target == nil {
+			return nil
+		}
+	} else if p.curTokenIs(lexer.LBRACE) {
+		// Nested object destructuring in parameter: function f({user: {name, age}}) { ... }
+		element.Target = p.parseObjectLiteral()
+		if element.Target == nil {
+			return nil
+		}
+	} else {
+		p.addError(p.curToken, "parameter destructuring target must be an identifier or nested pattern")
 		return nil
 	}
-	
-	element.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
 	// Check for default value (not allowed for rest elements)
 	if !element.IsRest && p.peekTokenIs(lexer.ASSIGN) {
@@ -1873,11 +1885,27 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 	// Check for explicit target (key: target)
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
-		if !p.expectPeek(lexer.IDENT) {
-			p.addError(p.peekToken, "object parameter property target must be an identifier")
+		p.nextToken() // Move to target
+		
+		// Parse target (support nested patterns)
+		if p.curTokenIs(lexer.IDENT) {
+			prop.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		} else if p.curTokenIs(lexer.LBRACKET) {
+			// Nested array destructuring: {prop: [a, b]}
+			prop.Target = p.parseArrayLiteral()
+			if prop.Target == nil {
+				return nil
+			}
+		} else if p.curTokenIs(lexer.LBRACE) {
+			// Nested object destructuring: {prop: {x, y}}
+			prop.Target = p.parseObjectLiteral()
+			if prop.Target == nil {
+				return nil
+			}
+		} else {
+			p.addError(p.curToken, "object parameter property target must be an identifier or nested pattern")
 			return nil
 		}
-		prop.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
 		// Shorthand: use key as target
 		prop.Target = prop.Key
@@ -3124,9 +3152,9 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 			IsRest:  isRest,
 		}
 		
-		// Validate that the target is a valid identifier
-		if _, ok := target.(*Identifier); !ok {
-			msg := fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String())
+		// Validate that the target is a valid destructuring target
+		if !p.isValidDestructuringTarget(target) {
+			msg := fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String())
 			p.addError(arrayLit.Token, msg)
 			return nil
 		}
@@ -3236,9 +3264,9 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 			defaultValue = nil
 		}
 		
-		// Validate that the target is a valid identifier
-		if _, ok := target.(*Identifier); !ok {
-			msg := fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String())
+		// Validate that the target is a valid destructuring target
+		if !p.isValidDestructuringTarget(target) {
+			msg := fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String())
 			p.addError(objectLit.Token, msg)
 			return nil
 		}
@@ -3341,9 +3369,9 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 			IsRest:  isRest,
 		}
 		
-		// Validate that the target is a valid identifier
-		if _, ok := target.(*Identifier); !ok {
-			p.addError(p.curToken, fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String()))
+		// Validate that the target is a valid destructuring target
+		if !p.isValidDestructuringTarget(target) {
+			p.addError(p.curToken, fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String()))
 			return nil
 		}
 		
@@ -3467,9 +3495,9 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 			defaultValue = nil
 		}
 		
-		// Validate that the target is a valid identifier
-		if _, ok := target.(*Identifier); !ok {
-			p.addError(objectLit.Token, fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String()))
+		// Validate that the target is a valid destructuring target
+		if !p.isValidDestructuringTarget(target) {
+			p.addError(objectLit.Token, fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String()))
 			return nil
 		}
 		
@@ -5233,5 +5261,23 @@ func GetTokenFromNode(node Node) lexer.Token {
 	default:
 		// Cannot easily determine a representative token
 		return lexer.Token{} // Return zero value
+	}
+}
+
+// isValidDestructuringTarget checks if an expression can be used as a destructuring target
+// Valid targets: Identifier, ArrayLiteral (for nested array destructuring), ObjectLiteral (for nested object destructuring)
+func (p *Parser) isValidDestructuringTarget(expr Expression) bool {
+	switch expr.(type) {
+	case *Identifier:
+		// Simple variable assignment: [a] = [1]
+		return true
+	case *ArrayLiteral:
+		// Nested array destructuring: [a, [b, c]] = [1, [2, 3]]
+		return true
+	case *ObjectLiteral:
+		// Nested object destructuring: {user: {name, age}} = {user: {name: "John", age: 30}}
+		return true
+	default:
+		return false
 	}
 }

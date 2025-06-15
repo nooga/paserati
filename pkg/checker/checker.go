@@ -1778,13 +1778,8 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 			}
 		}
 
-		// Define the variable with its inferred type
-		if ident, ok := element.Target.(*parser.Identifier); ok {
-			if !c.env.Define(ident.Value, elemType, node.IsConst) {
-				c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
-			}
-			ident.SetComputedType(elemType)
-		}
+		// Define the variable(s) with inferred type - support both identifiers and nested patterns
+		c.checkDestructuringTargetForDeclaration(element.Target, elemType, node.IsConst)
 	}
 }
 
@@ -1877,13 +1872,8 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			}
 		}
 
-		// Define the variable with its inferred type
-		if ident, ok := prop.Target.(*parser.Identifier); ok {
-			if !c.env.Define(ident.Value, propType, node.IsConst) {
-				c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
-			}
-			ident.SetComputedType(propType)
-		}
+		// Define the variable(s) with inferred type - support both identifiers and nested patterns
+		c.checkDestructuringTargetForDeclaration(prop.Target, propType, node.IsConst)
 	}
 
 	// Handle rest property if present
