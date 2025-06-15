@@ -2310,6 +2310,14 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 // parseAssignmentExpression handles variable assignment (e.g., x = value)
 func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	debugPrint("parseAssignmentExpression starting with left: %s (%T)", left.String(), left)
+	
+	// Check for array destructuring assignment: [a, b, c] = expr
+	if arrayLit, ok := left.(*ArrayLiteral); ok && p.curToken.Type == lexer.ASSIGN {
+		debugPrint("parseAssignmentExpression detected array destructuring pattern")
+		return p.parseArrayDestructuringAssignment(arrayLit)
+	}
+	
+	// Regular assignment expression
 	expr := &AssignmentExpression{
 		Token:    p.curToken,         // The assignment token (=, +=, etc.)
 		Operator: p.curToken.Literal, // Store the operator string
@@ -2331,6 +2339,45 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	debugPrint("parseAssignmentExpression finished right side: %s (%T)", expr.Value.String(), expr.Value)
 
 	return expr
+}
+
+// parseArrayDestructuringAssignment handles array destructuring like [a, b, c] = expr
+func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expression {
+	debugPrint("parseArrayDestructuringAssignment starting")
+	
+	destructure := &ArrayDestructuringAssignment{
+		Token: arrayLit.Token, // The '[' token from the array literal
+	}
+	
+	// Convert array elements to destructuring elements
+	for _, element := range arrayLit.Elements {
+		destElement := &DestructuringElement{
+			Target:  element,
+			Default: nil, // No defaults in Phase 1
+		}
+		
+		// Validate that the target is a valid identifier for now
+		if _, ok := element.(*Identifier); !ok {
+			msg := fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", element.String())
+			p.addError(arrayLit.Token, msg)
+			return nil
+		}
+		
+		destructure.Elements = append(destructure.Elements, destElement)
+	}
+	
+	// Consume the '=' token (already checked in caller)
+	p.nextToken()
+	
+	// Parse the right-hand side expression
+	destructure.Value = p.parseExpression(LOWEST)
+	if destructure.Value == nil {
+		p.addError(p.curToken, "expected expression after '=' in array destructuring assignment")
+		return nil
+	}
+	
+	debugPrint("parseArrayDestructuringAssignment completed: %s", destructure.String())
+	return destructure
 }
 
 // --- New: While Statement Parsing ---

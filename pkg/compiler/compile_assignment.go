@@ -409,3 +409,89 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 	return hint, nil
 }
+
+// compileArrayDestructuringAssignment compiles array destructuring like [a, b, c] = expr
+// Desugars into: temp = expr; a = temp[0]; b = temp[1]; c = temp[2];
+func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestructuringAssignment, hint Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+	
+	if debugAssignment {
+		fmt.Printf("// [Assignment] Compiling array destructuring: %s\n", node.String())
+	}
+
+	// 1. Compile RHS expression into temp register
+	tempReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(tempReg)
+	
+	_, err := c.compileNode(node.Value, tempReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. For each element, compile: target = temp[index]
+	for i, element := range node.Elements {
+		if element.Target == nil {
+			continue // Skip malformed elements
+		}
+
+		// Allocate registers for index and extracted value
+		indexReg := c.regAlloc.Alloc()
+		valueReg := c.regAlloc.Alloc()
+		
+		// Load the index as a constant
+		indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
+		c.emitLoadConstant(indexReg, indexConstIdx, line)
+		
+		// Get temp[i] using GetIndex operation
+		c.emitOpCode(vm.OpGetIndex, line)
+		c.emitByte(byte(valueReg))  // destination register
+		c.emitByte(byte(tempReg))   // array register
+		c.emitByte(byte(indexReg))  // index register
+		
+		// Assign the extracted value to the target variable
+		err := c.compileSimpleAssignment(element.Target, valueReg, line)
+		if err != nil {
+			c.regAlloc.Free(indexReg)
+			c.regAlloc.Free(valueReg)
+			return BadRegister, err
+		}
+		
+		// Clean up temporary registers
+		c.regAlloc.Free(indexReg)
+		c.regAlloc.Free(valueReg)
+	}
+
+	// 3. Return the original RHS value (like regular assignment)
+	if hint != tempReg {
+		c.emitMove(hint, tempReg, line)
+	}
+	
+	return hint, nil
+}
+
+// compileSimpleAssignment handles assignment to a single target (identifier only for Phase 1)
+func (c *Compiler) compileSimpleAssignment(target parser.Expression, valueReg Register, line int) errors.PaseratiError {
+	// For Phase 1, only support Identifier targets
+	identTarget, ok := target.(*parser.Identifier)
+	if !ok {
+		return NewCompileError(target, "destructuring target must be an identifier")
+	}
+
+	// Resolve the identifier to determine how to store it
+	symbol, _, found := c.currentSymbolTable.Resolve(identTarget.Value)
+	if !found {
+		return NewCompileError(identTarget, fmt.Sprintf("undefined variable '%s'", identTarget.Value))
+	}
+
+	// Generate appropriate store instruction based on symbol type
+	if symbol.IsGlobal {
+		c.emitSetGlobal(symbol.GlobalIndex, valueReg, line)
+	} else {
+		// For local variables, move to the allocated register
+		if valueReg != symbol.Register {
+			c.emitMove(symbol.Register, valueReg, line)
+		}
+	}
+
+	return nil
+}

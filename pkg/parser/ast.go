@@ -1605,6 +1605,59 @@ func (cte *ConstructorTypeExpression) String() string {
 
 // --- END NEW ---
 
+// --- NEW: Destructuring Assignment Support ---
+
+// DestructuringElement represents a single element in destructuring pattern
+type DestructuringElement struct {
+	Target  Expression // Target variable (Identifier for now)
+	Default Expression // Default value (nil if no default)
+}
+
+// String() for DestructuringElement (helpful for debugging)
+func (de *DestructuringElement) String() string {
+	var out bytes.Buffer
+	if de.Target != nil {
+		out.WriteString(de.Target.String())
+	}
+	if de.Default != nil {
+		out.WriteString(" = ")
+		out.WriteString(de.Default.String())
+	}
+	return out.String()
+}
+
+// ArrayDestructuringAssignment represents [a, b, c] = expr
+type ArrayDestructuringAssignment struct {
+	BaseExpression                     // Embed base for ComputedType
+	Token          lexer.Token         // The '[' token
+	Elements       []*DestructuringElement // Target variables/patterns
+	Value          Expression          // RHS expression to destructure
+}
+
+func (ada *ArrayDestructuringAssignment) expressionNode()      {}
+func (ada *ArrayDestructuringAssignment) TokenLiteral() string { return ada.Token.Literal }
+func (ada *ArrayDestructuringAssignment) String() string {
+	var out bytes.Buffer
+	elements := []string{}
+	for _, el := range ada.Elements {
+		if el != nil {
+			elements = append(elements, el.String())
+		}
+	}
+	out.WriteString("[")
+	out.WriteString(strings.Join(elements, ", "))
+	out.WriteString("] = ")
+	if ada.Value != nil {
+		out.WriteString(ada.Value.String())
+	}
+	if ada.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ada.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// --- END NEW: Destructuring Assignment Support ---
+
 // --- Function Overload Support ---
 
 // FunctionSignature represents a function signature without a body (used in overloads)

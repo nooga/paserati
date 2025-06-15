@@ -133,3 +133,103 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 	// Set computed type for the overall assignment expression (evaluates to RHS value)
 	node.SetComputedType(rhsType)
 }
+
+// checkArrayDestructuringAssignment handles array destructuring assignments like [a, b, c] = expr
+func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructuringAssignment) {
+	// 1. Check RHS expression 
+	c.visit(node.Value)
+	rhsType := node.Value.GetComputedType()
+	if rhsType == nil {
+		rhsType = types.Any
+	}
+
+	// 2. Validate that RHS is array-like type
+	widenedRhsType := types.GetWidenedType(rhsType)
+	var elementType types.Type
+	
+	if arrayType, ok := widenedRhsType.(*types.ArrayType); ok {
+		// Standard array type T[]
+		elementType = arrayType.ElementType
+	} else if tupleType, ok := widenedRhsType.(*types.TupleType); ok {
+		// Tuple type [T1, T2, T3] - handle with precise type checking
+		c.checkArrayDestructuringWithTuple(node, tupleType, rhsType)
+		return
+	} else if widenedRhsType == types.Any {
+		// Allow destructuring of 'any' type
+		elementType = types.Any
+	} else {
+		// RHS is not array-like
+		c.addError(node.Value, fmt.Sprintf("type '%s' is not array-like and cannot be destructured", rhsType.String()))
+		elementType = types.Any // Continue with Any to avoid cascading errors
+	}
+
+	// 3. For each destructuring element, assign appropriate type
+	for i, element := range node.Elements {
+		if element.Target == nil {
+			continue // Skip malformed elements
+		}
+
+		// For Phase 1, only support Identifier targets
+		if identTarget, ok := element.Target.(*parser.Identifier); ok {
+			// Check if target variable is const
+			_, isConst, found := c.env.Resolve(identTarget.Value)
+			if found && isConst {
+				c.addError(identTarget, fmt.Sprintf("cannot assign to constant variable '%s'", identTarget.Value))
+			}
+
+			// Set the computed type for the target
+			identTarget.SetComputedType(elementType)
+			
+			// Update the variable's type in the environment
+			c.env.Update(identTarget.Value, elementType)
+			
+		} else {
+			// Only identifiers supported in Phase 1
+			c.addError(element.Target, fmt.Sprintf("destructuring target at position %d must be an identifier", i))
+		}
+	}
+
+	// 4. Set computed type for the overall expression (evaluates to RHS value)
+	node.SetComputedType(rhsType)
+}
+
+// checkArrayDestructuringWithTuple handles array destructuring with tuple types for precise checking
+func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuringAssignment, tupleType *types.TupleType, rhsType types.Type) {
+	// For each destructuring element, assign the corresponding tuple element type
+	for i, element := range node.Elements {
+		if element.Target == nil {
+			continue
+		}
+
+		var targetType types.Type
+		if i < len(tupleType.ElementTypes) {
+			// Use the precise type from the tuple
+			targetType = tupleType.ElementTypes[i]
+		} else {
+			// More destructuring targets than tuple elements - undefined
+			targetType = types.Undefined
+		}
+
+		// For Phase 1, only support Identifier targets
+		if identTarget, ok := element.Target.(*parser.Identifier); ok {
+			// Check if target variable is const
+			_, isConst, found := c.env.Resolve(identTarget.Value)
+			if found && isConst {
+				c.addError(identTarget, fmt.Sprintf("cannot assign to constant variable '%s'", identTarget.Value))
+			}
+
+			// Set the computed type for the target
+			identTarget.SetComputedType(targetType)
+			
+			// Update the variable's type in the environment
+			c.env.Update(identTarget.Value, targetType)
+			
+		} else {
+			// Only identifiers supported in Phase 1
+			c.addError(element.Target, fmt.Sprintf("destructuring target at position %d must be an identifier", i))
+		}
+	}
+
+	// Set computed type for the overall expression (evaluates to RHS value)
+	node.SetComputedType(rhsType)
+}

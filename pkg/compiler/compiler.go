@@ -576,6 +576,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.AssignmentExpression:
 		return c.compileAssignmentExpression(node, hint) // TODO: Fix this
 
+	case *parser.ArrayDestructuringAssignment:
+		return c.compileArrayDestructuringAssignment(node, hint)
+
 	case *parser.UpdateExpression:
 		return c.compileUpdateExpression(node, hint) // TODO: Fix this
 

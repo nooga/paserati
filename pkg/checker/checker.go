@@ -1368,6 +1368,9 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.AssignmentExpression:
 		c.checkAssignmentExpression(node)
 
+	case *parser.ArrayDestructuringAssignment:
+		c.checkArrayDestructuringAssignment(node)
+
 	case *parser.UpdateExpression:
 		// --- NEW: Handle UpdateExpression ---
 		c.visit(node.Argument)
