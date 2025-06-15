@@ -2582,15 +2582,18 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 	// Set precedence for parsing the property identifier
 	// Member access has higher precedence than most operators
 
-	if !p.expectPeek(lexer.IDENT) {
-		// If the token after '.' is not an identifier, it's a syntax error.
-		msg := fmt.Sprintf("expected identifier after '.', got %s", p.peekToken.Type)
-		p.addError(p.peekToken, msg)
+	// Move to the next token (which should be the property name)
+	p.nextToken()
+	
+	// Parse property name (allowing keywords as property names)
+	propIdent := p.parsePropertyName()
+	if propIdent == nil {
+		// If the token after '.' is not a valid property name, it's a syntax error.
+		msg := fmt.Sprintf("expected identifier after '.', got %s", p.curToken.Type)
+		p.addError(p.curToken, msg)
 		return nil
 	}
 
-	// Construct the Identifier node for the property
-	propIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	exp.Property = propIdent
 
 	// We don't call parseExpression here because the right side MUST be an identifier.
@@ -2761,8 +2764,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken() // Consume '{' or ',' to get to the key
 
-		// --- NEW: Check for shorthand method syntax (identifier followed by '(') ---
-		if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN) {
+		// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
+		propName := p.parsePropertyName()
+		if propName != nil && p.peekTokenIs(lexer.LPAREN) {
 			// This is a shorthand method like methodName() { ... }
 			shorthandMethod := p.parseShorthandMethod()
 			if shorthandMethod == nil {
@@ -2772,11 +2776,11 @@ func (p *Parser) parseObjectLiteral() Expression {
 			// Create an ObjectProperty with the method name as key and the shorthand method as value
 			methodName := shorthandMethod.Name
 			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodName, Value: shorthandMethod})
-		} else if p.curTokenIs(lexer.IDENT) && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE)) {
-			// --- NEW: Check for shorthand property syntax (identifier followed by ',' or '}') ---
+		} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE)) {
+			// --- NEW: Check for shorthand property syntax (identifier/keyword followed by ',' or '}') ---
 			// This is shorthand like { name, age } equivalent to { name: name, age: age }
 			identName := p.curToken.Literal
-			key := p.parseIdentifier()
+			key := propName
 
 			// For shorthand property, the value is also the same identifier
 			value := &Identifier{Token: p.curToken, Value: identName}
@@ -2786,9 +2790,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 		} else {
 			// Regular property parsing
 			var key Expression
-			// --- MODIFIED: Handle Keys (Identifier, String, NUMBER, Computed) ---
-			if p.curTokenIs(lexer.IDENT) {
-				key = p.parseIdentifier()
+			// --- MODIFIED: Handle Keys (Identifier/Keywords, String, NUMBER, Computed) ---
+			if propName != nil {
+				key = propName
 			} else if p.curTokenIs(lexer.STRING) {
 				key = p.parseStringLiteral()
 			} else if p.curTokenIs(lexer.NUMBER) { // <<< ADD NUMBER CASE
@@ -2859,14 +2863,15 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 // parseShorthandMethod parses a shorthand method like methodName() { ... }
 func (p *Parser) parseShorthandMethod() *ShorthandMethod {
-	if !p.curTokenIs(lexer.IDENT) {
+	methodName := p.parsePropertyName()
+	if methodName == nil {
 		p.addError(p.curToken, "expected method name (identifier) for shorthand method")
 		return nil
 	}
 
 	method := &ShorthandMethod{
 		Token: p.curToken, // The method name token
-		Name:  &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		Name:  methodName,
 	}
 
 	// Expect '(' for parameters
@@ -3004,14 +3009,15 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		return prop
 	}
 
-	// Check for shorthand method syntax first (identifier followed by '(')
-	if !p.curTokenIs(lexer.IDENT) {
+	// Check for shorthand method syntax first (identifier or keyword as property name)
+	propName := p.parsePropertyName()
+	if propName == nil {
 		p.addError(p.curToken, "expected property name (identifier) or call signature '(' in interface")
 		return nil
 	}
 
 	prop := &InterfaceProperty{
-		Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		Name: propName,
 	}
 
 	// Check for optional marker '?' first
@@ -3171,10 +3177,16 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			}
 
 			objType.Properties = append(objType.Properties, prop)
-		} else if p.curTokenIs(lexer.IDENT) {
-			// Regular property or method signature
+		} else {
+			// Regular property or method signature - try to parse property name (allowing keywords)
+			propName := p.parsePropertyName()
+			if propName == nil {
+				p.addError(p.curToken, "expected property name (identifier) or call signature '(' in object type")
+				return nil
+			}
+			
 			prop := &ObjectTypeProperty{
-				Name: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+				Name: propName,
 			}
 
 			// Check for optional marker '?' first
@@ -3213,9 +3225,6 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			}
 
 			objType.Properties = append(objType.Properties, prop)
-		} else {
-			p.addError(p.curToken, "expected property name (identifier) or call signature '(' in object type")
-			return nil
 		}
 
 		// Expect ';' or '}' next
@@ -3236,6 +3245,23 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 	}
 
 	return objType
+}
+
+// parsePropertyName parses a property name, allowing keywords to be used as identifiers
+func (p *Parser) parsePropertyName() *Identifier {
+	// Keywords that can be used as property names
+	switch p.curToken.Type {
+	case lexer.IDENT:
+		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	case lexer.DELETE, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION, 
+		 lexer.RETURN, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL, 
+		 lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, 
+		 lexer.IN, lexer.INSTANCEOF:
+		// Allow keywords as property names
+		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	default:
+		return nil
+	}
 }
 
 // parseVoidExpression parses a void expression.

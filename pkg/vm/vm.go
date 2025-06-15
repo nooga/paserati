@@ -1248,21 +1248,23 @@ func (vm *VM) run() (InterpretResult, Value) {
 			var success bool
 			if obj.IsObject() {
 				if plainObj := obj.AsPlainObject(); plainObj != nil {
-					// PlainObject doesn't support deletion - need to convert to DictObject
-					// First, create a new DictObject and copy all properties
+					// ERSATZ SOLUTION: Set property to undefined on original object (for existing references)
+					plainObj.SetOwn(propName, Undefined)
+					
+					// Also create a new DictObject and replace the register (for future operations)
 					dictValue := NewDictObject(plainObj.GetPrototype())
 					dict := dictValue.AsDictObject()
 					
-					// Copy all properties from shape
+					// Copy all properties from shape (except the one we're deleting)
 					for _, field := range plainObj.shape.fields {
-						if field.offset < len(plainObj.properties) {
+						if field.offset < len(plainObj.properties) && field.name != propName {
 							dict.SetOwn(field.name, plainObj.properties[field.offset])
 						}
 					}
 					
-					// Now delete the property from the dict object
-					success = dict.DeleteOwn(propName)
-					// Replace the original object with the dict object
+					// Delete operation always succeeds since we didn't copy the target property
+					success = true
+					// Replace the register with the dict object
 					registers[objReg] = dictValue
 					
 				} else if dictObj := obj.AsDictObject(); dictObj != nil {
