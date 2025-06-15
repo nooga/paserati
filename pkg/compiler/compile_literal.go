@@ -466,7 +466,6 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 			// Compile the default value expression
 			defaultValueReg := functionCompiler.regAlloc.Alloc()
-			fmt.Printf("[DEFAULT VALUE DEBUG] Compiling default value for param %s: %T with defaultValueReg=R%d\n", param.Name.Value, param.DefaultValue, defaultValueReg)
 			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			if err != nil {
 				// Continue with compilation even if default value has errors
