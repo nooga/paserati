@@ -92,6 +92,7 @@ const (
 	OpMakeEmptyObject OpCode = 40 // Rx: Creates an empty object in Rx
 	OpGetProp         OpCode = 41 // Rx Ry NameIdx(16bit): Rx = Ry[NameIdx]
 	OpSetProp         OpCode = 42 // Rx Ry NameIdx(16bit): Rx[NameIdx] = Ry (Object in Rx, Value in Ry)
+	OpDeleteProp      OpCode = 62 // Rx Ry NameIdx(16bit): Rx = delete Ry[NameIdx] (returns boolean)
 
 	// --- NEW: Method Calls and This Context ---
 	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
@@ -222,6 +223,8 @@ func (op OpCode) String() string {
 		return "OpGetProp"
 	case OpSetProp:
 		return "OpSetProp"
+	case OpDeleteProp:
+		return "OpDeleteProp"
 	case OpCallMethod:
 		return "OpCallMethod"
 	case OpLoadThis:
@@ -406,6 +409,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpGetProp:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetProp:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpDeleteProp:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpCallMethod:
 		return c.callMethodInstruction(builder, instruction.String(), offset)

@@ -1219,6 +1219,72 @@ func (vm *VM) run() (InterpretResult, Value) {
 				return status, value
 			}
 
+		case OpDeleteProp:
+			destReg := code[ip]
+			objReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get property name from constants
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) { // Compiler should ensure this
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			propName := AsString(nameVal)
+
+			// Get the object
+			obj := registers[objReg]
+			
+			// Handle delete operation
+			var success bool
+			if obj.IsObject() {
+				if plainObj := obj.AsPlainObject(); plainObj != nil {
+					// PlainObject doesn't support deletion - need to convert to DictObject
+					// First, create a new DictObject and copy all properties
+					dictValue := NewDictObject(plainObj.GetPrototype())
+					dict := dictValue.AsDictObject()
+					
+					// Copy all properties from shape
+					for _, field := range plainObj.shape.fields {
+						if field.offset < len(plainObj.properties) {
+							dict.SetOwn(field.name, plainObj.properties[field.offset])
+						}
+					}
+					
+					// Now delete the property from the dict object
+					success = dict.DeleteOwn(propName)
+					// Replace the original object with the dict object
+					registers[objReg] = dictValue
+					
+				} else if dictObj := obj.AsDictObject(); dictObj != nil {
+					// DictObject supports deletion directly
+					success = dictObj.DeleteOwn(propName)
+					
+				} else if arrObj := obj.AsArray(); arrObj != nil {
+					// Arrays don't support property deletion (only element deletion in the future)
+					success = false
+					
+				} else {
+					// Other object types don't support property deletion
+					success = false
+				}
+			} else {
+				// Non-object types don't support property deletion
+				success = false
+			}
+			
+			// Store the result (boolean) in the destination register
+			registers[destReg] = BooleanValue(success)
+
 		case OpCallMethod:
 			// Refactored to use centralized prepareCall
 			destReg := code[ip]

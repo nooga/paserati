@@ -1040,6 +1040,21 @@ func (c *Checker) visit(node parser.Node) {
 					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
+			// --- NEW: Handle delete operator ---
+			case "delete":
+				// delete operator returns boolean indicating success
+				resultType = types.Boolean
+				// The operand must be a property access expression
+				switch node.Right.(type) {
+				case *parser.MemberExpression, *parser.IndexExpression:
+					// Valid delete target
+				case *parser.Identifier:
+					// In TypeScript, deleting a variable is not allowed
+					c.addError(node, "delete cannot be applied to variables")
+				default:
+					// Other expressions are not valid delete targets
+					c.addError(node, fmt.Sprintf("delete cannot be applied to %T", node.Right))
+				}
 			// --- END NEW ---
 			default:
 				c.addError(node, fmt.Sprintf("unsupported prefix operator: %s", node.Operator))

@@ -717,6 +717,47 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 	// --- NEW ---
 	case "~":
 		c.emitBitwiseNot(hint, rightReg, node.Token.Line)
+	// --- NEW: Handle delete operator ---
+	case "delete":
+		// delete operator requires special handling based on the operand type
+		switch operand := node.Right.(type) {
+		case *parser.MemberExpression:
+			// delete obj.prop
+			objReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, objReg)
+			_, err := c.compileNode(operand.Object, objReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			// Get property name and add to constant pool
+			propName := operand.Property.Value
+			propIdx := c.chunk.AddConstant(vm.String(propName))
+			c.emitDeleteProp(hint, objReg, propIdx, node.Token.Line)
+			
+		case *parser.IndexExpression:
+			// delete obj[key]
+			// For now, we'll handle this similarly to member expressions if the key is a string literal
+			// Full dynamic property deletion would require a different opcode
+			if strLit, ok := operand.Index.(*parser.StringLiteral); ok {
+				objReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, objReg)
+				_, err := c.compileNode(operand.Left, objReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				propIdx := c.chunk.AddConstant(vm.String(strLit.Value))
+				c.emitDeleteProp(hint, objReg, propIdx, node.Token.Line)
+			} else {
+				// For dynamic keys, we'd need a different approach
+				// For now, compile error
+				return BadRegister, NewCompileError(node, "delete with dynamic property keys not yet supported")
+			}
+			
+		default:
+			// For other expressions (like identifiers), the type checker should have caught this
+			// But let's return a compile error just in case
+			return BadRegister, NewCompileError(node, fmt.Sprintf("cannot delete %T", node.Right))
+		}
 	// --- END NEW ---
 	default:
 		return BadRegister, NewCompileError(node, fmt.Sprintf("unknown prefix operator '%s'", node.Operator))

@@ -196,6 +196,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.BITWISE_NOT, p.parsePrefixExpression)
 	p.registerPrefix(lexer.TYPEOF, p.parseTypeofExpression) // Added for typeof operator
 	p.registerPrefix(lexer.VOID, p.parseVoidExpression)     // Added for void operator
+	p.registerPrefix(lexer.DELETE, p.parsePrefixExpression) // Added for delete operator
 	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)

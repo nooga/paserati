@@ -172,6 +172,8 @@ const (
 	IN TokenType = "IN"
 	// INSTANCEOF keyword
 	INSTANCEOF TokenType = "INSTANCEOF"
+	// DELETE keyword
+	DELETE TokenType = "DELETE"
 )
 
 var keywords = map[string]TokenType{
@@ -205,6 +207,7 @@ var keywords = map[string]TokenType{
 	"as":         AS,         // Added for type assertions
 	"in":         IN,         // Added for in operator
 	"instanceof": INSTANCEOF, // Added for instanceof operator
+	"delete":     DELETE,     // Added for delete operator
 }
 
 // LookupIdent checks the keywords table for an identifier.

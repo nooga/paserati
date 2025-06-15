@@ -339,6 +339,14 @@ func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int)
 	c.emitUint16(nameConstIdx)
 }
 
+// emitDeleteProp emits OpDeleteProp DestReg, ObjReg, NameConstIdx(Uint16)
+func (c *Compiler) emitDeleteProp(dest, obj Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpDeleteProp, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(obj))
+	c.emitUint16(nameConstIdx)
+}
+
 // --- END REVISED/NEW ---
 
 // --- NEW: Global Variable Emit Functions ---
