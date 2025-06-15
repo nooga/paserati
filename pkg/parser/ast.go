@@ -1611,11 +1611,15 @@ func (cte *ConstructorTypeExpression) String() string {
 type DestructuringElement struct {
 	Target  Expression // Target variable (Identifier for now)
 	Default Expression // Default value (nil if no default)
+	IsRest  bool       // true if this is a rest element (...target)
 }
 
 // String() for DestructuringElement (helpful for debugging)
 func (de *DestructuringElement) String() string {
 	var out bytes.Buffer
+	if de.IsRest {
+		out.WriteString("...")
+	}
 	if de.Target != nil {
 		out.WriteString(de.Target.String())
 	}

@@ -177,11 +177,20 @@ func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructur
 				c.addError(identTarget, fmt.Sprintf("cannot assign to constant variable '%s'", identTarget.Value))
 			}
 
+			var targetType types.Type
+			if element.IsRest {
+				// Rest element gets an array type containing the remaining elements
+				targetType = &types.ArrayType{ElementType: elementType}
+			} else {
+				// Regular element gets the element type
+				targetType = elementType
+			}
+
 			// Set the computed type for the target
-			identTarget.SetComputedType(elementType)
+			identTarget.SetComputedType(targetType)
 			
 			// Update the variable's type in the environment
-			c.env.Update(identTarget.Value, elementType)
+			c.env.Update(identTarget.Value, targetType)
 			
 		} else {
 			// Only identifiers supported in Phase 1
@@ -202,7 +211,27 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 		}
 
 		var targetType types.Type
-		if i < len(tupleType.ElementTypes) {
+		if element.IsRest {
+			// Rest element gets an array of remaining tuple elements
+			if i < len(tupleType.ElementTypes) {
+				// Create an array type with union of remaining elements
+				remainingTypes := tupleType.ElementTypes[i:]
+				if len(remainingTypes) == 0 {
+					// No remaining elements, empty array
+					targetType = &types.ArrayType{ElementType: types.Never}
+				} else if len(remainingTypes) == 1 {
+					// Single remaining type
+					targetType = &types.ArrayType{ElementType: remainingTypes[0]}
+				} else {
+					// Multiple remaining types - create a union
+					unionType := &types.UnionType{Types: remainingTypes}
+					targetType = &types.ArrayType{ElementType: unionType}
+				}
+			} else {
+				// Rest element beyond tuple length - empty array
+				targetType = &types.ArrayType{ElementType: types.Never}
+			}
+		} else if i < len(tupleType.ElementTypes) {
 			// Use the precise type from the tuple
 			targetType = tupleType.ElementTypes[i]
 		} else {

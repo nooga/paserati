@@ -2380,24 +2380,33 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 	}
 	
 	// Convert array elements to destructuring elements
-	for _, element := range arrayLit.Elements {
+	for i, element := range arrayLit.Elements {
 		var target Expression
 		var defaultValue Expression
+		var isRest bool
 		
-		// Check if this element is an assignment expression (a = defaultValue)
-		if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+		// Check if this element is a rest element (...rest)
+		if spreadExpr, ok := element.(*SpreadElement); ok {
+			// This is a rest element: [...rest]
+			target = spreadExpr.Argument
+			defaultValue = nil
+			isRest = true
+		} else if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
 			// This is a default value: [a = 5]
 			target = assignExpr.Left
 			defaultValue = assignExpr.Value
+			isRest = false
 		} else {
 			// This is a simple element: [a]
 			target = element
 			defaultValue = nil
+			isRest = false
 		}
 		
 		destElement := &DestructuringElement{
 			Target:  target,
 			Default: defaultValue,
+			IsRest:  isRest,
 		}
 		
 		// Validate that the target is a valid identifier
@@ -2405,6 +2414,15 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 			msg := fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String())
 			p.addError(arrayLit.Token, msg)
 			return nil
+		}
+		
+		// Validate rest element placement
+		if isRest {
+			// Rest element must be the last element
+			if i != len(arrayLit.Elements)-1 {
+				p.addError(arrayLit.Token, "rest element must be last element in destructuring pattern")
+				return nil
+			}
 		}
 		
 		destructure.Elements = append(destructure.Elements, destElement)
@@ -2553,28 +2571,46 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 	}
 	
 	// Convert elements to DestructuringElements (similar to assignment parsing)
-	for _, element := range elements {
+	for i, element := range elements {
 		var target Expression
 		var defaultValue Expression
+		var isRest bool
 		
-		// Check if this element is an assignment expression (a = defaultValue)
-		if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+		// Check if this element is a rest element (...rest)
+		if spreadExpr, ok := element.(*SpreadElement); ok {
+			// This is a rest element: [...rest]
+			target = spreadExpr.Argument
+			defaultValue = nil
+			isRest = true
+		} else if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
 			target = assignExpr.Left
 			defaultValue = assignExpr.Value
+			isRest = false
 		} else {
 			target = element
 			defaultValue = nil
+			isRest = false
 		}
 		
 		destElement := &DestructuringElement{
 			Target:  target,
 			Default: defaultValue,
+			IsRest:  isRest,
 		}
 		
 		// Validate that the target is a valid identifier
 		if _, ok := target.(*Identifier); !ok {
 			p.addError(p.curToken, fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String()))
 			return nil
+		}
+		
+		// Validate rest element placement
+		if isRest {
+			// Rest element must be the last element
+			if i != len(elements)-1 {
+				p.addError(p.curToken, "rest element must be last element in destructuring pattern")
+				return nil
+			}
 		}
 		
 		decl.Elements = append(decl.Elements, destElement)

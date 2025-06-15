@@ -429,32 +429,47 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 		return BadRegister, err
 	}
 
-	// 2. For each element, compile: target = temp[index]
+	// 2. For each element, compile: target = temp[index] or target = temp.slice(index)
 	for i, element := range node.Elements {
 		if element.Target == nil {
 			continue // Skip malformed elements
 		}
 
-		// Allocate registers for index and extracted value
-		indexReg := c.regAlloc.Alloc()
-		valueReg := c.regAlloc.Alloc()
+		var valueReg Register
 		
-		// Load the index as a constant
-		indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
-		c.emitLoadConstant(indexReg, indexConstIdx, line)
-		
-		// Get temp[i] using GetIndex operation
-		c.emitOpCode(vm.OpGetIndex, line)
-		c.emitByte(byte(valueReg))  // destination register
-		c.emitByte(byte(tempReg))   // array register
-		c.emitByte(byte(indexReg))  // index register
+		if element.IsRest {
+			// Rest element: compile temp.slice(i) to get remaining elements
+			valueReg = c.regAlloc.Alloc()
+			
+			// Call temp.slice(i) to get the rest of the array
+			err := c.compileArraySliceCall(tempReg, i, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
+		} else {
+			// Regular element: compile temp[i]
+			indexReg := c.regAlloc.Alloc()
+			valueReg = c.regAlloc.Alloc()
+			
+			// Load the index as a constant
+			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
+			c.emitLoadConstant(indexReg, indexConstIdx, line)
+			
+			// Get temp[i] using GetIndex operation
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(valueReg))  // destination register
+			c.emitByte(byte(tempReg))   // array register
+			c.emitByte(byte(indexReg))  // index register
+			
+			c.regAlloc.Free(indexReg)
+		}
 		
 		// Handle assignment with potential default value
 		if element.Default != nil {
 			// Compile conditional assignment: target = valueReg !== undefined ? valueReg : default
 			err := c.compileConditionalAssignment(element.Target, valueReg, element.Default, line)
 			if err != nil {
-				c.regAlloc.Free(indexReg)
 				c.regAlloc.Free(valueReg)
 				return BadRegister, err
 			}
@@ -462,14 +477,12 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 			// Simple assignment: target = valueReg
 			err := c.compileSimpleAssignment(element.Target, valueReg, line)
 			if err != nil {
-				c.regAlloc.Free(indexReg)
 				c.regAlloc.Free(valueReg)
 				return BadRegister, err
 			}
 		}
 		
 		// Clean up temporary registers
-		c.regAlloc.Free(indexReg)
 		c.regAlloc.Free(valueReg)
 	}
 
@@ -479,6 +492,26 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 	}
 	
 	return hint, nil
+}
+
+// compileArraySliceCall compiles an array slice operation for rest elements
+func (c *Compiler) compileArraySliceCall(arrayReg Register, startIndex int, resultReg Register, line int) errors.PaseratiError {
+	// This compiles: resultReg = arrayReg.slice(startIndex) using the specialized OpArraySlice opcode
+	
+	// Load the start index as a constant
+	startIndexReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(startIndexReg)
+	
+	startConstIdx := c.chunk.AddConstant(vm.Number(float64(startIndex)))
+	c.emitLoadConstant(startIndexReg, startConstIdx, line)
+	
+	// Emit the array slice opcode: OpArraySlice destReg arrayReg startIndexReg
+	c.emitOpCode(vm.OpArraySlice, line)
+	c.emitByte(byte(resultReg))      // destination register
+	c.emitByte(byte(arrayReg))       // source array register
+	c.emitByte(byte(startIndexReg))  // start index register
+	
+	return nil
 }
 
 // compileSimpleAssignment handles assignment to a single target (identifier only for Phase 1)
@@ -656,19 +689,35 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			return BadRegister, NewCompileError(element.Target, "destructuring declaration target must be an identifier")
 		}
 
-		// Allocate registers for index and extracted value
-		indexReg := c.regAlloc.Alloc()
-		valueReg := c.regAlloc.Alloc()
+		var valueReg Register
 		
-		// Load the index as a constant
-		indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
-		c.emitLoadConstant(indexReg, indexConstIdx, line)
-		
-		// Get temp[i] using GetIndex operation
-		c.emitOpCode(vm.OpGetIndex, line)
-		c.emitByte(byte(valueReg))  // destination register
-		c.emitByte(byte(tempReg))   // array register
-		c.emitByte(byte(indexReg))  // index register
+		if element.IsRest {
+			// Rest element: compile temp.slice(i) to get remaining elements
+			valueReg = c.regAlloc.Alloc()
+			
+			// Call temp.slice(i) to get the rest of the array
+			err := c.compileArraySliceCall(tempReg, i, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
+		} else {
+			// Regular element: compile temp[i]
+			indexReg := c.regAlloc.Alloc()
+			valueReg = c.regAlloc.Alloc()
+			
+			// Load the index as a constant
+			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
+			c.emitLoadConstant(indexReg, indexConstIdx, line)
+			
+			// Get temp[i] using GetIndex operation
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(valueReg))  // destination register
+			c.emitByte(byte(tempReg))   // array register
+			c.emitByte(byte(indexReg))  // index register
+			
+			c.regAlloc.Free(indexReg)
+		}
 		
 		// Handle default value if present
 		if element.Default != nil {
@@ -676,7 +725,6 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			defaultReg := c.regAlloc.Alloc()
 			_, err := c.compileNode(element.Default, defaultReg)
 			if err != nil {
-				c.regAlloc.Free(indexReg)
 				c.regAlloc.Free(valueReg)
 				c.regAlloc.Free(defaultReg)
 				return BadRegister, err
@@ -688,7 +736,6 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			// Define variable with extracted value
 			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
 			if err != nil {
-				c.regAlloc.Free(indexReg)
 				c.regAlloc.Free(valueReg)
 				c.regAlloc.Free(defaultReg)
 				return BadRegister, err
@@ -703,7 +750,6 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			// Define variable with default value
 			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, defaultReg, line)
 			if err != nil {
-				c.regAlloc.Free(indexReg)
 				c.regAlloc.Free(valueReg)
 				c.regAlloc.Free(defaultReg)
 				return BadRegister, err
@@ -717,14 +763,12 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			// Define variable with extracted value
 			err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
 			if err != nil {
-				c.regAlloc.Free(indexReg)
 				c.regAlloc.Free(valueReg)
 				return BadRegister, err
 			}
 		}
 		
 		// Clean up temporary registers
-		c.regAlloc.Free(indexReg)
 		c.regAlloc.Free(valueReg)
 	}
 	

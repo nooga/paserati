@@ -1781,6 +1781,56 @@ func (vm *VM) run() (InterpretResult, Value) {
 			keysArray := NewArrayWithArgs(keyValues)
 			registers[destReg] = keysArray
 
+		case OpArraySlice:
+			destReg := code[ip]
+			arrayReg := code[ip+1]
+			startReg := code[ip+2]
+			ip += 3
+
+			arrayValue := registers[arrayReg]
+			startValue := registers[startReg]
+
+			// Ensure we have an array
+			if arrayValue.Type() != TypeArray {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot slice non-array value of type %d", int(arrayValue.Type()))
+				return status, Undefined
+			}
+
+			// Ensure start index is a number
+			if !startValue.IsNumber() {
+				frame.ip = ip
+				status := vm.runtimeError("Array slice start index must be a number, got type %d", int(startValue.Type()))
+				return status, Undefined
+			}
+
+			sourceArray := arrayValue.AsArray()
+			startIndex := int(startValue.ToFloat())
+			arrayLength := sourceArray.Length()
+
+			// Handle negative indices (slice(-1) means slice from end)
+			if startIndex < 0 {
+				startIndex = arrayLength + startIndex
+			}
+
+			// Clamp start index to valid range
+			if startIndex < 0 {
+				startIndex = 0
+			}
+			if startIndex > arrayLength {
+				startIndex = arrayLength
+			}
+
+			// Create new array with sliced elements
+			slicedElements := make([]Value, 0, arrayLength-startIndex)
+			for i := startIndex; i < arrayLength; i++ {
+				slicedElements = append(slicedElements, sourceArray.Get(i))
+			}
+
+			// Create new array with sliced elements
+			resultArray := NewArrayWithArgs(slicedElements)
+			registers[destReg] = resultArray
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)

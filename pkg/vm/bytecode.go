@@ -122,6 +122,10 @@ const (
 	// --- NEW: Object Enumeration Support ---
 	OpGetOwnKeys OpCode = 60 // Rx Ry: Get own enumerable property names of object in Ry, store array in Rx
 	// --- END NEW ---
+
+	// --- NEW: Array Slice Support for Rest Elements ---
+	OpArraySlice OpCode = 63 // Rx Ry Rz: Rx = Ry.slice(Rz) - slice array from start index
+	// --- END NEW ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -259,6 +263,8 @@ func (op OpCode) String() string {
 		return "OpSpreadCallMethod"
 	case OpGetOwnKeys:
 		return "OpGetOwnKeys"
+	case OpArraySlice:
+		return "OpArraySlice"
 	// --- END NEW ---
 
 	default:

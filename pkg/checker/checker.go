@@ -1733,7 +1733,31 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 
 		// Get the element type (undefined if beyond array bounds)
 		var elemType types.Type
-		if i < len(elementTypes) {
+		if element.IsRest {
+			// Rest element gets an array of remaining elements
+			if arrayType, ok := valueType.(*types.ArrayType); ok {
+				// For arrays, rest gets the same element type
+				elemType = &types.ArrayType{ElementType: arrayType.ElementType}
+			} else if tupleType, ok := valueType.(*types.TupleType); ok {
+				// For tuples, rest gets array of remaining element types
+				if i < len(tupleType.ElementTypes) {
+					remainingTypes := tupleType.ElementTypes[i:]
+					if len(remainingTypes) == 0 {
+						elemType = &types.ArrayType{ElementType: types.Never}
+					} else if len(remainingTypes) == 1 {
+						elemType = &types.ArrayType{ElementType: remainingTypes[0]}
+					} else {
+						unionType := &types.UnionType{Types: remainingTypes}
+						elemType = &types.ArrayType{ElementType: unionType}
+					}
+				} else {
+					elemType = &types.ArrayType{ElementType: types.Never}
+				}
+			} else {
+				// For other types (like Any), rest gets any[]
+				elemType = &types.ArrayType{ElementType: types.Any}
+			}
+		} else if i < len(elementTypes) {
 			elemType = elementTypes[i]
 		} else {
 			elemType = types.Undefined
