@@ -813,81 +813,105 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 	return tupleTypeExp
 }
 
-func (p *Parser) parseLetStatement() *LetStatement {
-	stmt := &LetStatement{Token: p.curToken}
+func (p *Parser) parseLetStatement() Statement {
+	letToken := p.curToken // Save the 'let' token
+	
+	// Peek at the next token to determine if it's a destructuring pattern
+	p.nextToken() // Move to what comes after 'let'
+	
+	switch p.curToken.Type {
+	case lexer.LBRACKET:
+		// Array destructuring: let [a, b] = ...
+		return p.parseArrayDestructuringDeclaration(letToken, false)
+	case lexer.LBRACE:
+		// Object destructuring: let {a, b} = ...
+		return p.parseObjectDestructuringDeclaration(letToken, false)
+	case lexer.IDENT:
+		// Regular identifier: let x = ...
+		stmt := &LetStatement{Token: letToken}
+		stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-	if !p.expectPeek(lexer.IDENT) {
+		// Optional Type Annotation
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume ':'
+			p.nextToken() // Consume token starting the type expression
+			stmt.TypeAnnotation = p.parseTypeExpression()
+			if stmt.TypeAnnotation == nil {
+				return nil
+			}
+		} else {
+			stmt.TypeAnnotation = nil
+		}
+
+		// Allow omitting = value, defaulting to undefined
+		if p.peekTokenIs(lexer.ASSIGN) {
+			p.nextToken() // Consume '='
+			p.nextToken() // Consume token starting the expression
+			stmt.Value = p.parseExpression(LOWEST)
+		} else {
+			stmt.Value = nil
+		}
+
+		// Optional semicolon
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+
+		return stmt
+	default:
+		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
 		return nil
 	}
-
-	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-	// Optional Type Annotation
-	if p.peekTokenIs(lexer.COLON) {
-		p.nextToken() // Consume ':'
-		p.nextToken() // Consume token starting the type expression
-		// --- MODIFIED: Use parseTypeExpression ---
-		stmt.TypeAnnotation = p.parseTypeExpression()
-		if stmt.TypeAnnotation == nil {
-			return nil
-		} // Propagate parsing error
-	} else {
-		stmt.TypeAnnotation = nil // No type annotation provided
-	}
-
-	// Allow omitting = value, defaulting to undefined
-	if p.peekTokenIs(lexer.ASSIGN) {
-		p.nextToken() // Consume '='
-		p.nextToken() // Consume token starting the expression
-		stmt.Value = p.parseExpression(LOWEST)
-	} else {
-		stmt.Value = nil // No initializer provided, implies undefined
-	}
-
-	// Optional semicolon - Consume it here
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
-
-	return stmt
 }
 
-func (p *Parser) parseConstStatement() *ConstStatement {
-	stmt := &ConstStatement{Token: p.curToken}
+func (p *Parser) parseConstStatement() Statement {
+	constToken := p.curToken // Save the 'const' token
+	
+	// Peek at the next token to determine if it's a destructuring pattern
+	p.nextToken() // Move to what comes after 'const'
+	
+	switch p.curToken.Type {
+	case lexer.LBRACKET:
+		// Array destructuring: const [a, b] = ...
+		return p.parseArrayDestructuringDeclaration(constToken, true)
+	case lexer.LBRACE:
+		// Object destructuring: const {a, b} = ...
+		return p.parseObjectDestructuringDeclaration(constToken, true)
+	case lexer.IDENT:
+		// Regular identifier: const x = ...
+		stmt := &ConstStatement{Token: constToken}
+		stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-	if !p.expectPeek(lexer.IDENT) {
-		return nil
-	}
+		// Optional Type Annotation
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume ':'
+			p.nextToken() // Consume the token starting the type expression
+			stmt.TypeAnnotation = p.parseTypeExpression()
+			if stmt.TypeAnnotation == nil {
+				return nil
+			}
+		} else {
+			stmt.TypeAnnotation = nil
+		}
 
-	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-	// Optional Type Annotation
-	if p.peekTokenIs(lexer.COLON) {
-		p.nextToken() // Consume ':'
-		p.nextToken() // Consume the token starting the type expression
-		// --- MODIFIED: Use parseTypeExpression ---
-		stmt.TypeAnnotation = p.parseTypeExpression()
-		if stmt.TypeAnnotation == nil {
+		// const requires initializer
+		if !p.expectPeek(lexer.ASSIGN) {
 			return nil
-		} // Propagate parsing error
-	} else {
-		stmt.TypeAnnotation = nil // No type annotation provided
-	}
+		}
 
-	if !p.expectPeek(lexer.ASSIGN) {
+		p.nextToken() // Consume token starting the expression
+		stmt.Value = p.parseExpression(LOWEST)
+
+		// Optional semicolon
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+
+		return stmt
+	default:
+		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'const', got %s", p.curToken.Type))
 		return nil
 	}
-
-	p.nextToken() // Consume '='
-
-	stmt.Value = p.parseExpression(LOWEST)
-
-	// Optional semicolon - Consume it here
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
-
-	return stmt
 }
 
 func (p *Parser) parseVarStatement() *VarStatement {
@@ -2317,6 +2341,12 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		return p.parseArrayDestructuringAssignment(arrayLit)
 	}
 	
+	// Check for object destructuring assignment: {a, b, c} = expr
+	if objectLit, ok := left.(*ObjectLiteral); ok && p.curToken.Type == lexer.ASSIGN {
+		debugPrint("parseAssignmentExpression detected object destructuring pattern")
+		return p.parseObjectDestructuringAssignment(objectLit)
+	}
+	
 	// Regular assignment expression
 	expr := &AssignmentExpression{
 		Token:    p.curToken,         // The assignment token (=, +=, etc.)
@@ -2351,14 +2381,28 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 	
 	// Convert array elements to destructuring elements
 	for _, element := range arrayLit.Elements {
-		destElement := &DestructuringElement{
-			Target:  element,
-			Default: nil, // No defaults in Phase 1
+		var target Expression
+		var defaultValue Expression
+		
+		// Check if this element is an assignment expression (a = defaultValue)
+		if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+			// This is a default value: [a = 5]
+			target = assignExpr.Left
+			defaultValue = assignExpr.Value
+		} else {
+			// This is a simple element: [a]
+			target = element
+			defaultValue = nil
 		}
 		
-		// Validate that the target is a valid identifier for now
-		if _, ok := element.(*Identifier); !ok {
-			msg := fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", element.String())
+		destElement := &DestructuringElement{
+			Target:  target,
+			Default: defaultValue,
+		}
+		
+		// Validate that the target is a valid identifier
+		if _, ok := target.(*Identifier); !ok {
+			msg := fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String())
 			p.addError(arrayLit.Token, msg)
 			return nil
 		}
@@ -2378,6 +2422,288 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 	
 	debugPrint("parseArrayDestructuringAssignment completed: %s", destructure.String())
 	return destructure
+}
+
+// parseObjectDestructuringAssignment handles object destructuring like {a, b, c} = expr
+func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Expression {
+	debugPrint("parseObjectDestructuringAssignment starting")
+	
+	destructure := &ObjectDestructuringAssignment{
+		Token: objectLit.Token, // The '{' token from the object literal
+	}
+	
+	// Convert object properties to destructuring properties
+	for _, pair := range objectLit.Properties {
+		// For Phase 2, we support simple property destructuring
+		// {name, age} = obj (shorthand) or {name: localName} = obj (explicit target)
+		
+		// The key should be an identifier for simple property access
+		keyIdent, ok := pair.Key.(*Identifier)
+		if !ok {
+			msg := fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", pair.Key.String())
+			p.addError(objectLit.Token, msg)
+			return nil
+		}
+		
+		var target Expression
+		var defaultValue Expression
+		
+		// Check for different patterns:
+		// 1. {name} - shorthand without default
+		// 2. {name = defaultVal} - shorthand with default (value is assignment expr)
+		// 3. {name: localVar} - explicit target without default
+		// 4. {name: localVar = defaultVal} - explicit target with default
+		
+		if valueIdent, ok := pair.Value.(*Identifier); ok && valueIdent.Value == keyIdent.Value {
+			// Pattern 1: Shorthand without default {name}
+			target = keyIdent
+			defaultValue = nil
+		} else if assignExpr, ok := pair.Value.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+			// Check if this is shorthand with default or explicit with default
+			if leftIdent, ok := assignExpr.Left.(*Identifier); ok && leftIdent.Value == keyIdent.Value {
+				// Pattern 2: Shorthand with default {name = defaultVal}
+				target = keyIdent
+				defaultValue = assignExpr.Value
+			} else {
+				// Pattern 4: Explicit target with default {name: localVar = defaultVal}
+				target = assignExpr.Left
+				defaultValue = assignExpr.Value
+			}
+		} else {
+			// Pattern 3: Explicit target without default {name: localVar}
+			target = pair.Value
+			defaultValue = nil
+		}
+		
+		// Validate that the target is a valid identifier
+		if _, ok := target.(*Identifier); !ok {
+			msg := fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String())
+			p.addError(objectLit.Token, msg)
+			return nil
+		}
+		
+		destProperty := &DestructuringProperty{
+			Key:     keyIdent,
+			Target:  target,
+			Default: defaultValue,
+		}
+		
+		destructure.Properties = append(destructure.Properties, destProperty)
+	}
+	
+	// Consume the '=' token (already checked in caller)
+	p.nextToken()
+	
+	// Parse the right-hand side expression
+	destructure.Value = p.parseExpression(LOWEST)
+	if destructure.Value == nil {
+		p.addError(p.curToken, "expected expression after '=' in object destructuring assignment")
+		return nil
+	}
+	
+	debugPrint("parseObjectDestructuringAssignment completed: %s", destructure.String())
+	return destructure
+}
+
+// parseArrayDestructuringDeclaration handles let/const/var [a, b] = expr
+func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isConst bool) *ArrayDestructuringDeclaration {
+	debugPrint("parseArrayDestructuringDeclaration starting")
+	
+	decl := &ArrayDestructuringDeclaration{
+		Token:   declToken,
+		IsConst: isConst,
+	}
+	
+	// Current token is '[', parse the pattern using similar logic to parseExpressionList
+	elements := []Expression{}
+	
+	// Check for empty pattern: let [] = ...
+	if p.peekTokenIs(lexer.RBRACKET) {
+		p.nextToken() // Consume ']'
+	} else {
+		p.nextToken() // Move past '[' to first element
+		
+		// Parse first element
+		element := p.parseExpression(LOWEST)
+		if element != nil {
+			elements = append(elements, element)
+		}
+		
+		// Parse remaining elements
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			
+			// Allow trailing comma
+			if p.peekTokenIs(lexer.RBRACKET) {
+				p.nextToken() // Consume ']'
+				break
+			}
+			
+			p.nextToken() // Move to next element
+			element = p.parseExpression(LOWEST)
+			if element != nil {
+				elements = append(elements, element)
+			}
+		}
+		
+		// Ensure we end with ']'
+		if !p.expectPeek(lexer.RBRACKET) {
+			return nil
+		}
+	}
+	
+	// Convert elements to DestructuringElements (similar to assignment parsing)
+	for _, element := range elements {
+		var target Expression
+		var defaultValue Expression
+		
+		// Check if this element is an assignment expression (a = defaultValue)
+		if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+			target = assignExpr.Left
+			defaultValue = assignExpr.Value
+		} else {
+			target = element
+			defaultValue = nil
+		}
+		
+		destElement := &DestructuringElement{
+			Target:  target,
+			Default: defaultValue,
+		}
+		
+		// Validate that the target is a valid identifier
+		if _, ok := target.(*Identifier); !ok {
+			p.addError(p.curToken, fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String()))
+			return nil
+		}
+		
+		decl.Elements = append(decl.Elements, destElement)
+	}
+	
+	// Optional type annotation: let [a, b]: [number, string] = ...
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Move to type expression
+		decl.TypeAnnotation = p.parseTypeExpression()
+		if decl.TypeAnnotation == nil {
+			return nil
+		}
+	}
+	
+	// Require initializer for destructuring
+	if !p.expectPeek(lexer.ASSIGN) {
+		p.addError(p.peekToken, "destructuring declaration must have an initializer")
+		return nil
+	}
+	
+	p.nextToken() // Move to RHS expression
+	decl.Value = p.parseExpression(LOWEST)
+	if decl.Value == nil {
+		return nil
+	}
+	
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	
+	debugPrint("parseArrayDestructuringDeclaration completed: %s", decl.String())
+	return decl
+}
+
+// parseObjectDestructuringDeclaration handles let/const/var {a, b} = expr
+func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isConst bool) *ObjectDestructuringDeclaration {
+	debugPrint("parseObjectDestructuringDeclaration starting")
+	
+	decl := &ObjectDestructuringDeclaration{
+		Token:   declToken,
+		IsConst: isConst,
+	}
+	
+	// Current token is '{', parse the pattern similar to object literal
+	objectLit := p.parseObjectLiteral().(*ObjectLiteral)
+	if objectLit == nil {
+		return nil
+	}
+	
+	// Convert object properties to destructuring properties
+	for _, pair := range objectLit.Properties {
+		// The key should be an identifier for simple property access
+		keyIdent, ok := pair.Key.(*Identifier)
+		if !ok {
+			p.addError(objectLit.Token, fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", pair.Key.String()))
+			return nil
+		}
+		
+		var target Expression
+		var defaultValue Expression
+		
+		// Check for different patterns (same logic as assignment destructuring)
+		if valueIdent, ok := pair.Value.(*Identifier); ok && valueIdent.Value == keyIdent.Value {
+			// Pattern 1: Shorthand without default {name}
+			target = keyIdent
+			defaultValue = nil
+		} else if assignExpr, ok := pair.Value.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+			// Check if this is shorthand with default or explicit with default
+			if leftIdent, ok := assignExpr.Left.(*Identifier); ok && leftIdent.Value == keyIdent.Value {
+				// Pattern 2: Shorthand with default {name = defaultVal}
+				target = keyIdent
+				defaultValue = assignExpr.Value
+			} else {
+				// Pattern 4: Explicit target with default {name: localVar = defaultVal}
+				target = assignExpr.Left
+				defaultValue = assignExpr.Value
+			}
+		} else {
+			// Pattern 3: Explicit target without default {name: localVar}
+			target = pair.Value
+			defaultValue = nil
+		}
+		
+		// Validate that the target is a valid identifier
+		if _, ok := target.(*Identifier); !ok {
+			p.addError(objectLit.Token, fmt.Sprintf("invalid destructuring target: %s (only identifiers supported)", target.String()))
+			return nil
+		}
+		
+		destProperty := &DestructuringProperty{
+			Key:     keyIdent,
+			Target:  target,
+			Default: defaultValue,
+		}
+		
+		decl.Properties = append(decl.Properties, destProperty)
+	}
+	
+	// Optional type annotation: let {a, b}: {a: number, b: string} = ...
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Move to type expression
+		decl.TypeAnnotation = p.parseTypeExpression()
+		if decl.TypeAnnotation == nil {
+			return nil
+		}
+	}
+	
+	// Require initializer for destructuring
+	if !p.expectPeek(lexer.ASSIGN) {
+		p.addError(p.peekToken, "destructuring declaration must have an initializer")
+		return nil
+	}
+	
+	p.nextToken() // Move to RHS expression
+	decl.Value = p.parseExpression(LOWEST)
+	if decl.Value == nil {
+		return nil
+	}
+	
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	
+	debugPrint("parseObjectDestructuringDeclaration completed: %s", decl.String())
+	return decl
 }
 
 // --- New: While Statement Parsing ---

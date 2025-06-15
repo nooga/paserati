@@ -210,7 +210,35 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 			targetType = types.Undefined
 		}
 
-		// For Phase 1, only support Identifier targets
+		// Handle default values if present
+		var finalTargetType types.Type = targetType
+		if element.Default != nil {
+			// Type-check the default value
+			c.visit(element.Default)
+			defaultType := element.Default.GetComputedType()
+			if defaultType == nil {
+				defaultType = types.Any
+			}
+			
+			// Check that default value is assignable to expected element type
+			if targetType != types.Undefined && targetType != types.Any {
+				if !types.IsAssignable(defaultType, targetType) {
+					c.addError(element.Default, fmt.Sprintf("default value type '%s' is not assignable to expected element type '%s'", defaultType.String(), targetType.String()))
+				}
+			}
+			
+			// Final type is the union of element type and default type (excluding undefined)
+			if targetType == types.Undefined {
+				// Element doesn't exist, so target gets default type
+				finalTargetType = defaultType
+			} else {
+				// Element exists, so target could be either element type or default type
+				// For simplicity, use the element type since default is only used when undefined
+				finalTargetType = targetType
+			}
+		}
+
+		// Only support Identifier targets
 		if identTarget, ok := element.Target.(*parser.Identifier); ok {
 			// Check if target variable is const
 			_, isConst, found := c.env.Resolve(identTarget.Value)
@@ -219,14 +247,109 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 			}
 
 			// Set the computed type for the target
-			identTarget.SetComputedType(targetType)
+			identTarget.SetComputedType(finalTargetType)
 			
 			// Update the variable's type in the environment
-			c.env.Update(identTarget.Value, targetType)
+			c.env.Update(identTarget.Value, finalTargetType)
 			
 		} else {
-			// Only identifiers supported in Phase 1
+			// Only identifiers supported
 			c.addError(element.Target, fmt.Sprintf("destructuring target at position %d must be an identifier", i))
+		}
+	}
+
+	// Set computed type for the overall expression (evaluates to RHS value)
+	node.SetComputedType(rhsType)
+}
+
+// checkObjectDestructuringAssignment handles object destructuring assignments like {a, b} = expr
+func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestructuringAssignment) {
+	// 1. Check RHS expression 
+	c.visit(node.Value)
+	rhsType := node.Value.GetComputedType()
+	if rhsType == nil {
+		rhsType = types.Any
+	}
+
+	// 2. Widen the RHS type for compatibility checking
+	widenedRhsType := types.GetWidenedType(rhsType)
+
+	// 3. Validate that RHS is object-like (has properties)
+	if widenedRhsType != types.Any {
+		switch rhsType := rhsType.(type) {
+		case *types.ObjectType:
+			// Valid: object type with known properties (includes interfaces)
+		default:
+			// For Phase 2, we require object types or Any
+			c.addError(node.Value, fmt.Sprintf("object destructuring requires RHS to be object-like, got '%s'", rhsType.String()))
+			return
+		}
+	}
+
+	// 4. For each destructuring property, check if it exists on RHS and infer target type
+	for _, prop := range node.Properties {
+		if prop.Target == nil {
+			continue // Skip malformed properties
+		}
+
+		// Get the property name
+		propName := prop.Key.Value
+
+		// Determine the property type from RHS
+		var propType types.Type = types.Any // Default fallback
+
+		if widenedRhsType != types.Any {
+			switch rhsType := rhsType.(type) {
+			case *types.ObjectType:
+				if foundPropType, exists := rhsType.Properties[propName]; exists {
+					propType = foundPropType
+				} else {
+					// Property doesn't exist on object - will be undefined at runtime
+					// In TypeScript, this is allowed but results in undefined
+					propType = types.Undefined
+				}
+			}
+		}
+
+		// Handle default values if present
+		var finalPropType types.Type = propType
+		if prop.Default != nil {
+			// Type-check the default value
+			c.visit(prop.Default)
+			defaultType := prop.Default.GetComputedType()
+			if defaultType == nil {
+				defaultType = types.Any
+			}
+			
+			// Check that default value is assignable to expected property type
+			if propType != types.Undefined && propType != types.Any {
+				if !types.IsAssignable(defaultType, propType) {
+					c.addError(prop.Default, fmt.Sprintf("default value type '%s' is not assignable to expected property type '%s'", defaultType.String(), propType.String()))
+				}
+			}
+			
+			// Final type is the union of property type and default type (excluding undefined)
+			if propType == types.Undefined {
+				// Property doesn't exist, so target gets default type
+				finalPropType = defaultType
+			} else {
+				// Property exists, so target could be either property type or default type
+				// For simplicity, use the property type since default is only used when undefined
+				finalPropType = propType
+			}
+		}
+
+		// Set the computed type for the target variable
+		if identTarget, ok := prop.Target.(*parser.Identifier); ok {
+			// Set the computed type for the target
+			identTarget.SetComputedType(finalPropType)
+			
+			// Update the variable's type in the environment
+			c.env.Update(identTarget.Value, finalPropType)
+			
+		} else {
+			// Only identifiers supported
+			c.addError(prop.Target, fmt.Sprintf("destructuring target for property '%s' must be an identifier", propName))
 		}
 	}
 

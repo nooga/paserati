@@ -5,6 +5,7 @@ import (
 
 	"paserati/pkg/errors"
 	"paserati/pkg/parser"
+	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
 
@@ -448,12 +449,23 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 		c.emitByte(byte(tempReg))   // array register
 		c.emitByte(byte(indexReg))  // index register
 		
-		// Assign the extracted value to the target variable
-		err := c.compileSimpleAssignment(element.Target, valueReg, line)
-		if err != nil {
-			c.regAlloc.Free(indexReg)
-			c.regAlloc.Free(valueReg)
-			return BadRegister, err
+		// Handle assignment with potential default value
+		if element.Default != nil {
+			// Compile conditional assignment: target = valueReg !== undefined ? valueReg : default
+			err := c.compileConditionalAssignment(element.Target, valueReg, element.Default, line)
+			if err != nil {
+				c.regAlloc.Free(indexReg)
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
+		} else {
+			// Simple assignment: target = valueReg
+			err := c.compileSimpleAssignment(element.Target, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(indexReg)
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
 		}
 		
 		// Clean up temporary registers
@@ -493,5 +505,377 @@ func (c *Compiler) compileSimpleAssignment(target parser.Expression, valueReg Re
 		}
 	}
 
+	return nil
+}
+
+// compileObjectDestructuringAssignment compiles object destructuring like {a, b} = expr
+// Desugars into: temp = expr; a = temp.a; b = temp.b;
+func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestructuringAssignment, hint Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+	
+	if debugAssignment {
+		fmt.Printf("// [Assignment] Compiling object destructuring: %s\n", node.String())
+	}
+
+	// 1. Compile RHS expression into temp register
+	tempReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(tempReg)
+	
+	_, err := c.compileNode(node.Value, tempReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. For each property, compile: target = temp.propertyName
+	for _, prop := range node.Properties {
+		if prop.Target == nil {
+			continue // Skip malformed properties
+		}
+
+		// Allocate register for extracted property value
+		valueReg := c.regAlloc.Alloc()
+		
+		// Add property name as a constant
+		propNameIdx := c.chunk.AddConstant(vm.String(prop.Key.Value))
+		
+		// Get temp.propertyName using GetProp operation
+		c.emitGetProp(valueReg, tempReg, propNameIdx, line)
+		
+		// Handle assignment with potential default value
+		if prop.Default != nil {
+			// Compile conditional assignment: target = valueReg !== undefined ? valueReg : default
+			err := c.compileConditionalAssignment(prop.Target, valueReg, prop.Default, line)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
+		} else {
+			// Simple assignment: target = valueReg
+			err := c.compileSimpleAssignment(prop.Target, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
+		}
+		
+		// Clean up temporary register
+		c.regAlloc.Free(valueReg)
+	}
+
+	// 3. Return the original RHS value (like regular assignment)
+	if hint != tempReg {
+		c.emitMove(hint, tempReg, line)
+	}
+	
+	return hint, nil
+}
+// compileConditionalAssignment compiles: target = (valueReg !== undefined) ? valueReg : defaultExpr
+func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueReg Register, defaultExpr parser.Expression, line int) errors.PaseratiError {
+	// This implements: target = valueReg !== undefined ? valueReg : defaultExpr
+	
+	// 1. Conditional jump: if undefined, jump to default value assignment
+	jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+	
+	// 3. Path 1: Value is not undefined, assign valueReg to target
+	err := c.compileSimpleAssignment(target, valueReg, line)
+	if err != nil {
+		return err
+	}
+	
+	// Jump past the default assignment
+	jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+	
+	// 4. Path 2: Value is undefined, evaluate and assign default
+	c.patchJump(jumpToDefault)
+	
+	// Compile the default expression
+	defaultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(defaultReg)
+	
+	_, err = c.compileNode(defaultExpr, defaultReg)
+	if err != nil {
+		return err
+	}
+	
+	// Assign default value to target
+	err = c.compileSimpleAssignment(target, defaultReg, line)
+	if err != nil {
+		return err
+	}
+	
+	// 5. Patch the jump past default
+	c.patchJump(jumpPastDefault)
+	
+	return nil
+}
+
+// compileArrayDestructuringDeclaration compiles let/const [a, b] = expr declarations
+func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestructuringDeclaration, hint Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+	
+	if debugAssignment {
+		fmt.Printf("// [Assignment] Compiling array destructuring declaration: %s\n", node.String())
+	}
+
+	// If no initializer, assign undefined to all variables
+	if node.Value == nil {
+		for _, element := range node.Elements {
+			if element.Target == nil {
+				continue
+			}
+			
+			if ident, ok := element.Target.(*parser.Identifier); ok {
+				// Define variable with undefined value
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Undefined, line)
+				if err != nil {
+					return BadRegister, err
+				}
+			}
+		}
+		return BadRegister, nil
+	}
+
+	// 1. Compile RHS expression into temp register
+	tempReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(tempReg)
+	
+	_, err := c.compileNode(node.Value, tempReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. For each element, compile: define target = temp[index]
+	for i, element := range node.Elements {
+		if element.Target == nil {
+			continue // Skip malformed elements
+		}
+
+		// Only support identifier targets for now
+		ident, ok := element.Target.(*parser.Identifier)
+		if !ok {
+			return BadRegister, NewCompileError(element.Target, "destructuring declaration target must be an identifier")
+		}
+
+		// Allocate registers for index and extracted value
+		indexReg := c.regAlloc.Alloc()
+		valueReg := c.regAlloc.Alloc()
+		
+		// Load the index as a constant
+		indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
+		c.emitLoadConstant(indexReg, indexConstIdx, line)
+		
+		// Get temp[i] using GetIndex operation
+		c.emitOpCode(vm.OpGetIndex, line)
+		c.emitByte(byte(valueReg))  // destination register
+		c.emitByte(byte(tempReg))   // array register
+		c.emitByte(byte(indexReg))  // index register
+		
+		// Handle default value if present
+		if element.Default != nil {
+			// Compile conditional assignment with default
+			defaultReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(element.Default, defaultReg)
+			if err != nil {
+				c.regAlloc.Free(indexReg)
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(defaultReg)
+				return BadRegister, err
+			}
+			
+			// Jump to default if valueReg is undefined
+			jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+			
+			// Define variable with extracted value
+			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(indexReg)
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(defaultReg)
+				return BadRegister, err
+			}
+			
+			// Jump past default
+			jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+			
+			// Patch jump to default
+			c.patchJump(jumpToDefault)
+			
+			// Define variable with default value
+			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, defaultReg, line)
+			if err != nil {
+				c.regAlloc.Free(indexReg)
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(defaultReg)
+				return BadRegister, err
+			}
+			
+			// Patch jump past default
+			c.patchJump(jumpPastDefault)
+			
+			c.regAlloc.Free(defaultReg)
+		} else {
+			// Define variable with extracted value
+			err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(indexReg)
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
+		}
+		
+		// Clean up temporary registers
+		c.regAlloc.Free(indexReg)
+		c.regAlloc.Free(valueReg)
+	}
+	
+	return BadRegister, nil
+}
+
+// compileObjectDestructuringDeclaration compiles let/const {a, b} = expr declarations
+func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDestructuringDeclaration, hint Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+	
+	if debugAssignment {
+		fmt.Printf("// [Assignment] Compiling object destructuring declaration: %s\n", node.String())
+	}
+
+	// If no initializer, assign undefined to all variables
+	if node.Value == nil {
+		for _, prop := range node.Properties {
+			if prop.Target == nil {
+				continue
+			}
+			
+			if ident, ok := prop.Target.(*parser.Identifier); ok {
+				// Define variable with undefined value
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Undefined, line)
+				if err != nil {
+					return BadRegister, err
+				}
+			}
+		}
+		return BadRegister, nil
+	}
+
+	// 1. Compile RHS expression into temp register
+	tempReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(tempReg)
+	
+	_, err := c.compileNode(node.Value, tempReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. For each property, compile: define target = temp.property
+	for _, prop := range node.Properties {
+		if prop.Key == nil || prop.Target == nil {
+			continue // Skip malformed properties
+		}
+
+		// Only support identifier targets for now
+		ident, ok := prop.Target.(*parser.Identifier)
+		if !ok {
+			return BadRegister, NewCompileError(prop.Target, "destructuring declaration target must be an identifier")
+		}
+
+		// Allocate register for extracted value
+		valueReg := c.regAlloc.Alloc()
+		
+		// Get property from object
+		propNameIdx := c.chunk.AddConstant(vm.String(prop.Key.Value))
+		c.emitOpCode(vm.OpGetProp, line)
+		c.emitByte(byte(valueReg))   // destination register
+		c.emitByte(byte(tempReg))    // object register
+		c.emitUint16(propNameIdx)    // property name constant index
+		
+		// Handle default value if present
+		if prop.Default != nil {
+			// Compile conditional assignment with default
+			defaultReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(prop.Default, defaultReg)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(defaultReg)
+				return BadRegister, err
+			}
+			
+			// Jump to default if valueReg is undefined
+			jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+			
+			// Define variable with extracted value
+			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(defaultReg)
+				return BadRegister, err
+			}
+			
+			// Jump past default
+			jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+			
+			// Patch jump to default
+			c.patchJump(jumpToDefault)
+			
+			// Define variable with default value
+			err = c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, defaultReg, line)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(defaultReg)
+				return BadRegister, err
+			}
+			
+			// Patch jump past default
+			c.patchJump(jumpPastDefault)
+			
+			c.regAlloc.Free(defaultReg)
+		} else {
+			// Define variable with extracted value
+			err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				return BadRegister, err
+			}
+		}
+		
+		// Clean up temporary register
+		c.regAlloc.Free(valueReg)
+	}
+	
+	return BadRegister, nil
+}
+
+// defineDestructuredVariable defines a new variable from destructuring (without value)
+func (c *Compiler) defineDestructuredVariable(name string, isConst bool, valueType types.Type, line int) errors.PaseratiError {
+	undefReg := c.regAlloc.Alloc()
+	c.emitLoadUndefined(undefReg, line)
+	
+	err := c.defineDestructuredVariableWithValue(name, isConst, undefReg, line)
+	if err != nil {
+		c.regAlloc.Free(undefReg)
+		return err
+	}
+	
+	// Pin the register for local variables
+	if c.enclosing != nil {
+		c.regAlloc.Pin(undefReg)
+	}
+	
+	return nil
+}
+
+// defineDestructuredVariableWithValue defines a new variable from destructuring with a specific value
+func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool, valueReg Register, line int) errors.PaseratiError {
+	if c.enclosing == nil {
+		// Top-level: use global variable
+		globalIdx := c.GetOrAssignGlobalIndex(name)
+		c.emitSetGlobal(globalIdx, valueReg, line)
+		c.currentSymbolTable.DefineGlobal(name, globalIdx)
+	} else {
+		// Function scope: use local symbol table
+		c.currentSymbolTable.Define(name, valueReg)
+		// Pin the register since local variables can be captured by upvalues
+		c.regAlloc.Pin(valueReg)
+	}
+	
 	return nil
 }

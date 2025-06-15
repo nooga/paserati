@@ -808,6 +808,12 @@ func (c *Checker) visit(node parser.Node) {
 		// Set computed type on the Name Identifier node itself
 		node.Name.SetComputedType(finalType) // <<< USE NODE METHOD
 
+	case *parser.ArrayDestructuringDeclaration:
+		c.checkArrayDestructuringDeclaration(node)
+		
+	case *parser.ObjectDestructuringDeclaration:
+		c.checkObjectDestructuringDeclaration(node)
+
 	case *parser.ReturnStatement:
 		// --- UPDATED: Handle ReturnStatement ---
 		var actualReturnType types.Type = types.Undefined // Default if no return value
@@ -1371,6 +1377,9 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.ArrayDestructuringAssignment:
 		c.checkArrayDestructuringAssignment(node)
 
+	case *parser.ObjectDestructuringAssignment:
+		c.checkObjectDestructuringAssignment(node)
+
 	case *parser.UpdateExpression:
 		// --- NEW: Handle UpdateExpression ---
 		c.visit(node.Argument)
@@ -1651,6 +1660,195 @@ func (c *Checker) visit(node parser.Node) {
 		// Optional: Add error for unhandled node types
 		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
 		break
+	}
+}
+
+// checkArrayDestructuringDeclaration handles type checking for array destructuring declarations
+func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructuringDeclaration) {
+	// Check if we have an initializer (required for const, optional for let/var)
+	if node.Value == nil {
+		if node.IsConst {
+			c.addError(node, "const declaration must be initialized")
+		}
+		// For let/var without initializer, all variables get undefined type
+		for _, element := range node.Elements {
+			if element != nil && element.Target != nil {
+				if ident, ok := element.Target.(*parser.Identifier); ok {
+					if !c.env.Define(ident.Value, types.Undefined, node.IsConst) {
+						c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+					}
+					ident.SetComputedType(types.Undefined)
+				}
+			}
+		}
+		return
+	}
+
+	// Check the RHS value
+	c.visit(node.Value)
+	valueType := node.Value.GetComputedType()
+	if valueType == nil {
+		valueType = types.Any
+	}
+
+	// Check if we have a type annotation
+	var expectedType types.Type
+	if node.TypeAnnotation != nil {
+		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
+		// Verify that the value is assignable to the expected type
+		if !types.IsAssignable(valueType, expectedType) {
+			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to type '%s'", valueType.String(), expectedType.String()))
+		}
+	}
+
+	// Extract element types based on value type
+	var elementTypes []types.Type
+	if arrayType, ok := valueType.(*types.ArrayType); ok {
+		// For arrays, all elements have the same type
+		for range node.Elements {
+			elementTypes = append(elementTypes, arrayType.ElementType)
+		}
+	} else if tupleType, ok := valueType.(*types.TupleType); ok {
+		// For tuples, use specific element types
+		elementTypes = tupleType.ElementTypes
+	} else if valueType == types.Any {
+		// For any type, all elements are any
+		for range node.Elements {
+			elementTypes = append(elementTypes, types.Any)
+		}
+	} else {
+		// Not an array-like type
+		c.addError(node.Value, fmt.Sprintf("cannot destructure non-array type '%s'", valueType.String()))
+		// Continue with Any types to avoid cascading errors
+		for range node.Elements {
+			elementTypes = append(elementTypes, types.Any)
+		}
+	}
+
+	// Process each destructuring element
+	for i, element := range node.Elements {
+		if element == nil || element.Target == nil {
+			continue
+		}
+
+		// Get the element type (undefined if beyond array bounds)
+		var elemType types.Type
+		if i < len(elementTypes) {
+			elemType = elementTypes[i]
+		} else {
+			elemType = types.Undefined
+		}
+
+		// Handle default value if present
+		if element.Default != nil {
+			c.visit(element.Default)
+			defaultType := element.Default.GetComputedType()
+			if defaultType == nil {
+				defaultType = types.Any
+			}
+
+			// The resulting type is the union of element type and default type
+			// For now, we'll use the element type if it's not undefined
+			if elemType == types.Undefined {
+				elemType = types.GetWidenedType(defaultType)
+			}
+		}
+
+		// Define the variable with its inferred type
+		if ident, ok := element.Target.(*parser.Identifier); ok {
+			if !c.env.Define(ident.Value, elemType, node.IsConst) {
+				c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+			}
+			ident.SetComputedType(elemType)
+		}
+	}
+}
+
+// checkObjectDestructuringDeclaration handles type checking for object destructuring declarations
+func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestructuringDeclaration) {
+	// Check if we have an initializer (required for const, optional for let/var)
+	if node.Value == nil {
+		if node.IsConst {
+			c.addError(node, "const declaration must be initialized")
+		}
+		// For let/var without initializer, all variables get undefined type
+		for _, prop := range node.Properties {
+			if prop != nil && prop.Target != nil {
+				if ident, ok := prop.Target.(*parser.Identifier); ok {
+					if !c.env.Define(ident.Value, types.Undefined, node.IsConst) {
+						c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+					}
+					ident.SetComputedType(types.Undefined)
+				}
+			}
+		}
+		return
+	}
+
+	// Check the RHS value
+	c.visit(node.Value)
+	valueType := node.Value.GetComputedType()
+	if valueType == nil {
+		valueType = types.Any
+	}
+
+	// Check if we have a type annotation
+	var expectedType types.Type
+	if node.TypeAnnotation != nil {
+		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
+		// Verify that the value is assignable to the expected type
+		if !types.IsAssignable(valueType, expectedType) {
+			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to type '%s'", valueType.String(), expectedType.String()))
+		}
+	}
+
+	// Check if the value is an object-like type
+	var objType *types.ObjectType
+	if ot, ok := valueType.(*types.ObjectType); ok {
+		objType = ot
+	} else if valueType != types.Any {
+		// Not an object-like type
+		c.addError(node.Value, fmt.Sprintf("cannot destructure non-object type '%s'", valueType.String()))
+	}
+
+	// Process each destructuring property
+	for _, prop := range node.Properties {
+		if prop == nil || prop.Key == nil || prop.Target == nil {
+			continue
+		}
+
+		// Get the property type from the object
+		var propType types.Type = types.Undefined
+		if objType != nil {
+			if pt, exists := objType.Properties[prop.Key.Value]; exists {
+				propType = pt
+			}
+		} else if valueType == types.Any {
+			propType = types.Any
+		}
+
+		// Handle default value if present
+		if prop.Default != nil {
+			c.visit(prop.Default)
+			defaultType := prop.Default.GetComputedType()
+			if defaultType == nil {
+				defaultType = types.Any
+			}
+
+			// The resulting type is the union of property type and default type
+			// For now, we'll use the property type if it's not undefined
+			if propType == types.Undefined {
+				propType = types.GetWidenedType(defaultType)
+			}
+		}
+
+		// Define the variable with its inferred type
+		if ident, ok := prop.Target.(*parser.Identifier); ok {
+			if !c.env.Define(ident.Value, propType, node.IsConst) {
+				c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+			}
+			ident.SetComputedType(propType)
+		}
 	}
 }
 

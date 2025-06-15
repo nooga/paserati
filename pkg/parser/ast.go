@@ -1656,7 +1656,143 @@ func (ada *ArrayDestructuringAssignment) String() string {
 	return out.String()
 }
 
+// DestructuringProperty represents key: target in object destructuring
+type DestructuringProperty struct {
+	Key     *Identifier // Property name in source object
+	Target  Expression  // Target variable (can be different from key)
+	Default Expression  // Default value (nil if no default)
+}
+
+// String() for DestructuringProperty (helpful for debugging)
+func (dp *DestructuringProperty) String() string {
+	var out bytes.Buffer
+	if dp.Key != nil {
+		out.WriteString(dp.Key.String())
+	}
+	if dp.Target != nil && dp.Target != dp.Key {
+		out.WriteString(": ")
+		out.WriteString(dp.Target.String())
+	}
+	if dp.Default != nil {
+		out.WriteString(" = ")
+		out.WriteString(dp.Default.String())
+	}
+	return out.String()
+}
+
+// ObjectDestructuringAssignment represents {a, b} = expr
+type ObjectDestructuringAssignment struct {
+	BaseExpression                       // Embed base for ComputedType
+	Token          lexer.Token           // The '{' token
+	Properties     []*DestructuringProperty // Target properties/patterns
+	Value          Expression            // RHS expression to destructure
+}
+
+func (oda *ObjectDestructuringAssignment) expressionNode()      {}
+func (oda *ObjectDestructuringAssignment) TokenLiteral() string { return oda.Token.Literal }
+func (oda *ObjectDestructuringAssignment) String() string {
+	var out bytes.Buffer
+	properties := []string{}
+	for _, prop := range oda.Properties {
+		if prop != nil {
+			properties = append(properties, prop.String())
+		}
+	}
+	out.WriteString("{")
+	out.WriteString(strings.Join(properties, ", "))
+	out.WriteString("} = ")
+	if oda.Value != nil {
+		out.WriteString(oda.Value.String())
+	}
+	if oda.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", oda.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // --- END NEW: Destructuring Assignment Support ---
+
+// --- NEW: Destructuring Declaration Support ---
+
+// ArrayDestructuringDeclaration represents let/const/var [a, b, c] = expr
+type ArrayDestructuringDeclaration struct {
+	Token          lexer.Token         // The 'let', 'const', or 'var' token
+	IsConst        bool                // true for const, false for let/var
+	Elements       []*DestructuringElement // Target variables/patterns
+	TypeAnnotation Expression          // Optional type annotation (e.g., : [number, string])
+	Value          Expression          // RHS expression to destructure
+}
+
+func (add *ArrayDestructuringDeclaration) statementNode()       {}
+func (add *ArrayDestructuringDeclaration) TokenLiteral() string { return add.Token.Literal }
+func (add *ArrayDestructuringDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString(add.Token.Literal)
+	out.WriteString(" ")
+	
+	elements := []string{}
+	for _, el := range add.Elements {
+		if el != nil {
+			elements = append(elements, el.String())
+		}
+	}
+	out.WriteString("[")
+	out.WriteString(strings.Join(elements, ", "))
+	out.WriteString("]")
+	
+	if add.TypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(add.TypeAnnotation.String())
+	}
+	
+	if add.Value != nil {
+		out.WriteString(" = ")
+		out.WriteString(add.Value.String())
+	}
+	
+	return out.String()
+}
+
+// ObjectDestructuringDeclaration represents let/const/var {a, b} = expr
+type ObjectDestructuringDeclaration struct {
+	Token          lexer.Token           // The 'let', 'const', or 'var' token
+	IsConst        bool                  // true for const, false for let/var
+	Properties     []*DestructuringProperty // Target properties/patterns
+	TypeAnnotation Expression            // Optional type annotation (e.g., : {a: number, b: string})
+	Value          Expression            // RHS expression to destructure
+}
+
+func (odd *ObjectDestructuringDeclaration) statementNode()       {}
+func (odd *ObjectDestructuringDeclaration) TokenLiteral() string { return odd.Token.Literal }
+func (odd *ObjectDestructuringDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString(odd.Token.Literal)
+	out.WriteString(" ")
+	
+	properties := []string{}
+	for _, prop := range odd.Properties {
+		if prop != nil {
+			properties = append(properties, prop.String())
+		}
+	}
+	out.WriteString("{")
+	out.WriteString(strings.Join(properties, ", "))
+	out.WriteString("}")
+	
+	if odd.TypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(odd.TypeAnnotation.String())
+	}
+	
+	if odd.Value != nil {
+		out.WriteString(" = ")
+		out.WriteString(odd.Value.String())
+	}
+	
+	return out.String()
+}
+
+// --- END NEW: Destructuring Declaration Support ---
 
 // --- Function Overload Support ---
 

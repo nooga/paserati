@@ -415,6 +415,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.ConstStatement:
 		return c.compileConstStatement(node, hint) // TODO: Fix this
 
+	case *parser.ArrayDestructuringDeclaration:
+		return c.compileArrayDestructuringDeclaration(node, hint)
+
+	case *parser.ObjectDestructuringDeclaration:
+		return c.compileObjectDestructuringDeclaration(node, hint)
+
 	case *parser.ReturnStatement: // Although less relevant for top-level script return
 		return c.compileReturnStatement(node, hint) // TODO: Fix this
 
@@ -578,6 +584,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ArrayDestructuringAssignment:
 		return c.compileArrayDestructuringAssignment(node, hint)
+
+	case *parser.ObjectDestructuringAssignment:
+		return c.compileObjectDestructuringAssignment(node, hint)
 
 	case *parser.UpdateExpression:
 		return c.compileUpdateExpression(node, hint) // TODO: Fix this
@@ -894,7 +903,7 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // As
 func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) int {
 	pos := len(c.chunk.Code)
 	c.emitOpCode(op, line)
-	if op == vm.OpJumpIfFalse {
+	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined {
 		c.emitByte(byte(srcReg)) // Register operand
 		c.emitUint16(0xFFFF)     // Placeholder offset
 	} else { // OpJump
@@ -908,7 +917,7 @@ func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) 
 func (c *Compiler) patchJump(placeholderPos int) {
 	op := vm.OpCode(c.chunk.Code[placeholderPos])
 	operandStartPos := placeholderPos + 1
-	if op == vm.OpJumpIfFalse {
+	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined {
 		operandStartPos = placeholderPos + 2 // Skip register byte
 	}
 
