@@ -7,6 +7,10 @@ import (
 	"paserati/pkg/types"
 )
 
+// Global environment for prototype method resolution
+// This is shared with type_utils.go
+var globalEnvironment *Environment
+
 // --- NEW: Symbol Information ---
 type SymbolInfo struct {
 	Type    types.Type
@@ -24,6 +28,9 @@ type Environment struct {
 	pendingOverloads map[string][]*parser.FunctionSignature
 	// Maps function names to their completed ObjectType with call signatures
 	overloadedFunctions map[string]*types.ObjectType
+
+	// --- Primitive prototype registry (only for global environment) ---
+	primitivePrototypes map[string]*types.ObjectType // Stores prototype types for primitives
 }
 
 // NewEnvironment creates a new top-level type environment.
@@ -34,6 +41,7 @@ func NewEnvironment() *Environment {
 		outer:                     nil,
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
+		primitivePrototypes: nil, // Only initialized for global environment
 	}
 }
 
@@ -45,39 +53,74 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		outer:               outer,
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
+		primitivePrototypes: nil, // Nested environments don't need primitive prototypes
 	}
 }
 
 // NewGlobalEnvironment creates a new top-level global environment.
-// It populates the environment with built-in types.
+// It populates the environment with built-in types using the new initializer system.
 func NewGlobalEnvironment() *Environment {
-	builtins.InitializeRegistry()
 	env := &Environment{
 		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases:               make(map[string]types.Type), // Initialize
 		outer:               nil,
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
+		primitivePrototypes: make(map[string]*types.ObjectType), // Initialize for global environment
 	}
 
-	// Define built-in primitive types (if not already globally available elsewhere)
-	// Example: env.Define("number", types.Number) // Assuming types.Number is a Type itself representing the primitive
-	// env.Define("string", types.String)
-	// env.Define("boolean", types.Boolean)
-	// ... etc
+	// Create type context for builtin initialization
+	typeCtx := &builtins.TypeContext{
+		DefineGlobal: func(name string, typ types.Type) error {
+			if !env.Define(name, typ, true) {
+				return fmt.Errorf("global %s already defined", name)
+			}
+			return nil
+		},
+		GetType: func(name string) (types.Type, bool) {
+			if info, found := env.symbols[name]; found {
+				return info.Type, true
+			}
+			return nil, false
+		},
+		SetPrimitivePrototype: func(primitiveName string, prototypeType *types.ObjectType) {
+			env.primitivePrototypes[primitiveName] = prototypeType
+		},
+	}
 
-	// Populate with built-in function types
-	builtinTypes := builtins.GetAllTypes()
-	for name, typ := range builtinTypes {
-		if !env.Define(name, typ, true) {
-			// This should ideally not happen if names are unique and Define works correctly
-			fmt.Printf("Warning: Failed to define built-in '%s' in global environment (already exists?).\n", name)
-		} else {
-			// fmt.Printf("Checker Env: Defined built-in '%s' with type %s\n", name, typ.String()) // Debug print
+	// Initialize all builtins using the new system
+	initializers := builtins.GetStandardInitializers()
+	for _, init := range initializers {
+		if err := init.InitTypes(typeCtx); err != nil {
+			fmt.Printf("Warning: failed to initialize %s types: %v\n", init.Name(), err)
 		}
 	}
 
+	// Set this as the global environment for prototype method resolution
+	// Note: This is used by the types package for property resolution
+	globalEnvironment = env
+
 	return env
+}
+
+// GetPrimitivePrototypeMethodType returns the type of a method on a primitive prototype
+// This replaces the old builtins.GetPrototypeMethodType function
+func (e *Environment) GetPrimitivePrototypeMethodType(primitiveName, methodName string) types.Type {
+	// Walk up to find the global environment (which has primitivePrototypes)
+	current := e
+	for current != nil {
+		if current.primitivePrototypes != nil {
+			// Found global environment
+			if prototypeType, exists := current.primitivePrototypes[primitiveName]; exists {
+				if methodType, found := prototypeType.Properties[methodName]; found {
+					return methodType
+				}
+			}
+			break
+		}
+		current = current.outer
+	}
+	return nil
 }
 
 // Define adds a new *variable* type binding and its const status to the current environment scope.

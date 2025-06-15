@@ -11,6 +11,7 @@ import (
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
+	"sort"
 )
 
 // Paserati represents a persistent interpreter session.
@@ -29,13 +30,12 @@ func NewPaserati() *Paserati {
 	comp := compiler.NewCompiler()
 	comp.SetChecker(checker)
 
-	// Create VM and add standard builtin callbacks
+	// Create VM and initialize builtin system
 	vmInstance := vm.NewVM()
-	vmInstance.AddStandardCallbacks(builtins.GetStandardInitCallbacks())
-	
-	// Run initialization now that callbacks are registered
-	if err := vmInstance.InitializeWithCallbacks(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: VM initialization failed: %v\n", err)
+
+	// Initialize builtins using new initializer system
+	if err := initializeBuiltinsWithCompiler(vmInstance, comp); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
 	}
 
 	return &Paserati{
@@ -337,4 +337,81 @@ func (p *Paserati) RunCode(source string, options RunOptions) (vm.Value, []error
 // GetCacheStats returns extended cache statistics from the VM instance
 func (p *Paserati) GetCacheStats() vm.ExtendedCacheStats {
 	return vm.GetExtendedStatsFromVM(p.vmInstance)
+}
+
+// initializeBuiltins sets up all builtin global variables in the VM using the new initializer system
+func initializeBuiltins(vmInstance *vm.VM) error {
+	// Get all standard initializers
+	initializers := builtins.GetStandardInitializers()
+
+	// Sort by priority
+	sort.Slice(initializers, func(i, j int) bool {
+		return initializers[i].Priority() < initializers[j].Priority()
+	})
+
+	// Create runtime context for VM initialization
+	globalVariables := make(map[string]vm.Value)
+
+	runtimeCtx := &builtins.RuntimeContext{
+		VM: vmInstance,
+		DefineGlobal: func(name string, value vm.Value) error {
+			globalVariables[name] = value
+			return nil
+		},
+	}
+
+	// Initialize all builtins runtime values
+	for _, init := range initializers {
+		if err := init.InitRuntime(runtimeCtx); err != nil {
+			return fmt.Errorf("failed to initialize %s runtime: %v", init.Name(), err)
+		}
+	}
+
+	// Set up global variables in VM
+	return vmInstance.SetBuiltinGlobals(globalVariables)
+}
+
+// initializeBuiltinsWithCompiler sets up all builtin global variables in both the compiler and VM
+// ensuring they use the same global index ordering
+func initializeBuiltinsWithCompiler(vmInstance *vm.VM, comp *compiler.Compiler) error {
+	// Get all standard initializers
+	initializers := builtins.GetStandardInitializers()
+
+	// Sort by priority
+	sort.Slice(initializers, func(i, j int) bool {
+		return initializers[i].Priority() < initializers[j].Priority()
+	})
+
+	// Create runtime context for VM initialization
+	globalVariables := make(map[string]vm.Value)
+
+	runtimeCtx := &builtins.RuntimeContext{
+		VM: vmInstance,
+		DefineGlobal: func(name string, value vm.Value) error {
+			globalVariables[name] = value
+			return nil
+		},
+	}
+
+	// Initialize all builtins runtime values
+	for _, init := range initializers {
+		if err := init.InitRuntime(runtimeCtx); err != nil {
+			return fmt.Errorf("failed to initialize %s runtime: %v", init.Name(), err)
+		}
+	}
+
+	// Pre-populate compiler global indices in alphabetical order to match VM
+	var globalNames []string
+	for name := range globalVariables {
+		globalNames = append(globalNames, name)
+	}
+	sort.Strings(globalNames)
+
+	// Pre-assign global indices in the compiler to match VM ordering
+	for _, name := range globalNames {
+		comp.GetOrAssignGlobalIndex(name)
+	}
+
+	// Set up global variables in VM
+	return vmInstance.SetBuiltinGlobals(globalVariables)
 }

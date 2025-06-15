@@ -22,8 +22,8 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 	argCount := len(args)
 	currentFrame := &vm.frames[vm.frameCount-1]
 
-	fmt.Printf("DEBUG prepareCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
-		calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
+	// fmt.Printf("DEBUG prepareCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
+	// 	calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
 
 	switch calleeVal.Type() {
 	case TypeClosure:
@@ -123,8 +123,8 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 	case TypeNativeFunction:
 		nativeFunc := AsNativeFunction(calleeVal)
 
-		fmt.Printf("DEBUG prepareCall: nativeFunc=%v, nativeFunc.Arity=%v, nativeFunc.Variadic=%v\n",
-			nativeFunc.Fn, nativeFunc.Arity, nativeFunc.Variadic)
+		// fmt.Printf("DEBUG prepareCall: nativeFunc=%v, nativeFunc.Arity=%v, nativeFunc.Variadic=%v\n",
+		// 	nativeFunc.Fn, nativeFunc.Arity, nativeFunc.Variadic)
 
 		// Arity checking for native functions
 		if nativeFunc.Arity >= 0 {
@@ -141,11 +141,13 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 			}
 		}
 
-		fmt.Printf("DEBUG prepareCall: args=%v\n", args)
+		//fmt.Printf("DEBUG prepareCall: args=%v\n", args)
+		// Set the current 'this' value for native function access
+		vm.currentThis = thisValue
 		// Native functions execute immediately in caller's context
 		result := nativeFunc.Fn(args)
 
-		fmt.Printf("DEBUG prepareCall: result=%v\n", result.Inspect())
+		//fmt.Printf("DEBUG prepareCall: result=%v\n", result.Inspect())
 
 		// Store result
 		if int(destReg) < len(callerRegisters) {
@@ -177,6 +179,8 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 			}
 		}
 
+		// Set the current 'this' value for native function access
+		vm.currentThis = thisValue
 		// Execute immediately
 		result := nativeFuncWithProps.Fn(args)
 
@@ -228,15 +232,10 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 // prepareMethodCall is a convenience wrapper for method calls that handles 'this' binding
 func (vm *VM) prepareMethodCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
 	// Debug logging
-	fmt.Printf("DEBUG prepareMethodCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
-		calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
+	// fmt.Printf("DEBUG prepareMethodCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
+	// 	calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
 
-	// For native functions, they already expect 'this' as first argument
-	if calleeVal.Type() == TypeNativeFunction {
-		return vm.prepareCall(calleeVal, thisValue, args, destReg, callerRegisters, callerIP)
-	}
-
-	// For all other function types, pass thisValue for frame setup but don't modify args
+	// For all function types, pass thisValue for frame setup and let prepareCall handle the 'this' setting
 	return vm.prepareCall(calleeVal, thisValue, args, destReg, callerRegisters, callerIP)
 }
 

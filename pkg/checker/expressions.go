@@ -2,7 +2,6 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/builtins"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -370,7 +369,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			resultType = types.Number // string.length is number
 		} else {
 			// Check prototype registry for String methods
-			if methodType := builtins.GetPrototypeMethodType("string", propertyName); methodType != nil {
+			if methodType := c.env.GetPrimitivePrototypeMethodType("string", propertyName); methodType != nil {
 				resultType = methodType
 			} else {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
@@ -385,7 +384,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				resultType = types.Number // Array.length is number
 			} else {
 				// Check prototype registry for Array methods
-				if methodType := builtins.GetPrototypeMethodType("array", propertyName); methodType != nil {
+				if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
 					resultType = methodType
 				} else {
 					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
@@ -411,12 +410,12 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					}
 				} else if obj.IsCallable() {
 					// Check for function prototype methods if this is a callable object
-					if methodType := builtins.GetPrototypeMethodType("function", propertyName); methodType != nil {
+					if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
 						resultType = methodType
 						debugPrintf("// [Checker MemberExpr] Found function prototype method '%s': %s\n", propertyName, methodType.String())
 					} else {
 						// NEW: Check for Object prototype methods for all objects
-						if methodType := builtins.GetPrototypeMethodType("object", propertyName); methodType != nil {
+						if methodType := c.env.GetPrimitivePrototypeMethodType("object", propertyName); methodType != nil {
 							resultType = methodType
 							debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 						} else {
@@ -427,7 +426,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					}
 				} else {
 					// NEW: Check for Object prototype methods for all objects
-					if methodType := builtins.GetPrototypeMethodType("object", propertyName); methodType != nil {
+					if methodType := c.env.GetPrimitivePrototypeMethodType("object", propertyName); methodType != nil {
 						resultType = methodType
 						debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 					} else {
@@ -586,7 +585,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 			baseResultType = types.Number // string.length is number
 		} else {
 			// Check prototype registry for String methods
-			if methodType := builtins.GetPrototypeMethodType("string", propertyName); methodType != nil {
+			if methodType := c.env.GetPrimitivePrototypeMethodType("string", propertyName); methodType != nil {
 				baseResultType = methodType
 			} else {
 				// Property not found - for optional chaining, this is OK, just return undefined
@@ -653,7 +652,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				}
 			} else if obj.IsCallable() {
 				// Check for function prototype methods if this is a callable object
-				if methodType := builtins.GetPrototypeMethodType("function", propertyName); methodType != nil {
+				if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
 					baseResultType = methodType
 					debugPrintf("// [Checker OptionalChaining] Found function prototype method '%s': %s\n", propertyName, methodType.String())
 				} else {

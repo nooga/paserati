@@ -36,17 +36,17 @@ func TestArrayAccessBug(t *testing.T) {
 		},
 		{
 			name:     "Clock with array access - should work",
-			input:    "clock() > 0 && Array(1, 2, 3)[2] == 3;",
+			input:    "Date.now() > 0 && Array(1, 2, 3)[2] == 3;",
 			expected: true,
 		},
 		{
 			name:     "Full expression - currently broken",
-			input:    "clock() > 0 && Array(10).length == 10 && Array(1, 2, 3)[2] == 3;",
+			input:    "Date.now() > 0 && Array(10).length == 10 && Array(1, 2, 3)[2] == 3;",
 			expected: true,
 		},
 		{
 			name:     "Just the array value in full context",
-			input:    "clock() > 0 && Array(10).length == 10 && Array(1, 2, 3)[2];",
+			input:    "Date.now() > 0 && Array(10).length == 10 && Array(1, 2, 3)[2];",
 			expected: 3.0,
 		},
 	}

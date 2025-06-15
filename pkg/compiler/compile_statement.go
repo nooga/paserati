@@ -63,7 +63,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg)
 		if c.enclosing == nil {
 			// Top-level: use global variable
-			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
@@ -78,7 +78,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg)
 		if c.enclosing == nil {
 			// Top-level: use global variable
-			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
@@ -89,7 +89,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		}
 	} else if c.enclosing == nil {
 		// Top-level function: also set as global
-		globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 		// Get the closure register from the symbol table
 		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 		if found && symbolRef.Register != nilRegister {
@@ -152,7 +152,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		// For non-functions, Define associates the name with the final value register.
 		if c.enclosing == nil {
 			// Top-level: use global variable
-			globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
@@ -163,7 +163,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		}
 	} else if c.enclosing == nil {
 		// Top-level function: also set as global
-		globalIdx := c.getOrAssignGlobalIndex(node.Name.Value)
+		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 		// Get the closure register from the symbol table
 		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 		if found && symbolRef.Register != nilRegister {

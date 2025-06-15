@@ -44,7 +44,8 @@ func registerObjectConstructor() {
 	objectObj := objectValue.AsNativeFunctionWithProps()
 
 	// Add the getPrototypeOf method to the runtime Object
-	objectObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOf))
+	// commented out - the method was using old global prototype system in vm
+	//objectObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOf))
 
 	// Add the create method to the runtime Object
 	objectObj.Properties.SetOwn("create", vm.NewNativeFunction(1, false, "create", objectCreate))
@@ -83,45 +84,46 @@ func objectConstructor(args []vm.Value) vm.Value {
 }
 
 // objectGetPrototypeOf implements Object.getPrototypeOf() static method
-func objectGetPrototypeOf(args []vm.Value) vm.Value {
-	if len(args) == 0 {
-		return vm.Undefined
-	}
+// commented out - using old global prototypes in vm
+// func objectGetPrototypeOf(args []vm.Value) vm.Value {
+// 	if len(args) == 0 {
+// 		return vm.Undefined
+// 	}
 
-	obj := args[0]
+// 	obj := args[0]
 
-	// For objects with prototypes, return their prototype
-	switch obj.Type() {
-	case vm.TypeObject:
-		// For plain objects, get their actual prototype
-		plainObj := obj.AsPlainObject()
-		if plainObj != nil {
-			return plainObj.GetPrototype()
-		}
-		return vm.Null
-	case vm.TypeArray:
-		// For arrays, return Array.prototype if available
-		if vm.ArrayPrototype != nil {
-			return vm.NewValueFromPlainObject(vm.ArrayPrototype)
-		}
-		return vm.DefaultObjectPrototype
-	case vm.TypeString:
-		// For strings, return String.prototype if available
-		if vm.StringPrototype != nil {
-			return vm.NewValueFromPlainObject(vm.StringPrototype)
-		}
-		return vm.Null
-	case vm.TypeFunction, vm.TypeClosure:
-		// For functions, return Function.prototype if available
-		if vm.FunctionPrototype != nil {
-			return vm.NewValueFromPlainObject(vm.FunctionPrototype)
-		}
-		return vm.Null
-	default:
-		// For primitive values, return null
-		return vm.Null
-	}
-}
+// 	// For objects with prototypes, return their prototype
+// 	switch obj.Type() {
+// 	case vm.TypeObject:
+// 		// For plain objects, get their actual prototype
+// 		plainObj := obj.AsPlainObject()
+// 		if plainObj != nil {
+// 			return plainObj.GetPrototype()
+// 		}
+// 		return vm.Null
+// 	case vm.TypeArray:
+// 		// For arrays, return Array.prototype if available
+// 		if vm.ArrayPrototype != nil {
+// 			return vm.NewValueFromPlainObject(vm.ArrayPrototype)
+// 		}
+// 		return vm.DefaultObjectPrototype
+// 	case vm.TypeString:
+// 		// For strings, return String.prototype if available
+// 		if vm.StringPrototype != nil {
+// 			return vm.NewValueFromPlainObject(vm.StringPrototype)
+// 		}
+// 		return vm.Null
+// 	case vm.TypeFunction, vm.TypeClosure:
+// 		// For functions, return Function.prototype if available
+// 		if vm.FunctionPrototype != nil {
+// 			return vm.NewValueFromPlainObject(vm.FunctionPrototype)
+// 		}
+// 		return vm.Null
+// 	default:
+// 		// For primitive values, return null
+// 		return vm.Null
+// 	}
+// }
 
 // objectCreate implements Object.create() static method
 func objectCreate(args []vm.Value) vm.Value {

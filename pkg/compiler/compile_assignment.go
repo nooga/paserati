@@ -57,7 +57,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		if !found {
 			// Variable not found in any scope, treat as global assignment
 			identInfo.isGlobal = true
-			identInfo.globalIdx = c.getOrAssignGlobalIndex(lhsNode.Value)
+			identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
 			// For compound assignments, we need the current value
 			if node.Operator != "=" {
 				currentValueReg = c.regAlloc.Alloc()

@@ -3,7 +3,6 @@ package compiler
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/builtins" // <<< ADDED: Import builtins
 	"paserati/pkg/checker"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
@@ -195,7 +194,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			c.currentSymbolTable.UpdateRegister(name, closureReg) // Update from nilRegister to actual register
 
 			// 5. NEW: Emit OpSetGlobal to store the function in the VM's globals array
-			globalIdx := c.getOrAssignGlobalIndex(name)
+			globalIdx := c.GetOrAssignGlobalIndex(name)
 			c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
 
 			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d, stored at global index %d\n", name, len(freeSymbols), closureReg, globalIdx)
@@ -480,33 +479,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil
 
 	case *parser.Identifier:
-		// <<< ADDED: Check for built-in first >>>
-		if builtinFunc := builtins.GetFunc(node.Value); builtinFunc != nil {
-			// It's a built-in function.
-			debugPrintf("// DEBUG Identifier '%s': Resolved as Builtin\n", node.Value)
-			builtinValue := vm.NewNativeFunction(builtinFunc.Arity, builtinFunc.Variadic, builtinFunc.Name, builtinFunc.Fn)
-			constIdx := c.chunk.AddConstant(builtinValue) // Add vm.Value to constant pool
-
-			// Allocate register and load the constant
-			c.emitLoadConstant(hint, constIdx, node.Token.Line) // Use existing emitter
-
-			return hint, nil // Built-in handled successfully
-		}
-
-		// <<< ADDED: Check for built-in objects >>>
-		if builtinObj := builtins.GetObject(node.Value); !builtinObj.Is(vm.Undefined) {
-			// It's a built-in object (like console).
-			debugPrintf("// DEBUG Identifier '%s': Resolved as Builtin Object\n", node.Value)
-			constIdx := c.chunk.AddConstant(builtinObj) // Add the object to constant pool
-
-			// Allocate register and load the constant
-			c.emitLoadConstant(hint, constIdx, node.Token.Line) // Use existing emitter
-
-			return hint, nil // Built-in object handled successfully
-		}
-		// <<< END ADDED >>>
-
-		// If not a built-in, proceed with existing variable lookup logic
+		// All identifiers (including builtins) now use standard variable lookup
+		// Builtins are registered as global variables via the new initializer system
 		scopeName := "Function"
 		if c.currentSymbolTable.Outer == nil {
 			scopeName = "Global"
@@ -517,7 +491,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, treating as GLOBAL\n", node.Value) // <<< ADDED
 			// Variable not found in any scope, treat as a global variable access
 			// This will return undefined at runtime if the global doesn't exist
-			globalIdx := c.getOrAssignGlobalIndex(node.Value)
+			globalIdx := c.GetOrAssignGlobalIndex(node.Value)
 			c.emitGetGlobal(hint, globalIdx, node.Token.Line)
 			return hint, nil // Handle as global access
 		}
@@ -1320,10 +1294,10 @@ func (c *Compiler) resolveCycle(cycle []Register, moves map[Register]Register, l
 
 // --- NEW: Global Variable Index Management ---
 
-// getOrAssignGlobalIndex returns the index for a global variable name.
+// GetOrAssignGlobalIndex returns the index for a global variable name.
 // If the variable doesn't have an index yet, assigns a new one.
 // This function should only be called on the top-level compiler.
-func (c *Compiler) getOrAssignGlobalIndex(name string) uint16 {
+func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	// Only top-level compiler should manage global indices
 	topCompiler := c
 	for topCompiler.enclosing != nil {

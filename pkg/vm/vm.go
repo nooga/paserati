@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"paserati/pkg/errors"
+	"sort"
 	"strconv"
 	"unsafe"
 )
@@ -87,6 +88,9 @@ type VM struct {
 	// Instance-specific initialization callbacks
 	initCallbacks []VMInitCallback
 
+	// Current 'this' value for native function execution
+	currentThis Value
+
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
 }
@@ -142,6 +146,32 @@ func (vm *VM) DecrementCallDepth() {
 }
 
 // Reset clears the VM state, ready for new execution.
+// SetBuiltinGlobals initializes the VM's global variables with builtin values
+func (vm *VM) SetBuiltinGlobals(globals map[string]Value) error {
+	// Clear existing globals
+	vm.globals = make([]Value, 0)
+	vm.globalNames = make([]string, 0)
+	
+	// Sort global names for deterministic ordering
+	// This is crucial for coordination with compiler's getOrAssignGlobalIndex
+	var names []string
+	for name := range globals {
+		names = append(names, name)
+	}
+	
+	// Sort alphabetically for predictable indices
+	// TODO: Better coordination with compiler would be ideal
+	sort.Strings(names)
+	
+	// Set builtin globals in sorted order
+	for _, name := range names {
+		vm.globals = append(vm.globals, globals[name])
+		vm.globalNames = append(vm.globalNames, name)
+	}
+	
+	return nil
+}
+
 func (vm *VM) Reset() {
 	vm.frameCount = 0
 	vm.nextRegSlot = 0
@@ -1861,4 +1891,10 @@ func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
 	copy(args, arrayObj.elements)
 
 	return args, nil
+}
+
+// GetThis returns the current 'this' value for native function execution
+// This allows native functions to access the 'this' context without it being passed as an argument
+func (vm *VM) GetThis() Value {
+	return vm.currentThis
 }

@@ -337,6 +337,12 @@ func (ot *ObjectType) WithOptionalProperty(name string, propType Type) *ObjectTy
 	return ot
 }
 
+// WithVariadicProperty adds a variadic method property to the ObjectType and returns the same instance for chaining
+func (ot *ObjectType) WithVariadicProperty(name string, paramTypes []Type, returnType Type, restType Type) *ObjectType {
+	methodType := NewObjectType().WithVariadicCallSignature(paramTypes, returnType, restType)
+	return ot.WithProperty(name, methodType)
+}
+
 // WithCallSignature adds a call signature to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithCallSignature(sig *Signature) *ObjectType {
 	ot.CallSignatures = append(ot.CallSignatures, sig)

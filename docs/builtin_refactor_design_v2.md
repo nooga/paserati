@@ -600,10 +600,9 @@ We will NOT run old and new systems in parallel. This approach previously caused
 
 #### Preparation
 
-- [ ] Create feature branch for refactor
-- [ ] Tag current working state before starting
-- [ ] Ensure all tests pass on main branch
-- [ ] Document current system behavior for reference
+- [ ] The project doesn't build now and the tests don't run
+- [ ] We need to apply the planned refactoring and make sure the project builds FIRST
+- [ ] Then we can tackle the issues by runnign tests and determining what needs to be fixed until all tests pass
 
 #### Rollback Triggers
 
