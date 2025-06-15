@@ -231,14 +231,17 @@ func (i *Identifier) String() string       { return i.Value }
 // --- NEW: Parameter Node ---
 // Represents a function parameter with an optional type annotation.
 // <Name> : <TypeAnnotation>
+// Also supports destructuring patterns: ([a, b]: [number, number]) or ({x, y}: Point)
 type Parameter struct {
-	Token          lexer.Token // The token of the parameter name
-	Name           *Identifier
-	TypeAnnotation Expression // Parsed type node (e.g., *Identifier)
-	ComputedType   types.Type // Stores the resolved type from TypeAnnotation
-	Optional       bool       // Whether this parameter is optional (param?)
-	DefaultValue   Expression // Default value expression (param = defaultValue)
-	IsThis         bool       // Whether this is an explicit 'this' parameter
+	Token            lexer.Token // The token of the parameter name
+	Name             *Identifier // For simple parameters
+	Pattern          Expression  // For destructuring patterns (ArrayParameterPattern/ObjectParameterPattern)
+	TypeAnnotation   Expression  // Parsed type node (e.g., *Identifier)
+	ComputedType     types.Type  // Stores the resolved type from TypeAnnotation
+	Optional         bool        // Whether this parameter is optional (param?)
+	DefaultValue     Expression  // Default value expression (param = defaultValue)
+	IsThis           bool        // Whether this is an explicit 'this' parameter
+	IsDestructuring  bool        // Whether this parameter uses destructuring pattern
 }
 
 func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
@@ -247,6 +250,8 @@ func (p *Parameter) String() string {
 	var out bytes.Buffer
 	if p.IsThis {
 		out.WriteString("this")
+	} else if p.IsDestructuring && p.Pattern != nil {
+		out.WriteString(p.Pattern.String())
 	} else if p.Name != nil {
 		out.WriteString(p.Name.String())
 	}
@@ -1805,6 +1810,62 @@ func (odd *ObjectDestructuringDeclaration) String() string {
 }
 
 // --- END NEW: Destructuring Declaration Support ---
+
+// --- NEW: Parameter Pattern Support ---
+
+// ArrayParameterPattern represents array destructuring in function parameters
+// Examples: ([a, b]: [number, number]) => {}
+type ArrayParameterPattern struct {
+	BaseExpression               // Embed base for ComputedType
+	Token          lexer.Token   // The '[' token
+	Elements       []*DestructuringElement // Parameter elements (can have defaults and rest)
+}
+
+func (app *ArrayParameterPattern) expressionNode()      {}
+func (app *ArrayParameterPattern) TokenLiteral() string { return app.Token.Literal }
+func (app *ArrayParameterPattern) String() string {
+	var out bytes.Buffer
+	elements := []string{}
+	for _, el := range app.Elements {
+		if el != nil {
+			elements = append(elements, el.String())
+		}
+	}
+	out.WriteString("[")
+	out.WriteString(strings.Join(elements, ", "))
+	out.WriteString("]")
+	return out.String()
+}
+
+// ObjectParameterPattern represents object destructuring in function parameters
+// Examples: ({x, y}: Point) => {}, ({name = "Unknown"}: {name?: string}) => {}
+type ObjectParameterPattern struct {
+	BaseExpression                       // Embed base for ComputedType
+	Token          lexer.Token           // The '{' token
+	Properties     []*DestructuringProperty // Parameter properties (can have defaults)
+	RestProperty   *DestructuringElement // Rest property (...rest) - optional
+}
+
+func (opp *ObjectParameterPattern) expressionNode()      {}
+func (opp *ObjectParameterPattern) TokenLiteral() string { return opp.Token.Literal }
+func (opp *ObjectParameterPattern) String() string {
+	var out bytes.Buffer
+	elements := []string{}
+	for _, prop := range opp.Properties {
+		if prop != nil {
+			elements = append(elements, prop.String())
+		}
+	}
+	if opp.RestProperty != nil {
+		elements = append(elements, opp.RestProperty.String())
+	}
+	out.WriteString("{")
+	out.WriteString(strings.Join(elements, ", "))
+	out.WriteString("}")
+	return out.String()
+}
+
+// --- END NEW: Parameter Pattern Support ---
 
 // --- Function Overload Support ---
 

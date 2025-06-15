@@ -1376,6 +1376,9 @@ func (p *Parser) parseFunctionLiteral() Expression {
 
 	lit.Body = p.parseBlockStatement() // Includes consuming RBRACE
 
+	// Transform function if it has destructuring parameters
+	lit = p.transformFunctionWithDestructuring(lit)
+
 	return lit
 }
 
@@ -1459,9 +1462,9 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 		return parameters, restParam, nil
 	}
 
-	// Parse first regular parameter (could be 'this' parameter)
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) {
-		msg := fmt.Sprintf("expected identifier or 'this' for parameter name, got %s", p.curToken.Type)
+	// Parse first regular parameter (could be 'this' parameter or destructuring pattern)
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
+		msg := fmt.Sprintf("expected identifier, 'this', or destructuring pattern for parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
 		return nil, nil, fmt.Errorf("%s", msg)
@@ -1484,7 +1487,22 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			p.addError(p.peekToken, "'this' parameter must have a type annotation")
 			return nil, nil, fmt.Errorf("'this' parameter must have a type annotation")
 		}
+	} else if p.curTokenIs(lexer.LBRACKET) {
+		// Array destructuring parameter
+		param.IsDestructuring = true
+		param.Pattern = p.parseArrayParameterPattern()
+		if param.Pattern == nil {
+			return nil, nil, fmt.Errorf("failed to parse array parameter pattern")
+		}
+	} else if p.curTokenIs(lexer.LBRACE) {
+		// Object destructuring parameter  
+		param.IsDestructuring = true
+		param.Pattern = p.parseObjectParameterPattern()
+		if param.Pattern == nil {
+			return nil, nil, fmt.Errorf("failed to parse object parameter pattern")
+		}
 	} else {
+		// Regular identifier parameter
 		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 
@@ -1492,6 +1510,9 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 	if p.peekTokenIs(lexer.QUESTION) {
 		if param.IsThis {
 			// Already handled above
+		} else if param.IsDestructuring {
+			p.addError(p.peekToken, "destructuring parameters cannot be optional")
+			return nil, nil, fmt.Errorf("destructuring parameters cannot be optional")
 		} else {
 			p.nextToken() // Consume '?'
 			param.Optional = true
@@ -1519,6 +1540,9 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 		if param.IsThis {
 			p.addError(p.peekToken, "'this' parameter cannot have a default value")
 			return nil, nil, fmt.Errorf("'this' parameter cannot have a default value")
+		} else if param.IsDestructuring {
+			p.addError(p.peekToken, "destructuring parameters cannot have top-level default values (use defaults inside the pattern)")
+			return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
 		} else {
 			p.nextToken() // Consume '='
 			p.nextToken() // Move to expression
@@ -1557,19 +1581,42 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			return nil, nil, fmt.Errorf("'this' parameter can only be the first parameter")
 		}
 
-		if !p.curTokenIs(lexer.IDENT) {
-			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
+		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
+			msg := fmt.Sprintf("expected identifier or destructuring pattern for parameter after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
 			return nil, nil, fmt.Errorf("%s", msg)
 		}
 		param := &Parameter{Token: p.curToken}
-		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		
+		if p.curTokenIs(lexer.LBRACKET) {
+			// Array destructuring parameter
+			param.IsDestructuring = true
+			param.Pattern = p.parseArrayParameterPattern()
+			if param.Pattern == nil {
+				return nil, nil, fmt.Errorf("failed to parse array parameter pattern")
+			}
+		} else if p.curTokenIs(lexer.LBRACE) {
+			// Object destructuring parameter  
+			param.IsDestructuring = true
+			param.Pattern = p.parseObjectParameterPattern()
+			if param.Pattern == nil {
+				return nil, nil, fmt.Errorf("failed to parse object parameter pattern")
+			}
+		} else {
+			// Regular identifier parameter
+			param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		}
 
 		// Check for optional parameter (?)
 		if p.peekTokenIs(lexer.QUESTION) {
-			p.nextToken() // Consume '?'
-			param.Optional = true
+			if param.IsDestructuring {
+				p.addError(p.peekToken, "destructuring parameters cannot be optional")
+				return nil, nil, fmt.Errorf("destructuring parameters cannot be optional")
+			} else {
+				p.nextToken() // Consume '?'
+				param.Optional = true
+			}
 		}
 
 		// Check for Type Annotation
@@ -1586,12 +1633,17 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 
 		// Check for Default Value
 		if p.peekTokenIs(lexer.ASSIGN) {
-			p.nextToken() // Consume '='
-			p.nextToken() // Move to expression
-			param.DefaultValue = p.parseExpression(LOWEST)
-			if param.DefaultValue == nil {
-				p.addError(p.curToken, "expected expression after '=' in parameter default value")
-				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+			if param.IsDestructuring {
+				p.addError(p.peekToken, "destructuring parameters cannot have top-level default values (use defaults inside the pattern)")
+				return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
+			} else {
+				p.nextToken() // Consume '='
+				p.nextToken() // Move to expression
+				param.DefaultValue = p.parseExpression(LOWEST)
+				if param.DefaultValue == nil {
+					p.addError(p.curToken, "expected expression after '=' in parameter default value")
+					return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+				}
 			}
 		}
 
@@ -1629,6 +1681,603 @@ func (p *Parser) parseRestParameter() *RestParameter {
 
 	return restParam
 }
+
+// --- NEW: Parameter Pattern Parsing Functions ---
+
+// parseArrayParameterPattern parses array destructuring in function parameters
+// Examples: [a, b], [a = 1, b], [first, ...rest]
+func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
+	pattern := &ArrayParameterPattern{Token: p.curToken} // The '[' token
+	
+	// Parse elements using existing destructuring logic but adapted for parameters
+	elements := []*DestructuringElement{}
+	
+	// Handle empty array pattern: []
+	if p.peekTokenIs(lexer.RBRACKET) {
+		p.nextToken() // Consume ']'
+		pattern.Elements = elements
+		return pattern
+	}
+	
+	p.nextToken() // Move to first element
+	
+	// Parse first element
+	element := p.parseParameterDestructuringElement()
+	if element == nil {
+		p.addError(p.curToken, "failed to parse array parameter element")
+		return nil
+	}
+	elements = append(elements, element)
+	
+	// Parse subsequent elements
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // Consume ','
+		
+		// Check for trailing comma
+		if p.peekTokenIs(lexer.RBRACKET) {
+			break
+		}
+		
+		p.nextToken() // Move to next element
+		element := p.parseParameterDestructuringElement()
+		if element == nil {
+			p.addError(p.curToken, "failed to parse array parameter element")
+			return nil
+		}
+		elements = append(elements, element)
+		
+		// If this is a rest element, it must be the last one
+		if element.IsRest && !p.peekTokenIs(lexer.RBRACKET) {
+			p.addError(p.peekToken, "rest element must be last element in array parameter")
+			return nil
+		}
+	}
+	
+	if !p.expectPeek(lexer.RBRACKET) {
+		p.addError(p.peekToken, "expected ']' after array parameter elements")
+		return nil
+	}
+	
+	pattern.Elements = elements
+	return pattern
+}
+
+// parseObjectParameterPattern parses object destructuring in function parameters
+// Examples: {x, y}, {x = 1, y}, {x: localX, ...rest}
+func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
+	pattern := &ObjectParameterPattern{Token: p.curToken} // The '{' token
+	
+	properties := []*DestructuringProperty{}
+	var restProperty *DestructuringElement
+	
+	// Handle empty object pattern: {}
+	if p.peekTokenIs(lexer.RBRACE) {
+		p.nextToken() // Consume '}'
+		pattern.Properties = properties
+		return pattern
+	}
+	
+	p.nextToken() // Move to first property
+	
+	// Parse first property/rest
+	if p.curTokenIs(lexer.SPREAD) {
+		// Rest property
+		restProperty = p.parseParameterDestructuringElement()
+		if restProperty == nil {
+			return nil
+		}
+		if !restProperty.IsRest {
+			p.addError(p.curToken, "expected rest element after '...'")
+			return nil
+		}
+	} else {
+		// Regular property
+		prop := p.parseParameterDestructuringProperty()
+		if prop == nil {
+			return nil
+		}
+		properties = append(properties, prop)
+	}
+	
+	// Parse subsequent properties
+	for p.peekTokenIs(lexer.COMMA) && restProperty == nil {
+		p.nextToken() // Consume ','
+		
+		// Check for trailing comma
+		if p.peekTokenIs(lexer.RBRACE) {
+			break
+		}
+		
+		p.nextToken() // Move to next property
+		
+		if p.curTokenIs(lexer.SPREAD) {
+			// Rest property (must be last)
+			restProperty = p.parseParameterDestructuringElement()
+			if restProperty == nil {
+				return nil
+			}
+			if !restProperty.IsRest {
+				p.addError(p.curToken, "expected rest element after '...'")
+				return nil
+			}
+			break // Rest must be last
+		} else {
+			// Regular property
+			prop := p.parseParameterDestructuringProperty()
+			if prop == nil {
+				return nil
+			}
+			properties = append(properties, prop)
+		}
+	}
+	
+	if !p.expectPeek(lexer.RBRACE) {
+		p.addError(p.peekToken, "expected '}' after object parameter properties")
+		return nil
+	}
+	
+	pattern.Properties = properties
+	pattern.RestProperty = restProperty
+	return pattern
+}
+
+// parseParameterDestructuringElement parses a destructuring element in parameter context
+// Handles: identifier, ...rest, identifier = default
+func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
+	element := &DestructuringElement{}
+	
+	// Check for rest element
+	if p.curTokenIs(lexer.SPREAD) {
+		element.IsRest = true
+		if !p.expectPeek(lexer.IDENT) {
+			p.addError(p.peekToken, "expected identifier after '...' in parameter rest element")
+			return nil
+		}
+	}
+	
+	// Parse target (must be identifier in parameter context)
+	if !p.curTokenIs(lexer.IDENT) {
+		p.addError(p.curToken, "parameter destructuring target must be an identifier")
+		return nil
+	}
+	
+	element.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	// Check for default value (not allowed for rest elements)
+	if !element.IsRest && p.peekTokenIs(lexer.ASSIGN) {
+		p.nextToken() // Consume '='
+		p.nextToken() // Move to default expression
+		element.Default = p.parseExpression(LOWEST)
+		if element.Default == nil {
+			p.addError(p.curToken, "expected expression after '=' in parameter default")
+			return nil
+		}
+	}
+	
+	return element
+}
+
+// parseParameterDestructuringProperty parses a property in object parameter destructuring
+// Handles: key, key: target, key = default, key: target = default
+func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
+	prop := &DestructuringProperty{}
+	
+	// Parse key (must be identifier)
+	if !p.curTokenIs(lexer.IDENT) {
+		p.addError(p.curToken, "object parameter property key must be an identifier")
+		return nil
+	}
+	
+	prop.Key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	// Check for explicit target (key: target)
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		if !p.expectPeek(lexer.IDENT) {
+			p.addError(p.peekToken, "object parameter property target must be an identifier")
+			return nil
+		}
+		prop.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
+		// Shorthand: use key as target
+		prop.Target = prop.Key
+	}
+	
+	// Check for default value
+	if p.peekTokenIs(lexer.ASSIGN) {
+		p.nextToken() // Consume '='
+		p.nextToken() // Move to default expression
+		prop.Default = p.parseExpression(LOWEST)
+		if prop.Default == nil {
+			p.addError(p.curToken, "expected expression after '=' in parameter default")
+			return nil
+		}
+	}
+	
+	return prop
+}
+
+// --- END NEW: Parameter Pattern Parsing Functions ---
+
+// --- NEW: Parameter Transformation Functions ---
+
+// transformFunctionWithDestructuring transforms a function with destructuring parameters
+// into a function with regular parameters and destructuring assignments in the body
+func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *FunctionLiteral {
+	if fn == nil || fn.Body == nil {
+		return fn
+	}
+	
+	// Check if any parameters use destructuring
+	hasDestructuring := false
+	for _, param := range fn.Parameters {
+		if param.IsDestructuring {
+			hasDestructuring = true
+			break
+		}
+	}
+	
+	if !hasDestructuring {
+		return fn // No transformation needed
+	}
+	
+	// Create new parameters and body statements
+	newParams := []*Parameter{}
+	newStatements := []Statement{}
+	paramIndex := 0
+	
+	for _, param := range fn.Parameters {
+		if param.IsDestructuring {
+			// Create a new regular parameter for this destructuring parameter
+			newParamName := fmt.Sprintf("__destructured_param_%d", paramIndex)
+			newParam := &Parameter{
+				Token:            param.Token,
+				Name:             &Identifier{Token: param.Token, Value: newParamName},
+				TypeAnnotation:   param.TypeAnnotation,
+				ComputedType:     param.ComputedType,
+				Optional:         false, // Destructuring params can't be optional
+				DefaultValue:     nil,   // Destructuring params can't have top-level defaults
+				IsThis:           false,
+				IsDestructuring:  false,
+			}
+			newParams = append(newParams, newParam)
+			
+			// Create destructuring declaration statement
+			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok {
+				// Convert array parameter pattern to array destructuring declaration
+				declaration := &ArrayDestructuringDeclaration{
+					Token:          arrayPattern.Token,
+					IsConst:        false, // Use let for function parameters
+					Elements:       arrayPattern.Elements,
+					TypeAnnotation: param.TypeAnnotation,
+					Value:          &Identifier{
+						Token: lexer.Token{
+							Type:     lexer.IDENT,
+							Literal:  newParamName,
+							Line:     param.Token.Line,
+							Column:   param.Token.Column,
+							StartPos: param.Token.StartPos,
+						},
+						Value: newParamName,
+					},
+				}
+				newStatements = append(newStatements, declaration)
+			} else if objectPattern, ok := param.Pattern.(*ObjectParameterPattern); ok {
+				// Convert object parameter pattern to object destructuring declaration
+				declaration := &ObjectDestructuringDeclaration{
+					Token:          objectPattern.Token,
+					IsConst:        false, // Use let for function parameters
+					Properties:     objectPattern.Properties,
+					RestProperty:   objectPattern.RestProperty,
+					TypeAnnotation: param.TypeAnnotation,
+					Value:          &Identifier{
+						Token: lexer.Token{
+							Type:     lexer.IDENT,
+							Literal:  newParamName,
+							Line:     param.Token.Line,
+							Column:   param.Token.Column,
+							StartPos: param.Token.StartPos,
+						},
+						Value: newParamName,
+					},
+				}
+				newStatements = append(newStatements, declaration)
+			}
+			paramIndex++
+		} else {
+			// Regular parameter - keep as is
+			newParams = append(newParams, param)
+		}
+	}
+	
+	// Combine new destructuring statements with original body
+	newStatements = append(newStatements, fn.Body.Statements...)
+	
+	// Create new function with transformed parameters and body
+	newFn := &FunctionLiteral{
+		BaseExpression:       fn.BaseExpression,
+		Token:                fn.Token,
+		Name:                 fn.Name,
+		Parameters:           newParams,
+		RestParameter:        fn.RestParameter, // Rest parameter stays the same
+		ReturnTypeAnnotation: fn.ReturnTypeAnnotation,
+		Body: &BlockStatement{
+			Token:               fn.Body.Token,
+			Statements:          newStatements,
+			HoistedDeclarations: fn.Body.HoistedDeclarations,
+		},
+	}
+	
+	return newFn
+}
+
+// transformArrowFunctionWithDestructuring transforms an arrow function with destructuring parameters
+func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLiteral) *ArrowFunctionLiteral {
+	if fn == nil {
+		return fn
+	}
+	
+	// Check if any parameters use destructuring
+	hasDestructuring := false
+	for _, param := range fn.Parameters {
+		if param.IsDestructuring {
+			hasDestructuring = true
+			break
+		}
+	}
+	
+	if !hasDestructuring {
+		return fn // No transformation needed
+	}
+	
+	// Create new parameters and body statements
+	newParams := []*Parameter{}
+	newStatements := []Statement{}
+	paramIndex := 0
+	
+	for _, param := range fn.Parameters {
+		if param.IsDestructuring {
+			// Create a new regular parameter for this destructuring parameter
+			newParamName := fmt.Sprintf("__destructured_param_%d", paramIndex)
+			newParam := &Parameter{
+				Token:            param.Token,
+				Name:             &Identifier{Token: param.Token, Value: newParamName},
+				TypeAnnotation:   param.TypeAnnotation,
+				ComputedType:     param.ComputedType,
+				Optional:         false,
+				DefaultValue:     nil,
+				IsThis:           false,
+				IsDestructuring:  false,
+			}
+			newParams = append(newParams, newParam)
+			
+			// Create destructuring declaration statement
+			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok {
+				// Create a 'let' token for the declaration
+				letToken := lexer.Token{
+					Type:     lexer.LET,
+					Literal:  "let",
+					Line:     arrayPattern.Token.Line,
+					Column:   arrayPattern.Token.Column,
+					StartPos: arrayPattern.Token.StartPos,
+				}
+				declaration := &ArrayDestructuringDeclaration{
+					Token:          letToken,
+					IsConst:        false, // Use let for function parameters
+					Elements:       arrayPattern.Elements,
+					TypeAnnotation: param.TypeAnnotation,
+					Value:          &Identifier{
+						Token: lexer.Token{
+							Type:     lexer.IDENT,
+							Literal:  newParamName,
+							Line:     param.Token.Line,
+							Column:   param.Token.Column,
+							StartPos: param.Token.StartPos,
+						},
+						Value: newParamName,
+					},
+				}
+				newStatements = append(newStatements, declaration)
+			} else if objectPattern, ok := param.Pattern.(*ObjectParameterPattern); ok {
+				// Create a 'let' token for the declaration
+				letToken := lexer.Token{
+					Type:     lexer.LET,
+					Literal:  "let",
+					Line:     objectPattern.Token.Line,
+					Column:   objectPattern.Token.Column,
+					StartPos: objectPattern.Token.StartPos,
+				}
+				declaration := &ObjectDestructuringDeclaration{
+					Token:          letToken,
+					IsConst:        false, // Use let for function parameters
+					Properties:     objectPattern.Properties,
+					RestProperty:   objectPattern.RestProperty,
+					TypeAnnotation: param.TypeAnnotation,
+					Value:          &Identifier{
+						Token: lexer.Token{
+							Type:     lexer.IDENT,
+							Literal:  newParamName,
+							Line:     param.Token.Line,
+							Column:   param.Token.Column,
+							StartPos: param.Token.StartPos,
+						},
+						Value: newParamName,
+					},
+				}
+				newStatements = append(newStatements, declaration)
+			}
+			paramIndex++
+		} else {
+			// Regular parameter - keep as is
+			newParams = append(newParams, param)
+		}
+	}
+	
+	// Handle arrow function body transformation
+	var newBody Node
+	if blockStmt, ok := fn.Body.(*BlockStatement); ok {
+		// Block statement body - combine new destructuring statements with original body
+		newStatements = append(newStatements, blockStmt.Statements...)
+		newBody = &BlockStatement{
+			Token:               blockStmt.Token,
+			Statements:          newStatements,
+			HoistedDeclarations: blockStmt.HoistedDeclarations,
+		}
+	} else {
+		// Expression body - convert to block statement with destructuring assignments + return
+		if len(newStatements) > 0 {
+			returnStmt := &ReturnStatement{
+				Token:       fn.Token, // Use arrow function token
+				ReturnValue: fn.Body.(Expression),
+			}
+			newStatements = append(newStatements, returnStmt)
+			newBody = &BlockStatement{
+				Token:      fn.Token,
+				Statements: newStatements,
+			}
+		} else {
+			// No destructuring, keep expression body
+			newBody = fn.Body
+		}
+	}
+	
+	// Create new arrow function with transformed parameters and body
+	newFn := &ArrowFunctionLiteral{
+		BaseExpression:       fn.BaseExpression,
+		Token:                fn.Token,
+		Parameters:           newParams,
+		RestParameter:        fn.RestParameter,
+		ReturnTypeAnnotation: fn.ReturnTypeAnnotation,
+		Body:                 newBody,
+	}
+	
+	return newFn
+}
+
+// transformShorthandMethodWithDestructuring transforms a shorthand method with destructuring parameters
+func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMethod) *ShorthandMethod {
+	if method == nil || method.Body == nil {
+		return method
+	}
+	
+	// Check if any parameters use destructuring
+	hasDestructuring := false
+	for _, param := range method.Parameters {
+		if param.IsDestructuring {
+			hasDestructuring = true
+			break
+		}
+	}
+	
+	if !hasDestructuring {
+		return method // No transformation needed
+	}
+	
+	// Create new parameters and body statements
+	newParams := []*Parameter{}
+	newStatements := []Statement{}
+	paramIndex := 0
+	
+	for _, param := range method.Parameters {
+		if param.IsDestructuring {
+			// Create a new regular parameter for this destructuring parameter
+			newParamName := fmt.Sprintf("__destructured_param_%d", paramIndex)
+			newParam := &Parameter{
+				Token:            param.Token,
+				Name:             &Identifier{Token: param.Token, Value: newParamName},
+				TypeAnnotation:   param.TypeAnnotation,
+				ComputedType:     param.ComputedType,
+				Optional:         false,
+				DefaultValue:     nil,
+				IsThis:           false,
+				IsDestructuring:  false,
+			}
+			newParams = append(newParams, newParam)
+			
+			// Create destructuring declaration statement
+			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok {
+				// Create a 'let' token for the declaration
+				letToken := lexer.Token{
+					Type:     lexer.LET,
+					Literal:  "let",
+					Line:     arrayPattern.Token.Line,
+					Column:   arrayPattern.Token.Column,
+					StartPos: arrayPattern.Token.StartPos,
+				}
+				declaration := &ArrayDestructuringDeclaration{
+					Token:          letToken,
+					IsConst:        false, // Use let for function parameters
+					Elements:       arrayPattern.Elements,
+					TypeAnnotation: param.TypeAnnotation,
+					Value:          &Identifier{
+						Token: lexer.Token{
+							Type:     lexer.IDENT,
+							Literal:  newParamName,
+							Line:     param.Token.Line,
+							Column:   param.Token.Column,
+							StartPos: param.Token.StartPos,
+						},
+						Value: newParamName,
+					},
+				}
+				newStatements = append(newStatements, declaration)
+			} else if objectPattern, ok := param.Pattern.(*ObjectParameterPattern); ok {
+				// Create a 'let' token for the declaration
+				letToken := lexer.Token{
+					Type:     lexer.LET,
+					Literal:  "let",
+					Line:     objectPattern.Token.Line,
+					Column:   objectPattern.Token.Column,
+					StartPos: objectPattern.Token.StartPos,
+				}
+				declaration := &ObjectDestructuringDeclaration{
+					Token:          letToken,
+					IsConst:        false, // Use let for function parameters
+					Properties:     objectPattern.Properties,
+					RestProperty:   objectPattern.RestProperty,
+					TypeAnnotation: param.TypeAnnotation,
+					Value:          &Identifier{
+						Token: lexer.Token{
+							Type:     lexer.IDENT,
+							Literal:  newParamName,
+							Line:     param.Token.Line,
+							Column:   param.Token.Column,
+							StartPos: param.Token.StartPos,
+						},
+						Value: newParamName,
+					},
+				}
+				newStatements = append(newStatements, declaration)
+			}
+			paramIndex++
+		} else {
+			// Regular parameter - keep as is
+			newParams = append(newParams, param)
+		}
+	}
+	
+	// Combine new destructuring statements with original body
+	newStatements = append(newStatements, method.Body.Statements...)
+	
+	// Create new method with transformed parameters and body
+	newMethod := &ShorthandMethod{
+		BaseExpression:       method.BaseExpression,
+		Token:                method.Token,
+		Name:                 method.Name,
+		Parameters:           newParams,
+		RestParameter:        method.RestParameter,
+		ReturnTypeAnnotation: method.ReturnTypeAnnotation,
+		Body: &BlockStatement{
+			Token:               method.Body.Token,
+			Statements:          newStatements,
+			HoistedDeclarations: method.Body.HoistedDeclarations,
+		},
+	}
+	
+	return newMethod
+}
+
+// --- END NEW: Parameter Transformation Functions ---
 
 func (p *Parser) parseSpreadElement() Expression {
 	spreadElement := &SpreadElement{Token: p.curToken} // The '...' token
@@ -2138,6 +2787,10 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter, restParam 
 		arrowFunc.Body = p.parseExpression(LOWEST)
 	}
 	debugPrint("parseArrowFunctionBodyAndFinish: Finished parsing body=%T, returning ArrowFunc", arrowFunc.Body)
+	
+	// Transform arrow function if it has destructuring parameters
+	arrowFunc = p.transformArrowFunctionWithDestructuring(arrowFunc)
+	
 	return arrowFunc
 }
 
@@ -2179,20 +2832,43 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 		return params, restParam, nil
 	}
 
-	// Parse regular parameter
-	if !p.curTokenIs(lexer.IDENT) {
-		msg := fmt.Sprintf("expected identifier as parameter, got %s", p.curToken.Type)
+	// Parse regular parameter (identifier or destructuring pattern)
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
+		msg := fmt.Sprintf("expected identifier or destructuring pattern as parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
 		return nil, nil, fmt.Errorf("%s", msg)
 	}
 	param := &Parameter{Token: p.curToken}
-	param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	if p.curTokenIs(lexer.LBRACKET) {
+		// Array destructuring parameter
+		param.IsDestructuring = true
+		param.Pattern = p.parseArrayParameterPattern()
+		if param.Pattern == nil {
+			return nil, nil, fmt.Errorf("failed to parse array parameter pattern")
+		}
+	} else if p.curTokenIs(lexer.LBRACE) {
+		// Object destructuring parameter  
+		param.IsDestructuring = true
+		param.Pattern = p.parseObjectParameterPattern()
+		if param.Pattern == nil {
+			return nil, nil, fmt.Errorf("failed to parse object parameter pattern")
+		}
+	} else {
+		// Regular identifier parameter
+		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
 
 	// Check for optional parameter (?)
 	if p.peekTokenIs(lexer.QUESTION) {
-		p.nextToken() // Consume '?'
-		param.Optional = true
+		if param.IsDestructuring {
+			p.addError(p.peekToken, "destructuring parameters cannot be optional")
+			return nil, nil, fmt.Errorf("destructuring parameters cannot be optional")
+		} else {
+			p.nextToken() // Consume '?'
+			param.Optional = true
+		}
 	}
 
 	// Check for Type Annotation
@@ -2209,22 +2885,31 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 
 	// Check for Default Value
 	if p.peekTokenIs(lexer.ASSIGN) {
-		p.nextToken() // Consume '='
-		p.nextToken() // Move to expression
-		param.DefaultValue = p.parseExpression(LOWEST)
-		if param.DefaultValue == nil {
-			p.addError(p.curToken, "expected expression after '=' in parameter default value")
-			return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+		if param.IsDestructuring {
+			p.addError(p.peekToken, "destructuring parameters cannot have top-level default values (use defaults inside the pattern)")
+			return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
+		} else {
+			p.nextToken() // Consume '='
+			p.nextToken() // Move to expression
+			param.DefaultValue = p.parseExpression(LOWEST)
+			if param.DefaultValue == nil {
+				p.addError(p.curToken, "expected expression after '=' in parameter default value")
+				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+			}
 		}
 	}
 
 	params = append(params, param)
-	debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
+	if param.IsDestructuring {
+		debugPrint("parseParameterList: Parsed destructuring param (type: %v)", param.TypeAnnotation)
+	} else {
+		debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
+	}
 
 	// Parse subsequent parameters (comma-separated)
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // Consume ','
-		p.nextToken() // Consume identifier or spread
+		p.nextToken() // Consume identifier, destructuring pattern, or spread
 
 		// Check if this is a rest parameter
 		if p.curTokenIs(lexer.SPREAD) {
@@ -2241,18 +2926,40 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 			return params, restParam, nil
 		}
 
-		// Parse regular parameter
-		if !p.curTokenIs(lexer.IDENT) {
-			msg := fmt.Sprintf("expected identifier for parameter name after comma, got %s", p.curToken.Type)
+		// Check for destructuring patterns
+		param := &Parameter{Token: p.curToken}
+		if p.curTokenIs(lexer.LBRACKET) {
+			// Array destructuring parameter: [a, b]
+			debugPrint("parseParameterList: Found array destructuring parameter after comma")
+			param.Pattern = p.parseArrayParameterPattern()
+			if param.Pattern == nil {
+				return nil, nil, fmt.Errorf("failed to parse array destructuring parameter after comma")
+			}
+			param.IsDestructuring = true
+		} else if p.curTokenIs(lexer.LBRACE) {
+			// Object destructuring parameter: {a, b}
+			debugPrint("parseParameterList: Found object destructuring parameter after comma")
+			param.Pattern = p.parseObjectParameterPattern()
+			if param.Pattern == nil {
+				return nil, nil, fmt.Errorf("failed to parse object destructuring parameter after comma")
+			}
+			param.IsDestructuring = true
+		} else if p.curTokenIs(lexer.IDENT) {
+			// Regular parameter
+			param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		} else {
+			msg := fmt.Sprintf("expected identifier or destructuring pattern for parameter after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
 			return nil, nil, fmt.Errorf("%s", msg)
 		}
-		param := &Parameter{Token: p.curToken}
-		param.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
 		// Check for optional parameter (?)
 		if p.peekTokenIs(lexer.QUESTION) {
+			if param.IsDestructuring {
+				p.addError(p.peekToken, "destructuring parameters cannot be optional")
+				return nil, nil, fmt.Errorf("destructuring parameters cannot be optional")
+			}
 			p.nextToken() // Consume '?'
 			param.Optional = true
 		}
@@ -2271,6 +2978,10 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 
 		// Check for Default Value
 		if p.peekTokenIs(lexer.ASSIGN) {
+			if param.IsDestructuring {
+				p.addError(p.peekToken, "destructuring parameters cannot have top-level default values")
+				return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
+			}
 			p.nextToken() // Consume '='
 			p.nextToken() // Move to expression
 			param.DefaultValue = p.parseExpression(LOWEST)
@@ -2281,7 +2992,11 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 		}
 
 		params = append(params, param)
-		debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
+		if param.IsDestructuring {
+			debugPrint("parseParameterList: Parsed destructuring param (pattern: %s) (type: %v)", param.Pattern.String(), param.TypeAnnotation)
+		} else {
+			debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
+		}
 	}
 
 	// Expect closing parenthesis
@@ -3404,6 +4119,9 @@ func (p *Parser) parseShorthandMethod() *ShorthandMethod {
 	if method.Body == nil {
 		return nil // Error parsing method body
 	}
+
+	// Transform method if it has destructuring parameters
+	method = p.transformShorthandMethodWithDestructuring(method)
 
 	return method
 }
