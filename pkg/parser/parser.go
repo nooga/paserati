@@ -448,6 +448,9 @@ func (p *Parser) parseTypeAliasStatement() *TypeAliasStatement {
 
 	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
+	// Check for type parameters (same pattern as functions)
+	stmt.TypeParameters = p.tryParseTypeParameters()
+
 	if !p.expectPeek(lexer.ASSIGN) {
 		return nil // Expected '=' after identifier
 	}
@@ -4264,6 +4267,9 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 	}
 
 	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	// Check for type parameters (same pattern as functions)
+	stmt.TypeParameters = p.tryParseTypeParameters()
 
 	// Check for extends clause
 	if p.peekTokenIs(lexer.EXTENDS) {

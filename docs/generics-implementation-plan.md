@@ -391,10 +391,21 @@ Basic inference algorithm:
 - [ ] Add Map<K, V> and Set<T> support (needs Map/Set types first)
 - [ ] Comprehensive test suite for all built-ins
 
+### Milestone 5: User-defined Generic Types ✅ COMPLETED
+- [x] Generic interface declarations: `interface Container<T> { value: T; }`
+- [x] Generic type alias declarations: `type Optional<T> = T | undefined`
+- [x] Type parameter parsing with constraints: `T extends string`
+- [x] Type checking for generic interface and type alias bodies
+- [x] Integration with existing type system architecture
+- [x] Proper error reporting for generic type declarations
+- [ ] Generic type instantiation in variable declarations (next phase)
+- [ ] Generic type references in extends clauses (next phase)
+
 ### Milestone 6: Advanced Generic Features 📋 FUTURE
+- [ ] Generic type instantiation: `let x: Container<string>`
+- [ ] Generic extends clauses: `interface A<T> extends B<T> {}`
 - [ ] Support default type parameters (T = any)
 - [ ] Generic function overloads
-- [ ] User-defined generic types (interfaces, type aliases)
 - [ ] Conditional types (T extends U ? A : B)
 - [ ] Mapped types (keyof, in operator)
 - [ ] Variance annotations (in T, out T)

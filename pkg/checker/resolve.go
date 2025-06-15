@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -199,8 +200,38 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return promiseType
 			
 		default:
-			c.addError(node, fmt.Sprintf("Unknown generic type '%s'", node.Name.Value))
-			return nil
+			// Check if this is a user-defined generic type
+			baseType, exists := c.env.ResolveType(node.Name.Value)
+			if !exists {
+				c.addError(node, fmt.Sprintf("Unknown generic type '%s'", node.Name.Value))
+				return nil
+			}
+			
+			// Check if it's a GenericType
+			if genericType, ok := baseType.(*types.GenericType); ok {
+				// Validate type argument count
+				if len(node.TypeArguments) != len(genericType.TypeParameters) {
+					c.addError(node, fmt.Sprintf("Generic type '%s' expects %d type arguments, got %d", 
+						node.Name.Value, len(genericType.TypeParameters), len(node.TypeArguments)))
+					return nil
+				}
+				
+				// Resolve type arguments
+				typeArgs := make([]types.Type, len(node.TypeArguments))
+				for i, argExpr := range node.TypeArguments {
+					argType := c.resolveTypeAnnotation(argExpr)
+					if argType == nil {
+						return nil // Error already reported
+					}
+					typeArgs[i] = argType
+				}
+				
+				// Instantiate the generic type
+				return c.instantiateGenericType(genericType, typeArgs)
+			} else {
+				c.addError(node, fmt.Sprintf("Type '%s' is not a generic type", node.Name.Value))
+				return nil
+			}
 		}
 
 	// --- NEW: Handle ConstructorTypeExpression ---
@@ -500,5 +531,143 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 		OptionalParams:    optionalParams,
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
+	}
+}
+
+// instantiateGenericType creates a concrete type by substituting type arguments
+// into a GenericType's body type
+func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArgs []types.Type) types.Type {
+	// Create debug string for type arguments
+	var typeStrs []string
+	for _, t := range typeArgs {
+		typeStrs = append(typeStrs, t.String())
+	}
+	debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n", 
+		genericType.Name, strings.Join(typeStrs, ", "))
+	
+	// Create substitution map from type parameters to concrete types
+	substitution := make(map[string]types.Type)
+	for i, typeParam := range genericType.TypeParameters {
+		substitution[typeParam.Name] = typeArgs[i]
+	}
+	
+	// Perform type substitution on the body type
+	instantiatedType := c.substituteTypes(genericType.Body, substitution)
+	
+	debugPrintf("// [Checker] Instantiated type: %s\n", instantiatedType.String())
+	return instantiatedType
+}
+
+// substituteTypes recursively substitutes TypeParameterType with concrete types
+func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Type) types.Type {
+	if t == nil {
+		return nil
+	}
+	
+	switch typ := t.(type) {
+	case *types.TypeParameterType:
+		// Replace type parameter with concrete type
+		if replacement, exists := substitution[typ.Parameter.Name]; exists {
+			debugPrintf("// [Checker] Substituting %s -> %s\n", typ.Parameter.Name, replacement.String())
+			return replacement
+		}
+		// Type parameter not found in substitution - this shouldn't happen if validation is correct
+		debugPrintf("// [Checker] WARNING: Type parameter '%s' not found in substitution map\n", typ.Parameter.Name)
+		return typ
+		
+	case *types.ArrayType:
+		// Recursively substitute element type
+		newElementType := c.substituteTypes(typ.ElementType, substitution)
+		return &types.ArrayType{ElementType: newElementType}
+		
+	case *types.ObjectType:
+		// Handle ObjectType with properties and call signatures
+		result := &types.ObjectType{
+			Properties:         make(map[string]types.Type),
+			OptionalProperties: make(map[string]bool),
+		}
+		
+		// Copy and substitute property types
+		for propName, propType := range typ.Properties {
+			result.Properties[propName] = c.substituteTypes(propType, substitution)
+		}
+		for propName, isOptional := range typ.OptionalProperties {
+			result.OptionalProperties[propName] = isOptional
+		}
+		
+		// Copy and substitute call signatures
+		if typ.CallSignatures != nil {
+			result.CallSignatures = make([]*types.Signature, len(typ.CallSignatures))
+			for i, sig := range typ.CallSignatures {
+				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
+				for j, paramType := range sig.ParameterTypes {
+					newParamTypes[j] = c.substituteTypes(paramType, substitution)
+				}
+				
+				newReturnType := c.substituteTypes(sig.ReturnType, substitution)
+				newRestParamType := c.substituteTypes(sig.RestParameterType, substitution)
+				
+				result.CallSignatures[i] = &types.Signature{
+					ParameterTypes:    newParamTypes,
+					ReturnType:        newReturnType,
+					OptionalParams:    sig.OptionalParams, // Copy optional flags
+					IsVariadic:        sig.IsVariadic,
+					RestParameterType: newRestParamType,
+				}
+			}
+		}
+		
+		// Copy construct signatures (if any)
+		if typ.ConstructSignatures != nil {
+			result.ConstructSignatures = make([]*types.Signature, len(typ.ConstructSignatures))
+			for i, sig := range typ.ConstructSignatures {
+				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
+				for j, paramType := range sig.ParameterTypes {
+					newParamTypes[j] = c.substituteTypes(paramType, substitution)
+				}
+				
+				newReturnType := c.substituteTypes(sig.ReturnType, substitution)
+				newRestParamType := c.substituteTypes(sig.RestParameterType, substitution)
+				
+				result.ConstructSignatures[i] = &types.Signature{
+					ParameterTypes:    newParamTypes,
+					ReturnType:        newReturnType,
+					OptionalParams:    sig.OptionalParams,
+					IsVariadic:        sig.IsVariadic,
+					RestParameterType: newRestParamType,
+				}
+			}
+		}
+		
+		return result
+		
+	case *types.UnionType:
+		// Recursively substitute union member types
+		newTypes := make([]types.Type, len(typ.Types))
+		for i, memberType := range typ.Types {
+			newTypes[i] = c.substituteTypes(memberType, substitution)
+		}
+		return types.NewUnionType(newTypes...)
+		
+	case *types.IntersectionType:
+		// Recursively substitute intersection member types
+		newTypes := make([]types.Type, len(typ.Types))
+		for i, memberType := range typ.Types {
+			newTypes[i] = c.substituteTypes(memberType, substitution)
+		}
+		return types.NewIntersectionType(newTypes...)
+		
+	case *types.TupleType:
+		// Recursively substitute tuple element types
+		newElementTypes := make([]types.Type, len(typ.ElementTypes))
+		for i, elementType := range typ.ElementTypes {
+			newElementTypes[i] = c.substituteTypes(elementType, substitution)
+		}
+		return &types.TupleType{ElementTypes: newElementTypes}
+		
+	default:
+		// For primitive types and other types that don't contain type parameters,
+		// return as-is
+		return typ
 	}
 }

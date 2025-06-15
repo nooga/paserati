@@ -18,7 +18,13 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 		return // Should not happen if parser prevents duplicates
 	}
 
-	// 2. Resolve the RHS type using the CURRENT (global) environment
+	// 2. Handle generic type aliases
+	if len(node.TypeParameters) > 0 {
+		c.checkGenericTypeAliasStatement(node)
+		return
+	}
+
+	// 3. Resolve the RHS type using the CURRENT (global) environment
 	// This allows aliases to reference previously defined aliases in the same pass
 	aliasedType := c.resolveTypeAnnotation(node.Type) // Uses c.env (globalEnv)
 	if aliasedType == nil {
@@ -29,13 +35,77 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 		return
 	}
 
-	// 3. Define the alias in the CURRENT (global) environment
+	// 4. Define the alias in the CURRENT (global) environment
 	if !c.env.DefineTypeAlias(node.Name.Value, aliasedType) {
 		debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for '%s'.\n", node.Name.Value)
 	} else {
 		debugPrintf("// [Checker TypeAlias P1] Defined alias '%s' as type '%s' in env %p\n", node.Name.Value, aliasedType.String(), c.env)
 	}
 	// No need to set computed type on the TypeAliasStatement node itself
+}
+
+// checkGenericTypeAliasStatement handles generic type alias declarations
+func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement) {
+	debugPrintf("// [Checker TypeAlias P1] Processing generic type alias '%s' with %d type parameters\n", 
+		node.Name.Value, len(node.TypeParameters))
+
+	// 1. Validate type parameters
+	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
+	for i, param := range node.TypeParameters {
+		// Create TypeParameter type
+		typeParam := &types.TypeParameter{
+			Name: param.Name.Value,
+		}
+		
+		// Handle constraint if present
+		if param.Constraint != nil {
+			constraintType := c.resolveTypeAnnotation(param.Constraint)
+			if constraintType != nil {
+				typeParam.Constraint = constraintType
+			}
+		}
+		
+		typeParams[i] = typeParam
+	}
+
+	// 2. Create the body type with TypeParameterType references
+	// Create a new environment with type parameters available as TypeParameterType
+	genericEnv := NewEnclosedEnvironment(c.env)
+	for _, typeParam := range typeParams {
+		paramType := &types.TypeParameterType{
+			Parameter: typeParam,
+		}
+		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
+	}
+	
+	// Save current environment and switch to generic environment
+	savedEnv := c.env
+	c.env = genericEnv
+	
+	// Resolve the RHS type with TypeParameterType references
+	bodyType := c.resolveTypeAnnotation(node.Type)
+	if bodyType == nil {
+		debugPrintf("// [Checker TypeAlias P1] Failed to resolve body type for generic alias '%s'. Using Any.\n", node.Name.Value)
+		bodyType = types.Any
+	}
+
+	// Restore environment
+	c.env = savedEnv
+
+	// 3. Create the GenericType
+	genericType := &types.GenericType{
+		Name:           node.Name.Value,
+		TypeParameters: typeParams,
+		Body:           bodyType,
+	}
+
+	// 4. Define in environment
+	if !c.env.DefineTypeAlias(node.Name.Value, genericType) {
+		debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for generic type alias '%s'.\n", node.Name.Value)
+	} else {
+		debugPrintf("// [Checker TypeAlias P1] Defined generic type alias '%s' with %d type parameters in env %p\n",
+			node.Name.Value, len(typeParams), c.env)
+	}
 }
 
 // --- NEW: Interface Declaration Check ---
@@ -46,6 +116,12 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// 1. Check if already defined
 	if _, exists := c.env.ResolveType(node.Name.Value); exists {
 		debugPrintf("// [Checker Interface P1] Interface '%s' already defined? Skipping.\n", node.Name.Value)
+		return
+	}
+
+	// 2. Handle generic interfaces
+	if len(node.TypeParameters) > 0 {
+		c.checkGenericInterfaceDeclaration(node)
 		return
 	}
 
@@ -151,6 +227,121 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	} else {
 		debugPrintf("// [Checker Interface P1] Defined interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
 			node.Name.Value, interfaceType.String(), c.env, len(node.Extends))
+	}
+}
+
+// checkGenericInterfaceDeclaration handles generic interface declarations
+func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclaration) {
+	debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n", 
+		node.Name.Value, len(node.TypeParameters))
+
+	// 1. Validate type parameters
+	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
+	for i, param := range node.TypeParameters {
+		// Create TypeParameter type
+		typeParam := &types.TypeParameter{
+			Name: param.Name.Value,
+		}
+		
+		// Handle constraint if present
+		if param.Constraint != nil {
+			constraintType := c.resolveTypeAnnotation(param.Constraint)
+			if constraintType != nil {
+				typeParam.Constraint = constraintType
+			}
+		}
+		
+		typeParams[i] = typeParam
+	}
+
+	// 2. Create the body ObjectType with TypeParameterType references
+	// This is a template that will be instantiated with concrete types later
+	
+	// Create a new environment with type parameters available as TypeParameterType
+	genericEnv := NewEnclosedEnvironment(c.env)
+	for _, typeParam := range typeParams {
+		paramType := &types.TypeParameterType{
+			Parameter: typeParam,
+		}
+		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
+	}
+	
+	// Save current environment and switch to generic environment
+	savedEnv := c.env
+	c.env = genericEnv
+	
+	// Build the ObjectType body with TypeParameterType references
+	properties := make(map[string]types.Type)
+	optionalProperties := make(map[string]bool)
+
+	// Handle extends clause with generic environment
+	for _, extendedInterfaceName := range node.Extends {
+		extendedType, exists := c.env.ResolveType(extendedInterfaceName.Value)
+		if !exists {
+			// Try resolving in parent environment
+			extendedType, exists = savedEnv.ResolveType(extendedInterfaceName.Value)
+		}
+		if !exists {
+			continue // Skip unresolved extended interfaces
+		}
+
+		if extendedObjectType, ok := extendedType.(*types.ObjectType); ok {
+			for propName, propType := range extendedObjectType.Properties {
+				properties[propName] = propType
+				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
+					optionalProperties[propName] = true
+				}
+			}
+		}
+	}
+
+	// Process interface properties with TypeParameterType references
+	for _, prop := range node.Properties {
+		if prop.IsConstructorSignature {
+			constructorType := c.resolveTypeAnnotation(prop.Type)
+			if constructorType == nil {
+				constructorType = types.Any
+			}
+			properties["new"] = constructorType
+		} else if prop.Name == nil {
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				propType = types.Any
+			}
+			properties["__call"] = propType
+		} else {
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				propType = types.Any
+			}
+			properties[prop.Name.Value] = propType
+			if prop.Optional {
+				optionalProperties[prop.Name.Value] = true
+			}
+		}
+	}
+
+	// Restore environment
+	c.env = savedEnv
+
+	bodyType := &types.ObjectType{
+		Properties:         properties,
+		OptionalProperties: optionalProperties,
+	}
+
+	// 3. Create the GenericType
+	genericType := &types.GenericType{
+		Name:           node.Name.Value,
+		TypeParameters: typeParams,
+		Body:           bodyType,
+	}
+
+	// 4. Define in environment
+	if !c.env.DefineTypeAlias(node.Name.Value, genericType) {
+		debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for generic interface '%s'.\n", node.Name.Value)
+	} else {
+		debugPrintf("// [Checker Interface P1] Defined generic interface '%s' with %d type parameters in env %p\n",
+			node.Name.Value, len(typeParams), c.env)
 	}
 }
 

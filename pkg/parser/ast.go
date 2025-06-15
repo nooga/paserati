@@ -1068,9 +1068,10 @@ func (te *TernaryExpression) String() string {
 
 // TypeAliasStatement represents a `type Name = Type;` declaration.
 type TypeAliasStatement struct {
-	Token lexer.Token // The 'type' token
-	Name  *Identifier // The name of the alias
-	Type  Expression  // The type expression being aliased
+	Token          lexer.Token       // The 'type' token
+	Name           *Identifier       // The name of the alias
+	TypeParameters []*TypeParameter  // Generic type parameters (e.g., <T, U>)
+	Type           Expression        // The type expression being aliased
 }
 
 func (tas *TypeAliasStatement) statementNode()       {}
@@ -1079,6 +1080,19 @@ func (tas *TypeAliasStatement) String() string {
 	var out bytes.Buffer
 	out.WriteString(tas.TokenLiteral() + " ")
 	out.WriteString(tas.Name.String())
+	
+	// Add type parameters if present
+	if len(tas.TypeParameters) > 0 {
+		out.WriteString("<")
+		for i, tp := range tas.TypeParameters {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(tp.String())
+		}
+		out.WriteString(">")
+	}
+	
 	out.WriteString(" = ")
 	out.WriteString(tas.Type.String())
 	out.WriteString(";")
@@ -1607,10 +1621,11 @@ func (otp *ObjectTypeProperty) String() string {
 // InterfaceDeclaration represents an interface declaration.
 // interface Name { property: Type; method(): ReturnType; }
 type InterfaceDeclaration struct {
-	Token      lexer.Token          // The 'interface' token
-	Name       *Identifier          // Interface name
-	Extends    []*Identifier        // Interfaces this interface extends (NEW)
-	Properties []*InterfaceProperty // Interface properties/methods
+	Token          lexer.Token          // The 'interface' token
+	Name           *Identifier          // Interface name
+	TypeParameters []*TypeParameter     // Generic type parameters (e.g., <T, U>)
+	Extends        []*Identifier        // Interfaces this interface extends (NEW)
+	Properties     []*InterfaceProperty // Interface properties/methods
 }
 
 func (id *InterfaceDeclaration) statementNode()       {}
@@ -1619,6 +1634,18 @@ func (id *InterfaceDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("interface ")
 	out.WriteString(id.Name.String())
+	
+	// Add type parameters if present
+	if len(id.TypeParameters) > 0 {
+		out.WriteString("<")
+		for i, tp := range id.TypeParameters {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(tp.String())
+		}
+		out.WriteString(">")
+	}
 
 	// Add extends clause if present
 	if len(id.Extends) > 0 {
