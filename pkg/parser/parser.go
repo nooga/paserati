@@ -200,6 +200,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
+	p.registerPrefix(lexer.LT, p.parseGenericArrowFunction)    // Generic arrow functions: <T>(x: T) => x
 	p.registerPrefix(lexer.IF, p.parseIfExpression)
 	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
 	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)  // <<< NEW: Register Object Literal Parsing
@@ -1136,7 +1137,7 @@ func (p *Parser) parseIdentifier() Expression {
 			TypeAnnotation: nil, // No type annotation in this shorthand syntax
 		}
 		// parseArrowFunctionBodyAndFinish expects curToken to be '=>'
-		return p.parseArrowFunctionBodyAndFinish([]*Parameter{param}, nil, nil)
+		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
 	}
 
 	debugPrint("parseIdentifier (VALUE context): Just identifier '%s', returning.", ident.Value)
@@ -1331,6 +1332,9 @@ func (p *Parser) parseFunctionLiteral() Expression {
 		}
 		lit.Name = nameIdent
 	}
+
+	// Try to parse type parameters: function name<T, U>() or function<T, U>()
+	lit.TypeParameters = p.tryParseTypeParameters()
 
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
@@ -2512,7 +2516,7 @@ func (p *Parser) parseGroupedExpression() Expression {
 			p.nextToken() // Consume ')', Now curToken is '=>'
 			debugPrint("parseGroupedExpression: Consumed ')', cur is now '=>'")
 			p.errors = p.errors[:startErrors]                                // Clear errors from backtrack attempt
-			return p.parseArrowFunctionBodyAndFinish(params, restParam, nil) // No return type annotation
+			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil) // No return type annotation
 
 			// Case 2: Arrow function with params AND return type annotation: (a: T, b: U): R => body
 		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
@@ -2545,7 +2549,7 @@ func (p *Parser) parseGroupedExpression() Expression {
 
 			// Pass the correctly parsed returnTypeAnnotation.
 			// parseArrowFunctionBodyAndFinish expects curToken to be '=>'.
-			return p.parseArrowFunctionBodyAndFinish(params, restParam, returnTypeAnnotation)
+			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation)
 
 		} else {
 			// Not an arrow function (or parseParameterList failed), backtrack.
@@ -2794,10 +2798,11 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 
 // parseArrowFunctionBodyAndFinish completes parsing an arrow function.
 // It assumes the parameters have been parsed and the current token is '=>'.
-func (p *Parser) parseArrowFunctionBodyAndFinish(params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression) Expression {
+func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression) Expression {
 	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v, restParam=%v", p.curToken.Literal, p.curToken.Type, params, restParam)
 	arrowFunc := &ArrowFunctionLiteral{
 		Token:                p.curToken, // The '=>' token
+		TypeParameters:       typeParams, // Use the passed-in type parameters
 		Parameters:           params,     // Use the passed-in parameters
 		RestParameter:        restParam,  // Use the passed-in rest parameter
 		ReturnTypeAnnotation: returnTypeAnnotation,
@@ -3959,7 +3964,77 @@ func (p *Parser) parseTypeIdentifier() Expression {
 		p.addError(p.curToken, msg)
 		return nil
 	}
-	return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	// Save the identifier
+	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	// Check if this could be a generic type reference
+	// We need to be careful here - only parse as generic if we see '<' followed by a valid type
+	if p.peekTokenIs(lexer.LT) {
+		// Try to parse as generic, but be ready to backtrack
+		return p.tryParseGenericTypeRef(ident)
+	}
+	
+	return ident
+}
+
+// tryParseGenericTypeRef attempts to parse Array<T> syntax
+// If it fails, it returns the original identifier
+func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
+	// For now, we'll use a simpler approach without full backtracking
+	// This is safe because we're only in type context
+	
+	// Consume the '<'
+	p.nextToken()
+	if !p.curTokenIs(lexer.LT) {
+		// This shouldn't happen since we checked peek
+		return name
+	}
+	
+	// Try to parse type arguments
+	var typeArgs []Expression
+	
+	// Parse first type argument
+	p.nextToken()
+	if p.curTokenIs(lexer.GT) {
+		// Empty type arguments not allowed
+		p.addError(p.curToken, "Expected type argument after '<'")
+		return name
+	}
+	
+	firstArg := p.parseTypeExpression()
+	if firstArg == nil {
+		// Error already added by parseTypeExpression
+		return name
+	}
+	typeArgs = append(typeArgs, firstArg)
+	
+	// Parse remaining type arguments
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // consume comma
+		p.nextToken() // move to next type
+		
+		arg := p.parseTypeExpression()
+		if arg == nil {
+			// Error already added by parseTypeExpression
+			return name
+		}
+		typeArgs = append(typeArgs, arg)
+	}
+	
+	// Expect closing '>'
+	if !p.peekTokenIs(lexer.GT) {
+		p.addError(p.peekToken, fmt.Sprintf("Expected '>' after type arguments, got %s", p.peekToken.Type))
+		return name
+	}
+	p.nextToken() // consume '>'
+	
+	// Success! Create generic type ref
+	return &GenericTypeRef{
+		BaseExpression: BaseExpression{},
+		Name:           name,
+		TypeArguments:  typeArgs,
+	}
 }
 
 func (p *Parser) parseObjectLiteral() Expression {
@@ -5262,6 +5337,157 @@ func GetTokenFromNode(node Node) lexer.Token {
 		// Cannot easily determine a representative token
 		return lexer.Token{} // Return zero value
 	}
+}
+
+// --- Type Parameter Parsing Helpers ---
+
+// parseTypeParameters parses a type parameter list: <T, U extends string>
+// Assumes current token is '<', consumes through '>'
+func (p *Parser) parseTypeParameters() ([]*TypeParameter, error) {
+	if !p.curTokenIs(lexer.LT) {
+		return nil, fmt.Errorf("internal error: parseTypeParameters called without '<'")
+	}
+	
+	var typeParams []*TypeParameter
+	
+	// Move to first type parameter
+	p.nextToken()
+	
+	// Handle empty type parameter list
+	if p.curTokenIs(lexer.GT) {
+		return typeParams, nil // Empty list is valid
+	}
+	
+	// Parse first type parameter
+	firstParam := p.parseTypeParameter()
+	if firstParam == nil {
+		return nil, fmt.Errorf("failed to parse type parameter")
+	}
+	typeParams = append(typeParams, firstParam)
+	
+	// Parse remaining type parameters
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // consume comma
+		p.nextToken() // move to next type parameter
+		
+		param := p.parseTypeParameter()
+		if param == nil {
+			return nil, fmt.Errorf("failed to parse type parameter")
+		}
+		typeParams = append(typeParams, param)
+	}
+	
+	// Expect closing '>'
+	if !p.expectPeek(lexer.GT) {
+		return nil, fmt.Errorf("expected '>' after type parameters")
+	}
+	
+	return typeParams, nil
+}
+
+// parseTypeParameter parses a single type parameter: T or T extends string
+func (p *Parser) parseTypeParameter() *TypeParameter {
+	if !p.curTokenIs(lexer.IDENT) {
+		p.addError(p.curToken, "expected type parameter name")
+		return nil
+	}
+	
+	param := &TypeParameter{
+		Token: p.curToken,
+		Name:  &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+	}
+	
+	// Check for constraint: T extends SomeType
+	if p.peekTokenIs(lexer.EXTENDS) {
+		p.nextToken() // consume 'extends'
+		p.nextToken() // move to constraint type
+		
+		constraint := p.parseTypeExpression()
+		if constraint == nil {
+			p.addError(p.curToken, "expected type after 'extends'")
+			return nil
+		}
+		param.Constraint = constraint
+	}
+	
+	return param
+}
+
+// tryParseTypeParameters attempts to parse type parameters and returns them if successful
+// If parsing fails, it backtracks and returns nil (used for disambiguation)
+func (p *Parser) tryParseTypeParameters() []*TypeParameter {
+	if !p.peekTokenIs(lexer.LT) {
+		return nil // No type parameters
+	}
+	
+	// Save current state for potential backtracking
+	savedCur := p.curToken
+	savedPeek := p.peekToken
+	savedErrorCount := len(p.errors)
+	
+	// Try to parse type parameters
+	p.nextToken() // consume '<'
+	typeParams, err := p.parseTypeParameters()
+	
+	if err != nil {
+		// Backtrack on failure
+		p.curToken = savedCur
+		p.peekToken = savedPeek
+		// Remove any errors added during failed parse
+		if len(p.errors) > savedErrorCount {
+			p.errors = p.errors[:savedErrorCount]
+		}
+		return nil
+	}
+	
+	return typeParams
+}
+
+// parseGenericArrowFunction parses arrow functions that start with type parameters
+// Handles syntax like: <T>(x: T) => x or <T, U>(a: T, b: U) => [a, b]
+func (p *Parser) parseGenericArrowFunction() Expression {
+	if !p.curTokenIs(lexer.LT) {
+		p.addError(p.curToken, "internal error: parseGenericArrowFunction called without '<'")
+		return nil
+	}
+	
+	// Parse type parameters
+	typeParams, err := p.parseTypeParameters()
+	if err != nil {
+		p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
+		return nil
+	}
+	
+	// Expect '(' for parameters
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+	
+	// Parse regular parameters
+	params, restParam, parseErr := p.parseFunctionParameters()
+	if parseErr != nil {
+		p.addError(p.curToken, fmt.Sprintf("failed to parse arrow function parameters: %v", parseErr))
+		return nil
+	}
+	
+	// Optional return type annotation
+	var returnTypeAnnotation Expression
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // consume ':'
+		p.nextToken() // move to type
+		returnTypeAnnotation = p.parseTypeExpression()
+		if returnTypeAnnotation == nil {
+			p.addError(p.curToken, "expected return type after ':'")
+			return nil
+		}
+	}
+	
+	// Expect '=>'
+	if !p.expectPeek(lexer.ARROW) {
+		return nil
+	}
+	
+	return p.parseArrowFunctionBodyAndFinish(typeParams, params, restParam, returnTypeAnnotation)
 }
 
 // isValidDestructuringTarget checks if an expression can be used as a destructuring target

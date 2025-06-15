@@ -1,198 +1,51 @@
 package checker
 
 import (
-	"fmt"
 	"paserati/pkg/parser"
-	"paserati/pkg/types"
 )
 
 func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
-	// 1. Resolve explicit annotations FIRST to get the signature contract.
-	//    Use resolveFunctionLiteralSignature helper, but pass the *current* env.
-	//    This gives us the expected parameter types and *potential* return type.
-	resolvedSignature := c.resolveFunctionLiteralSignature(node, c.env) // Pass c.env
-	if resolvedSignature == nil {
-		// Error resolving annotations (e.g., unknown type name)
-		// Error should have been added by resolve helper.
-		// Create a dummy Any signature to proceed safely.
-		paramTypes := make([]types.Type, len(node.Parameters))
-		for i := range paramTypes {
-			paramTypes[i] = types.Any
-		}
-		resolvedSignature = &types.Signature{ParameterTypes: paramTypes, ReturnType: types.Any}
-		// Set dummy type on node immediately to prevent nil checks later if we proceeded?
-		// No, let's calculate the final type below and set it once.
-	}
-
-	// 2. Save outer context
-	outerExpectedReturnType := c.currentExpectedReturnType
-	outerInferredReturnTypes := c.currentInferredReturnTypes
-	outerThisType := c.currentThisType
-
-	// 3. Set context for BODY CHECK based ONLY on explicit return annotation.
-	//    resolvedSignature.ReturnType can be nil if not annotated.
-	c.currentExpectedReturnType = resolvedSignature.ReturnType // Use ReturnType from resolved signature
-	c.currentInferredReturnTypes = nil                         // Reset inferred list for this function body
-	if c.currentExpectedReturnType == nil {                    // Allocate ONLY if inference is actually needed
-		c.currentInferredReturnTypes = []types.Type{}
-	}
-
-	// 4. Handle explicit 'this' parameter
-	var thisParamIndex = -1
-	if len(node.Parameters) > 0 && node.Parameters[0].IsThis {
-		thisParamIndex = 0
-		// Set the 'this' context from the first parameter's type
-		if thisParamIndex < len(resolvedSignature.ParameterTypes) {
-			c.currentThisType = resolvedSignature.ParameterTypes[thisParamIndex]
-			debugPrintf("// [Checker FuncLit] Setting this type from explicit parameter: %s\n", c.currentThisType.String())
-		} else {
-			// Should not happen if resolution worked correctly
-			c.currentThisType = types.Any
-		}
-	} else {
-		// No explicit 'this' parameter
-		if c.currentThisType == nil {
-			// No outer context - this is a top-level function that could be a constructor
-			// Set 'this' to 'any' to allow property access
-			c.currentThisType = types.Any
-			debugPrintf("// [Checker FuncLit] No explicit this parameter and no outer context, setting this to any\n")
-		} else {
-			// Preserve the outer 'this' context (for object methods)
-			debugPrintf("// [Checker FuncLit] No explicit this parameter, preserving outer context: %v\n", c.currentThisType)
-		}
-	}
-
-	// 5. Create function's inner scope & define parameters using resolved signature param types
-	funcNameForLog := "<anonymous>"
+	// Use the unified function checking approach
+	funcName := "<anonymous>"
 	if node.Name != nil {
-		funcNameForLog = node.Name.Value
+		funcName = node.Name.Value
 	}
-	debugPrintf("// [Checker Visit FuncLit] Creating INNER scope for '%s'. Current Env: %p\n", funcNameForLog, c.env)
-	originalEnv := c.env
-	funcEnv := NewEnclosedEnvironment(originalEnv)
-	c.env = funcEnv
-	for i, paramNode := range node.Parameters { // Iterate over parser nodes
-		// Skip the 'this' parameter - it doesn't go into the function scope
-		if paramNode.IsThis {
-			// Set computed type on the 'this' parameter node itself
-			if i < len(resolvedSignature.ParameterTypes) {
-				paramNode.ComputedType = resolvedSignature.ParameterTypes[i]
-			}
-			continue
-		}
-		
-		if i < len(resolvedSignature.ParameterTypes) { // Safety check using resolved signature
-			paramType := resolvedSignature.ParameterTypes[i]
-			if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
-				c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
-			}
-			// Set computed type on the Parameter node itself
-			paramNode.ComputedType = paramType
-		} else {
-			// Mismatch between AST params and resolved signature params - internal error?
-			debugPrintf("// [Checker FuncLit Visit] ERROR: Mismatch in param count for func '%s'\n", funcNameForLog)
-		}
+	
+	// Create function check context
+	ctx := &FunctionCheckContext{
+		FunctionName:              funcName,
+		TypeParameters:            node.TypeParameters, // Support for generic functions
+		Parameters:                node.Parameters,
+		RestParameter:             node.RestParameter,
+		ReturnTypeAnnotation:      node.ReturnTypeAnnotation,
+		Body:                      node.Body,
+		IsArrow:                   false,
+		AllowSelfReference:        node.Name != nil, // Allow recursion for named functions
+		AllowOverloadCompletion:   node.Name != nil, // Check for overloads for named functions
 	}
 
-	// --- NEW: Define rest parameter if present ---
-	if node.RestParameter != nil && resolvedSignature.RestParameterType != nil {
-		if !funcEnv.Define(node.RestParameter.Name.Value, resolvedSignature.RestParameterType, false) {
-			c.addError(node.RestParameter.Name, fmt.Sprintf("duplicate parameter name: %s", node.RestParameter.Name.Value))
-		}
-		// Set computed type on the RestParameter node itself
-		node.RestParameter.ComputedType = resolvedSignature.RestParameterType
-		debugPrintf("// [Checker FuncLit Visit] Defined rest parameter '%s' with type: %s\n", node.RestParameter.Name.Value, resolvedSignature.RestParameterType.String())
-	}
-	// --- END NEW ---
+	// 1. Resolve parameters and signature
+	preliminarySignature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv := c.resolveFunctionParameters(ctx)
 
-	// --- Function name self-definition for recursion (if named) ---
-	// Hoisting handles top-level/block-level, but let/const needs this.
-	if node.Name != nil {
-		// Re-use the resolvedSignature for the temporary definition using unified ObjectType
-		// (ReturnType might still be nil here if not annotated)
-		tempFuncTypeForRecursion := types.NewFunctionType(resolvedSignature)
-		if !funcEnv.Define(node.Name.Value, tempFuncTypeForRecursion, false) {
-			// This might happen if a param has the same name - parser should likely prevent this
-			c.addError(node.Name, fmt.Sprintf("function name '%s' conflicts with a parameter", node.Name.Value))
-		}
-	}
-	// --- END Function name self-definition ---
+	// 2. Setup function environment
+	originalEnv := c.setupFunctionEnvironment(ctx, paramTypes, paramNames, restParameterType, restParameterName, preliminarySignature, typeParamEnv)
 
-	// 5. Visit Body (only if it exists - function signatures have nil body)
-	if node.Body != nil {
-		c.visit(node.Body)
+	// 3. Check function body and determine return type
+	finalReturnType := c.checkFunctionBody(ctx, preliminarySignature.ReturnType)
+
+	// 4. Create final function type
+	finalFuncType := c.createFinalFunctionType(ctx, paramTypes, finalReturnType, restParameterType)
+
+	// 5. Set computed type on the FunctionLiteral node
+	debugPrintf("// [Checker FuncLit] Setting computed type: %s\n", finalFuncType.String())
+	node.SetComputedType(finalFuncType)
+
+	// 6. Check for overload completion if this is a named function
+	if ctx.AllowOverloadCompletion && len(c.env.GetPendingOverloads(funcName)) > 0 {
+		c.completeOverloadedFunction(funcName, finalFuncType)
 	}
 
-	// 6. Determine Final ACTUAL Return Type of the function body
-	var actualReturnType types.Type
-	if resolvedSignature.ReturnType != nil {
-		// Annotation exists, use that as the final actual type.
-		// Checks against this type happened during ReturnStatement visits.
-		actualReturnType = resolvedSignature.ReturnType
-	} else {
-		// No annotation, INFER the return type from collected returns.
-		if len(c.currentInferredReturnTypes) == 0 {
-			actualReturnType = types.Undefined // No returns -> undefined
-		} else {
-			// Use NewUnionType to combine inferred return types
-			actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
-		}
-		debugPrintf("// [Checker FuncLit Visit] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
-	}
-
-	// --- Update self-definition if name existed and return type was inferred ---
-	if node.Name != nil && resolvedSignature.ReturnType == nil {
-		optionalParams := make([]bool, len(node.Parameters))
-		for i, param := range node.Parameters {
-			optionalParams[i] = param.Optional || (param.DefaultValue != nil)
-		}
-
-		finalFuncTypeForRecursion := types.NewFunctionType(&types.Signature{
-			ParameterTypes: resolvedSignature.ParameterTypes,
-			ReturnType:     actualReturnType, // Use the inferred type now
-			OptionalParams: optionalParams,
-		})
-		// Update the function's own entry in its scope
-		if !funcEnv.Update(node.Name.Value, finalFuncTypeForRecursion) {
-			debugPrintf("// [Checker FuncLit Visit] WARNING: Failed to update self-definition for '%s'\n", node.Name.Value)
-		}
-	}
-	// --- END Update self-definition ---
-
-	// 7. Create the FINAL function type representing this literal
-	optionalParams := make([]bool, len(node.Parameters))
-	for i, param := range node.Parameters {
-		optionalParams[i] = param.Optional || (param.DefaultValue != nil)
-	}
-
-	// Create a Signature for our function
-	sig := &types.Signature{
-		ParameterTypes:    resolvedSignature.ParameterTypes, // Use types from annotation/defaults
-		ReturnType:        actualReturnType,                 // Use the explicit or inferred return type
-		OptionalParams:    optionalParams,
-		IsVariadic:        resolvedSignature.IsVariadic,        // Add variadic info
-		RestParameterType: resolvedSignature.RestParameterType, // Add rest parameter type
-	}
-
-	// Create an ObjectType with call signature using the constructor
-	finalFuncType := types.NewFunctionType(sig)
-
-
-	// 8. *** ALWAYS Set the Computed Type on the FunctionLiteral node ***
-	debugPrintf("// [Checker FuncLit Visit] SETTING final computed type for '%s': %s\n", funcNameForLog, finalFuncType.String())
-	node.SetComputedType(finalFuncType) // Use the new ObjectType with call signature
-
-	// --- NEW: Check for overload completion ---
-	if node.Name != nil && len(c.env.GetPendingOverloads(node.Name.Value)) > 0 {
-		// Use the unified function type for overloads
-		c.completeOverloadedFunction(node.Name.Value, finalFuncType)
-	}
-	// --- END NEW ---
-
-	// 9. Restore outer environment and context
-	debugPrintf("// [Checker Visit FuncLit] Exiting '%s'. Restoring Env: %p (from current %p)\n", funcNameForLog, originalEnv, c.env)
+	// 7. Restore environment
 	c.env = originalEnv
-	c.currentExpectedReturnType = outerExpectedReturnType
-	c.currentInferredReturnTypes = outerInferredReturnTypes
-	c.currentThisType = outerThisType
+	debugPrintf("// [Checker FuncLit] Restored environment to: %p\n", originalEnv)
 }

@@ -8,42 +8,99 @@ import (
 
 // FunctionCheckContext holds the common context for function checking
 type FunctionCheckContext struct {
-	FunctionName              string              // For logging and recursion
-	Parameters                []*parser.Parameter // Parameter nodes
-	RestParameter             *parser.RestParameter // Rest parameter node (if any)
-	ReturnTypeAnnotation      parser.Expression   // Return type annotation (if any)
-	Body                      parser.Node         // Function body (block or expression)
-	IsArrow                   bool                // Whether this is an arrow function
-	AllowSelfReference        bool                // Whether to allow recursive self-reference
-	AllowOverloadCompletion   bool                // Whether to check for overload completion
+	FunctionName              string                      // For logging and recursion
+	TypeParameters            []*parser.TypeParameter     // Generic type parameters (if any)
+	Parameters                []*parser.Parameter         // Parameter nodes
+	RestParameter             *parser.RestParameter       // Rest parameter node (if any)
+	ReturnTypeAnnotation      parser.Expression           // Return type annotation (if any)
+	Body                      parser.Node                 // Function body (block or expression)
+	IsArrow                   bool                        // Whether this is an arrow function
+	AllowSelfReference        bool                        // Whether to allow recursive self-reference
+	AllowOverloadCompletion   bool                        // Whether to check for overload completion
 }
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
-func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.Signature, []types.Type, []*parser.Identifier, types.Type, *parser.Identifier) {
+// Returns: signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
+func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.Signature, []types.Type, []*parser.Identifier, types.Type, *parser.Identifier, *Environment) {
+	// 1. First, create an environment for type parameters if this is a generic function
+	var typeParamEnv *Environment = c.env
+	
+	if len(ctx.TypeParameters) > 0 {
+		// Create a new environment that includes type parameters
+		typeParamEnv = NewEnclosedEnvironment(c.env)
+		
+		// Define each type parameter in the environment
+		for i, typeParamNode := range ctx.TypeParameters {
+			// Resolve constraint if present
+			var constraintType types.Type
+			if typeParamNode.Constraint != nil {
+				originalEnv := c.env
+				c.env = typeParamEnv // Use the type param environment for constraint resolution
+				constraintType = c.resolveTypeAnnotation(typeParamNode.Constraint)
+				c.env = originalEnv
+				if constraintType == nil {
+					constraintType = types.Any // Default constraint
+				}
+			} else {
+				constraintType = types.Any // Default constraint
+			}
+			
+			// Create the type parameter
+			typeParam := &types.TypeParameter{
+				Name:       typeParamNode.Name.Value,
+				Constraint: constraintType,
+				Index:      i,
+			}
+			
+			// Define it in the environment
+			if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
+				c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+			}
+			
+			// Set computed type on the AST node
+			typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
+			
+			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint %s\n", 
+				typeParam.Name, constraintType.String())
+		}
+	}
+
 	var paramTypes []types.Type
 	var paramNames []*parser.Identifier
 	var restParameterType types.Type
 	var restParameterName *parser.Identifier
 	
-	// Resolve regular parameters
+	// 2. Resolve regular parameters using the type parameter environment
 	for _, param := range ctx.Parameters {
 		var paramType types.Type = types.Any
 		if param.TypeAnnotation != nil {
+			originalEnv := c.env
+			c.env = typeParamEnv // Use environment that includes type parameters
 			resolvedParamType := c.resolveTypeAnnotation(param.TypeAnnotation)
+			c.env = originalEnv
 			if resolvedParamType != nil {
 				paramType = resolvedParamType
 			}
 		}
 		paramTypes = append(paramTypes, paramType)
-		paramNames = append(paramNames, param.Name)
+		
+		// For 'this' parameters, include in signature but don't add to paramNames (no variable)
+		if param.IsThis {
+			paramNames = append(paramNames, nil) // Placeholder to keep indices aligned
+		} else {
+			paramNames = append(paramNames, param.Name)
+		}
 		param.ComputedType = paramType
 	}
 	
-	// Handle rest parameter if present
+	// 3. Handle rest parameter if present using the type parameter environment
 	if ctx.RestParameter != nil {
 		var resolvedRestType types.Type
 		if ctx.RestParameter.TypeAnnotation != nil {
+			originalEnv := c.env
+			c.env = typeParamEnv // Use environment that includes type parameters
 			resolvedRestType = c.resolveTypeAnnotation(ctx.RestParameter.TypeAnnotation)
+			c.env = originalEnv
 			
 			// Rest parameter type should be an array type
 			if resolvedRestType != nil {
@@ -64,10 +121,13 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 		ctx.RestParameter.ComputedType = restParameterType
 	}
 	
-	// Resolve return type annotation
+	// 4. Resolve return type annotation using the type parameter environment
 	var expectedReturnType types.Type
 	if ctx.ReturnTypeAnnotation != nil {
+		originalEnv := c.env
+		c.env = typeParamEnv // Use environment that includes type parameters
 		expectedReturnType = c.resolveTypeAnnotation(ctx.ReturnTypeAnnotation)
+		c.env = originalEnv
 	}
 	
 	// Create preliminary signature
@@ -84,19 +144,20 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 		RestParameterType: restParameterType,
 	}
 	
-	return signature, paramTypes, paramNames, restParameterType, restParameterName
+	return signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
 }
 
 // setupFunctionEnvironment creates the function scope and defines parameters
-func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes []types.Type, paramNames []*parser.Identifier, restParameterType types.Type, restParameterName *parser.Identifier, preliminarySignature *types.Signature) *Environment {
+func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes []types.Type, paramNames []*parser.Identifier, restParameterType types.Type, restParameterName *parser.Identifier, preliminarySignature *types.Signature, typeParamEnv *Environment) *Environment {
 	debugPrintf("// [Checker Function Common] Creating scope for '%s'. Current Env: %p\n", ctx.FunctionName, c.env)
 	originalEnv := c.env
-	funcEnv := NewEnclosedEnvironment(originalEnv)
+	// Use the type parameter environment as the base for the function body environment
+	funcEnv := NewEnclosedEnvironment(typeParamEnv)
 	c.env = funcEnv
 	
-	// Define regular parameters
+	// Define regular parameters (skip 'this' parameters which have nil nameNode)
 	for i, nameNode := range paramNames {
-		if i < len(paramTypes) {
+		if i < len(paramTypes) && nameNode != nil {
 			if !funcEnv.Define(nameNode.Value, paramTypes[i], false) {
 				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
 			}
@@ -133,6 +194,29 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	c.currentInferredReturnTypes = nil
 	if expectedReturnType == nil {
 		c.currentInferredReturnTypes = []types.Type{}
+	}
+	
+	// Set up 'this' context - check for explicit 'this' parameter
+	outerThisType := c.currentThisType
+	hasExplicitThisParam := false
+	for _, param := range ctx.Parameters {
+		if param.IsThis {
+			hasExplicitThisParam = true
+			// Use the resolved type from parameter resolution
+			if param.ComputedType != nil {
+				c.currentThisType = param.ComputedType
+				debugPrintf("// [Checker Function Body] Using explicit this parameter type: %s\n", param.ComputedType.String())
+			} else {
+				c.currentThisType = types.Any
+			}
+			break
+		}
+	}
+	
+	if !hasExplicitThisParam {
+		// No explicit 'this' parameter - set to 'any' for function literals (like prototype methods)
+		c.currentThisType = types.Any
+		debugPrintf("// [Checker Function Body] No explicit this parameter, setting this to any for function literal\n")
 	}
 	
 	var finalReturnType types.Type
@@ -172,9 +256,10 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 		finalReturnType = c.inferFinalReturnType(expectedReturnType, ctx.FunctionName)
 	}
 	
-	// Restore return context
+	// Restore return context and this context
 	c.currentExpectedReturnType = outerExpectedReturnType
 	c.currentInferredReturnTypes = outerInferredReturnTypes
+	c.currentThisType = outerThisType
 	
 	return finalReturnType
 }

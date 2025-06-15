@@ -293,6 +293,30 @@ func (rp *RestParameter) String() string {
 	return out.String()
 }
 
+// --- NEW: TypeParameter Node ---
+// Represents a type parameter in generic function declarations (e.g., T, U extends string)
+// Used in function<T, U extends string>() syntax
+type TypeParameter struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The identifier token (e.g., 'T')
+	Name           *Identifier // The type parameter name
+	Constraint     Expression  // Optional constraint (e.g., 'string' in 'T extends string')
+}
+
+func (tp *TypeParameter) expressionNode()      {}
+func (tp *TypeParameter) TokenLiteral() string { return tp.Token.Literal }
+func (tp *TypeParameter) String() string {
+	var out bytes.Buffer
+	if tp.Name != nil {
+		out.WriteString(tp.Name.Value)
+	}
+	if tp.Constraint != nil {
+		out.WriteString(" extends ")
+		out.WriteString(tp.Constraint.String())
+	}
+	return out.String()
+}
+
 // SpreadElement represents spread syntax (...arr) in function calls and other contexts
 type SpreadElement struct {
 	BaseExpression             // Embed base for ComputedType
@@ -423,6 +447,7 @@ type FunctionLiteral struct {
 	BaseExpression                       // Embed base for ComputedType (Function type)
 	Token                lexer.Token     // The 'function' token
 	Name                 *Identifier     // Optional function name
+	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter    // Regular parameters
 	RestParameter        *RestParameter  // Optional rest parameter (...args)
 	ReturnTypeAnnotation Expression      // << RENAMED & TYPE CHANGED
@@ -447,6 +472,20 @@ func (fl *FunctionLiteral) String() string {
 		out.WriteString(" ")
 		out.WriteString(fl.Name.String())
 	}
+	
+	// Add type parameters if present
+	if len(fl.TypeParameters) > 0 {
+		out.WriteString("<")
+		typeParams := []string{}
+		for _, tp := range fl.TypeParameters {
+			if tp != nil {
+				typeParams = append(typeParams, tp.String())
+			}
+		}
+		out.WriteString(strings.Join(typeParams, ", "))
+		out.WriteString(">")
+	}
+	
 	out.WriteString("(")
 	out.WriteString(strings.Join(params, ", "))
 	out.WriteString(")")
@@ -522,6 +561,7 @@ func (ue *UpdateExpression) String() string {
 type ArrowFunctionLiteral struct {
 	BaseExpression                      // Embed base for ComputedType (Function type)
 	Token                lexer.Token    // The '=>' token
+	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter   // Regular parameters
 	RestParameter        *RestParameter // Optional rest parameter (...args)
 	ReturnTypeAnnotation Expression     // << MODIFIED
@@ -542,12 +582,27 @@ func (afl *ArrowFunctionLiteral) String() string {
 		params = append(params, afl.RestParameter.String())
 	}
 
-	if len(afl.Parameters) == 1 && afl.Parameters[0] != nil && afl.Parameters[0].TypeAnnotation == nil && afl.RestParameter == nil {
-		out.WriteString(params[0])
-	} else {
+	// Add type parameters if present
+	if len(afl.TypeParameters) > 0 {
+		out.WriteString("<")
+		typeParams := []string{}
+		for _, tp := range afl.TypeParameters {
+			if tp != nil {
+				typeParams = append(typeParams, tp.String())
+			}
+		}
+		out.WriteString(strings.Join(typeParams, ", "))
+		out.WriteString(">")
+	}
+
+	// If we have type parameters, always use parentheses
+	// Otherwise, use the existing logic for single parameter optimization
+	if len(afl.TypeParameters) > 0 || len(afl.Parameters) != 1 || afl.Parameters[0] == nil || afl.Parameters[0].TypeAnnotation != nil || afl.RestParameter != nil {
 		out.WriteString("(")
 		out.WriteString(strings.Join(params, ", "))
 		out.WriteString(")")
+	} else {
+		out.WriteString(params[0])
 	}
 
 	if afl.ReturnTypeAnnotation != nil {
@@ -1078,6 +1133,34 @@ func (ite *IntersectionTypeExpression) String() string {
 	out.WriteString(")")
 	if ite.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", ite.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// --- NEW: GenericTypeRef ---
+
+// GenericTypeRef represents a generic type reference (e.g., Array<string>, Promise<number>).
+type GenericTypeRef struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The identifier token
+	Name           *Identifier // The generic type name (e.g., "Array")
+	TypeArguments  []Expression // The type arguments (e.g., [string] in Array<string>)
+}
+
+func (g *GenericTypeRef) expressionNode()      {}
+func (g *GenericTypeRef) TokenLiteral() string { return g.Token.Literal }
+func (g *GenericTypeRef) String() string {
+	var out bytes.Buffer
+	out.WriteString(g.Name.Value)
+	out.WriteString("<")
+	args := []string{}
+	for _, arg := range g.TypeArguments {
+		args = append(args, arg.String())
+	}
+	out.WriteString(strings.Join(args, ", "))
+	out.WriteString(">")
+	if g.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", g.ComputedType.String()))
 	}
 	return out.String()
 }

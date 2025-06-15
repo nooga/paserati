@@ -270,6 +270,18 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 	debugPrintf("// [Checker CallExpr] Processing function signature: %s, IsVariadic: %t\n", funcSignature.String(), funcSignature.IsVariadic)
 
+	// Check if this is a generic function call that needs type inference
+	if c.isGenericSignature(funcSignature) {
+		debugPrintf("// [Checker CallExpr] Detected generic function call, attempting type inference\n")
+		inferredSignature := c.inferGenericFunctionCall(node, funcSignature)
+		if inferredSignature != nil {
+			debugPrintf("// [Checker CallExpr] Type inference successful, using inferred signature: %s\n", inferredSignature.String())
+			funcSignature = inferredSignature
+		} else {
+			debugPrintf("// [Checker CallExpr] Type inference failed, using original signature with type parameters\n")
+		}
+	}
+
 	// --- MODIFIED Arity and Argument Type Checking ---
 	// First validate all spread arguments
 	hasSpreadErrors := false
@@ -526,4 +538,230 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 	// Set the result type from the matched signature
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
+}
+
+// isGenericSignature checks if a function signature contains unresolved type parameters
+func (c *Checker) isGenericSignature(sig *types.Signature) bool {
+	// Helper function to check if a type contains type parameters
+	var containsTypeParameters func(t types.Type) bool
+	containsTypeParameters = func(t types.Type) bool {
+		switch typ := t.(type) {
+		case *types.TypeParameterType:
+			return true
+		case *types.ArrayType:
+			return containsTypeParameters(typ.ElementType)
+		case *types.UnionType:
+			for _, memberType := range typ.Types {
+				if containsTypeParameters(memberType) {
+					return true
+				}
+			}
+			return false
+		case *types.ObjectType:
+			for _, propType := range typ.Properties {
+				if containsTypeParameters(propType) {
+					return true
+				}
+			}
+			return false
+		// Add more type cases as needed
+		default:
+			return false
+		}
+	}
+	
+	// Check parameter types
+	for _, paramType := range sig.ParameterTypes {
+		if containsTypeParameters(paramType) {
+			return true
+		}
+	}
+	
+	// Check return type
+	if sig.ReturnType != nil && containsTypeParameters(sig.ReturnType) {
+		return true
+	}
+	
+	// Check rest parameter type
+	if sig.RestParameterType != nil && containsTypeParameters(sig.RestParameterType) {
+		return true
+	}
+	
+	return false
+}
+
+// inferGenericFunctionCall attempts to infer type arguments for a generic function call
+func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
+	debugPrintf("// [Checker Inference] Starting type inference for generic function call\n")
+	
+	// First, visit all arguments to get their types
+	var argTypes []types.Type
+	for i, argNode := range callNode.Arguments {
+		c.visit(argNode)
+		argType := argNode.GetComputedType()
+		if argType == nil {
+			argType = types.Any
+		}
+		argTypes = append(argTypes, argType)
+		debugPrintf("// [Checker Inference] Argument %d type: %s\n", i, argType.String())
+	}
+	
+	// Collect type parameter constraints
+	constraints := c.collectTypeParameterConstraints(genericSig, argTypes)
+	debugPrintf("// [Checker Inference] Collected %d type parameter constraints\n", len(constraints))
+	
+	// Solve constraints to get type parameter bindings
+	solution := c.solveTypeParameterConstraints(constraints)
+	debugPrintf("// [Checker Inference] Solved %d type parameter bindings\n", len(solution))
+	
+	if len(solution) == 0 {
+		debugPrintf("// [Checker Inference] No type parameters could be inferred\n")
+		return nil // Inference failed
+	}
+	
+	// Substitute type parameters with inferred types
+	inferredSig := c.substituteTypeParameters(genericSig, solution)
+	debugPrintf("// [Checker Inference] Created inferred signature: %s\n", inferredSig.String())
+	
+	return inferredSig
+}
+
+// TypeParameterConstraint represents a constraint on a type parameter
+type TypeParameterConstraint struct {
+	TypeParameter *types.TypeParameter
+	InferredType  types.Type
+	Confidence    int // Higher = more confident
+}
+
+// collectTypeParameterConstraints analyzes arguments to build constraints for type parameters
+func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes []types.Type) []TypeParameterConstraint {
+	var constraints []TypeParameterConstraint
+	
+	// For each parameter, if it contains type parameters, create constraints based on the argument type
+	for i, paramType := range sig.ParameterTypes {
+		if i >= len(argTypes) {
+			break // No more arguments
+		}
+		argType := argTypes[i]
+		
+		// Collect constraints from this parameter-argument pair
+		paramConstraints := c.collectConstraintsFromType(paramType, argType)
+		constraints = append(constraints, paramConstraints...)
+	}
+	
+	return constraints
+}
+
+// collectConstraintsFromType recursively collects constraints by matching parameter and argument types
+func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []TypeParameterConstraint {
+	var constraints []TypeParameterConstraint
+	
+	switch pType := paramType.(type) {
+	case *types.TypeParameterType:
+		// Direct constraint: T should be inferred as argType
+		constraints = append(constraints, TypeParameterConstraint{
+			TypeParameter: pType.Parameter,
+			InferredType:  argType,
+			Confidence:    100, // High confidence for direct matches
+		})
+		debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, argType.String())
+		
+	case *types.ArrayType:
+		// Array<T> matched against Array<U> or U[]
+		if aType, isArray := argType.(*types.ArrayType); isArray {
+			// Recurse into element types
+			elemConstraints := c.collectConstraintsFromType(pType.ElementType, aType.ElementType)
+			constraints = append(constraints, elemConstraints...)
+		}
+		
+	// Add more cases for other generic type constructs as needed
+	}
+	
+	return constraints
+}
+
+// solveTypeParameterConstraints attempts to solve the collected constraints
+func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConstraint) map[*types.TypeParameter]types.Type {
+	solution := make(map[*types.TypeParameter]types.Type)
+	
+	// Simple solver: for each type parameter, pick the constraint with highest confidence
+	// In the future, this could be much more sophisticated (unification, etc.)
+	
+	type bestConstraint struct {
+		constraint TypeParameterConstraint
+		confidence int
+	}
+	
+	best := make(map[*types.TypeParameter]bestConstraint)
+	
+	for _, constraint := range constraints {
+		existing, exists := best[constraint.TypeParameter]
+		if !exists || constraint.Confidence > existing.confidence {
+			best[constraint.TypeParameter] = bestConstraint{
+				constraint: constraint,
+				confidence: constraint.Confidence,
+			}
+		}
+	}
+	
+	// Convert best constraints to solution
+	for typeParam, bestConstr := range best {
+		solution[typeParam] = bestConstr.constraint.InferredType
+		debugPrintf("// [Checker Solve] %s = %s (confidence: %d)\n", 
+			typeParam.Name, bestConstr.constraint.InferredType.String(), bestConstr.confidence)
+	}
+	
+	return solution
+}
+
+// substituteTypeParameters creates a new signature with type parameters replaced by inferred types
+func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*types.TypeParameter]types.Type) *types.Signature {
+	// Helper function to substitute type parameters in a type
+	var substitute func(t types.Type) types.Type
+	substitute = func(t types.Type) types.Type {
+		switch typ := t.(type) {
+		case *types.TypeParameterType:
+			if inferredType, found := solution[typ.Parameter]; found {
+				return inferredType
+			}
+			return typ // Keep unresolved type parameters
+		case *types.ArrayType:
+			return &types.ArrayType{ElementType: substitute(typ.ElementType)}
+		case *types.UnionType:
+			var newTypes []types.Type
+			for _, memberType := range typ.Types {
+				newTypes = append(newTypes, substitute(memberType))
+			}
+			return types.NewUnionType(newTypes...)
+		// Add more cases as needed
+		default:
+			return typ
+		}
+	}
+	
+	// Substitute in parameter types
+	var newParamTypes []types.Type
+	for _, paramType := range sig.ParameterTypes {
+		newParamTypes = append(newParamTypes, substitute(paramType))
+	}
+	
+	// Substitute in return type
+	var newReturnType types.Type
+	if sig.ReturnType != nil {
+		newReturnType = substitute(sig.ReturnType)
+	}
+	
+	// Substitute in rest parameter type
+	var newRestParamType types.Type
+	if sig.RestParameterType != nil {
+		newRestParamType = substitute(sig.RestParameterType)
+	}
+	
+	return &types.Signature{
+		ParameterTypes:    newParamTypes,
+		ReturnType:        newReturnType,
+		OptionalParams:    sig.OptionalParams, // Copy as-is
+		IsVariadic:        sig.IsVariadic,
+		RestParameterType: newRestParamType,
+	}
 }

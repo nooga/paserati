@@ -8,6 +8,7 @@ func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 	// Create function check context
 	ctx := &FunctionCheckContext{
 		FunctionName:              "<arrow>", // Arrow functions are anonymous
+		TypeParameters:            node.TypeParameters, // Support for generic arrow functions
 		Parameters:                node.Parameters,
 		RestParameter:             node.RestParameter,
 		ReturnTypeAnnotation:      node.ReturnTypeAnnotation,
@@ -18,10 +19,10 @@ func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 	}
 
 	// 1. Resolve parameters and signature
-	preliminarySignature, paramTypes, paramNames, restParameterType, restParameterName := c.resolveFunctionParameters(ctx)
+	preliminarySignature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv := c.resolveFunctionParameters(ctx)
 
 	// 2. Setup function environment
-	originalEnv := c.setupFunctionEnvironment(ctx, paramTypes, paramNames, restParameterType, restParameterName, preliminarySignature)
+	originalEnv := c.setupFunctionEnvironment(ctx, paramTypes, paramNames, restParameterType, restParameterName, preliminarySignature, typeParamEnv)
 
 	// 3. Check function body and determine return type
 	finalReturnType := c.checkFunctionBody(ctx, preliminarySignature.ReturnType)

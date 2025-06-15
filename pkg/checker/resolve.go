@@ -29,6 +29,12 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		debugPrintf("// [Checker resolveTypeAnno Ident] Processing identifier: '%s'\n", node.Value)
 		// --- END ADDED ---
 
+		// --- NEW: Check if this is a type parameter first ---
+		if typeParam, found := c.env.ResolveTypeParameter(node.Value); found {
+			debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as type parameter\n", node.Value)
+			return &types.TypeParameterType{Parameter: typeParam}
+		}
+
 		// --- UPDATED: Prioritize alias resolution ---
 		// 1. Attempt to resolve as a type alias in the environment
 		resolvedAlias, found := c.env.ResolveType(node.Value)
@@ -160,6 +166,42 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	// --- NEW: Handle ObjectTypeExpression ---
 	case *parser.ObjectTypeExpression:
 		return c.resolveObjectTypeSignature(node)
+
+	// --- NEW: Handle GenericTypeRef ---
+	case *parser.GenericTypeRef:
+		// For Phase 1, we only support built-in generic types
+		switch node.Name.Value {
+		case "Array":
+			if len(node.TypeArguments) != 1 {
+				c.addError(node, "Array requires exactly one type argument")
+				return nil
+			}
+			elemType := c.resolveTypeAnnotation(node.TypeArguments[0])
+			if elemType == nil {
+				return nil // Error already reported
+			}
+			return &types.ArrayType{ElementType: elemType}
+			
+		case "Promise":
+			if len(node.TypeArguments) != 1 {
+				c.addError(node, "Promise requires exactly one type argument")
+				return nil
+			}
+			valueType := c.resolveTypeAnnotation(node.TypeArguments[0])
+			if valueType == nil {
+				return nil // Error already reported
+			}
+			// For now, return a simple ObjectType with Promise-like structure
+			// In a full implementation, we'd have a dedicated PromiseType
+			promiseType := types.NewObjectType()
+			promiseType.WithProperty("then", types.Any) // Simplified for now
+			promiseType.WithProperty("catch", types.Any)
+			return promiseType
+			
+		default:
+			c.addError(node, fmt.Sprintf("Unknown generic type '%s'", node.Name.Value))
+			return nil
+		}
 
 	// --- NEW: Handle ConstructorTypeExpression ---
 	case *parser.ConstructorTypeExpression:

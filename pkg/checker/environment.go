@@ -23,6 +23,9 @@ type Environment struct {
 	typeAliases map[string]types.Type // Stores resolved types for type aliases
 	outer       *Environment          // Pointer to the enclosing environment
 
+	// --- Generic type parameter support ---
+	typeParameters map[string]*types.TypeParameter // Maps type parameter names to their definitions
+
 	// --- Function overload support ---
 	// Maps function names to their collected overload signatures (before implementation is found)
 	pendingOverloads map[string][]*parser.FunctionSignature
@@ -39,6 +42,7 @@ func NewEnvironment() *Environment {
 		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases:               make(map[string]types.Type), // Initialize
 		outer:                     nil,
+		typeParameters:            make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Only initialized for global environment
@@ -51,6 +55,7 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases:               make(map[string]types.Type), // Initialize
 		outer:               outer,
+		typeParameters:            make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Nested environments don't need primitive prototypes
@@ -64,6 +69,7 @@ func NewGlobalEnvironment() *Environment {
 		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases:               make(map[string]types.Type), // Initialize
 		outer:               nil,
+		typeParameters:            make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: make(map[string]*types.ObjectType), // Initialize for global environment
@@ -352,4 +358,70 @@ func (e *Environment) IsOverloadedFunction(name string) bool {
 	}
 
 	return false
+}
+
+// --- Type Parameter Management ---
+
+// DefineTypeParameter defines a type parameter in the current scope.
+// Returns true if successful, false if the parameter name already exists.
+func (e *Environment) DefineTypeParameter(name string, param *types.TypeParameter) bool {
+	if e.typeParameters == nil {
+		e.typeParameters = make(map[string]*types.TypeParameter)
+	}
+	
+	// Check if type parameter already exists in current scope
+	if _, exists := e.typeParameters[name]; exists {
+		return false
+	}
+	
+	e.typeParameters[name] = param
+	return true
+}
+
+// ResolveTypeParameter looks up a type parameter by name.
+// It searches the current scope and outer scopes.
+// Returns the TypeParameter and true if found, nil and false otherwise.
+func (e *Environment) ResolveTypeParameter(name string) (*types.TypeParameter, bool) {
+	// Check current scope
+	if e.typeParameters != nil {
+		if param, exists := e.typeParameters[name]; exists {
+			return param, true
+		}
+	}
+	
+	// Check outer scopes
+	if e.outer != nil {
+		return e.outer.ResolveTypeParameter(name)
+	}
+	
+	return nil, false
+}
+
+// IsTypeParameterInScope checks if a type parameter name is currently in scope.
+func (e *Environment) IsTypeParameterInScope(name string) bool {
+	_, found := e.ResolveTypeParameter(name)
+	return found
+}
+
+// GetCurrentScopeTypeParameters returns all type parameters defined in the current scope.
+// This is useful for creating generic function types.
+func (e *Environment) GetCurrentScopeTypeParameters() map[string]*types.TypeParameter {
+	if e.typeParameters == nil {
+		return make(map[string]*types.TypeParameter)
+	}
+	
+	// Return a copy to prevent external modification
+	result := make(map[string]*types.TypeParameter)
+	for name, param := range e.typeParameters {
+		result[name] = param
+	}
+	return result
+}
+
+// ClearTypeParameters removes all type parameters from the current scope.
+// This is useful when exiting a generic function.
+func (e *Environment) ClearTypeParameters() {
+	if e.typeParameters != nil {
+		e.typeParameters = make(map[string]*types.TypeParameter)
+	}
 }

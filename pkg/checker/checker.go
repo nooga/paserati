@@ -17,6 +17,53 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
+// extractTypeParametersFromSignature extracts type parameter instances from a function signature
+// This helps maintain consistency between hoisting and body checking phases
+func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*types.TypeParameter {
+	var typeParams []*types.TypeParameter
+	seen := make(map[*types.TypeParameter]bool)
+	
+	// Helper function to extract type parameters from a type
+	var extractFromType func(t types.Type)
+	extractFromType = func(t types.Type) {
+		switch typ := t.(type) {
+		case *types.TypeParameterType:
+			if !seen[typ.Parameter] {
+				typeParams = append(typeParams, typ.Parameter)
+				seen[typ.Parameter] = true
+			}
+		case *types.ArrayType:
+			extractFromType(typ.ElementType)
+		case *types.UnionType:
+			for _, memberType := range typ.Types {
+				extractFromType(memberType)
+			}
+		case *types.ObjectType:
+			for _, propType := range typ.Properties {
+				extractFromType(propType)
+			}
+		// Add more type cases as needed
+		}
+	}
+	
+	// Extract from parameter types
+	for _, paramType := range sig.ParameterTypes {
+		extractFromType(paramType)
+	}
+	
+	// Extract from return type
+	if sig.ReturnType != nil {
+		extractFromType(sig.ReturnType)
+	}
+	
+	// Extract from rest parameter type
+	if sig.RestParameterType != nil {
+		extractFromType(sig.RestParameterType)
+	}
+	
+	return typeParams
+}
+
 // ContextualType represents type information that flows from context to sub-expressions
 type ContextualType struct {
 	ExpectedType types.Type // The type expected in this context
@@ -93,7 +140,22 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			funcLit, _ := hoistedNode.(*parser.FunctionLiteral) // Parser guarantees type
 
 			debugPrintf("// [Checker Pass 2] Processing Hoisted Function Signature: %s\n", name)
-			initialSignature := c.resolveFunctionLiteralSignature(funcLit, globalEnv)
+			
+			// Use the new unified approach for generic function support
+			ctx := &FunctionCheckContext{
+				FunctionName:              name,
+				TypeParameters:            funcLit.TypeParameters, // Support for generic functions
+				Parameters:                funcLit.Parameters,
+				RestParameter:             funcLit.RestParameter,
+				ReturnTypeAnnotation:      funcLit.ReturnTypeAnnotation,
+				Body:                      nil, // Don't process body during hoisting
+				IsArrow:                   false,
+				AllowSelfReference:        false, // Don't allow self-reference during hoisting
+				AllowOverloadCompletion:   false, // Don't check overloads during hoisting
+			}
+			
+			// Resolve parameters and signature with type parameter support
+			initialSignature, _, _, _, _, _ := c.resolveFunctionParameters(ctx)
 			if initialSignature == nil { // Handle resolution error
 				initialSignature = &types.Signature{ // Default to Any signature on error
 					ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
@@ -281,7 +343,46 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// Create function's inner scope & define parameters
 		originalEnv := c.env
-		funcEnv := NewEnclosedEnvironment(originalEnv)
+		
+		// Create type parameter environment first if this is a generic function
+		var typeParamEnv *Environment = originalEnv
+		if len(funcLit.TypeParameters) > 0 {
+			// Create a new environment that includes type parameters
+			typeParamEnv = NewEnclosedEnvironment(originalEnv)
+			
+			// Extract existing type parameters from the hoisted signature
+			typeParamsFromSignature := c.extractTypeParametersFromSignature(funcSignature)
+			
+			// Define each type parameter in the environment using the original instances
+			for i, typeParamNode := range funcLit.TypeParameters {
+				var typeParam *types.TypeParameter
+				
+				// Find the matching type parameter from the signature
+				if i < len(typeParamsFromSignature) {
+					typeParam = typeParamsFromSignature[i]
+				} else {
+					// Fallback: create new one (shouldn't happen if hoisting worked correctly)
+					typeParam = &types.TypeParameter{
+						Name:       typeParamNode.Name.Value,
+						Constraint: types.Any,
+						Index:      i,
+					}
+					debugPrintf("// [Checker Pass 3] WARNING: Had to create new type parameter '%s'\n", typeParam.Name)
+				}
+				
+				// Define it in the environment
+				if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
+					c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+				}
+				
+				// Set computed type on the AST node
+				typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
+				
+				debugPrintf("// [Checker Pass 3] Defined type parameter '%s' for body checking (reused from hoisting)\n", typeParam.Name)
+			}
+		}
+		
+		funcEnv := NewEnclosedEnvironment(typeParamEnv)
 		c.env = funcEnv
 		// Define parameters using the initial signature
 		for i, paramNode := range funcLit.Parameters {
@@ -827,6 +928,19 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Check against expected type if available
 		if c.currentExpectedReturnType != nil {
+			debugPrintf("// [Checker Return] Checking return type: actual=%T(%s) vs expected=%T(%s)\n", 
+				actualReturnType, actualReturnType.String(), c.currentExpectedReturnType, c.currentExpectedReturnType.String())
+			
+			// Debug type parameter instances
+			if actualTPT, ok := actualReturnType.(*types.TypeParameterType); ok {
+				if expectedTPT, ok := c.currentExpectedReturnType.(*types.TypeParameterType); ok {
+					debugPrintf("// [Checker Return] Type parameter comparison: actual.Parameter=%p vs expected.Parameter=%p\n", 
+						actualTPT.Parameter, expectedTPT.Parameter)
+					debugPrintf("// [Checker Return] Type parameter names: actual=%s vs expected=%s\n", 
+						actualTPT.Parameter.Name, expectedTPT.Parameter.Name)
+				}
+			}
+			
 			if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
 				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
 					actualReturnType, c.currentExpectedReturnType)

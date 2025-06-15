@@ -105,9 +105,20 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				ExpectedType: arrayType.ElementType,
 				IsContextual: true,
 			})
+			
+			// Validate that the element is assignable to the expected element type
+			actualElemType := elemNode.GetComputedType()
+			if actualElemType == nil {
+				actualElemType = types.Any
+			}
+			
+			if !types.IsAssignable(actualElemType, arrayType.ElementType) {
+				c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'", 
+					actualElemType.String(), arrayType.ElementType.String()))
+			}
 		}
 
-		// Use the expected array type as the result
+		// Use the expected array type as the result (even if there are errors)
 		node.SetComputedType(arrayType)
 		debugPrintf("// [Checker ArrayLitContext] Set type to expected array type: %s\n", arrayType.String())
 		return

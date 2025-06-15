@@ -34,6 +34,11 @@ func IsAssignable(source, target Type) bool {
 		return true
 	}
 
+	// Check using type-specific Equals method for complex types
+	if source.Equals(target) {
+		return true
+	}
+
 	// Union type handling
 	sourceUnion, sourceIsUnion := source.(*UnionType)
 	targetUnion, targetIsUnion := target.(*UnionType)
