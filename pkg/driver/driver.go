@@ -93,7 +93,7 @@ func (p *Paserati) RunString(source string) (vm.Value, []errors.PaseratiError) {
 // Returns true if execution completed without any errors, false otherwise.
 func (p *Paserati) DisplayResult(source string, value vm.Value, errs []errors.PaseratiError) bool {
 	if len(errs) > 0 {
-		errors.DisplayErrors(source, errs)
+		errors.DisplayErrors(errs, source)
 		return false
 	}
 
@@ -234,9 +234,7 @@ func WriteJavaScriptFile(inputFilename string, outputFilename string) bool {
 	jsCode, errs := EmitJavaScriptFile(inputFilename)
 	if len(errs) > 0 {
 		// Print errors
-		sourceBytes, _ := ioutil.ReadFile(inputFilename)
-		source := string(sourceBytes)
-		errors.DisplayErrors(source, errs)
+		errors.DisplayErrors(errs)
 		return false
 	}
 

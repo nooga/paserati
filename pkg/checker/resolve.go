@@ -227,7 +227,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				}
 				
 				// Instantiate the generic type
-				return c.instantiateGenericType(genericType, typeArgs)
+				return c.instantiateGenericType(genericType, typeArgs, node)
 			} else {
 				c.addError(node, fmt.Sprintf("Type '%s' is not a generic type", node.Name.Value))
 				return nil
@@ -536,7 +536,7 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 
 // instantiateGenericType creates a concrete type by substituting type arguments
 // into a GenericType's body type
-func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArgs []types.Type) types.Type {
+func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArgs []types.Type, node parser.Node) types.Type {
 	// Create debug string for type arguments
 	var typeStrs []string
 	for _, t := range typeArgs {
@@ -556,13 +556,12 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			
 			// Check if the type argument satisfies the constraint
 			if !types.IsAssignable(argType, constraintType) {
-				// Create a more detailed error message
+				// Create a more detailed error message with proper node position
 				errorMsg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'", 
 					argType.String(), constraintType.String(), typeParam.Name)
 				
-				// We don't have the original AST node here, so we'll add a generic error
-				// In a more complete implementation, we'd pass the node through
-				c.addGenericError(errorMsg)
+				// Use the provided node for accurate error positioning
+				c.addConstraintError(node, errorMsg)
 				return types.Any // Return any type to allow compilation to continue
 			}
 		}

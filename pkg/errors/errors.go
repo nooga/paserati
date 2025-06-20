@@ -6,11 +6,46 @@ import (
 	"strings"
 )
 
+// ANSI color codes for enhanced error formatting
+const (
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorYellow = "\033[33m"
+	ColorBlue   = "\033[34m"
+	ColorCyan   = "\033[36m"
+	ColorGray   = "\033[90m"
+	ColorBold   = "\033[1m"
+)
+
+// Error codes for different types of errors (TypeScript-style)
+const (
+	// Syntax Error Codes (PS1xxx)
+	PS1001 = "PS1001" // Unexpected token
+	PS1002 = "PS1002" // Missing token
+	PS1003 = "PS1003" // Invalid syntax
+	
+	// Type Error Codes (PS2xxx)
+	PS2001 = "PS2001" // Type assignment error
+	PS2002 = "PS2002" // Property does not exist
+	PS2003 = "PS2003" // Function argument type mismatch
+	PS2004 = "PS2004" // Generic constraint violation
+	PS2005 = "PS2005" // Type not assignable
+	
+	// Compile Error Codes (PS3xxx)
+	PS3001 = "PS3001" // Compilation failed
+	PS3002 = "PS3002" // Bytecode generation error
+	
+	// Runtime Error Codes (PS4xxx)
+	PS4001 = "PS4001" // Runtime exception
+	PS4002 = "PS4002" // Reference error
+)
+
 // PaseratiError is the interface implemented by all Paserati errors.
 type PaseratiError interface {
 	error // Embed the standard error interface
 	Pos() Position
 	Kind() string // e.g., "Syntax", "Type", "Compile", "Runtime"
+	Code() string // Error code (e.g., "PS2001")
 	// Message returns the specific error message without position info.
 	// This might be useful if the caller wants to format the error differently.
 	Message() string
@@ -22,8 +57,9 @@ type PaseratiError interface {
 // SyntaxError represents an error during lexing or parsing.
 type SyntaxError struct {
 	Position
-	Msg   string
-	Cause error // Underlying cause, if any
+	Msg      string
+	ErrorCode string // Error code (e.g., PS1001)
+	Cause    error  // Underlying cause, if any
 }
 
 func (e *SyntaxError) Error() string {
@@ -31,18 +67,29 @@ func (e *SyntaxError) Error() string {
 }
 func (e *SyntaxError) Pos() Position   { return e.Position }
 func (e *SyntaxError) Kind() string    { return "Syntax" }
+func (e *SyntaxError) Code() string    { 
+	if e.ErrorCode != "" { 
+		return e.ErrorCode 
+	}
+	return PS1003 // Default syntax error code
+}
 func (e *SyntaxError) Message() string { return e.Msg }
 func (e *SyntaxError) Unwrap() error   { return e.Cause }
 func (e *SyntaxError) CausedBy(cause error) *SyntaxError {
 	e.Cause = cause
 	return e
 }
+func (e *SyntaxError) WithCode(code string) *SyntaxError {
+	e.ErrorCode = code
+	return e
+}
 
 // TypeError represents an error during static type checking.
 type TypeError struct {
 	Position
-	Msg   string
-	Cause error // Underlying cause, if any
+	Msg       string
+	ErrorCode string // Error code (e.g., PS2001)
+	Cause     error  // Underlying cause, if any
 }
 
 func (e *TypeError) Error() string {
@@ -50,85 +97,235 @@ func (e *TypeError) Error() string {
 }
 func (e *TypeError) Pos() Position   { return e.Position }
 func (e *TypeError) Kind() string    { return "Type" }
+func (e *TypeError) Code() string    { 
+	if e.ErrorCode != "" { 
+		return e.ErrorCode 
+	}
+	return PS2001 // Default type error code
+}
 func (e *TypeError) Message() string { return e.Msg }
 func (e *TypeError) Unwrap() error   { return e.Cause }
 func (e *TypeError) CausedBy(cause error) *TypeError {
 	e.Cause = cause
 	return e
 }
+func (e *TypeError) WithCode(code string) *TypeError {
+	e.ErrorCode = code
+	return e
+}
 
 // CompileError represents an error during bytecode compilation.
 type CompileError struct {
 	Position
-	Msg   string
-	Cause error // Underlying cause, if any
+	Msg       string
+	ErrorCode string // Error code (e.g., PS3001)
+	Cause     error  // Underlying cause, if any
 }
 
 func (e *CompileError) Error() string {
-	// Compile errors might sometimes lack precise position,
-	// but we include it for consistency.
-	// We might refine formatting later based on whether Pos is zero.
 	return fmt.Sprintf("Compile Error at %d:%d: %s", e.Line, e.Column, e.Msg)
 }
 func (e *CompileError) Pos() Position   { return e.Position }
 func (e *CompileError) Kind() string    { return "Compile" }
+func (e *CompileError) Code() string    { 
+	if e.ErrorCode != "" { 
+		return e.ErrorCode 
+	}
+	return PS3001 // Default compile error code
+}
 func (e *CompileError) Message() string { return e.Msg }
 func (e *CompileError) Unwrap() error   { return e.Cause }
 func (e *CompileError) CausedBy(cause error) *CompileError {
 	e.Cause = cause
 	return e
 }
+func (e *CompileError) WithCode(code string) *CompileError {
+	e.ErrorCode = code
+	return e
+}
 
 // RuntimeError represents an error during program execution in the VM.
 type RuntimeError struct {
-	// Position might be less precise for runtime errors, potentially
-	// pointing to the start of the operation that failed rather than
-	// a specific token. We'll still store it.
 	Position
-	Msg   string
-	Cause error // Underlying cause, if any
+	Msg       string
+	ErrorCode string // Error code (e.g., PS4001)
+	Cause     error  // Underlying cause, if any
 }
 
 func (e *RuntimeError) Error() string {
-	// Similar to CompileError, we might refine formatting based on Position validity.
 	return fmt.Sprintf("Runtime Error at %d:%d: %s", e.Line, e.Column, e.Msg)
 }
 func (e *RuntimeError) Pos() Position   { return e.Position }
 func (e *RuntimeError) Kind() string    { return "Runtime" }
+func (e *RuntimeError) Code() string    { 
+	if e.ErrorCode != "" { 
+		return e.ErrorCode 
+	}
+	return PS4001 // Default runtime error code
+}
 func (e *RuntimeError) Message() string { return e.Msg }
 func (e *RuntimeError) Unwrap() error   { return e.Cause }
 func (e *RuntimeError) CausedBy(cause error) *RuntimeError {
 	e.Cause = cause
 	return e
 }
+func (e *RuntimeError) WithCode(code string) *RuntimeError {
+	e.ErrorCode = code
+	return e
+}
 
-// --- Helper for creating errors ---
-// (We might add helper functions here later if needed, e.g., NewSyntaxError)
+// --- Helper functions for creating errors ---
+
+// NewSyntaxError creates a new syntax error with optional error code
+func NewSyntaxError(pos Position, msg string, code ...string) *SyntaxError {
+	err := &SyntaxError{
+		Position: pos,
+		Msg:      msg,
+	}
+	if len(code) > 0 {
+		err.ErrorCode = code[0]
+	}
+	return err
+}
+
+// NewTypeError creates a new type error with optional error code
+func NewTypeError(pos Position, msg string, code ...string) *TypeError {
+	err := &TypeError{
+		Position: pos,
+		Msg:      msg,
+	}
+	if len(code) > 0 {
+		err.ErrorCode = code[0]
+	}
+	return err
+}
+
+// NewCompileError creates a new compile error with optional error code
+func NewCompileError(pos Position, msg string, code ...string) *CompileError {
+	err := &CompileError{
+		Position: pos,
+		Msg:      msg,
+	}
+	if len(code) > 0 {
+		err.ErrorCode = code[0]
+	}
+	return err
+}
+
+// NewRuntimeError creates a new runtime error with optional error code
+func NewRuntimeError(pos Position, msg string, code ...string) *RuntimeError {
+	err := &RuntimeError{
+		Position: pos,
+		Msg:      msg,
+	}
+	if len(code) > 0 {
+		err.ErrorCode = code[0]
+	}
+	return err
+}
+
+// Specific helper functions for common error types
+
+// NewTypeAssignmentError creates a type assignment error (PS2001)
+func NewTypeAssignmentError(pos Position, fromType, toType string) *TypeError {
+	msg := fmt.Sprintf("Type '%s' is not assignable to type '%s'", fromType, toType)
+	return NewTypeError(pos, msg, PS2001)
+}
+
+// NewGenericConstraintError creates a generic constraint violation error (PS2004)
+func NewGenericConstraintError(pos Position, argType, constraintType, paramName string) *TypeError {
+	msg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'", 
+		argType, constraintType, paramName)
+	return NewTypeError(pos, msg, PS2004)
+}
+
+// NewPropertyNotExistError creates a property does not exist error (PS2002)
+func NewPropertyNotExistError(pos Position, property, objectType string) *TypeError {
+	msg := fmt.Sprintf("Property '%s' does not exist on type '%s'", property, objectType)
+	return NewTypeError(pos, msg, PS2002)
+}
+
+// NewArgumentTypeError creates a function argument type mismatch error (PS2003)
+func NewArgumentTypeError(pos Position, argNum int, expectedType, actualType string) *TypeError {
+	msg := fmt.Sprintf("Argument %d: cannot assign type '%s' to parameter of type '%s'", 
+		argNum, actualType, expectedType)
+	return NewTypeError(pos, msg, PS2003)
+}
+
+// NewUnexpectedTokenError creates an unexpected token error (PS1001)
+func NewUnexpectedTokenError(pos Position, token string) *SyntaxError {
+	msg := fmt.Sprintf("Unexpected token '%s'", token)
+	return NewSyntaxError(pos, msg, PS1001)
+}
+
+// NewMissingTokenError creates a missing token error (PS1002)
+func NewMissingTokenError(pos Position, expected string) *SyntaxError {
+	msg := fmt.Sprintf("Expected '%s'", expected)
+	return NewSyntaxError(pos, msg, PS1002)
+}
 
 // --- Error Reporting ---
 
-// DisplayErrors prints a list of Paserati errors to stderr in a user-friendly format,
-// including the source line and position marker.
-func DisplayErrors(source string, errors []PaseratiError) {
+// isColorTerminal checks if we should use colors (basic detection)
+func isColorTerminal() bool {
+	// Check common terminal color support environment variables
+	term := os.Getenv("TERM")
+	colorTerm := os.Getenv("COLORTERM")
+	return term != "dumb" && (colorTerm != "" || 
+		strings.Contains(term, "color") || 
+		strings.Contains(term, "xterm") ||
+		strings.Contains(term, "screen"))
+}
+
+// colorize applies color to text if terminal supports it
+func colorize(color, text string) string {
+	if isColorTerminal() {
+		return color + text + ColorReset
+	}
+	return text
+}
+
+// DisplayErrors prints a list of Paserati errors in TypeScript-style format with enhanced visual presentation
+func DisplayErrors(errors []PaseratiError, fallbackSource ...string) {
 	if len(errors) == 0 {
 		return
 	}
-
-	lines := strings.Split(source, "\n")
+	
+	// Use fallback source if no source files are available
+	var fallbackLines []string
+	if len(fallbackSource) > 0 && fallbackSource[0] != "" {
+		fallbackLines = strings.Split(fallbackSource[0], "\n")
+	}
 
 	for _, err := range errors {
 		pos := err.Pos()
-		kind := err.Kind()
+		code := err.Code()
 		msg := err.Message()
 
-		// Print error location and message
-		// Format: <Kind> Error at <Line>:<Column>: <Message>
-		fmt.Fprintf(os.Stderr, "%s Error at %d:%d: %s\n", kind, pos.Line, pos.Column, msg)
+		// TypeScript-style header: PS2345 [ERROR]: Message
+		errorHeader := fmt.Sprintf("%s %s: %s", 
+			colorize(ColorBlue, code), 
+			colorize(ColorBold+ColorRed, "[ERROR]"), 
+			msg)
+		fmt.Fprintf(os.Stderr, "%s\n", errorHeader)
 
+		// Get source lines from either source file or fallback
+		var lines []string
+		if pos.Source != nil {
+			lines = pos.Source.Lines()
+		} else if fallbackLines != nil {
+			lines = fallbackLines
+		} else {
+			// No source available at all
+			locationInfo := colorize(ColorGray, fmt.Sprintf("    at line %d, column %d", pos.Line, pos.Column))
+			fmt.Fprintf(os.Stderr, "%s\n", locationInfo)
+			fmt.Fprintln(os.Stderr) // Add a blank line
+			continue
+		}
+		
 		// Ensure line numbers are within bounds (1-based index)
 		lineIdx := pos.Line - 1
 		if lineIdx < 0 || lineIdx >= len(lines) {
-			// Print just the error message if line info is invalid
 			fmt.Fprintln(os.Stderr) // Add a blank line
 			continue
 		}
@@ -136,14 +333,14 @@ func DisplayErrors(source string, errors []PaseratiError) {
 		sourceLine := lines[lineIdx]
 		trimmedLine := strings.TrimRight(sourceLine, "\r\n\t ") // Trim trailing whitespace
 
-		// For very long single lines (like -e commands), show a truncated version
-		const maxLineLength = 100 // Maximum characters to show
+		// Handle long lines with intelligent truncation
+		const maxLineLength = 120 // Increased for better readability
 		showSourceLine := true
 		markerColumn := pos.Column
+		markerLength := calculateErrorLength(pos) // Default to 1 char
 
 		if len(trimmedLine) > maxLineLength {
-			// Calculate a reasonable window around the error position
-			start := pos.Column - 40 // Show 40 chars before error
+			start := pos.Column - 60 // Show more context before error
 			if start < 0 {
 				start = 0
 			}
@@ -157,12 +354,11 @@ func DisplayErrors(source string, errors []PaseratiError) {
 				}
 			}
 
-			// If we're showing a truncated version of a very long line (common with -e),
-			// and it's a single line of source, skip showing the source altogether
-			if len(lines) == 1 && len(trimmedLine) > 200 {
+			// Skip source display for extremely long single lines (like -e commands)
+			if len(lines) == 1 && len(trimmedLine) > 300 {
 				showSourceLine = false
 			} else {
-				// Show truncated version with ellipsis
+				// Show truncated version with clear indicators
 				prefix := ""
 				suffix := ""
 				if start > 0 {
@@ -179,16 +375,57 @@ func DisplayErrors(source string, errors []PaseratiError) {
 		}
 
 		if showSourceLine {
-			// Print the source line
-			fmt.Fprintf(os.Stderr, "  %s\n", trimmedLine)
+			// Show source line with line number and indentation
+			lineNumber := fmt.Sprintf("%d", pos.Line)
+			linePrefix := colorize(ColorGray, fmt.Sprintf("%s: ", lineNumber))
+			
+			fmt.Fprintf(os.Stderr, "  %s%s\n", linePrefix, trimmedLine)
 
-			// Print the marker line (^)
-			if markerColumn >= 0 {
-				marker := strings.Repeat(" ", markerColumn) + "^"
-				fmt.Fprintf(os.Stderr, "  %s\n", marker)
+			// Create enhanced marker line with squiggly underline
+			if markerColumn >= 0 && markerColumn <= len(trimmedLine) {
+				// Calculate spaces to account for line number prefix
+				prefixSpaces := len(lineNumber) + 2 + 2 // "123: " + "  "
+				
+				// Fix off-by-one error: markerColumn is 1-based, convert to 0-based for spacing
+				adjustedColumn := markerColumn - 1
+				if adjustedColumn < 0 {
+					adjustedColumn = 0
+				}
+				
+				marker := strings.Repeat(" ", prefixSpaces + adjustedColumn)
+				
+				// Use squiggly underline for better visibility
+				underline := strings.Repeat("~", markerLength)
+				if markerLength == 1 {
+					underline = "^" // Single character errors use caret
+				}
+				
+				markerLine := marker + colorize(ColorRed, underline)
+				fmt.Fprintf(os.Stderr, "%s\n", markerLine)
 			}
 		}
 
+		// Add file location info (TypeScript-style with clickable path)
+		var locationInfo string
+		if pos.Source != nil && pos.Source.IsFile() {
+			locationInfo = colorize(ColorGray, fmt.Sprintf("    at %s:%d:%d", pos.Source.DisplayPath(), pos.Line, pos.Column))
+		} else if pos.Source != nil {
+			locationInfo = colorize(ColorGray, fmt.Sprintf("    at %s:%d:%d", pos.Source.Name, pos.Line, pos.Column))
+		} else {
+			locationInfo = colorize(ColorGray, fmt.Sprintf("    at line %d, column %d", pos.Line, pos.Column))
+		}
+		fmt.Fprintf(os.Stderr, "%s\n", locationInfo)
+
 		fmt.Fprintln(os.Stderr) // Add a blank line between errors
 	}
+}
+
+// calculateErrorLength determines how many characters to underline
+// This is a simple version - could be enhanced to use actual token length
+func calculateErrorLength(pos Position) int {
+	// Use EndPos if available for more precise underlining
+	if pos.EndPos > pos.StartPos {
+		return pos.EndPos - pos.StartPos
+	}
+	return 1 // Default to single character
 }

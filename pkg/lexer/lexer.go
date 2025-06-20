@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"fmt"
+	"paserati/pkg/source"
 	"strings" // Added for strings.Builder
 )
 
@@ -22,11 +23,12 @@ type TokenType string
 // Token represents a lexical token.
 type Token struct {
 	Type     TokenType
-	Literal  string // The actual text of the token (lexeme)
-	Line     int    // 1-based line number where the token starts
-	Column   int    // 1-based column number (rune index) where the token starts
-	StartPos int    // 0-based byte offset where the token starts
-	EndPos   int    // 0-based byte offset after the token ends
+	Literal  string             // The actual text of the token (lexeme)
+	Line     int                // 1-based line number where the token starts
+	Column   int                // 1-based column number (rune index) where the token starts
+	StartPos int                // 0-based byte offset where the token starts
+	EndPos   int                // 0-based byte offset after the token ends
+	Source   *source.SourceFile // Reference to the source file
 }
 
 // --- Token Types ---
@@ -220,12 +222,13 @@ func LookupIdent(ident string) TokenType {
 
 // Lexer holds the state of the scanner.
 type Lexer struct {
-	input        string
-	position     int  // current position in input (points to current char's byte offset)
-	readPosition int  // current reading position in input (byte offset after current char)
-	ch           byte // current char under examination
-	line         int  // current 1-based line number
-	column       int  // current 1-based column number (position of l.position on l.line)
+	source       *source.SourceFile // source file being lexed
+	input        string             // source content (same as source.Content)
+	position     int                // current position in input (points to current char's byte offset)
+	readPosition int                // current reading position in input (byte offset after current char)
+	ch           byte               // current char under examination
+	line         int                // current 1-based line number
+	column       int                // current 1-based column number (position of l.position on l.line)
 
 	// --- NEW: Template literal state tracking ---
 	inTemplate    bool // true when we're inside a template literal
@@ -264,9 +267,33 @@ func (l *Lexer) SetPosition(pos int) {
 
 // NewLexer creates a new Lexer.
 func NewLexer(input string) *Lexer {
-	l := &Lexer{input: input, line: 1, column: 1} // Start at line 1, column 1
-	l.readChar()                                  // Initialize l.ch, l.position, l.readPosition, and potentially update line/column if input starts with newline
+	// Create a default source file for backward compatibility
+	sourceFile := source.NewEvalSource(input)
+	return NewLexerWithSource(sourceFile)
+}
+
+func NewLexerWithSource(sourceFile *source.SourceFile) *Lexer {
+	l := &Lexer{
+		source: sourceFile,
+		input:  sourceFile.Content,
+		line:   1,
+		column: 1,
+	} // Start at line 1, column 1
+	l.readChar() // Initialize l.ch, l.position, l.readPosition, and potentially update line/column if input starts with newline
 	return l
+}
+
+// newToken creates a new token with the current lexer state
+func (l *Lexer) newToken(tokenType TokenType, literal string) Token {
+	return Token{
+		Type:     tokenType,
+		Literal:  literal,
+		Line:     l.line,
+		Column:   l.column,
+		StartPos: l.position,
+		EndPos:   l.position + len(literal),
+		Source:   l.source,
+	}
 }
 
 // SplitRightShiftToken converts a >> token into > and pushes the second > back
@@ -280,6 +307,7 @@ func (l *Lexer) SplitRightShiftToken(rsToken Token) Token {
 		Column:   rsToken.Column,
 		StartPos: rsToken.StartPos,
 		EndPos:   rsToken.StartPos + 1,
+		Source:   rsToken.Source,
 	}
 	
 	// Create the second > token and push it back
@@ -290,6 +318,7 @@ func (l *Lexer) SplitRightShiftToken(rsToken Token) Token {
 		Column:   rsToken.Column + 1,
 		StartPos: rsToken.StartPos + 1,
 		EndPos:   rsToken.EndPos,
+		Source:   rsToken.Source,
 	}
 	
 	l.pushedToken = &secondGT
