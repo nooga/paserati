@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
+	"paserati/pkg/source"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -23,6 +24,7 @@ func debugPrint(format string, args ...interface{}) {
 // Parser takes a lexer and builds an AST.
 type Parser struct {
 	l      *lexer.Lexer
+	source *source.SourceFile // cached from lexer
 	errors []errors.PaseratiError
 
 	curToken  lexer.Token
@@ -167,6 +169,7 @@ var typePrecedences = map[lexer.TokenType]int{
 func NewParser(l *lexer.Lexer) *Parser {
 	p := &Parser{
 		l:      l,
+		source: l.GetSource(), // Cache source from lexer
 		errors: []errors.PaseratiError{},
 	}
 
@@ -342,6 +345,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program := &Program{}
 	program.Statements = []Statement{}
 	program.HoistedDeclarations = make(map[string]Expression) // Initialize map with Expression
+	program.Source = p.source // Set source context for error reporting
 
 	for p.curToken.Type != lexer.EOF {
 		stmt := p.parseStatement()
@@ -5538,5 +5542,10 @@ func (p *Parser) isValidDestructuringTarget(expr Expression) bool {
 	default:
 		return false
 	}
+}
+
+// GetSource returns the source file associated with this parser
+func (p *Parser) GetSource() *source.SourceFile {
+	return p.source
 }
 

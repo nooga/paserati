@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"paserati/pkg/errors" // Added import
+	"paserati/pkg/source" // Added import for source context
 
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
@@ -73,6 +74,7 @@ type ContextualType struct {
 // Checker performs static type checking on the AST.
 type Checker struct {
 	program *parser.Program // Root AST node
+	source  *source.SourceFile // Source context for error reporting (cached from program)
 	// TODO: Add Type Registry if needed
 	env    *Environment           // Current type environment
 	errors []errors.PaseratiError // Changed from []TypeError
@@ -103,6 +105,7 @@ func NewChecker() *Checker {
 // Check analyzes the given program AST for type errors.
 func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
+	c.source = program.Source // Cache source for error reporting
 	c.errors = []errors.PaseratiError{} // Reset errors
 	// DON'T reset the environment - keep it persistent for REPL sessions
 	// c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check

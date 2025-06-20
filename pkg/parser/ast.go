@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"paserati/pkg/lexer" // Need token types
+	"paserati/pkg/source" // Need source package for SourceFile
 	"paserati/pkg/types" // Need types package for ComputedType
 	"strings"
 )
@@ -51,6 +52,7 @@ func (be *BaseExpression) expressionNode() {} // Implement dummy method
 type Program struct {
 	Statements          []Statement
 	HoistedDeclarations map[string]Expression // Changed: Store hoisted Expression (e.g., FunctionLiteral)
+	Source              *source.SourceFile    // Source file context for error reporting
 }
 
 func (p *Program) TokenLiteral() string {

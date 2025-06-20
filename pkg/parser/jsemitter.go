@@ -294,11 +294,11 @@ func (e *JSEmitter) emitSwitchStatement(stmt *SwitchStatement) {
 func (e *JSEmitter) emitExpression(expr Expression) {
 	switch exp := expr.(type) {
 	case *Identifier:
-		e.write(exp.Value)
+		e.write("%s", exp.Value)
 	case *BooleanLiteral:
-		e.write(fmt.Sprintf("%t", exp.Value))
+		e.write("%t", exp.Value)
 	case *NumberLiteral:
-		e.write(exp.TokenLiteral())
+		e.write("%s", exp.TokenLiteral())
 	case *StringLiteral:
 		e.write("%q", exp.Value)
 	case *NullLiteral:
@@ -372,7 +372,7 @@ func (e *JSEmitter) emitFunctionLiteral(fn *FunctionLiteral) {
 	for _, p := range fn.Parameters {
 		params = append(params, p.Name.Value)
 	}
-	e.write(strings.Join(params, ", "))
+	e.write("%s", strings.Join(params, ", "))
 
 	e.write(") ")
 	e.emitBlockStatement(fn.Body)
@@ -385,7 +385,7 @@ func (e *JSEmitter) emitArrowFunctionLiteral(fn *ArrowFunctionLiteral) {
 	}
 
 	if len(params) == 1 {
-		e.write(params[0])
+		e.write("%s", params[0])
 	} else {
 		e.write("(%s)", strings.Join(params, ", "))
 	}
@@ -520,7 +520,7 @@ func (e *JSEmitter) emitIndexExpression(expr *IndexExpression) {
 func (e *JSEmitter) emitMemberExpression(expr *MemberExpression) {
 	e.emitExpression(expr.Object)
 	e.write(".")
-	e.write(expr.Property.Value)
+	e.write("%s", expr.Property.Value)
 }
 
 func (e *JSEmitter) emitObjectLiteral(obj *ObjectLiteral) {
@@ -533,7 +533,7 @@ func (e *JSEmitter) emitObjectLiteral(obj *ObjectLiteral) {
 			keyExpr, isIdent := prop.Key.(*Identifier)
 
 			if isIdent {
-				e.write(keyExpr.Value)
+				e.write("%s", keyExpr.Value)
 			} else {
 				e.emitExpression(prop.Key)
 			}
@@ -597,7 +597,7 @@ func (e *JSEmitter) emitShorthandMethod(method *ShorthandMethod) {
 	for _, p := range method.Parameters {
 		params = append(params, p.Name.Value)
 	}
-	e.write(strings.Join(params, ", "))
+	e.write("%s", strings.Join(params, ", "))
 
 	e.write(") ")
 	e.emitBlockStatement(method.Body)

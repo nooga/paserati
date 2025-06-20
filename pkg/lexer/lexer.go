@@ -23,12 +23,11 @@ type TokenType string
 // Token represents a lexical token.
 type Token struct {
 	Type     TokenType
-	Literal  string             // The actual text of the token (lexeme)
-	Line     int                // 1-based line number where the token starts
-	Column   int                // 1-based column number (rune index) where the token starts
-	StartPos int                // 0-based byte offset where the token starts
-	EndPos   int                // 0-based byte offset after the token ends
-	Source   *source.SourceFile // Reference to the source file
+	Literal  string // The actual text of the token (lexeme)
+	Line     int    // 1-based line number where the token starts
+	Column   int    // 1-based column number (rune index) where the token starts
+	StartPos int    // 0-based byte offset where the token starts
+	EndPos   int    // 0-based byte offset after the token ends
 }
 
 // --- Token Types ---
@@ -292,7 +291,6 @@ func (l *Lexer) newToken(tokenType TokenType, literal string) Token {
 		Column:   l.column,
 		StartPos: l.position,
 		EndPos:   l.position + len(literal),
-		Source:   l.source,
 	}
 }
 
@@ -307,7 +305,6 @@ func (l *Lexer) SplitRightShiftToken(rsToken Token) Token {
 		Column:   rsToken.Column,
 		StartPos: rsToken.StartPos,
 		EndPos:   rsToken.StartPos + 1,
-		Source:   rsToken.Source,
 	}
 	
 	// Create the second > token and push it back
@@ -318,7 +315,6 @@ func (l *Lexer) SplitRightShiftToken(rsToken Token) Token {
 		Column:   rsToken.Column + 1,
 		StartPos: rsToken.StartPos + 1,
 		EndPos:   rsToken.EndPos,
-		Source:   rsToken.Source,
 	}
 	
 	l.pushedToken = &secondGT
@@ -1274,6 +1270,11 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 		StartPos: startPos,
 		EndPos:   l.position,
 	}
+}
+
+// GetSource returns the source file associated with this lexer
+func (l *Lexer) GetSource() *source.SourceFile {
+	return l.source
 }
 
 // --- TODO: Implement readString for string literals --- // Removed TODO

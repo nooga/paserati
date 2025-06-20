@@ -2,6 +2,7 @@ package parser
 
 import (
 	"paserati/pkg/lexer"
+	"paserati/pkg/source"
 	"testing"
 )
 
@@ -12,24 +13,25 @@ func TestParseGenericFunctionLiteral(t *testing.T) {
 	}{
 		{
 			"function identity<T>(x: T): T { return x; }",
-			"function identity<T>(x: T): T { return x; }",
+			"function identity<T>(x: T): T {\n\treturn x;\n}",
 		},
 		{
 			"function pair<T, U>(a: T, b: U): [T, U] { return [a, b]; }",
-			"function pair<T, U>(a: T, b: U): [T, U] { return [a, b]; }",
+			"function pair<T, U>(a: T, b: U): [T, U] {\n\treturn [a, b];\n}",
 		},
 		{
 			"function constrained<T extends string>(x: T): T { return x; }",
-			"function constrained<T extends string>(x: T): T { return x; }",
+			"function constrained<T extends string>(x: T): T {\n\treturn x;\n}",
 		},
 		{
 			"function<T>(x: T): T { return x; }", // Anonymous generic function
-			"function<T>(x: T): T { return x; }",
+			"function<T>(x: T): T {\n\treturn x;\n}",
 		},
 	}
 
 	for _, tt := range tests {
-		l := lexer.NewLexer(tt.input)
+		sourceFile := source.NewEvalSource(tt.input)
+		l := lexer.NewLexerWithSource(sourceFile)
 		p := NewParser(l)
 		program, parseErrs := p.ParseProgram()
 		
@@ -96,7 +98,8 @@ func TestParseGenericArrowFunction(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := lexer.NewLexer(tt.input)
+		sourceFile := source.NewEvalSource(tt.input)
+		l := lexer.NewLexerWithSource(sourceFile)
 		p := NewParser(l)
 		program, parseErrs := p.ParseProgram()
 		
@@ -173,9 +176,9 @@ func TestParseTypeParameters(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := lexer.NewLexer(tt.input)
+		sourceFile := source.NewEvalSource(tt.input)
+		l := lexer.NewLexerWithSource(sourceFile)
 		p := NewParser(l)
-		p.nextToken() // Move to '<'
 		
 		typeParams, err := p.parseTypeParameters()
 		if err != nil {

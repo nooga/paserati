@@ -14,7 +14,7 @@ func (c *Checker) addError(node parser.Node, message string) {
 			Column:   token.Column,
 			StartPos: token.StartPos,
 			EndPos:   token.EndPos,
-			Source:   token.Source,
+			Source:   c.source, // Use cached source from checker
 		},
 		Msg: message,
 	}
@@ -29,7 +29,7 @@ func (c *Checker) addGenericError(message string) {
 			Column:   1,
 			StartPos: 0,
 			EndPos:   0,
-			Source:   nil, // No source file available for generic errors
+			Source:   c.source, // Use cached source from checker
 		},
 		Msg:       message,
 		ErrorCode: errors.PS2004, // Use constraint violation error code
@@ -46,7 +46,7 @@ func (c *Checker) addConstraintError(node parser.Node, message string) {
 			Column:   token.Column,
 			StartPos: token.StartPos,
 			EndPos:   token.EndPos,
-			Source:   token.Source,
+			Source:   c.source, // Use cached source from checker
 		},
 		Msg:       message,
 		ErrorCode: errors.PS2004, // Constraint violation error code

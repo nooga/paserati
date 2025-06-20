@@ -10,6 +10,7 @@ import (
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
+	"paserati/pkg/source"
 	"paserati/pkg/vm"
 	"sort"
 )
@@ -50,8 +51,9 @@ func NewPaserati() *Paserati {
 // RunString compiles and executes the given source code in the current session.
 // It uses the persistent type checker environment.
 // Returns the result value and any errors that occurred.
-func (p *Paserati) RunString(source string) (vm.Value, []errors.PaseratiError) {
-	l := lexer.NewLexer(source)
+func (p *Paserati) RunString(sourceCode string) (vm.Value, []errors.PaseratiError) {
+	sourceFile := source.NewEvalSource(sourceCode)
+	l := lexer.NewLexerWithSource(sourceFile)
 	parser := parser.NewParser(l)
 	// Parse into a Program node, which the checker expects
 	program, parseErrs := parser.ParseProgram()
@@ -91,9 +93,9 @@ func (p *Paserati) RunString(source string) (vm.Value, []errors.PaseratiError) {
 
 // DisplayResult formats and prints the result value and any errors.
 // Returns true if execution completed without any errors, false otherwise.
-func (p *Paserati) DisplayResult(source string, value vm.Value, errs []errors.PaseratiError) bool {
+func (p *Paserati) DisplayResult(sourceCode string, value vm.Value, errs []errors.PaseratiError) bool {
 	if len(errs) > 0 {
-		errors.DisplayErrors(errs, source)
+		errors.DisplayErrors(errs, sourceCode)
 		return false
 	}
 
@@ -107,8 +109,9 @@ func (p *Paserati) DisplayResult(source string, value vm.Value, errs []errors.Pa
 // CompileString takes Paserati source code as a string, compiles it,
 // and returns the resulting VM chunk or an aggregated list of Paserati errors.
 // This version does NOT use a persistent session.
-func CompileString(source string) (*vm.Chunk, []errors.PaseratiError) {
-	l := lexer.NewLexer(source)
+func CompileString(sourceCode string) (*vm.Chunk, []errors.PaseratiError) {
+	sourceFile := source.NewEvalSource(sourceCode)
+	l := lexer.NewLexerWithSource(sourceFile)
 	p := parser.NewParser(l)
 	program, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
@@ -140,8 +143,23 @@ func CompileFile(filename string) (*vm.Chunk, []errors.PaseratiError) {
 		}
 		return nil, []errors.PaseratiError{readErr}
 	}
-	source := string(sourceBytes)
-	return CompileString(source) // Reuses the non-persistent CompileString
+	sourceCode := string(sourceBytes)
+	sourceFile := source.FromFile(filename, sourceCode)
+	l := lexer.NewLexerWithSource(sourceFile)
+	p := parser.NewParser(l)
+	program, parseErrs := p.ParseProgram()
+	if len(parseErrs) > 0 {
+		return nil, parseErrs
+	}
+
+	comp := compiler.NewCompiler() // Fresh compiler
+	// Compile will create and use its own internal checker
+	chunk, compileAndTypeErrs := comp.Compile(program)
+	if len(compileAndTypeErrs) > 0 {
+		return nil, compileAndTypeErrs
+	}
+
+	return chunk, nil
 }
 
 // RunString compiles and interprets Paserati source code from a string.
@@ -180,15 +198,47 @@ func RunFile(filename string) bool {
 		fmt.Fprintf(os.Stderr, "%s Error: %s\n", readErr.Kind(), readErr.Message())
 		return false
 	}
-	source := string(sourceBytes)
-	// Delegate to RunString, which creates a fresh Paserati session
-	return RunString(source)
+	sourceCode := string(sourceBytes)
+	
+	// Create a proper file source instead of treating it as eval
+	sourceFile := source.FromFile(filename, sourceCode)
+	
+	// Create a new Paserati session
+	paserati := NewPaserati()
+	
+	// Create lexer and parser with file context
+	l := lexer.NewLexerWithSource(sourceFile)
+	parser := parser.NewParser(l)
+	program, parseErrs := parser.ParseProgram()
+	if len(parseErrs) > 0 {
+		return paserati.DisplayResult(sourceCode, vm.Undefined, parseErrs)
+	}
+
+	// Run the code using the session
+	chunk, compileAndTypeErrs := paserati.compiler.Compile(program)
+	if len(compileAndTypeErrs) > 0 {
+		return paserati.DisplayResult(sourceCode, vm.Undefined, compileAndTypeErrs)
+	}
+	if chunk == nil {
+		internalErr := &errors.RuntimeError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+		}
+		return paserati.DisplayResult(sourceCode, vm.Undefined, []errors.PaseratiError{internalErr})
+	}
+
+	// Execute the chunk
+	finalValue, runtimeErrs := paserati.vmInstance.Interpret(chunk)
+	
+	// Display the result
+	return paserati.DisplayResult(sourceCode, finalValue, runtimeErrs)
 }
 
 // EmitJavaScript parses TypeScript source and emits equivalent JavaScript code
 // without type annotations and TypeScript-specific syntax.
-func EmitJavaScript(source string) (string, []errors.PaseratiError) {
-	l := lexer.NewLexer(source)
+func EmitJavaScript(sourceCode string) (string, []errors.PaseratiError) {
+	sourceFile := source.NewEvalSource(sourceCode)
+	l := lexer.NewLexerWithSource(sourceFile)
 	p := parser.NewParser(l)
 	program, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
@@ -213,8 +263,20 @@ func EmitJavaScriptFile(filename string) (string, []errors.PaseratiError) {
 		}
 		return "", []errors.PaseratiError{readErr}
 	}
-	source := string(sourceBytes)
-	return EmitJavaScript(source)
+	sourceCode := string(sourceBytes)
+	sourceFile := source.FromFile(filename, sourceCode)
+	l := lexer.NewLexerWithSource(sourceFile)
+	p := parser.NewParser(l)
+	program, parseErrs := p.ParseProgram()
+	if len(parseErrs) > 0 {
+		return "", parseErrs
+	}
+
+	// Create JavaScript emitter and emit JS code
+	emitter := parser.NewJSEmitter()
+	jsCode := emitter.Emit(program)
+
+	return jsCode, nil
 }
 
 // WriteJavaScriptFile reads a TypeScript file, converts it to JavaScript,
@@ -258,8 +320,9 @@ type RunOptions struct {
 }
 
 // RunCode runs source code with the given Paserati session and options
-func (p *Paserati) RunCode(source string, options RunOptions) (vm.Value, []errors.PaseratiError) {
-	l := lexer.NewLexer(source)
+func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []errors.PaseratiError) {
+	sourceFile := source.NewEvalSource(sourceCode)
+	l := lexer.NewLexerWithSource(sourceFile)
 	parser := parser.NewParser(l)
 	program, parseErrs := parser.ParseProgram()
 	if len(parseErrs) > 0 {
