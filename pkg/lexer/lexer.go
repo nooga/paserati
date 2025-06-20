@@ -175,6 +175,11 @@ const (
 	INSTANCEOF TokenType = "INSTANCEOF"
 	// DELETE keyword
 	DELETE TokenType = "DELETE"
+	// Exception handling keywords
+	TRY     TokenType = "TRY"
+	CATCH   TokenType = "CATCH"
+	THROW   TokenType = "THROW"
+	FINALLY TokenType = "FINALLY"
 )
 
 var keywords = map[string]TokenType{
@@ -209,6 +214,10 @@ var keywords = map[string]TokenType{
 	"in":         IN,         // Added for in operator
 	"instanceof": INSTANCEOF, // Added for instanceof operator
 	"delete":     DELETE,     // Added for delete operator
+	"try":        TRY,        // Added for try statements
+	"catch":      CATCH,      // Added for catch blocks
+	"throw":      THROW,      // Added for throw statements
+	"finally":    FINALLY,    // Added for finally blocks
 }
 
 // LookupIdent checks the keywords table for an identifier.

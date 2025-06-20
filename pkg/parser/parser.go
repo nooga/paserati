@@ -410,6 +410,10 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseSwitchStatement()
 	case lexer.FUNCTION:
 		return p.parseFunctionDeclarationStatement()
+	case lexer.TRY:
+		return p.parseTryStatement()
+	case lexer.THROW:
+		return p.parseThrowStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -5551,5 +5555,103 @@ func (p *Parser) isValidDestructuringTarget(expr Expression) bool {
 // GetSource returns the source file associated with this parser
 func (p *Parser) GetSource() *source.SourceFile {
 	return p.source
+}
+
+// --- Exception Handling Parsing ---
+
+// parseTryStatement parses a try/catch statement
+func (p *Parser) parseTryStatement() *TryStatement {
+	stmt := &TryStatement{Token: p.curToken} // 'try' token
+	
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil // Expected '{' after 'try'
+	}
+	
+	stmt.Body = p.parseBlockStatement()
+	if stmt.Body == nil {
+		return nil
+	}
+	
+	// Optional catch clause
+	if p.peekTokenIs(lexer.CATCH) {
+		p.nextToken() // consume 'catch'
+		stmt.CatchClause = p.parseCatchClause()
+		if stmt.CatchClause == nil {
+			return nil
+		}
+	}
+	
+	// For Phase 1, reject finally blocks with clear error
+	if p.peekTokenIs(lexer.FINALLY) {
+		p.addError(p.peekToken, "finally blocks are not yet implemented")
+		return nil
+	}
+	
+	// Must have either catch or finally (we only support catch for now)
+	if stmt.CatchClause == nil {
+		p.addError(stmt.Token, "try statement must have a catch clause")
+		return nil
+	}
+	
+	return stmt
+}
+
+// parseCatchClause parses a catch clause
+func (p *Parser) parseCatchClause() *CatchClause {
+	clause := &CatchClause{Token: p.curToken} // 'catch' token
+	
+	// Optional parameter (ES2019+ allows catch without parameter)
+	if p.peekTokenIs(lexer.LPAREN) {
+		p.nextToken() // consume '('
+		
+		if !p.expectPeek(lexer.IDENT) {
+			return nil // Expected identifier for catch parameter
+		}
+		
+		clause.Parameter = &Identifier{
+			Token: p.curToken,
+			Value: p.curToken.Literal,
+		}
+		
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil // Expected ')' after catch parameter
+		}
+	}
+	
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil // Expected '{' for catch body
+	}
+	
+	clause.Body = p.parseBlockStatement()
+	if clause.Body == nil {
+		return nil
+	}
+	
+	return clause
+}
+
+// parseThrowStatement parses a throw statement
+func (p *Parser) parseThrowStatement() *ThrowStatement {
+	stmt := &ThrowStatement{Token: p.curToken} // 'throw' token
+	
+	// In JavaScript, throw requires an expression on the same line
+	// We'll be lenient and just require an expression
+	if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) {
+		p.addError(p.curToken, "throw statement requires an expression")
+		return nil
+	}
+	
+	p.nextToken() // move to expression
+	stmt.Value = p.parseExpression(LOWEST)
+	if stmt.Value == nil {
+		return nil
+	}
+	
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	
+	return stmt
 }
 

@@ -93,6 +93,10 @@ type VM struct {
 
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
+
+	// Exception handling state
+	currentException Value // Current thrown exception
+	unwinding        bool  // True during exception unwinding
 }
 
 // InterpretResult represents the outcome of an interpretation.
@@ -1906,12 +1910,45 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 			registers[destReg] = resultObj
 
+		case OpThrow:
+			// Save IP before potential unwinding
+			frame.ip = ip
+			vm.executeOpThrow(code, &ip)
+			// If unwinding is active, check if we need to terminate or continue
+			if vm.unwinding {
+				// Exception was thrown and we're unwinding
+				// The unwinding logic will either find a handler or terminate
+				if vm.frameCount == 0 {
+					// All frames unwound, uncaught exception
+					return InterpretRuntimeError, vm.currentException
+				}
+				continue // Let the unwinding process take control
+			} else {
+				// Exception was handled, synchronize IP and continue execution
+				ip = frame.ip
+				continue
+			}
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
 			return status, Undefined
 		}
+
+		// Check for exception unwinding after each instruction
+		if vm.unwinding {
+			// Exception is being unwound - check if we have terminated
+			if vm.frameCount == 0 {
+				// All frames unwound, uncaught exception
+				return InterpretRuntimeError, vm.currentException
+			}
+			// Continue unwinding by breaking out of current frame's execution
+			break
+		}
 	}
+
+	// If we reach here, the function completed normally (shouldn't happen in main script)
+	return InterpretOK, Undefined
 }
 
 // captureUpvalue creates a new Upvalue object for a local variable at the given stack location.

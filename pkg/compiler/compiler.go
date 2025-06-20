@@ -448,6 +448,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.SwitchStatement: // Added
 		return c.compileSwitchStatement(node, hint) // TODO: Fix this
 
+	// --- Exception Handling Statements ---
+	case *parser.TryStatement:
+		return c.compileTryStatement(node, hint)
+
+	case *parser.ThrowStatement:
+		return c.compileThrowStatement(node, hint)
+
 	// --- Expressions (excluding FunctionLiteral which is handled above) ---
 	case *parser.NumberLiteral:
 		//fmt.Printf("[NUMBER LITERAL DEBUG] Compiling NumberLiteral value=%f with hint=R%d\n", node.Value, hint)

@@ -876,6 +876,68 @@ func (dws *DoWhileStatement) String() string {
 	return out.String()
 }
 
+// --- Exception Handling Statements ---
+
+// TryStatement represents a try/catch block.
+type TryStatement struct {
+	Token       lexer.Token      // The 'try' token
+	Body        *BlockStatement  // The try block
+	CatchClause *CatchClause     // Optional catch clause
+	// FinallyBlock not yet implemented in Phase 1
+}
+
+func (ts *TryStatement) statementNode()       {}
+func (ts *TryStatement) TokenLiteral() string { return ts.Token.Literal }
+func (ts *TryStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("try ")
+	out.WriteString(ts.Body.String())
+	if ts.CatchClause != nil {
+		out.WriteString(" ")
+		out.WriteString(ts.CatchClause.String())
+	}
+	return out.String()
+}
+
+// CatchClause represents a catch block.
+type CatchClause struct {
+	Token     lexer.Token      // The 'catch' token
+	Parameter *Identifier      // Exception variable (optional in ES2019+)
+	Body      *BlockStatement  // The catch block
+}
+
+func (cc *CatchClause) String() string {
+	var out bytes.Buffer
+	out.WriteString("catch")
+	if cc.Parameter != nil {
+		out.WriteString(" (")
+		out.WriteString(cc.Parameter.String())
+		out.WriteString(")")
+	}
+	out.WriteString(" ")
+	out.WriteString(cc.Body.String())
+	return out.String()
+}
+
+// ThrowStatement represents a throw statement.
+type ThrowStatement struct {
+	Token lexer.Token // The 'throw' token
+	Value Expression  // The expression to throw
+}
+
+func (ths *ThrowStatement) statementNode()       {}
+func (ths *ThrowStatement) TokenLiteral() string { return ths.Token.Literal }
+func (ths *ThrowStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(ths.Token.Literal)
+	out.WriteString(" ")
+	if ths.Value != nil {
+		out.WriteString(ths.Value.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
+
 // --- TODO: Add more expression types later (Infix, Prefix, Call, If, etc.) ---
 
 // PrefixExpression represents a prefix operator expression.

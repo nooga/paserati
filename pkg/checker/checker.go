@@ -1773,6 +1773,13 @@ func (c *Checker) visit(node parser.Node) {
 		// For now, set it to the original type
 		node.SetComputedType(argType)
 
+	// --- Exception Handling Statements ---
+	case *parser.TryStatement:
+		c.checkTryStatement(node)
+
+	case *parser.ThrowStatement:
+		c.checkThrowStatement(node)
+
 	default:
 		// Optional: Add error for unhandled node types
 		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
@@ -2061,4 +2068,55 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		// For other node types, use regular visit for now
 		c.visit(node)
 	}
+}
+
+// --- Exception Handling Type Checking ---
+
+// checkTryStatement performs type checking for try/catch statements
+func (c *Checker) checkTryStatement(node *parser.TryStatement) {
+	// Check the try block
+	c.visit(node.Body)
+	
+	// Check the catch clause if present
+	if node.CatchClause != nil {
+		c.checkCatchClause(node.CatchClause)
+	}
+}
+
+// checkCatchClause performs type checking for catch clauses
+func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
+	// Create a new environment for the catch block
+	originalEnv := c.env
+	c.env = NewEnclosedEnvironment(c.env)
+	
+	// Define the catch parameter if present
+	if clause.Parameter != nil {
+		// In JavaScript/TypeScript, catch parameter is implicitly 'any' type
+		if !c.env.Define(clause.Parameter.Value, types.Any, false) {
+			c.addError(clause.Parameter, fmt.Sprintf("parameter '%s' already declared", clause.Parameter.Value))
+		}
+		clause.Parameter.SetComputedType(types.Any)
+	}
+	
+	// Check the catch body
+	c.visit(clause.Body)
+	
+	// Restore the original environment
+	c.env = originalEnv
+}
+
+// checkThrowStatement performs type checking for throw statements
+func (c *Checker) checkThrowStatement(node *parser.ThrowStatement) {
+	// Check that throw has an expression
+	if node.Value == nil {
+		c.addError(node, "throw statement requires an expression")
+		return
+	}
+	
+	// Visit the expression being thrown
+	c.visit(node.Value)
+	
+	// In TypeScript, throw expressions have type 'never'
+	// but for simplicity in Phase 1, we don't need to enforce much
+	// The expression can be of any type (JavaScript allows throwing anything)
 }

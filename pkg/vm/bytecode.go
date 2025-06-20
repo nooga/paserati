@@ -130,6 +130,10 @@ const (
 	// --- NEW: Object Copy Support for Rest Properties ---
 	OpCopyObjectExcluding OpCode = 64 // Rx Ry Rz: Rx = copy Ry excluding properties in array Rz
 	// --- END NEW ---
+
+	// --- Exception Handling ---
+	OpThrow OpCode = 65 // Rx: Throw exception in register Rx
+	// --- END Exception Handling ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -272,10 +276,24 @@ func (op OpCode) String() string {
 	case OpCopyObjectExcluding:
 		return "OpCopyObjectExcluding"
 	// --- END NEW ---
+	
+	// --- Exception Handling ---
+	case OpThrow:
+		return "OpThrow"
+	// --- END Exception Handling ---
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}
+}
+
+// ExceptionHandler represents an entry in the exception table
+type ExceptionHandler struct {
+	TryStart     int    // PC where try block starts (inclusive)
+	TryEnd       int    // PC where try block ends (exclusive)
+	HandlerPC    int    // Where to jump when exception caught
+	CatchReg     int    // Register to store exception (-1 if finally only)
+	IsCatch      bool   // true for catch, false for finally
 }
 
 // Chunk represents a sequence of bytecode instructions and associated data.
@@ -283,6 +301,7 @@ type Chunk struct {
 	Code      []byte  // The bytecode instructions (OpCodes and operands)
 	Constants []Value // Constant pool (Now uses Value from vm package)
 	Lines     []int   // Line number corresponding to the start of each instruction
+	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
 	// Add MaxRegs later for function definitions
 }
 
@@ -301,9 +320,10 @@ func (c *Chunk) GetLine(offset int) int {
 // NewChunk creates a new, empty Chunk.
 func NewChunk() *Chunk {
 	return &Chunk{
-		Code:      make([]byte, 0),
-		Constants: make([]Value, 0),
-		Lines:     make([]int, 0),
+		Code:           make([]byte, 0),
+		Constants:      make([]Value, 0),
+		Lines:          make([]int, 0),
+		ExceptionTable: make([]ExceptionHandler, 0),
 	}
 }
 
@@ -442,6 +462,11 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpSetGlobal:
 		return c.globalRegisterInstruction(builder, instruction.String(), offset) // GlobalIdx(16bit), Ry
 	// --- END NEW ---
+
+	// --- Exception Handling Disassembly ---
+	case OpThrow:
+		return c.registerInstruction(builder, instruction.String(), offset) // Rx
+	// --- END Exception Handling ---
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))
