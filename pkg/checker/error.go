@@ -19,3 +19,17 @@ func (c *Checker) addError(node parser.Node, message string) {
 	}
 	c.errors = append(c.errors, err)
 }
+
+// Helper to add generic type errors without a specific node
+func (c *Checker) addGenericError(message string) {
+	err := &errors.TypeError{
+		Position: errors.Position{
+			Line:     1,
+			Column:   1,
+			StartPos: 0,
+			EndPos:   0,
+		},
+		Msg: message,
+	}
+	c.errors = append(c.errors, err)
+}

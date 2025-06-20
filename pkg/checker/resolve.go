@@ -545,6 +545,29 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n", 
 		genericType.Name, strings.Join(typeStrs, ", "))
 	
+	// Validate constraints before instantiation
+	for i, typeParam := range genericType.TypeParameters {
+		if typeParam.Constraint != nil {
+			argType := typeArgs[i]
+			constraintType := typeParam.Constraint
+			
+			debugPrintf("// [Checker] Checking constraint: %s extends %s\n", 
+				argType.String(), constraintType.String())
+			
+			// Check if the type argument satisfies the constraint
+			if !types.IsAssignable(argType, constraintType) {
+				// Create a more detailed error message
+				errorMsg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'", 
+					argType.String(), constraintType.String(), typeParam.Name)
+				
+				// We don't have the original AST node here, so we'll add a generic error
+				// In a more complete implementation, we'd pass the node through
+				c.addGenericError(errorMsg)
+				return types.Any // Return any type to allow compilation to continue
+			}
+		}
+	}
+	
 	// Create substitution map from type parameters to concrete types
 	substitution := make(map[string]types.Type)
 	for i, typeParam := range genericType.TypeParameters {

@@ -398,11 +398,25 @@ Basic inference algorithm:
 - [x] Type checking for generic interface and type alias bodies
 - [x] Integration with existing type system architecture
 - [x] Proper error reporting for generic type declarations
-- [ ] Generic type instantiation in variable declarations (next phase)
-- [ ] Generic type references in extends clauses (next phase)
+- [x] Generic type instantiation in variable declarations: `let x: Container<string>`
+- [x] Basic type substitution and property access
+- [x] Type safety validation for instantiated generics
+- [ ] Generic type references in extends clauses: `interface A<T> extends B<T> {}` (parser limitation)
 
-### Milestone 6: Advanced Generic Features 📋 FUTURE
-- [ ] Generic type instantiation: `let x: Container<string>`
+### Milestone 6: Constraint Validation ✅ COMPLETED
+- [x] Constraint parsing: `T extends Lengthable`
+- [x] Constraint storage in TypeParameter
+- [x] **Constraint enforcement during instantiation** 
+- [x] Constraint violation error reporting
+- [ ] Complex constraint validation (intersection types, etc.)
+
+**Implementation Notes:**
+- Constraint validation is implemented in `instantiateGenericType` method in `/Users/nooga/lab/paserati/pkg/checker/resolve.go`
+- Uses `types.IsAssignable(argType, constraintType)` to validate type arguments against constraints
+- Properly reports errors with descriptive messages: "Type 'X' does not satisfy constraint 'Y' for type parameter 'Z'"
+- **Known limitation**: Built-in types like `string` and `Array<T>` are not recognized as having their prototype properties for structural typing. This affects constraints like `T extends {length: number}` with `string` arguments, but is a broader type system issue, not specific to generics.
+
+### Milestone 7: Advanced Generic Features 📋 FUTURE
 - [ ] Generic extends clauses: `interface A<T> extends B<T> {}`
 - [ ] Support default type parameters (T = any)
 - [ ] Generic function overloads
