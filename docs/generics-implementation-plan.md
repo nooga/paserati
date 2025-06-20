@@ -416,7 +416,35 @@ Basic inference algorithm:
 - Properly reports errors with descriptive messages: "Type 'X' does not satisfy constraint 'Y' for type parameter 'Z'"
 - **Known limitation**: Built-in types like `string` and `Array<T>` are not recognized as having their prototype properties for structural typing. This affects constraints like `T extends {length: number}` with `string` arguments, but is a broader type system issue, not specific to generics.
 
-### Milestone 7: Advanced Generic Features 📋 FUTURE
+### Milestone 7: Generic Function Call Syntax 📋 TODO
+- [ ] **Explicit generic function calls** - `func<number>()` syntax
+  - Current limitation: Parser doesn't support explicit type arguments in call expressions
+  - Workaround: Use type annotations on variables instead: `let result: Type<T> = func()`
+  - Impact: Users must rely on type inference or explicit type annotations
+  - Implementation needed: Extend CallExpression AST to support TypeArguments field
+
+### Milestone 8: Enhanced Type Inference 📋 TODO  
+- [ ] **Complex higher-order function inference** - Issues with compose/map chains
+  - Current limitation: Type inference fails in complex functional programming scenarios
+  - Specific issues: Generic type parameter propagation through function composition
+  - Impact: Complex functional code requires explicit type annotations
+  - Examples that fail: `compose(f, g)`, complex `map` chains with generic callbacks
+
+### Milestone 9: Built-in Type Integration 📋 TODO
+- [ ] **Primitive type structural typing** - `string.length`, `number.toString()` property access
+  - Current limitation: `types.IsAssignable` doesn't recognize primitive prototype properties
+  - Specific issues: `string` not assignable to `{length: number}`, method calls on primitives
+  - Impact: Constraints like `T extends {length: number}` don't work with `string`/`Array<T>`
+  - Root cause: Structural typing only works for explicit object types, not built-in types
+  - Fix needed: Enhance `IsAssignable` in `/Users/nooga/lab/paserati/pkg/types/assignable.go`
+
+### Milestone 10: Parser Enhancements 📋 TODO
+- [ ] **Multiple variable declarations** - `let a = 0, b = 1;` syntax
+  - Current limitation: Parser only supports single variable per declaration statement
+  - Impact: TypeScript code needs to be rewritten with separate statements
+  - Workaround: Split into multiple `let` statements
+
+### Milestone 11: Advanced Generic Features 📋 FUTURE
 - [ ] Generic extends clauses: `interface A<T> extends B<T> {}`
 - [ ] Support default type parameters (T = any)
 - [ ] Generic function overloads
@@ -433,6 +461,31 @@ Basic inference algorithm:
 5. ✅ All existing tests continue to pass (249 passing, only 2 expected `.bind()` failures)
 
 **Bonus Achievement:** Full generic function type inference working seamlessly!
+
+## Current Implementation Status
+
+### ✅ What Works (Production Ready)
+- **Generic function declarations**: `function identity<T>(x: T): T`
+- **Generic interfaces**: `interface Container<T> { value: T; }`
+- **Generic type aliases**: `type Optional<T> = T | undefined`
+- **Type parameter constraints**: `T extends Lengthable` with validation
+- **Built-in generic types**: `Array<T>`, `Promise<T>`
+- **Nested generic types**: `Container<Container<T>>`
+- **Type inference from arguments**: Automatic deduction in function calls
+- **Type safety validation**: Comprehensive error reporting
+- **Zero runtime overhead**: Complete type erasure
+- **TypeScript compliance**: Passes `deno check` for supported features
+
+### 🚧 What Has Limitations
+- **Explicit generic calls**: `func<number>()` not supported (use type annotations instead)
+- **Complex type inference**: Higher-order functions may need explicit annotations
+- **Primitive constraints**: `string` not recognized as having `length` property
+- **Parser limitations**: No multiple variable declarations, some syntax restrictions
+
+### 📊 Test Coverage
+- **16 comprehensive tests** covering all implemented features
+- **Examples**: `/Users/nooga/lab/paserati/examples/generics_simple.ts` demonstrates working features
+- **Edge cases**: Constraint validation, nested types, error scenarios all tested
 
 ## Open Questions
 

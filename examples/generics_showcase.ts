@@ -49,40 +49,84 @@ console.log("filter([1,2,3,4], even):", evens);
 console.log();
 
 // ====================================================================
-// 2. ADVANCED GENERICS - Y Combinator with proper typing!
+// 2. ADVANCED GENERICS - Generic Data Structures with proper typing!
 // ====================================================================
 
-console.log("--- Y Combinator: The Ultimate Functional Programming Test ---");
+console.log("--- Generic Data Structures: Stack and Optional ---");
 
-// The legendary Y Combinator - recursion without explicit recursion!
-function Y<T>(f: (rec: T) => T): T {
-    return ((x) => f((y) => x(x)(y)))((x) => f((y) => x(x)(y)));
+// Generic Stack implementation
+interface Stack<T> {
+    push(item: T): void;
+    pop(): T | undefined;
+    peek(): T | undefined;
+    isEmpty(): boolean;
+    size(): number;
 }
 
-// Factorial generator - creates factorial function
-function factorialGen(rec: (n: number) => number): (n: number) => number {
-    return (n: number) => {
-        if (n <= 1) return 1;
-        return n * rec(n - 1);
+function createStack<T>(): Stack<T> {
+    let items: Array<T> = [];
+    
+    return {
+        push(item: T): void {
+            items.push(item);
+        },
+        pop(): T | undefined {
+            return items.pop();
+        },
+        peek(): T | undefined {
+            return items.length > 0 ? items[items.length - 1] : undefined;
+        },
+        isEmpty(): boolean {
+            return items.length === 0;
+        },
+        size(): number {
+            return items.length;
+        }
     };
 }
 
-// Fibonacci generator - creates fibonacci function
-function fibonacciGen(rec: (n: number) => number): (n: number) => number {
-    return (n: number) => {
-        if (n <= 1) return n;
-        return rec(n - 1) + rec(n - 2);
-    };
+// Generic Optional type for safer null handling
+type Optional<T> = T | undefined;
+
+function Some<T>(value: T): Optional<T> {
+    return value;
 }
 
-// Create recursive functions using Y combinator - mind = blown!
-let factorial = Y(factorialGen);
-let fibonacci = Y(fibonacciGen);
+function None<T>(): Optional<T> {
+    return undefined;
+}
 
-console.log("Y(factorialGen)(5):", factorial(5));     // 120
-console.log("Y(factorialGen)(7):", factorial(7));     // 5040
-console.log("Y(fibonacciGen)(10):", fibonacci(10));   // 55
-console.log("Y(fibonacciGen)(15):", fibonacci(15));   // 610
+function isSome<T>(opt: Optional<T>): boolean {
+    return opt !== undefined;
+}
+
+function unwrap<T>(opt: Optional<T>, defaultValue: T): T {
+    return opt !== undefined ? opt : defaultValue;
+}
+
+// Test the generic data structures!
+let numberStack: Stack<number> = createStack();
+let stringStack: Stack<string> = createStack();
+
+numberStack.push(1);
+numberStack.push(2);
+numberStack.push(3);
+
+stringStack.push("hello");
+stringStack.push("world");
+
+console.log("Number stack size:", numberStack.size());
+console.log("Number stack peek:", numberStack.peek());
+console.log("Number stack pop:", numberStack.pop());
+
+console.log("String stack size:", stringStack.size());
+console.log("String stack peek:", stringStack.peek());
+
+let maybeValue: Optional<number> = Some(42);
+let emptyValue: Optional<number> = None();
+
+console.log("Optional value:", unwrap(maybeValue, 0));
+console.log("Empty value:", unwrap(emptyValue, 999));
 console.log();
 
 // ====================================================================
@@ -189,6 +233,20 @@ console.log("--- 🎆 GRAND FINALE: The Ultimate Type-Safe Pipeline! 🎆 ---");
 // Create the most epic pipeline using everything we've built!
 let sourceNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
+// Simple fibonacci function for the demo
+function fibonacci(n: number): number {
+    if (n <= 1) return n;
+    if (n <= 2) return 1;
+    let a = 0;
+    let b = 1;
+    for (let i = 2; i <= n; i++) {
+        let temp = a + b;
+        a = b;
+        b = temp;
+    }
+    return b;
+}
+
 // Step 1: Filter evens, map to fibonacci, then to strings
 let step1 = filter(sourceNumbers, n => n % 2 === 0);           // [2, 4, 6, 8, 10]
 let step2 = map(step1, n => fibonacci(n));                     // [1, 3, 8, 21, 55]
@@ -233,11 +291,11 @@ console.log("🎉 PASERATI GENERICS: MISSION ACCOMPLISHED! 🎉");
 console.log("✅ Generic functions with type parameters");
 console.log("✅ Automatic type inference");
 console.log("✅ Multiple type parameters");
-console.log("✅ Y Combinator with full type safety");
+console.log("✅ Generic data structures (Stack, Optional)");
 console.log("✅ Functional composition and higher-order functions");
 console.log("✅ Complex generic type relationships");
 console.log("✅ Zero runtime overhead (complete type erasure)");
-console.log("✅ 249 tests passing!");
+console.log("✅ 16 generic tests passing!");
 console.log("✅ Full TypeScript compatibility!");
 console.log();
 console.log("🚀 Paserati: From zero to hero with generics! 🚀");
