@@ -3857,6 +3857,7 @@ func (p *Parser) addError(tok lexer.Token, msg string) {
 			Column:   tok.Column,
 			StartPos: tok.StartPos,
 			EndPos:   tok.EndPos,
+			Source:   p.source, // Use parser's cached source context
 		},
 		Msg: msg,
 	}
@@ -4065,6 +4066,7 @@ func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 	// Success! Create generic type ref
 	return &GenericTypeRef{
 		BaseExpression: BaseExpression{},
+		Token:          name.Token, // Use the identifier token
 		Name:           name,
 		TypeArguments:  typeArgs,
 	}
@@ -5360,6 +5362,8 @@ func GetTokenFromNode(node Node) lexer.Token {
 		return n.Token // The '{' token
 	case *ConstructorTypeExpression:
 		return n.Token // The 'new' token
+	case *GenericTypeRef:
+		return n.Token // The identifier token
 
 	// Special cases
 	case *Program:

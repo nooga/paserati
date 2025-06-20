@@ -103,7 +103,7 @@ func runRepl(showCacheStats bool, showBytecode bool) {
 	// Create a persistent Paserati session for the REPL
 	paserati := driver.NewPaserati()
 
-	fmt.Println("Paserati REPL (Persistent Session) (Ctrl+C to exit)")
+	fmt.Println("Paserati (Ctrl+C to exit)")
 	if showCacheStats {
 		fmt.Println("Cache statistics enabled")
 	}

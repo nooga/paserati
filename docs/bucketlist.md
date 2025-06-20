@@ -5,7 +5,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 **Recent Major Updates (hoisting branch):**
 
 - **Complete Destructuring Implementation** - Full support for array/object destructuring with rest elements, defaults, and nested patterns
-- **Built-in System Refactor** - Modernized builtin architecture and cleaned up legacy code  
+- **Built-in System Refactor** - Modernized builtin architecture and cleaned up legacy code
 - **🚀 GENERICS IMPLEMENTATION** - **COMPLETE!** Full generic types, functions, and type inference
 - **Function.prototype.bind()** - Work in progress (failing tests indicate incomplete implementation)
 
@@ -435,7 +435,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 ### Advanced Types
 
-- [x] **Generics** - **COMPLETE IMPLEMENTATION!** 🎉
+- [x] **Generics**
   - [x] Generic type references (`Array<T>`, `Promise<T>`)
   - [x] Generic function declarations (`function identity<T>(arg: T): T`)
   - [x] Generic arrow functions (`<T>(x: T): T => x`)
