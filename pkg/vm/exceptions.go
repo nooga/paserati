@@ -1,6 +1,9 @@
 package vm
 
-import "fmt"
+import (
+	"fmt"
+	"paserati/pkg/errors"
+)
 
 // --- Exception State ---
 
@@ -15,7 +18,7 @@ type ExceptionState struct {
 // findExceptionHandler searches the exception table for a handler that covers the given PC
 func (vm *VM) findExceptionHandler(pc int) *ExceptionHandler {
 	chunk := vm.frames[vm.frameCount-1].closure.Fn.Chunk
-	
+
 	for i := range chunk.ExceptionTable {
 		handler := &chunk.ExceptionTable[i]
 		if pc >= handler.TryStart && pc < handler.TryEnd {
@@ -32,10 +35,10 @@ func (vm *VM) findAllExceptionHandlers(pc int) []*ExceptionHandler {
 	if vm.frameCount == 0 {
 		return nil
 	}
-	
+
 	chunk := vm.frames[vm.frameCount-1].closure.Fn.Chunk
 	var handlers []*ExceptionHandler
-	
+
 	for i := range chunk.ExceptionTable {
 		handler := &chunk.ExceptionTable[i]
 		if pc >= handler.TryStart && pc < handler.TryEnd {
@@ -49,7 +52,7 @@ func (vm *VM) findAllExceptionHandlers(pc int) []*ExceptionHandler {
 func (vm *VM) throwException(value Value) {
 	vm.currentException = value
 	vm.unwinding = true
-	
+
 	// Start unwinding from current frame
 	handlerFound := vm.unwindException()
 	if !handlerFound {
@@ -72,14 +75,14 @@ func (vm *VM) unwindException() bool {
 	// fmt.Printf("[DEBUG] unwindException: Starting unwind with frameCount=%d\n", vm.frameCount)
 	for vm.frameCount > 0 {
 		frame := &vm.frames[vm.frameCount-1]
-		
+
 		// fmt.Printf("[DEBUG] unwindException: Checking frame %d at IP %d\n", vm.frameCount-1, frame.ip)
-		
+
 		// Look for handlers covering the current IP
 		handlers := vm.findAllExceptionHandlers(frame.ip)
-		
+
 		// fmt.Printf("[DEBUG] unwindException: Found %d handlers for IP %d\n", len(handlers), frame.ip)
-		
+
 		for _, handler := range handlers {
 			if handler.IsCatch {
 				// fmt.Printf("[DEBUG] unwindException: Found catch handler at PC %d\n", handler.HandlerPC)
@@ -100,14 +103,14 @@ func (vm *VM) unwindException() bool {
 				}
 			}
 		}
-		
+
 		// fmt.Printf("[DEBUG] unwindException: No handler in frame %d, unwinding to caller\n", vm.frameCount-1)
 		// No handler in current frame, unwind to caller
 		vm.frameCount--
 		// For register-based VM, just decrement frame count
 		// Register cleanup is handled by the frame management
 	}
-	
+
 	// fmt.Printf("[DEBUG] unwindException: No handler found in any frame\n")
 	// No handler found in any frame
 	return false
@@ -116,15 +119,15 @@ func (vm *VM) unwindException() bool {
 // handleCatchBlock transfers control to a catch block
 func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	frame := &vm.frames[vm.frameCount-1]
-	
+
 	// Store exception in catch register if specified
 	if handler.CatchReg >= 0 && handler.CatchReg < len(frame.registers) {
 		frame.registers[handler.CatchReg] = vm.currentException
 	}
-	
-	// Jump to catch handler  
+
+	// Jump to catch handler
 	frame.ip = handler.HandlerPC
-	
+
 	// Clear exception state
 	vm.currentException = Null
 	vm.unwinding = false
@@ -133,9 +136,9 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 // handleFinallyBlock transfers control to a finally block
 func (vm *VM) handleFinallyBlock(handler *ExceptionHandler) {
 	frame := &vm.frames[vm.frameCount-1]
-	
+
 	// fmt.Printf("[DEBUG] handleFinallyBlock: Entering finally handler at PC %d\n", handler.HandlerPC)
-	
+
 	// Save current exception state if unwinding
 	if vm.unwinding {
 		// fmt.Printf("[DEBUG] handleFinallyBlock: Saving exception %s as pending action\n", vm.currentException.ToString())
@@ -148,13 +151,13 @@ func (vm *VM) handleFinallyBlock(handler *ExceptionHandler) {
 	} else {
 		// fmt.Printf("[DEBUG] handleFinallyBlock: Not unwinding, just jumping to finally\n")
 	}
-	
+
 	// Jump to finally handler
 	frame.ip = handler.HandlerPC
 	vm.finallyDepth++
-	
+
 	// fmt.Printf("[DEBUG] handleFinallyBlock: Set IP to %d, finallyDepth=%d\n", handler.HandlerPC, vm.finallyDepth)
-	
+
 	// Note: After the finally block executes, the main VM loop will
 	// check for pending actions and execute them appropriately.
 }
@@ -164,11 +167,12 @@ func (vm *VM) handleUncaughtException() {
 	// fmt.Printf("[DEBUG] handleUncaughtException called, exception=%s\n", vm.currentException.ToString())
 	// For display, use proper string representation
 	var displayStr string
+	var stackTrace string
 	if vm.currentException.IsObject() {
 		// For Error objects, try to get a meaningful representation
 		if vm.currentException.Type() == TypeObject {
 			obj := vm.currentException.AsPlainObject()
-			
+
 			// Check if this looks like an Error object (has name and message properties)
 			if nameVal, hasName := obj.GetOwn("name"); hasName {
 				if messageVal, hasMessage := obj.GetOwn("message"); hasMessage {
@@ -179,6 +183,11 @@ func (vm *VM) handleUncaughtException() {
 						displayStr = name
 					} else {
 						displayStr = name + ": " + message
+					}
+					
+					// Try to get stack trace from Error object
+					if stackVal, hasStack := obj.GetOwn("stack"); hasStack {
+						stackTrace = stackVal.ToString()
 					}
 				} else {
 					displayStr = vm.currentException.ToString()
@@ -192,12 +201,20 @@ func (vm *VM) handleUncaughtException() {
 	} else {
 		displayStr = vm.currentException.ToString()
 	}
+
+	// Add the uncaught exception as a runtime error (with stack trace if available)
+	errorMsg := fmt.Sprintf("Uncaught exception: %s", displayStr)
+	if stackTrace != "" {
+		errorMsg += "\n" + stackTrace
+	}
 	
-	fmt.Printf("Uncaught exception: %s\n", displayStr)
-	
-	// Add the uncaught exception as a runtime error
-	vm.runtimeError("Uncaught exception: %s", displayStr)
-	
+	// Create runtime error directly without the extra printing from vm.runtimeError
+	runtimeErr := &errors.RuntimeError{
+		Position: errors.Position{Line: 1, Column: 1, StartPos: 0, EndPos: 0},
+		Msg:      errorMsg,
+	}
+	vm.errors = append(vm.errors, runtimeErr)
+
 	// Keep unwinding = true so the VM knows to terminate
 	// vm.unwinding = false // DON'T clear this - we need it to signal termination
 	// Set frameCount to 0 to terminate execution
@@ -212,17 +229,91 @@ func (vm *VM) executeOpThrow(code []byte, ip *int) {
 	// Read register containing exception value
 	exceptionReg := code[*ip]
 	*ip++
-	
+
 	frame := &vm.frames[vm.frameCount-1]
 	if int(exceptionReg) >= len(frame.registers) {
 		vm.runtimeError("Invalid register index %d for throw operation", exceptionReg)
 		return
 	}
-	
+
 	exceptionValue := frame.registers[exceptionReg]
-	
+
 	// fmt.Printf("[DEBUG] executeOpThrow: About to throw exception %s from register R%d\n", exceptionValue.ToString(), exceptionReg)
-	
+
 	// Throw the exception
 	vm.throwException(exceptionValue)
+}
+
+// --- Stack Trace Support (Phase 4b) ---
+
+// StackFrame represents a single frame in a stack trace
+type StackFrame struct {
+	FunctionName string
+	FileName     string
+	Line         int
+	Column       int
+}
+
+// CaptureStackTrace captures the current call stack and returns it as a formatted string
+func (vm *VM) CaptureStackTrace() string {
+	frames := vm.getStackFrames()
+	if len(frames) == 0 {
+		return ""
+	}
+
+	result := ""
+	for i, frame := range frames {
+		if i > 0 {
+			result += "\n"
+		}
+		result += fmt.Sprintf("    at %s (%s:%d:%d)", frame.FunctionName, frame.FileName, frame.Line, frame.Column)
+	}
+	return result
+}
+
+// getStackFrames extracts stack frame information from the current VM call stack
+func (vm *VM) getStackFrames() []StackFrame {
+	var frames []StackFrame
+
+	// Walk through all active frames
+	for i := vm.frameCount - 1; i >= 0; i-- {
+		frame := &vm.frames[i]
+
+		// Skip native frames - they don't have meaningful source location info
+		if frame.isNativeFrame {
+			continue
+		}
+
+		if frame.closure != nil && frame.closure.Fn != nil {
+			fn := frame.closure.Fn
+
+			// Get function name
+			funcName := fn.Name
+			if funcName == "" {
+				funcName = "<anonymous>"
+			}
+
+			// Get current line number from chunk's line info
+			line := 1
+			column := 1
+			if fn.Chunk != nil && frame.ip >= 0 && frame.ip < len(fn.Chunk.Lines) {
+				line = fn.Chunk.Lines[frame.ip]
+			}
+
+			// For now, use a placeholder filename - could be enhanced with source mapping
+			fileName := "<script>"
+			if funcName != "<script>" && funcName != "<anonymous>" {
+				fileName = "<" + funcName + ">"
+			}
+
+			frames = append(frames, StackFrame{
+				FunctionName: funcName,
+				FileName:     fileName,
+				Line:         line,
+				Column:       column,
+			})
+		}
+	}
+
+	return frames
 }

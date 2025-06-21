@@ -9,14 +9,14 @@ This document outlines the phased implementation of try/catch/finally/throw exce
 - ✅ **Phase 3**: Finally blocks - **COMPLETED** 🎉
 - 🚧 **Phase 4**: Advanced features - **IN PROGRESS**
   - ✅ **Phase 4a**: Return statements in finally blocks - **COMPLETED** 🎉
+  - ✅ **Phase 4b**: Error stack traces - **COMPLETED** 🎉
 
-**Latest Update**: Phase 4a Return Statements in Finally Blocks completed! Implemented proper handling of return statements in try/catch blocks with finally blocks, including conditional returns and variable overrides. The OpReturnFinally mechanism works perfectly with the existing VM pending action system.
+**Latest Update**: Phase 4b Error Stack Traces completed! Added comprehensive stack trace capture to Error objects with proper function names and line numbers. Error instances now have a `stack` property that shows the complete call chain when the error was created or thrown. Uncaught exceptions now display stack traces automatically in the error output. This provides excellent debugging experience comparable to Node.js and modern browsers.
 
 ## 🚀 Next Steps (Priority Order)
 
-1. **Phase 4b: Stack Traces** - Add stack property to Error objects for better debugging
-2. **Phase 4c: Custom Error Types** - TypeError, ReferenceError, etc.
-3. **Phase 4d: Advanced Features** - Re-throwing, nested try optimization
+1. **Phase 4c: Custom Error Types** - TypeError, ReferenceError, etc.
+2. **Phase 4d: Advanced Features** - Re-throwing, nested try optimization
 
 ## Overview
 
@@ -246,16 +246,17 @@ let err4 = new Error(undefined);     // message: ""
 - `pkg/builtins/standard.go` - Added ErrorInitializer to standard builtins
 - `tests/scripts/error_*.ts` - Comprehensive test suite
 
-#### 2.2 Stack Trace Support 🚧 **FUTURE**
-- Stack trace capture is planned for a future enhancement
-- Current implementation provides functional Error objects without stack traces
-- Add stack property to Error instances (deferred to Phase 4)
+#### 2.2 Stack Trace Support ✅ **COMPLETED**
+- ✅ Stack trace capture implemented in Phase 4b
+- ✅ Error objects have `stack` property with full call chain
+- ✅ Automatic stack trace display for uncaught exceptions
+- ✅ Format: `    at functionName (<filename>:line:column)`
 
-### Phase 3: Finally Blocks 🚧 **READY FOR IMPLEMENTATION**
+### Phase 3: Finally Blocks ✅ **COMPLETED**
 
 **Goal**: Add finally block support with proper control flow handling.
 
-**Status**: 🚧 Ready for implementation! Phases 1 & 2 are complete and stable. Finally blocks are the next logical enhancement.
+**Status**: ✅ Fully implemented with comprehensive control flow handling including return statements in finally blocks.
 
 #### 3.1 Parser Updates
 - Enable parsing of finally blocks
@@ -431,13 +432,30 @@ function testReturn() {
 This phased approach allows us to build exception handling incrementally:
 1. ✅ **Phase 1 Complete**: Basic try/catch provides immediate value with full exception unwinding
 2. ✅ **Phase 2 Complete**: Added proper Error objects with constructor and prototype support
-3. 🚧 **Phase 3 Next**: Implement finally for complete control flow
-4. 🚧 **Phase 4 Future**: Polish with advanced features (stack traces, custom error types)
+3. ✅ **Phase 3 Complete**: Finally blocks with full control flow support
+4. 🚧 **Phase 4 In Progress**: Advanced features
+   - ✅ **4a Complete**: Return statements in finally blocks
+   - ✅ **4b Complete**: Stack traces with automatic display
+   - 🚧 **4c Next**: Custom error types (TypeError, ReferenceError, etc.)
+   - 🚧 **4d Future**: Re-throwing and optimization
 
 **Phase 1 & 2 Success**: The implemented exception handling works seamlessly with Paserati's register-based VM, providing TypeScript-compliant exception semantics with zero performance overhead for normal execution. The Error constructor integrates perfectly with the existing builtin system, and the exception table approach proves effective for clean architecture and easy extension.
 
 **Major Bug Fix**: Resolved critical compiler issue where exceptions thrown from nested function calls weren't being caught properly. The bug was in exception table IP range calculation - the `tryEnd` was being set before the jump instruction, causing return addresses from nested calls to fall outside the protected range. This fix ensures all try/catch blocks work correctly regardless of call depth.
 
-**Current Status**: Paserati now has robust, fully functional try/catch/throw exception handling with proper Error objects. All test cases pass including complex nested function call scenarios. Users can create Error instances, access and modify properties, and get proper string representations. The foundation is solid and battle-tested for implementing finally blocks and advanced features.
+**Current Status**: Paserati now has comprehensive exception handling that rivals modern JavaScript engines:
+- ✅ **try/catch/finally/throw** - Full control flow support
+- ✅ **Error objects** - Constructor, prototype chain, and properties
+- ✅ **Stack traces** - Automatic capture and display with function names and line numbers
+- ✅ **Advanced control flow** - Return statements in finally blocks (OpReturnFinally)
+- ✅ **Clean error reporting** - Single, informative error messages with source display
+- ✅ **TypeScript compliance** - Follows JavaScript/TypeScript semantics precisely
+
+**Remaining Work (Phase 4c & 4d)**:
+- Custom error types (TypeError, ReferenceError, etc.)
+- Re-throwing support with stack preservation
+- Nested try/catch optimizations
+
+The exception handling system is production-ready and provides an excellent debugging experience for developers.
 
 Each phase is independently useful and won't break existing code, allowing for safe incremental development and testing.

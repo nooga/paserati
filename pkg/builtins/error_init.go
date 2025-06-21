@@ -21,6 +21,7 @@ func (e *ErrorInitializer) InitTypes(ctx *TypeContext) error {
 	errorProtoType := types.NewObjectType().
 		WithProperty("name", types.String).
 		WithProperty("message", types.String).
+		WithProperty("stack", types.String).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Create Error constructor type
@@ -96,6 +97,10 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Set properties
 		errorInstancePtr.SetOwn("name", vm.NewString("Error"))
 		errorInstancePtr.SetOwn("message", vm.NewString(message))
+		
+		// Capture stack trace at the time of Error creation
+		stackTrace := vmInstance.CaptureStackTrace()
+		errorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
 		
 		return errorInstance
 	})

@@ -187,6 +187,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Error object constructor and proper prototype chain
   - [x] Finally blocks with proper control flow
   - [x] **Advanced return statements in finally blocks** - OpReturnFinally mechanism
+  - [x] **Error stack traces** - Complete call stack capture with function names and line numbers
   - [x] Exception table approach with minimal bytecode changes
   - [x] Comprehensive test coverage for all exception scenarios
 - [x] `throw` Statement - **Complete!**
