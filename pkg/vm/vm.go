@@ -13,6 +13,17 @@ import (
 const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
+// PendingAction represents actions that should be performed after finally blocks complete
+type PendingAction int
+
+const (
+	ActionNone PendingAction = iota
+	ActionReturn
+	ActionThrow
+	ActionBreak    // Future: for break in loops
+	ActionContinue // Future: for continue in loops
+)
+
 // CallFrame represents a single active function call.
 type CallFrame struct {
 	// closure is the current runtime closure (user-level ClosureObject)
@@ -97,6 +108,11 @@ type VM struct {
 	// Exception handling state
 	currentException Value // Current thrown exception
 	unwinding        bool  // True during exception unwinding
+	
+	// Finally block state (Phase 3)
+	pendingAction PendingAction // Action to perform after finally blocks complete
+	pendingValue  Value         // Value associated with pending action (e.g., return value)
+	finallyDepth  int           // Track nested finally blocks
 }
 
 // InterpretResult represents the outcome of an interpretation.
@@ -191,6 +207,10 @@ func (vm *VM) Reset() {
 	// Clear global variables
 	vm.globals = make([]Value, 0)
 	vm.globalNames = make([]string, 0)
+	// Clear finally state
+	vm.pendingAction = ActionNone
+	vm.pendingValue = Undefined
+	vm.finallyDepth = 0
 	// No need to clear registerStack explicitly, slots will be overwritten.
 }
 
@@ -1959,6 +1979,47 @@ startExecution:
 			// Continue unwinding by breaking out of current frame's execution
 			break
 		}
+		
+		// Check if we've exited finally blocks and handle pending actions
+		if vm.finallyDepth > 0 {
+			// Check if we're still within any finally handler range
+			frame := &vm.frames[vm.frameCount-1]
+			inFinallyRange := false
+			for _, handler := range vm.findAllExceptionHandlers(frame.ip) {
+				if handler.IsFinally {
+					inFinallyRange = true
+					break
+				}
+			}
+			
+			// If we've exited the finally range, decrement depth
+			if !inFinallyRange {
+				vm.finallyDepth--
+			}
+		}
+		
+		// Check for pending actions after finally blocks complete
+		if vm.finallyDepth == 0 && vm.pendingAction != ActionNone {
+			switch vm.pendingAction {
+			case ActionThrow:
+				// Resume throwing the saved exception
+				vm.pendingAction = ActionNone
+				savedValue := vm.pendingValue
+				vm.pendingValue = Undefined
+				vm.throwException(savedValue)
+				continue // Let exception unwinding take over
+			case ActionReturn:
+				// Resume the return with saved value
+				vm.pendingAction = ActionNone
+				_ = vm.pendingValue // TODO: Implement return logic
+				vm.pendingValue = Undefined
+				continue
+			default:
+				// Clear unknown pending action
+				vm.pendingAction = ActionNone
+				vm.pendingValue = Undefined
+			}
+		}
 	}
 
 	// If we reach here, we broke out of the execution loop
@@ -2192,6 +2253,7 @@ func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
 
 	return args, nil
 }
+
 
 // GetThis returns the current 'this' value for native function execution
 // This allows native functions to access the 'this' context without it being passed as an argument

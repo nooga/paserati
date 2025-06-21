@@ -294,6 +294,8 @@ type ExceptionHandler struct {
 	HandlerPC    int    // Where to jump when exception caught
 	CatchReg     int    // Register to store exception (-1 if finally only)
 	IsCatch      bool   // true for catch, false for finally
+	IsFinally    bool   // true for finally blocks (Phase 3)
+	FinallyReg   int    // Register to store pending action/value (-1 if not needed)
 }
 
 // Chunk represents a sequence of bytecode instructions and associated data.
@@ -377,6 +379,17 @@ func (c *Chunk) DisassembleChunk(name string) string {
 	for offset < len(c.Code) {
 		offset = c.disassembleInstruction(&builder, offset)
 	}
+	
+	// Add exception table information
+	if len(c.ExceptionTable) > 0 {
+		builder.WriteString("\n=== Exception Table ===\n")
+		for i, handler := range c.ExceptionTable {
+			builder.WriteString(fmt.Sprintf("Handler %d: TryStart=%d, TryEnd=%d, HandlerPC=%d, IsCatch=%t, IsFinally=%t\n",
+				i, handler.TryStart, handler.TryEnd, handler.HandlerPC, handler.IsCatch, handler.IsFinally))
+		}
+		builder.WriteString("=======================\n")
+	}
+	
 	return builder.String()
 }
 

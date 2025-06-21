@@ -878,12 +878,12 @@ func (dws *DoWhileStatement) String() string {
 
 // --- Exception Handling Statements ---
 
-// TryStatement represents a try/catch block.
+// TryStatement represents a try/catch/finally block.
 type TryStatement struct {
-	Token       lexer.Token      // The 'try' token
-	Body        *BlockStatement  // The try block
-	CatchClause *CatchClause     // Optional catch clause
-	// FinallyBlock not yet implemented in Phase 1
+	Token        lexer.Token      // The 'try' token
+	Body         *BlockStatement  // The try block
+	CatchClause  *CatchClause     // Optional catch clause
+	FinallyBlock *BlockStatement  // Optional finally block (Phase 3)
 }
 
 func (ts *TryStatement) statementNode()       {}
@@ -895,6 +895,10 @@ func (ts *TryStatement) String() string {
 	if ts.CatchClause != nil {
 		out.WriteString(" ")
 		out.WriteString(ts.CatchClause.String())
+	}
+	if ts.FinallyBlock != nil {
+		out.WriteString(" finally ")
+		out.WriteString(ts.FinallyBlock.String())
 	}
 	return out.String()
 }

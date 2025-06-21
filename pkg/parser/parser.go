@@ -5559,7 +5559,7 @@ func (p *Parser) GetSource() *source.SourceFile {
 
 // --- Exception Handling Parsing ---
 
-// parseTryStatement parses a try/catch statement
+// parseTryStatement parses a try/catch/finally statement
 func (p *Parser) parseTryStatement() *TryStatement {
 	stmt := &TryStatement{Token: p.curToken} // 'try' token
 	
@@ -5581,15 +5581,24 @@ func (p *Parser) parseTryStatement() *TryStatement {
 		}
 	}
 	
-	// For Phase 1, reject finally blocks with clear error
+	// Optional finally clause (Phase 3)
 	if p.peekTokenIs(lexer.FINALLY) {
-		p.addError(p.peekToken, "finally blocks are not yet implemented")
-		return nil
+		p.nextToken() // consume 'finally'
+		
+		if !p.expectPeek(lexer.LBRACE) {
+			p.addError(p.curToken, "expected '{' after 'finally'")
+			return nil
+		}
+		
+		stmt.FinallyBlock = p.parseBlockStatement()
+		if stmt.FinallyBlock == nil {
+			return nil
+		}
 	}
 	
-	// Must have either catch or finally (we only support catch for now)
-	if stmt.CatchClause == nil {
-		p.addError(stmt.Token, "try statement must have a catch clause")
+	// Must have either catch or finally
+	if stmt.CatchClause == nil && stmt.FinallyBlock == nil {
+		p.addError(stmt.Token, "try statement must have a catch clause, finally clause, or both")
 		return nil
 	}
 	

@@ -25,6 +25,21 @@ func (vm *VM) findExceptionHandler(pc int) *ExceptionHandler {
 	return nil
 }
 
+// findAllExceptionHandlers searches the exception table for all handlers that cover the given PC
+// This is needed for finally blocks which may coexist with catch handlers
+func (vm *VM) findAllExceptionHandlers(pc int) []*ExceptionHandler {
+	chunk := vm.frames[vm.frameCount-1].closure.Fn.Chunk
+	var handlers []*ExceptionHandler
+	
+	for i := range chunk.ExceptionTable {
+		handler := &chunk.ExceptionTable[i]
+		if pc >= handler.TryStart && pc < handler.TryEnd {
+			handlers = append(handlers, handler)
+		}
+	}
+	return handlers
+}
+
 // throwException initiates exception unwinding with the given value
 func (vm *VM) throwException(value Value) {
 	vm.currentException = value
@@ -42,12 +57,25 @@ func (vm *VM) throwException(value Value) {
 func (vm *VM) unwindException() bool {
 	for vm.frameCount > 0 {
 		frame := &vm.frames[vm.frameCount-1]
-		handler := vm.findExceptionHandler(frame.ip)
 		
-		if handler != nil && handler.IsCatch {
-			// Found a catch handler
-			vm.handleCatchBlock(handler)
-			return true
+		// Look for handlers covering the current IP
+		handlers := vm.findAllExceptionHandlers(frame.ip)
+		
+		for _, handler := range handlers {
+			if handler.IsCatch {
+				// Found a catch handler - execute it
+				vm.handleCatchBlock(handler)
+				return true
+			} else if handler.IsFinally {
+				// Found a finally handler - execute it and continue unwinding if needed
+				vm.handleFinallyBlock(handler)
+				// If exception was not cleared (no pending action override), continue unwinding
+				if vm.unwinding {
+					continue // Continue looking for catch handlers
+				} else {
+					return true // Finally handled the situation
+				}
+			}
 		}
 		
 		// No handler in current frame, unwind to caller
@@ -75,6 +103,28 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	// Clear exception state
 	vm.currentException = Null
 	vm.unwinding = false
+}
+
+// handleFinallyBlock transfers control to a finally block
+func (vm *VM) handleFinallyBlock(handler *ExceptionHandler) {
+	frame := &vm.frames[vm.frameCount-1]
+	
+	// Save current exception state if unwinding
+	if vm.unwinding {
+		// Save the exception for later re-throwing
+		vm.pendingAction = ActionThrow
+		vm.pendingValue = vm.currentException
+		// Temporarily clear unwinding so finally block executes normally
+		vm.unwinding = false
+		vm.currentException = Null
+	}
+	
+	// Jump to finally handler
+	frame.ip = handler.HandlerPC
+	vm.finallyDepth++
+	
+	// Note: After the finally block executes, the main VM loop will
+	// check for pending actions and execute them appropriately.
 }
 
 // handleUncaughtException handles uncaught exceptions by terminating execution
