@@ -306,6 +306,7 @@ func (vm *VM) run() (InterpretResult, Value) {
 	registers := frame.registers // This is the frame's register window
 	ip := frame.ip
 
+startExecution:
 	for {
 		if ip >= len(code) {
 			// Save IP before erroring
@@ -1947,7 +1948,23 @@ func (vm *VM) run() (InterpretResult, Value) {
 		}
 	}
 
-	// If we reach here, the function completed normally (shouldn't happen in main script)
+	// If we reach here, check if we broke out due to unwinding
+	if vm.unwinding {
+		if vm.frameCount == 0 {
+			return InterpretRuntimeError, vm.currentException
+		}
+		// If there are still frames, we need to continue unwinding in the parent frame
+		// Update cached variables for the current (parent) frame
+		frame = &vm.frames[vm.frameCount-1]
+		closure = frame.closure
+		function = closure.Fn
+		code = function.Chunk.Code
+		constants = function.Chunk.Constants
+		registers = frame.registers
+		ip = frame.ip
+		goto startExecution // Continue the execution loop with updated frame
+	}
+	// Otherwise, the function completed normally (shouldn't happen in main script)
 	return InterpretOK, Undefined
 }
 

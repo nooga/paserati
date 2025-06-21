@@ -79,8 +79,44 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 
 // handleUncaughtException handles uncaught exceptions by terminating execution
 func (vm *VM) handleUncaughtException() {
-	fmt.Printf("Uncaught exception: %s\n", vm.currentException.Inspect())
-	vm.unwinding = false
+	// For display, use proper string representation
+	var displayStr string
+	if vm.currentException.IsObject() {
+		// For Error objects, try to get a meaningful representation
+		if vm.currentException.Type() == TypeObject {
+			obj := vm.currentException.AsPlainObject()
+			
+			// Check if this looks like an Error object (has name and message properties)
+			if nameVal, hasName := obj.GetOwn("name"); hasName {
+				if messageVal, hasMessage := obj.GetOwn("message"); hasMessage {
+					name := nameVal.ToString()
+					message := messageVal.ToString()
+					// Format like Error.prototype.toString() would
+					if message == "" {
+						displayStr = name
+					} else {
+						displayStr = name + ": " + message
+					}
+				} else {
+					displayStr = vm.currentException.ToString()
+				}
+			} else {
+				displayStr = vm.currentException.ToString()
+			}
+		} else {
+			displayStr = vm.currentException.ToString()
+		}
+	} else {
+		displayStr = vm.currentException.ToString()
+	}
+	
+	fmt.Printf("Uncaught exception: %s\n", displayStr)
+	
+	// Add the uncaught exception as a runtime error
+	vm.runtimeError("Uncaught exception: %s", displayStr)
+	
+	// Keep unwinding = true so the VM knows to terminate
+	// vm.unwinding = false // DON'T clear this - we need it to signal termination
 	// Set frameCount to 0 to terminate execution
 	vm.frameCount = 0
 }
