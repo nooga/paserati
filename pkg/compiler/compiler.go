@@ -70,7 +70,8 @@ type Compiler struct {
 	constantCache map[uint16]Register
 	
 	// --- Phase 4a: Finally Context Tracking ---
-	inFinallyBlock bool // Track if we're compiling inside finally block
+	inFinallyBlock  bool // Track if we're compiling inside finally block
+	tryFinallyDepth int  // Number of enclosing try-with-finally blocks
 }
 
 // NewCompiler creates a new *top-level* Compiler.

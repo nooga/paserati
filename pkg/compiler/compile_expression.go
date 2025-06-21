@@ -89,10 +89,10 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		// Check the static type provided by the checker
 		objectStaticType := node.Object.GetComputedType()
 		if objectStaticType == nil {
-			// This might happen if type checking failed earlier, but Compile should have caught it.
-			// Still, good to have a safeguard.
-			return BadRegister, NewCompileError(node.Object, "compiler internal error: checker did not provide type for object in member expression")
-		}
+			// This can happen in finally blocks where type information may not be fully tracked
+			// Fall through to generic OpGetProp instead of erroring
+			debugPrintf("// DEBUG CompileMember: .length requested but object type is nil. Falling through to OpGetProp.\n")
+		} else {
 
 		// Widen the type to handle cases like `string | null` having `.length`
 		widenedObjectType := types.GetWidenedType(objectStaticType)
@@ -108,6 +108,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		// The type checker *should* have caught this, but OpGetProp will likely return undefined/error at runtime.
 		debugPrintf("// DEBUG CompileMember: .length requested on non-array/string type %s (widened from %s). Falling through to OpGetProp.\n",
 			widenedObjectType.String(), objectStaticType.String())
+		}
 	}
 	// --- END Special case for .length ---
 

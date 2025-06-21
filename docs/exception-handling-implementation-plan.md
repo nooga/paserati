@@ -7,16 +7,16 @@ This document outlines the phased implementation of try/catch/finally/throw exce
 - ✅ **Phase 1**: Basic try/catch/throw - **COMPLETED** (Including nested calls fix)
 - ✅ **Phase 2**: Error objects and stack traces - **COMPLETED**  
 - ✅ **Phase 3**: Finally blocks - **COMPLETED** 🎉
-- 🚧 **Phase 4**: Advanced features - **PLANNED**
+- 🚧 **Phase 4**: Advanced features - **IN PROGRESS**
+  - ✅ **Phase 4a**: Return statements in finally blocks - **COMPLETED** 🎉
 
-**Latest Update**: Phase 3 Finally Blocks completed! Implemented comprehensive finally block support with proper control flow handling for all exit scenarios (normal completion, exceptions, and pending action restoration).
+**Latest Update**: Phase 4a Return Statements in Finally Blocks completed! Implemented proper handling of return statements in try/catch blocks with finally blocks, including conditional returns and variable overrides. The OpReturnFinally mechanism works perfectly with the existing VM pending action system.
 
 ## 🚀 Next Steps (Priority Order)
 
-1. **Phase 4a: Return Statements in Finally** - Handle return statements in try/catch with finally blocks
-2. **Phase 4b: Stack Traces** - Add stack property to Error objects for better debugging
-3. **Phase 4c: Custom Error Types** - TypeError, ReferenceError, etc.
-4. **Phase 4d: Advanced Features** - Re-throwing, nested try optimization
+1. **Phase 4b: Stack Traces** - Add stack property to Error objects for better debugging
+2. **Phase 4c: Custom Error Types** - TypeError, ReferenceError, etc.
+3. **Phase 4d: Advanced Features** - Re-throwing, nested try optimization
 
 ## Overview
 

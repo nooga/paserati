@@ -12,6 +12,14 @@ import (
 func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register) (Register, errors.PaseratiError) {
 	tryStart := len(c.chunk.Code)
 	
+	// Track finally depth for return statement handling
+	if node.FinallyBlock != nil {
+		c.tryFinallyDepth++
+		defer func() {
+			c.tryFinallyDepth--
+		}()
+	}
+	
 	// Compile try body
 	bodyReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(bodyReg)

@@ -213,8 +213,8 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 			return BadRegister, err
 		}
 		// Emit return using the register holding the final value (closure or other expression result)
-		// Choose opcode based on whether we're in a finally block
-		if c.inFinallyBlock {
+		// Choose opcode based on whether we're in a finally block or try-with-finally context
+		if c.inFinallyBlock || c.tryFinallyDepth > 0 {
 			c.emitReturnFinally(returnReg, node.Token.Line)
 		} else {
 			c.emitReturn(returnReg, node.Token.Line)
@@ -222,8 +222,8 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 		return returnReg, nil // Return the register containing the returned value
 	} else {
 		// Return undefined implicitly using the optimized opcode
-		if c.inFinallyBlock {
-			// For finally blocks, we need to use OpReturnFinally even for undefined returns
+		if c.inFinallyBlock || c.tryFinallyDepth > 0 {
+			// For finally blocks or try-with-finally contexts, we need to use OpReturnFinally even for undefined returns
 			// Allocate a temporary register for undefined
 			undefinedReg := c.regAlloc.Alloc()
 			defer c.regAlloc.Free(undefinedReg)
