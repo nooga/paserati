@@ -39,19 +39,17 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 			defer c.regAlloc.Free(catchReg)
 			
 			if node.CatchClause.Parameter != nil {
-				// Define catch parameter in a new scope
-				prevSymbolTable := c.currentSymbolTable
-				c.currentSymbolTable = NewEnclosedSymbolTable(prevSymbolTable)
-				c.currentSymbolTable.Define(node.CatchClause.Parameter.Value, catchReg)
+				// Define catch parameter in the current function scope
+				// This allows the catch block to access all function-local variables
+				paramName := node.CatchClause.Parameter.Value
+				
+				// Define the catch parameter (this might shadow an existing variable)
+				c.currentSymbolTable.Define(paramName, catchReg)
 				
 				// Compile catch body
 				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
-					c.currentSymbolTable = prevSymbolTable
 					return BadRegister, err
 				}
-				
-				// Restore symbol table
-				c.currentSymbolTable = prevSymbolTable
 			} else {
 				// Catch without parameter (ES2019+)
 				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
@@ -132,19 +130,17 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 			defer c.regAlloc.Free(catchReg)
 			
 			if node.CatchClause.Parameter != nil {
-				// Define catch parameter in a new scope
-				prevSymbolTable := c.currentSymbolTable
-				c.currentSymbolTable = NewEnclosedSymbolTable(prevSymbolTable)
-				c.currentSymbolTable.Define(node.CatchClause.Parameter.Value, catchReg)
+				// Define catch parameter in the current function scope
+				// This allows the catch block to access all function-local variables
+				paramName := node.CatchClause.Parameter.Value
+				
+				// Define the catch parameter (this might shadow an existing variable)
+				c.currentSymbolTable.Define(paramName, catchReg)
 				
 				// Compile catch body
 				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
-					c.currentSymbolTable = prevSymbolTable
 					return BadRegister, err
 				}
-				
-				// Restore symbol table
-				c.currentSymbolTable = prevSymbolTable
 			} else {
 				// Catch without parameter (ES2019+)
 				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {

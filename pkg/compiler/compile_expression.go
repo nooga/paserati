@@ -288,7 +288,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			tempRegs = append(tempRegs, currentValueReg)
 			c.emitGetGlobal(currentValueReg, symbolRef.GlobalIndex, line)
 		} else if definingTable == c.currentSymbolTable {
-			// Local variable: Get its register
+			// Local variable (including variables from immediate parent scope in same function)
 			identInfo.targetReg = symbolRef.Register
 			identInfo.isUpvalue = false
 			identInfo.isGlobal = false

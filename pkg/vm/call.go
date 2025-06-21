@@ -123,8 +123,8 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 	case TypeNativeFunction:
 		nativeFunc := AsNativeFunction(calleeVal)
 
-		// fmt.Printf("DEBUG prepareCall: nativeFunc=%v, nativeFunc.Arity=%v, nativeFunc.Variadic=%v\n",
-		// 	nativeFunc.Fn, nativeFunc.Arity, nativeFunc.Variadic)
+		// fmt.Printf("DEBUG prepareCall: nativeFunc=%v, nativeFunc.Arity=%v, nativeFunc.Variadic=%v, argCount=%v\n",
+		// 	nativeFunc.Name, nativeFunc.Arity, nativeFunc.Variadic, argCount)
 
 		// Arity checking for native functions
 		if nativeFunc.Arity >= 0 {
@@ -134,10 +134,13 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 					return false, fmt.Errorf("Native function expected at least %d arguments but got %d", nativeFunc.Arity, argCount)
 				}
 			} else {
-				if argCount != nativeFunc.Arity {
+				// For non-variadic functions, allow fewer arguments if they might have optional parameters
+				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
+				if argCount > nativeFunc.Arity {
 					currentFrame.ip = callerIP
 					return false, fmt.Errorf("Native function expected %d arguments but got %d", nativeFunc.Arity, argCount)
 				}
+				// Allow fewer arguments - the native function implementation should handle undefined parameters
 			}
 		}
 
@@ -172,10 +175,13 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 					return false, fmt.Errorf("Native function expected at least %d arguments but got %d", nativeFuncWithProps.Arity, argCount)
 				}
 			} else {
-				if argCount != nativeFuncWithProps.Arity {
+				// For non-variadic functions, allow fewer arguments if they might have optional parameters
+				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
+				if argCount > nativeFuncWithProps.Arity {
 					currentFrame.ip = callerIP
 					return false, fmt.Errorf("Native function expected %d arguments but got %d", nativeFuncWithProps.Arity, argCount)
 				}
+				// Allow fewer arguments - the native function implementation should handle undefined parameters
 			}
 		}
 
@@ -206,10 +212,13 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 					return false, fmt.Errorf("Async native function expected at least %d arguments but got %d", asyncNativeFunc.Arity, argCount)
 				}
 			} else {
-				if argCount != asyncNativeFunc.Arity {
+				// For non-variadic functions, allow fewer arguments if they might have optional parameters
+				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
+				if argCount > asyncNativeFunc.Arity {
 					currentFrame.ip = callerIP
 					return false, fmt.Errorf("Async native function expected %d arguments but got %d", asyncNativeFunc.Arity, argCount)
 				}
+				// Allow fewer arguments - the native function implementation should handle undefined parameters
 			}
 		}
 

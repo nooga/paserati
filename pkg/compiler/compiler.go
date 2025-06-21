@@ -193,11 +193,13 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			// 3. Create the Closure with the actual freeSymbols (not nil)
 			closureReg := c.emitClosure(c.regAlloc.Alloc(), funcConstIndex, funcLit, freeSymbols) // Use actual freeSymbols
 
-			// 4. Update the symbol table entry with the register holding the closure
-			c.currentSymbolTable.UpdateRegister(name, closureReg) // Update from nilRegister to actual register
-
-			// 5. NEW: Emit OpSetGlobal to store the function in the VM's globals array
+			// 4. Get global index and define as global symbol
 			globalIdx := c.GetOrAssignGlobalIndex(name)
+			
+			// Update the symbol table entry to mark it as global
+			c.currentSymbolTable.DefineGlobal(name, globalIdx)
+			
+			// 5. Emit OpSetGlobal to store the function in the VM's globals array
 			c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
 
 			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d, stored at global index %d\n", name, len(freeSymbols), closureReg, globalIdx)

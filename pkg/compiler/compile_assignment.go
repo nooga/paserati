@@ -82,7 +82,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}
 			} else if definingTable == c.currentSymbolTable {
-				// Local variable
+				// Local variable (including variables from immediate parent scope in same function)
 				identInfo.targetReg = symbolRef.Register
 				identInfo.isUpvalue = false
 				identInfo.isGlobal = false
