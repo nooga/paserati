@@ -120,6 +120,20 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		return true, InterpretOK, *dest
 	}
 
+	// 8. Array objects (after special properties are handled)
+	if objVal.Type() == TypeArray {
+		// Arrays don't have additional own properties beyond special ones
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// 9. RegExp objects (after special properties are handled)
+	if objVal.Type() == TypeRegExp {
+		// RegExp objects don't have additional own properties beyond special ones
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
 	// Shouldn't reach here, but handle as undefined
 	*dest = Undefined
 	return true, InterpretOK, *dest

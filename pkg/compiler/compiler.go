@@ -501,6 +501,15 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		c.emitLoadUndefined(hint, node.Token.Line)
 		return hint, nil // ADDED: Explicit return
 
+	case *parser.RegexLiteral: // Added for regex literals
+		// Create a RegExp object from pattern and flags
+		regexValue, err := vm.NewRegExp(node.Pattern, node.Flags)
+		if err != nil {
+			return BadRegister, NewCompileError(node, fmt.Sprintf("Invalid regex: %s", err.Error()))
+		}
+		c.emitLoadNewConstant(hint, regexValue, node.Token.Line)
+		return hint, nil
+
 	case *parser.ThisExpression: // Added for this keyword
 		// Load 'this' value from current call context
 		c.emitLoadThis(hint, node.Token.Line)

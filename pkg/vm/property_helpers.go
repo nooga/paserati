@@ -64,6 +64,10 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		prototype = vm.StringPrototype.AsPlainObject()
 	case TypeArray:
 		prototype = vm.ArrayPrototype.AsPlainObject()
+	case TypeRegExp:
+		if vm.RegExpPrototype.Type() == TypeObject {
+			prototype = vm.RegExpPrototype.AsPlainObject()
+		}
 	default:
 		return Undefined, false
 	}
@@ -94,6 +98,30 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 			return Number(float64(utf8.RuneCountInString(str))), true
 		}
 	}
+
+	// Handle RegExp properties
+	if objVal.Type() == TypeRegExp {
+		regexObj := objVal.AsRegExpObject()
+		if regexObj != nil {
+			switch propName {
+			case "source":
+				return NewString(regexObj.GetSource()), true
+			case "flags":
+				return NewString(regexObj.GetFlags()), true
+			case "global":
+				return BooleanValue(regexObj.IsGlobal()), true
+			case "ignoreCase":
+				return BooleanValue(regexObj.IsIgnoreCase()), true
+			case "multiline":
+				return BooleanValue(regexObj.IsMultiline()), true
+			case "dotAll":
+				return BooleanValue(regexObj.IsDotAll()), true
+			case "lastIndex":
+				return Number(float64(regexObj.GetLastIndex())), true
+			}
+		}
+	}
+
 	return Undefined, false
 }
 

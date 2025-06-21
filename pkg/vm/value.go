@@ -36,6 +36,7 @@ const (
 	TypeDictObject
 
 	TypeArray
+	TypeRegExp
 )
 
 type StringObject struct {
@@ -159,7 +160,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeRegExp
 }
 
 func (v Value) IsDictObject() bool {
@@ -208,7 +209,7 @@ func (v Value) TypeName() string {
 		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		return "function"
-	case TypeObject, TypeDictObject, TypeArray:
+	case TypeObject, TypeDictObject, TypeArray, TypeRegExp:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)
@@ -394,6 +395,12 @@ func (v Value) ToString() string {
 		return "null"
 	case TypeUndefined:
 		return "undefined"
+	case TypeRegExp:
+		regex := v.AsRegExpObject()
+		if regex != nil {
+			return "/" + regex.source + "/" + regex.flags
+		}
+		return "/(?:)/"
 	}
 	return fmt.Sprintf("<unknown type %d>", v.typ)
 }
@@ -580,6 +587,12 @@ func (v Value) inspectWithContext(nested bool) string {
 		return "null"
 	case TypeUndefined:
 		return "undefined"
+	case TypeRegExp:
+		regex := v.AsRegExpObject()
+		if regex != nil {
+			return "/" + regex.source + "/" + regex.flags
+		}
+		return "/(?:)/"
 	default:
 		return fmt.Sprintf("<unknown %d>", v.typ)
 	}
@@ -606,8 +619,8 @@ func (v Value) IsFalsey() bool {
 		return v.AsBigInt().Cmp(bigZero) == 0
 	case TypeString:
 		return v.AsString() == ""
-	case TypeSymbol, TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction:
-		// All object types (including symbols) are truthy
+	case TypeSymbol, TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp:
+		// All object types (including symbols and regex) are truthy
 		return false
 	default:
 		return true // Unknown types assumed truthy? Or panic? Let's assume truthy.
@@ -663,8 +676,8 @@ func (v Value) Is(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction:
-		// Objects (including arrays, functions, etc.) are equal only by reference
+	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp:
+		// Objects (including arrays, functions, regex, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
 		panic(fmt.Sprintf("Unhandled type in Is comparison: %v", v.typ)) // Should not happen
@@ -702,8 +715,8 @@ func (v Value) StrictlyEquals(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction:
-		// Objects (including arrays, functions, etc.) are equal only by reference
+	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp:
+		// Objects (including arrays, functions, regex, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
 		panic(fmt.Sprintf("Unhandled type in StrictlyEquals comparison: %v", v.typ))

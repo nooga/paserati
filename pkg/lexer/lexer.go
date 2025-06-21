@@ -37,11 +37,12 @@ const (
 	EOF     TokenType = "EOF"     // End Of File
 
 	// Identifiers + Literals
-	IDENT     TokenType = "IDENT"     // functionName, variableName
-	NUMBER    TokenType = "NUMBER"    // 123, 45.67
-	STRING    TokenType = "STRING"    // "hello world"
-	NULL      TokenType = "NULL"      // Added
-	UNDEFINED TokenType = "UNDEFINED" // Added
+	IDENT         TokenType = "IDENT"         // functionName, variableName
+	NUMBER        TokenType = "NUMBER"        // 123, 45.67
+	STRING        TokenType = "STRING"        // "hello world"
+	REGEX_LITERAL TokenType = "REGEX_LITERAL" // /pattern/flags
+	NULL          TokenType = "NULL"          // Added
+	UNDEFINED     TokenType = "UNDEFINED"     // Added
 
 	// --- NEW: Template Literal Tokens ---
 	TEMPLATE_START         TokenType = "TEMPLATE_START"         // ` (opening backtick)
@@ -183,32 +184,32 @@ const (
 )
 
 var keywords = map[string]TokenType{
-	"function":  FUNCTION,
-	"let":       LET,
-	"var":       VAR, // Added
-	"const":     CONST,
-	"true":      TRUE,
-	"false":     FALSE,
-	"if":        IF,
-	"else":      ELSE,
-	"return":    RETURN,
-	"null":      NULL,
-	"undefined": UNDEFINED, // Added
-	"while":     WHILE,
-	"do":        DO, // Added for do...while
-	"for":       FOR,
-	"break":     BREAK,     // Added
-	"continue":  CONTINUE,  // Added
-	"type":      TYPE,      // Added
-	"switch":    SWITCH,    // Added
-	"case":      CASE,      // Added
-	"default":   DEFAULT,   // Added
-	"this":      THIS,      // Added for this keyword
-	"new":       NEW,       // Added for NEW keyword
-	"interface": INTERFACE, // Added for interface keyword
-	"extends":   EXTENDS,   // Added for extends keyword
-	"typeof":    TYPEOF,    // Added for typeof operator
-	"void":      VOID,      // Added for void operator
+	"function":   FUNCTION,
+	"let":        LET,
+	"var":        VAR, // Added
+	"const":      CONST,
+	"true":       TRUE,
+	"false":      FALSE,
+	"if":         IF,
+	"else":       ELSE,
+	"return":     RETURN,
+	"null":       NULL,
+	"undefined":  UNDEFINED, // Added
+	"while":      WHILE,
+	"do":         DO, // Added for do...while
+	"for":        FOR,
+	"break":      BREAK,      // Added
+	"continue":   CONTINUE,   // Added
+	"type":       TYPE,       // Added
+	"switch":     SWITCH,     // Added
+	"case":       CASE,       // Added
+	"default":    DEFAULT,    // Added
+	"this":       THIS,       // Added for this keyword
+	"new":        NEW,        // Added for NEW keyword
+	"interface":  INTERFACE,  // Added for interface keyword
+	"extends":    EXTENDS,    // Added for extends keyword
+	"typeof":     TYPEOF,     // Added for typeof operator
+	"void":       VOID,       // Added for void operator
 	"of":         OF,         // Added for for...of loops
 	"as":         AS,         // Added for type assertions
 	"in":         IN,         // Added for in operator
@@ -242,9 +243,12 @@ type Lexer struct {
 	inTemplate    bool // true when we're inside a template literal
 	braceDepth    int  // tracks nested braces inside ${...} interpolations
 	templateStart int  // position where current template started (for error reporting)
-	
+
 	// --- NEW: Token pushback for >> splitting in generics ---
 	pushedToken *Token // Single token pushback buffer
+
+	// --- NEW: Previous token tracking for regex context determination ---
+	prevToken TokenType // tracks the previous token type to determine if '/' starts a regex
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -282,10 +286,11 @@ func NewLexer(input string) *Lexer {
 
 func NewLexerWithSource(sourceFile *source.SourceFile) *Lexer {
 	l := &Lexer{
-		source: sourceFile,
-		input:  sourceFile.Content,
-		line:   1,
-		column: 1,
+		source:    sourceFile,
+		input:     sourceFile.Content,
+		line:      1,
+		column:    1,
+		prevToken: ILLEGAL, // Initialize to ILLEGAL to allow regex at start of input
 	} // Start at line 1, column 1
 	l.readChar() // Initialize l.ch, l.position, l.readPosition, and potentially update line/column if input starts with newline
 	return l
@@ -315,7 +320,7 @@ func (l *Lexer) SplitRightShiftToken(rsToken Token) Token {
 		StartPos: rsToken.StartPos,
 		EndPos:   rsToken.StartPos + 1,
 	}
-	
+
 	// Create the second > token and push it back
 	secondGT := Token{
 		Type:     GT,
@@ -325,10 +330,10 @@ func (l *Lexer) SplitRightShiftToken(rsToken Token) Token {
 		StartPos: rsToken.StartPos + 1,
 		EndPos:   rsToken.EndPos,
 	}
-	
+
 	l.pushedToken = &secondGT
 	debugPrintf("SplitRightShiftToken: split >> into > and pushed > back")
-	
+
 	return firstGT
 }
 
@@ -343,7 +348,7 @@ func (l *Lexer) SplitUnsignedRightShiftToken(ursToken Token) Token {
 		StartPos: ursToken.StartPos,
 		EndPos:   ursToken.StartPos + 1,
 	}
-	
+
 	// Create the remaining >> token and push it back
 	remainingRS := Token{
 		Type:     RIGHT_SHIFT,
@@ -353,10 +358,10 @@ func (l *Lexer) SplitUnsignedRightShiftToken(ursToken Token) Token {
 		StartPos: ursToken.StartPos + 1,
 		EndPos:   ursToken.EndPos,
 	}
-	
+
 	l.pushedToken = &remainingRS
 	debugPrintf("SplitUnsignedRightShiftToken: split >>> into > and pushed >> back")
-	
+
 	return firstGT
 }
 
@@ -404,6 +409,10 @@ func (l *Lexer) NextToken() Token {
 		tok := *l.pushedToken
 		l.pushedToken = nil
 		debugPrintf("NextToken: returning pushed token %s", tok.Type)
+
+		// Update previous token for regex context determination
+		l.prevToken = tok.Type
+
 		return tok
 	}
 
@@ -593,7 +602,23 @@ func (l *Lexer) NextToken() Token {
 			literal := l.input[startPos : l.position+1] // Read the actual '/='
 			l.readChar()                                // Advance past '='
 			tok = Token{Type: SLASH_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		} else if canBeRegexStart(l.prevToken) {
+			// DEBUG: Add debug output for regex context
+			debugPrintf("Attempting regex parse: prevToken=%s, position=%d", l.prevToken, l.position)
+			// Try to read as regex literal
+			pattern, flags, success := l.readRegexLiteral()
+			if success {
+				// Successfully read regex literal
+				literal := "/" + pattern + "/" + flags
+				tok = Token{Type: REGEX_LITERAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else {
+				// Failed to read as regex in a context where regex is expected
+				// This indicates a malformed regex, so return ILLEGAL
+				literal := "Invalid regex literal"
+				tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
 		} else {
+			// Context doesn't allow regex, treat as division operator
 			literal := string(l.ch) // Just '/'
 			l.readChar()            // Advance past '/'
 			tok = Token{Type: SLASH, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
@@ -866,6 +891,10 @@ func (l *Lexer) NextToken() Token {
 	}
 
 	debugPrintf("Token: %s, %s, %d, %d, %d, %d", tok.Type, tok.Literal, tok.Line, tok.Column, tok.StartPos, tok.EndPos)
+
+	// Update previous token for regex context determination
+	l.prevToken = tok.Type
+
 	return tok
 }
 
@@ -1086,6 +1115,116 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 	// or via returning false for errors. This point should not be reached.
 }
 
+// readRegexLiteral reads a regular expression literal /pattern/flags
+// Returns the pattern and flags separately, and a boolean indicating success.
+// Advances the lexer's position to *after* the closing slash and flags if successful.
+// If unsuccessful, the lexer position is restored to before the opening slash.
+func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool) {
+	var patternBuilder strings.Builder
+	var flagsBuilder strings.Builder
+
+	// Save the current position in case we need to backtrack
+	savedPosition := l.position
+	savedReadPosition := l.readPosition
+	savedCh := l.ch
+	savedLine := l.line
+	savedColumn := l.column
+
+	debugPrintf("readRegexLiteral: starting at position %d, ch='%c'", l.position, l.ch)
+
+	// Consume the opening slash
+	l.readChar()
+
+	// Read the pattern
+	for {
+		// Check for termination conditions
+		if l.ch == '/' {
+			// Found closing slash - now read flags
+			l.readChar() // Consume the closing slash
+
+			// Read flags (letters only)
+			for isLetter(l.ch) {
+				flagsBuilder.WriteByte(l.ch)
+				l.readChar()
+			}
+
+			// Validate flags - check for duplicates and invalid flags
+			flagsStr := flagsBuilder.String()
+			seenFlags := make(map[byte]bool)
+			for i := 0; i < len(flagsStr); i++ {
+				flag := flagsStr[i]
+				// Valid JavaScript regex flags: g, i, m, s, u, y
+				if flag != 'g' && flag != 'i' && flag != 'm' && flag != 's' && flag != 'u' && flag != 'y' {
+					debugPrintf("readRegexLiteral: invalid flag '%c' found, backtracking", flag)
+					// Backtrack on invalid flag
+					l.position = savedPosition
+					l.readPosition = savedReadPosition
+					l.ch = savedCh
+					l.line = savedLine
+					l.column = savedColumn
+					return "", "", false // Invalid flag
+				}
+				if seenFlags[flag] {
+					// Backtrack on duplicate flag
+					l.position = savedPosition
+					l.readPosition = savedReadPosition
+					l.ch = savedCh
+					l.line = savedLine
+					l.column = savedColumn
+					return "", "", false // Duplicate flag
+				}
+				seenFlags[flag] = true
+			}
+
+			return patternBuilder.String(), flagsStr, true
+		}
+
+		if l.ch == 0 { // EOF
+			// Backtrack on EOF
+			l.position = savedPosition
+			l.readPosition = savedReadPosition
+			l.ch = savedCh
+			l.line = savedLine
+			l.column = savedColumn
+			return "", "", false // Unterminated regex
+		}
+
+		if l.ch == '\n' || l.ch == '\r' {
+			// Backtrack on newline
+			l.position = savedPosition
+			l.readPosition = savedReadPosition
+			l.ch = savedCh
+			l.line = savedLine
+			l.column = savedColumn
+			return "", "", false // Unescaped newline in regex
+		}
+
+		if l.ch == '\\' { // Handle escape sequences
+			patternBuilder.WriteByte('\\')
+			l.readChar() // Consume the backslash
+
+			if l.ch == 0 { // EOF after backslash
+				// Backtrack on EOF after backslash
+				l.position = savedPosition
+				l.readPosition = savedReadPosition
+				l.ch = savedCh
+				l.line = savedLine
+				l.column = savedColumn
+				return "", "", false
+			}
+
+			// In regex, we preserve the escape sequence as-is
+			// The regex engine will interpret it
+			patternBuilder.WriteByte(l.ch)
+		} else {
+			// Regular character
+			patternBuilder.WriteByte(l.ch)
+		}
+
+		l.readChar()
+	}
+}
+
 // skipComment reads until the end of the line.
 func (l *Lexer) skipComment() {
 	for l.ch != '\n' && l.ch != 0 {
@@ -1126,6 +1265,38 @@ func (l *Lexer) skipMultilineComment() bool {
 // isLetter checks if the character is a letter or underscore.
 func isLetter(ch byte) bool {
 	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_'
+}
+
+// canBeRegexStart checks if the previous token allows a regex literal to start
+// In JavaScript, regex literals can appear after certain tokens but not others
+func canBeRegexStart(prevTokenType TokenType) bool {
+	switch prevTokenType {
+	// After operators
+	case ASSIGN, PLUS_ASSIGN, MINUS_ASSIGN, ASTERISK_ASSIGN, SLASH_ASSIGN,
+		REMAINDER_ASSIGN, EXPONENT_ASSIGN, LEFT_SHIFT_ASSIGN, RIGHT_SHIFT_ASSIGN,
+		UNSIGNED_RIGHT_SHIFT_ASSIGN, BITWISE_AND_ASSIGN, BITWISE_OR_ASSIGN,
+		BITWISE_XOR_ASSIGN, LOGICAL_AND_ASSIGN, LOGICAL_OR_ASSIGN, COALESCE_ASSIGN,
+		EQ, NOT_EQ, STRICT_EQ, STRICT_NOT_EQ, LT, GT, LE, GE,
+		PLUS, MINUS, ASTERISK, REMAINDER, EXPONENT,
+		BITWISE_AND, PIPE, BITWISE_XOR, BITWISE_NOT,
+		LEFT_SHIFT, RIGHT_SHIFT, UNSIGNED_RIGHT_SHIFT,
+		LOGICAL_AND, LOGICAL_OR, BANG, COALESCE, QUESTION:
+		return true
+	// After delimiters
+	case LPAREN, LBRACKET, LBRACE, COMMA, SEMICOLON, COLON:
+		return true
+	// After keywords
+	case RETURN, THROW, NEW, DELETE, TYPEOF, VOID, IF, ELSE, WHILE, DO, FOR:
+		return true
+	// After arrows
+	case ARROW:
+		return true
+	// Special case: beginning of input
+	case ILLEGAL:
+		return true
+	default:
+		return false
+	}
 }
 
 // isDigit checks if the character is a digit.

@@ -1037,6 +1037,11 @@ func (c *Checker) visit(node parser.Node) {
 		literalType := &types.LiteralType{Value: vm.String(node.Value)}
 		node.SetComputedType(literalType) // <<< USE NODE METHOD
 
+	case *parser.RegexLiteral:
+		// For now, treat regex literals as the general RegExp type
+		// Later we can add more specific typing based on patterns/flags
+		node.SetComputedType(types.RegExp)
+
 	case *parser.BooleanLiteral:
 		literalType := &types.LiteralType{Value: vm.BooleanValue(node.Value)}
 		// Treat boolean literals as literal types during checking

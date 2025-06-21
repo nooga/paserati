@@ -88,6 +88,7 @@ type VM struct {
 	StringPrototype   Value
 	NumberPrototype   Value
 	BooleanPrototype  Value
+	RegExpPrototype   Value
 	ErrorPrototype    Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion

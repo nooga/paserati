@@ -54,6 +54,7 @@ const (
 	PriorityString   = 10  // String primitives
 	PriorityNumber   = 11  // Number primitives
 	PriorityBoolean  = 12  // Boolean primitives
+	PriorityRegExp   = 13  // RegExp constructor
 	PriorityMath     = 100 // Math object
 	PriorityJSON     = 101 // JSON object
 	PriorityConsole  = 102 // Console object

@@ -31,6 +31,7 @@ var (
 	Unknown   = &Primitive{Name: "unknown"}
 	Never     = &Primitive{Name: "never"}
 	Void      = &Primitive{Name: "void"}
+	RegExp    = &Primitive{Name: "RegExp"}
 )
 
 // TypeofResultType represents the union of all possible string literals that the typeof operator can return

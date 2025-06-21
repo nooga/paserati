@@ -432,6 +432,18 @@ func (ul *UndefinedLiteral) expressionNode()      {}
 func (ul *UndefinedLiteral) TokenLiteral() string { return ul.Token.Literal }
 func (ul *UndefinedLiteral) String() string       { return ul.Token.Literal }
 
+// RegexLiteral represents a regular expression literal /pattern/flags.
+type RegexLiteral struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.REGEX_LITERAL token
+	Pattern        string      // The pattern part (without slashes)
+	Flags          string      // The flags part
+}
+
+func (rl *RegexLiteral) expressionNode()      {}
+func (rl *RegexLiteral) TokenLiteral() string { return rl.Token.Literal }
+func (rl *RegexLiteral) String() string       { return rl.Token.Literal }
+
 // ThisExpression represents the `this` keyword.
 type ThisExpression struct {
 	BaseExpression             // Embed base for ComputedType

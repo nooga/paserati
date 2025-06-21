@@ -387,6 +387,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				// resultType remains types.Never
 			}
 		}
+	} else if widenedObjectType == types.RegExp {
+		// Check prototype registry for RegExp methods and properties
+		if methodType := c.env.GetPrimitivePrototypeMethodType("RegExp", propertyName); methodType != nil {
+			resultType = methodType
+		} else {
+			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'RegExp'", propertyName))
+			// resultType remains types.Never
+		}
 	} else {
 		// Use a type switch for struct-based types
 		switch obj := widenedObjectType.(type) {

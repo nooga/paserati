@@ -185,6 +185,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
 	p.registerPrefix(lexer.NUMBER, p.parseNumberLiteral)
 	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
+	p.registerPrefix(lexer.REGEX_LITERAL, p.parseRegexLiteral)     // NEW: Regex literals
 	p.registerPrefix(lexer.TEMPLATE_START, p.parseTemplateLiteral) // NEW: Template literals
 	p.registerPrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
@@ -1328,6 +1329,41 @@ func (p *Parser) parseNullLiteral() Expression {
 
 func (p *Parser) parseUndefinedLiteral() Expression {
 	return &UndefinedLiteral{Token: p.curToken}
+}
+
+func (p *Parser) parseRegexLiteral() Expression {
+	// Parse pattern and flags from the token literal /pattern/flags
+	literal := p.curToken.Literal
+	
+	// Extract pattern and flags from the literal
+	// The literal format is "/pattern/flags"
+	if len(literal) < 2 || literal[0] != '/' {
+		p.addError(p.curToken, fmt.Sprintf("Invalid regex literal format: %s", literal))
+		return nil
+	}
+	
+	// Find the closing slash
+	lastSlash := -1
+	for i := len(literal) - 1; i >= 1; i-- {
+		if literal[i] == '/' {
+			lastSlash = i
+			break
+		}
+	}
+	
+	if lastSlash == -1 || lastSlash == 1 {
+		p.addError(p.curToken, fmt.Sprintf("Invalid regex literal format: %s", literal))
+		return nil
+	}
+	
+	pattern := literal[1:lastSlash]     // Extract pattern between slashes
+	flags := literal[lastSlash+1:]      // Extract flags after last slash
+	
+	return &RegexLiteral{
+		Token:   p.curToken,
+		Pattern: pattern,
+		Flags:   flags,
+	}
 }
 
 func (p *Parser) parseThisExpression() Expression {
