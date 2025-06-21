@@ -29,9 +29,9 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false      // <<< CHANGED back to false after fixing register leakage
+const debugCompiler = false      // Enable for debugging register allocation issue
 const debugCompilerStats = false // <<< CHANGED back to false
-const debugCompiledCode = false
+const debugCompiledCode = true
 const debugPrint = false // Enable debug output
 
 func debugPrintf(format string, args ...interface{}) {
@@ -68,6 +68,9 @@ type Compiler struct {
 	// --- NEW: Constant Register Cache for Performance ---
 	// Maps constant index to register that currently holds it
 	constantCache map[uint16]Register
+	
+	// --- Phase 4a: Finally Context Tracking ---
+	inFinallyBlock bool // Track if we're compiling inside finally block
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -237,6 +240,15 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		if c.regAlloc.nextReg > 20 { // Only warn if we have a lot of registers allocated
 			fmt.Printf("// [REGALLOC WARNING] High register usage detected - potential leakage!\n")
 		}
+	}
+	// <<< END ADDED >>>
+
+	// <<< ADDED: Debug dump bytecode for functions >>>
+	if debugCompiler && c.compilingFuncName != "<script>" && c.compilingFuncName != "" {
+		// This is a function, dump its bytecode
+		fmt.Printf("\n=== Function Bytecode: %s ===\n", c.compilingFuncName)
+		fmt.Print(c.chunk.DisassembleChunk(c.compilingFuncName))
+		fmt.Printf("=== END %s ===\n\n", c.compilingFuncName)
 	}
 	// <<< END ADDED >>>
 

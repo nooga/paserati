@@ -295,10 +295,10 @@ func (vm *VM) run() (InterpretResult, Value) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "\n[VM PANIC RECOVERED]: %v\n", r)
-			vm.printFrameStack()
-			vm.printDisassemblyAroundIP()
+			// vm.printFrameStack()
+			// vm.printDisassemblyAroundIP()
 			// Re-panic to maintain original behavior
-			panic(r)
+			// panic(r)
 		}
 	}()
 
@@ -350,6 +350,12 @@ startExecution:
 		opcode := OpCode(code[ip]) // Use local OpCode
 		//fmt.Printf("%s | ip: %d | %s\n", frame.closure.Fn.Name, ip, opcode.String())
 		ip++ // Advance IP past the opcode itself
+		
+		// Debug output for instruction execution
+		// if vm.finallyDepth > 0 || vm.currentException != Null {
+		//     fmt.Printf("[DEBUG] Executing opcode %d (%s) at IP %d, finallyDepth=%d, exception=%s\n", 
+		//         int(opcode), opcode.String(), ip-1, vm.finallyDepth, vm.currentException.ToString())
+		// }
 
 		switch opcode {
 		case OpLoadConst:
@@ -707,6 +713,33 @@ startExecution:
 			result := registers[srcReg]
 			frame.ip = ip // Save final IP of this frame
 
+			// Check if there are finally handlers that should execute
+			handlers := vm.findAllExceptionHandlers(frame.ip)
+			hasFinallyHandler := false
+			for _, handler := range handlers {
+				if handler.IsFinally {
+					hasFinallyHandler = true
+					break
+				}
+			}
+
+			if hasFinallyHandler {
+				// Set pending return action and let finally blocks execute
+				vm.pendingAction = ActionReturn
+				vm.pendingValue = result
+				
+				// Find the finally handler and jump to it
+				for _, handler := range handlers {
+					if handler.IsFinally {
+						ip = handler.HandlerPC
+						break
+					}
+				}
+				// Continue executing from the finally handler
+				continue
+			}
+
+			// No finally handler, proceed with normal return
 			// Close upvalues for the returning frame
 			vm.closeUpvalues(frame.registers)
 
@@ -722,6 +755,12 @@ startExecution:
 
 			if vm.frameCount == 0 {
 				// Returned from the top-level script frame.
+				// Check if there's a pending exception that should be propagated
+				if vm.pendingAction == ActionThrow {
+					// Propagate the uncaught exception
+					vm.currentException = vm.pendingValue
+					return InterpretRuntimeError, vm.pendingValue
+				}
 				// Return the result directly.
 				return InterpretOK, result
 			}
@@ -744,6 +783,10 @@ startExecution:
 			}
 
 			// Get the caller frame (which is now the top frame)
+			if vm.frameCount == 0 {
+				// No caller frame, return to top level
+				return InterpretOK, result
+			}
 			callerFrame := &vm.frames[vm.frameCount-1]
 
 			// Handle constructor return semantics
@@ -782,6 +825,25 @@ startExecution:
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
 
+			// Check if there are finally handlers that should execute
+			handlers := vm.findAllExceptionHandlers(frame.ip)
+			hasFinallyHandler := false
+			for _, handler := range handlers {
+				if handler.IsFinally {
+					hasFinallyHandler = true
+					break
+				}
+			}
+
+			if hasFinallyHandler {
+				// Set pending return action and let finally blocks execute
+				vm.pendingAction = ActionReturn
+				vm.pendingValue = Undefined
+				// Don't return immediately - let the finally handler execute
+				continue
+			}
+
+			// No finally handler, proceed with normal return
 			// Close upvalues for the returning frame
 			vm.closeUpvalues(frame.registers)
 
@@ -1963,6 +2025,210 @@ startExecution:
 				continue
 			}
 
+		case OpReturnFinally:
+			srcReg := code[ip]
+			ip++
+			result := registers[srcReg]
+			frame.ip = ip // Save final IP of this frame
+			
+			// Returns from finally blocks clear any pending exceptions
+			// because the return takes precedence over the exception
+			// fmt.Printf("[DEBUG] OpReturnFinally: Clearing exception, unwinding, and pending actions\n")
+			vm.currentException = Null
+			vm.unwinding = false
+			// Also clear any pending throw action - the return takes precedence
+			if vm.pendingAction == ActionThrow {
+				// fmt.Printf("[DEBUG] OpReturnFinally: Clearing pending throw action\n")
+				vm.pendingAction = ActionNone
+				vm.pendingValue = Undefined
+			}
+
+			// Check if we have more finally handlers that could override this return
+			handlers := vm.findAllExceptionHandlers(frame.ip)
+			hasFinallyHandler := false
+			for _, handler := range handlers {
+				if handler.IsFinally {
+					hasFinallyHandler = true
+					break
+				}
+			}
+
+			if hasFinallyHandler {
+				// There are more finally blocks - set as pending action to be overridden
+				vm.pendingAction = ActionReturn
+				vm.pendingValue = result
+				continue // Don't return yet, let finally handlers run
+			} else {
+				// No more finally handlers - this return takes effect immediately  
+				vm.pendingAction = ActionNone
+				vm.pendingValue = Undefined
+				vm.finallyDepth = 0
+			}
+
+			// Close upvalues for the returning frame
+			vm.closeUpvalues(frame.registers)
+
+			// Pop the current frame (same logic as OpReturn)
+			returningFrameRegSize := function.RegisterSize
+			callerTargetRegister := frame.targetRegister
+			isConstructor := frame.isConstructorCall
+			constructorThisValue := frame.thisValue
+
+			vm.frameCount--
+			vm.nextRegSlot -= returningFrameRegSize // Reclaim register space
+
+			if vm.frameCount == 0 {
+				// Returned from the top-level script frame.
+				return InterpretOK, result
+			}
+
+			// Check if this was a direct call frame and should return early
+			if frame.isDirectCall {
+				// Handle constructor return semantics for direct call
+				var finalResult Value
+				if isConstructor {
+					if result.IsObject() {
+						finalResult = result // Return the explicit object
+					} else {
+						finalResult = constructorThisValue // Return the instance
+					}
+				} else {
+					finalResult = result
+				}
+				// Return the result immediately instead of continuing execution
+				return InterpretOK, finalResult
+			}
+
+			// Get the caller frame (which is now the top frame)
+			if vm.frameCount == 0 {
+				// No caller frame, return to top level
+				return InterpretOK, result
+			}
+			callerFrame := &vm.frames[vm.frameCount-1]
+
+			// Handle constructor return semantics
+			var finalResult Value
+			if isConstructor {
+				// Constructor call: only return the explicit value if it's an object,
+				// otherwise return the instance (this)
+				if result.IsObject() {
+					finalResult = result // Return the explicit object
+				} else {
+					finalResult = constructorThisValue // Return the instance
+				}
+			} else {
+				// Regular function call: return the explicit value
+				finalResult = result
+			}
+
+			// Place the final result into the caller's target register
+			if int(callerTargetRegister) < len(callerFrame.registers) {
+				callerFrame.registers[callerTargetRegister] = finalResult
+			} else {
+				// This would be an internal error (compiler/vm mismatch)
+				status := vm.runtimeError("Internal Error: Invalid target register %d for finally return value.", callerTargetRegister)
+				return status, Undefined
+			}
+
+			// Restore cached variables for the caller frame
+			frame = callerFrame // Update local frame pointer
+			closure = frame.closure
+			function = closure.Fn
+			code = function.Chunk.Code
+			constants = function.Chunk.Constants
+			registers = frame.registers
+			ip = frame.ip // Restore caller's IP
+
+		// --- Phase 4a: Handle Pending Actions ---
+		case OpHandlePending:
+			// This instruction is emitted at the end of finally blocks
+			// to execute any pending actions (return or throw)
+			frame.ip = ip // Save current position
+			
+			// fmt.Printf("[DEBUG] OpHandlePending: pendingAction=%d, pendingValue=%s\n", vm.pendingAction, vm.pendingValue.ToString())
+			
+			if vm.pendingAction == ActionReturn {
+				// Execute the pending return
+				result := vm.pendingValue
+				vm.pendingAction = ActionNone
+				vm.pendingValue = Undefined
+				
+				// Close upvalues for the returning frame
+				vm.closeUpvalues(frame.registers)
+				
+				// Pop the current frame
+				returningFrameRegSize := function.RegisterSize
+				callerTargetRegister := frame.targetRegister
+				isConstructor := frame.isConstructorCall
+				constructorThisValue := frame.thisValue
+				
+				vm.frameCount--
+				vm.nextRegSlot -= returningFrameRegSize
+				
+				if vm.frameCount == 0 {
+					// Returned from the top-level script frame
+					return InterpretOK, result
+				}
+				
+				// Handle the return value in the caller frame
+				if frame.isDirectCall {
+					var finalResult Value
+					if isConstructor {
+						if result.IsObject() {
+							finalResult = result
+						} else {
+							finalResult = constructorThisValue
+						}
+					} else {
+						finalResult = result
+					}
+					return InterpretOK, finalResult
+				}
+				
+				// Get the caller frame
+				callerFrame := &vm.frames[vm.frameCount-1]
+				
+				// Handle constructor return semantics
+				var finalResult Value
+				if isConstructor {
+					if result.IsObject() {
+						finalResult = result
+					} else {
+						finalResult = constructorThisValue
+					}
+				} else {
+					finalResult = result
+				}
+				
+				// Place the result in the caller's target register
+				if int(callerTargetRegister) < len(callerFrame.registers) {
+					callerFrame.registers[callerTargetRegister] = finalResult
+				} else {
+					status := vm.runtimeError("Internal Error: Invalid target register %d for pending return.", callerTargetRegister)
+					return status, Undefined
+				}
+				
+				// Restore cached variables for the caller frame
+				frame = callerFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				
+			} else if vm.pendingAction == ActionThrow {
+				// Execute the pending throw
+				vm.currentException = vm.pendingValue
+				vm.pendingAction = ActionNone
+				vm.pendingValue = Undefined
+				vm.unwinding = true
+				// fmt.Printf("[DEBUG] OpHandlePending: Re-throwing pending exception %s\n", vm.currentException.ToString())
+				// Let the exception handling logic take over
+			}
+			// If no pending action, just continue
+		// --- END Phase 4a ---
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
@@ -1971,41 +2237,56 @@ startExecution:
 
 		// Check for exception unwinding after each instruction
 		if vm.unwinding {
-			// Exception is being unwound - check if we have terminated
-			if vm.frameCount == 0 {
-				// All frames unwound, uncaught exception
+			// Continue the unwinding process by calling unwindException
+			unwindResult := vm.unwindException()
+			if !unwindResult {
+				// No handler found, uncaught exception
+				vm.handleUncaughtException()
 				return InterpretRuntimeError, vm.currentException
 			}
-			// Continue unwinding by breaking out of current frame's execution
-			break
+			// Handler was found, continue execution with updated frame
+			frame = &vm.frames[vm.frameCount-1]
+			closure = frame.closure
+			function = closure.Fn
+			code = function.Chunk.Code
+			constants = function.Chunk.Constants
+			registers = frame.registers
+			ip = frame.ip
+			continue
 		}
 		
 		// Check if we've exited finally blocks and handle pending actions
-		if vm.finallyDepth > 0 {
-			// Check if we're still within any finally handler range
-			frame := &vm.frames[vm.frameCount-1]
-			inFinallyRange := false
-			for _, handler := range vm.findAllExceptionHandlers(frame.ip) {
-				if handler.IsFinally {
-					inFinallyRange = true
-					break
-				}
-			}
-			
-			// If we've exited the finally range, decrement depth
-			if !inFinallyRange {
-				vm.finallyDepth--
-			}
-		}
+		// NOTE: Disabled the automatic finallyDepth decrement based on IP position
+		// because it was causing premature pending action execution. The finallyDepth
+		// should only be decremented by explicit finally completion (OpReturnFinally)
+		// or when explicitly exiting finally blocks.
+		// if vm.finallyDepth > 0 {
+		//     // Check if we're still within any finally handler range
+		//     frame := &vm.frames[vm.frameCount-1]
+		//     inFinallyRange := false
+		//     for _, handler := range vm.findAllExceptionHandlers(frame.ip) {
+		//         if handler.IsFinally {
+		//             inFinallyRange = true
+		//             break
+		//         }
+		//     }
+		//     
+		//     // If we've exited the finally range, decrement depth
+		//     if !inFinallyRange {
+		//         vm.finallyDepth--
+		//     }
+		// }
 		
 		// Check for pending actions after finally blocks complete
 		if vm.finallyDepth == 0 && vm.pendingAction != ActionNone {
+			// fmt.Printf("[DEBUG] Finally depth is 0, executing pending action %d\n", vm.pendingAction)
 			switch vm.pendingAction {
 			case ActionThrow:
 				// Resume throwing the saved exception
 				vm.pendingAction = ActionNone
 				savedValue := vm.pendingValue
 				vm.pendingValue = Undefined
+				// fmt.Printf("[DEBUG] Re-throwing saved exception: %s\n", savedValue.ToString())
 				vm.throwException(savedValue)
 				continue // Let exception unwinding take over
 			case ActionReturn:

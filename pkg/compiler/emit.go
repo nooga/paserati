@@ -56,6 +56,17 @@ func (c *Compiler) emitReturn(src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+// emitReturnFinally emits OpReturnFinally for returns in finally blocks
+func (c *Compiler) emitReturnFinally(src Register, line int) {
+	c.emitOpCode(vm.OpReturnFinally, line)
+	c.emitByte(byte(src))
+}
+
+// emitHandlePendingAction emits OpHandlePending to handle pending actions after finally
+func (c *Compiler) emitHandlePendingAction(line int) {
+	c.emitOpCode(vm.OpHandlePending, line)
+}
+
 func (c *Compiler) emitNegate(dest, src Register, line int) {
 	c.emitOpCode(vm.OpNegate, line)
 	c.emitByte(byte(dest))

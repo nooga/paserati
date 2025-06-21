@@ -134,6 +134,14 @@ const (
 	// --- Exception Handling ---
 	OpThrow OpCode = 65 // Rx: Throw exception in register Rx
 	// --- END Exception Handling ---
+	
+	// --- Phase 4a: Return in Finally ---
+	OpReturnFinally OpCode = 66 // Rx: Return value from register Rx (finally context)
+	// --- END Phase 4a ---
+	
+	// --- Phase 4a: Handle Pending Actions ---
+	OpHandlePending OpCode = 67 // Handle pending actions after finally block
+	// --- END Phase 4a ---
 )
 
 // String returns a human-readable name for the OpCode.
@@ -281,6 +289,16 @@ func (op OpCode) String() string {
 	case OpThrow:
 		return "OpThrow"
 	// --- END Exception Handling ---
+	
+	// --- Phase 4a: Return in Finally ---
+	case OpReturnFinally:
+		return "OpReturnFinally"
+	// --- END Phase 4a ---
+	
+	// --- Phase 4a: Handle Pending Actions ---
+	case OpHandlePending:
+		return "OpHandlePending"
+	// --- END Phase 4a ---
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -480,6 +498,16 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpThrow:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	// --- END Exception Handling ---
+	
+	// --- Phase 4a: Return in Finally Disassembly ---
+	case OpReturnFinally:
+		return c.registerInstruction(builder, instruction.String(), offset) // Rx
+	// --- END Phase 4a ---
+	
+	// --- Phase 4a: Handle Pending Actions Disassembly ---
+	case OpHandlePending:
+		return c.simpleInstruction(builder, instruction.String(), offset) // No operands
+	// --- END Phase 4a ---
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))

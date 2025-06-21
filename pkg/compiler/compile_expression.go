@@ -28,19 +28,27 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 		}
 	}()
 
-	// 1. Compile the constructor expression
-	constructorReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, constructorReg)
+	// 1. For OpNew, we need constructor + arguments in contiguous registers
+	// Allocate a contiguous block: [constructor, arg1, arg2, ...]
+	argCount := len(node.Arguments)
+	totalRegs := 1 + argCount // constructor + arguments
+	
+	constructorReg := c.regAlloc.AllocContiguous(totalRegs)
+	// Add all registers to tempRegs for cleanup
+	for i := 0; i < totalRegs; i++ {
+		tempRegs = append(tempRegs, constructorReg+Register(i))
+	}
+	
+	// Compile constructor into first register
 	_, err := c.compileNode(node.Constructor, constructorReg)
 	if err != nil {
 		return BadRegister, err
 	}
-
-	// 2. Compile arguments directly into their target positions (constructorReg+1, constructorReg+2, ...)
-	argCount := len(node.Arguments)
+	
+	// Compile arguments into subsequent registers
 	for i, arg := range node.Arguments {
-		targetReg := constructorReg + 1 + Register(i)
-		_, err := c.compileNode(arg, targetReg)
+		argReg := constructorReg + 1 + Register(i)
+		_, err := c.compileNode(arg, argReg)
 		if err != nil {
 			return BadRegister, err
 		}

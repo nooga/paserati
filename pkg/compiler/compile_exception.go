@@ -84,9 +84,24 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 			c.patchJump(catchAfterJump)
 		}
 		
-		if _, err := c.compileNode(node.FinallyBlock, bodyReg); err != nil {
+		// Set finally block context before compilation
+		prevInFinally := c.inFinallyBlock
+		c.inFinallyBlock = true
+		
+		// Allocate a fresh register for finally block compilation
+		finallyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(finallyReg)
+		
+		_, err := c.compileNode(node.FinallyBlock, finallyReg)
+		c.inFinallyBlock = prevInFinally // Restore previous context
+		
+		if err != nil {
 			return BadRegister, err
 		}
+		
+		// ALWAYS emit instruction to handle pending actions after finally block
+		// This ensures that even empty finally blocks properly handle pending returns/throws
+		c.emitHandlePendingAction(node.Token.Line)
 		
 		// The finally handler should cover the try/catch blocks but NOT the finally block itself
 		// This ensures that exceptions in try/catch trigger finally, but exceptions in finally

@@ -121,6 +121,14 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	regSize := funcCompiler.regAlloc.MaxRegs()
 	functionChunk := funcCompiler.chunk
 
+	// <<< ADDED: Debug dump function bytecode >>>
+	if debugCompiler {
+		fmt.Printf("\n=== Function Bytecode: %s ===\n", funcCompiler.compilingFuncName)
+		fmt.Print(functionChunk.DisassembleChunk(funcCompiler.compilingFuncName))
+		fmt.Printf("=== END %s ===\n\n", funcCompiler.compilingFuncName)
+	}
+	// <<< END ADDED >>>
+
 	// 6. Create the function object directly using vm.NewFunction
 	// Count parameters excluding 'this' parameters for arity calculation
 	arity := 0
@@ -509,6 +517,15 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	// 6. Finalize function chunk (add implicit return to the function's chunk)
 	functionCompiler.emitFinalReturn(node.Body.Token.Line) // Use body's end token? Or func literal token?
 	functionChunk := functionCompiler.chunk
+
+	// <<< ADDED: Debug dump function bytecode >>>
+	if debugCompiler {
+		fmt.Printf("\n=== Function Bytecode: %s ===\n", determinedFuncName)
+		fmt.Print(functionChunk.DisassembleChunk(determinedFuncName))
+		fmt.Printf("=== END %s ===\n\n", determinedFuncName)
+	}
+	// <<< END ADDED >>>
+
 	// <<< Get freeSymbols from the functionCompiler instance >>>
 	freeSymbols := functionCompiler.freeSymbols
 	// Collect any additional errors from the sub-compilation
