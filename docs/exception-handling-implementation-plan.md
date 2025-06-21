@@ -5,11 +5,11 @@ This document outlines the phased implementation of try/catch/finally/throw exce
 ## 🎯 Current Status
 
 - ✅ **Phase 1**: Basic try/catch/throw - **COMPLETED**
-- 🚧 **Phase 2**: Error objects and stack traces - **PLANNED**  
+- ✅ **Phase 2**: Error objects and stack traces - **COMPLETED**  
 - 🚧 **Phase 3**: Finally blocks - **PLANNED**
 - 🚧 **Phase 4**: Advanced features - **PLANNED**
 
-**Latest Update**: Phase 1 fully implemented with working try/catch blocks, exception unwinding, and uncaught exception handling.
+**Latest Update**: Phase 2 completed! Error constructor and prototype chain fully implemented with proper property handling and toString method.
 
 ## Overview
 
@@ -173,35 +173,71 @@ throw 'uncaught error'; // terminates with proper error message
 try { throw 'error'; } catch { console.log('no parameter'); }
 ```
 
-### Phase 2: Error Object Support 🚧 **PLANNED**
+### Phase 2: Error Object Support ✅ **COMPLETED**
 
 **Goal**: Add proper Error constructor and stack traces.
 
-**Status**: 🚧 Not yet implemented. Ready for development after Phase 1 completion.
+**Status**: ✅ Fully implemented with Error constructor and prototype chain.
 
-#### 2.1 Error Constructor
+#### 2.1 Error Constructor ✅
 ```go
-// builtins/error_init.go
-func InitError() BuiltinInitializer {
-    return &errorInitializer{}
-}
+// pkg/builtins/error_init.go - ErrorInitializer implementation
+type ErrorInitializer struct{}
 
-// Implement Error constructor with:
-// - message property
-// - name property (default "Error")
-// - Basic toString() method
+func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
+    // Create Error.prototype with name, message, toString properties
+    // Create Error constructor function
+    // Set up proper prototype chain
+}
 ```
 
-#### 2.2 Stack Trace Support
-- Capture call stack when Error is constructed
-- Add stack property to Error instances
-- Format stack traces similar to Node.js/V8
+**✅ Implemented Features:**
+- Error constructor: `new Error(message)`
+- Error.prototype with proper properties:
+  - `name`: defaults to "Error" 
+  - `message`: defaults to empty string
+  - `toString()`: returns "name: message" format
+- Property modification support
+- Prototype chain inheritance from Object.prototype
+- Constructor property linkage
+- Type coercion for non-string messages
+
+**✅ Working Examples:**
+```javascript
+// Basic Error creation
+let err1 = new Error();              // name: "Error", message: ""
+let err2 = new Error("Test error");  // name: "Error", message: "Test error"
+
+// Property access and modification
+console.log(err2.name);              // "Error"
+console.log(err2.message);           // "Test error"
+err2.name = "CustomError";
+err2.message = "Modified";
+
+// toString method
+console.log(err1.toString());        // "Error"
+console.log(err2.toString());        // "CustomError: Modified"
+
+// Type coercion
+let err3 = new Error(42);            // message: "42"
+let err4 = new Error(undefined);     // message: ""
+```
+
+**Files Added/Modified:**
+- `pkg/builtins/error_init.go` - Error constructor implementation
+- `pkg/builtins/standard.go` - Added ErrorInitializer to standard builtins
+- `tests/scripts/error_*.ts` - Comprehensive test suite
+
+#### 2.2 Stack Trace Support 🚧 **FUTURE**
+- Stack trace capture is planned for a future enhancement
+- Current implementation provides functional Error objects without stack traces
+- Add stack property to Error instances (deferred to Phase 4)
 
 ### Phase 3: Finally Blocks 🚧 **PLANNED**
 
 **Goal**: Add finally block support with proper control flow handling.
 
-**Status**: 🚧 Not yet implemented. Depends on Phase 1 completion (✅ ready).
+**Status**: 🚧 Not yet implemented. Ready for development after Phase 2 completion (✅ ready).
 
 #### 3.1 Parser Updates
 - Enable parsing of finally blocks
@@ -288,16 +324,23 @@ try {
 }
 ```
 
-### Phase 2 Tests
+### Phase 2 Tests ✅
 ```javascript
-// Error object
+// Error object - IMPLEMENTED
 const err = new Error("test error");
-console.log(err.message);
-console.log(err.name);
-console.log(err.stack);
+console.log(err.message);    // "test error"
+console.log(err.name);       // "Error"
+console.log(err.toString()); // "Error: test error"
 
-// Custom error properties
+// Custom error properties - IMPLEMENTED
 err.code = "TEST001";
+err.name = "CustomError";
+console.log(err.toString()); // "CustomError: test error"
+
+// Type coercion - IMPLEMENTED
+new Error(42).message;       // "42"
+new Error(null).message;     // "null"
+new Error().message;         // ""
 ```
 
 ### Phase 3 Tests
@@ -330,8 +373,8 @@ function testReturn() {
 
 ## Migration Path
 
-1. **Phase 1**: Can be merged immediately - adds new syntax without affecting existing code
-2. **Phase 2**: Pure addition of Error constructor - no breaking changes
+1. **Phase 1**: ✅ Merged - adds new syntax without affecting existing code
+2. **Phase 2**: ✅ Merged - pure addition of Error constructor with no breaking changes
 3. **Phase 3**: Finally blocks are optional - existing try/catch continues to work
 4. **Phase 4**: All enhancements are backward compatible
 
@@ -369,10 +412,12 @@ function testReturn() {
 
 This phased approach allows us to build exception handling incrementally:
 1. ✅ **Phase 1 Complete**: Basic try/catch provides immediate value with full exception unwinding
-2. 🚧 **Phase 2 Next**: Add proper Error objects for better debugging
-3. 🚧 **Phase 3 Future**: Implement finally for complete control flow
-4. 🚧 **Phase 4 Future**: Polish with advanced features
+2. ✅ **Phase 2 Complete**: Added proper Error objects with constructor and prototype support
+3. 🚧 **Phase 3 Next**: Implement finally for complete control flow
+4. 🚧 **Phase 4 Future**: Polish with advanced features (stack traces, custom error types)
 
-**Phase 1 Success**: The implemented exception handling works seamlessly with Paserati's register-based VM, providing TypeScript-compliant exception semantics with zero performance overhead for normal execution. The exception table approach proves effective and the clean architecture enables easy extension for future phases.
+**Phase 1 & 2 Success**: The implemented exception handling works seamlessly with Paserati's register-based VM, providing TypeScript-compliant exception semantics with zero performance overhead for normal execution. The Error constructor integrates perfectly with the existing builtin system, and the exception table approach proves effective for clean architecture and easy extension.
+
+**Current Status**: Paserati now has fully functional try/catch/throw exception handling with proper Error objects. Users can create Error instances, access and modify properties, and get proper string representations. The foundation is solid for implementing finally blocks and advanced features.
 
 Each phase is independently useful and won't break existing code, allowing for safe incremental development and testing.
