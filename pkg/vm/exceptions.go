@@ -69,7 +69,7 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 		frame.registers[handler.CatchReg] = vm.currentException
 	}
 	
-	// Jump to catch handler
+	// Jump to catch handler  
 	frame.ip = handler.HandlerPC
 	
 	// Clear exception state

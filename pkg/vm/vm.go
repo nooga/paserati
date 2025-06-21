@@ -321,6 +321,12 @@ startExecution:
 			}
 		}
 
+		if ip >= len(code) {
+			frame.ip = ip
+			status := vm.runtimeError("IP %d beyond code length %d", ip, len(code))
+			return status, Undefined
+		}
+		
 		opcode := OpCode(code[ip]) // Use local OpCode
 		//fmt.Printf("%s | ip: %d | %s\n", frame.closure.Fn.Name, ip, opcode.String())
 		ip++ // Advance IP past the opcode itself
@@ -1925,7 +1931,14 @@ startExecution:
 				}
 				continue // Let the unwinding process take control
 			} else {
-				// Exception was handled, synchronize IP and continue execution
+				// Exception was handled, synchronize all cached variables and continue execution
+				// The exception handler may have changed the frame, so resynchronize everything
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
 				ip = frame.ip
 				continue
 			}
@@ -1948,24 +1961,29 @@ startExecution:
 		}
 	}
 
-	// If we reach here, check if we broke out due to unwinding
-	if vm.unwinding {
-		if vm.frameCount == 0 {
+	// If we reach here, we broke out of the execution loop
+	// This could be due to either:
+	// 1. Ongoing unwinding (vm.unwinding == true) - continue unwinding in parent frame
+	// 2. Completed exception handling (vm.unwinding == false) - resume execution at handler
+	
+	if vm.frameCount == 0 {
+		// No frames left - either uncaught exception or completed execution
+		if vm.unwinding {
 			return InterpretRuntimeError, vm.currentException
+		} else {
+			return InterpretOK, Undefined
 		}
-		// If there are still frames, we need to continue unwinding in the parent frame
-		// Update cached variables for the current (parent) frame
-		frame = &vm.frames[vm.frameCount-1]
-		closure = frame.closure
-		function = closure.Fn
-		code = function.Chunk.Code
-		constants = function.Chunk.Constants
-		registers = frame.registers
-		ip = frame.ip
-		goto startExecution // Continue the execution loop with updated frame
 	}
-	// Otherwise, the function completed normally (shouldn't happen in main script)
-	return InterpretOK, Undefined
+	
+	// Update cached variables for the current frame and continue execution
+	frame = &vm.frames[vm.frameCount-1]
+	closure = frame.closure
+	function = closure.Fn
+	code = function.Chunk.Code
+	constants = function.Chunk.Constants
+	registers = frame.registers
+	ip = frame.ip
+	goto startExecution // Continue the execution loop with updated frame
 }
 
 // captureUpvalue creates a new Upvalue object for a local variable at the given stack location.

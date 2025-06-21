@@ -20,8 +20,11 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 		return BadRegister, err
 	}
 	
-	tryEnd := len(c.chunk.Code)
+	// The tryEnd should include the jump instruction that exits the try block
+	// This ensures that function calls within the try block that return to 
+	// the instruction after the call are still covered by the exception handler
 	normalExit := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+	tryEnd := len(c.chunk.Code)
 	
 	// Compile catch if present
 	if node.CatchClause != nil {
