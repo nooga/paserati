@@ -59,6 +59,15 @@ type BoundNativeFunctionObject struct {
 	Name       string
 }
 
+// BoundFunctionObject represents any function bound to a 'this' value and optional partial arguments
+type BoundFunctionObject struct {
+	Object
+	OriginalFunction Value   // The function being bound (can be any callable type)
+	BoundThis        Value   // The 'this' value to use when calling
+	PartialArgs      []Value // Arguments to prepend to call arguments
+	Name             string  // For debugging/inspection
+}
+
 // NativeFunctionObjectWithProps represents a native function that can also have properties
 // This is useful for constructors that need static methods (like String.fromCharCode)
 type NativeFunctionObjectWithProps struct {
@@ -165,5 +174,18 @@ func NewAsyncNativeFunction(arity int, variadic bool, name string, asyncFn func(
 		Variadic: variadic,
 		Name:     name,
 		AsyncFn:  asyncFn,
+	})}
+}
+
+func NewBoundFunction(originalFunction Value, boundThis Value, partialArgs []Value, name string) Value {
+	// Copy partial args to avoid aliasing issues
+	argsCopy := make([]Value, len(partialArgs))
+	copy(argsCopy, partialArgs)
+	
+	return Value{typ: TypeBoundFunction, obj: unsafe.Pointer(&BoundFunctionObject{
+		OriginalFunction: originalFunction,
+		BoundThis:        boundThis,
+		PartialArgs:      argsCopy,
+		Name:             name,
 	})}
 }

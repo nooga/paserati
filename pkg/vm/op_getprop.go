@@ -36,8 +36,8 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		}
 	}
 
-	// 4. Functions and Closures (unified handling)
-	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure {
+	// 4. Functions, Closures, Native Functions, and Bound Functions (unified handling)
+	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypeBoundFunction || objVal.Type() == TypeNativeFunction {
 		if result, handled := vm.handleCallableProperty(*objVal, propName); handled {
 			*dest = result
 			return true, InterpretOK, *dest

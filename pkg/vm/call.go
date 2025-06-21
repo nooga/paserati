@@ -232,6 +232,18 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		// Result already stored by executeAsyncNativeFunction
 		return false, nil
 
+	case TypeBoundFunction:
+		// Handle bound function - delegate to original function with bound 'this' and combined args
+		boundFunc := calleeVal.AsBoundFunction()
+		
+		// Combine partial args with call-time args
+		finalArgs := make([]Value, len(boundFunc.PartialArgs)+len(args))
+		copy(finalArgs, boundFunc.PartialArgs)
+		copy(finalArgs[len(boundFunc.PartialArgs):], args)
+		
+		// Call the original function with the bound 'this' value (ignore the provided thisValue)
+		return vm.prepareCall(boundFunc.OriginalFunction, boundFunc.BoundThis, finalArgs, destReg, callerRegisters, callerIP)
+
 	default:
 		currentFrame.ip = callerIP
 		return false, fmt.Errorf("Cannot call non-function value of type %v", calleeVal.Type())

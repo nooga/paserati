@@ -30,6 +30,7 @@ const (
 	TypeNativeFunctionWithProps
 	TypeAsyncNativeFunction
 	TypeClosure
+	TypeBoundFunction
 
 	TypeObject
 	TypeDictObject
@@ -170,7 +171,7 @@ func (v Value) IsArray() bool {
 }
 
 func (v Value) IsCallable() bool {
-	return v.typ == TypeFunction || v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps || v.typ == TypeClosure
+	return v.typ == TypeFunction || v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps || v.typ == TypeClosure || v.typ == TypeBoundFunction
 }
 
 func (v Value) IsFunction() bool {
@@ -312,6 +313,13 @@ func (v Value) AsAsyncNativeFunction() *AsyncNativeFunctionObject {
 	return (*AsyncNativeFunctionObject)(v.obj)
 }
 
+func (v Value) AsBoundFunction() *BoundFunctionObject {
+	if v.typ != TypeBoundFunction {
+		panic("value is not a bound function")
+	}
+	return (*BoundFunctionObject)(v.obj)
+}
+
 func (v Value) AsBoolean() bool {
 	if v.typ != TypeBoolean {
 		panic("value is not a boolean")
@@ -366,6 +374,12 @@ func (v Value) ToString() string {
 			return fmt.Sprintf("<async native function %s>", asyncFn.Name)
 		}
 		return "<async native function>"
+	case TypeBoundFunction:
+		boundFn := (*BoundFunctionObject)(v.obj)
+		if boundFn.Name != "" {
+			return fmt.Sprintf("<bound function %s>", boundFn.Name)
+		}
+		return "<bound function>"
 	case TypeObject, TypeDictObject:
 		return "[object Object]"
 	case TypeArray:
@@ -649,7 +663,7 @@ func (v Value) Is(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps:
+	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction:
 		// Objects (including arrays, functions, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
@@ -688,7 +702,7 @@ func (v Value) StrictlyEquals(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction:
+	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction:
 		// Objects (including arrays, functions, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
@@ -821,6 +835,9 @@ func valuesStrictEqual(a, b Value) bool { return a.StrictlyEquals(b) }
 // AsNativeFunction returns the NativeFunctionObject pointer from a native function value.
 func AsNativeFunction(v Value) *NativeFunctionObject { return v.AsNativeFunction() }
 
+// AsBoundFunction returns the BoundFunctionObject pointer from a bound function value.
+func AsBoundFunction(v Value) *BoundFunctionObject { return v.AsBoundFunction() }
+
 // IsFunction reports whether the value is a function (FunctionObject or ClosureObject or NativeFunctionObject).
 func IsFunction(v Value) bool { return v.IsFunction() }
 
@@ -947,6 +964,14 @@ func (v Value) GetArity() int {
 		return v.AsNativeFunctionWithProps().Arity
 	case TypeAsyncNativeFunction:
 		return v.AsAsyncNativeFunction().Arity
+	case TypeBoundFunction:
+		boundFn := v.AsBoundFunction()
+		originalArity := boundFn.OriginalFunction.GetArity()
+		newArity := originalArity - len(boundFn.PartialArgs)
+		if newArity < 0 {
+			newArity = 0
+		}
+		return newArity
 	default:
 		panic("value is not callable")
 	}

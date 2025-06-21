@@ -13,17 +13,21 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	case TypeClosure:
 		closure := AsClosure(objVal)
 		fn = closure.Fn
+	case TypeBoundFunction, TypeNativeFunction:
+		// Bound functions and native functions inherit properties from Function.prototype but don't have their own function object
+		// Skip to prototype method checking
+		fn = nil
 	default:
 		return Undefined, false
 	}
 
-	// Special handling for "prototype" property
-	if propName == "prototype" {
+	// Special handling for "prototype" property (not available on bound functions)
+	if fn != nil && propName == "prototype" {
 		return fn.getOrCreatePrototype(), true
 	}
 
-	// Other function properties (if any)
-	if fn.Properties != nil {
+	// Other function properties (if any) - not available on bound functions
+	if fn != nil && fn.Properties != nil {
 		if prop, exists := fn.Properties.GetOwn(propName); exists {
 			return prop, true
 		}

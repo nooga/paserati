@@ -3,7 +3,6 @@ package builtins
 import (
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
-	"strings"
 )
 
 // FunctionInitializer implements the Function builtin
@@ -138,16 +137,6 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
 		return vm.Undefined
 	}
 
-	// Check if we're trying to bind a bound function - prevent infinite recursion
-	if originalFunc.Type() == vm.TypeNativeFunction {
-		if nativeFunc := originalFunc.AsNativeFunction(); nativeFunc != nil {
-			if strings.HasPrefix(nativeFunc.Name, "bound ") {
-				// This is already a bound function - this should be allowed in JavaScript
-				// but we'll continue with the binding anyway
-			}
-		}
-	}
-
 	var boundThis vm.Value = vm.Undefined
 	var partialArgs []vm.Value
 
@@ -156,69 +145,32 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
 		partialArgs = args[1:] // Remaining arguments are partial arguments
 	}
 
-	// Calculate new arity
-	originalArity := originalFunc.GetArity()
-
-	newArity := originalArity - len(partialArgs)
-	if newArity < 0 {
-		newArity = 0
-	}
-
-	// IMPORTANT: Capture the original function value at bind-time!
-	// We cannot rely on GetThis() inside the bound function because
-	// when the bound function is called, 'this' will be the bound function itself
-	capturedOriginalFunc := originalFunc
-	capturedBoundThis := boundThis
-	capturedPartialArgs := make([]vm.Value, len(partialArgs))
-	copy(capturedPartialArgs, partialArgs)
-
-	// Create bound function
-	boundFunction := func(additionalArgs []vm.Value) vm.Value {
-		// Combine partial args with additional args
-		finalArgs := make([]vm.Value, len(capturedPartialArgs)+len(additionalArgs))
-		copy(finalArgs, capturedPartialArgs)
-		copy(finalArgs[len(capturedPartialArgs):], additionalArgs)
-
-		// Call the original function directly based on its type
-		switch capturedOriginalFunc.Type() {
-		case vm.TypeNativeFunction:
-			// For native functions, call directly with 'this' as first argument
-			nativeFunc := capturedOriginalFunc.AsNativeFunction()
-			nativeArgs := make([]vm.Value, len(finalArgs)+1)
-			nativeArgs[0] = capturedBoundThis
-			copy(nativeArgs[1:], finalArgs)
-			return nativeFunc.Fn(nativeArgs)
-
-		case vm.TypeNativeFunctionWithProps:
-			// For native functions with properties, call directly
-			nativeFuncWithProps := capturedOriginalFunc.AsNativeFunctionWithProps()
-			nativeArgs := make([]vm.Value, len(finalArgs)+1)
-			nativeArgs[0] = capturedBoundThis
-			copy(nativeArgs[1:], finalArgs)
-			return nativeFuncWithProps.Fn(nativeArgs)
-
-		case vm.TypeClosure, vm.TypeFunction:
-			// For user-defined functions, temporarily return undefined to avoid infinite recursion
-			// TODO: Implement proper user function calling for bind without recursion
-			return vm.Undefined
-
-		default:
-			return vm.Undefined
-		}
-	}
-
-	// Use a simple name to avoid infinite recursion during Inspect()
+	// Create function name for debugging
 	functionName := "bound"
-	if originalFunc.Type() == vm.TypeNativeFunction {
+	switch originalFunc.Type() {
+	case vm.TypeNativeFunction:
 		if nativeFunc := originalFunc.AsNativeFunction(); nativeFunc != nil {
 			functionName = "bound " + nativeFunc.Name
 		}
-	} else if originalFunc.Type() == vm.TypeNativeFunctionWithProps {
+	case vm.TypeNativeFunctionWithProps:
 		if nativeFuncWithProps := originalFunc.AsNativeFunctionWithProps(); nativeFuncWithProps != nil {
 			functionName = "bound " + nativeFuncWithProps.Name
 		}
+	case vm.TypeFunction:
+		if fn := originalFunc.AsFunction(); fn != nil {
+			functionName = "bound " + fn.Name
+		}
+	case vm.TypeClosure:
+		if closure := originalFunc.AsClosure(); closure != nil && closure.Fn != nil {
+			functionName = "bound " + closure.Fn.Name
+		}
+	case vm.TypeBoundFunction:
+		if boundFn := originalFunc.AsBoundFunction(); boundFn != nil {
+			functionName = "bound " + boundFn.Name
+		}
 	}
 
-	result := vm.NewNativeFunction(newArity, false, functionName, boundFunction)
+	// Create a bound function using the new BoundFunction type
+	result := vm.NewBoundFunction(originalFunc, boundThis, partialArgs, functionName)
 	return result
 }
