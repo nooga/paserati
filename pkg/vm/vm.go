@@ -2033,12 +2033,10 @@ startExecution:
 			
 			// Returns from finally blocks clear any pending exceptions
 			// because the return takes precedence over the exception
-			// fmt.Printf("[DEBUG] OpReturnFinally: Clearing exception, unwinding, and pending actions\n")
 			vm.currentException = Null
 			vm.unwinding = false
 			// Also clear any pending throw action - the return takes precedence
 			if vm.pendingAction == ActionThrow {
-				// fmt.Printf("[DEBUG] OpReturnFinally: Clearing pending throw action\n")
 				vm.pendingAction = ActionNone
 				vm.pendingValue = Undefined
 			}
@@ -2054,10 +2052,19 @@ startExecution:
 			}
 
 			if hasFinallyHandler {
-				// There are more finally blocks - set as pending action to be overridden
+				// There are more finally blocks - trigger them to execute
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = result
-				continue // Don't return yet, let finally handlers run
+				
+				// Find the first finally handler and jump to it
+				for _, handler := range handlers {
+					if handler.IsFinally {
+						frame.ip = handler.HandlerPC
+						ip = handler.HandlerPC  // Sync local IP variable
+						vm.finallyDepth++
+						continue startExecution // Jump to the outer finally block
+					}
+				}
 			} else {
 				// No more finally handlers - this return takes effect immediately  
 				vm.pendingAction = ActionNone
