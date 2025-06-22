@@ -194,6 +194,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.THIS, p.parseThisExpression)        // Added for this keyword
 	p.registerPrefix(lexer.NEW, p.parseNewExpression)          // Added for new keyword
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
+	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
 	p.registerPrefix(lexer.PLUS, p.parsePrefixExpression) // Added for unary plus
@@ -411,6 +412,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseSwitchStatement()
 	case lexer.FUNCTION:
 		return p.parseFunctionDeclarationStatement()
+	case lexer.CLASS:
+		return p.parseClassDeclaration()
 	case lexer.TRY:
 		return p.parseTryStatement()
 	case lexer.THROW:

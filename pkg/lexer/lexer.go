@@ -181,6 +181,10 @@ const (
 	CATCH   TokenType = "CATCH"
 	THROW   TokenType = "THROW"
 	FINALLY TokenType = "FINALLY"
+	// Class keyword
+	CLASS TokenType = "CLASS"
+	// Static keyword (for future use)
+	STATIC TokenType = "STATIC"
 )
 
 var keywords = map[string]TokenType{
@@ -219,6 +223,8 @@ var keywords = map[string]TokenType{
 	"catch":      CATCH,      // Added for catch blocks
 	"throw":      THROW,      // Added for throw statements
 	"finally":    FINALLY,    // Added for finally blocks
+	"class":      CLASS,      // Added for class declarations/expressions
+	"static":     STATIC,     // Added for static members
 }
 
 // LookupIdent checks the keywords table for an identifier.

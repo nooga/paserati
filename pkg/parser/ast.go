@@ -2129,3 +2129,154 @@ func (fog *FunctionOverloadGroup) String() string {
 
 	return out.String()
 }
+
+// --- Class-related AST Nodes ---
+
+// ClassDeclaration represents a class declaration statement
+type ClassDeclaration struct {
+	Token      lexer.Token   // The 'class' token
+	Name       *Identifier   // Class name
+	SuperClass *Identifier   // nil for basic classes (extends support later)
+	Body       *ClassBody    // Class body containing methods and properties
+}
+
+func (cd *ClassDeclaration) statementNode()       {}
+func (cd *ClassDeclaration) TokenLiteral() string { return cd.Token.Literal }
+func (cd *ClassDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString("class ")
+	if cd.Name != nil {
+		out.WriteString(cd.Name.String())
+	}
+	if cd.SuperClass != nil {
+		out.WriteString(" extends ")
+		out.WriteString(cd.SuperClass.String())
+	}
+	out.WriteString(" ")
+	if cd.Body != nil {
+		out.WriteString(cd.Body.String())
+	}
+	return out.String()
+}
+
+// ClassExpression represents a class expression (can be anonymous)
+type ClassExpression struct {
+	BaseExpression
+	Token      lexer.Token   // The 'class' token
+	Name       *Identifier   // nil for anonymous classes
+	SuperClass *Identifier   // nil for basic classes (extends support later)
+	Body       *ClassBody    // Class body containing methods and properties
+}
+
+func (ce *ClassExpression) TokenLiteral() string { return ce.Token.Literal }
+func (ce *ClassExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("class")
+	if ce.Name != nil {
+		out.WriteString(" ")
+		out.WriteString(ce.Name.String())
+	}
+	if ce.SuperClass != nil {
+		out.WriteString(" extends ")
+		out.WriteString(ce.SuperClass.String())
+	}
+	out.WriteString(" ")
+	if ce.Body != nil {
+		out.WriteString(ce.Body.String())
+	}
+	return out.String()
+}
+
+// ClassBody represents the body of a class containing methods and properties
+type ClassBody struct {
+	Token      lexer.Token            // The '{' token
+	Methods    []*MethodDefinition    // Class methods (including constructor)
+	Properties []*PropertyDefinition  // Class properties
+}
+
+func (cb *ClassBody) TokenLiteral() string { return cb.Token.Literal }
+func (cb *ClassBody) String() string {
+	var out bytes.Buffer
+	out.WriteString("{\n")
+	
+	for _, prop := range cb.Properties {
+		out.WriteString("  ")
+		out.WriteString(prop.String())
+		out.WriteString("\n")
+	}
+	
+	for _, method := range cb.Methods {
+		out.WriteString("  ")
+		out.WriteString(method.String())
+		out.WriteString("\n")
+	}
+	
+	out.WriteString("}")
+	return out.String()
+}
+
+// MethodDefinition represents a method in a class
+type MethodDefinition struct {
+	BaseExpression
+	Token    lexer.Token         // The method name token
+	Key      *Identifier         // Method name
+	Value    *FunctionLiteral    // Function implementation
+	Kind     string              // "constructor", "method"
+	IsStatic bool                // For future static method support
+}
+
+func (md *MethodDefinition) TokenLiteral() string { return md.Token.Literal }
+func (md *MethodDefinition) String() string {
+	var out bytes.Buffer
+	if md.IsStatic {
+		out.WriteString("static ")
+	}
+	if md.Kind == "constructor" {
+		out.WriteString("constructor")
+	} else if md.Key != nil {
+		out.WriteString(md.Key.String())
+	}
+	if md.Value != nil {
+		// Print function signature without 'function' keyword
+		out.WriteString("(")
+		if md.Value.Parameters != nil {
+			for i, param := range md.Value.Parameters {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				out.WriteString(param.String())
+			}
+		}
+		out.WriteString(") ")
+		if md.Value.Body != nil {
+			out.WriteString(md.Value.Body.String())
+		}
+	}
+	return out.String()
+}
+
+// PropertyDefinition represents a property declaration in a class
+type PropertyDefinition struct {
+	BaseExpression
+	Token    lexer.Token // The property name token
+	Key      *Identifier // Property name
+	Value    Expression  // Initializer expression (can be nil)
+	IsStatic bool        // For future static property support
+}
+
+func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }
+func (pd *PropertyDefinition) String() string {
+	var out bytes.Buffer
+	if pd.IsStatic {
+		out.WriteString("static ")
+	}
+	if pd.Key != nil {
+		out.WriteString(pd.Key.String())
+	}
+	if pd.Value != nil {
+		out.WriteString(" = ")
+		out.WriteString(pd.Value.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
