@@ -424,6 +424,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// TODO: Consider freeing registers?
 		return hint, nil // ADDED: Explicit return
 
+	case *parser.ClassDeclaration:
+		return c.compileClassDeclaration(node, hint)
+
 	case *parser.LetStatement:
 		return c.compileLetStatement(node, hint) // TODO: Fix this
 

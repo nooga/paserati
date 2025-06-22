@@ -714,12 +714,16 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 }
 
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
+	fmt.Printf("DEBUG: Checking NewExpression with constructor: %T\n", node.Constructor)
+	
 	// Check the constructor expression
 	c.visit(node.Constructor)
 	constructorType := node.Constructor.GetComputedType()
 	if constructorType == nil {
 		constructorType = types.Any
 	}
+	
+	fmt.Printf("DEBUG: Constructor type resolved to: %s\n", constructorType.String())
 
 	// Check arguments
 	for _, arg := range node.Arguments {

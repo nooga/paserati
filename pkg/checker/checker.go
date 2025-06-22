@@ -638,6 +638,7 @@ func (c *Checker) visit(node parser.Node) {
 		return
 	}
 	debugPrintf("// [Checker Visit Enter] Node: %T, Env: %p\n", node, c.env)
+	fmt.Printf("DEBUG: Visiting node type: %T\n", node)
 
 	switch node := node.(type) {
 	case *parser.Program:
@@ -1587,6 +1588,7 @@ func (c *Checker) visit(node parser.Node) {
 		// Type should already be set during function literal processing
 
 	case *parser.NewExpression:
+		fmt.Printf("DEBUG: Visiting NewExpression in main visit function\n")
 		c.checkNewExpression(node)
 
 	case *parser.ShorthandMethod:
@@ -1777,6 +1779,10 @@ func (c *Checker) visit(node parser.Node) {
 		// But this depends on context - in call expressions, it's handled specially
 		// For now, set it to the original type
 		node.SetComputedType(argType)
+
+	// --- Class Declarations ---
+	case *parser.ClassDeclaration:
+		c.checkClassDeclaration(node)
 
 	// --- Exception Handling Statements ---
 	case *parser.TryStatement:

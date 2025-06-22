@@ -136,9 +136,6 @@ func (p *Parser) parseClassBody() *ClassBody {
 			p.addError(p.curToken, "expected identifier in class body")
 			p.nextToken()
 		}
-		
-		// Advance to the next token for the next iteration
-		p.nextToken()
 	}
 	
 	if !p.curTokenIs(lexer.RBRACE) {
