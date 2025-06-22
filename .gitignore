@@ -28,3 +28,10 @@ paserati
 *.baseline
 gojac
 .DS_Store
+
+# Python virtual environment
+venv/
+
+timing.py
+timing.json
+.tally.py
