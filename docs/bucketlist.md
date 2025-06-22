@@ -40,7 +40,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] RegExp methods: test(), exec(), toString()
   - [x] Flag support: g, i, m, s (u is default in Go, y handled at JS level)
   - [x] Comprehensive test suite with 20+ regex test files
-  - [ ] String method integration: match(), replace(), search(), split() with RegExp arguments
+  - [x] String method integration: match(), replace(), search(), split() with RegExp arguments
 - [x] Template Literals (backticks, `${}`)
 - [ ] BigInt Literals (`100n`)
 
@@ -313,7 +313,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] String constructor with static methods (`.fromCharCode`)
     - [x] **Comprehensive string processing pipeline support**
     - [x] **22+ String methods implemented** - covers most common JavaScript string operations
-    - [ ] Advanced regex integration (`.replace`, `.match`, `.search`, `.split` with RegExp arguments)
+    - [x] **Advanced regex integration** (`.replace`, `.match`, `.search`, `.split` with RegExp arguments)
 - [x] `Math` Object
   - [x] **All standard Math constants** (`PI`, `E`, `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT1_2`, `SQRT2`)
   - [x] **Trigonometric functions** (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`)

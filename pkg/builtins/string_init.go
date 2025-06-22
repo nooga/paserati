@@ -38,10 +38,10 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("trimEnd", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("repeat", types.NewSimpleFunction([]types.Type{types.Number}, types.String)).
 		WithProperty("concat", types.NewVariadicFunction([]types.Type{}, types.String, types.String)).
-		WithProperty("split", types.NewOptionalFunction([]types.Type{types.String, types.Number}, &types.ArrayType{ElementType: types.String}, []bool{false, true})).
-		WithProperty("replace", types.NewSimpleFunction([]types.Type{types.String, types.String}, types.String)).
-		WithProperty("match", types.NewSimpleFunction([]types.Type{types.String}, types.NewUnionType(&types.ArrayType{ElementType: types.String}, types.Null))).
-		WithProperty("search", types.NewSimpleFunction([]types.Type{types.String}, types.Number))
+		WithProperty("split", types.NewOptionalFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.Number}, &types.ArrayType{ElementType: types.String}, []bool{false, true})).
+		WithProperty("replace", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.String}, types.String)).
+		WithProperty("match", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.NewUnionType(&types.ArrayType{ElementType: types.String}, types.Null))).
+		WithProperty("search", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Number))
 
 	// Register string primitive prototype
 	ctx.SetPrimitivePrototype("string", stringProtoType)
@@ -332,39 +332,64 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	stringProto.SetOwn("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) vm.Value {
 		thisStr := vmInstance.GetThis().ToString()
-		if len(args) < 1 {
+		if len(args) == 0 {
 			// No separator - return array with whole string
 			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)})
 		}
-		separator := args[0].ToString()
+		
+		separatorArg := args[0]
 		limit := -1
 		if len(args) >= 2 {
-			limit = int(args[1].ToFloat())
-			if limit <= 0 {
+			limitVal := args[1].ToFloat()
+			if limitVal > 0 {
+				limit = int(limitVal)
+			} else if limitVal <= 0 {
 				return vm.NewArray()
 			}
 		}
-		if separator == "" {
-			// Split into individual characters
-			runes := []rune(thisStr)
-			elements := make([]vm.Value, 0, len(runes))
-			for i, r := range runes {
-				if limit > 0 && i >= limit {
-					break
+		
+		if separatorArg.IsRegExp() {
+			// RegExp separator
+			regex := separatorArg.AsRegExpObject()
+			compiledRegex := regex.GetCompiledRegex()
+			
+			parts := compiledRegex.Split(thisStr, -1)
+			if limit > 0 && len(parts) > limit {
+				parts = parts[:limit]
+			}
+			elements := make([]vm.Value, len(parts))
+			for i, part := range parts {
+				elements[i] = vm.NewString(part)
+			}
+			return vm.NewArrayWithArgs(elements)
+		} else {
+			// String separator
+			separator := separatorArg.ToString()
+			if separator == "" {
+				// Split into individual characters
+				runes := []rune(thisStr)
+				count := len(runes)
+				if limit > 0 && limit < count {
+					count = limit
 				}
-				elements = append(elements, vm.NewString(string(r)))
+				elements := make([]vm.Value, count)
+				for i := 0; i < count; i++ {
+					elements[i] = vm.NewString(string(runes[i]))
+				}
+				return vm.NewArrayWithArgs(elements)
+			}
+			
+			// Normal string split
+			parts := strings.Split(thisStr, separator)
+			if limit > 0 && len(parts) > limit {
+				parts = parts[:limit]
+			}
+			elements := make([]vm.Value, len(parts))
+			for i, part := range parts {
+				elements[i] = vm.NewString(part)
 			}
 			return vm.NewArrayWithArgs(elements)
 		}
-		parts := strings.Split(thisStr, separator)
-		if limit > 0 && len(parts) > limit {
-			parts = parts[:limit]
-		}
-		elements := make([]vm.Value, len(parts))
-		for i, part := range parts {
-			elements[i] = vm.NewString(part)
-		}
-		return vm.NewArrayWithArgs(elements)
 	}))
 
 	stringProto.SetOwn("replace", vm.NewNativeFunction(2, false, "replace", func(args []vm.Value) vm.Value {
@@ -372,11 +397,34 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 2 {
 			return vm.NewString(thisStr)
 		}
-		searchValue := args[0].ToString()
+		
+		searchArg := args[0]
 		replaceValue := args[1].ToString()
-		// Simple replace - only replaces first occurrence
-		result := strings.Replace(thisStr, searchValue, replaceValue, 1)
-		return vm.NewString(result)
+		
+		if searchArg.IsRegExp() {
+			// RegExp argument
+			regex := searchArg.AsRegExpObject()
+			compiledRegex := regex.GetCompiledRegex()
+			
+			if regex.IsGlobal() {
+				// Global replace: replace all matches
+				result := compiledRegex.ReplaceAllString(thisStr, replaceValue)
+				return vm.NewString(result)
+			} else {
+				// Non-global: replace first match only
+				if loc := compiledRegex.FindStringIndex(thisStr); loc != nil {
+					// Replace only the first match
+					result := thisStr[:loc[0]] + replaceValue + thisStr[loc[1]:]
+					return vm.NewString(result)
+				}
+				return vm.NewString(thisStr)
+			}
+		} else {
+			// String argument - legacy behavior (replace first occurrence only)
+			searchValue := searchArg.ToString()
+			result := strings.Replace(thisStr, searchValue, replaceValue, 1)
+			return vm.NewString(result)
+		}
 	}))
 
 	stringProto.SetOwn("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) vm.Value {
@@ -384,13 +432,46 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.Null
 		}
-		pattern := args[0].ToString()
-		// Simple match - just check if pattern exists
-		if strings.Contains(thisStr, pattern) {
-			// Return array with match
-			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(pattern)})
+		
+		arg := args[0]
+		if arg.IsRegExp() {
+			// RegExp argument
+			regex := arg.AsRegExpObject()
+			compiledRegex := regex.GetCompiledRegex()
+			
+			if regex.IsGlobal() {
+				// Global match: find all matches
+				matches := compiledRegex.FindAllString(thisStr, -1)
+				if len(matches) == 0 {
+					return vm.Null
+				}
+				result := vm.NewArray()
+				arr := result.AsArray()
+				for _, match := range matches {
+					arr.Append(vm.NewString(match))
+				}
+				return result
+			} else {
+				// Non-global: find first match with capture groups
+				matches := compiledRegex.FindStringSubmatch(thisStr)
+				if matches == nil {
+					return vm.Null
+				}
+				result := vm.NewArray()
+				arr := result.AsArray()
+				for _, match := range matches {
+					arr.Append(vm.NewString(match))
+				}
+				return result
+			}
+		} else {
+			// String argument - legacy behavior
+			pattern := arg.ToString()
+			if strings.Contains(thisStr, pattern) {
+				return vm.NewArrayWithArgs([]vm.Value{vm.NewString(pattern)})
+			}
+			return vm.Null
 		}
-		return vm.Null
 	}))
 
 	stringProto.SetOwn("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) vm.Value {
@@ -398,10 +479,24 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.NumberValue(-1)
 		}
-		searchValue := args[0].ToString()
-		// Simple search - just find first occurrence
-		index := strings.Index(thisStr, searchValue)
-		return vm.NumberValue(float64(index))
+		
+		arg := args[0]
+		if arg.IsRegExp() {
+			// RegExp argument
+			regex := arg.AsRegExpObject()
+			compiledRegex := regex.GetCompiledRegex()
+			
+			loc := compiledRegex.FindStringIndex(thisStr)
+			if loc == nil {
+				return vm.NumberValue(-1)
+			}
+			return vm.NumberValue(float64(loc[0]))
+		} else {
+			// String argument - legacy behavior
+			searchValue := arg.ToString()
+			index := strings.Index(thisStr, searchValue)
+			return vm.NumberValue(float64(index))
+		}
 	}))
 
 	// Create String constructor
