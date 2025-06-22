@@ -606,16 +606,22 @@ func (l *Lexer) NextToken() Token {
 			// DEBUG: Add debug output for regex context
 			debugPrintf("Attempting regex parse: prevToken=%s, position=%d", l.prevToken, l.position)
 			// Try to read as regex literal
-			pattern, flags, success := l.readRegexLiteral()
+			pattern, flags, success, foundComplete := l.readRegexLiteral()
 			if success {
 				// Successfully read regex literal
 				literal := "/" + pattern + "/" + flags
 				tok = Token{Type: REGEX_LITERAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			} else {
-				// Failed to read as regex in a context where regex is expected
-				// This indicates a malformed regex, so return ILLEGAL
+			} else if foundComplete {
+				// Found a complete regex pattern but with invalid flags/format
+				// This is an error, not a division operator
 				literal := "Invalid regex literal"
 				tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else {
+				// Failed to find complete regex pattern - backtrack and treat as division
+				// readRegexLiteral already restored the lexer state
+				literal := string(l.ch) // Just '/'
+				l.readChar()            // Advance past '/'
+				tok = Token{Type: SLASH, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
 		} else {
 			// Context doesn't allow regex, treat as division operator
@@ -1119,7 +1125,7 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 // Returns the pattern and flags separately, and a boolean indicating success.
 // Advances the lexer's position to *after* the closing slash and flags if successful.
 // If unsuccessful, the lexer position is restored to before the opening slash.
-func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool) {
+func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, foundComplete bool) {
 	var patternBuilder strings.Builder
 	var flagsBuilder strings.Builder
 
@@ -1162,7 +1168,7 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool) 
 					l.ch = savedCh
 					l.line = savedLine
 					l.column = savedColumn
-					return "", "", false // Invalid flag
+					return "", "", false, true // Invalid flag but complete regex
 				}
 				if seenFlags[flag] {
 					// Backtrack on duplicate flag
@@ -1171,12 +1177,12 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool) 
 					l.ch = savedCh
 					l.line = savedLine
 					l.column = savedColumn
-					return "", "", false // Duplicate flag
+					return "", "", false, true // Duplicate flag but complete regex
 				}
 				seenFlags[flag] = true
 			}
 
-			return patternBuilder.String(), flagsStr, true
+			return patternBuilder.String(), flagsStr, true, true
 		}
 
 		if l.ch == 0 { // EOF
@@ -1186,7 +1192,7 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool) 
 			l.ch = savedCh
 			l.line = savedLine
 			l.column = savedColumn
-			return "", "", false // Unterminated regex
+			return "", "", false, false // Unterminated regex
 		}
 
 		if l.ch == '\n' || l.ch == '\r' {
@@ -1196,7 +1202,7 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool) 
 			l.ch = savedCh
 			l.line = savedLine
 			l.column = savedColumn
-			return "", "", false // Unescaped newline in regex
+			return "", "", false, false // Unescaped newline in regex
 		}
 
 		if l.ch == '\\' { // Handle escape sequences
@@ -1210,7 +1216,7 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool) 
 				l.ch = savedCh
 				l.line = savedLine
 				l.column = savedColumn
-				return "", "", false
+				return "", "", false, false // EOF after backslash
 			}
 
 			// In regex, we preserve the escape sequence as-is

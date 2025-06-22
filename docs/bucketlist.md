@@ -30,7 +30,17 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `undefined` Literal (as value and uninitialized state)
 - [x] Array Literals (`[]`)
 - [x] Object Literals (`{}`)
-- [ ] Regular Expression Literals (`/abc/`)
+- [x] Regular Expression Literals (`/abc/`) - **Complete Implementation!**
+  - [x] Lexer support with regex/division disambiguation via backtracking
+  - [x] Parser integration as primary expressions
+  - [x] Type system support with RegExp primitive type
+  - [x] VM runtime with RegExpObject backed by Go's regexp package
+  - [x] RegExp constructor: `new RegExp(pattern, flags)` and `RegExp(pattern, flags)`
+  - [x] RegExp properties: source, flags, global, ignoreCase, multiline, dotAll, lastIndex
+  - [x] RegExp methods: test(), exec(), toString()
+  - [x] Flag support: g, i, m, s (u is default in Go, y handled at JS level)
+  - [x] Comprehensive test suite with 20+ regex test files
+  - [ ] String method integration: match(), replace(), search(), split() with RegExp arguments
 - [x] Template Literals (backticks, `${}`)
 - [ ] BigInt Literals (`100n`)
 
@@ -298,11 +308,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] **Case conversion** (`.toLowerCase`, `.toUpperCase`)
     - [x] **Whitespace handling** (`.trim`, `.trimStart`, `.trimEnd`)
     - [x] **String manipulation** (`.repeat`, `.concat`, `.split`, `.lastIndexOf`)
+    - [x] **Basic pattern methods** (`.replace`, `.match`, `.search`) - string-only, no regex support yet
     - [x] Proper type signatures for all methods with TypeScript compatibility
     - [x] String constructor with static methods (`.fromCharCode`)
     - [x] **Comprehensive string processing pipeline support**
-    - [x] **19+ String methods implemented** - covers most common JavaScript string operations
-    - [ ] Advanced methods (`.replace`, `.match`, regex support, padding) - future enhancements
+    - [x] **22+ String methods implemented** - covers most common JavaScript string operations
+    - [ ] Advanced regex integration (`.replace`, `.match`, `.search`, `.split` with RegExp arguments)
 - [x] `Math` Object
   - [x] **All standard Math constants** (`PI`, `E`, `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT1_2`, `SQRT2`)
   - [x] **Trigonometric functions** (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`)

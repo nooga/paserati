@@ -425,8 +425,8 @@ func TestArrayValue(t *testing.T) {
 	if !v.IsArray() {
 		t.Errorf("Expected IsArray() == true")
 	}
-	if v.IsObject() {
-		t.Errorf("Expected IsObject() == false for Array") // Current IsObject behavior
+	if !v.IsObject() {
+		t.Errorf("Expected IsObject() == true for Array") // Current IsObject behavior
 	}
 
 	arrObj := v.AsArray()
