@@ -10,7 +10,7 @@ Welcome to **PASERATI** - a _bootleg_ TypeScript runtime implementation written 
 
 _Pops the hood, looks around, slams the hood shut._
 
-Paserati aims to be performance-adjacent, like any other JavaScript engine written in Go, but with loftier ambitions to overtake all of them. It compiles TypeScript directly to bytecode for a register-based virtual machine, skipping the JavaScript middle-man entirely. Compile-time type checking will be used to specialize the bytecode for the given types which should allow for some interesting optimizations like treating some `number`s as integers, unboxed values and static method dispatch. Runtime type information is also on the roadmap.
+Paserati aims to be performance-adjacent, like any other JavaScript engine written in Go, but with loftier ambitions to overtake all of them. It compiles TypeScript directly to bytecode for a register-based virtual machine, skipping the JavaScript middle-man entirely. For now, the main optimization is inline caches (ICs) for property access - no fancy optimization wizardry, yet.
 
 ## Goals
 
@@ -33,34 +33,26 @@ _Tosses 2/3 of the cigarette out the window._
 
 _Lights another cigarette, curses at the cigarette, throws it out the window._
 
-For example, uh, it does tricks with functions and types.
+Here's some TypeScript that actually works:
 
 ```typescript
-// It's very generic, cough, needs generics
-type YCombinatorRejectedMyApplicationOnce = (
-  f: (rec: (arg: any) => any) => (arg: any) => any
-) => (arg: any) => any;
+type Cucumber = number;
 
-// The Y Combinator
-const Y: YCombinatorRejectedMyApplicationOnce = (f) =>
-  ((x) => f((y) => x(x)(y)))((x) => f((y) => x(x)(y)));
+const Y = <T>(f: any): any =>
+  ((x: any): any => f((y: T) => x(x)(y)))((x: any): any =>
+    f((y: T) => x(x)(y))
+  );
 
-// Factorial function generator
-const FactGen = (f: (n: number) => number) => (n: number) => {
-  if (n == 0) {
-    return 1;
-  }
-  return n * f(n - 1);
-};
+const factorial = Y(
+  (f: any) =>
+    (n: Cucumber): Cucumber =>
+      n <= 1 ? 1 : n * f(n - 1)
+);
 
-// Create the factorial function using the Y Combinator
-const factorial = Y(FactGen);
-
-// Calculate factorial of 5
-factorial(5); // Should result in 120
+console.time("factorial");
+console.log(factorial(10)); // 3628800
+console.timeEnd("factorial"); // factorial: 0.016ms
 ```
-
-See [tests/scripts](tests/scripts) for random bits of code.
 
 ## Usage
 
@@ -81,19 +73,41 @@ go test ./tests/...
 
 _Scratches a nasty red spot on the roof._
 
-Just starting up, glowplugs still on _...wheezing sounds..._. The engine turns over sometimes, but don't expect to win any races yet. Still working on getting it past the driveway without stalling on basic JS syntax.
+The engine's warmed up and running decent up until the first bend! I've got the core language fundamentals working - variables, functions, objects, basic types, control flow. But let's be real about what's still missing:
 
-See [docs/bucketlist.md](docs/bucketlist.md) for an up-to-date list of features.
+**Big Missing Pieces:**
 
-_Slaps the roof._
+- **No async/await** - Don't have an event loop yet, so no async/await
+- **No modules** - No `import`/`export`, everything's global baby
+- **No generators** - No `function*` or `yield`
+- **No iterators** - No `Symbol.iterator` or `for...of` protocol
+- **No BigInt** - Useless for now
+- **Classes are partial** - Basic syntax works but inheritance and fancy features are sketchy
 
-## Performance
+**Also Missing:**
 
-It's slow for now. Takes about 1.4 seconds to compute the factorial of 10, 1 million times, on M1 Pro.
+- Map/Set collections, WeakMap/WeakSet
+- Typed Arrays, Symbols, Decorators
+- Namespaces, advanced TypeScript features
+- Spread syntax in array/object literals (`[...arr]`, `{...obj}`)
+
+I'm not targeting any specific TypeScript or ECMAScript version - I'm just vibing in the workshop, implementing whatever seems fun or necessary. Sometimes that means skipping the hard stuff and sometimes it means going deep on random features that caught my interest.
+
+See [docs/bucketlist.md](docs/bucketlist.md) for the complete feature rundown.
+
+_Slaps the roof, it caves in._
+
+## Performance and Footprint
+
+I think it's slow, around 20x slower than V8. Takes about 626.6ms ± 29.0ms to compute the factorial of 10, 1 million times, on M1 Pro. This includes parsing, type checking, and compilation.
+
+For comparison, [goja](https://github.com/dop251/goja) takes about 1.007s ± 0.004s on the same machine running the same benchmark with types erased.
+
+Stripped `paserati` binary is 4.2MB, it includes the runtime, the compiler, the type checker, and the virtual machine.
 
 ## Contributing
 
-Seriously, why would you want to contribute to this? _…But if you do, I’m both terrified and thrilled. PRs and issues are welcome._
+Seriously, why would you want to contribute to this? _…But if you do, I'm both terrified and thrilled. PRs and issues are welcome._
 
 ## License
 
@@ -101,9 +115,9 @@ This project is licensed under the MIT License.
 
 ## AI Disclaimer
 
-This project is made with heavy use of AI. Google Gemini 2.5 Pro wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
+This project is made with heavy use of AI. Google Gemini 2.5 Pro and Claude Sonnet 4 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
 
-That fun sticker at the top of the README? It's made with GPT-4o's souped up image generation.
+That fun sticker at the top of the README? It's made with GPT-4o's image generation.
 
 While I understand that some people might have reservations about using AI to write code, or using AI to do anything, I would like to reserve the right to avoid having to justify my choices.
 

@@ -140,13 +140,17 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Runtime behavior (assertions are no-ops after type checking)
   - [x] Support for primitive types, interfaces, and complex types
   - [x] Integration with union types and contextual typing
-- [x] Spread Syntax (`...`) - **Major Enhancement!**
-  - [x] Spread in function calls (`func(...args)`)
+- [x] Spread Syntax (`...`) - **Partial Implementation**
+  - [x] Spread in function calls (`func(...args)`) with tuple types
   - [x] Contextual typing for spread array literals (`sum(...[1, 2, 3])`)
   - [x] TypeScript-compliant error handling for non-tuple spreads
   - [x] Integration with tuple types and parameter type inference
+  - [ ] **Missing**: Spread in array literals (`[...arr1, ...arr2]`)
+  - [ ] **Missing**: Spread in object literals (`{...obj1, ...obj2}`)
 - [ ] `yield` / `yield*` (Generators)
-- [ ] `await` (Async/Await)
+- [ ] `await` (Async/Await) - **Blocked by event loop implementation**
+- [ ] **Symbols** (`Symbol.iterator`, `Symbol.for`, etc.)
+- [ ] **Iterators** (`Symbol.iterator` protocol, `next()` method)
 - [x] Destructuring Assignment - **Complete Implementation!**
   - [x] **Array Destructuring** - Full support with rest elements
     - [x] Basic array destructuring (`let [a, b] = [1, 2]`)
@@ -334,10 +338,11 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] **Complete JSON serialization/deserialization support**
   - [x] Proper type conversion between VM values and JSON representation
   - [x] Handles all standard JavaScript types (objects, arrays, primitives)
-- [ ] `Map` / `Set`
-- [ ] `WeakMap` / `WeakSet`
-- [ ] Typed Arrays
-- [ ] `Promise`
+- [ ] `Map` / `Set` collections
+- [ ] `WeakMap` / `WeakSet` collections
+- [ ] Typed Arrays (`Int8Array`, `Uint8Array`, `Float32Array`, etc.)
+- [ ] `Promise` (basic object exists, no async/await integration)
+- [ ] **Event Loop** - Required for async/await functionality
 - [x] `console` Object
   - [x] `console.log()` - variadic logging with inspect formatting
   - [x] `console.error()`, `console.warn()`, `console.info()`, `console.debug()`

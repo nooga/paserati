@@ -31,7 +31,7 @@ type LoopContext struct {
 
 const debugCompiler = false      // Enable for debugging register allocation issue
 const debugCompilerStats = false // <<< CHANGED back to false
-const debugCompiledCode = true
+const debugCompiledCode = false
 const debugPrint = false // Enable debug output
 
 func debugPrintf(format string, args ...interface{}) {
@@ -68,7 +68,7 @@ type Compiler struct {
 	// --- NEW: Constant Register Cache for Performance ---
 	// Maps constant index to register that currently holds it
 	constantCache map[uint16]Register
-	
+
 	// --- Phase 4a: Finally Context Tracking ---
 	inFinallyBlock  bool // Track if we're compiling inside finally block
 	tryFinallyDepth int  // Number of enclosing try-with-finally blocks
@@ -196,10 +196,10 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 
 			// 4. Get global index and define as global symbol
 			globalIdx := c.GetOrAssignGlobalIndex(name)
-			
+
 			// Update the symbol table entry to mark it as global
 			c.currentSymbolTable.DefineGlobal(name, globalIdx)
-			
+
 			// 5. Emit OpSetGlobal to store the function in the VM's globals array
 			c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
 
@@ -823,7 +823,7 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 			sig := objType.CallSignatures[0] // Default to first signature
 			bestMatch := sig
 			bestScore := -1
-			
+
 			for _, candidateSig := range objType.CallSignatures {
 				score := 0
 				// Prefer exact parameter count match
@@ -840,13 +840,13 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
 					score += 5
 				}
-				
+
 				if score > bestScore {
 					bestScore = score
 					bestMatch = candidateSig
 				}
 			}
-			
+
 			expectedParamCount = len(bestMatch.ParameterTypes)
 			optionalParams = bestMatch.OptionalParams
 		}
@@ -904,7 +904,6 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 
 	return argRegs, finalArgCount, nil
 }
-
 
 // addFreeSymbol adds a symbol identified as a free variable to the compiler's list.
 // It ensures the symbol is added only once and returns its index in the freeSymbols slice.

@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"fmt"
+	"time"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
@@ -41,6 +42,9 @@ func (c *ConsoleInitializer) InitTypes(ctx *TypeContext) error {
 func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create console object
 	consoleObj := vm.NewObject(vm.Null).AsPlainObject()
+
+	// Timer storage for console.time/timeEnd
+	timers := make(map[string]time.Time)
 
 	// Helper function to format arguments for console output
 	formatArgs := func(args []vm.Value) string {
@@ -118,8 +122,7 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 {
 			label = args[0].ToString()
 		}
-		// TODO: Implement proper timer tracking
-		fmt.Printf("Timer '%s' started\n", label)
+		timers[label] = time.Now()
 		return vm.Undefined
 	}))
 
@@ -128,8 +131,13 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 {
 			label = args[0].ToString()
 		}
-		// TODO: Implement proper timer tracking and duration calculation
-		fmt.Printf("Timer '%s': 0ms\n", label)
+		if startTime, exists := timers[label]; exists {
+			elapsed := time.Since(startTime)
+			fmt.Printf("%s: %.3fms\n", label, float64(elapsed.Nanoseconds())/1000000.0)
+			delete(timers, label)
+		} else {
+			fmt.Printf("Timer '%s' does not exist\n", label)
+		}
 		return vm.Undefined
 	}))
 

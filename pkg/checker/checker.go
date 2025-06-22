@@ -23,7 +23,7 @@ func debugPrintf(format string, args ...interface{}) {
 func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*types.TypeParameter {
 	var typeParams []*types.TypeParameter
 	seen := make(map[*types.TypeParameter]bool)
-	
+
 	// Helper function to extract type parameters from a type
 	var extractFromType func(t types.Type)
 	extractFromType = func(t types.Type) {
@@ -43,25 +43,25 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 			for _, propType := range typ.Properties {
 				extractFromType(propType)
 			}
-		// Add more type cases as needed
+			// Add more type cases as needed
 		}
 	}
-	
+
 	// Extract from parameter types
 	for _, paramType := range sig.ParameterTypes {
 		extractFromType(paramType)
 	}
-	
+
 	// Extract from return type
 	if sig.ReturnType != nil {
 		extractFromType(sig.ReturnType)
 	}
-	
+
 	// Extract from rest parameter type
 	if sig.RestParameterType != nil {
 		extractFromType(sig.RestParameterType)
 	}
-	
+
 	return typeParams
 }
 
@@ -73,7 +73,7 @@ type ContextualType struct {
 
 // Checker performs static type checking on the AST.
 type Checker struct {
-	program *parser.Program // Root AST node
+	program *parser.Program    // Root AST node
 	source  *source.SourceFile // Source context for error reporting (cached from program)
 	// TODO: Add Type Registry if needed
 	env    *Environment           // Current type environment
@@ -105,7 +105,7 @@ func NewChecker() *Checker {
 // Check analyzes the given program AST for type errors.
 func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
-	c.source = program.Source // Cache source for error reporting
+	c.source = program.Source           // Cache source for error reporting
 	c.errors = []errors.PaseratiError{} // Reset errors
 	// DON'T reset the environment - keep it persistent for REPL sessions
 	// c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
@@ -143,20 +143,20 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			funcLit, _ := hoistedNode.(*parser.FunctionLiteral) // Parser guarantees type
 
 			debugPrintf("// [Checker Pass 2] Processing Hoisted Function Signature: %s\n", name)
-			
+
 			// Use the new unified approach for generic function support
 			ctx := &FunctionCheckContext{
-				FunctionName:              name,
-				TypeParameters:            funcLit.TypeParameters, // Support for generic functions
-				Parameters:                funcLit.Parameters,
-				RestParameter:             funcLit.RestParameter,
-				ReturnTypeAnnotation:      funcLit.ReturnTypeAnnotation,
-				Body:                      nil, // Don't process body during hoisting
-				IsArrow:                   false,
-				AllowSelfReference:        false, // Don't allow self-reference during hoisting
-				AllowOverloadCompletion:   false, // Don't check overloads during hoisting
+				FunctionName:            name,
+				TypeParameters:          funcLit.TypeParameters, // Support for generic functions
+				Parameters:              funcLit.Parameters,
+				RestParameter:           funcLit.RestParameter,
+				ReturnTypeAnnotation:    funcLit.ReturnTypeAnnotation,
+				Body:                    nil, // Don't process body during hoisting
+				IsArrow:                 false,
+				AllowSelfReference:      false, // Don't allow self-reference during hoisting
+				AllowOverloadCompletion: false, // Don't check overloads during hoisting
 			}
-			
+
 			// Resolve parameters and signature with type parameter support
 			initialSignature, _, _, _, _, _ := c.resolveFunctionParameters(ctx)
 			if initialSignature == nil { // Handle resolution error
@@ -346,20 +346,20 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// Create function's inner scope & define parameters
 		originalEnv := c.env
-		
+
 		// Create type parameter environment first if this is a generic function
 		var typeParamEnv *Environment = originalEnv
 		if len(funcLit.TypeParameters) > 0 {
 			// Create a new environment that includes type parameters
 			typeParamEnv = NewEnclosedEnvironment(originalEnv)
-			
+
 			// Extract existing type parameters from the hoisted signature
 			typeParamsFromSignature := c.extractTypeParametersFromSignature(funcSignature)
-			
+
 			// Define each type parameter in the environment using the original instances
 			for i, typeParamNode := range funcLit.TypeParameters {
 				var typeParam *types.TypeParameter
-				
+
 				// Find the matching type parameter from the signature
 				if i < len(typeParamsFromSignature) {
 					typeParam = typeParamsFromSignature[i]
@@ -372,19 +372,19 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					}
 					debugPrintf("// [Checker Pass 3] WARNING: Had to create new type parameter '%s'\n", typeParam.Name)
 				}
-				
+
 				// Define it in the environment
 				if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
 					c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
 				}
-				
+
 				// Set computed type on the AST node
 				typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
-				
+
 				debugPrintf("// [Checker Pass 3] Defined type parameter '%s' for body checking (reused from hoisting)\n", typeParam.Name)
 			}
 		}
-		
+
 		funcEnv := NewEnclosedEnvironment(typeParamEnv)
 		c.env = funcEnv
 		// Define parameters using the initial signature
@@ -638,7 +638,7 @@ func (c *Checker) visit(node parser.Node) {
 		return
 	}
 	debugPrintf("// [Checker Visit Enter] Node: %T, Env: %p\n", node, c.env)
-	fmt.Printf("DEBUG: Visiting node type: %T\n", node)
+	//fmt.Printf("DEBUG: Visiting node type: %T\n", node)
 
 	switch node := node.(type) {
 	case *parser.Program:
@@ -915,7 +915,7 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.ArrayDestructuringDeclaration:
 		c.checkArrayDestructuringDeclaration(node)
-		
+
 	case *parser.ObjectDestructuringDeclaration:
 		c.checkObjectDestructuringDeclaration(node)
 
@@ -932,19 +932,19 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Check against expected type if available
 		if c.currentExpectedReturnType != nil {
-			debugPrintf("// [Checker Return] Checking return type: actual=%T(%s) vs expected=%T(%s)\n", 
+			debugPrintf("// [Checker Return] Checking return type: actual=%T(%s) vs expected=%T(%s)\n",
 				actualReturnType, actualReturnType.String(), c.currentExpectedReturnType, c.currentExpectedReturnType.String())
-			
+
 			// Debug type parameter instances
 			if actualTPT, ok := actualReturnType.(*types.TypeParameterType); ok {
 				if expectedTPT, ok := c.currentExpectedReturnType.(*types.TypeParameterType); ok {
-					debugPrintf("// [Checker Return] Type parameter comparison: actual.Parameter=%p vs expected.Parameter=%p\n", 
+					debugPrintf("// [Checker Return] Type parameter comparison: actual.Parameter=%p vs expected.Parameter=%p\n",
 						actualTPT.Parameter, expectedTPT.Parameter)
-					debugPrintf("// [Checker Return] Type parameter names: actual=%s vs expected=%s\n", 
+					debugPrintf("// [Checker Return] Type parameter names: actual=%s vs expected=%s\n",
 						actualTPT.Parameter.Name, expectedTPT.Parameter.Name)
 				}
 			}
-			
+
 			if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
 				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
 					actualReturnType, c.currentExpectedReturnType)
@@ -1936,7 +1936,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				}
 			}
 		}
-		
+
 		// Handle rest property without initializer
 		if node.RestProperty != nil {
 			if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
@@ -1946,7 +1946,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				ident.SetComputedType(types.Undefined)
 			}
 		}
-		
+
 		return
 	}
 
@@ -2015,7 +2015,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	if node.RestProperty != nil {
 		// Rest property gets an object type containing all remaining properties
 		var restType types.Type
-		
+
 		if valueType == types.Any {
 			// If RHS is Any, rest property is also Any
 			restType = types.Any
@@ -2027,7 +2027,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 					extractedProps[prop.Key.Value] = struct{}{}
 				}
 			}
-			
+
 			// Build remaining properties map
 			remainingProps := make(map[string]types.Type)
 			for propName, propType := range objType.Properties {
@@ -2035,14 +2035,14 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 					remainingProps[propName] = propType
 				}
 			}
-			
+
 			// Create object type with remaining properties
 			restType = &types.ObjectType{Properties: remainingProps}
 		} else {
 			// For other types, rest gets an empty object type
 			restType = &types.ObjectType{Properties: make(map[string]types.Type)}
 		}
-		
+
 		// Define the rest variable
 		if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
 			if !c.env.Define(ident.Value, restType, node.IsConst) {
@@ -2087,7 +2087,7 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 func (c *Checker) checkTryStatement(node *parser.TryStatement) {
 	// Check the try block
 	c.visit(node.Body)
-	
+
 	// Check the catch clause if present
 	if node.CatchClause != nil {
 		c.checkCatchClause(node.CatchClause)
@@ -2099,7 +2099,7 @@ func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
 	// Create a new environment for the catch block
 	originalEnv := c.env
 	c.env = NewEnclosedEnvironment(c.env)
-	
+
 	// Define the catch parameter if present
 	if clause.Parameter != nil {
 		// In JavaScript/TypeScript, catch parameter is implicitly 'any' type
@@ -2108,10 +2108,10 @@ func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
 		}
 		clause.Parameter.SetComputedType(types.Any)
 	}
-	
+
 	// Check the catch body
 	c.visit(clause.Body)
-	
+
 	// Restore the original environment
 	c.env = originalEnv
 }
@@ -2123,10 +2123,10 @@ func (c *Checker) checkThrowStatement(node *parser.ThrowStatement) {
 		c.addError(node, "throw statement requires an expression")
 		return
 	}
-	
+
 	// Visit the expression being thrown
 	c.visit(node.Value)
-	
+
 	// In TypeScript, throw expressions have type 'never'
 	// but for simplicity in Phase 1, we don't need to enforce much
 	// The expression can be of any type (JavaScript allows throwing anything)
