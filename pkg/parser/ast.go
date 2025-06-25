@@ -1533,6 +1533,7 @@ func (fte *FunctionTypeExpression) GetComputedType() types.Type { return nil }
 
 // --- NEW: ObjectProperty (Helper for ObjectLiteral) ---
 // Represents a single key-value pair within an object literal.
+// For spread elements, Key will be a SpreadElement and Value will be nil.
 type ObjectProperty struct {
 	Key   Expression
 	Value Expression
@@ -1540,6 +1541,12 @@ type ObjectProperty struct {
 
 // String() for ObjectProperty (optional, but helpful for debugging)
 func (op *ObjectProperty) String() string {
+	// Check if this is a spread element
+	if spreadElement, isSpread := op.Key.(*SpreadElement); isSpread {
+		return fmt.Sprintf("...%s", spreadElement.Argument.String())
+	}
+	
+	// Regular property
 	keyStr := ""
 	if op.Key != nil {
 		keyStr = op.Key.String()
@@ -1614,7 +1621,7 @@ func (ol *ObjectLiteral) TokenLiteral() string { return ol.Token.Literal }
 func (ol *ObjectLiteral) String() string {
 	var out bytes.Buffer
 	propStrings := []string{}
-	// --- MODIFIED: Iterate over slice ---
+	// --- MODIFIED: Iterate over properties ---
 	for _, prop := range ol.Properties {
 		propStrings = append(propStrings, prop.String())
 	}

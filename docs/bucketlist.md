@@ -140,13 +140,28 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Runtime behavior (assertions are no-ops after type checking)
   - [x] Support for primitive types, interfaces, and complex types
   - [x] Integration with union types and contextual typing
-- [x] Spread Syntax (`...`) - **Partial Implementation**
+- [x] Spread Syntax (`...`) - **Complete Implementation!**
   - [x] Spread in function calls (`func(...args)`) with tuple types
   - [x] Contextual typing for spread array literals (`sum(...[1, 2, 3])`)
   - [x] TypeScript-compliant error handling for non-tuple spreads
   - [x] Integration with tuple types and parameter type inference
-  - [ ] **Missing**: Spread in array literals (`[...arr1, ...arr2]`)
-  - [ ] **Missing**: Spread in object literals (`{...obj1, ...obj2}`)
+  - [x] **Spread in array literals** (`[...arr1, ...arr2]`) - **New!**
+    - [x] Basic array spread with identifiers and expressions
+    - [x] Mixed spread with literals (`[0, ...arr, 5, ...[6,7], 8]`)
+    - [x] Complex nested expressions (`[...obj.arr, ...getArray()]`)
+    - [x] Empty array handling and edge cases
+    - [x] Proper VM implementation with `OpArraySpread` bytecode
+  - [x] **Spread in object literals** (`{...obj1, ...obj2}`) - **New!**
+    - [x] Basic object spread with identifiers and expressions
+    - [x] Mixed spread with properties (`{a: 1, ...obj, b: 2}`)
+    - [x] Complex expressions (`{...getObj(), ...nested.prop}`)
+    - [x] Property override semantics (later properties override earlier ones)
+    - [x] Object literal expressions (`{...{a: 1}, b: 2}`)
+    - [x] Proper VM implementation with `OpObjectSpread` bytecode
+  - [x] **Enhanced parser support** - Fixed to handle arbitrary expressions (not just identifiers)
+  - [x] **Comprehensive type checking** - Validates spread arguments are appropriate types
+  - [x] **Integration with destructuring** - Works seamlessly with rest/spread patterns
+  - [x] **19+ comprehensive tests** covering all scenarios, edge cases, and error handling
 - [ ] `yield` / `yield*` (Generators)
 - [ ] `await` (Async/Await) - **Blocked by event loop implementation**
 - [ ] **Symbols** (`Symbol.iterator`, `Symbol.for`, etc.)

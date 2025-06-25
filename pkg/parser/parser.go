@@ -4125,26 +4125,29 @@ func (p *Parser) parseObjectLiteral() Expression {
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken() // Consume '{' or ',' to get to the key
 
-		// --- NEW: Check for spread syntax (...identifier) ---
+		// --- NEW: Check for spread syntax (...expression) ---
 		if p.curTokenIs(lexer.SPREAD) {
-			// Parse spread element: ...identifier
-			p.nextToken() // Consume '...' to get to the identifier
+			// Parse spread element: ...expression
+			spreadToken := p.curToken
+			p.nextToken() // Consume '...' to get to the expression
 			
-			if !p.curTokenIs(lexer.IDENT) {
-				p.addError(p.curToken, "expected identifier after '...' in object literal")
+			// Parse the expression being spread
+			spreadExpr := p.parseExpression(LOWEST)
+			if spreadExpr == nil {
+				p.addError(p.curToken, "expected expression after '...' in object literal")
 				return nil
 			}
 			
 			// Create a SpreadElement 
 			spreadElement := &SpreadElement{
-				Token: lexer.Token{Type: lexer.SPREAD, Literal: "..."},
-				Argument: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+				Token: spreadToken,
+				Argument: spreadExpr,
 			}
 			
-			// Add as a special property (we'll handle this in destructuring conversion)
+			// Add as a special property where Key is SpreadElement and Value is nil
 			objLit.Properties = append(objLit.Properties, &ObjectProperty{
-				Key:   spreadElement,  // Use spread element as key to mark it
-				Value: spreadElement.Argument, // The identifier being spread
+				Key:   spreadElement,
+				Value: nil, // No separate value for spread elements
 			})
 			
 			// Check for comma or closing brace

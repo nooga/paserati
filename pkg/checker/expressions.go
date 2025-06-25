@@ -149,6 +149,27 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		case *parser.NumberLiteral: // Allow number literals as keys, convert to string
 			// Note: JavaScript converts number keys to strings internally
 			keyName = fmt.Sprintf("%v", key.Value) // Simple conversion
+		case *parser.SpreadElement:
+			// Handle spread syntax: {...obj}
+			// Check that the argument is an object type
+			c.visit(key.Argument)
+			argType := key.Argument.GetComputedType()
+			if argType == nil {
+				argType = types.Any
+			}
+			
+			// Check if the type can be spread (is an object type)
+			widenedType := types.GetWidenedType(argType)
+			switch widenedType.(type) {
+			case *types.ObjectType, *types.ArrayType:
+				// Valid object types for spreading
+			default:
+				if widenedType != types.Any {
+					c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))
+				}
+			}
+			// Skip the rest of the property processing for spread elements
+			continue
 		default:
 			c.addError(prop.Key, "object key must be an identifier, string, or number literal")
 			continue // Skip this property if key type is invalid

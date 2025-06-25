@@ -194,7 +194,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register) (Register, errors.PaseratiError) {
 	elementCount := len(node.Elements)
-	if elementCount > 255 { // Check against OpMakeArray count operand size
+	if elementCount > 255 { // Check against total element processing
 		return BadRegister, NewCompileError(node, "array literal exceeds maximum size of 255 elements")
 	}
 
@@ -205,6 +205,28 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 			c.regAlloc.Free(reg)
 		}
 	}()
+
+	// Check if any elements are spread elements
+	hasSpread := false
+	for _, elem := range node.Elements {
+		if _, isSpread := elem.(*parser.SpreadElement); isSpread {
+			hasSpread = true
+			break
+		}
+	}
+
+	// If no spread elements, use the original simple implementation
+	if !hasSpread {
+		return c.compileArrayLiteralSimple(node, hint, tempRegs)
+	}
+
+	// Handle array literal with spread elements
+	return c.compileArrayLiteralWithSpread(node, hint, tempRegs)
+}
+
+// Original implementation for arrays without spread
+func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Register, tempRegs []Register) (Register, errors.PaseratiError) {
+	elementCount := len(node.Elements)
 
 	// 1. Compile elements and store their final registers
 	elementRegs := make([]Register, elementCount)
@@ -258,16 +280,97 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 	return hint, nil
 }
 
+// New implementation for arrays with spread elements
+func (c *Compiler) compileArrayLiteralWithSpread(node *parser.ArrayLiteral, hint Register, tempRegs []Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+
+	// Start with an empty array
+	c.emitOpCode(vm.OpMakeArray, line)
+	c.emitByte(byte(hint)) // DestReg: result array
+	c.emitByte(0)          // StartReg: unused for empty array
+	c.emitByte(0)          // Count: 0 elements
+
+	// Process each element, adding to the result array
+	for _, elem := range node.Elements {
+		switch e := elem.(type) {
+		case *parser.SpreadElement:
+			// Compile the spread expression (should be an array)
+			spreadReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, spreadReg)
+			_, err := c.compileNode(e.Argument, spreadReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Use OpArraySpread to append all elements from spreadReg to hint
+			c.emitOpCode(vm.OpArraySpread, line)
+			c.emitByte(byte(hint))     // DestReg: result array (modified in place)
+			c.emitByte(byte(spreadReg)) // SrcReg: array to spread
+
+		default:
+			// Regular element: compile and add to array
+			elemReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, elemReg)
+			_, err := c.compileNode(elem, elemReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Create a temporary single-element array and spread it
+			singleElemArrayReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, singleElemArrayReg)
+			c.emitOpCode(vm.OpMakeArray, line)
+			c.emitByte(byte(singleElemArrayReg)) // DestReg: temporary array
+			c.emitByte(byte(elemReg))            // StartReg: single element
+			c.emitByte(1)                        // Count: 1 element
+
+			// Spread the single-element array into the result
+			c.emitOpCode(vm.OpArraySpread, line)
+			c.emitByte(byte(hint))                // DestReg: result array (modified in place)
+			c.emitByte(byte(singleElemArrayReg))  // SrcReg: single-element array
+		}
+	}
+
+	// Result array is now in hint register
+	return hint, nil
+}
+
 func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
 	line := parser.GetTokenFromNode(node).Line
+
+	// Track temporary registers for cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
 
 	// 1. Create an empty object in hint register
 	c.emitMakeEmptyObject(hint, line)
 
 	// 2. Set properties one by one
 	for _, prop := range node.Properties {
-		// Compile Key (must evaluate to string constant for OpSetProp in Phase 1)
+		// Check if this is a spread element
+		if spreadElement, isSpread := prop.Key.(*parser.SpreadElement); isSpread {
+			// Handle spread syntax: {...obj}
+			spreadReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, spreadReg)
+			_, err := c.compileNode(spreadElement.Argument, spreadReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Use OpObjectSpread to copy all properties from spreadReg to hint
+			c.emitOpCode(vm.OpObjectSpread, line)
+			c.emitByte(byte(hint))     // DestReg: result object (modified in place)
+			c.emitByte(byte(spreadReg)) // SrcReg: object to spread
+
+			continue
+		}
+
+		// Regular property: compile key and value
 		var keyConstIdx uint16 = 0xFFFF // Invalid index marker
 		switch keyNode := prop.Key.(type) {
 		case *parser.Identifier:
@@ -288,18 +391,15 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 
 		// Compile Value into a temporary register
 		valueReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, valueReg)
 		_, err := c.compileNode(prop.Value, valueReg)
 		if err != nil {
-			c.regAlloc.Free(valueReg)
 			return BadRegister, err
 		}
 		debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
 
 		// Emit OpSetProp: hint[keyConstIdx] = valueReg
 		c.emitSetProp(hint, valueReg, keyConstIdx, line)
-
-		// Free the temporary value register
-		c.regAlloc.Free(valueReg)
 	}
 
 	// The object is fully constructed in hint register

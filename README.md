@@ -89,7 +89,6 @@ The engine's warmed up and running decent up until the first bend! I've got the 
 - Map/Set collections, WeakMap/WeakSet
 - Typed Arrays, Symbols, Decorators
 - Namespaces, advanced TypeScript features
-- Spread syntax in array/object literals (`[...arr]`, `{...obj}`)
 
 I'm not targeting any specific TypeScript or ECMAScript version - I'm just vibing in the workshop, implementing whatever seems fun or necessary. Sometimes that means skipping the hard stuff and sometimes it means going deep on random features that caught my interest.
 

@@ -1194,6 +1194,92 @@ startExecution:
 			registers[destReg] = Number(length)
 		// --- END NEW ---
 
+		// --- NEW: Array Spread Support ---
+		case OpArraySpread:
+			destReg := code[ip]
+			sourceReg := code[ip+1]
+			ip += 2
+
+			destVal := registers[destReg]
+			sourceVal := registers[sourceReg]
+
+			// Validate that both are arrays
+			if destVal.Type() != TypeArray {
+				frame.ip = ip
+				status := vm.runtimeError("OpArraySpread: destination must be an array, got '%v'", destVal.Type())
+				return status, Undefined
+			}
+			if sourceVal.Type() != TypeArray {
+				frame.ip = ip
+				status := vm.runtimeError("OpArraySpread: source must be an array, got '%v'", sourceVal.Type())
+				return status, Undefined
+			}
+
+			// Extract array objects
+			destArray := AsArray(destVal)
+			sourceArray := AsArray(sourceVal)
+
+			// Append all elements from source to destination
+			destArray.elements = append(destArray.elements, sourceArray.elements...)
+			destArray.length = len(destArray.elements)
+
+		// --- NEW: Object Spread Support ---
+		case OpObjectSpread:
+			destReg := code[ip]
+			sourceReg := code[ip+1]
+			ip += 2
+
+			destVal := registers[destReg]
+			sourceVal := registers[sourceReg]
+
+			// Validate that both are objects (TypeObject or TypeDictObject)
+			if destVal.Type() != TypeObject && destVal.Type() != TypeDictObject {
+				frame.ip = ip
+				status := vm.runtimeError("OpObjectSpread: destination must be an object, got '%v'", destVal.Type())
+				return status, Undefined
+			}
+			if sourceVal.Type() != TypeObject && sourceVal.Type() != TypeDictObject {
+				frame.ip = ip
+				status := vm.runtimeError("OpObjectSpread: source must be an object, got '%v'", sourceVal.Type())
+				return status, Undefined
+			}
+
+			// Copy all enumerable properties from source to destination
+			var sourceKeys []string
+			switch sourceVal.Type() {
+			case TypeDictObject:
+				sourceDict := AsDictObject(sourceVal)
+				sourceKeys = sourceDict.OwnKeys()
+				// Copy each property
+				for _, key := range sourceKeys {
+					if value, exists := sourceDict.GetOwn(key); exists {
+						if destVal.Type() == TypeDictObject {
+							destDict := AsDictObject(destVal)
+							destDict.SetOwn(key, value)
+						} else {
+							destObj := AsPlainObject(destVal)
+							destObj.SetOwn(key, value)
+						}
+					}
+				}
+			case TypeObject:
+				sourceObj := AsPlainObject(sourceVal)
+				sourceKeys = sourceObj.OwnKeys()
+				// Copy each property
+				for _, key := range sourceKeys {
+					if value, exists := sourceObj.GetOwn(key); exists {
+						if destVal.Type() == TypeDictObject {
+							destDict := AsDictObject(destVal)
+							destDict.SetOwn(key, value)
+						} else {
+							destObj := AsPlainObject(destVal)
+							destObj.SetOwn(key, value)
+						}
+					}
+				}
+			}
+		// --- END NEW ---
+
 		// --- NEW: Bitwise & Shift ---
 		case OpBitwiseNot:
 			destReg := code[ip]

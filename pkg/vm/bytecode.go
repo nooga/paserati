@@ -127,6 +127,14 @@ const (
 	OpArraySlice OpCode = 63 // Rx Ry Rz: Rx = Ry.slice(Rz) - slice array from start index
 	// --- END NEW ---
 
+	// --- NEW: Array Spread Support ---
+	OpArraySpread OpCode = 68 // Rx Ry: Append all elements from array in Ry to array in Rx
+	// --- END NEW ---
+
+	// --- NEW: Object Spread Support ---
+	OpObjectSpread OpCode = 69 // Rx Ry: Copy all enumerable properties from object in Ry to object in Rx
+	// --- END NEW ---
+
 	// --- NEW: Object Copy Support for Rest Properties ---
 	OpCopyObjectExcluding OpCode = 64 // Rx Ry Rz: Rx = copy Ry excluding properties in array Rz
 	// --- END NEW ---
@@ -281,6 +289,10 @@ func (op OpCode) String() string {
 		return "OpGetOwnKeys"
 	case OpArraySlice:
 		return "OpArraySlice"
+	case OpArraySpread:
+		return "OpArraySpread"
+	case OpObjectSpread:
+		return "OpObjectSpread"
 	case OpCopyObjectExcluding:
 		return "OpCopyObjectExcluding"
 	// --- END NEW ---
@@ -467,6 +479,12 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.getIndexInstruction(builder, instruction.String(), offset)
 	case OpSetIndex:
 		return c.setIndexInstruction(builder, instruction.String(), offset)
+	case OpArraySlice:
+		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset)
+	case OpArraySpread:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset)
+	case OpObjectSpread:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset)
 
 	// --- NEW: Object Operations Disassembly ---
 	case OpGetProp:
