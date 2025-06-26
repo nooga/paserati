@@ -28,10 +28,12 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 		}
 	}()
 
-	// 1. For OpNew, we need constructor + arguments in contiguous registers
+	// 1. Determine total argument count needed (including optional parameter padding)
+	totalArgCount := c.determineTotalArgCountForNew(node)
+	
+	// 2. For OpNew, we need constructor + arguments in contiguous registers
 	// Allocate a contiguous block: [constructor, arg1, arg2, ...]
-	argCount := len(node.Arguments)
-	totalRegs := 1 + argCount // constructor + arguments
+	totalRegs := 1 + totalArgCount // constructor + arguments
 	
 	constructorReg := c.regAlloc.AllocContiguous(totalRegs)
 	// Add all registers to tempRegs for cleanup
@@ -39,25 +41,20 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 		tempRegs = append(tempRegs, constructorReg+Register(i))
 	}
 	
-	// Compile constructor into first register
+	// 3. Compile constructor into first register
 	_, err := c.compileNode(node.Constructor, constructorReg)
 	if err != nil {
 		return BadRegister, err
 	}
 	
-	// Compile arguments into subsequent registers
-	for i, arg := range node.Arguments {
-		argReg := constructorReg + 1 + Register(i)
-		_, err := c.compileNode(arg, argReg)
-		if err != nil {
-			return BadRegister, err
-		}
+	// 4. Compile arguments with optional parameter handling (same as CallExpression)
+	_, actualArgCount, err := c.compileArgumentsWithOptionalHandlingForNew(node, constructorReg+1)
+	if err != nil {
+		return BadRegister, err
 	}
 
-	// Arguments are already in correct positions - no moves needed!
-
-	// 4. Emit OpNew (constructor call) using hint as result register
-	c.emitNew(hint, constructorReg, byte(argCount), node.Token.Line)
+	// 5. Emit OpNew (constructor call) using hint as result register
+	c.emitNew(hint, constructorReg, byte(actualArgCount), node.Token.Line)
 
 	return hint, nil
 }
@@ -1113,4 +1110,120 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 
 	// TODO: Free conditionReg if no longer needed?
 	return BadRegister, nil
+}
+
+// Helper function to determine total argument count for NewExpression including optional parameters
+func (c *Compiler) determineTotalArgCountForNew(node *parser.NewExpression) int {
+	// Calculate effective argument count, expanding spread elements
+	providedArgCount := c.calculateEffectiveArgCount(node.Arguments)
+
+	// Get constructor type to check for optional parameters
+	constructorType := node.Constructor.GetComputedType()
+	var expectedParamCount int
+	var optionalParams []bool
+
+	if constructorType != nil {
+		if objType, ok := constructorType.(*types.ObjectType); ok && objType.IsConstructable() && len(objType.ConstructSignatures) > 0 {
+			// For constructors, use construct signatures instead of call signatures
+			sig := objType.ConstructSignatures[0] // Default to first signature
+			bestMatch := sig
+			bestScore := -1
+			
+			for _, candidateSig := range objType.ConstructSignatures {
+				score := 0
+				// Prefer exact parameter count match
+				if len(candidateSig.ParameterTypes) == providedArgCount {
+					score += 10
+				}
+				// Or compatible with optional parameters
+				requiredParams := 0
+				for i, isOptional := range candidateSig.OptionalParams {
+					if i < len(candidateSig.ParameterTypes) && !isOptional {
+						requiredParams++
+					}
+				}
+				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
+					score += 5
+				}
+				
+				if score > bestScore {
+					bestScore = score
+					bestMatch = candidateSig
+				}
+			}
+			
+			expectedParamCount = len(bestMatch.ParameterTypes)
+			optionalParams = bestMatch.OptionalParams
+		}
+	}
+
+	// Determine final argument count (provided args + undefined padding for optional params)
+	finalArgCount := providedArgCount
+	if len(optionalParams) == expectedParamCount && providedArgCount < expectedParamCount {
+		// Count how many optional parameters we need to pad
+		for i := providedArgCount; i < expectedParamCount; i++ {
+			if i < len(optionalParams) && optionalParams[i] {
+				finalArgCount++
+			} else {
+				break // Stop at first required parameter
+			}
+		}
+	}
+
+	return finalArgCount
+}
+
+// Helper function to compile arguments for NewExpression with optional parameter handling
+func (c *Compiler) compileArgumentsWithOptionalHandlingForNew(node *parser.NewExpression, firstArgReg Register) ([]Register, int, errors.PaseratiError) {
+	// Get constructor type information for optional parameter analysis
+	constructorType := node.Constructor.GetComputedType()
+	var expectedParamCount int
+	var optionalParams []bool
+
+	if constructorType != nil {
+		if objType, ok := constructorType.(*types.ObjectType); ok && objType.IsConstructable() && len(objType.ConstructSignatures) > 0 {
+			sig := objType.ConstructSignatures[0] // Use first construct signature for now
+			expectedParamCount = len(sig.ParameterTypes)
+			optionalParams = sig.OptionalParams
+		}
+	}
+
+	// Determine final argument count (with padding for optional parameters)
+	providedArgCount := len(node.Arguments)
+	finalArgCount := providedArgCount
+
+	if len(optionalParams) == expectedParamCount && providedArgCount < expectedParamCount {
+		// Count how many optional parameters we need to pad
+		for i := providedArgCount; i < expectedParamCount; i++ {
+			if i < len(optionalParams) && optionalParams[i] {
+				finalArgCount++
+			} else {
+				break // Stop at first required parameter
+			}
+		}
+	}
+
+	// Create slice of target registers
+	argRegs := make([]Register, finalArgCount)
+	for i := 0; i < finalArgCount; i++ {
+		argRegs[i] = firstArgReg + Register(i)
+	}
+
+	// Compile provided arguments
+	for i, arg := range node.Arguments {
+		if i < len(argRegs) {
+			_, err := c.compileNode(arg, argRegs[i])
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+	}
+
+	// Pad missing optional parameters with undefined
+	for i := providedArgCount; i < finalArgCount; i++ {
+		targetReg := argRegs[i]
+		c.emitLoadUndefined(targetReg, node.Token.Line)
+	}
+
+	return argRegs, finalArgCount, nil
 }

@@ -34,8 +34,8 @@ func (p *Parser) parseClassDeclaration() Statement {
 		return nil
 	}
 	
-	// parseClassBody leaves us at the '}' token, advance past it
-	p.nextToken()
+	// parseClassBody leaves us at the '}' token, don't advance past it
+	// Let the main parsing loop handle advancing to the next token
 	
 	return &ClassDeclaration{
 		Token:      classToken,
@@ -74,8 +74,8 @@ func (p *Parser) parseClassExpression() Expression {
 		return nil
 	}
 	
-	// parseClassBody leaves us at the '}' token, advance past it
-	p.nextToken()
+	// parseClassBody leaves us at the '}' token, don't advance past it
+	// Let the main parsing loop handle advancing to the next token
 	
 	return &ClassExpression{
 		Token:      classToken,
@@ -176,13 +176,15 @@ func (p *Parser) parseConstructor(isStatic bool) *MethodDefinition {
 		return nil
 	}
 	
-	// Parse return type annotation if present (skip for now)
+	// Parse return type annotation if present
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // consume ':'
 		p.nextToken() // move to start of type expression
-		// Skip the type annotation by parsing until we hit the body
-		for !p.curTokenIs(lexer.LBRACE) && !p.curTokenIs(lexer.EOF) {
-			p.nextToken()
+		
+		// Parse the return type using existing type parsing logic
+		functionLiteral.ReturnTypeAnnotation = p.parseTypeExpression()
+		if functionLiteral.ReturnTypeAnnotation == nil {
+			return nil
 		}
 	}
 	
@@ -192,6 +194,9 @@ func (p *Parser) parseConstructor(isStatic bool) *MethodDefinition {
 	}
 	
 	functionLiteral.Body = p.parseBlockStatement()
+	
+	// parseBlockStatement leaves us at '}', advance past it
+	p.nextToken()
 	
 	return &MethodDefinition{
 		Token:    constructorToken,
@@ -226,13 +231,15 @@ func (p *Parser) parseMethod(isStatic bool) *MethodDefinition {
 		return nil
 	}
 	
-	// Parse return type annotation if present (skip for now)
+	// Parse return type annotation if present
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // consume ':'
 		p.nextToken() // move to start of type expression
-		// Skip the type annotation by parsing until we hit the body
-		for !p.curTokenIs(lexer.LBRACE) && !p.curTokenIs(lexer.EOF) {
-			p.nextToken()
+		
+		// Parse the return type using existing type parsing logic
+		functionLiteral.ReturnTypeAnnotation = p.parseTypeExpression()
+		if functionLiteral.ReturnTypeAnnotation == nil {
+			return nil
 		}
 	}
 	
@@ -242,6 +249,9 @@ func (p *Parser) parseMethod(isStatic bool) *MethodDefinition {
 	}
 	
 	functionLiteral.Body = p.parseBlockStatement()
+	
+	// parseBlockStatement leaves us at '}', advance past it
+	p.nextToken()
 	
 	return &MethodDefinition{
 		Token:    methodToken,
@@ -259,6 +269,29 @@ func (p *Parser) parseProperty(isStatic bool) *PropertyDefinition {
 	
 	p.nextToken() // move past property name
 	
+	// Check for optional marker '?' first
+	var isOptional bool
+	if p.curTokenIs(lexer.QUESTION) {
+		isOptional = true
+		p.nextToken() // Consume '?'
+	}
+	
+	// Parse optional type annotation using interface pattern
+	var typeAnnotation Expression
+	if p.curTokenIs(lexer.COLON) {
+		// Already at ':' token, move to type expression
+		p.nextToken() // Move to the start of the type expression
+		
+		// Parse type
+		typeAnnotation = p.parseTypeExpression()
+		if typeAnnotation == nil {
+			return nil
+		}
+		
+		// After parsing type, advance to next token
+		p.nextToken()
+	}
+	
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
@@ -271,9 +304,11 @@ func (p *Parser) parseProperty(isStatic bool) *PropertyDefinition {
 	}
 	
 	return &PropertyDefinition{
-		Token:    propertyToken,
-		Key:      propertyName,
-		Value:    initializer,
-		IsStatic: isStatic,
+		Token:          propertyToken,
+		Key:            propertyName,
+		TypeAnnotation: typeAnnotation,
+		Value:          initializer,
+		IsStatic:       isStatic,
+		Optional:       isOptional,
 	}
 }

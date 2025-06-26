@@ -117,7 +117,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	functionsToVisitBody := []*parser.FunctionLiteral{} // Function literals needing body check in Pass 3
 
 	// --- Pass 1: Define ALL Type Aliases ---
-	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases and Interfaces ---\n")
+	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases, Interfaces, and Classes ---\n")
 	for _, stmt := range program.Statements {
 		if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
 			debugPrintf("// [Checker Pass 1] Processing Type Alias: %s\n", aliasStmt.Name.Value)
@@ -129,6 +129,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.checkInterfaceDeclaration(interfaceStmt)
 			nodesProcessedPass1[interfaceStmt] = true
 			nodesProcessedPass2[interfaceStmt] = true // Also mark for Pass 2 skip
+		} else if classStmt, ok := stmt.(*parser.ClassDeclaration); ok {
+			debugPrintf("// [Checker Pass 1] Processing Class: %s\n", classStmt.Name.Value)
+			c.checkClassDeclaration(classStmt)
+			nodesProcessedPass1[classStmt] = true
+			nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
 		}
 	}
 	debugPrintf("// --- Checker - Pass 1: Complete ---\n")
@@ -1783,6 +1788,30 @@ func (c *Checker) visit(node parser.Node) {
 	// --- Class Declarations ---
 	case *parser.ClassDeclaration:
 		c.checkClassDeclaration(node)
+	
+	case *parser.ClassExpression:
+		// Convert ClassExpression to ClassDeclaration for checking
+		// The type checker treats them the same way
+		if node.Name == nil {
+			// Anonymous classes not yet supported
+			c.addError(node, "anonymous classes are not yet supported")
+			node.SetComputedType(types.Any)
+			return
+		}
+		classDecl := &parser.ClassDeclaration{
+			Token:      node.Token,
+			Name:       node.Name,
+			SuperClass: node.SuperClass,
+			Body:       node.Body,
+		}
+		c.checkClassDeclaration(classDecl)
+		// Set the computed type on the expression node as well
+		// Class expressions evaluate to their constructor function
+		if ctorType, _, exists := c.env.Resolve(node.Name.Value); exists {
+			node.SetComputedType(ctorType)
+		} else {
+			node.SetComputedType(types.Any)
+		}
 
 	// --- Exception Handling Statements ---
 	case *parser.TryStatement:

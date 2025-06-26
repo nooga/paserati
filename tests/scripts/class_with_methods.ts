@@ -1,4 +1,4 @@
-// expect: Hello, my name is Max
+// expect: Hello, my name is Max and I'm a student
 // Class with methods test
 class Person {
   name;

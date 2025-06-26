@@ -383,6 +383,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 // --- Statement Parsing ---
 
 func (p *Parser) parseStatement() Statement {
+	debugPrint("parseStatement: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 	switch p.curToken.Type {
 	case lexer.LET:
 		return p.parseLetStatement()
@@ -413,7 +414,7 @@ func (p *Parser) parseStatement() Statement {
 	case lexer.FUNCTION:
 		return p.parseFunctionDeclarationStatement()
 	case lexer.CLASS:
-		return p.parseClassDeclaration()
+		return p.parseClassDeclarationStatement()
 	case lexer.TRY:
 		return p.parseTryStatement()
 	case lexer.THROW:
@@ -447,6 +448,34 @@ func (p *Parser) parseFunctionDeclarationStatement() *ExpressionStatement {
 		p.nextToken()
 	}
 
+	return stmt
+}
+
+// --- Class Declaration Statement Parsing ---
+func (p *Parser) parseClassDeclarationStatement() *ExpressionStatement {
+	// Parse the class as an expression (ClassExpression)
+	// This is similar to how function declarations work
+	classExpr := p.parseClassExpression()
+	if classExpr == nil {
+		// If class parsing failed, return an empty expression statement
+		// to avoid nil statement that would cause panic
+		return &ExpressionStatement{
+			Token:      p.curToken,
+			Expression: nil,
+		}
+	}
+	
+	// Wrap it in an ExpressionStatement
+	stmt := &ExpressionStatement{
+		Token:      p.curToken,
+		Expression: classExpr,
+	}
+	
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	
 	return stmt
 }
 

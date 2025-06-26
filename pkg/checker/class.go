@@ -20,14 +20,26 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// 2. Create instance type from methods and properties
 	instanceType := c.createInstanceType(node.Body)
 	
-	// 3. Create constructor signature from constructor method  
+	// 3. Register the class name as a type alias pointing to the instance type EARLY
+	// This allows static methods to use the class name in type annotations
+	if !c.env.DefineTypeAlias(node.Name.Value, instanceType) {
+		c.addError(node.Name, fmt.Sprintf("failed to define class type '%s'", node.Name.Value))
+		return
+	}
+	debugPrintf("// [Checker Class] Early defined class type alias '%s': %s\n", 
+		node.Name.Value, instanceType.String())
+	
+	// 4. Create constructor signature from constructor method  
 	constructorSig := c.createConstructorSignature(node.Body, instanceType)
 	
-	// 4. Create constructor function type (ObjectType with construct signature)
+	// 5. Create constructor function type (ObjectType with construct signature)
 	// This represents the class constructor function, not a separate "class type"
 	constructorType := types.NewConstructorType(constructorSig)
 	
-	// 5. Register the constructor function in the environment
+	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
+	constructorType = c.addStaticMembers(node.Body, constructorType)
+	
+	// 6. Register the constructor function in the environment
 	// When we reference "Animal", we get the constructor function, not a separate class type
 	if !c.env.Define(node.Name.Value, constructorType, false) {
 		c.addError(node.Name, fmt.Sprintf("failed to define class '%s'", node.Name.Value))
@@ -140,6 +152,34 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 	}
 	
 	return types.Any
+}
+
+// addStaticMembers adds static methods and properties to the constructor type
+func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *types.ObjectType) *types.ObjectType {
+	// Add static methods
+	for _, method := range body.Methods {
+		if method.IsStatic && method.Kind != "constructor" {
+			methodType := c.inferMethodType(method)
+			constructorType = constructorType.WithProperty(method.Key.Value, methodType)
+			debugPrintf("// [Checker Class] Added static method '%s' to constructor type: %s\n", 
+				method.Key.Value, methodType.String())
+		}
+	}
+	
+	// Add static properties
+	for _, prop := range body.Properties {
+		if prop.IsStatic {
+			propType := c.inferPropertyType(prop)
+			constructorType = constructorType.WithProperty(prop.Key.Value, propType)
+			if prop.Optional {
+				constructorType.OptionalProperties[prop.Key.Value] = true
+			}
+			debugPrintf("// [Checker Class] Added static property '%s' to constructor type: %s\n", 
+				prop.Key.Value, propType.String())
+		}
+	}
+	
+	return constructorType
 }
 
 // extractParameterTypes extracts types from function parameters

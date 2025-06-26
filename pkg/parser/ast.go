@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"paserati/pkg/lexer" // Need token types
 	"paserati/pkg/source" // Need source package for SourceFile
 	"paserati/pkg/types" // Need types package for ComputedType
@@ -2265,10 +2266,12 @@ func (md *MethodDefinition) String() string {
 // PropertyDefinition represents a property declaration in a class
 type PropertyDefinition struct {
 	BaseExpression
-	Token    lexer.Token // The property name token
-	Key      *Identifier // Property name
-	Value    Expression  // Initializer expression (can be nil)
-	IsStatic bool        // For future static property support
+	Token          lexer.Token // The property name token
+	Key            *Identifier // Property name
+	TypeAnnotation Expression  // Type annotation (can be nil)
+	Value          Expression  // Initializer expression (can be nil)
+	IsStatic       bool        // For future static property support
+	Optional       bool        // Whether the property is optional (prop?)
 }
 
 func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }
@@ -2280,10 +2283,336 @@ func (pd *PropertyDefinition) String() string {
 	if pd.Key != nil {
 		out.WriteString(pd.Key.String())
 	}
+	if pd.Optional {
+		out.WriteString("?")
+	}
+	if pd.TypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(pd.TypeAnnotation.String())
+	}
 	if pd.Value != nil {
 		out.WriteString(" = ")
 		out.WriteString(pd.Value.String())
 	}
 	out.WriteString(";")
 	return out.String()
+}
+
+// --- AST Dump Utility ---
+
+// DumpASTEnabled controls whether AST dumping is enabled
+var DumpASTEnabled = false
+
+// DumpAST prints a structured representation of the AST to stderr if enabled
+func DumpAST(program *Program, title string) {
+	if !DumpASTEnabled {
+		return
+	}
+	
+	fmt.Fprintf(os.Stderr, "\n=== AST DUMP: %s ===\n", title)
+	if program == nil {
+		fmt.Fprintf(os.Stderr, "Program: null\n")
+		return
+	}
+	
+	fmt.Fprintf(os.Stderr, "Program {\n")
+	fmt.Fprintf(os.Stderr, "  statements: [\n")
+	
+	for i, stmt := range program.Statements {
+		fmt.Fprintf(os.Stderr, "    [%d] ", i)
+		dumpNode(stmt, "    ")
+		if i < len(program.Statements)-1 {
+			fmt.Fprintf(os.Stderr, ",")
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+	
+	fmt.Fprintf(os.Stderr, "  ]")
+	
+	if len(program.HoistedDeclarations) > 0 {
+		fmt.Fprintf(os.Stderr, ",\n  hoistedDeclarations: {\n")
+		count := 0
+		for name, decl := range program.HoistedDeclarations {
+			fmt.Fprintf(os.Stderr, "    %s: ", name)
+			dumpNode(decl, "    ")
+			if count < len(program.HoistedDeclarations)-1 {
+				fmt.Fprintf(os.Stderr, ",")
+			}
+			fmt.Fprintf(os.Stderr, "\n")
+			count++
+		}
+		fmt.Fprintf(os.Stderr, "  }")
+	}
+	
+	fmt.Fprintf(os.Stderr, "\n}\n=== END AST DUMP ===\n\n")
+}
+
+// dumpNode prints a structured representation of an AST node
+func dumpNode(node Node, indent string) {
+	if node == nil {
+		fmt.Fprintf(os.Stderr, "null")
+		return
+	}
+	
+	switch n := node.(type) {
+	case *LetStatement:
+		fmt.Fprintf(os.Stderr, "LetStatement {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		dumpNode(n.Name, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  typeAnnotation: ", indent)
+		dumpNode(n.TypeAnnotation, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
+		dumpNode(n.Value, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *VarStatement:
+		fmt.Fprintf(os.Stderr, "VarStatement {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		dumpNode(n.Name, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  typeAnnotation: ", indent)
+		dumpNode(n.TypeAnnotation, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
+		dumpNode(n.Value, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *ConstStatement:
+		fmt.Fprintf(os.Stderr, "ConstStatement {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		dumpNode(n.Name, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  typeAnnotation: ", indent)
+		dumpNode(n.TypeAnnotation, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
+		dumpNode(n.Value, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *ExpressionStatement:
+		fmt.Fprintf(os.Stderr, "ExpressionStatement {\n")
+		fmt.Fprintf(os.Stderr, "%s  expression: ", indent)
+		dumpNode(n.Expression, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *ClassDeclaration:
+		fmt.Fprintf(os.Stderr, "ClassDeclaration {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		dumpNode(n.Name, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  superClass: ", indent)
+		if n.SuperClass != nil {
+			dumpNode(n.SuperClass, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, ",\n%s  body: ", indent)
+		dumpNode(n.Body, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *ClassExpression:
+		fmt.Fprintf(os.Stderr, "ClassExpression {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		if n.Name != nil {
+			dumpNode(n.Name, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, ",\n%s  superClass: ", indent)
+		if n.SuperClass != nil {
+			dumpNode(n.SuperClass, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, ",\n%s  body: ", indent)
+		dumpNode(n.Body, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *ClassBody:
+		fmt.Fprintf(os.Stderr, "ClassBody {\n")
+		fmt.Fprintf(os.Stderr, "%s  properties: [", indent)
+		for i, prop := range n.Properties {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			dumpNode(prop, indent+"  ")
+		}
+		fmt.Fprintf(os.Stderr, "],\n%s  methods: [", indent)
+		for i, method := range n.Methods {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			dumpNode(method, indent+"  ")
+		}
+		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
+		
+	case *PropertyDefinition:
+		fmt.Fprintf(os.Stderr, "PropertyDefinition {\n")
+		fmt.Fprintf(os.Stderr, "%s  key: ", indent)
+		dumpNode(n.Key, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  typeAnnotation: ", indent)
+		dumpNode(n.TypeAnnotation, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
+		dumpNode(n.Value, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  isStatic: %t", indent, n.IsStatic)
+		fmt.Fprintf(os.Stderr, ",\n%s  optional: %t", indent, n.Optional)
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *MethodDefinition:
+		fmt.Fprintf(os.Stderr, "MethodDefinition {\n")
+		fmt.Fprintf(os.Stderr, "%s  key: ", indent)
+		dumpNode(n.Key, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  kind: %q", indent, n.Kind)
+		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
+		dumpNode(n.Value, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  isStatic: %t", indent, n.IsStatic)
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *NewExpression:
+		fmt.Fprintf(os.Stderr, "NewExpression {\n")
+		fmt.Fprintf(os.Stderr, "%s  constructor: ", indent)
+		dumpNode(n.Constructor, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  arguments: [", indent)
+		for i, arg := range n.Arguments {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			dumpNode(arg, indent+"  ")
+		}
+		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
+		
+	case *CallExpression:
+		fmt.Fprintf(os.Stderr, "CallExpression {\n")
+		fmt.Fprintf(os.Stderr, "%s  function: ", indent)
+		dumpNode(n.Function, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  arguments: [", indent)
+		for i, arg := range n.Arguments {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			dumpNode(arg, indent+"  ")
+		}
+		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
+		
+	case *MemberExpression:
+		fmt.Fprintf(os.Stderr, "MemberExpression {\n")
+		fmt.Fprintf(os.Stderr, "%s  object: ", indent)
+		dumpNode(n.Object, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  property: ", indent)
+		dumpNode(n.Property, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *AssignmentExpression:
+		fmt.Fprintf(os.Stderr, "AssignmentExpression {\n")
+		fmt.Fprintf(os.Stderr, "%s  operator: %q", indent, n.Operator)
+		fmt.Fprintf(os.Stderr, ",\n%s  left: ", indent)
+		dumpNode(n.Left, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
+		dumpNode(n.Value, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *Identifier:
+		fmt.Fprintf(os.Stderr, "Identifier { name: %q }", n.Value)
+		
+	case *StringLiteral:
+		fmt.Fprintf(os.Stderr, "StringLiteral { value: %q }", n.Value)
+		
+	case *NumberLiteral:
+		fmt.Fprintf(os.Stderr, "NumberLiteral { value: %g }", n.Value)
+		
+	case *BooleanLiteral:
+		fmt.Fprintf(os.Stderr, "BooleanLiteral { value: %t }", n.Value)
+		
+	case *NullLiteral:
+		fmt.Fprintf(os.Stderr, "NullLiteral")
+		
+	case *UndefinedLiteral:
+		fmt.Fprintf(os.Stderr, "UndefinedLiteral")
+		
+	case *ThisExpression:
+		fmt.Fprintf(os.Stderr, "ThisExpression")
+		
+	case *FunctionLiteral:
+		fmt.Fprintf(os.Stderr, "FunctionLiteral {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		if n.Name != nil {
+			dumpNode(n.Name, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, ",\n%s  typeParameters: [", indent)
+		for i, typeParam := range n.TypeParameters {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			dumpNode(typeParam, indent+"  ")
+		}
+		fmt.Fprintf(os.Stderr, "],\n%s  parameters: [", indent)
+		for i, param := range n.Parameters {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			dumpNode(param, indent+"  ")
+		}
+		fmt.Fprintf(os.Stderr, "],\n%s  restParameter: ", indent)
+		if n.RestParameter != nil {
+			dumpNode(n.RestParameter, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, ",\n%s  returnTypeAnnotation: ", indent)
+		if n.ReturnTypeAnnotation != nil {
+			dumpNode(n.ReturnTypeAnnotation, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, ",\n%s  body: ", indent)
+		if n.Body != nil {
+			dumpNode(n.Body, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *BlockStatement:
+		fmt.Fprintf(os.Stderr, "BlockStatement {\n")
+		fmt.Fprintf(os.Stderr, "%s  statements: [", indent)
+		for i, stmt := range n.Statements {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			fmt.Fprintf(os.Stderr, "\n%s    ", indent)
+			dumpNode(stmt, indent+"    ")
+		}
+		if len(n.Statements) > 0 {
+			fmt.Fprintf(os.Stderr, "\n%s  ", indent)
+		}
+		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
+		
+	case *Parameter:
+		fmt.Fprintf(os.Stderr, "Parameter {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		dumpNode(n.Name, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  typeAnnotation: ", indent)
+		dumpNode(n.TypeAnnotation, indent+"  ")
+		fmt.Fprintf(os.Stderr, ",\n%s  optional: %t", indent, n.Optional)
+		fmt.Fprintf(os.Stderr, ",\n%s  defaultValue: ", indent)
+		dumpNode(n.DefaultValue, indent+"  ")
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	case *RestParameter:
+		fmt.Fprintf(os.Stderr, "RestParameter {\n")
+		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
+		if n.Name != nil {
+			dumpNode(n.Name, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, ",\n%s  typeAnnotation: ", indent)
+		if n.TypeAnnotation != nil {
+			dumpNode(n.TypeAnnotation, indent+"  ")
+		} else {
+			fmt.Fprintf(os.Stderr, "null")
+		}
+		fmt.Fprintf(os.Stderr, "\n%s}", indent)
+		
+	default:
+		// Fallback for unhandled node types
+		fmt.Fprintf(os.Stderr, "%T { /* details not implemented */ }", node)
+	}
 }

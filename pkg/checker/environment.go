@@ -131,15 +131,13 @@ func (e *Environment) GetPrimitivePrototypeMethodType(primitiveName, methodName 
 
 // Define adds a new *variable* type binding and its const status to the current environment scope.
 // Returns false if the name conflicts with an existing variable/const in this scope.
+// Note: TypeScript-style declaration merging allows the same name to exist as both a value and a type.
 func (e *Environment) Define(name string, typ types.Type, isConst bool) bool {
 	// Check for conflict with existing variable/constant in this scope
 	if _, exists := e.symbols[name]; exists {
 		return false // Name already taken by a variable/const
 	}
-	// Check for conflict with existing type alias in this scope
-	if _, exists := e.typeAliases[name]; exists {
-		return false // Name already taken by a type alias
-	}
+	// Allow coexistence with type aliases (types) - this enables declaration merging for classes
 	e.symbols[name] = SymbolInfo{Type: typ, IsConst: isConst}
 	return true
 }
@@ -160,16 +158,14 @@ func (e *Environment) Update(name string, typ types.Type) bool {
 }
 
 // DefineTypeAlias adds a new *type alias* binding to the current environment scope.
-// Returns false if the alias name conflicts with an existing variable OR type alias in this scope.
+// Returns false if the alias name conflicts with an existing type alias in this scope.
+// Note: TypeScript-style declaration merging allows the same name to exist as both a value and a type.
 func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
-	// Check for conflict with existing variable/constant in this scope
-	if _, exists := e.symbols[name]; exists {
-		return false
-	}
 	// Check for conflict with existing type alias in this scope
 	if _, exists := e.typeAliases[name]; exists {
 		return false
 	}
+	// Allow coexistence with symbols (values) - this enables declaration merging for classes
 	e.typeAliases[name] = typ
 	return true
 }

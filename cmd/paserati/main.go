@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"paserati/pkg/driver"
+	"paserati/pkg/parser"
 	// \"paserati/pkg/vm\" // Remove: VM no longer directly used here
 )
 
@@ -17,8 +18,12 @@ func main() {
 	jsOutputFile := flag.String("o", "", "Output file for JavaScript emission (default: input file with .js extension)")
 	cacheStatsFlag := flag.Bool("cache-stats", false, "Show inline cache statistics after execution")
 	bytecodeFlag := flag.Bool("bytecode", false, "Show compiled bytecode before execution")
+	astDumpFlag := flag.Bool("ast", false, "Show AST dump before type checking")
 
 	flag.Parse() // Parses the command-line flags
+	
+	// Set global AST dump flag
+	parser.DumpASTEnabled = *astDumpFlag
 
 	// JavaScript emission mode
 	if *emitJSFlag {

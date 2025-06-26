@@ -23,11 +23,27 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		return BadRegister, err
 	}
 	
-	// 3. Define the class name in the symbol table (maps to constructor function)
-	c.currentSymbolTable.Define(node.Name.Value, constructorReg)
+	// 3. Set up static members on the constructor
+	err = c.setupStaticMembers(node, constructorReg)
+	if err != nil {
+		return BadRegister, err
+	}
 	
-	debugPrintf("// DEBUG compileClassDeclaration: Successfully compiled class '%s' to R%d\n", node.Name.Value, constructorReg)
-	return constructorReg, nil
+	// 4. Store the class constructor globally
+	if c.enclosing == nil {
+		// Top-level class declaration - define as global
+		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+		c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+		c.emitSetGlobal(globalIdx, constructorReg, node.Token.Line)
+		debugPrintf("// DEBUG compileClassDeclaration: Defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
+	} else {
+		// Local class declaration (inside function/block)
+		c.currentSymbolTable.Define(node.Name.Value, constructorReg)
+		debugPrintf("// DEBUG compileClassDeclaration: Defined local class '%s' in R%d\n", node.Name.Value, constructorReg)
+	}
+	
+	// Class declarations don't produce a value for the hint register
+	return BadRegister, nil
 }
 
 // compileConstructor creates a constructor function from the class constructor method
@@ -50,6 +66,9 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration) (Register, 
 		// Create default constructor
 		functionLiteral = c.createDefaultConstructor(node)
 	}
+	
+	// Inject field initializers into the constructor body
+	functionLiteral = c.injectFieldInitializers(node, functionLiteral)
 	
 	// Compile the constructor function
 	nameHint := node.Name.Value
@@ -138,5 +157,149 @@ func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototy
 	c.emitSetProp(prototypeReg, methodReg, methodNameIdx, method.Token.Line)
 	
 	debugPrintf("// DEBUG addMethodToPrototype: Method '%s' added to prototype\n", method.Key.Value)
+	return nil
+}
+
+// injectFieldInitializers creates a new function literal with field initializers prepended to the constructor body
+func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functionLiteral *parser.FunctionLiteral) *parser.FunctionLiteral {
+	// Collect field initializer statements
+	var fieldInitializers []parser.Statement
+	
+	// Extract field initializers from class properties
+	for _, property := range node.Body.Properties {
+		if property.Value != nil { // Property has an initializer
+			// Create assignment statement: this.propertyName = initializerExpression
+			assignment := &parser.AssignmentExpression{
+				Token:    property.Token,
+				Operator: "=",
+				Left: &parser.MemberExpression{
+					Token:    property.Token,
+					Object:   &parser.ThisExpression{Token: property.Token},
+					Property: property.Key,
+				},
+				Value: property.Value,
+			}
+			
+			// Wrap in expression statement
+			fieldInitStatement := &parser.ExpressionStatement{
+				Token:      property.Token,
+				Expression: assignment,
+			}
+			
+			fieldInitializers = append(fieldInitializers, fieldInitStatement)
+			debugPrintf("// DEBUG injectFieldInitializers: Added field initializer for '%s'\n", property.Key.Value)
+		}
+	}
+	
+	// If no field initializers, return original function literal
+	if len(fieldInitializers) == 0 {
+		return functionLiteral
+	}
+	
+	// Create new body with field initializers prepended to original statements
+	newStatements := make([]parser.Statement, 0, len(fieldInitializers)+len(functionLiteral.Body.Statements))
+	newStatements = append(newStatements, fieldInitializers...)
+	newStatements = append(newStatements, functionLiteral.Body.Statements...)
+	
+	// Create new function literal with modified body
+	newFunctionLiteral := &parser.FunctionLiteral{
+		Token:                functionLiteral.Token,
+		Name:                 functionLiteral.Name,
+		TypeParameters:       functionLiteral.TypeParameters,
+		Parameters:           functionLiteral.Parameters,
+		RestParameter:        functionLiteral.RestParameter,
+		ReturnTypeAnnotation: functionLiteral.ReturnTypeAnnotation,
+		Body: &parser.BlockStatement{
+			Token:      functionLiteral.Body.Token,
+			Statements: newStatements,
+		},
+	}
+	
+	debugPrintf("// DEBUG injectFieldInitializers: Created constructor with %d field initializers\n", len(fieldInitializers))
+	return newFunctionLiteral
+}
+
+// setupStaticMembers sets up static properties and methods on the constructor function
+func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructorReg Register) errors.PaseratiError {
+	debugPrintf("// DEBUG setupStaticMembers: Setting up static members for class '%s'\n", node.Name.Value)
+	
+	// Add static properties
+	for _, property := range node.Body.Properties {
+		if property.IsStatic {
+			err := c.addStaticProperty(property, constructorReg)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	
+	// Add static methods
+	for _, method := range node.Body.Methods {
+		if method.IsStatic && method.Kind != "constructor" {
+			err := c.addStaticMethod(method, constructorReg)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	
+	debugPrintf("// DEBUG setupStaticMembers: Static members setup complete for class '%s'\n", node.Name.Value)
+	return nil
+}
+
+// addStaticProperty compiles a static property and adds it to the constructor
+func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constructorReg Register) errors.PaseratiError {
+	debugPrintf("// DEBUG addStaticProperty: Adding static property '%s'\n", property.Key.Value)
+	
+	// Allocate a register for the property value
+	valueReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(valueReg)
+	
+	// Compile the property value (if it has an initializer)
+	if property.Value != nil {
+		var err errors.PaseratiError
+		compiledReg, err := c.compileNode(property.Value, valueReg)
+		if err != nil {
+			return err
+		}
+		// If compileNode returned a different register, move it to our allocated register
+		if compiledReg != valueReg {
+			c.emitMove(valueReg, compiledReg, property.Token.Line)
+			c.regAlloc.Free(compiledReg)
+		}
+	} else {
+		// No initializer, use undefined
+		c.emitLoadUndefined(valueReg, property.Token.Line)
+	}
+	
+	// Set constructor[propertyName] = value
+	propertyNameIdx := c.chunk.AddConstant(vm.String(property.Key.Value))
+	c.emitSetProp(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
+	
+	debugPrintf("// DEBUG addStaticProperty: Static property '%s' added to constructor\n", property.Key.Value)
+	return nil
+}
+
+// addStaticMethod compiles a static method and adds it to the constructor
+func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
+	debugPrintf("// DEBUG addStaticMethod: Adding static method '%s'\n", method.Key.Value)
+	
+	// Compile the method function
+	nameHint := method.Key.Value
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	if err != nil {
+		return err
+	}
+	
+	// Create closure for method
+	methodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(methodReg)
+	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
+	
+	// Set constructor[methodName] = methodFunction
+	methodNameIdx := c.chunk.AddConstant(vm.String(method.Key.Value))
+	c.emitSetProp(constructorReg, methodReg, methodNameIdx, method.Token.Line)
+	
+	debugPrintf("// DEBUG addStaticMethod: Static method '%s' added to constructor\n", method.Key.Value)
 	return nil
 }

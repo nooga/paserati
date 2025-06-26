@@ -426,6 +426,21 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ClassDeclaration:
 		return c.compileClassDeclaration(node, hint)
+	
+	case *parser.ClassExpression:
+		// Convert ClassExpression to ClassDeclaration for compilation
+		// The compiler treats them the same way
+		if node.Name == nil {
+			// Anonymous classes not yet supported
+			return BadRegister, NewCompileError(node, "anonymous classes are not yet supported")
+		}
+		classDecl := &parser.ClassDeclaration{
+			Token:      node.Token,
+			Name:       node.Name,
+			SuperClass: node.SuperClass,
+			Body:       node.Body,
+		}
+		return c.compileClassDeclaration(classDecl, hint)
 
 	case *parser.LetStatement:
 		return c.compileLetStatement(node, hint) // TODO: Fix this

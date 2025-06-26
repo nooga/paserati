@@ -54,9 +54,9 @@ func NewPaserati() *Paserati {
 func (p *Paserati) RunString(sourceCode string) (vm.Value, []errors.PaseratiError) {
 	sourceFile := source.NewEvalSource(sourceCode)
 	l := lexer.NewLexerWithSource(sourceFile)
-	parser := parser.NewParser(l)
+	parseInstance := parser.NewParser(l)
 	// Parse into a Program node, which the checker expects
-	program, parseErrs := parser.ParseProgram()
+	program, parseErrs := parseInstance.ParseProgram()
 	if len(parseErrs) > 0 {
 		// Convert parser errors (which might not implement PaseratiError directly)
 		// TODO: Ensure parser errors conform to PaseratiError interface or wrap them.
@@ -66,6 +66,9 @@ func (p *Paserati) RunString(sourceCode string) (vm.Value, []errors.PaseratiErro
 		// Let's assume parser.ParseProgram returns compatible errors for now.
 		return vm.Undefined, parseErrs
 	}
+
+	// Dump AST if enabled
+	parser.DumpAST(program, "RunString")
 
 	// --- Type Checking is now done inside Compiler.Compile using the persistent checker ---
 	// No need to call p.checker.Check(program) here directly.
@@ -118,6 +121,9 @@ func CompileString(sourceCode string) (*vm.Chunk, []errors.PaseratiError) {
 		return nil, parseErrs
 	}
 
+	// Dump AST if enabled
+	parser.DumpAST(program, "CompileString")
+
 	// --- Type Check is handled internally by Compile when no checker is set ---
 	// No need to call checker.Check() here.
 
@@ -151,6 +157,9 @@ func CompileFile(filename string) (*vm.Chunk, []errors.PaseratiError) {
 	if len(parseErrs) > 0 {
 		return nil, parseErrs
 	}
+
+	// Dump AST if enabled
+	parser.DumpAST(program, "CompileFile")
 
 	comp := compiler.NewCompiler() // Fresh compiler
 	// Compile will create and use its own internal checker
@@ -208,11 +217,14 @@ func RunFile(filename string) bool {
 	
 	// Create lexer and parser with file context
 	l := lexer.NewLexerWithSource(sourceFile)
-	parser := parser.NewParser(l)
-	program, parseErrs := parser.ParseProgram()
+	parseInstance := parser.NewParser(l)
+	program, parseErrs := parseInstance.ParseProgram()
 	if len(parseErrs) > 0 {
 		return paserati.DisplayResult(sourceCode, vm.Undefined, parseErrs)
 	}
+
+	// Dump AST if enabled
+	parser.DumpAST(program, "RunFile")
 
 	// Run the code using the session
 	chunk, compileAndTypeErrs := paserati.compiler.Compile(program)
@@ -323,11 +335,14 @@ type RunOptions struct {
 func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []errors.PaseratiError) {
 	sourceFile := source.NewEvalSource(sourceCode)
 	l := lexer.NewLexerWithSource(sourceFile)
-	parser := parser.NewParser(l)
-	program, parseErrs := parser.ParseProgram()
+	parseInstance := parser.NewParser(l)
+	program, parseErrs := parseInstance.ParseProgram()
 	if len(parseErrs) > 0 {
 		return vm.Undefined, parseErrs
 	}
+
+	// Dump AST if enabled
+	parser.DumpAST(program, "RunCode")
 
 	// --- Compilation Step ---
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
