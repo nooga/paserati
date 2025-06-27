@@ -21,8 +21,8 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 		return
 	}
 	
-	// 2. Create instance type from methods and properties
-	instanceType := c.createInstanceType(node.Name.Value, node.Body)
+	// 2. Handle inheritance relationships and create instance type from methods and properties
+	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 	
 	// 3. Register the class name as a type alias pointing to the instance type EARLY
 	// This allows static methods to use the class name in type annotations
@@ -55,9 +55,19 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 }
 
 // createInstanceType builds an object type representing instances of the class
-func (c *Checker) createInstanceType(className string, body *parser.ClassBody) *types.ObjectType {
+func (c *Checker) createInstanceType(className string, body *parser.ClassBody, superClass *parser.Identifier, implements []*parser.Identifier) *types.ObjectType {
 	// Create class instance type with metadata
 	instanceType := types.NewClassInstanceType(className)
+	
+	// Handle inheritance relationships
+	if superClass != nil {
+		c.handleClassInheritance(instanceType, superClass.Value)
+	}
+	
+	// Handle interface implementations
+	for _, iface := range implements {
+		c.handleInterfaceImplementation(instanceType, iface.Value)
+	}
 	
 	// Add methods to instance type (excluding constructor and static methods)
 	for _, method := range body.Methods {
@@ -297,6 +307,164 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 	
 	// Default to any[] for rest parameters
 	return &types.ArrayType{ElementType: types.Any}
+}
+
+// handleClassInheritance processes class inheritance (extends clause)
+func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superClassName string) {
+	debugPrintf("// [Checker Class] Handling inheritance: %s extends %s\n", instanceType.GetClassName(), superClassName)
+	
+	// Check if superclass exists and is a class
+	superType, _, exists := c.env.Resolve(superClassName)
+	if !exists {
+		c.addError(nil, fmt.Sprintf("superclass '%s' is not defined", superClassName))
+		return
+	}
+	
+	// Verify superType is a constructor (class)
+	superObjType, ok := superType.(*types.ObjectType)
+	if !ok {
+		c.addError(nil, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassName))
+		return
+	}
+	
+	// Check if it has constructor signatures (indicating it's a class constructor)
+	if len(superObjType.ConstructSignatures) == 0 {
+		c.addError(nil, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassName))
+		return
+	}
+	
+	// Get the superclass instance type
+	superInstanceType := c.getClassInstanceType(superClassName)
+	if superInstanceType == nil {
+		c.addError(nil, fmt.Sprintf("could not find instance type for superclass '%s'", superClassName))
+		return
+	}
+	
+	// Set inheritance relationship in class metadata
+	if instanceType.ClassMeta != nil {
+		instanceType.ClassMeta.SetSuperClass(superClassName)
+	}
+	
+	// Add superclass to BaseTypes for structural inheritance
+	instanceType.BaseTypes = append(instanceType.BaseTypes, superInstanceType)
+	
+	debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassName)
+}
+
+// handleInterfaceImplementation processes interface implementation (implements clause)
+func (c *Checker) handleInterfaceImplementation(instanceType *types.ObjectType, interfaceName string) {
+	debugPrintf("// [Checker Class] Handling interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	
+	// Check if interface exists
+	interfaceType, _, exists := c.env.Resolve(interfaceName)
+	if !exists {
+		c.addError(nil, fmt.Sprintf("interface '%s' is not defined", interfaceName))
+		return
+	}
+	
+	// Verify interfaceType is an interface (ObjectType without constructor signatures)
+	interfaceObjType, ok := interfaceType.(*types.ObjectType)
+	if !ok {
+		c.addError(nil, fmt.Sprintf("'%s' is not an interface and cannot be implemented", interfaceName))
+		return
+	}
+	
+	// Add interface to class metadata
+	if instanceType.ClassMeta != nil {
+		instanceType.ClassMeta.AddImplementedInterface(interfaceName)
+	}
+	
+	// Add interface to BaseTypes for structural inheritance
+	instanceType.BaseTypes = append(instanceType.BaseTypes, interfaceObjType)
+	
+	// Validate that the class actually implements the interface
+	c.validateInterfaceImplementation(instanceType, interfaceObjType, interfaceName)
+	
+	debugPrintf("// [Checker Class] Successfully set up interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+}
+
+// getClassInstanceType retrieves the instance type for a given class name
+func (c *Checker) getClassInstanceType(className string) *types.ObjectType {
+	// Try to resolve class type alias first
+	if classType, exists := c.env.ResolveType(className); exists {
+		if objType, ok := classType.(*types.ObjectType); ok && objType.IsClassInstance() {
+			return objType
+		}
+	}
+	return nil
+}
+
+// checkSuperExpression validates super expressions and determines their type
+func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
+	debugPrintf("// [Checker SuperExpr] Checking super expression\n")
+	
+	// Super is only valid within a class context
+	if c.currentClassContext == nil {
+		c.addError(node, "super expression can only be used within a class")
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Get the current class metadata
+	currentClass := c.currentClassContext.CurrentClassName
+	classInstanceType := c.getClassInstanceType(currentClass)
+	if classInstanceType == nil || classInstanceType.ClassMeta == nil {
+		c.addError(node, "super expression can only be used within a class context")
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Check if the current class has a superclass
+	superClassName := classInstanceType.ClassMeta.SuperClassName
+	if superClassName == "" {
+		c.addError(node, fmt.Sprintf("class '%s' does not extend any class", currentClass))
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Get the superclass instance type
+	superInstanceType := c.getClassInstanceType(superClassName)
+	if superInstanceType == nil {
+		c.addError(node, fmt.Sprintf("could not resolve superclass '%s'", superClassName))
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Set the computed type to the superclass instance type
+	// This allows super.method() and super() calls to work correctly
+	node.SetComputedType(superInstanceType)
+	debugPrintf("// [Checker SuperExpr] Super expression type: %s\n", superInstanceType.String())
+}
+
+// validateInterfaceImplementation checks that a class properly implements an interface
+func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, interfaceType *types.ObjectType, interfaceName string) {
+	className := classType.GetClassName()
+	debugPrintf("// [Checker Class] Validating interface implementation: %s implements %s\n", className, interfaceName)
+	
+	// Check that all interface properties are implemented
+	for propName, propType := range interfaceType.Properties {
+		classProperty, hasProp := classType.Properties[propName]
+		if !hasProp {
+			c.addError(nil, fmt.Sprintf("class '%s' is missing property '%s' required by interface '%s'", className, propName, interfaceName))
+			continue
+		}
+		
+		// Check type compatibility
+		if !types.IsAssignable(classProperty, propType) {
+			c.addError(nil, fmt.Sprintf("property '%s' in class '%s' is not compatible with interface '%s' (expected %s, got %s)", 
+				propName, className, interfaceName, propType.String(), classProperty.String()))
+		}
+	}
+	
+	// Check that all interface call signatures are implemented
+	// For classes, this typically means checking methods
+	for _, interfaceSig := range interfaceType.CallSignatures {
+		// For method implementations, we need to check if the class has compatible methods
+		// This is a simplified check - a full implementation would need more sophisticated matching
+		debugPrintf("// [Checker Class] Interface %s requires call signature: %s\n", interfaceName, interfaceSig.String())
+	}
+	
+	debugPrintf("// [Checker Class] Interface implementation validation completed for %s implements %s\n", className, interfaceName)
 }
 
 // inferReturnType determines the return type of a function

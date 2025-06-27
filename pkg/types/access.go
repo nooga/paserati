@@ -47,16 +47,22 @@ type ClassMetadata struct {
 	// Reference to the source class declaration (if available)
 	// This is used for inheritance checks and access validation
 	SourceClassName string
+	
+	// Inheritance relationships
+	SuperClassName string     // The class this class extends (if any)
+	ImplementedInterfaces []string // The interfaces this class implements
 }
 
 // NewClassMetadata creates a new ClassMetadata instance
 func NewClassMetadata(className string, isInstance bool) *ClassMetadata {
 	return &ClassMetadata{
-		ClassName:          className,
-		MemberAccess:       make(map[string]*MemberAccessInfo),
-		IsClassInstance:    isInstance,
-		IsClassConstructor: !isInstance,
-		SourceClassName:    className,
+		ClassName:             className,
+		MemberAccess:          make(map[string]*MemberAccessInfo),
+		IsClassInstance:       isInstance,
+		IsClassConstructor:    !isInstance,
+		SourceClassName:       className,
+		SuperClassName:        "", // No inheritance by default
+		ImplementedInterfaces: []string{}, // No interfaces by default
 	}
 }
 
@@ -78,6 +84,53 @@ func (cm *ClassMetadata) GetMemberAccess(memberName string) *MemberAccessInfo {
 func (cm *ClassMetadata) HasMember(memberName string) bool {
 	_, exists := cm.MemberAccess[memberName]
 	return exists
+}
+
+// SetSuperClass sets the superclass for this class
+func (cm *ClassMetadata) SetSuperClass(superClassName string) {
+	cm.SuperClassName = superClassName
+}
+
+// AddImplementedInterface adds an interface that this class implements
+func (cm *ClassMetadata) AddImplementedInterface(interfaceName string) {
+	cm.ImplementedInterfaces = append(cm.ImplementedInterfaces, interfaceName)
+}
+
+// ExtendsClass returns true if this class extends the given class name
+func (cm *ClassMetadata) ExtendsClass(className string) bool {
+	return cm.SuperClassName == className
+}
+
+// ImplementsInterface returns true if this class implements the given interface
+func (cm *ClassMetadata) ImplementsInterface(interfaceName string) bool {
+	for _, impl := range cm.ImplementedInterfaces {
+		if impl == interfaceName {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSubclassOf returns true if this class is a subclass of the given class name
+// This checks the entire inheritance chain, not just direct inheritance
+func (cm *ClassMetadata) IsSubclassOf(targetClass string, getClassMeta func(string) *ClassMetadata) bool {
+	if cm.SuperClassName == "" {
+		return false // No superclass
+	}
+	
+	if cm.SuperClassName == targetClass {
+		return true // Direct inheritance
+	}
+	
+	// Check if superclass is a subclass of the target (recursive)
+	if getClassMeta != nil {
+		superMeta := getClassMeta(cm.SuperClassName)
+		if superMeta != nil {
+			return superMeta.IsSubclassOf(targetClass, getClassMeta)
+		}
+	}
+	
+	return false
 }
 
 // IsAccessibleFrom checks if a member is accessible from a given class context

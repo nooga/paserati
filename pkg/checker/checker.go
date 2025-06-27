@@ -1146,6 +1146,10 @@ func (c *Checker) visit(node parser.Node) {
 			debugPrintf("// [Checker ThisExpr] No this context, using undefined\n")
 		}
 
+	case *parser.SuperExpression:
+		// Super expression handling - must be in a class context with inheritance
+		c.checkSuperExpression(node)
+
 	// --- Other Expressions ---
 	case *parser.Identifier:
 		// --- Check concrete pointer AFTER type switch ---
@@ -2239,4 +2243,9 @@ func (c *Checker) checkThrowStatement(node *parser.ThrowStatement) {
 	// In TypeScript, throw expressions have type 'never'
 	// but for simplicity in Phase 1, we don't need to enforce much
 	// The expression can be of any type (JavaScript allows throwing anything)
+}
+
+// GetProgram returns the program AST being checked
+func (c *Checker) GetProgram() *parser.Program {
+	return c.program
 }

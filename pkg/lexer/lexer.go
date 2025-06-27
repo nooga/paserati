@@ -166,6 +166,10 @@ const (
 	INTERFACE TokenType = "INTERFACE"
 	// EXTENDS keyword
 	EXTENDS TokenType = "EXTENDS"
+	// IMPLEMENTS keyword
+	IMPLEMENTS TokenType = "IMPLEMENTS"
+	// SUPER keyword
+	SUPER TokenType = "SUPER"
 	// OF keyword
 	OF TokenType = "OF"
 	// AS keyword
@@ -218,6 +222,8 @@ var keywords = map[string]TokenType{
 	"new":        NEW,        // Added for NEW keyword
 	"interface":  INTERFACE,  // Added for interface keyword
 	"extends":    EXTENDS,    // Added for extends keyword
+	"implements": IMPLEMENTS, // Added for implements keyword
+	"super":      SUPER,      // Added for super keyword
 	"typeof":     TYPEOF,     // Added for typeof operator
 	"void":       VOID,       // Added for void operator
 	"of":         OF,         // Added for for...of loops

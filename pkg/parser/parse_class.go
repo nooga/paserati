@@ -25,6 +25,24 @@ func (p *Parser) parseClassDeclaration() Statement {
 		superClass = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 	
+	var implements []*Identifier
+	if p.peekTokenIs(lexer.IMPLEMENTS) {
+		p.nextToken() // consume 'implements'
+		
+		// Parse comma-separated list of interface names
+		for {
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+			implements = append(implements, &Identifier{Token: p.curToken, Value: p.curToken.Literal})
+			
+			if !p.peekTokenIs(lexer.COMMA) {
+				break
+			}
+			p.nextToken() // consume ','
+		}
+	}
+	
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
@@ -41,6 +59,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 		Token:      classToken,
 		Name:       name,
 		SuperClass: superClass,
+		Implements: implements,
 		Body:       body,
 	}
 }
@@ -65,6 +84,24 @@ func (p *Parser) parseClassExpression() Expression {
 		superClass = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 	
+	var implements []*Identifier
+	if p.peekTokenIs(lexer.IMPLEMENTS) {
+		p.nextToken() // consume 'implements'
+		
+		// Parse comma-separated list of interface names
+		for {
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+			implements = append(implements, &Identifier{Token: p.curToken, Value: p.curToken.Literal})
+			
+			if !p.peekTokenIs(lexer.COMMA) {
+				break
+			}
+			p.nextToken() // consume ','
+		}
+	}
+	
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
@@ -81,6 +118,7 @@ func (p *Parser) parseClassExpression() Expression {
 		Token:      classToken,
 		Name:       name,
 		SuperClass: superClass,
+		Implements: implements,
 		Body:       body,
 	}
 }

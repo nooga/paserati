@@ -455,6 +455,16 @@ func (te *ThisExpression) expressionNode()      {}
 func (te *ThisExpression) TokenLiteral() string { return te.Token.Literal }
 func (te *ThisExpression) String() string       { return "this" }
 
+// SuperExpression represents super keyword expressions (super(), super.method())
+type SuperExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.SUPER token
+}
+
+func (se *SuperExpression) expressionNode()      {}
+func (se *SuperExpression) TokenLiteral() string { return se.Token.Literal }
+func (se *SuperExpression) String() string       { return "super" }
+
 // FunctionLiteral represents a function definition.
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
@@ -2142,10 +2152,11 @@ func (fog *FunctionOverloadGroup) String() string {
 
 // ClassDeclaration represents a class declaration statement
 type ClassDeclaration struct {
-	Token      lexer.Token   // The 'class' token
-	Name       *Identifier   // Class name
-	SuperClass *Identifier   // nil for basic classes (extends support later)
-	Body       *ClassBody    // Class body containing methods and properties
+	Token      lexer.Token     // The 'class' token
+	Name       *Identifier     // Class name
+	SuperClass *Identifier     // nil for basic classes (extends support)
+	Implements []*Identifier   // Interfaces this class implements
+	Body       *ClassBody      // Class body containing methods and properties
 }
 
 func (cd *ClassDeclaration) statementNode()       {}
@@ -2160,6 +2171,15 @@ func (cd *ClassDeclaration) String() string {
 		out.WriteString(" extends ")
 		out.WriteString(cd.SuperClass.String())
 	}
+	if len(cd.Implements) > 0 {
+		out.WriteString(" implements ")
+		for i, iface := range cd.Implements {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(iface.String())
+		}
+	}
 	out.WriteString(" ")
 	if cd.Body != nil {
 		out.WriteString(cd.Body.String())
@@ -2170,10 +2190,11 @@ func (cd *ClassDeclaration) String() string {
 // ClassExpression represents a class expression (can be anonymous)
 type ClassExpression struct {
 	BaseExpression
-	Token      lexer.Token   // The 'class' token
-	Name       *Identifier   // nil for anonymous classes
-	SuperClass *Identifier   // nil for basic classes (extends support later)
-	Body       *ClassBody    // Class body containing methods and properties
+	Token      lexer.Token     // The 'class' token
+	Name       *Identifier     // nil for anonymous classes
+	SuperClass *Identifier     // nil for basic classes (extends support)
+	Implements []*Identifier   // Interfaces this class implements
+	Body       *ClassBody      // Class body containing methods and properties
 }
 
 func (ce *ClassExpression) TokenLiteral() string { return ce.Token.Literal }
@@ -2187,6 +2208,15 @@ func (ce *ClassExpression) String() string {
 	if ce.SuperClass != nil {
 		out.WriteString(" extends ")
 		out.WriteString(ce.SuperClass.String())
+	}
+	if len(ce.Implements) > 0 {
+		out.WriteString(" implements ")
+		for i, iface := range ce.Implements {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(iface.String())
+		}
 	}
 	out.WriteString(" ")
 	if ce.Body != nil {

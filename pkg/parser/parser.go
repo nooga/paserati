@@ -210,6 +210,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
 	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)  // <<< NEW: Register Object Literal Parsing
 	p.registerPrefix(lexer.SPREAD, p.parseSpreadElement)  // NEW: Spread syntax in calls
+	p.registerPrefix(lexer.SUPER, p.parseSuperExpression) // NEW: Super expressions
 
 	// --- Register VALUE Infix Functions ---
 	// Arithmetic & Comparison/Logical
@@ -1400,6 +1401,10 @@ func (p *Parser) parseRegexLiteral() Expression {
 
 func (p *Parser) parseThisExpression() Expression {
 	return &ThisExpression{Token: p.curToken}
+}
+
+func (p *Parser) parseSuperExpression() Expression {
+	return &SuperExpression{Token: p.curToken}
 }
 
 func (p *Parser) parseNewExpression() Expression {

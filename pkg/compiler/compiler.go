@@ -29,7 +29,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false      // Enable for debugging register allocation issue
+const debugCompiler = true      // Enable for debugging register allocation issue
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
@@ -530,6 +530,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ThisExpression: // Added for this keyword
 		// Load 'this' value from current call context
+		c.emitLoadThis(hint, node.Token.Line)
+		return hint, nil
+
+	case *parser.SuperExpression: // Added for super expressions
+		// Load 'super' value - for now, this is the same as 'this' since we use prototype-based inheritance
+		// TODO: Implement proper super method binding when needed
 		c.emitLoadThis(hint, node.Token.Line)
 		return hint, nil
 

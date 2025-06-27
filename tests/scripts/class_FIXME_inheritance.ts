@@ -1,5 +1,5 @@
 // FIXME: Class inheritance not yet supported
-// expect: "Dog named Buddy says Woof!"
+// expect: Dog named Buddy says Woof!
 // Test class inheritance
 
 class Animal {
