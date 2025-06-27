@@ -234,6 +234,58 @@ func IsAssignable(source, target Type) bool {
 		return true
 	}
 
+	// Readonly type handling
+	sourceReadonly, sourceIsReadonly := source.(*ReadonlyType)
+	targetReadonly, targetIsReadonly := target.(*ReadonlyType)
+	
+	if sourceIsReadonly && targetIsReadonly {
+		// readonly T to readonly U: T must be assignable to U
+		return IsAssignable(sourceReadonly.InnerType, targetReadonly.InnerType)
+	} else if sourceIsReadonly && !targetIsReadonly {
+		// readonly T to T: allowed (covariance)
+		return IsAssignable(sourceReadonly.InnerType, target)
+	} else if !sourceIsReadonly && targetIsReadonly {
+		// T to readonly T: allowed (source is assignable to target inner type)
+		// This is safe because we're making something more restrictive
+		return IsAssignable(source, targetReadonly.InnerType)
+	}
+	
+	// Check if target is Readonly<T> instantiated type
+	if targetInstantiated, ok := target.(*InstantiatedType); ok {
+		if targetInstantiated.Generic == ReadonlyGeneric && len(targetInstantiated.TypeArguments) == 1 {
+			// Target is Readonly<U>, check if source is readonly U or U itself
+			targetInner := targetInstantiated.TypeArguments[0]
+			if sourceIsReadonly {
+				// readonly T to Readonly<U>: T must be assignable to U
+				return IsAssignable(sourceReadonly.InnerType, targetInner)
+			} else {
+				// T to Readonly<U>: generally not allowed (prevents mutation)
+				// Exceptions:
+				// 1. Allow assignment to Readonly<any>
+				// 2. Allow assignment if source is assignable to target inner type
+				if targetInner == Any || IsAssignable(source, targetInner) {
+					return true
+				}
+				return false
+			}
+		}
+	}
+	
+	// Check if source is Readonly<T> instantiated type
+	if sourceInstantiated, ok := source.(*InstantiatedType); ok {
+		if sourceInstantiated.Generic == ReadonlyGeneric && len(sourceInstantiated.TypeArguments) == 1 {
+			// Source is Readonly<T>
+			sourceInner := sourceInstantiated.TypeArguments[0]
+			if targetIsReadonly {
+				// Readonly<T> to readonly U: T must be assignable to U
+				return IsAssignable(sourceInner, targetReadonly.InnerType)
+			} else {
+				// Readonly<T> to U: T must be assignable to U (covariance)
+				return IsAssignable(sourceInner, target)
+			}
+		}
+	}
+
 	// Legacy FunctionType compatibility removed - use ObjectType with CallSignatures instead
 
 	return false

@@ -9,6 +9,9 @@ func GetStandardInitializers() []BuiltinInitializer {
 	// Global constants and backward compatibility functions
 	initializers = append(initializers, &GlobalsInitializer{})
 	
+	// Utility types (Readonly<T>, etc.)
+	initializers = append(initializers, &UtilityTypesInitializer{})
+	
 	// Core builtins
 	initializers = append(initializers, &ObjectInitializer{})
 	initializers = append(initializers, &FunctionInitializer{})

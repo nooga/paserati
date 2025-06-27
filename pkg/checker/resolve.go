@@ -67,6 +67,8 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return types.Never
 		case "void":
 			return types.Void
+		case "object":
+			return types.NewObjectType()
 		default:
 			// 3. If neither alias nor primitive, it's an unknown type name
 			debugPrintf("// [Checker resolveTypeAnno Ident] Primitive check failed for '%s', reporting error.\n", node.Value) // ADDED DEBUG
@@ -198,6 +200,18 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			promiseType.WithProperty("then", types.Any) // Simplified for now
 			promiseType.WithProperty("catch", types.Any)
 			return promiseType
+			
+		case "Readonly":
+			if len(node.TypeArguments) != 1 {
+				c.addError(node, "Readonly requires exactly one type argument")
+				return nil
+			}
+			innerType := c.resolveTypeAnnotation(node.TypeArguments[0])
+			if innerType == nil {
+				return nil // Error already reported
+			}
+			// Instantiate the Readonly<T> generic type
+			return types.NewInstantiatedType(types.ReadonlyGeneric, []types.Type{innerType}).Substitute()
 			
 		default:
 			// Check if this is a user-defined generic type

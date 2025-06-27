@@ -483,6 +483,37 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on intersection type %s", propertyName, obj.String()))
 			}
 			resultType = propType
+		case *types.ReadonlyType:
+			// Handle property access on readonly types
+			// Delegate to the inner type for property lookup
+			innerType := obj.InnerType
+			
+			// Check property access on the inner type
+			if innerType == types.Any {
+				// For Readonly<any>, allow any property access
+				resultType = types.Any
+			} else {
+				switch innerObj := innerType.(type) {
+				case *types.ObjectType:
+					if propType, exists := innerObj.Properties[propertyName]; exists {
+						// Property exists, return its type (not wrapped in readonly for reading)
+						resultType = propType
+					} else {
+						// Check if property is optional
+						isOptional := innerObj.OptionalProperties != nil && innerObj.OptionalProperties[propertyName]
+						if !isOptional {
+							c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on readonly type", propertyName))
+							resultType = types.Never
+						} else {
+							resultType = types.Undefined // Optional property that doesn't exist
+						}
+					}
+				default:
+					// For non-object inner types, we can't access properties
+					c.addError(node.Object, fmt.Sprintf("property access is not supported on readonly %s", innerType.String()))
+					resultType = types.Never
+				}
+			}
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
@@ -735,7 +766,6 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 }
 
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
-	fmt.Printf("DEBUG: Checking NewExpression with constructor: %T\n", node.Constructor)
 	
 	// Check the constructor expression
 	c.visit(node.Constructor)
@@ -744,7 +774,6 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		constructorType = types.Any
 	}
 	
-	fmt.Printf("DEBUG: Constructor type resolved to: %s\n", constructorType.String())
 
 	// Check arguments
 	for _, arg := range node.Arguments {

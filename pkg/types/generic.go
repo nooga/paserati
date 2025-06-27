@@ -184,6 +184,11 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		// Return the substituted result, not the InstantiatedType itself
 		return newInstantiated.Substitute()
 		
+	case *ReadonlyType:
+		// Substitute in the inner type
+		newInnerType := substituteType(t.InnerType, substitutions)
+		return NewReadonlyType(newInnerType)
+		
 	// For primitive types and other types that don't contain type parameters
 	default:
 		return t
@@ -226,6 +231,9 @@ var (
 	
 	// Promise<T> generic type  
 	PromiseGeneric *GenericType
+	
+	// Readonly<T> utility type
+	ReadonlyGeneric *GenericType
 )
 
 func init() {
@@ -240,4 +248,9 @@ func init() {
 	promiseBody.WithProperty("then", Any)
 	promiseBody.WithProperty("catch", Any)
 	PromiseGeneric = NewGenericType("Promise", []*TypeParameter{promiseT}, promiseBody)
+	
+	// Create Readonly<T> utility type
+	readonlyT := NewTypeParameter("T", 0, nil)
+	readonlyBody := NewReadonlyType(&TypeParameterType{Parameter: readonlyT})
+	ReadonlyGeneric = NewGenericType("Readonly", []*TypeParameter{readonlyT}, readonlyBody)
 }

@@ -101,10 +101,25 @@ func (p *Parser) parseClassBody() *ClassBody {
 			continue
 		}
 		
-		// Check for static modifier (for future use)
+		// Check for modifiers in any order (readonly static OR static readonly)
+		isReadonly := false
 		isStatic := false
-		if p.curTokenIs(lexer.STATIC) {
+		
+		// First modifier
+		if p.curTokenIs(lexer.READONLY) {
+			isReadonly = true
+			p.nextToken()
+		} else if p.curTokenIs(lexer.STATIC) {
 			isStatic = true
+			p.nextToken()
+		}
+		
+		// Second modifier (if first was found)
+		if isReadonly && p.curTokenIs(lexer.STATIC) {
+			isStatic = true
+			p.nextToken()
+		} else if isStatic && p.curTokenIs(lexer.READONLY) {
+			isReadonly = true
 			p.nextToken()
 		}
 		
@@ -126,7 +141,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 					}
 				} else {
 					// It's a property
-					property := p.parseProperty(isStatic)
+					property := p.parseProperty(isStatic, isReadonly)
 					if property != nil {
 						properties = append(properties, property)
 					}
@@ -263,7 +278,7 @@ func (p *Parser) parseMethod(isStatic bool) *MethodDefinition {
 }
 
 // parseProperty parses a property declaration
-func (p *Parser) parseProperty(isStatic bool) *PropertyDefinition {
+func (p *Parser) parseProperty(isStatic bool, isReadonly bool) *PropertyDefinition {
 	propertyToken := p.curToken
 	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
@@ -310,5 +325,6 @@ func (p *Parser) parseProperty(isStatic bool) *PropertyDefinition {
 		Value:          initializer,
 		IsStatic:       isStatic,
 		Optional:       isOptional,
+		Readonly:       isReadonly,
 	}
 }

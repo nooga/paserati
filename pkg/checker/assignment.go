@@ -81,7 +81,11 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			// Still proceed to check assignability for more errors
 		}
 	}
-	// TODO: Check if MemberExpression LHS refers to a const property?
+	
+	// --- Check LHS readonly status ---
+	if memberLHS, ok := node.Left.(*parser.MemberExpression); ok {
+		c.checkReadonlyPropertyAssignment(memberLHS)
+	}
 
 	// --- Final Assignability Check ---
 	if validOperands {
@@ -132,6 +136,30 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 
 	// Set computed type for the overall assignment expression (evaluates to RHS value)
 	node.SetComputedType(rhsType)
+}
+
+// checkReadonlyPropertyAssignment checks if a property assignment violates readonly constraints
+func (c *Checker) checkReadonlyPropertyAssignment(memberExpr *parser.MemberExpression) {
+	// Get the object type
+	objectType := memberExpr.Object.GetComputedType()
+	if objectType == nil {
+		return // Can't check readonly if we don't know the object type
+	}
+	
+	// Get the property name
+	if memberExpr.Property == nil {
+		return // No property to check
+	}
+	propertyName := memberExpr.Property.Value
+	
+	// Check if the object type has this property and if it's readonly
+	if objType, ok := objectType.(*types.ObjectType); ok {
+		if propType, exists := objType.Properties[propertyName]; exists {
+			if types.IsReadonlyType(propType) {
+				c.addError(memberExpr, fmt.Sprintf("cannot assign to readonly property '%s'", propertyName))
+			}
+		}
+	}
 }
 
 // checkArrayDestructuringAssignment handles array destructuring assignments like [a, b, c] = expr

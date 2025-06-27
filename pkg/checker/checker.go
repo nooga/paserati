@@ -119,6 +119,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// --- Pass 1: Define ALL Type Aliases ---
 	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases, Interfaces, and Classes ---\n")
 	for _, stmt := range program.Statements {
+		debugPrintf("// [Checker Pass 1] Examining statement type: %T\n", stmt)
 		if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
 			debugPrintf("// [Checker Pass 1] Processing Type Alias: %s\n", aliasStmt.Name.Value)
 			c.checkTypeAliasStatement(aliasStmt) // Uses c.env (globalEnv)
@@ -134,6 +135,21 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.checkClassDeclaration(classStmt)
 			nodesProcessedPass1[classStmt] = true
 			nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
+		} else if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
+			// Check if this is a class expression wrapped in an expression statement
+			if classExpr, isClassExpr := exprStmt.Expression.(*parser.ClassExpression); isClassExpr && classExpr.Name != nil {
+				debugPrintf("// [Checker Pass 1] Processing Class Expression: %s\n", classExpr.Name.Value)
+				// Convert to ClassDeclaration for checking
+				classDecl := &parser.ClassDeclaration{
+					Token:      classExpr.Token,
+					Name:       classExpr.Name,
+					SuperClass: classExpr.SuperClass,
+					Body:       classExpr.Body,
+				}
+				c.checkClassDeclaration(classDecl)
+				nodesProcessedPass1[exprStmt] = true
+				nodesProcessedPass2[exprStmt] = true // Also mark for Pass 2 skip
+			}
 		}
 	}
 	debugPrintf("// --- Checker - Pass 1: Complete ---\n")
@@ -1593,7 +1609,6 @@ func (c *Checker) visit(node parser.Node) {
 		// Type should already be set during function literal processing
 
 	case *parser.NewExpression:
-		fmt.Printf("DEBUG: Visiting NewExpression in main visit function\n")
 		c.checkNewExpression(node)
 
 	case *parser.ShorthandMethod:
@@ -1819,6 +1834,17 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.ThrowStatement:
 		c.checkThrowStatement(node)
+
+	// --- Type Expressions (normally handled via resolveTypeAnnotation, but may be visited directly) ---
+	case *parser.ArrayTypeExpression:
+		// Type expressions are normally resolved via resolveTypeAnnotation
+		// If visited directly, we can set their computed type
+		elemType := c.resolveTypeAnnotation(node.ElementType)
+		if elemType == nil {
+			elemType = types.Any
+		}
+		arrayType := &types.ArrayType{ElementType: elemType}
+		node.SetComputedType(arrayType)
 
 	default:
 		// Optional: Add error for unhandled node types

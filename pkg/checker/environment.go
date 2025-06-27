@@ -224,7 +224,6 @@ func (e *Environment) ResolveType(name string) (types.Type, bool) {
 	// 1. Check type aliases in current scope
 	typ, ok := e.typeAliases[name]
 	if ok {
-		debugPrintf("// [Env ResolveType] Found alias '%s' in env %p\n", name, e)
 		return typ, true
 	}
 

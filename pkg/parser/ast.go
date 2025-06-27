@@ -2272,11 +2272,15 @@ type PropertyDefinition struct {
 	Value          Expression  // Initializer expression (can be nil)
 	IsStatic       bool        // For future static property support
 	Optional       bool        // Whether the property is optional (prop?)
+	Readonly       bool        // Whether the property is readonly
 }
 
 func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }
 func (pd *PropertyDefinition) String() string {
 	var out bytes.Buffer
+	if pd.Readonly {
+		out.WriteString("readonly ")
+	}
 	if pd.IsStatic {
 		out.WriteString("static ")
 	}
@@ -2451,6 +2455,7 @@ func dumpNode(node Node, indent string) {
 		dumpNode(n.Value, indent+"  ")
 		fmt.Fprintf(os.Stderr, ",\n%s  isStatic: %t", indent, n.IsStatic)
 		fmt.Fprintf(os.Stderr, ",\n%s  optional: %t", indent, n.Optional)
+		fmt.Fprintf(os.Stderr, ",\n%s  readonly: %t", indent, n.Readonly)
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
 		
 	case *MethodDefinition:

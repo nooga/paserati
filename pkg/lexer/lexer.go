@@ -185,6 +185,8 @@ const (
 	CLASS TokenType = "CLASS"
 	// Static keyword (for future use)
 	STATIC TokenType = "STATIC"
+	// Readonly keyword
+	READONLY TokenType = "READONLY"
 )
 
 var keywords = map[string]TokenType{
@@ -225,6 +227,7 @@ var keywords = map[string]TokenType{
 	"finally":    FINALLY,    // Added for finally blocks
 	"class":      CLASS,      // Added for class declarations/expressions
 	"static":     STATIC,     // Added for static members
+	"readonly":   READONLY,   // Added for readonly modifier
 }
 
 // LookupIdent checks the keywords table for an identifier.

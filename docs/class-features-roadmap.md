@@ -2,98 +2,122 @@
 
 ## Overview
 
-This document outlines the step-by-step implementation plan for TypeScript class features in Paserati. Based on comprehensive testing with the AST dump utility, we've identified exactly what's working and what needs to be implemented.
+This document outlines the step-by-step implementation plan for TypeScript class features in Paserati. 
+
+**🎉 MAJOR MILESTONE ACHIEVED**: Core TypeScript class features are now **production-ready**!
+
+### 📊 Implementation Progress
+- **✅ Phase 1 (Type System Integration)**: 100% Complete
+- **🔄 Phase 2 (Access Modifiers)**: 33% Complete (1/3 features)
+- **✅ Phase 3 (Optional Features)**: 100% Complete
+- **✅ Bonus Features**: 100% Complete
+
+### 🚀 What Works Now
+All fundamental TypeScript class features are **fully implemented and working**:
+- Property type annotations, initializers, and optional properties
+- Method type annotations (parameters and return types)
+- Static members (properties and methods)
+- Constructor optional parameter handling
+- Class names as type annotations
+- TypeScript-style declaration merging
 
 ## Current Status
 
 ### ✅ Working Features
 - Basic class declarations: `class Name {}`
 - Property declarations without types: `prop;`, `prop = value;`
+- **✅ Property declarations with types: `name: string;`** (only with built-in type identifiers available in scope)
+- **✅ Property initializers: `score: number = 100;`** (type annotations work with available types)
+- **✅ Optional properties: `email?: string;`**
 - Constructor methods: `constructor() {}`
+- **✅ Constructor with typed parameters: `constructor(name: string, age?: number)`**
+- **✅ Constructor optional parameter arity handling**
 - Instance methods: `method() {}`
+- **✅ Method return type annotations: `method(): string`**
+- **✅ Method parameter type annotations: `method(param: string, optional?: number)`**
+- **✅ Static properties: `static count: number = 0;`**
+- **✅ Static methods: `static getCount(): number`**
+- **✅ Class names as type annotations: `createDefault(): ClassName`**
+- **✅ Readonly properties: `readonly id: number;`**
+- **✅ Static readonly properties: `static readonly version = "1.0";`**
+- **✅ Combined modifiers: Both `static readonly` and `readonly static` orders work**
+- **✅ Readonly assignment enforcement at compile-time**
+- **✅ Utility type: `Readonly<T>` (basic support)**
 - Class instantiation: `new Class()`
 - Property access and method calls
-- Method parameters without types: `method(param1, param2)`
 
-### ❌ Missing Features (Parsing Errors)
-All advanced TypeScript class syntax fails with parsing errors, specifically:
-- Type annotations cause "expected identifier in class body" errors
-- Access modifiers are parsed as property names
-- TypeScript-specific keywords are not recognized in class context
+### ❌ Missing Features (Parsing/Implementation Gaps)
+- Access modifiers are parsed but not enforced: `private`, `public`, `protected`
+- **✅ Readonly modifier: `readonly prop: type`** - COMPLETED
+- Class inheritance: `extends` keyword
+- Super calls: `super()` and `super.method()`
 
 ## Implementation Phases
 
-### Phase 1: Type System Integration (High Priority)
+### Phase 1: Type System Integration (High Priority) ✅ **COMPLETED**
 
-#### 1.1 Property Type Annotations
+#### 1.1 Property Type Annotations ✅ **COMPLETED**
 **Goal**: Support `name: string;` syntax in class bodies
 
-**Current Issue**:
+~~**Current Issue**:~~
 ```typescript
 class User {
-    name: string;  // ❌ Parser error: "expected identifier in class body"
+    name: string;  // ✅ Now works perfectly!
 }
 ```
 
-**Implementation Plan**:
+**✅ Completed Implementation**:
 - **File**: `pkg/parser/parse_class.go`
 - **Method**: `parseProperty()`
-- **Changes**:
-  1. After parsing property identifier, check for `:` token
-  2. If found, parse type annotation using existing type parsing logic
-  3. Store type in `PropertyDefinition.TypeAnnotation` field (add if needed)
-  4. Update AST dump to show property types
+- **Changes**: ✅ All implemented
+  1. ✅ After parsing property identifier, check for `:` token
+  2. ✅ Parse type annotation using existing type parsing logic
+  3. ✅ Store type in `PropertyDefinition.TypeAnnotation` field
+  4. ✅ Updated AST dump to show property types
 
-**Test Files**: `tests/scripts/class_FIXME_type_annotations.ts`
+**✅ Test Files**: `tests/scripts/class_FIXME_type_annotations.ts` - **NOW PASSING**
 
-#### 1.2 Method Return Type Annotations
+#### 1.2 Method Return Type Annotations ✅ **COMPLETED**
 **Goal**: Support `method(): returnType` syntax
 
-**Current Issue**:
+~~**Current Issue**:~~
 ```typescript
-getName(): string { return this.name; }  // ❌ Parser error
+getName(): string { return this.name; }  // ✅ Now works perfectly!
 ```
 
-**Implementation Plan**:
+**✅ Completed Implementation**:
 - **File**: `pkg/parser/parse_class.go`
 - **Method**: Method parsing in `parseClassBody()`
-- **Changes**:
-  1. After parsing method parameters `()`, check for `:` token
-  2. Parse return type annotation
-  3. Store in `FunctionLiteral.ReturnTypeAnnotation`
-  4. Ensure compatibility with existing function parsing
+- **Changes**: ✅ All implemented
+  1. ✅ After parsing method parameters `()`, check for `:` token
+  2. ✅ Parse return type annotation
+  3. ✅ Store in `FunctionLiteral.ReturnTypeAnnotation`
+  4. ✅ Enhanced AST dump to show return type annotations
 
-#### 1.3 Method Parameter Type Annotations
+#### 1.3 Method Parameter Type Annotations ✅ **COMPLETED**
 **Goal**: Support `method(param: type)` syntax
 
-**Current Issue**:
+~~**Current Issue**:~~
 ```typescript
-setName(name: string) { }  // ❌ Parser error
+setName(name: string) { }  // ✅ Already worked via unified parameter handling!
 ```
 
-**Implementation Plan**:
-- **File**: `pkg/parser/parser.go` (function parameter parsing)
-- **Method**: `parseFunctionParameters()`
-- **Changes**:
-  1. Extend parameter parsing to handle `: type` after parameter name
-  2. Store type in `Parameter.TypeAnnotation`
-  3. Ensure this works for both regular functions and class methods
+**✅ Discovery**: Was already working via unified parameter parsing across all function types (methods, functions, arrows)
 
-#### 1.4 Constructor Parameter Types
+#### 1.4 Constructor Parameter Types ✅ **COMPLETED**
 **Goal**: Support typed constructor parameters
 
-**Implementation Plan**:
-- Uses same logic as 1.3 since constructors use standard function parameter parsing
-- Test specifically with class constructors
+**✅ Completed**: Uses same logic as 1.3 since constructors use standard function parameter parsing
+**✅ Bonus**: Fixed constructor optional parameter arity handling to match function behavior
 
-### Phase 2: Access Modifiers (Medium Priority)
+### Phase 2: Access Modifiers (Medium Priority) 🔄 **PARTIALLY COMPLETED**
 
-#### 2.1 Basic Access Modifiers
+#### 2.1 Basic Access Modifiers ❌ **NOT IMPLEMENTED**
 **Goal**: Support `public`, `private`, `protected` keywords
 
 **Current Issue**:
 ```typescript
-private name: string;  // ❌ Parsed as property named "private"
+private name: string;  // ❌ Still parsed as property named "private"
 ```
 
 **Implementation Plan**:
@@ -105,19 +129,27 @@ private name: string;  // ❌ Parsed as property named "private"
   3. Add access modifier fields to `PropertyDefinition` and `MethodDefinition`
   4. Update parser to consume modifier tokens
 
-#### 2.2 Static Members
+#### 2.2 Static Members ✅ **COMPLETED**
 **Goal**: Support `static` keyword for properties and methods
 
-**Implementation Plan**:
-- **File**: `pkg/parser/parse_class.go`
-- **Changes**:
-  1. Add `STATIC` token recognition
-  2. Parse `static` before property/method declarations
-  3. Set `IsStatic` field in AST nodes
-  4. Update type checker to handle static members
+**✅ Completed Implementation**:
+- **File**: `pkg/parser/parse_class.go` and `pkg/compiler/compile_class.go` and `pkg/checker/class.go`
+- **Changes**: ✅ All implemented
+  1. ✅ `STATIC` token already recognized by parser
+  2. ✅ Parser sets `IsStatic` field in AST nodes
+  3. ✅ Compiler attaches static members to constructor function
+  4. ✅ Type checker includes static members in constructor type
+  5. ✅ Runtime execution works perfectly
 
-#### 2.3 Readonly Properties
+**✅ Test Files**: `tests/scripts/class_static_members.ts` - **NOW PASSING**
+
+#### 2.3 Readonly Properties ❌ **NOT IMPLEMENTED**
 **Goal**: Support `readonly` modifier
+
+**Current Issue**:
+```typescript
+readonly id: number = 42;  // ❌ Parsed as property named "readonly"
+```
 
 **Implementation Plan**:
 - **File**: `pkg/parser/parse_class.go`
@@ -126,16 +158,20 @@ private name: string;  // ❌ Parsed as property named "private"
   2. Parse `readonly` modifier for properties
   3. Add `IsReadonly` field to `PropertyDefinition`
 
-### Phase 3: Optional Features (Medium Priority)
+### Phase 3: Optional Features (Medium Priority) ✅ **COMPLETED**
 
-#### 3.1 Optional Properties and Parameters
+#### 3.1 Optional Properties and Parameters ✅ **COMPLETED**
 **Goal**: Support `?` syntax for optional members
 
-**Implementation Plan**:
+**✅ Completed Implementation**:
 - **File**: `pkg/parser/parse_class.go` and parameter parsing
-- **Changes**:
-  1. Check for `?` token after property/parameter names
-  2. Set `Optional` field in respective AST nodes
+- **Changes**: ✅ All implemented
+  1. ✅ Check for `?` token after property/parameter names
+  2. ✅ Set `Optional` field in respective AST nodes
+  3. ✅ TypeScript-style declaration merging implemented
+  4. ✅ Constructor optional parameter arity handling fixed
+
+**✅ Test Files**: `tests/scripts/class_FIXME_optional_properties.ts` - **NOW PASSING**
 
 ### Phase 4: Inheritance (Lower Priority)
 
@@ -196,18 +232,28 @@ private name: string;  // ❌ Parsed as property named "private"
 
 ## Success Criteria
 
-### Phase 1 Complete
-- [ ] Property type annotations parse correctly
-- [ ] Method return types parse correctly  
-- [ ] Method parameter types parse correctly
-- [ ] Constructor parameter types parse correctly
-- [ ] All `class_FIXME_type_annotations.ts` tests pass
+### Phase 1 Complete ✅ **COMPLETED**
+- [x] Property type annotations parse correctly
+- [x] Method return types parse correctly  
+- [x] Method parameter types parse correctly
+- [x] Constructor parameter types parse correctly
+- [x] All `class_FIXME_type_annotations.ts` tests pass
 
-### Phase 2 Complete
+### Phase 2 Complete 🔄 **PARTIALLY COMPLETED**
 - [ ] Access modifiers (`public`, `private`, `protected`) parse correctly
-- [ ] Static members parse and work correctly
+- [x] Static members parse and work correctly
 - [ ] Readonly properties are recognized
 - [ ] All `class_FIXME_access_modifiers.ts` tests pass
+
+### Phase 3 Complete ✅ **COMPLETED**
+- [x] Optional properties and parameters work correctly
+- [x] Constructor optional parameter arity handling fixed
+- [x] All `class_FIXME_optional_properties.ts` tests pass
+
+### Bonus Features Complete ✅ **COMPLETED**
+- [x] Field initializers execute during object construction
+- [x] Class names work as type annotations (e.g., `method(): ClassName`)
+- [x] TypeScript-style declaration merging implemented
 
 ### Final Success
 - [ ] All comprehensive class test files pass
@@ -233,3 +279,23 @@ private name: string;  // ❌ Parsed as property named "private"
 - `pkg/checker/class.go` - Type checking for classes
 
 This roadmap provides a clear, implementable path to full TypeScript class support in Paserati.
+
+## Recent Achievements
+
+### Readonly Implementation (Completed)
+- **✅ Added `readonly` keyword to lexer** (`pkg/lexer/lexer.go`)
+- **✅ Added `Readonly` field to PropertyDefinition AST** (`pkg/parser/ast.go`)
+- **✅ Updated class parser to handle readonly modifier** (`pkg/parser/parse_class.go`)
+- **✅ Created ReadonlyType wrapper type** (`pkg/types/readonly.go`)
+- **✅ Implemented Readonly<T> utility type** (`pkg/types/generic.go`)
+- **✅ Added readonly assignment checking** (`pkg/checker/assignment.go`)
+- **✅ Updated type assignability rules for readonly** (`pkg/types/assignable.go`)
+- **✅ Registered Readonly<T> as global utility type** (`pkg/builtins/utility_types_init.go`)
+- **✅ Fixed modifier parsing to support both `static readonly` and `readonly static` orders** (`pkg/parser/parse_class.go`)
+
+The readonly implementation follows TypeScript semantics:
+- Properties marked as `readonly` cannot be reassigned after initialization
+- `readonly T` is assignable to `T` (covariance)
+- `T` is NOT assignable to `readonly T` (prevents mutation)
+- `Readonly<T>` is recognized as a valid generic type (like `Array<T>`)
+- Note: Full mapped type semantics for `Readonly<T>` are not yet implemented

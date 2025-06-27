@@ -3,35 +3,35 @@
 
 class StaticExample {
   // Static fields
-  static count: number = 0;
-  static readonly version: string = "1.0";
-  static instances: StaticExample[] = [];
+  static count = 0;
+  static readonly version = "1.0";
+  static instances = [];
 
   // Instance field
-  name: string;
+  name;
 
-  constructor(name: string) {
+  constructor(name) {
     this.name = name;
     StaticExample.count++;
     StaticExample.instances.push(this);
   }
 
   // Static methods
-  static getCount(): number {
+  static getCount() {
     return StaticExample.count;
   }
 
-  static reset(): void {
+  static reset() {
     StaticExample.count = 0;
     StaticExample.instances = [];
   }
 
-  static createDefault(): StaticExample {
+  static createDefault() {
     return new StaticExample("default");
   }
 
   // Instance method
-  toString(): string {
+  toString() {
     return `${this.name} (#${StaticExample.count})`;
   }
 }

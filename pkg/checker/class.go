@@ -9,7 +9,6 @@ import (
 // checkClassDeclaration handles type checking for class declarations
 func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
-	fmt.Printf("DEBUG: Checking class declaration '%s'\n", node.Name.Value)
 	
 	// 1. Check if class name is already defined
 	if _, _, exists := c.env.Resolve(node.Name.Value); exists {
@@ -47,8 +46,6 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	}
 	
 	debugPrintf("// [Checker Class] Successfully defined class '%s' as constructor type: %s\n", 
-		node.Name.Value, constructorType.String())
-	fmt.Printf("DEBUG: Successfully defined class '%s' as constructor type: %s\n", 
 		node.Name.Value, constructorType.String())
 }
 
@@ -139,19 +136,35 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 
 // inferPropertyType determines the type of a class property
 func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type {
-	if prop.Value == nil {
-		// Property without initializer gets 'any' type for now
-		// In a full implementation, this might be 'undefined' or require explicit type annotation
-		return types.Any
+	var propType types.Type
+	
+	// First check if there's an explicit type annotation
+	if prop.TypeAnnotation != nil {
+		annotationType := c.resolveTypeAnnotation(prop.TypeAnnotation)
+		if annotationType != nil {
+			propType = annotationType
+		} else {
+			propType = types.Any
+		}
+	} else if prop.Value != nil {
+		// Type check the initializer expression to get its type
+		c.visit(prop.Value)
+		if initType := prop.Value.GetComputedType(); initType != nil {
+			propType = initType
+		} else {
+			propType = types.Any
+		}
+	} else {
+		// Property without initializer or type annotation gets 'any' type for now
+		propType = types.Any
 	}
 	
-	// Type check the initializer expression to get its type
-	c.visit(prop.Value)
-	if initType := prop.Value.GetComputedType(); initType != nil {
-		return initType
+	// Wrap with readonly if the property is readonly
+	if prop.Readonly {
+		return types.NewReadonlyType(propType)
 	}
 	
-	return types.Any
+	return propType
 }
 
 // addStaticMembers adds static methods and properties to the constructor type
