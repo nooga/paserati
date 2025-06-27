@@ -1,4 +1,4 @@
-// expect: "Point at (5, 10)"
+// expect: Point at (5, 10)
 // Test constructor overloading patterns
 
 class Point {

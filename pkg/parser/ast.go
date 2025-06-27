@@ -2227,9 +2227,11 @@ func (ce *ClassExpression) String() string {
 
 // ClassBody represents the body of a class containing methods and properties
 type ClassBody struct {
-	Token      lexer.Token            // The '{' token
-	Methods    []*MethodDefinition    // Class methods (including constructor)
-	Properties []*PropertyDefinition  // Class properties
+	Token               lexer.Token               // The '{' token
+	Methods             []*MethodDefinition       // Class method implementations
+	Properties          []*PropertyDefinition     // Class properties
+	ConstructorSigs     []*ConstructorSignature   // Constructor overload signatures
+	MethodSigs          []*MethodSignature        // Method overload signatures
 }
 
 func (cb *ClassBody) TokenLiteral() string { return cb.Token.Literal }
@@ -2313,6 +2315,116 @@ func (md *MethodDefinition) String() string {
 			out.WriteString(md.Value.Body.String())
 		}
 	}
+	return out.String()
+}
+
+// ConstructorSignature represents a constructor overload signature in a class
+type ConstructorSignature struct {
+	Token              lexer.Token    // The 'constructor' token
+	Parameters         []*Parameter   // Parameter list
+	RestParameter      *RestParameter // Rest parameter (if any)
+	ReturnTypeAnnotation Expression   // Optional return type
+	IsStatic           bool           // Access modifiers
+	IsPublic           bool
+	IsPrivate          bool
+	IsProtected        bool
+}
+
+func (cs *ConstructorSignature) statementNode()       {}
+func (cs *ConstructorSignature) TokenLiteral() string { return cs.Token.Literal }
+func (cs *ConstructorSignature) String() string {
+	var out bytes.Buffer
+	
+	// Add access modifiers
+	if cs.IsPrivate {
+		out.WriteString("private ")
+	} else if cs.IsProtected {
+		out.WriteString("protected ")
+	} else if cs.IsPublic {
+		out.WriteString("public ")
+	}
+	if cs.IsStatic {
+		out.WriteString("static ")
+	}
+	
+	out.WriteString("constructor(")
+	if cs.Parameters != nil {
+		for i, param := range cs.Parameters {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(param.String())
+		}
+	}
+	out.WriteString(")")
+	
+	if cs.ReturnTypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(cs.ReturnTypeAnnotation.String())
+	}
+	out.WriteString(";")
+	
+	return out.String()
+}
+
+// MethodSignature represents a method overload signature in a class
+type MethodSignature struct {
+	Token                lexer.Token    // The method name token
+	Key                  *Identifier    // Method name
+	Parameters           []*Parameter   // Parameter list
+	RestParameter        *RestParameter // Rest parameter (if any)
+	ReturnTypeAnnotation Expression     // Optional return type
+	Kind                 string         // "method", "getter", "setter"
+	IsStatic             bool           // Access modifiers
+	IsPublic             bool
+	IsPrivate            bool
+	IsProtected          bool
+}
+
+func (ms *MethodSignature) statementNode()       {}
+func (ms *MethodSignature) TokenLiteral() string { return ms.Token.Literal }
+func (ms *MethodSignature) String() string {
+	var out bytes.Buffer
+	
+	// Add access modifiers
+	if ms.IsPrivate {
+		out.WriteString("private ")
+	} else if ms.IsProtected {
+		out.WriteString("protected ")
+	} else if ms.IsPublic {
+		out.WriteString("public ")
+	}
+	if ms.IsStatic {
+		out.WriteString("static ")
+	}
+	
+	if ms.Kind == "getter" {
+		out.WriteString("get ")
+	} else if ms.Kind == "setter" {
+		out.WriteString("set ")
+	}
+	
+	if ms.Key != nil {
+		out.WriteString(ms.Key.String())
+	}
+	
+	out.WriteString("(")
+	if ms.Parameters != nil {
+		for i, param := range ms.Parameters {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(param.String())
+		}
+	}
+	out.WriteString(")")
+	
+	if ms.ReturnTypeAnnotation != nil {
+		out.WriteString(": ")
+		out.WriteString(ms.ReturnTypeAnnotation.String())
+	}
+	out.WriteString(";")
+	
 	return out.String()
 }
 

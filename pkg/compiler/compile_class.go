@@ -62,7 +62,7 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration) (Register, 
 	// Create function literal for the constructor
 	var functionLiteral *parser.FunctionLiteral
 	if constructorMethod != nil {
-		// Use the existing constructor method
+		// Use the existing constructor implementation
 		functionLiteral = constructorMethod.Value
 	} else {
 		// Create default constructor
@@ -502,6 +502,7 @@ func (c *Compiler) extractConstructorArity(classDecl *parser.ClassDeclaration, c
 	// Find the constructor method in the class body
 	for _, method := range classDecl.Body.Methods {
 		if method.Kind == "constructor" {
+			// Extract parameter count from constructor function
 			paramCount := len(method.Value.Parameters)
 			debugPrintf("// DEBUG extractConstructorArity: Constructor has %d parameters\n", paramCount)
 			return paramCount

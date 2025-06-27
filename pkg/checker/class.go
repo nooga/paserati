@@ -157,6 +157,19 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		}
 	}
 	
+	// Process method signatures (overloads) - for now, we'll validate they exist but not add them separately
+	// In a full implementation, we'd create overloaded function types
+	for _, methodSig := range body.MethodSigs {
+		if !methodSig.IsStatic {
+			c.setClassContext(className, types.AccessContextInstanceMethod)
+			
+			// Validate the signature types
+			c.validateMethodSignature(methodSig)
+			
+			debugPrintf("// [Checker Class] Validated method signature '%s'\n", methodSig.Key.Value)
+		}
+	}
+	
 	// Add properties to instance type (excluding static properties)
 	for _, prop := range body.Properties {
 		if !prop.IsStatic {
@@ -177,8 +190,9 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 }
 
 // createConstructorSignature creates a signature for the class constructor
+// Always uses the implementation signature for runtime, while overload signatures are for compile-time checking
 func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceType *types.ObjectType) *types.Signature {
-	// Find the constructor method
+	// Find the constructor method implementation first (this is what's used at runtime)
 	var constructor *parser.MethodDefinition
 	for _, method := range body.Methods {
 		if method.Kind == "constructor" {
@@ -187,27 +201,43 @@ func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceTyp
 		}
 	}
 	
-	if constructor == nil {
-		// Default constructor: no parameters, returns the instance type
+	if constructor != nil {
+		// Extract parameter types from constructor implementation
+		paramTypes := c.extractParameterTypes(constructor.Value)
+		optionalParams := c.extractOptionalParams(constructor.Value)
+		
 		return &types.Signature{
-			ParameterTypes:    []types.Type{},
+			ParameterTypes:    paramTypes,
 			ReturnType:        instanceType,
-			OptionalParams:    []bool{},
-			IsVariadic:        false,
-			RestParameterType: nil,
+			OptionalParams:    optionalParams,
+			IsVariadic:        constructor.Value.RestParameter != nil,
+			RestParameterType: c.extractRestParameterType(constructor.Value),
 		}
 	}
 	
-	// Extract parameter types from constructor
-	paramTypes := c.extractParameterTypes(constructor.Value)
-	optionalParams := c.extractOptionalParams(constructor.Value)
+	// If no implementation but there are signatures, use the first signature
+	// This handles the case where only signatures are provided (which should be an error)
+	if len(body.ConstructorSigs) > 0 {
+		firstSig := body.ConstructorSigs[0]
+		paramTypes := c.extractParameterTypesFromSignature(firstSig)
+		optionalParams := c.extractOptionalParamsFromSignature(firstSig)
+		
+		return &types.Signature{
+			ParameterTypes:    paramTypes,
+			ReturnType:        instanceType,
+			OptionalParams:    optionalParams,
+			IsVariadic:        firstSig.RestParameter != nil,
+			RestParameterType: c.extractRestParameterTypeFromSignature(firstSig),
+		}
+	}
 	
+	// Default constructor: no parameters, returns the instance type
 	return &types.Signature{
-		ParameterTypes:    paramTypes,
+		ParameterTypes:    []types.Type{},
 		ReturnType:        instanceType,
-		OptionalParams:    optionalParams,
-		IsVariadic:        constructor.Value.RestParameter != nil,
-		RestParameterType: c.extractRestParameterType(constructor.Value),
+		OptionalParams:    []bool{},
+		IsVariadic:        false,
+		RestParameterType: nil,
 	}
 }
 
@@ -222,13 +252,15 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	paramTypes := c.extractParameterTypes(method.Value)
 	returnType := c.inferReturnType(method.Value)
 	optionalParams := c.extractOptionalParams(method.Value)
+	isVariadic := method.Value.RestParameter != nil
+	restParameterType := c.extractRestParameterType(method.Value)
 	
 	signature := &types.Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    optionalParams,
-		IsVariadic:        method.Value.RestParameter != nil,
-		RestParameterType: c.extractRestParameterType(method.Value),
+		IsVariadic:        isVariadic,
+		RestParameterType: restParameterType,
 	}
 	
 	return types.NewFunctionType(signature)
@@ -550,3 +582,84 @@ func (c *Checker) inferReturnType(fn *parser.FunctionLiteral) types.Type {
 	// In a full implementation, we would analyze the function body to infer the return type
 	return types.Any
 }
+
+// extractParameterTypesFromSignature extracts parameter types from a constructor signature
+func (c *Checker) extractParameterTypesFromSignature(sig *parser.ConstructorSignature) []types.Type {
+	var paramTypes []types.Type
+	
+	for _, param := range sig.Parameters {
+		if param.TypeAnnotation != nil {
+			// Use explicit type annotation
+			paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
+			if paramType != nil {
+				paramTypes = append(paramTypes, paramType)
+			} else {
+				paramTypes = append(paramTypes, types.Any)
+			}
+		} else {
+			// No type annotation, use 'any'
+			paramTypes = append(paramTypes, types.Any)
+		}
+	}
+	
+	return paramTypes
+}
+
+// extractOptionalParamsFromSignature extracts optional parameter flags from a constructor signature
+func (c *Checker) extractOptionalParamsFromSignature(sig *parser.ConstructorSignature) []bool {
+	optionalParams := make([]bool, len(sig.Parameters))
+	
+	for i, param := range sig.Parameters {
+		optionalParams[i] = param.Optional
+	}
+	
+	return optionalParams
+}
+
+// extractRestParameterTypeFromSignature extracts rest parameter type from a constructor signature
+func (c *Checker) extractRestParameterTypeFromSignature(sig *parser.ConstructorSignature) types.Type {
+	if sig.RestParameter == nil {
+		return nil
+	}
+	
+	if sig.RestParameter.TypeAnnotation != nil {
+		// Use explicit type annotation
+		restType := c.resolveTypeAnnotation(sig.RestParameter.TypeAnnotation)
+		if restType != nil {
+			return restType
+		}
+	}
+	
+	// Default to any[] for rest parameters
+	return &types.ArrayType{ElementType: types.Any}
+}
+
+// validateMethodSignature validates a method signature's types
+func (c *Checker) validateMethodSignature(sig *parser.MethodSignature) {
+	// Validate parameter types
+	for _, param := range sig.Parameters {
+		if param.TypeAnnotation != nil {
+			paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
+			if paramType == nil {
+				c.addError(param.Name, fmt.Sprintf("invalid type annotation for parameter '%s'", param.Name.Value))
+			}
+		}
+	}
+	
+	// Validate rest parameter type if present
+	if sig.RestParameter != nil && sig.RestParameter.TypeAnnotation != nil {
+		restType := c.resolveTypeAnnotation(sig.RestParameter.TypeAnnotation)
+		if restType == nil {
+			c.addError(sig.RestParameter.Name, fmt.Sprintf("invalid type annotation for rest parameter '%s'", sig.RestParameter.Name.Value))
+		}
+	}
+	
+	// Validate return type if present
+	if sig.ReturnTypeAnnotation != nil {
+		returnType := c.resolveTypeAnnotation(sig.ReturnTypeAnnotation)
+		if returnType == nil {
+			c.addError(sig.Key, fmt.Sprintf("invalid return type annotation for method '%s'", sig.Key.Value))
+		}
+	}
+}
+

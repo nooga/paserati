@@ -129,6 +129,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 	
 	var methods []*MethodDefinition
 	var properties []*PropertyDefinition
+	var constructorSigs []*ConstructorSignature
+	var methodSigs []*MethodSignature
 	
 	p.nextToken() // move past '{'
 	
@@ -183,18 +185,31 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		} else if p.curTokenIs(lexer.IDENT) {
 			if p.curToken.Literal == "constructor" {
-				method := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)
-				if method != nil {
-					methods = append(methods, method)
+				// Parse constructor - let it decide if it's signature or implementation
+				result := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)
+				if result != nil {
+					if sig, ok := result.(*ConstructorSignature); ok {
+						// It's a signature
+						constructorSigs = append(constructorSigs, sig)
+					} else if method, ok := result.(*MethodDefinition); ok {
+						// It's an implementation
+						methods = append(methods, method)
+					}
 				}
 			} else {
 				// Could be a method or property
 				// Look ahead to distinguish
 				if p.peekTokenIs(lexer.LPAREN) {
-					// It's a method
-					method := p.parseMethod(isStatic, isPublic, isPrivate, isProtected)
-					if method != nil {
-						methods = append(methods, method)
+					// It's a method - parse it and handle signatures/implementations
+					result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected)
+					if result != nil {
+						if sig, ok := result.(*MethodSignature); ok {
+							// It's a method signature
+							methodSigs = append(methodSigs, sig)
+						} else if method, ok := result.(*MethodDefinition); ok {
+							// It's a method implementation
+							methods = append(methods, method)
+						}
 					}
 				} else {
 					// It's a property
@@ -219,14 +234,17 @@ func (p *Parser) parseClassBody() *ClassBody {
 	// to be consistent with other parsing functions like parseBlockStatement
 	
 	return &ClassBody{
-		Token:      bodyToken,
-		Methods:    methods,
-		Properties: properties,
+		Token:           bodyToken,
+		Methods:         methods,
+		Properties:      properties,
+		ConstructorSigs: constructorSigs,
+		MethodSigs:      methodSigs,
 	}
 }
 
-// parseConstructor parses a constructor method
-func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
+// parseConstructor parses a constructor method or signature
+// Returns either *ConstructorSignature or *MethodDefinition based on whether it ends with ';' or '{'
+func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected bool) interface{} {
 	constructorToken := p.curToken
 	
 	// We're currently at the "constructor" token, next should be (
@@ -234,41 +252,66 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 		return nil
 	}
 	
-	// Create a function literal structure manually
-	functionLiteral := &FunctionLiteral{
-		Token: constructorToken,
-		Name:  nil, // Constructors don't have names like regular functions
-	}
-	
 	// Parse parameters - we're now at the '(' token
+	var parameters []*Parameter
+	var restParameter *RestParameter
 	var err error
-	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters()
+	parameters, restParameter, err = p.parseFunctionParameters()
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse constructor parameters: %s", err.Error()))
 		return nil
 	}
 	
 	// Parse return type annotation if present
+	var returnTypeAnnotation Expression
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // consume ':'
 		p.nextToken() // move to start of type expression
 		
 		// Parse the return type using existing type parsing logic
-		functionLiteral.ReturnTypeAnnotation = p.parseTypeExpression()
-		if functionLiteral.ReturnTypeAnnotation == nil {
+		returnTypeAnnotation = p.parseTypeExpression()
+		if returnTypeAnnotation == nil {
 			return nil
 		}
 	}
 	
-	// Parse body - after parseFunctionParameters we should be at ')' with peek being '{' 
+	// Check if this is a constructor signature (ends with semicolon) or implementation (has body)
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		// This is a constructor signature, not an implementation
+		p.nextToken() // Consume semicolon
+		
+		sig := &ConstructorSignature{
+			Token:                constructorToken,
+			Parameters:           parameters,
+			RestParameter:        restParameter,
+			ReturnTypeAnnotation: returnTypeAnnotation,
+			IsStatic:             isStatic,
+			IsPublic:             isPublic,
+			IsPrivate:            isPrivate,
+			IsProtected:          isProtected,
+		}
+		return sig
+	}
+	
+	// This is a constructor implementation - continue parsing the body
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
 	
-	functionLiteral.Body = p.parseBlockStatement()
+	body := p.parseBlockStatement()
 	
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
+	
+	// Create function literal for the implementation
+	functionLiteral := &FunctionLiteral{
+		Token:                constructorToken,
+		Name:                 nil, // Constructors don't have names like regular functions
+		Parameters:           parameters,
+		RestParameter:        restParameter,
+		ReturnTypeAnnotation: returnTypeAnnotation,
+		Body:                 body,
+	}
 	
 	return &MethodDefinition{
 		Token:       constructorToken,
@@ -282,8 +325,9 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 	}
 }
 
-// parseMethod parses a regular method
-func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
+// parseMethod parses a regular method or signature
+// Returns either *MethodSignature or *MethodDefinition based on whether it ends with ';' or '{'
+func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) interface{} {
 	methodToken := p.curToken
 	methodName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
@@ -292,41 +336,68 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) *M
 		return nil
 	}
 	
-	// Create a function literal structure manually
-	functionLiteral := &FunctionLiteral{
-		Token: methodToken,
-		Name:  nil, // Methods don't have names in the traditional function sense
-	}
-	
 	// Parse parameters - we're now at the '(' token
+	var parameters []*Parameter
+	var restParameter *RestParameter
 	var err error
-	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters()
+	parameters, restParameter, err = p.parseFunctionParameters()
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse method parameters: %s", err.Error()))
 		return nil
 	}
 	
 	// Parse return type annotation if present
+	var returnTypeAnnotation Expression
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // consume ':'
 		p.nextToken() // move to start of type expression
 		
 		// Parse the return type using existing type parsing logic
-		functionLiteral.ReturnTypeAnnotation = p.parseTypeExpression()
-		if functionLiteral.ReturnTypeAnnotation == nil {
+		returnTypeAnnotation = p.parseTypeExpression()
+		if returnTypeAnnotation == nil {
 			return nil
 		}
 	}
 	
-	// Parse body - after parseFunctionParameters we should be at ')' with peek being '{'
+	// Check if this is a method signature (ends with semicolon) or implementation (has body)
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		// This is a method signature, not an implementation
+		p.nextToken() // Consume semicolon
+		
+		sig := &MethodSignature{
+			Token:                methodToken,
+			Key:                  methodName,
+			Parameters:           parameters,
+			RestParameter:        restParameter,
+			ReturnTypeAnnotation: returnTypeAnnotation,
+			Kind:                 "method",
+			IsStatic:             isStatic,
+			IsPublic:             isPublic,
+			IsPrivate:            isPrivate,
+			IsProtected:          isProtected,
+		}
+		return sig
+	}
+	
+	// This is a method implementation - continue parsing the body
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
 	
-	functionLiteral.Body = p.parseBlockStatement()
+	body := p.parseBlockStatement()
 	
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
+	
+	// Create function literal for the implementation
+	functionLiteral := &FunctionLiteral{
+		Token:                methodToken,
+		Name:                 nil, // Methods don't have names in the traditional function sense
+		Parameters:           parameters,
+		RestParameter:        restParameter,
+		ReturnTypeAnnotation: returnTypeAnnotation,
+		Body:                 body,
+	}
 	
 	return &MethodDefinition{
 		Token:       methodToken,
@@ -520,3 +591,4 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected bool) *M
 		IsProtected: isProtected,
 	}
 }
+
