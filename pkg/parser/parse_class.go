@@ -101,32 +101,39 @@ func (p *Parser) parseClassBody() *ClassBody {
 			continue
 		}
 		
-		// Check for modifiers in any order (readonly static OR static readonly)
+		// Parse modifiers in any order
 		isReadonly := false
 		isStatic := false
+		isPublic := false
+		isPrivate := false
+		isProtected := false
 		
-		// First modifier
-		if p.curTokenIs(lexer.READONLY) {
-			isReadonly = true
-			p.nextToken()
-		} else if p.curTokenIs(lexer.STATIC) {
-			isStatic = true
-			p.nextToken()
-		}
-		
-		// Second modifier (if first was found)
-		if isReadonly && p.curTokenIs(lexer.STATIC) {
-			isStatic = true
-			p.nextToken()
-		} else if isStatic && p.curTokenIs(lexer.READONLY) {
-			isReadonly = true
-			p.nextToken()
+		// Parse all modifiers until we hit something that's not a modifier
+		for {
+			if p.curTokenIs(lexer.READONLY) && !isReadonly {
+				isReadonly = true
+				p.nextToken()
+			} else if p.curTokenIs(lexer.STATIC) && !isStatic {
+				isStatic = true
+				p.nextToken()
+			} else if p.curTokenIs(lexer.PUBLIC) && !isPublic && !isPrivate && !isProtected {
+				isPublic = true
+				p.nextToken()
+			} else if p.curTokenIs(lexer.PRIVATE) && !isPublic && !isPrivate && !isProtected {
+				isPrivate = true
+				p.nextToken()
+			} else if p.curTokenIs(lexer.PROTECTED) && !isPublic && !isPrivate && !isProtected {
+				isProtected = true
+				p.nextToken()
+			} else {
+				break // No more modifiers
+			}
 		}
 		
 		// Parse constructor or method
 		if p.curTokenIs(lexer.IDENT) {
 			if p.curToken.Literal == "constructor" {
-				method := p.parseConstructor(isStatic)
+				method := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)
 				if method != nil {
 					methods = append(methods, method)
 				}
@@ -135,13 +142,13 @@ func (p *Parser) parseClassBody() *ClassBody {
 				// Look ahead to distinguish
 				if p.peekTokenIs(lexer.LPAREN) {
 					// It's a method
-					method := p.parseMethod(isStatic)
+					method := p.parseMethod(isStatic, isPublic, isPrivate, isProtected)
 					if method != nil {
 						methods = append(methods, method)
 					}
 				} else {
 					// It's a property
-					property := p.parseProperty(isStatic, isReadonly)
+					property := p.parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected)
 					if property != nil {
 						properties = append(properties, property)
 					}
@@ -169,7 +176,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 }
 
 // parseConstructor parses a constructor method
-func (p *Parser) parseConstructor(isStatic bool) *MethodDefinition {
+func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
 	constructorToken := p.curToken
 	
 	// We're currently at the "constructor" token, next should be (
@@ -214,16 +221,19 @@ func (p *Parser) parseConstructor(isStatic bool) *MethodDefinition {
 	p.nextToken()
 	
 	return &MethodDefinition{
-		Token:    constructorToken,
-		Key:      &Identifier{Token: constructorToken, Value: "constructor"},
-		Value:    functionLiteral,
-		Kind:     "constructor",
-		IsStatic: isStatic,
+		Token:       constructorToken,
+		Key:         &Identifier{Token: constructorToken, Value: "constructor"},
+		Value:       functionLiteral,
+		Kind:        "constructor",
+		IsStatic:    isStatic,
+		IsPublic:    isPublic,
+		IsPrivate:   isPrivate,
+		IsProtected: isProtected,
 	}
 }
 
 // parseMethod parses a regular method
-func (p *Parser) parseMethod(isStatic bool) *MethodDefinition {
+func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
 	methodToken := p.curToken
 	methodName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
@@ -269,16 +279,19 @@ func (p *Parser) parseMethod(isStatic bool) *MethodDefinition {
 	p.nextToken()
 	
 	return &MethodDefinition{
-		Token:    methodToken,
-		Key:      methodName,
-		Value:    functionLiteral,
-		Kind:     "method",
-		IsStatic: isStatic,
+		Token:       methodToken,
+		Key:         methodName,
+		Value:       functionLiteral,
+		Kind:        "method",
+		IsStatic:    isStatic,
+		IsPublic:    isPublic,
+		IsPrivate:   isPrivate,
+		IsProtected: isProtected,
 	}
 }
 
 // parseProperty parses a property declaration
-func (p *Parser) parseProperty(isStatic bool, isReadonly bool) *PropertyDefinition {
+func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
 	propertyToken := p.curToken
 	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
@@ -326,5 +339,8 @@ func (p *Parser) parseProperty(isStatic bool, isReadonly bool) *PropertyDefiniti
 		IsStatic:       isStatic,
 		Optional:       isOptional,
 		Readonly:       isReadonly,
+		IsPublic:       isPublic,
+		IsPrivate:      isPrivate,
+		IsProtected:    isProtected,
 	}
 }

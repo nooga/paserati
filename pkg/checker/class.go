@@ -10,6 +10,11 @@ import (
 func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
 	
+	// Set up class context for access control checking
+	prevContext := c.currentClassContext
+	c.setClassContext(node.Name.Value, types.AccessContextExternal)
+	defer func() { c.currentClassContext = prevContext }()
+	
 	// 1. Check if class name is already defined
 	if _, _, exists := c.env.Resolve(node.Name.Value); exists {
 		c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared", node.Name.Value))
@@ -17,7 +22,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	}
 	
 	// 2. Create instance type from methods and properties
-	instanceType := c.createInstanceType(node.Body)
+	instanceType := c.createInstanceType(node.Name.Value, node.Body)
 	
 	// 3. Register the class name as a type alias pointing to the instance type EARLY
 	// This allows static methods to use the class name in type annotations
@@ -50,16 +55,26 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 }
 
 // createInstanceType builds an object type representing instances of the class
-func (c *Checker) createInstanceType(body *parser.ClassBody) *types.ObjectType {
-	instanceType := types.NewObjectType()
+func (c *Checker) createInstanceType(className string, body *parser.ClassBody) *types.ObjectType {
+	// Create class instance type with metadata
+	instanceType := types.NewClassInstanceType(className)
 	
 	// Add methods to instance type (excluding constructor and static methods)
 	for _, method := range body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic {
+			// Set method context for access control checking
+			c.setClassContext(className, types.AccessContextInstanceMethod)
+			
 			methodType := c.inferMethodType(method)
-			instanceType = instanceType.WithProperty(method.Key.Value, methodType)
-			debugPrintf("// [Checker Class] Added method '%s' to instance type: %s\n", 
-				method.Key.Value, methodType.String())
+			
+			// Determine access level
+			accessLevel := c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)
+			
+			// Add method with access control metadata
+			instanceType.WithClassMember(method.Key.Value, methodType, accessLevel, false, false)
+			
+			debugPrintf("// [Checker Class] Added method '%s' to instance type: %s (%s)\n", 
+				method.Key.Value, methodType.String(), accessLevel.String())
 		}
 	}
 	
@@ -67,9 +82,15 @@ func (c *Checker) createInstanceType(body *parser.ClassBody) *types.ObjectType {
 	for _, prop := range body.Properties {
 		if !prop.IsStatic {
 			propType := c.inferPropertyType(prop)
-			instanceType = instanceType.WithProperty(prop.Key.Value, propType)
-			debugPrintf("// [Checker Class] Added property '%s' to instance type: %s\n", 
-				prop.Key.Value, propType.String())
+			
+			// Determine access level
+			accessLevel := c.getAccessLevel(prop.IsPublic, prop.IsPrivate, prop.IsProtected)
+			
+			// Add property with access control metadata
+			instanceType.WithClassMember(prop.Key.Value, propType, accessLevel, false, prop.Readonly)
+			
+			debugPrintf("// [Checker Class] Added property '%s' to instance type: %s (%s, readonly: %v)\n", 
+				prop.Key.Value, propType.String(), accessLevel.String(), prop.Readonly)
 		}
 	}
 	
@@ -167,15 +188,39 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 	return propType
 }
 
+// getAccessLevel determines the access level from boolean flags
+func (c *Checker) getAccessLevel(isPublic, isPrivate, isProtected bool) types.AccessModifier {
+	if isPrivate {
+		return types.AccessPrivate
+	}
+	if isProtected {
+		return types.AccessProtected
+	}
+	// Default to public if no explicit modifier (TypeScript default)
+	return types.AccessPublic
+}
+
 // addStaticMembers adds static methods and properties to the constructor type
 func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *types.ObjectType) *types.ObjectType {
+	// Get the class name from constructor metadata
+	className := constructorType.GetClassName()
+	
 	// Add static methods
 	for _, method := range body.Methods {
 		if method.IsStatic && method.Kind != "constructor" {
+			// Set static method context for access control checking
+			c.setClassContext(className, types.AccessContextStaticMethod)
+			
 			methodType := c.inferMethodType(method)
-			constructorType = constructorType.WithProperty(method.Key.Value, methodType)
-			debugPrintf("// [Checker Class] Added static method '%s' to constructor type: %s\n", 
-				method.Key.Value, methodType.String())
+			
+			// Determine access level
+			accessLevel := c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)
+			
+			// Add method with access control metadata
+			constructorType.WithClassMember(method.Key.Value, methodType, accessLevel, true, false)
+			
+			debugPrintf("// [Checker Class] Added static method '%s' to constructor type: %s (%s)\n", 
+				method.Key.Value, methodType.String(), accessLevel.String())
 		}
 	}
 	
@@ -183,12 +228,20 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 	for _, prop := range body.Properties {
 		if prop.IsStatic {
 			propType := c.inferPropertyType(prop)
-			constructorType = constructorType.WithProperty(prop.Key.Value, propType)
+			
+			// Determine access level
+			accessLevel := c.getAccessLevel(prop.IsPublic, prop.IsPrivate, prop.IsProtected)
+			
+			// Add property with access control metadata
+			constructorType.WithClassMember(prop.Key.Value, propType, accessLevel, true, prop.Readonly)
+			
+			// Handle optional properties
 			if prop.Optional {
 				constructorType.OptionalProperties[prop.Key.Value] = true
 			}
-			debugPrintf("// [Checker Class] Added static property '%s' to constructor type: %s\n", 
-				prop.Key.Value, propType.String())
+			
+			debugPrintf("// [Checker Class] Added static property '%s' to constructor type: %s (%s, readonly: %v)\n", 
+				prop.Key.Value, propType.String(), accessLevel.String(), prop.Readonly)
 		}
 	}
 	

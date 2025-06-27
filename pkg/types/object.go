@@ -126,6 +126,9 @@ type ObjectType struct {
 	ConstructSignatures []*Signature // Object constructor signatures: new obj(args)
 	BaseTypes           []Type       // For inheritance (classes, interfaces)
 
+	// NEW: Class metadata for access control
+	ClassMeta *ClassMetadata // Contains access control information for class types
+
 	// TODO: Index Signatures?
 }
 
@@ -242,7 +245,22 @@ func (ot *ObjectType) Equals(other Type) bool {
 		}
 	}
 
-	return true // All properties, signatures, and base types match
+	// Check class metadata
+	if (ot.ClassMeta == nil) != (otherOt.ClassMeta == nil) {
+		return false
+	}
+	if ot.ClassMeta != nil {
+		// Compare class metadata - for type equality, class names must match
+		if ot.ClassMeta.ClassName != otherOt.ClassMeta.ClassName ||
+		   ot.ClassMeta.IsClassInstance != otherOt.ClassMeta.IsClassInstance ||
+		   ot.ClassMeta.IsClassConstructor != otherOt.ClassMeta.IsClassConstructor {
+			return false
+		}
+		// Note: We don't compare member access info for type equality
+		// Access modifiers are metadata, not part of the structural type
+	}
+
+	return true // All properties, signatures, base types, and class metadata match
 }
 
 // --- ObjectType Helper Methods ---
@@ -250,6 +268,40 @@ func (ot *ObjectType) Equals(other Type) bool {
 // IsCallable returns true if this ObjectType has call signatures
 func (ot *ObjectType) IsCallable() bool {
 	return ot != nil && ot.CallSignatures != nil && len(ot.CallSignatures) > 0
+}
+
+// IsClassInstance returns true if this ObjectType represents a class instance
+func (ot *ObjectType) IsClassInstance() bool {
+	return ot.ClassMeta != nil && ot.ClassMeta.IsClassInstance
+}
+
+// IsClassConstructor returns true if this ObjectType represents a class constructor
+func (ot *ObjectType) IsClassConstructor() bool {
+	return ot.ClassMeta != nil && ot.ClassMeta.IsClassConstructor
+}
+
+// GetClassName returns the class name if this is a class type, empty string otherwise
+func (ot *ObjectType) GetClassName() string {
+	if ot.ClassMeta != nil {
+		return ot.ClassMeta.ClassName
+	}
+	return ""
+}
+
+// GetMemberAccessInfo returns access information for a member, or nil if not a class type
+func (ot *ObjectType) GetMemberAccessInfo(memberName string) *MemberAccessInfo {
+	if ot.ClassMeta != nil {
+		return ot.ClassMeta.GetMemberAccess(memberName)
+	}
+	return nil
+}
+
+// IsAccessibleFrom checks if a member is accessible from the given context
+func (ot *ObjectType) IsAccessibleFrom(memberName string, accessContext *AccessContext) bool {
+	if ot.ClassMeta != nil {
+		return ot.ClassMeta.IsAccessibleFrom(memberName, accessContext)
+	}
+	return true // Non-class types have no access restrictions
 }
 
 // IsConstructable returns true if this ObjectType has constructor signatures
@@ -321,6 +373,7 @@ func NewObjectType() *ObjectType {
 		CallSignatures:      []*Signature{},
 		ConstructSignatures: []*Signature{},
 		BaseTypes:           []Type{},
+		ClassMeta:           nil, // No class metadata by default
 	}
 }
 
@@ -394,6 +447,31 @@ func (ot *ObjectType) WithSimpleConstructSignature(paramTypes []Type, returnType
 // Inherits adds a base type for inheritance and returns the same instance for chaining
 func (ot *ObjectType) Inherits(baseType Type) *ObjectType {
 	ot.BaseTypes = append(ot.BaseTypes, baseType)
+	return ot
+}
+
+// AsClassInstance sets this ObjectType as a class instance type with the given class name
+func (ot *ObjectType) AsClassInstance(className string) *ObjectType {
+	ot.ClassMeta = NewClassMetadata(className, true)
+	return ot
+}
+
+// AsClassConstructor sets this ObjectType as a class constructor type with the given class name
+func (ot *ObjectType) AsClassConstructor(className string) *ObjectType {
+	ot.ClassMeta = NewClassMetadata(className, false)
+	return ot
+}
+
+// WithClassMember adds a class member with access control information
+func (ot *ObjectType) WithClassMember(memberName string, memberType Type, accessLevel AccessModifier, isStatic, isReadonly bool) *ObjectType {
+	// Add the property to the type
+	ot.Properties[memberName] = memberType
+	
+	// Add access control metadata
+	if ot.ClassMeta != nil {
+		ot.ClassMeta.AddMember(memberName, accessLevel, isStatic, isReadonly)
+	}
+	
 	return ot
 }
 
@@ -534,4 +612,16 @@ func NewOverloadedFunctionType(sigs []*Signature) *ObjectType {
 // NewConstructorType creates an ObjectType representing a pure constructor
 func NewConstructorType(sig *Signature) *ObjectType {
 	return NewObjectType().WithConstructSignature(sig)
+}
+
+// --- Class Type Constructors ---
+
+// NewClassInstanceType creates an ObjectType representing a class instance
+func NewClassInstanceType(className string) *ObjectType {
+	return NewObjectType().AsClassInstance(className)
+}
+
+// NewClassConstructorType creates an ObjectType representing a class constructor
+func NewClassConstructorType(className string, sig *Signature) *ObjectType {
+	return NewObjectType().AsClassConstructor(className).WithConstructSignature(sig)
 }

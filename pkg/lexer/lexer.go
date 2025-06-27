@@ -187,6 +187,10 @@ const (
 	STATIC TokenType = "STATIC"
 	// Readonly keyword
 	READONLY TokenType = "READONLY"
+	// Access modifier keywords
+	PUBLIC    TokenType = "PUBLIC"
+	PRIVATE   TokenType = "PRIVATE"
+	PROTECTED TokenType = "PROTECTED"
 )
 
 var keywords = map[string]TokenType{
@@ -228,6 +232,9 @@ var keywords = map[string]TokenType{
 	"class":      CLASS,      // Added for class declarations/expressions
 	"static":     STATIC,     // Added for static members
 	"readonly":   READONLY,   // Added for readonly modifier
+	"public":     PUBLIC,     // Added for public access modifier
+	"private":    PRIVATE,    // Added for private access modifier
+	"protected":  PROTECTED,  // Added for protected access modifier
 }
 
 // LookupIdent checks the keywords table for an identifier.

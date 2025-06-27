@@ -88,6 +88,10 @@ type Checker struct {
 	// --- NEW: Context for 'this' type checking ---
 	// Type of 'this' in the current context (set when checking methods)
 	currentThisType types.Type
+	
+	// --- NEW: Context for access control checking ---
+	// Current class context for access modifier validation
+	currentClassContext *types.AccessContext
 }
 
 // NewChecker creates a new type checker.
@@ -99,7 +103,57 @@ func NewChecker() *Checker {
 		currentExpectedReturnType:  nil,
 		currentInferredReturnTypes: nil,
 		currentThisType:            nil, // Initialize this type context
+		currentClassContext:        nil, // No class context initially
 	}
+}
+
+// --- Access Control Helper Methods ---
+
+// setClassContext sets the current class context for access control checking
+func (c *Checker) setClassContext(className string, contextType types.AccessContextType) {
+	c.currentClassContext = types.NewAccessContext(className, contextType)
+	// TODO: Set inheritance checking function when inheritance is implemented
+	// c.currentClassContext.IsSubclassOfFunc = c.isSubclassOf
+}
+
+// clearClassContext clears the current class context
+func (c *Checker) clearClassContext() {
+	c.currentClassContext = nil
+}
+
+// validateMemberAccess checks if a member access is allowed given the current context
+func (c *Checker) validateMemberAccess(objectType types.Type, memberName string, accessLocation parser.Node) {
+	// Only check access for class instance types
+	if objType, ok := objectType.(*types.ObjectType); ok && objType.IsClassInstance() {
+		// Check if member is accessible from current context
+		if !objType.IsAccessibleFrom(memberName, c.currentClassContext) {
+			c.createAccessError(objType, memberName, accessLocation)
+		}
+	}
+}
+
+// createAccessError creates a TypeScript-style access control error
+func (c *Checker) createAccessError(objType *types.ObjectType, memberName string, node parser.Node) {
+	memberInfo := objType.GetMemberAccessInfo(memberName)
+	className := objType.GetClassName()
+	
+	var errorMsg string
+	if memberInfo != nil {
+		errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'", 
+			memberName, memberInfo.AccessLevel.String(), className)
+	} else {
+		errorMsg = fmt.Sprintf("Property '%s' does not exist on type '%s'", memberName, className)
+	}
+	
+	c.addError(node, errorMsg)
+}
+
+// getCurrentClassName returns the current class name being checked, or empty string
+func (c *Checker) getCurrentClassName() string {
+	if c.currentClassContext != nil {
+		return c.currentClassContext.CurrentClassName
+	}
+	return ""
 }
 
 // Check analyzes the given program AST for type errors.

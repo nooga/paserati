@@ -441,7 +441,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				// Look for the property in the object's fields
 				fieldType, exists := obj.Properties[propertyName]
 				if exists {
-					// Property found
+					// Property found - check access control for class types
+					c.validateMemberAccess(objectType, propertyName, node.Property)
+					
 					if fieldType == nil { // Should ideally not happen if checker populates correctly
 						c.addError(node.Property, fmt.Sprintf("internal checker error: property '%s' has nil type in ObjectType", propertyName))
 						resultType = types.Never

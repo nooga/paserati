@@ -1,0 +1,170 @@
+package types
+
+// AccessModifier represents the visibility level of class members
+type AccessModifier int
+
+const (
+	AccessPublic AccessModifier = iota
+	AccessPrivate
+	AccessProtected
+)
+
+// String returns the string representation of the access modifier
+func (a AccessModifier) String() string {
+	switch a {
+	case AccessPublic:
+		return "public"
+	case AccessPrivate:
+		return "private"
+	case AccessProtected:
+		return "protected"
+	default:
+		return "unknown"
+	}
+}
+
+// MemberAccessInfo contains access control information for a class member
+type MemberAccessInfo struct {
+	AccessLevel AccessModifier
+	IsStatic    bool
+	IsReadonly  bool
+}
+
+// ClassMetadata contains class-specific type information for access control
+type ClassMetadata struct {
+	// Name of the class this type represents
+	ClassName string
+	
+	// Access control information for each member
+	MemberAccess map[string]*MemberAccessInfo
+	
+	// Indicates this is a class instance type (not the constructor)
+	IsClassInstance bool
+	
+	// Indicates this is a class constructor type
+	IsClassConstructor bool
+	
+	// Reference to the source class declaration (if available)
+	// This is used for inheritance checks and access validation
+	SourceClassName string
+}
+
+// NewClassMetadata creates a new ClassMetadata instance
+func NewClassMetadata(className string, isInstance bool) *ClassMetadata {
+	return &ClassMetadata{
+		ClassName:          className,
+		MemberAccess:       make(map[string]*MemberAccessInfo),
+		IsClassInstance:    isInstance,
+		IsClassConstructor: !isInstance,
+		SourceClassName:    className,
+	}
+}
+
+// AddMember adds access control information for a class member
+func (cm *ClassMetadata) AddMember(memberName string, accessLevel AccessModifier, isStatic, isReadonly bool) {
+	cm.MemberAccess[memberName] = &MemberAccessInfo{
+		AccessLevel: accessLevel,
+		IsStatic:    isStatic,
+		IsReadonly:  isReadonly,
+	}
+}
+
+// GetMemberAccess returns the access information for a member, or nil if not found
+func (cm *ClassMetadata) GetMemberAccess(memberName string) *MemberAccessInfo {
+	return cm.MemberAccess[memberName]
+}
+
+// HasMember checks if a member exists in this class
+func (cm *ClassMetadata) HasMember(memberName string) bool {
+	_, exists := cm.MemberAccess[memberName]
+	return exists
+}
+
+// IsAccessibleFrom checks if a member is accessible from a given class context
+func (cm *ClassMetadata) IsAccessibleFrom(memberName string, accessContext *AccessContext) bool {
+	memberInfo := cm.GetMemberAccess(memberName)
+	if memberInfo == nil {
+		return false // Member doesn't exist
+	}
+	
+	switch memberInfo.AccessLevel {
+	case AccessPublic:
+		return true // Always accessible
+		
+	case AccessPrivate:
+		// Only accessible within the same class
+		return accessContext != nil && 
+			   accessContext.CurrentClassName == cm.SourceClassName
+			   
+	case AccessProtected:
+		// Accessible within the same class or subclasses
+		return accessContext != nil && 
+			   (accessContext.CurrentClassName == cm.SourceClassName ||
+			    accessContext.IsSubclassOf(cm.SourceClassName))
+	}
+	
+	return false
+}
+
+// AccessContext represents the context from which a member is being accessed
+type AccessContext struct {
+	// Name of the class currently being checked
+	CurrentClassName string
+	
+	// Type of access context
+	ContextType AccessContextType
+	
+	// Whether we're inside a constructor
+	IsInConstructor bool
+	
+	// Whether we're in a static context
+	IsStaticContext bool
+	
+	// Function to check inheritance relationships
+	// Returns true if currentClass is a subclass of targetClass
+	IsSubclassOfFunc func(currentClass, targetClass string) bool
+}
+
+// AccessContextType represents where the access is happening from
+type AccessContextType int
+
+const (
+	AccessContextExternal AccessContextType = iota
+	AccessContextInstanceMethod
+	AccessContextStaticMethod
+	AccessContextConstructor
+)
+
+// String returns the string representation of the access context type
+func (act AccessContextType) String() string {
+	switch act {
+	case AccessContextExternal:
+		return "external"
+	case AccessContextInstanceMethod:
+		return "instance method"
+	case AccessContextStaticMethod:
+		return "static method"
+	case AccessContextConstructor:
+		return "constructor"
+	default:
+		return "unknown"
+	}
+}
+
+// IsSubclassOf checks if the current class is a subclass of the target class
+func (ac *AccessContext) IsSubclassOf(targetClass string) bool {
+	if ac.IsSubclassOfFunc == nil {
+		return false // No inheritance checking available
+	}
+	return ac.IsSubclassOfFunc(ac.CurrentClassName, targetClass)
+}
+
+// NewAccessContext creates a new access context
+func NewAccessContext(className string, contextType AccessContextType) *AccessContext {
+	return &AccessContext{
+		CurrentClassName: className,
+		ContextType:      contextType,
+		IsInConstructor:  contextType == AccessContextConstructor,
+		IsStaticContext:  contextType == AccessContextStaticMethod,
+	}
+}

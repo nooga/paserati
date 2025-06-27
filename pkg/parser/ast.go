@@ -2226,16 +2226,29 @@ func (cb *ClassBody) String() string {
 // MethodDefinition represents a method in a class
 type MethodDefinition struct {
 	BaseExpression
-	Token    lexer.Token         // The method name token
-	Key      *Identifier         // Method name
-	Value    *FunctionLiteral    // Function implementation
-	Kind     string              // "constructor", "method"
-	IsStatic bool                // For future static method support
+	Token       lexer.Token         // The method name token
+	Key         *Identifier         // Method name
+	Value       *FunctionLiteral    // Function implementation
+	Kind        string              // "constructor", "method"
+	IsStatic    bool                // For static method support
+	IsPublic    bool                // For public access modifier
+	IsPrivate   bool                // For private access modifier
+	IsProtected bool                // For protected access modifier
 }
 
 func (md *MethodDefinition) TokenLiteral() string { return md.Token.Literal }
 func (md *MethodDefinition) String() string {
 	var out bytes.Buffer
+	
+	// Add access modifiers
+	if md.IsPrivate {
+		out.WriteString("private ")
+	} else if md.IsProtected {
+		out.WriteString("protected ")
+	} else if md.IsPublic {
+		out.WriteString("public ")
+	}
+	
 	if md.IsStatic {
 		out.WriteString("static ")
 	}
@@ -2270,14 +2283,27 @@ type PropertyDefinition struct {
 	Key            *Identifier // Property name
 	TypeAnnotation Expression  // Type annotation (can be nil)
 	Value          Expression  // Initializer expression (can be nil)
-	IsStatic       bool        // For future static property support
+	IsStatic       bool        // For static property support
 	Optional       bool        // Whether the property is optional (prop?)
 	Readonly       bool        // Whether the property is readonly
+	IsPublic       bool        // For public access modifier
+	IsPrivate      bool        // For private access modifier
+	IsProtected    bool        // For protected access modifier
 }
 
 func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }
 func (pd *PropertyDefinition) String() string {
 	var out bytes.Buffer
+	
+	// Add access modifiers
+	if pd.IsPrivate {
+		out.WriteString("private ")
+	} else if pd.IsProtected {
+		out.WriteString("protected ")
+	} else if pd.IsPublic {
+		out.WriteString("public ")
+	}
+	
 	if pd.Readonly {
 		out.WriteString("readonly ")
 	}
