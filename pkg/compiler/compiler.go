@@ -29,7 +29,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = true      // Enable for debugging register allocation issue
+const debugCompiler = false      // Enable for debugging register allocation issue
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
@@ -1384,4 +1384,24 @@ func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	}
 
 	return uint16(idx)
+}
+
+// hasMethodInType checks if an object type has a method with the given name
+// This includes checking the object's own properties and any prototype chain
+func (c *Compiler) hasMethodInType(objType *types.ObjectType, methodName string) bool {
+	// Check own properties
+	if _, exists := objType.Properties[methodName]; exists {
+		return true
+	}
+	
+	// Check in base types (prototypes)
+	for _, baseType := range objType.BaseTypes {
+		if baseObjType, ok := baseType.(*types.ObjectType); ok {
+			if c.hasMethodInType(baseObjType, methodName) {
+				return true
+			}
+		}
+	}
+	
+	return false
 }

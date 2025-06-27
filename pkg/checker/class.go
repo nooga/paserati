@@ -69,9 +69,78 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		c.handleInterfaceImplementation(instanceType, iface.Value)
 	}
 	
-	// Add methods to instance type (excluding constructor and static methods)
+	// Collect getters and setters to handle them specially
+	getters := make(map[string]*parser.MethodDefinition)
+	setters := make(map[string]*parser.MethodDefinition)
+	
+	// First pass: collect getters and setters
 	for _, method := range body.Methods {
-		if method.Kind != "constructor" && !method.IsStatic {
+		if method.Kind == "getter" && !method.IsStatic {
+			getters[method.Key.Value] = method
+		} else if method.Kind == "setter" && !method.IsStatic {
+			setters[method.Key.Value] = method
+		}
+	}
+	
+	// Second pass: handle getters and setters to create properties
+	propertyNames := make(map[string]bool)
+	for name := range getters {
+		propertyNames[name] = true
+	}
+	for name := range setters {
+		propertyNames[name] = true
+	}
+	
+	for propName := range propertyNames {
+		getter := getters[propName]
+		setter := setters[propName]
+		
+		var propType types.Type
+		var accessLevel types.AccessModifier
+		
+		// Determine property type and access level
+		if getter != nil {
+			c.setClassContext(className, types.AccessContextInstanceMethod)
+			methodType := c.inferMethodType(getter)
+			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
+				propType = objType.CallSignatures[0].ReturnType
+			}
+			accessLevel = c.getAccessLevel(getter.IsPublic, getter.IsPrivate, getter.IsProtected)
+			debugPrintf("// [Checker Class] Found getter for property '%s': %s (%s)\n", 
+				propName, propType.String(), accessLevel.String())
+		}
+		
+		if setter != nil {
+			c.setClassContext(className, types.AccessContextInstanceMethod)
+			methodType := c.inferMethodType(setter)
+			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
+				sig := objType.CallSignatures[0]
+				if len(sig.ParameterTypes) > 0 {
+					setterType := sig.ParameterTypes[0]
+					if propType == nil {
+						propType = setterType
+					}
+					// Use the more restrictive access level
+					setterAccessLevel := c.getAccessLevel(setter.IsPublic, setter.IsPrivate, setter.IsProtected)
+					if accessLevel == types.AccessPublic {
+						accessLevel = setterAccessLevel
+					}
+					debugPrintf("// [Checker Class] Found setter for property '%s': %s (%s)\n", 
+						propName, setterType.String(), setterAccessLevel.String())
+				}
+			}
+		}
+		
+		if propType != nil {
+			instanceType.WithClassMember(propName, propType, accessLevel, false, false)
+			debugPrintf("// [Checker Class] Added getter/setter property '%s' to instance type: %s (%s)\n", 
+				propName, propType.String(), accessLevel.String())
+		}
+	}
+	
+	// Add regular methods to instance type (excluding constructor, static methods, getters, and setters)
+	for _, method := range body.Methods {
+		if method.Kind != "constructor" && !method.IsStatic && method.Kind != "getter" && method.Kind != "setter" {
 			// Set method context for access control checking
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 			

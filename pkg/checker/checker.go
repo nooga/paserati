@@ -107,6 +107,11 @@ func NewChecker() *Checker {
 	}
 }
 
+// GetEnvironment returns the current type environment
+func (c *Checker) GetEnvironment() *Environment {
+	return c.env
+}
+
 // --- Access Control Helper Methods ---
 
 // setClassContext sets the current class context for access control checking
@@ -1318,6 +1323,9 @@ func (c *Checker) visit(node parser.Node) {
 					// <<< NEW: Handle String + Number Coercion >>>
 				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.String) {
+					resultType = types.String
+				} else if (widenedLeftType == types.String && widenedRightType == types.Boolean) ||
+					(widenedLeftType == types.Boolean && widenedRightType == types.String) {
 					resultType = types.String
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))

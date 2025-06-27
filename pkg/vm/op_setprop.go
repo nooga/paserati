@@ -96,8 +96,10 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			// Cache was stale or property layout changed, fall through to slow path
 		}
 
-		// Cache miss or new property - use slow path and update cache
+		// Cache miss or new property
 		vm.cacheStats.totalMisses++
+		
+		// Normal property setting
 		originalShape := po.shape
 		po.SetOwn(propName, *valueToSet)
 

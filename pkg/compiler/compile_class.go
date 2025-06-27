@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"paserati/pkg/errors"
 	"paserati/pkg/parser"
+	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
 
@@ -132,9 +133,21 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 	// Add methods to prototype (excluding constructor and static methods)
 	for _, method := range node.Body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic {
-			err := c.addMethodToPrototype(method, prototypeReg)
-			if err != nil {
-				return err
+			if method.Kind == "getter" {
+				err := c.addGetterToPrototype(method, prototypeReg, node.Name.Value)
+				if err != nil {
+					return err
+				}
+			} else if method.Kind == "setter" {
+				err := c.addSetterToPrototype(method, prototypeReg, node.Name.Value)
+				if err != nil {
+					return err
+				}
+			} else {
+				err := c.addMethodToPrototype(method, prototypeReg, node.Name.Value)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -153,12 +166,12 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 }
 
 // addMethodToPrototype compiles a method and adds it to the prototype object
-func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototypeReg Register) errors.PaseratiError {
+func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
 	debugPrintf("// DEBUG addMethodToPrototype: Adding method '%s' to prototype\n", method.Key.Value)
 	
-	// Compile the method function
+	// Compile the method function with class context
 	nameHint := method.Key.Value
-	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralWithThisClass(method.Value, nameHint, className)
 	if err != nil {
 		return err
 	}
@@ -173,6 +186,54 @@ func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototy
 	c.emitSetProp(prototypeReg, methodReg, methodNameIdx, method.Token.Line)
 	
 	debugPrintf("// DEBUG addMethodToPrototype: Method '%s' added to prototype\n", method.Key.Value)
+	return nil
+}
+
+// addGetterToPrototype compiles a getter and adds it to the prototype object with special naming
+func (c *Compiler) addGetterToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
+	debugPrintf("// DEBUG addGetterToPrototype: Adding getter '%s' to prototype\n", method.Key.Value)
+	
+	// Compile the getter function with class context
+	nameHint := "get " + method.Key.Value
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralWithThisClass(method.Value, nameHint, className)
+	if err != nil {
+		return err
+	}
+	
+	// Create closure for getter
+	getterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(getterReg)
+	c.emitClosure(getterReg, funcConstIndex, method.Value, freeSymbols)
+	
+	// Store getter with special naming: prototype["__get__propertyName"] = getterFunction
+	getterNameIdx := c.chunk.AddConstant(vm.String("__get__" + method.Key.Value))
+	c.emitSetProp(prototypeReg, getterReg, getterNameIdx, method.Token.Line)
+	
+	debugPrintf("// DEBUG addGetterToPrototype: Getter '%s' added to prototype as '__get__%s'\n", method.Key.Value, method.Key.Value)
+	return nil
+}
+
+// addSetterToPrototype compiles a setter and adds it to the prototype object with special naming
+func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
+	debugPrintf("// DEBUG addSetterToPrototype: Adding setter '%s' to prototype\n", method.Key.Value)
+	
+	// Compile the setter function with class context
+	nameHint := "set " + method.Key.Value
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralWithThisClass(method.Value, nameHint, className)
+	if err != nil {
+		return err
+	}
+	
+	// Create closure for setter
+	setterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(setterReg)
+	c.emitClosure(setterReg, funcConstIndex, method.Value, freeSymbols)
+	
+	// Store setter with special naming: prototype["__set__propertyName"] = setterFunction
+	setterNameIdx := c.chunk.AddConstant(vm.String("__set__" + method.Key.Value))
+	c.emitSetProp(prototypeReg, setterReg, setterNameIdx, method.Token.Line)
+	
+	debugPrintf("// DEBUG addSetterToPrototype: Setter '%s' added to prototype as '__set__%s'\n", method.Key.Value, method.Key.Value)
 	return nil
 }
 
@@ -300,7 +361,7 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
 	debugPrintf("// DEBUG addStaticMethod: Adding static method '%s'\n", method.Key.Value)
 	
-	// Compile the method function
+	// Compile the method function (static methods don't have `this` context)
 	nameHint := method.Key.Value
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
 	if err != nil {
@@ -450,4 +511,122 @@ func (c *Compiler) extractConstructorArity(classDecl *parser.ClassDeclaration, c
 	// No explicit constructor found, so it's a default constructor with 0 parameters
 	debugPrintf("// DEBUG extractConstructorArity: No explicit constructor found, defaulting to 0 args\n")
 	return 0
+}
+
+// compileFunctionLiteralWithThisClass compiles a function literal in a specific class context with `this` type information
+func (c *Compiler) compileFunctionLiteralWithThisClass(node *parser.FunctionLiteral, nameHint string, className string) (uint16, []*Symbol, errors.PaseratiError) {
+	// Get the class instance type from the type checker
+	var thisType *types.ObjectType = nil
+	if c.typeChecker != nil {
+		// Try to get the class instance type for the specific class
+		if classType, exists := c.typeChecker.GetEnvironment().ResolveType(className); exists {
+			if objType, ok := classType.(*types.ObjectType); ok && objType.IsClassInstance() {
+				thisType = objType
+				debugPrintf("// DEBUG compileFunctionLiteralWithThisClass: Found class instance type for '%s': %s\n", className, thisType.String())
+			}
+		}
+	}
+	
+	// If we found the class instance type, set it on ThisExpression nodes during compilation
+	if thisType != nil {
+		// Set the this type context for the function compilation
+		return c.compileFunctionLiteralWithThisType(node, nameHint, thisType)
+	}
+	
+	// Fall back to regular compilation if no class context
+	debugPrintf("// DEBUG compileFunctionLiteralWithThisClass: No class instance type found for '%s', falling back to regular compilation\n", className)
+	return c.compileFunctionLiteral(node, nameHint)
+}
+
+// getCurrentClassInstanceType attempts to determine the current class instance type being compiled
+func (c *Compiler) getCurrentClassInstanceType() *types.ObjectType {
+	// Look for class context in the compilation stack
+	// For now, we'll use a simpler approach: check if there's a program with classes
+	if c.typeChecker == nil || c.typeChecker.GetProgram() == nil {
+		return nil
+	}
+	
+	program := c.typeChecker.GetProgram()
+	// Find the most recent class declaration being compiled
+	// This is a simplified approach - in a full implementation we'd track compilation context
+	for _, stmt := range program.Statements {
+		if classDecl, ok := stmt.(*parser.ClassDeclaration); ok {
+			// Try to get the class instance type from the type checker
+			if classType, exists := c.typeChecker.GetEnvironment().ResolveType(classDecl.Name.Value); exists {
+				if objType, ok := classType.(*types.ObjectType); ok && objType.IsClassInstance() {
+					debugPrintf("// DEBUG getCurrentClassInstanceType: Found class instance type '%s'\n", classDecl.Name.Value)
+					return objType
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// compileFunctionLiteralWithThisType compiles a function literal with a specific `this` type
+func (c *Compiler) compileFunctionLiteralWithThisType(node *parser.FunctionLiteral, nameHint string, thisType *types.ObjectType) (uint16, []*Symbol, errors.PaseratiError) {
+	// First, set the computed type on any ThisExpression nodes in the function body
+	c.setThisTypeOnNodes(node.Body, thisType)
+	
+	// Now compile normally
+	return c.compileFunctionLiteral(node, nameHint)
+}
+
+// setThisTypeOnNodes walks the AST and sets the computed type on ThisExpression nodes
+func (c *Compiler) setThisTypeOnNodes(node parser.Node, thisType *types.ObjectType) {
+	if node == nil {
+		return
+	}
+	
+	switch n := node.(type) {
+	case *parser.ThisExpression:
+		n.SetComputedType(thisType)
+		debugPrintf("// DEBUG setThisTypeOnNodes: Set type on ThisExpression: %s\n", thisType.String())
+		
+	case *parser.BlockStatement:
+		for _, stmt := range n.Statements {
+			c.setThisTypeOnNodes(stmt, thisType)
+		}
+		
+	case *parser.ExpressionStatement:
+		c.setThisTypeOnNodes(n.Expression, thisType)
+		
+	case *parser.ReturnStatement:
+		if n.ReturnValue != nil {
+			c.setThisTypeOnNodes(n.ReturnValue, thisType)
+		}
+		
+	case *parser.IfStatement:
+		c.setThisTypeOnNodes(n.Condition, thisType)
+		c.setThisTypeOnNodes(n.Consequence, thisType)
+		if n.Alternative != nil {
+			c.setThisTypeOnNodes(n.Alternative, thisType)
+		}
+		
+	case *parser.MemberExpression:
+		c.setThisTypeOnNodes(n.Object, thisType)
+		c.setThisTypeOnNodes(n.Property, thisType)
+		
+	case *parser.CallExpression:
+		c.setThisTypeOnNodes(n.Function, thisType)
+		for _, arg := range n.Arguments {
+			c.setThisTypeOnNodes(arg, thisType)
+		}
+		
+	case *parser.AssignmentExpression:
+		c.setThisTypeOnNodes(n.Left, thisType)
+		c.setThisTypeOnNodes(n.Value, thisType)
+		
+	case *parser.InfixExpression:
+		c.setThisTypeOnNodes(n.Left, thisType)
+		c.setThisTypeOnNodes(n.Right, thisType)
+		
+	case *parser.TemplateLiteral:
+		for _, part := range n.Parts {
+			c.setThisTypeOnNodes(part, thisType)
+		}
+		
+	// Add more cases as needed for other node types that might contain ThisExpressions
+	}
 }

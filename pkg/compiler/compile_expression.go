@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"strings"
 )
 
 // Helper functions for detecting null and undefined literals
@@ -17,6 +18,62 @@ func isNullLiteral(node parser.Expression) bool {
 func isUndefinedLiteral(node parser.Expression) bool {
 	_, ok := node.(*parser.UndefinedLiteral)
 	return ok
+}
+
+// isDataProperty checks if a type represents a data property (as opposed to a getter/setter)
+func (c *Compiler) isDataProperty(propType types.Type) bool {
+	// Check for primitive types
+	if propType == types.String || propType == types.Number || propType == types.Boolean {
+		return true
+	}
+	
+	switch propType.(type) {
+	case *types.Primitive:
+		return true // All primitive types are data properties
+	case *types.LiteralType:
+		return true // Literal types are data properties
+	case *types.UnionType, *types.IntersectionType:
+		return true // These are typically data types
+	case *types.ArrayType:
+		return true
+	case *types.ObjectType:
+		// For object types, check if it's a function type (getters return function types)
+		objType := propType.(*types.ObjectType)
+		// If it has call signatures, it's probably a getter method, not a data property
+		return len(objType.CallSignatures) == 0
+	default:
+		return true // Default to treating as data property
+	}
+}
+
+// emitOptimisticGetterCall emits bytecode that tries to call a getter, but falls back to regular property access
+func (c *Compiler) emitOptimisticGetterCall(hint Register, methodReg Register, objectReg Register, propertyName string, line int) {
+	// Check if the method (getter) is undefined
+	undefinedReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(undefinedReg)
+	c.emitLoadUndefined(undefinedReg, line)
+	
+	// Compare getter method with undefined
+	compareReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(compareReg)
+	c.emitStrictEqual(compareReg, methodReg, undefinedReg, line)
+	
+	// Jump to fallback if getter is undefined (comparison is true)
+	jumpToFallbackPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, line)
+	
+	// Fallback: regular property access (getter is undefined)
+	propertyIdx := c.chunk.AddConstant(vm.String(propertyName))
+	c.emitGetProp(hint, objectReg, propertyIdx, line)
+	
+	// Jump over getter call
+	jumpOverGetterPos := c.emitPlaceholderJump(vm.OpJump, 0, line)
+	
+	// Getter exists - call it
+	c.patchJump(jumpToFallbackPos)
+	c.emitCallMethod(hint, methodReg, objectReg, 0, line)
+	
+	// Patch the jump over getter call
+	c.patchJump(jumpOverGetterPos)
 }
 
 func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Register) (Register, errors.PaseratiError) {
@@ -86,10 +143,42 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	propIdent := node.Property
 	propertyName := propIdent.Value
 
-	// 3. <<< NEW: Special case for .length >>>
+	// 3. Check if this is a getter access (compile-time optimization)
+	objectStaticType := node.Object.GetComputedType()
+	debugPrintf("// DEBUG compileMemberExpression: objectType for '%s': %v\n", propertyName, objectStaticType)
+	if objectStaticType != nil {
+		// Check if accessing a getter property
+		widenedType := types.GetWidenedType(objectStaticType)
+		debugPrintf("// DEBUG compileMemberExpression: widenedType for '%s': %v\n", propertyName, widenedType)
+		if objType, ok := widenedType.(*types.ObjectType); ok && objType.IsClassInstance() {
+			debugPrintf("// DEBUG compileMemberExpression: Found class instance type for '%s'\n", propertyName)
+			// Only try getter calls for public properties (not starting with underscore)
+			// Private properties (starting with _) are typically regular fields, not getters
+			if !strings.HasPrefix(propertyName, "_") {
+				// For now, use a simple heuristic: if the property exists in the type,
+				// try a getter call but let the VM handle the fallback if it doesn't exist
+				if _, hasProperty := objType.Properties[propertyName]; hasProperty {
+					// For class instances, optimistically try getter method call
+					// The VM will fall back to normal property access if the getter doesn't exist
+					getterMethodName := "__get__" + propertyName
+					debugPrintf("// DEBUG compileMemberExpression: Optimistically trying getter '%s' for property '%s'\n", getterMethodName, propertyName)
+					getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
+					methodReg := c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, methodReg)
+					c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
+					
+					// Check if the getter exists before calling it
+					c.emitOptimisticGetterCall(hint, methodReg, objectReg, propertyName, node.Token.Line)
+					debugPrintf("// DEBUG compileMemberExpression: Emitted optimistic getter call for '%s'\n", propertyName)
+					return hint, nil
+				}
+			}
+		}
+	}
+
+	// 4. <<< NEW: Special case for .length >>>
 	if propertyName == "length" {
 		// Check the static type provided by the checker
-		objectStaticType := node.Object.GetComputedType()
 		if objectStaticType == nil {
 			// This can happen in finally blocks where type information may not be fully tracked
 			// Fall through to generic OpGetProp instead of erroring
@@ -114,10 +203,10 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	}
 	// --- END Special case for .length ---
 
-	// 4. Add property name string to constant pool (for generic OpGetProp)
+	// 5. Add property name string to constant pool (for generic OpGetProp)
 	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 
-	// 5. Emit OpGetProp using hint as destination register
+	// 6. Emit OpGetProp using hint as destination register
 	c.emitGetProp(hint, objectReg, nameConstIdx, node.Token.Line) // Use '.' token line
 
 	return hint, nil

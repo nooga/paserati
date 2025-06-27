@@ -2284,6 +2284,16 @@ func (md *MethodDefinition) String() string {
 	}
 	if md.Kind == "constructor" {
 		out.WriteString("constructor")
+	} else if md.Kind == "getter" {
+		out.WriteString("get ")
+		if md.Key != nil {
+			out.WriteString(md.Key.String())
+		}
+	} else if md.Kind == "setter" {
+		out.WriteString("set ")
+		if md.Key != nil {
+			out.WriteString(md.Key.String())
+		}
 	} else if md.Key != nil {
 		out.WriteString(md.Key.String())
 	}

@@ -473,9 +473,23 @@ startExecution:
 					registers[destReg] = String(AsString(leftVal) + fmt.Sprintf("%v", AsNumber(rightVal)))
 				} else if IsNumber(leftVal) && IsString(rightVal) {
 					registers[destReg] = String(fmt.Sprintf("%v", AsNumber(leftVal)) + AsString(rightVal))
+				} else if IsString(leftVal) && rightVal.IsBoolean() {
+					// String + Boolean concatenation (boolean converted to string)
+					boolStr := "false"
+					if rightVal.AsBoolean() {
+						boolStr = "true"
+					}
+					registers[destReg] = String(AsString(leftVal) + boolStr)
+				} else if leftVal.IsBoolean() && IsString(rightVal) {
+					// Boolean + String concatenation (boolean converted to string)
+					boolStr := "false"
+					if leftVal.AsBoolean() {
+						boolStr = "true"
+					}
+					registers[destReg] = String(boolStr + AsString(rightVal))
 				} else {
 					frame.ip = ip
-					status := vm.runtimeError("Operands must be two numbers, two strings, or a string and a number for '+'.")
+					status := vm.runtimeError("Operands must be two numbers, two strings, a string and a number, or a string and a boolean for '+'.")
 					return status, Undefined
 				}
 			case OpSubtract, OpMultiply, OpDivide:

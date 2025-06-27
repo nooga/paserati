@@ -168,8 +168,20 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		}
 		
-		// Parse constructor or method
-		if p.curTokenIs(lexer.IDENT) {
+		// Parse constructor, method, getter, or setter
+		if p.curTokenIs(lexer.GET) {
+			// Parse getter method
+			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected)
+			if method != nil {
+				methods = append(methods, method)
+			}
+		} else if p.curTokenIs(lexer.SET) {
+			// Parse setter method
+			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected)
+			if method != nil {
+				methods = append(methods, method)
+			}
+		} else if p.curTokenIs(lexer.IDENT) {
 			if p.curToken.Literal == "constructor" {
 				method := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)
 				if method != nil {
@@ -193,7 +205,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 			}
 		} else {
-			p.addError(p.curToken, "expected identifier in class body")
+			p.addError(p.curToken, "expected identifier, 'get', or 'set' in class body")
 			p.nextToken()
 		}
 	}
@@ -380,5 +392,131 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		IsPublic:       isPublic,
 		IsPrivate:      isPrivate,
 		IsProtected:    isProtected,
+	}
+}
+
+// parseGetter parses a getter method in a class
+// Syntax: [static] get propertyName(): returnType { body }
+func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
+	getToken := p.curToken // 'get' token
+	
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+	
+	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+	
+	// Use existing function parameter parsing infrastructure
+	functionLiteral := &FunctionLiteral{
+		Token: getToken,
+		Name:  nil,
+	}
+	
+	// Parse parameters - we're now at the '(' token
+	var err error
+	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters()
+	if err != nil {
+		p.addError(p.curToken, fmt.Sprintf("failed to parse getter parameters: %s", err.Error()))
+		return nil
+	}
+	
+	// Validate that getters have no parameters
+	if len(functionLiteral.Parameters) > 0 || functionLiteral.RestParameter != nil {
+		p.addError(p.curToken, "getters cannot have parameters")
+		return nil
+	}
+	
+	// Parse return type annotation if present
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // consume ':'
+		p.nextToken() // move to start of type expression
+		
+		// Parse the return type using existing type parsing logic
+		functionLiteral.ReturnTypeAnnotation = p.parseTypeExpression()
+		if functionLiteral.ReturnTypeAnnotation == nil {
+			return nil
+		}
+	}
+	
+	// Parse body - after parseFunctionParameters we should be at ')' with peek being '{'
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+	
+	functionLiteral.Body = p.parseBlockStatement()
+	
+	// parseBlockStatement leaves us at '}', advance past it
+	p.nextToken()
+	
+	return &MethodDefinition{
+		Token:       getToken,
+		Key:         propertyName,
+		Value:       functionLiteral,
+		Kind:        "getter",
+		IsStatic:    isStatic,
+		IsPublic:    isPublic,
+		IsPrivate:   isPrivate,
+		IsProtected: isProtected,
+	}
+}
+
+// parseSetter parses a setter method in a class
+// Syntax: [static] set propertyName(value: type) { body }
+func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
+	setToken := p.curToken // 'set' token
+	
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+	
+	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+	
+	// Use existing function parameter parsing infrastructure
+	functionLiteral := &FunctionLiteral{
+		Token: setToken,
+		Name:  nil,
+	}
+	
+	// Parse parameters - we're now at the '(' token
+	var err error
+	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters()
+	if err != nil {
+		p.addError(p.curToken, fmt.Sprintf("failed to parse setter parameters: %s", err.Error()))
+		return nil
+	}
+	
+	// Validate that setters have exactly one parameter
+	if len(functionLiteral.Parameters) != 1 || functionLiteral.RestParameter != nil {
+		p.addError(p.curToken, "setters must have exactly one parameter")
+		return nil
+	}
+	
+	// Parse body - after parseFunctionParameters we should be at ')' with peek being '{'
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+	
+	functionLiteral.Body = p.parseBlockStatement()
+	
+	// parseBlockStatement leaves us at '}', advance past it
+	p.nextToken()
+	
+	return &MethodDefinition{
+		Token:       setToken,
+		Key:         propertyName,
+		Value:       functionLiteral,
+		Kind:        "setter",
+		IsStatic:    isStatic,
+		IsPublic:    isPublic,
+		IsPrivate:   isPrivate,
+		IsProtected: isProtected,
 	}
 }

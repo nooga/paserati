@@ -146,9 +146,39 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 		// If compound or logical assignment, load the current property value
 		if node.Operator != "=" {
-			currentValueReg = c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, currentValueReg)
-			c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+			// Check if this is a getter property for compound assignments
+			objectStaticType := lhsNode.Object.GetComputedType()
+			if objectStaticType != nil {
+				if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
+					getterMethodName := "__get__" + propName
+					if c.hasMethodInType(objType, getterMethodName) {
+						// Use getter method call for reading current value
+						currentValueReg = c.regAlloc.Alloc()
+						tempRegs = append(tempRegs, currentValueReg)
+						
+						getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
+						getterMethodReg := c.regAlloc.Alloc()
+						tempRegs = append(tempRegs, getterMethodReg)
+						c.emitGetProp(getterMethodReg, memberInfo.objectReg, getterIdx, line)
+						c.emitCallMethod(currentValueReg, getterMethodReg, memberInfo.objectReg, 0, line)
+					} else {
+						// Normal property access for reading
+						currentValueReg = c.regAlloc.Alloc()
+						tempRegs = append(tempRegs, currentValueReg)
+						c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+					}
+				} else {
+					// Normal property access for reading
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+				}
+			} else {
+				// Normal property access for reading
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+			}
 		} else {
 			// For simple assignment '=', we don't need the current value
 			currentValueReg = nilRegister
@@ -389,8 +419,50 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			c.emitByte(byte(indexInfo.indexReg))
 			c.emitByte(byte(hint))
 		case lhsIsMemberExpr:
-			debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
-			c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+			// Check if this is a setter property
+			setterDetected := false
+			if memberExpr, ok := node.Left.(*parser.MemberExpression); ok {
+				objectStaticType := memberExpr.Object.GetComputedType()
+				if objectStaticType != nil {
+					if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
+						propName := memberExpr.Property.Value
+						setterMethodName := "__set__" + propName
+						if c.hasMethodInType(objType, setterMethodName) {
+							// Use setter method call for assignment
+							debugPrintf("// DEBUG Assign Store Member: Detected setter for '%s', emitting method call\n", propName)
+							
+							// Allocate contiguous registers for the setter call: [method, arg1]
+							totalRegs := 1 + 1 // method + 1 argument
+							setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
+							for i := 0; i < totalRegs; i++ {
+								tempRegs = append(tempRegs, setterMethodReg+Register(i))
+							}
+							
+							// Get the setter method
+							setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
+							c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
+							
+							// Move the value to the argument register
+							argReg := setterMethodReg + 1
+							if hint != argReg {
+								c.emitMove(argReg, hint, line)
+							}
+							
+							// Call the setter: setterMethod.call(this=object, value)
+							dummyResultReg := c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, dummyResultReg)
+							c.emitCallMethod(dummyResultReg, setterMethodReg, memberInfo.objectReg, 1, line)
+							setterDetected = true
+						}
+					}
+				}
+			}
+			
+			if !setterDetected {
+				// Normal property assignment
+				debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
+				c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+			}
 		}
 	} else {
 		debugPrintf("// DEBUG Assign Store: Skipped store operation (needsStore=false)\n")

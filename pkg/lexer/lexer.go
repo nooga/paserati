@@ -195,6 +195,9 @@ const (
 	PUBLIC    TokenType = "PUBLIC"
 	PRIVATE   TokenType = "PRIVATE"
 	PROTECTED TokenType = "PROTECTED"
+	// Getter/Setter keywords
+	GET TokenType = "GET"
+	SET TokenType = "SET"
 )
 
 var keywords = map[string]TokenType{
@@ -241,6 +244,8 @@ var keywords = map[string]TokenType{
 	"public":     PUBLIC,     // Added for public access modifier
 	"private":    PRIVATE,    // Added for private access modifier
 	"protected":  PROTECTED,  // Added for protected access modifier
+	"get":        GET,        // Added for getter methods
+	"set":        SET,        // Added for setter methods
 }
 
 // LookupIdent checks the keywords table for an identifier.
