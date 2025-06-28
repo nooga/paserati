@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"paserati/pkg/lexer" // Need token types
+	"paserati/pkg/lexer"  // Need token types
 	"paserati/pkg/source" // Need source package for SourceFile
-	"paserati/pkg/types" // Need types package for ComputedType
+	"paserati/pkg/types"  // Need types package for ComputedType
 	"strings"
 )
 
@@ -236,15 +236,15 @@ func (i *Identifier) String() string       { return i.Value }
 // <Name> : <TypeAnnotation>
 // Also supports destructuring patterns: ([a, b]: [number, number]) or ({x, y}: Point)
 type Parameter struct {
-	Token            lexer.Token // The token of the parameter name
-	Name             *Identifier // For simple parameters
-	Pattern          Expression  // For destructuring patterns (ArrayParameterPattern/ObjectParameterPattern)
-	TypeAnnotation   Expression  // Parsed type node (e.g., *Identifier)
-	ComputedType     types.Type  // Stores the resolved type from TypeAnnotation
-	Optional         bool        // Whether this parameter is optional (param?)
-	DefaultValue     Expression  // Default value expression (param = defaultValue)
-	IsThis           bool        // Whether this is an explicit 'this' parameter
-	IsDestructuring  bool        // Whether this parameter uses destructuring pattern
+	Token           lexer.Token // The token of the parameter name
+	Name            *Identifier // For simple parameters
+	Pattern         Expression  // For destructuring patterns (ArrayParameterPattern/ObjectParameterPattern)
+	TypeAnnotation  Expression  // Parsed type node (e.g., *Identifier)
+	ComputedType    types.Type  // Stores the resolved type from TypeAnnotation
+	Optional        bool        // Whether this parameter is optional (param?)
+	DefaultValue    Expression  // Default value expression (param = defaultValue)
+	IsThis          bool        // Whether this is an explicit 'this' parameter
+	IsDestructuring bool        // Whether this parameter uses destructuring pattern
 }
 
 func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
@@ -469,14 +469,14 @@ func (se *SuperExpression) String() string       { return "super" }
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 type FunctionLiteral struct {
-	BaseExpression                       // Embed base for ComputedType (Function type)
-	Token                lexer.Token     // The 'function' token
-	Name                 *Identifier     // Optional function name
+	BaseExpression                        // Embed base for ComputedType (Function type)
+	Token                lexer.Token      // The 'function' token
+	Name                 *Identifier      // Optional function name
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	Parameters           []*Parameter    // Regular parameters
-	RestParameter        *RestParameter  // Optional rest parameter (...args)
-	ReturnTypeAnnotation Expression      // << RENAMED & TYPE CHANGED
-	Body                 *BlockStatement // Function body
+	Parameters           []*Parameter     // Regular parameters
+	RestParameter        *RestParameter   // Optional rest parameter (...args)
+	ReturnTypeAnnotation Expression       // << RENAMED & TYPE CHANGED
+	Body                 *BlockStatement  // Function body
 }
 
 func (fl *FunctionLiteral) expressionNode()      {} // Functions can be expressions
@@ -497,7 +497,7 @@ func (fl *FunctionLiteral) String() string {
 		out.WriteString(" ")
 		out.WriteString(fl.Name.String())
 	}
-	
+
 	// Add type parameters if present
 	if len(fl.TypeParameters) > 0 {
 		out.WriteString("<")
@@ -510,7 +510,7 @@ func (fl *FunctionLiteral) String() string {
 		out.WriteString(strings.Join(typeParams, ", "))
 		out.WriteString(">")
 	}
-	
+
 	out.WriteString("(")
 	out.WriteString(strings.Join(params, ", "))
 	out.WriteString(")")
@@ -584,13 +584,13 @@ func (ue *UpdateExpression) String() string {
 // ArrowFunctionLiteral represents an arrow function definition.
 // (<Parameters>) => <BodyExpression | BodyStatements>
 type ArrowFunctionLiteral struct {
-	BaseExpression                      // Embed base for ComputedType (Function type)
-	Token                lexer.Token    // The '=>' token
+	BaseExpression                        // Embed base for ComputedType (Function type)
+	Token                lexer.Token      // The '=>' token
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	Parameters           []*Parameter   // Regular parameters
-	RestParameter        *RestParameter // Optional rest parameter (...args)
-	ReturnTypeAnnotation Expression     // << MODIFIED
-	Body                 Node           // Can be Expression or *BlockStatement
+	Parameters           []*Parameter     // Regular parameters
+	RestParameter        *RestParameter   // Optional rest parameter (...args)
+	ReturnTypeAnnotation Expression       // << MODIFIED
+	Body                 Node             // Can be Expression or *BlockStatement
 }
 
 func (afl *ArrowFunctionLiteral) expressionNode()      {}
@@ -903,10 +903,10 @@ func (dws *DoWhileStatement) String() string {
 
 // TryStatement represents a try/catch/finally block.
 type TryStatement struct {
-	Token        lexer.Token      // The 'try' token
-	Body         *BlockStatement  // The try block
-	CatchClause  *CatchClause     // Optional catch clause
-	FinallyBlock *BlockStatement  // Optional finally block (Phase 3)
+	Token        lexer.Token     // The 'try' token
+	Body         *BlockStatement // The try block
+	CatchClause  *CatchClause    // Optional catch clause
+	FinallyBlock *BlockStatement // Optional finally block (Phase 3)
 }
 
 func (ts *TryStatement) statementNode()       {}
@@ -928,9 +928,9 @@ func (ts *TryStatement) String() string {
 
 // CatchClause represents a catch block.
 type CatchClause struct {
-	Token     lexer.Token      // The 'catch' token
-	Parameter *Identifier      // Exception variable (optional in ES2019+)
-	Body      *BlockStatement  // The catch block
+	Token     lexer.Token     // The 'catch' token
+	Parameter *Identifier     // Exception variable (optional in ES2019+)
+	Body      *BlockStatement // The catch block
 }
 
 func (cc *CatchClause) String() string {
@@ -1075,6 +1075,7 @@ type CallExpression struct {
 	BaseExpression              // Embed base for ComputedType (Function's return type)
 	Token          lexer.Token  // The '(' token
 	Function       Expression   // Identifier or FunctionLiteral being called
+	TypeArguments  []Expression // Type arguments (e.g., <string, number>)
 	Arguments      []Expression // List of arguments
 }
 
@@ -1082,13 +1083,27 @@ func (ce *CallExpression) expressionNode()      {}
 func (ce *CallExpression) TokenLiteral() string { return ce.Token.Literal }
 func (ce *CallExpression) String() string {
 	var out bytes.Buffer
+
+	out.WriteString(ce.Function.String())
+
+	// Add type arguments if present
+	if len(ce.TypeArguments) > 0 {
+		out.WriteString("<")
+		for i, arg := range ce.TypeArguments {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(arg.String())
+		}
+		out.WriteString(">")
+	}
+
 	args := []string{}
 	for _, arg := range ce.Arguments {
 		if arg != nil {
 			args = append(args, arg.String())
 		}
 	}
-	out.WriteString(ce.Function.String())
 	out.WriteString("(")
 	out.WriteString(strings.Join(args, ", "))
 	out.WriteString(")")
@@ -1104,6 +1119,7 @@ type NewExpression struct {
 	BaseExpression              // Embed base for ComputedType (constructed object type)
 	Token          lexer.Token  // The 'new' token
 	Constructor    Expression   // Identifier or function being called as constructor
+	TypeArguments  []Expression // Type arguments (e.g., <string, number>)
 	Arguments      []Expression // List of arguments
 }
 
@@ -1111,14 +1127,28 @@ func (ne *NewExpression) expressionNode()      {}
 func (ne *NewExpression) TokenLiteral() string { return ne.Token.Literal }
 func (ne *NewExpression) String() string {
 	var out bytes.Buffer
+
+	out.WriteString("new ")
+	out.WriteString(ne.Constructor.String())
+
+	// Add type arguments if present
+	if len(ne.TypeArguments) > 0 {
+		out.WriteString("<")
+		for i, arg := range ne.TypeArguments {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(arg.String())
+		}
+		out.WriteString(">")
+	}
+
 	args := []string{}
 	for _, arg := range ne.Arguments {
 		if arg != nil {
 			args = append(args, arg.String())
 		}
 	}
-	out.WriteString("new ")
-	out.WriteString(ne.Constructor.String())
 	out.WriteString("(")
 	out.WriteString(strings.Join(args, ", "))
 	out.WriteString(")")
@@ -1159,10 +1189,10 @@ func (te *TernaryExpression) String() string {
 
 // TypeAliasStatement represents a `type Name = Type;` declaration.
 type TypeAliasStatement struct {
-	Token          lexer.Token       // The 'type' token
-	Name           *Identifier       // The name of the alias
-	TypeParameters []*TypeParameter  // Generic type parameters (e.g., <T, U>)
-	Type           Expression        // The type expression being aliased
+	Token          lexer.Token      // The 'type' token
+	Name           *Identifier      // The name of the alias
+	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	Type           Expression       // The type expression being aliased
 }
 
 func (tas *TypeAliasStatement) statementNode()       {}
@@ -1171,7 +1201,7 @@ func (tas *TypeAliasStatement) String() string {
 	var out bytes.Buffer
 	out.WriteString(tas.TokenLiteral() + " ")
 	out.WriteString(tas.Name.String())
-	
+
 	// Add type parameters if present
 	if len(tas.TypeParameters) > 0 {
 		out.WriteString("<")
@@ -1183,7 +1213,7 @@ func (tas *TypeAliasStatement) String() string {
 		}
 		out.WriteString(">")
 	}
-	
+
 	out.WriteString(" = ")
 	out.WriteString(tas.Type.String())
 	out.WriteString(";")
@@ -1246,9 +1276,9 @@ func (ite *IntersectionTypeExpression) String() string {
 
 // GenericTypeRef represents a generic type reference (e.g., Array<string>, Promise<number>).
 type GenericTypeRef struct {
-	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The identifier token
-	Name           *Identifier // The generic type name (e.g., "Array")
+	BaseExpression              // Embed base for ComputedType
+	Token          lexer.Token  // The identifier token
+	Name           *Identifier  // The generic type name (e.g., "Array")
 	TypeArguments  []Expression // The type arguments (e.g., [string] in Array<string>)
 }
 
@@ -1556,7 +1586,7 @@ func (op *ObjectProperty) String() string {
 	if spreadElement, isSpread := op.Key.(*SpreadElement); isSpread {
 		return fmt.Sprintf("...%s", spreadElement.Argument.String())
 	}
-	
+
 	// Regular property
 	keyStr := ""
 	if op.Key != nil {
@@ -1732,7 +1762,7 @@ func (id *InterfaceDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("interface ")
 	out.WriteString(id.Name.String())
-	
+
 	// Add type parameters if present
 	if len(id.TypeParameters) > 0 {
 		out.WriteString("<")
@@ -1845,10 +1875,10 @@ func (de *DestructuringElement) String() string {
 
 // ArrayDestructuringAssignment represents [a, b, c] = expr
 type ArrayDestructuringAssignment struct {
-	BaseExpression                     // Embed base for ComputedType
-	Token          lexer.Token         // The '[' token
+	BaseExpression                         // Embed base for ComputedType
+	Token          lexer.Token             // The '[' token
 	Elements       []*DestructuringElement // Target variables/patterns
-	Value          Expression          // RHS expression to destructure
+	Value          Expression              // RHS expression to destructure
 }
 
 func (ada *ArrayDestructuringAssignment) expressionNode()      {}
@@ -1899,11 +1929,11 @@ func (dp *DestructuringProperty) String() string {
 
 // ObjectDestructuringAssignment represents {a, b} = expr
 type ObjectDestructuringAssignment struct {
-	BaseExpression                       // Embed base for ComputedType
-	Token          lexer.Token           // The '{' token
+	BaseExpression                          // Embed base for ComputedType
+	Token          lexer.Token              // The '{' token
 	Properties     []*DestructuringProperty // Target properties/patterns
-	RestProperty   *DestructuringElement // Rest property (...rest) - optional
-	Value          Expression            // RHS expression to destructure
+	RestProperty   *DestructuringElement    // Rest property (...rest) - optional
+	Value          Expression               // RHS expression to destructure
 }
 
 func (oda *ObjectDestructuringAssignment) expressionNode()      {}
@@ -1937,11 +1967,11 @@ func (oda *ObjectDestructuringAssignment) String() string {
 
 // ArrayDestructuringDeclaration represents let/const/var [a, b, c] = expr
 type ArrayDestructuringDeclaration struct {
-	Token          lexer.Token         // The 'let', 'const', or 'var' token
-	IsConst        bool                // true for const, false for let/var
+	Token          lexer.Token             // The 'let', 'const', or 'var' token
+	IsConst        bool                    // true for const, false for let/var
 	Elements       []*DestructuringElement // Target variables/patterns
-	TypeAnnotation Expression          // Optional type annotation (e.g., : [number, string])
-	Value          Expression          // RHS expression to destructure
+	TypeAnnotation Expression              // Optional type annotation (e.g., : [number, string])
+	Value          Expression              // RHS expression to destructure
 }
 
 func (add *ArrayDestructuringDeclaration) statementNode()       {}
@@ -1950,7 +1980,7 @@ func (add *ArrayDestructuringDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString(add.Token.Literal)
 	out.WriteString(" ")
-	
+
 	elements := []string{}
 	for _, el := range add.Elements {
 		if el != nil {
@@ -1960,28 +1990,28 @@ func (add *ArrayDestructuringDeclaration) String() string {
 	out.WriteString("[")
 	out.WriteString(strings.Join(elements, ", "))
 	out.WriteString("]")
-	
+
 	if add.TypeAnnotation != nil {
 		out.WriteString(": ")
 		out.WriteString(add.TypeAnnotation.String())
 	}
-	
+
 	if add.Value != nil {
 		out.WriteString(" = ")
 		out.WriteString(add.Value.String())
 	}
-	
+
 	return out.String()
 }
 
 // ObjectDestructuringDeclaration represents let/const/var {a, b} = expr
 type ObjectDestructuringDeclaration struct {
-	Token          lexer.Token           // The 'let', 'const', or 'var' token
-	IsConst        bool                  // true for const, false for let/var
+	Token          lexer.Token              // The 'let', 'const', or 'var' token
+	IsConst        bool                     // true for const, false for let/var
 	Properties     []*DestructuringProperty // Target properties/patterns
-	RestProperty   *DestructuringElement // Rest property (...rest) - optional
-	TypeAnnotation Expression            // Optional type annotation (e.g., : {a: number, b: string})
-	Value          Expression            // RHS expression to destructure
+	RestProperty   *DestructuringElement    // Rest property (...rest) - optional
+	TypeAnnotation Expression               // Optional type annotation (e.g., : {a: number, b: string})
+	Value          Expression               // RHS expression to destructure
 }
 
 func (odd *ObjectDestructuringDeclaration) statementNode()       {}
@@ -1990,7 +2020,7 @@ func (odd *ObjectDestructuringDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString(odd.Token.Literal)
 	out.WriteString(" ")
-	
+
 	properties := []string{}
 	for _, prop := range odd.Properties {
 		if prop != nil {
@@ -2003,17 +2033,17 @@ func (odd *ObjectDestructuringDeclaration) String() string {
 	out.WriteString("{")
 	out.WriteString(strings.Join(properties, ", "))
 	out.WriteString("}")
-	
+
 	if odd.TypeAnnotation != nil {
 		out.WriteString(": ")
 		out.WriteString(odd.TypeAnnotation.String())
 	}
-	
+
 	if odd.Value != nil {
 		out.WriteString(" = ")
 		out.WriteString(odd.Value.String())
 	}
-	
+
 	return out.String()
 }
 
@@ -2024,8 +2054,8 @@ func (odd *ObjectDestructuringDeclaration) String() string {
 // ArrayParameterPattern represents array destructuring in function parameters
 // Examples: ([a, b]: [number, number]) => {}
 type ArrayParameterPattern struct {
-	BaseExpression               // Embed base for ComputedType
-	Token          lexer.Token   // The '[' token
+	BaseExpression                         // Embed base for ComputedType
+	Token          lexer.Token             // The '[' token
 	Elements       []*DestructuringElement // Parameter elements (can have defaults and rest)
 }
 
@@ -2048,10 +2078,10 @@ func (app *ArrayParameterPattern) String() string {
 // ObjectParameterPattern represents object destructuring in function parameters
 // Examples: ({x, y}: Point) => {}, ({name = "Unknown"}: {name?: string}) => {}
 type ObjectParameterPattern struct {
-	BaseExpression                       // Embed base for ComputedType
-	Token          lexer.Token           // The '{' token
+	BaseExpression                          // Embed base for ComputedType
+	Token          lexer.Token              // The '{' token
 	Properties     []*DestructuringProperty // Parameter properties (can have defaults)
-	RestProperty   *DestructuringElement // Rest property (...rest) - optional
+	RestProperty   *DestructuringElement    // Rest property (...rest) - optional
 }
 
 func (opp *ObjectParameterPattern) expressionNode()      {}
@@ -2152,12 +2182,13 @@ func (fog *FunctionOverloadGroup) String() string {
 
 // ClassDeclaration represents a class declaration statement
 type ClassDeclaration struct {
-	Token      lexer.Token     // The 'class' token
-	Name       *Identifier     // Class name
-	SuperClass *Identifier     // nil for basic classes (extends support)
-	Implements []*Identifier   // Interfaces this class implements
-	Body       *ClassBody      // Class body containing methods and properties
-	IsAbstract bool            // true if this is an abstract class
+	Token          lexer.Token      // The 'class' token
+	Name           *Identifier      // Class name
+	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	SuperClass     *Identifier      // nil for basic classes (extends support)
+	Implements     []*Identifier    // Interfaces this class implements
+	Body           *ClassBody       // Class body containing methods and properties
+	IsAbstract     bool             // true if this is an abstract class
 }
 
 func (cd *ClassDeclaration) statementNode()       {}
@@ -2170,6 +2201,18 @@ func (cd *ClassDeclaration) String() string {
 	out.WriteString("class ")
 	if cd.Name != nil {
 		out.WriteString(cd.Name.String())
+	}
+
+	// Add type parameters if present
+	if len(cd.TypeParameters) > 0 {
+		out.WriteString("<")
+		for i, tp := range cd.TypeParameters {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(tp.String())
+		}
+		out.WriteString(">")
 	}
 	if cd.SuperClass != nil {
 		out.WriteString(" extends ")
@@ -2194,12 +2237,13 @@ func (cd *ClassDeclaration) String() string {
 // ClassExpression represents a class expression (can be anonymous)
 type ClassExpression struct {
 	BaseExpression
-	Token      lexer.Token     // The 'class' token
-	Name       *Identifier     // nil for anonymous classes
-	SuperClass *Identifier     // nil for basic classes (extends support)
-	Implements []*Identifier   // Interfaces this class implements
-	Body       *ClassBody      // Class body containing methods and properties
-	IsAbstract bool            // true if this is an abstract class
+	Token          lexer.Token      // The 'class' token
+	Name           *Identifier      // nil for anonymous classes
+	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	SuperClass     *Identifier      // nil for basic classes (extends support)
+	Implements     []*Identifier    // Interfaces this class implements
+	Body           *ClassBody       // Class body containing methods and properties
+	IsAbstract     bool             // true if this is an abstract class
 }
 
 func (ce *ClassExpression) TokenLiteral() string { return ce.Token.Literal }
@@ -2212,6 +2256,18 @@ func (ce *ClassExpression) String() string {
 	if ce.Name != nil {
 		out.WriteString(" ")
 		out.WriteString(ce.Name.String())
+	}
+
+	// Add type parameters if present
+	if len(ce.TypeParameters) > 0 {
+		out.WriteString("<")
+		for i, tp := range ce.TypeParameters {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(tp.String())
+		}
+		out.WriteString(">")
 	}
 	if ce.SuperClass != nil {
 		out.WriteString(" extends ")
@@ -2235,30 +2291,30 @@ func (ce *ClassExpression) String() string {
 
 // ClassBody represents the body of a class containing methods and properties
 type ClassBody struct {
-	Token               lexer.Token               // The '{' token
-	Methods             []*MethodDefinition       // Class method implementations
-	Properties          []*PropertyDefinition     // Class properties
-	ConstructorSigs     []*ConstructorSignature   // Constructor overload signatures
-	MethodSigs          []*MethodSignature        // Method overload signatures
+	Token           lexer.Token             // The '{' token
+	Methods         []*MethodDefinition     // Class method implementations
+	Properties      []*PropertyDefinition   // Class properties
+	ConstructorSigs []*ConstructorSignature // Constructor overload signatures
+	MethodSigs      []*MethodSignature      // Method overload signatures
 }
 
 func (cb *ClassBody) TokenLiteral() string { return cb.Token.Literal }
 func (cb *ClassBody) String() string {
 	var out bytes.Buffer
 	out.WriteString("{\n")
-	
+
 	for _, prop := range cb.Properties {
 		out.WriteString("  ")
 		out.WriteString(prop.String())
 		out.WriteString("\n")
 	}
-	
+
 	for _, method := range cb.Methods {
 		out.WriteString("  ")
 		out.WriteString(method.String())
 		out.WriteString("\n")
 	}
-	
+
 	out.WriteString("}")
 	return out.String()
 }
@@ -2266,22 +2322,22 @@ func (cb *ClassBody) String() string {
 // MethodDefinition represents a method in a class
 type MethodDefinition struct {
 	BaseExpression
-	Token       lexer.Token         // The method name token
-	Key         *Identifier         // Method name
-	Value       *FunctionLiteral    // Function implementation
-	Kind        string              // "constructor", "method"
-	IsStatic    bool                // For static method support
-	IsPublic    bool                // For public access modifier
-	IsPrivate   bool                // For private access modifier
-	IsProtected bool                // For protected access modifier
-	IsAbstract  bool                // For abstract methods (no implementation)
-	IsOverride  bool                // For override keyword
+	Token       lexer.Token      // The method name token
+	Key         *Identifier      // Method name
+	Value       *FunctionLiteral // Function implementation
+	Kind        string           // "constructor", "method"
+	IsStatic    bool             // For static method support
+	IsPublic    bool             // For public access modifier
+	IsPrivate   bool             // For private access modifier
+	IsProtected bool             // For protected access modifier
+	IsAbstract  bool             // For abstract methods (no implementation)
+	IsOverride  bool             // For override keyword
 }
 
 func (md *MethodDefinition) TokenLiteral() string { return md.Token.Literal }
 func (md *MethodDefinition) String() string {
 	var out bytes.Buffer
-	
+
 	// Add access modifiers
 	if md.IsPrivate {
 		out.WriteString("private ")
@@ -2290,7 +2346,7 @@ func (md *MethodDefinition) String() string {
 	} else if md.IsPublic {
 		out.WriteString("public ")
 	}
-	
+
 	if md.IsAbstract {
 		out.WriteString("abstract ")
 	}
@@ -2336,21 +2392,21 @@ func (md *MethodDefinition) String() string {
 
 // ConstructorSignature represents a constructor overload signature in a class
 type ConstructorSignature struct {
-	Token              lexer.Token    // The 'constructor' token
-	Parameters         []*Parameter   // Parameter list
-	RestParameter      *RestParameter // Rest parameter (if any)
-	ReturnTypeAnnotation Expression   // Optional return type
-	IsStatic           bool           // Access modifiers
-	IsPublic           bool
-	IsPrivate          bool
-	IsProtected        bool
+	Token                lexer.Token    // The 'constructor' token
+	Parameters           []*Parameter   // Parameter list
+	RestParameter        *RestParameter // Rest parameter (if any)
+	ReturnTypeAnnotation Expression     // Optional return type
+	IsStatic             bool           // Access modifiers
+	IsPublic             bool
+	IsPrivate            bool
+	IsProtected          bool
 }
 
 func (cs *ConstructorSignature) statementNode()       {}
 func (cs *ConstructorSignature) TokenLiteral() string { return cs.Token.Literal }
 func (cs *ConstructorSignature) String() string {
 	var out bytes.Buffer
-	
+
 	// Add access modifiers
 	if cs.IsPrivate {
 		out.WriteString("private ")
@@ -2362,7 +2418,7 @@ func (cs *ConstructorSignature) String() string {
 	if cs.IsStatic {
 		out.WriteString("static ")
 	}
-	
+
 	out.WriteString("constructor(")
 	if cs.Parameters != nil {
 		for i, param := range cs.Parameters {
@@ -2373,13 +2429,13 @@ func (cs *ConstructorSignature) String() string {
 		}
 	}
 	out.WriteString(")")
-	
+
 	if cs.ReturnTypeAnnotation != nil {
 		out.WriteString(": ")
 		out.WriteString(cs.ReturnTypeAnnotation.String())
 	}
 	out.WriteString(";")
-	
+
 	return out.String()
 }
 
@@ -2395,15 +2451,15 @@ type MethodSignature struct {
 	IsPublic             bool
 	IsPrivate            bool
 	IsProtected          bool
-	IsAbstract           bool           // Abstract method modifier
-	IsOverride           bool           // Override method modifier
+	IsAbstract           bool // Abstract method modifier
+	IsOverride           bool // Override method modifier
 }
 
 func (ms *MethodSignature) statementNode()       {}
 func (ms *MethodSignature) TokenLiteral() string { return ms.Token.Literal }
 func (ms *MethodSignature) String() string {
 	var out bytes.Buffer
-	
+
 	// Add access modifiers
 	if ms.IsPrivate {
 		out.WriteString("private ")
@@ -2421,17 +2477,17 @@ func (ms *MethodSignature) String() string {
 	if ms.IsOverride {
 		out.WriteString("override ")
 	}
-	
+
 	if ms.Kind == "getter" {
 		out.WriteString("get ")
 	} else if ms.Kind == "setter" {
 		out.WriteString("set ")
 	}
-	
+
 	if ms.Key != nil {
 		out.WriteString(ms.Key.String())
 	}
-	
+
 	out.WriteString("(")
 	if ms.Parameters != nil {
 		for i, param := range ms.Parameters {
@@ -2442,13 +2498,13 @@ func (ms *MethodSignature) String() string {
 		}
 	}
 	out.WriteString(")")
-	
+
 	if ms.ReturnTypeAnnotation != nil {
 		out.WriteString(": ")
 		out.WriteString(ms.ReturnTypeAnnotation.String())
 	}
 	out.WriteString(";")
-	
+
 	return out.String()
 }
 
@@ -2470,7 +2526,7 @@ type PropertyDefinition struct {
 func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }
 func (pd *PropertyDefinition) String() string {
 	var out bytes.Buffer
-	
+
 	// Add access modifiers
 	if pd.IsPrivate {
 		out.WriteString("private ")
@@ -2479,7 +2535,7 @@ func (pd *PropertyDefinition) String() string {
 	} else if pd.IsPublic {
 		out.WriteString("public ")
 	}
-	
+
 	if pd.Readonly {
 		out.WriteString("readonly ")
 	}
@@ -2514,16 +2570,16 @@ func DumpAST(program *Program, title string) {
 	if !DumpASTEnabled {
 		return
 	}
-	
+
 	fmt.Fprintf(os.Stderr, "\n=== AST DUMP: %s ===\n", title)
 	if program == nil {
 		fmt.Fprintf(os.Stderr, "Program: null\n")
 		return
 	}
-	
+
 	fmt.Fprintf(os.Stderr, "Program {\n")
 	fmt.Fprintf(os.Stderr, "  statements: [\n")
-	
+
 	for i, stmt := range program.Statements {
 		fmt.Fprintf(os.Stderr, "    [%d] ", i)
 		dumpNode(stmt, "    ")
@@ -2532,9 +2588,9 @@ func DumpAST(program *Program, title string) {
 		}
 		fmt.Fprintf(os.Stderr, "\n")
 	}
-	
+
 	fmt.Fprintf(os.Stderr, "  ]")
-	
+
 	if len(program.HoistedDeclarations) > 0 {
 		fmt.Fprintf(os.Stderr, ",\n  hoistedDeclarations: {\n")
 		count := 0
@@ -2549,7 +2605,7 @@ func DumpAST(program *Program, title string) {
 		}
 		fmt.Fprintf(os.Stderr, "  }")
 	}
-	
+
 	fmt.Fprintf(os.Stderr, "\n}\n=== END AST DUMP ===\n\n")
 }
 
@@ -2559,7 +2615,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, "null")
 		return
 	}
-	
+
 	switch n := node.(type) {
 	case *LetStatement:
 		fmt.Fprintf(os.Stderr, "LetStatement {\n")
@@ -2570,7 +2626,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
 		dumpNode(n.Value, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *VarStatement:
 		fmt.Fprintf(os.Stderr, "VarStatement {\n")
 		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
@@ -2580,7 +2636,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
 		dumpNode(n.Value, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *ConstStatement:
 		fmt.Fprintf(os.Stderr, "ConstStatement {\n")
 		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
@@ -2590,13 +2646,13 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
 		dumpNode(n.Value, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *ExpressionStatement:
 		fmt.Fprintf(os.Stderr, "ExpressionStatement {\n")
 		fmt.Fprintf(os.Stderr, "%s  expression: ", indent)
 		dumpNode(n.Expression, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *ClassDeclaration:
 		fmt.Fprintf(os.Stderr, "ClassDeclaration {\n")
 		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
@@ -2610,7 +2666,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  body: ", indent)
 		dumpNode(n.Body, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *ClassExpression:
 		fmt.Fprintf(os.Stderr, "ClassExpression {\n")
 		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
@@ -2628,7 +2684,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  body: ", indent)
 		dumpNode(n.Body, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *ClassBody:
 		fmt.Fprintf(os.Stderr, "ClassBody {\n")
 		fmt.Fprintf(os.Stderr, "%s  properties: [", indent)
@@ -2646,7 +2702,7 @@ func dumpNode(node Node, indent string) {
 			dumpNode(method, indent+"  ")
 		}
 		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
-		
+
 	case *PropertyDefinition:
 		fmt.Fprintf(os.Stderr, "PropertyDefinition {\n")
 		fmt.Fprintf(os.Stderr, "%s  key: ", indent)
@@ -2659,7 +2715,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  optional: %t", indent, n.Optional)
 		fmt.Fprintf(os.Stderr, ",\n%s  readonly: %t", indent, n.Readonly)
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *MethodDefinition:
 		fmt.Fprintf(os.Stderr, "MethodDefinition {\n")
 		fmt.Fprintf(os.Stderr, "%s  key: ", indent)
@@ -2669,25 +2725,32 @@ func dumpNode(node Node, indent string) {
 		dumpNode(n.Value, indent+"  ")
 		fmt.Fprintf(os.Stderr, ",\n%s  isStatic: %t", indent, n.IsStatic)
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *NewExpression:
 		fmt.Fprintf(os.Stderr, "NewExpression {\n")
 		fmt.Fprintf(os.Stderr, "%s  constructor: ", indent)
 		dumpNode(n.Constructor, indent+"  ")
-		fmt.Fprintf(os.Stderr, ",\n%s  arguments: [", indent)
-		for i, arg := range n.Arguments {
+		fmt.Fprintf(os.Stderr, ",\n%s  typeArguments: [", indent)
+		for i, arg := range n.TypeArguments {
 			if i > 0 {
 				fmt.Fprintf(os.Stderr, ", ")
 			}
 			dumpNode(arg, indent+"  ")
 		}
 		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
-		
+
 	case *CallExpression:
 		fmt.Fprintf(os.Stderr, "CallExpression {\n")
 		fmt.Fprintf(os.Stderr, "%s  function: ", indent)
 		dumpNode(n.Function, indent+"  ")
-		fmt.Fprintf(os.Stderr, ",\n%s  arguments: [", indent)
+		fmt.Fprintf(os.Stderr, ",\n%s  typeArguments: [", indent)
+		for i, arg := range n.TypeArguments {
+			if i > 0 {
+				fmt.Fprintf(os.Stderr, ", ")
+			}
+			dumpNode(arg, indent+"  ")
+		}
+		fmt.Fprintf(os.Stderr, "],\n%s  arguments: [", indent)
 		for i, arg := range n.Arguments {
 			if i > 0 {
 				fmt.Fprintf(os.Stderr, ", ")
@@ -2695,7 +2758,7 @@ func dumpNode(node Node, indent string) {
 			dumpNode(arg, indent+"  ")
 		}
 		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
-		
+
 	case *MemberExpression:
 		fmt.Fprintf(os.Stderr, "MemberExpression {\n")
 		fmt.Fprintf(os.Stderr, "%s  object: ", indent)
@@ -2703,7 +2766,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  property: ", indent)
 		dumpNode(n.Property, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *AssignmentExpression:
 		fmt.Fprintf(os.Stderr, "AssignmentExpression {\n")
 		fmt.Fprintf(os.Stderr, "%s  operator: %q", indent, n.Operator)
@@ -2712,28 +2775,28 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  value: ", indent)
 		dumpNode(n.Value, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *Identifier:
 		fmt.Fprintf(os.Stderr, "Identifier { name: %q }", n.Value)
-		
+
 	case *StringLiteral:
 		fmt.Fprintf(os.Stderr, "StringLiteral { value: %q }", n.Value)
-		
+
 	case *NumberLiteral:
 		fmt.Fprintf(os.Stderr, "NumberLiteral { value: %g }", n.Value)
-		
+
 	case *BooleanLiteral:
 		fmt.Fprintf(os.Stderr, "BooleanLiteral { value: %t }", n.Value)
-		
+
 	case *NullLiteral:
 		fmt.Fprintf(os.Stderr, "NullLiteral")
-		
+
 	case *UndefinedLiteral:
 		fmt.Fprintf(os.Stderr, "UndefinedLiteral")
-		
+
 	case *ThisExpression:
 		fmt.Fprintf(os.Stderr, "ThisExpression")
-		
+
 	case *FunctionLiteral:
 		fmt.Fprintf(os.Stderr, "FunctionLiteral {\n")
 		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
@@ -2775,7 +2838,7 @@ func dumpNode(node Node, indent string) {
 			fmt.Fprintf(os.Stderr, "null")
 		}
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *BlockStatement:
 		fmt.Fprintf(os.Stderr, "BlockStatement {\n")
 		fmt.Fprintf(os.Stderr, "%s  statements: [", indent)
@@ -2790,7 +2853,7 @@ func dumpNode(node Node, indent string) {
 			fmt.Fprintf(os.Stderr, "\n%s  ", indent)
 		}
 		fmt.Fprintf(os.Stderr, "]\n%s}", indent)
-		
+
 	case *Parameter:
 		fmt.Fprintf(os.Stderr, "Parameter {\n")
 		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
@@ -2801,7 +2864,7 @@ func dumpNode(node Node, indent string) {
 		fmt.Fprintf(os.Stderr, ",\n%s  defaultValue: ", indent)
 		dumpNode(n.DefaultValue, indent+"  ")
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	case *RestParameter:
 		fmt.Fprintf(os.Stderr, "RestParameter {\n")
 		fmt.Fprintf(os.Stderr, "%s  name: ", indent)
@@ -2817,7 +2880,7 @@ func dumpNode(node Node, indent string) {
 			fmt.Fprintf(os.Stderr, "null")
 		}
 		fmt.Fprintf(os.Stderr, "\n%s}", indent)
-		
+
 	default:
 		// Fallback for unhandled node types
 		fmt.Fprintf(os.Stderr, "%T { /* details not implemented */ }", node)

@@ -16,6 +16,9 @@ func (p *Parser) parseClassDeclaration() Statement {
 	
 	name := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
+	// Parse type parameters if present (same pattern as interfaces)
+	typeParameters := p.tryParseTypeParameters()
+	
 	var superClass *Identifier
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
@@ -56,11 +59,12 @@ func (p *Parser) parseClassDeclaration() Statement {
 	// Let the main parsing loop handle advancing to the next token
 	
 	return &ClassDeclaration{
-		Token:      classToken,
-		Name:       name,
-		SuperClass: superClass,
-		Implements: implements,
-		Body:       body,
+		Token:          classToken,
+		Name:           name,
+		TypeParameters: typeParameters,
+		SuperClass:     superClass,
+		Implements:     implements,
+		Body:           body,
 	}
 }
 
@@ -74,6 +78,10 @@ func (p *Parser) parseClassExpression() Expression {
 		p.nextToken()
 		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
+	
+	// Parse type parameters if present (same pattern as interfaces)
+	// Note: Anonymous classes (name == nil) can still have type parameters
+	typeParameters := p.tryParseTypeParameters()
 	
 	var superClass *Identifier
 	if p.peekTokenIs(lexer.EXTENDS) {
@@ -115,11 +123,12 @@ func (p *Parser) parseClassExpression() Expression {
 	// Let the main parsing loop handle advancing to the next token
 	
 	return &ClassExpression{
-		Token:      classToken,
-		Name:       name,
-		SuperClass: superClass,
-		Implements: implements,
-		Body:       body,
+		Token:          classToken,
+		Name:           name,
+		TypeParameters: typeParameters,
+		SuperClass:     superClass,
+		Implements:     implements,
+		Body:           body,
 	}
 }
 

@@ -25,6 +25,9 @@ type TypeContext struct {
 	// Define a global type (constructor, namespace, etc.)
 	DefineGlobal func(name string, typ types.Type) error
 
+	// Define a type alias (e.g., "number" -> types.Number)
+	DefineTypeAlias func(name string, typ types.Type) error
+
 	// Get a previously defined type
 	GetType func(name string) (types.Type, bool)
 

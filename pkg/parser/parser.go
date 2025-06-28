@@ -205,7 +205,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
-	p.registerPrefix(lexer.LT, p.parseGenericArrowFunction)    // Generic arrow functions: <T>(x: T) => x
+	p.registerPrefix(lexer.LT, p.parseGenericArrowFunction) // Generic arrow functions: <T>(x: T) => x
 	p.registerPrefix(lexer.IF, p.parseIfExpression)
 	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
 	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)  // <<< NEW: Register Object Literal Parsing
@@ -224,7 +224,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.NOT_EQ, p.parseInfixExpression)
 	p.registerInfix(lexer.STRICT_EQ, p.parseInfixExpression)
 	p.registerInfix(lexer.STRICT_NOT_EQ, p.parseInfixExpression)
-	p.registerInfix(lexer.LT, p.parseInfixExpression)
+	p.registerInfix(lexer.LT, p.parseGenericCallOrComparison)
 	p.registerInfix(lexer.GT, p.parseInfixExpression)
 	p.registerInfix(lexer.LE, p.parseInfixExpression)
 	p.registerInfix(lexer.GE, p.parseInfixExpression)
@@ -315,7 +315,6 @@ func (p *Parser) nextToken() {
 	debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 }
 
-
 // expectPeekGT is like expectPeek(GT) but handles >> and >>> in generic contexts
 // If peek is >>, it splits the token and consumes one >
 func (p *Parser) expectPeekGT() bool {
@@ -337,18 +336,17 @@ func (p *Parser) expectPeekGT() bool {
 		p.nextToken() // This will make current = first >, peek = >>
 		return true
 	}
-	
+
 	p.peekError(lexer.GT)
 	return false
 }
-
 
 // ParseProgram parses the entire input and returns the root Program node and any errors.
 func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program := &Program{}
 	program.Statements = []Statement{}
 	program.HoistedDeclarations = make(map[string]Expression) // Initialize map with Expression
-	program.Source = p.source // Set source context for error reporting
+	program.Source = p.source                                 // Set source context for error reporting
 
 	for p.curToken.Type != lexer.EOF {
 		stmt := p.parseStatement()
@@ -467,18 +465,18 @@ func (p *Parser) parseClassDeclarationStatement() *ExpressionStatement {
 			Expression: nil,
 		}
 	}
-	
+
 	// Wrap it in an ExpressionStatement
 	stmt := &ExpressionStatement{
 		Token:      p.curToken,
 		Expression: classExpr,
 	}
-	
+
 	// Optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
-	
+
 	return stmt
 }
 
@@ -490,8 +488,8 @@ func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
 			Expression: nil,
 		}
 	}
-	
-	// Parse the class as an expression (ClassExpression) 
+
+	// Parse the class as an expression (ClassExpression)
 	classExpr := p.parseClassExpression()
 	if classExpr == nil {
 		return &ExpressionStatement{
@@ -499,23 +497,23 @@ func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
 			Expression: nil,
 		}
 	}
-	
+
 	// Mark the class as abstract
 	if classDecl, ok := classExpr.(*ClassExpression); ok {
 		classDecl.IsAbstract = true
 	}
-	
+
 	// Wrap it in an ExpressionStatement
 	stmt := &ExpressionStatement{
 		Token:      p.curToken,
 		Expression: classExpr,
 	}
-	
+
 	// Optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
-	
+
 	return stmt
 }
 
@@ -928,10 +926,10 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 
 func (p *Parser) parseLetStatement() Statement {
 	letToken := p.curToken // Save the 'let' token
-	
+
 	// Peek at the next token to determine if it's a destructuring pattern
 	p.nextToken() // Move to what comes after 'let'
-	
+
 	switch p.curToken.Type {
 	case lexer.LBRACKET:
 		// Array destructuring: let [a, b] = ...
@@ -979,10 +977,10 @@ func (p *Parser) parseLetStatement() Statement {
 
 func (p *Parser) parseConstStatement() Statement {
 	constToken := p.curToken // Save the 'const' token
-	
+
 	// Peek at the next token to determine if it's a destructuring pattern
 	p.nextToken() // Move to what comes after 'const'
-	
+
 	switch p.curToken.Type {
 	case lexer.LBRACKET:
 		// Array destructuring: const [a, b] = ...
@@ -1406,14 +1404,14 @@ func (p *Parser) parseUndefinedLiteral() Expression {
 func (p *Parser) parseRegexLiteral() Expression {
 	// Parse pattern and flags from the token literal /pattern/flags
 	literal := p.curToken.Literal
-	
+
 	// Extract pattern and flags from the literal
 	// The literal format is "/pattern/flags"
 	if len(literal) < 2 || literal[0] != '/' {
 		p.addError(p.curToken, fmt.Sprintf("Invalid regex literal format: %s", literal))
 		return nil
 	}
-	
+
 	// Find the closing slash
 	lastSlash := -1
 	for i := len(literal) - 1; i >= 1; i-- {
@@ -1422,15 +1420,15 @@ func (p *Parser) parseRegexLiteral() Expression {
 			break
 		}
 	}
-	
+
 	if lastSlash == -1 || lastSlash == 1 {
 		p.addError(p.curToken, fmt.Sprintf("Invalid regex literal format: %s", literal))
 		return nil
 	}
-	
-	pattern := literal[1:lastSlash]     // Extract pattern between slashes
-	flags := literal[lastSlash+1:]      // Extract flags after last slash
-	
+
+	pattern := literal[1:lastSlash] // Extract pattern between slashes
+	flags := literal[lastSlash+1:]  // Extract flags after last slash
+
 	return &RegexLiteral{
 		Token:   p.curToken,
 		Pattern: pattern,
@@ -1454,6 +1452,9 @@ func (p *Parser) parseNewExpression() Expression {
 
 	// Parse the constructor expression (identifier, member expression, etc.)
 	ne.Constructor = p.parseExpression(CALL)
+
+	// Try to parse type arguments (e.g., new Container<string>)
+	ne.TypeArguments = p.tryParseTypeArguments()
 
 	// Check if there are arguments (parentheses)
 	if p.peekTokenIs(lexer.LPAREN) {
@@ -1650,7 +1651,7 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			return nil, nil, fmt.Errorf("failed to parse array parameter pattern")
 		}
 	} else if p.curTokenIs(lexer.LBRACE) {
-		// Object destructuring parameter  
+		// Object destructuring parameter
 		param.IsDestructuring = true
 		param.Pattern = p.parseObjectParameterPattern()
 		if param.Pattern == nil {
@@ -1743,7 +1744,7 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			return nil, nil, fmt.Errorf("%s", msg)
 		}
 		param := &Parameter{Token: p.curToken}
-		
+
 		if p.curTokenIs(lexer.LBRACKET) {
 			// Array destructuring parameter
 			param.IsDestructuring = true
@@ -1752,7 +1753,7 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 				return nil, nil, fmt.Errorf("failed to parse array parameter pattern")
 			}
 		} else if p.curTokenIs(lexer.LBRACE) {
-			// Object destructuring parameter  
+			// Object destructuring parameter
 			param.IsDestructuring = true
 			param.Pattern = p.parseObjectParameterPattern()
 			if param.Pattern == nil {
@@ -1843,19 +1844,19 @@ func (p *Parser) parseRestParameter() *RestParameter {
 // Examples: [a, b], [a = 1, b], [first, ...rest]
 func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 	pattern := &ArrayParameterPattern{Token: p.curToken} // The '[' token
-	
+
 	// Parse elements using existing destructuring logic but adapted for parameters
 	elements := []*DestructuringElement{}
-	
+
 	// Handle empty array pattern: []
 	if p.peekTokenIs(lexer.RBRACKET) {
 		p.nextToken() // Consume ']'
 		pattern.Elements = elements
 		return pattern
 	}
-	
+
 	p.nextToken() // Move to first element
-	
+
 	// Parse first element
 	element := p.parseParameterDestructuringElement()
 	if element == nil {
@@ -1863,16 +1864,16 @@ func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 		return nil
 	}
 	elements = append(elements, element)
-	
+
 	// Parse subsequent elements
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // Consume ','
-		
+
 		// Check for trailing comma
 		if p.peekTokenIs(lexer.RBRACKET) {
 			break
 		}
-		
+
 		p.nextToken() // Move to next element
 		element := p.parseParameterDestructuringElement()
 		if element == nil {
@@ -1880,19 +1881,19 @@ func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 			return nil
 		}
 		elements = append(elements, element)
-		
+
 		// If this is a rest element, it must be the last one
 		if element.IsRest && !p.peekTokenIs(lexer.RBRACKET) {
 			p.addError(p.peekToken, "rest element must be last element in array parameter")
 			return nil
 		}
 	}
-	
+
 	if !p.expectPeek(lexer.RBRACKET) {
 		p.addError(p.peekToken, "expected ']' after array parameter elements")
 		return nil
 	}
-	
+
 	pattern.Elements = elements
 	return pattern
 }
@@ -1901,19 +1902,19 @@ func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 // Examples: {x, y}, {x = 1, y}, {x: localX, ...rest}
 func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 	pattern := &ObjectParameterPattern{Token: p.curToken} // The '{' token
-	
+
 	properties := []*DestructuringProperty{}
 	var restProperty *DestructuringElement
-	
+
 	// Handle empty object pattern: {}
 	if p.peekTokenIs(lexer.RBRACE) {
 		p.nextToken() // Consume '}'
 		pattern.Properties = properties
 		return pattern
 	}
-	
+
 	p.nextToken() // Move to first property
-	
+
 	// Parse first property/rest
 	if p.curTokenIs(lexer.SPREAD) {
 		// Rest property
@@ -1933,18 +1934,18 @@ func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 		}
 		properties = append(properties, prop)
 	}
-	
+
 	// Parse subsequent properties
 	for p.peekTokenIs(lexer.COMMA) && restProperty == nil {
 		p.nextToken() // Consume ','
-		
+
 		// Check for trailing comma
 		if p.peekTokenIs(lexer.RBRACE) {
 			break
 		}
-		
+
 		p.nextToken() // Move to next property
-		
+
 		if p.curTokenIs(lexer.SPREAD) {
 			// Rest property (must be last)
 			restProperty = p.parseParameterDestructuringElement()
@@ -1965,12 +1966,12 @@ func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 			properties = append(properties, prop)
 		}
 	}
-	
+
 	if !p.expectPeek(lexer.RBRACE) {
 		p.addError(p.peekToken, "expected '}' after object parameter properties")
 		return nil
 	}
-	
+
 	pattern.Properties = properties
 	pattern.RestProperty = restProperty
 	return pattern
@@ -1980,7 +1981,7 @@ func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 // Handles: identifier, ...rest, identifier = default
 func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 	element := &DestructuringElement{}
-	
+
 	// Check for rest element
 	if p.curTokenIs(lexer.SPREAD) {
 		element.IsRest = true
@@ -1989,7 +1990,7 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 			return nil
 		}
 	}
-	
+
 	// Parse target (support nested patterns in parameter context)
 	if p.curTokenIs(lexer.IDENT) {
 		element.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -2009,7 +2010,7 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 		p.addError(p.curToken, "parameter destructuring target must be an identifier or nested pattern")
 		return nil
 	}
-	
+
 	// Check for default value (not allowed for rest elements)
 	if !element.IsRest && p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken() // Consume '='
@@ -2020,7 +2021,7 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 			return nil
 		}
 	}
-	
+
 	return element
 }
 
@@ -2028,20 +2029,20 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 // Handles: key, key: target, key = default, key: target = default
 func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 	prop := &DestructuringProperty{}
-	
+
 	// Parse key (must be identifier)
 	if !p.curTokenIs(lexer.IDENT) {
 		p.addError(p.curToken, "object parameter property key must be an identifier")
 		return nil
 	}
-	
+
 	prop.Key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	
+
 	// Check for explicit target (key: target)
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
 		p.nextToken() // Move to target
-		
+
 		// Parse target (support nested patterns)
 		if p.curTokenIs(lexer.IDENT) {
 			prop.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -2065,7 +2066,7 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 		// Shorthand: use key as target
 		prop.Target = prop.Key
 	}
-	
+
 	// Check for default value
 	if p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken() // Consume '='
@@ -2076,7 +2077,7 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 			return nil
 		}
 	}
-	
+
 	return prop
 }
 
@@ -2090,7 +2091,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 	if fn == nil || fn.Body == nil {
 		return fn
 	}
-	
+
 	// Check if any parameters use destructuring
 	hasDestructuring := false
 	for _, param := range fn.Parameters {
@@ -2099,32 +2100,32 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 			break
 		}
 	}
-	
+
 	if !hasDestructuring {
 		return fn // No transformation needed
 	}
-	
+
 	// Create new parameters and body statements
 	newParams := []*Parameter{}
 	newStatements := []Statement{}
 	paramIndex := 0
-	
+
 	for _, param := range fn.Parameters {
 		if param.IsDestructuring {
 			// Create a new regular parameter for this destructuring parameter
 			newParamName := fmt.Sprintf("__destructured_param_%d", paramIndex)
 			newParam := &Parameter{
-				Token:            param.Token,
-				Name:             &Identifier{Token: param.Token, Value: newParamName},
-				TypeAnnotation:   param.TypeAnnotation,
-				ComputedType:     param.ComputedType,
-				Optional:         false, // Destructuring params can't be optional
-				DefaultValue:     nil,   // Destructuring params can't have top-level defaults
-				IsThis:           false,
-				IsDestructuring:  false,
+				Token:           param.Token,
+				Name:            &Identifier{Token: param.Token, Value: newParamName},
+				TypeAnnotation:  param.TypeAnnotation,
+				ComputedType:    param.ComputedType,
+				Optional:        false, // Destructuring params can't be optional
+				DefaultValue:    nil,   // Destructuring params can't have top-level defaults
+				IsThis:          false,
+				IsDestructuring: false,
 			}
 			newParams = append(newParams, newParam)
-			
+
 			// Create destructuring declaration statement
 			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok {
 				// Convert array parameter pattern to array destructuring declaration
@@ -2133,7 +2134,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 					IsConst:        false, // Use let for function parameters
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
-					Value:          &Identifier{
+					Value: &Identifier{
 						Token: lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
@@ -2153,7 +2154,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 					Properties:     objectPattern.Properties,
 					RestProperty:   objectPattern.RestProperty,
 					TypeAnnotation: param.TypeAnnotation,
-					Value:          &Identifier{
+					Value: &Identifier{
 						Token: lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
@@ -2172,10 +2173,10 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 			newParams = append(newParams, param)
 		}
 	}
-	
+
 	// Combine new destructuring statements with original body
 	newStatements = append(newStatements, fn.Body.Statements...)
-	
+
 	// Create new function with transformed parameters and body
 	newFn := &FunctionLiteral{
 		BaseExpression:       fn.BaseExpression,
@@ -2190,7 +2191,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 			HoistedDeclarations: fn.Body.HoistedDeclarations,
 		},
 	}
-	
+
 	return newFn
 }
 
@@ -2199,7 +2200,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 	if fn == nil {
 		return fn
 	}
-	
+
 	// Check if any parameters use destructuring
 	hasDestructuring := false
 	for _, param := range fn.Parameters {
@@ -2208,32 +2209,32 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 			break
 		}
 	}
-	
+
 	if !hasDestructuring {
 		return fn // No transformation needed
 	}
-	
+
 	// Create new parameters and body statements
 	newParams := []*Parameter{}
 	newStatements := []Statement{}
 	paramIndex := 0
-	
+
 	for _, param := range fn.Parameters {
 		if param.IsDestructuring {
 			// Create a new regular parameter for this destructuring parameter
 			newParamName := fmt.Sprintf("__destructured_param_%d", paramIndex)
 			newParam := &Parameter{
-				Token:            param.Token,
-				Name:             &Identifier{Token: param.Token, Value: newParamName},
-				TypeAnnotation:   param.TypeAnnotation,
-				ComputedType:     param.ComputedType,
-				Optional:         false,
-				DefaultValue:     nil,
-				IsThis:           false,
-				IsDestructuring:  false,
+				Token:           param.Token,
+				Name:            &Identifier{Token: param.Token, Value: newParamName},
+				TypeAnnotation:  param.TypeAnnotation,
+				ComputedType:    param.ComputedType,
+				Optional:        false,
+				DefaultValue:    nil,
+				IsThis:          false,
+				IsDestructuring: false,
 			}
 			newParams = append(newParams, newParam)
-			
+
 			// Create destructuring declaration statement
 			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok {
 				// Create a 'let' token for the declaration
@@ -2249,7 +2250,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 					IsConst:        false, // Use let for function parameters
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
-					Value:          &Identifier{
+					Value: &Identifier{
 						Token: lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
@@ -2276,7 +2277,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 					Properties:     objectPattern.Properties,
 					RestProperty:   objectPattern.RestProperty,
 					TypeAnnotation: param.TypeAnnotation,
-					Value:          &Identifier{
+					Value: &Identifier{
 						Token: lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
@@ -2295,7 +2296,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 			newParams = append(newParams, param)
 		}
 	}
-	
+
 	// Handle arrow function body transformation
 	var newBody Node
 	if blockStmt, ok := fn.Body.(*BlockStatement); ok {
@@ -2323,7 +2324,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 			newBody = fn.Body
 		}
 	}
-	
+
 	// Create new arrow function with transformed parameters and body
 	newFn := &ArrowFunctionLiteral{
 		BaseExpression:       fn.BaseExpression,
@@ -2333,7 +2334,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 		ReturnTypeAnnotation: fn.ReturnTypeAnnotation,
 		Body:                 newBody,
 	}
-	
+
 	return newFn
 }
 
@@ -2342,7 +2343,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 	if method == nil || method.Body == nil {
 		return method
 	}
-	
+
 	// Check if any parameters use destructuring
 	hasDestructuring := false
 	for _, param := range method.Parameters {
@@ -2351,32 +2352,32 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 			break
 		}
 	}
-	
+
 	if !hasDestructuring {
 		return method // No transformation needed
 	}
-	
+
 	// Create new parameters and body statements
 	newParams := []*Parameter{}
 	newStatements := []Statement{}
 	paramIndex := 0
-	
+
 	for _, param := range method.Parameters {
 		if param.IsDestructuring {
 			// Create a new regular parameter for this destructuring parameter
 			newParamName := fmt.Sprintf("__destructured_param_%d", paramIndex)
 			newParam := &Parameter{
-				Token:            param.Token,
-				Name:             &Identifier{Token: param.Token, Value: newParamName},
-				TypeAnnotation:   param.TypeAnnotation,
-				ComputedType:     param.ComputedType,
-				Optional:         false,
-				DefaultValue:     nil,
-				IsThis:           false,
-				IsDestructuring:  false,
+				Token:           param.Token,
+				Name:            &Identifier{Token: param.Token, Value: newParamName},
+				TypeAnnotation:  param.TypeAnnotation,
+				ComputedType:    param.ComputedType,
+				Optional:        false,
+				DefaultValue:    nil,
+				IsThis:          false,
+				IsDestructuring: false,
 			}
 			newParams = append(newParams, newParam)
-			
+
 			// Create destructuring declaration statement
 			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok {
 				// Create a 'let' token for the declaration
@@ -2392,7 +2393,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 					IsConst:        false, // Use let for function parameters
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
-					Value:          &Identifier{
+					Value: &Identifier{
 						Token: lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
@@ -2419,7 +2420,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 					Properties:     objectPattern.Properties,
 					RestProperty:   objectPattern.RestProperty,
 					TypeAnnotation: param.TypeAnnotation,
-					Value:          &Identifier{
+					Value: &Identifier{
 						Token: lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
@@ -2438,10 +2439,10 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 			newParams = append(newParams, param)
 		}
 	}
-	
+
 	// Combine new destructuring statements with original body
 	newStatements = append(newStatements, method.Body.Statements...)
-	
+
 	// Create new method with transformed parameters and body
 	newMethod := &ShorthandMethod{
 		BaseExpression:       method.BaseExpression,
@@ -2456,7 +2457,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 			HoistedDeclarations: method.Body.HoistedDeclarations,
 		},
 	}
-	
+
 	return newMethod
 }
 
@@ -2666,7 +2667,7 @@ func (p *Parser) parseGroupedExpression() Expression {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found '=>' next.", params)
 			p.nextToken() // Consume ')', Now curToken is '=>'
 			debugPrint("parseGroupedExpression: Consumed ')', cur is now '=>'")
-			p.errors = p.errors[:startErrors]                                // Clear errors from backtrack attempt
+			p.errors = p.errors[:startErrors]                                     // Clear errors from backtrack attempt
 			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil) // No return type annotation
 
 			// Case 2: Arrow function with params AND return type annotation: (a: T, b: U): R => body
@@ -2899,6 +2900,7 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 }
 
 // parseCallExpression handles function calls like func(arg1, arg2)
+// NOTE: Type arguments are handled earlier in the parsing flow
 func (p *Parser) parseCallExpression(function Expression) Expression {
 	exp := &CallExpression{Token: p.curToken, Function: function}
 	exp.Arguments = p.parseExpressionList(lexer.RPAREN)
@@ -2971,10 +2973,10 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, pa
 		arrowFunc.Body = p.parseExpression(LOWEST)
 	}
 	debugPrint("parseArrowFunctionBodyAndFinish: Finished parsing body=%T, returning ArrowFunc", arrowFunc.Body)
-	
+
 	// Transform arrow function if it has destructuring parameters
 	arrowFunc = p.transformArrowFunctionWithDestructuring(arrowFunc)
-	
+
 	return arrowFunc
 }
 
@@ -2987,7 +2989,7 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 
 	if !p.curTokenIs(lexer.LPAREN) { // Check current token IS LPAREN
 		// This case should ideally not be hit if called correctly from parseGroupedExpression
-		return nil, nil, fmt.Errorf("expected '('")
+		return nil, nil, fmt.Errorf("expected '(")
 	}
 	debugPrint("parseParameterList: Starting, cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
 
@@ -3024,7 +3026,7 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 		return nil, nil, fmt.Errorf("%s", msg)
 	}
 	param := &Parameter{Token: p.curToken}
-	
+
 	if p.curTokenIs(lexer.LBRACKET) {
 		// Array destructuring parameter
 		param.IsDestructuring = true
@@ -3033,7 +3035,7 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 			return nil, nil, fmt.Errorf("failed to parse array parameter pattern")
 		}
 	} else if p.curTokenIs(lexer.LBRACE) {
-		// Object destructuring parameter  
+		// Object destructuring parameter
 		param.IsDestructuring = true
 		param.Pattern = p.parseObjectParameterPattern()
 		if param.Pattern == nil {
@@ -3233,19 +3235,19 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 // parseAssignmentExpression handles variable assignment (e.g., x = value)
 func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	debugPrint("parseAssignmentExpression starting with left: %s (%T)", left.String(), left)
-	
+
 	// Check for array destructuring assignment: [a, b, c] = expr
 	if arrayLit, ok := left.(*ArrayLiteral); ok && p.curToken.Type == lexer.ASSIGN {
 		debugPrint("parseAssignmentExpression detected array destructuring pattern")
 		return p.parseArrayDestructuringAssignment(arrayLit)
 	}
-	
+
 	// Check for object destructuring assignment: {a, b, c} = expr
 	if objectLit, ok := left.(*ObjectLiteral); ok && p.curToken.Type == lexer.ASSIGN {
 		debugPrint("parseAssignmentExpression detected object destructuring pattern")
 		return p.parseObjectDestructuringAssignment(objectLit)
 	}
-	
+
 	// Regular assignment expression
 	expr := &AssignmentExpression{
 		Token:    p.curToken,         // The assignment token (=, +=, etc.)
@@ -3273,17 +3275,17 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 // parseArrayDestructuringAssignment handles array destructuring like [a, b, c] = expr
 func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expression {
 	debugPrint("parseArrayDestructuringAssignment starting")
-	
+
 	destructure := &ArrayDestructuringAssignment{
 		Token: arrayLit.Token, // The '[' token from the array literal
 	}
-	
+
 	// Convert array elements to destructuring elements
 	for i, element := range arrayLit.Elements {
 		var target Expression
 		var defaultValue Expression
 		var isRest bool
-		
+
 		// Check if this element is a rest element (...rest)
 		if spreadExpr, ok := element.(*SpreadElement); ok {
 			// This is a rest element: [...rest]
@@ -3301,20 +3303,20 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 			defaultValue = nil
 			isRest = false
 		}
-		
+
 		destElement := &DestructuringElement{
 			Target:  target,
 			Default: defaultValue,
 			IsRest:  isRest,
 		}
-		
+
 		// Validate that the target is a valid destructuring target
 		if !p.isValidDestructuringTarget(target) {
 			msg := fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String())
 			p.addError(arrayLit.Token, msg)
 			return nil
 		}
-		
+
 		// Validate rest element placement
 		if isRest {
 			// Rest element must be the last element
@@ -3323,20 +3325,20 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 				return nil
 			}
 		}
-		
+
 		destructure.Elements = append(destructure.Elements, destElement)
 	}
-	
+
 	// Consume the '=' token (already checked in caller)
 	p.nextToken()
-	
+
 	// Parse the right-hand side expression
 	destructure.Value = p.parseExpression(LOWEST)
 	if destructure.Value == nil {
 		p.addError(p.curToken, "expected expression after '=' in array destructuring assignment")
 		return nil
 	}
-	
+
 	debugPrint("parseArrayDestructuringAssignment completed: %s", destructure.String())
 	return destructure
 }
@@ -3344,11 +3346,11 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 // parseObjectDestructuringAssignment handles object destructuring like {a, b, c} = expr
 func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Expression {
 	debugPrint("parseObjectDestructuringAssignment starting")
-	
+
 	destructure := &ObjectDestructuringAssignment{
 		Token: objectLit.Token, // The '{' token from the object literal
 	}
-	
+
 	// Convert object properties to destructuring properties
 	for i, pair := range objectLit.Properties {
 		// Check if this is a spread element (rest property)
@@ -3358,13 +3360,13 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 				p.addError(objectLit.Token, "multiple rest elements in object destructuring pattern")
 				return nil
 			}
-			
+
 			// Rest property must be the last property
 			if i != len(objectLit.Properties)-1 {
 				p.addError(objectLit.Token, "rest element must be last element in object destructuring pattern")
 				return nil
 			}
-			
+
 			// Validate that the spread argument is an identifier
 			if ident, ok := spreadElement.Argument.(*Identifier); ok {
 				destructure.RestProperty = &DestructuringElement{
@@ -3378,10 +3380,10 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 			}
 			continue
 		}
-		
+
 		// For regular properties, we support simple property destructuring
 		// {name, age} = obj (shorthand) or {name: localName} = obj (explicit target)
-		
+
 		// The key should be an identifier for simple property access
 		keyIdent, ok := pair.Key.(*Identifier)
 		if !ok {
@@ -3389,16 +3391,16 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 			p.addError(objectLit.Token, msg)
 			return nil
 		}
-		
+
 		var target Expression
 		var defaultValue Expression
-		
+
 		// Check for different patterns:
 		// 1. {name} - shorthand without default
 		// 2. {name = defaultVal} - shorthand with default (value is assignment expr)
 		// 3. {name: localVar} - explicit target without default
 		// 4. {name: localVar = defaultVal} - explicit target with default
-		
+
 		if valueIdent, ok := pair.Value.(*Identifier); ok && valueIdent.Value == keyIdent.Value {
 			// Pattern 1: Shorthand without default {name}
 			target = keyIdent
@@ -3419,33 +3421,33 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 			target = pair.Value
 			defaultValue = nil
 		}
-		
+
 		// Validate that the target is a valid destructuring target
 		if !p.isValidDestructuringTarget(target) {
 			msg := fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String())
 			p.addError(objectLit.Token, msg)
 			return nil
 		}
-		
+
 		destProperty := &DestructuringProperty{
 			Key:     keyIdent,
 			Target:  target,
 			Default: defaultValue,
 		}
-		
+
 		destructure.Properties = append(destructure.Properties, destProperty)
 	}
-	
+
 	// Consume the '=' token (already checked in caller)
 	p.nextToken()
-	
+
 	// Parse the right-hand side expression
 	destructure.Value = p.parseExpression(LOWEST)
 	if destructure.Value == nil {
 		p.addError(p.curToken, "expected expression after '=' in object destructuring assignment")
 		return nil
 	}
-	
+
 	debugPrint("parseObjectDestructuringAssignment completed: %s", destructure.String())
 	return destructure
 }
@@ -3453,56 +3455,56 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 // parseArrayDestructuringDeclaration handles let/const/var [a, b] = expr
 func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isConst bool) *ArrayDestructuringDeclaration {
 	debugPrint("parseArrayDestructuringDeclaration starting")
-	
+
 	decl := &ArrayDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
 	}
-	
+
 	// Current token is '[', parse the pattern using similar logic to parseExpressionList
 	elements := []Expression{}
-	
+
 	// Check for empty pattern: let [] = ...
 	if p.peekTokenIs(lexer.RBRACKET) {
 		p.nextToken() // Consume ']'
 	} else {
 		p.nextToken() // Move past '[' to first element
-		
+
 		// Parse first element
 		element := p.parseExpression(LOWEST)
 		if element != nil {
 			elements = append(elements, element)
 		}
-		
+
 		// Parse remaining elements
 		for p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // Consume ','
-			
+
 			// Allow trailing comma
 			if p.peekTokenIs(lexer.RBRACKET) {
 				p.nextToken() // Consume ']'
 				break
 			}
-			
+
 			p.nextToken() // Move to next element
 			element = p.parseExpression(LOWEST)
 			if element != nil {
 				elements = append(elements, element)
 			}
 		}
-		
+
 		// Ensure we end with ']'
 		if !p.expectPeek(lexer.RBRACKET) {
 			return nil
 		}
 	}
-	
+
 	// Convert elements to DestructuringElements (similar to assignment parsing)
 	for i, element := range elements {
 		var target Expression
 		var defaultValue Expression
 		var isRest bool
-		
+
 		// Check if this element is a rest element (...rest)
 		if spreadExpr, ok := element.(*SpreadElement); ok {
 			// This is a rest element: [...rest]
@@ -3518,19 +3520,19 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 			defaultValue = nil
 			isRest = false
 		}
-		
+
 		destElement := &DestructuringElement{
 			Target:  target,
 			Default: defaultValue,
 			IsRest:  isRest,
 		}
-		
+
 		// Validate that the target is a valid destructuring target
 		if !p.isValidDestructuringTarget(target) {
 			p.addError(p.curToken, fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String()))
 			return nil
 		}
-		
+
 		// Validate rest element placement
 		if isRest {
 			// Rest element must be the last element
@@ -3539,10 +3541,10 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 				return nil
 			}
 		}
-		
+
 		decl.Elements = append(decl.Elements, destElement)
 	}
-	
+
 	// Optional type annotation: let [a, b]: [number, string] = ...
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
@@ -3552,24 +3554,24 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 			return nil
 		}
 	}
-	
+
 	// Require initializer for destructuring
 	if !p.expectPeek(lexer.ASSIGN) {
 		p.addError(p.peekToken, "destructuring declaration must have an initializer")
 		return nil
 	}
-	
+
 	p.nextToken() // Move to RHS expression
 	decl.Value = p.parseExpression(LOWEST)
 	if decl.Value == nil {
 		return nil
 	}
-	
+
 	// Optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
-	
+
 	debugPrint("parseArrayDestructuringDeclaration completed: %s", decl.String())
 	return decl
 }
@@ -3577,18 +3579,18 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 // parseObjectDestructuringDeclaration handles let/const/var {a, b} = expr
 func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isConst bool) *ObjectDestructuringDeclaration {
 	debugPrint("parseObjectDestructuringDeclaration starting")
-	
+
 	decl := &ObjectDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
 	}
-	
+
 	// Current token is '{', parse the pattern similar to object literal
 	objectLit := p.parseObjectLiteral().(*ObjectLiteral)
 	if objectLit == nil {
 		return nil
 	}
-	
+
 	// Convert object properties to destructuring properties
 	for i, pair := range objectLit.Properties {
 		// Check if this is a spread element (rest property)
@@ -3598,13 +3600,13 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 				p.addError(objectLit.Token, "multiple rest elements in object destructuring pattern")
 				return nil
 			}
-			
+
 			// Rest property must be the last property
 			if i != len(objectLit.Properties)-1 {
 				p.addError(objectLit.Token, "rest element must be last element in object destructuring pattern")
 				return nil
 			}
-			
+
 			// Validate that the spread argument is an identifier
 			if ident, ok := spreadElement.Argument.(*Identifier); ok {
 				decl.RestProperty = &DestructuringElement{
@@ -3618,17 +3620,17 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 			}
 			continue
 		}
-		
+
 		// The key should be an identifier for simple property access
 		keyIdent, ok := pair.Key.(*Identifier)
 		if !ok {
 			p.addError(objectLit.Token, fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", pair.Key.String()))
 			return nil
 		}
-		
+
 		var target Expression
 		var defaultValue Expression
-		
+
 		// Check for different patterns (same logic as assignment destructuring)
 		if valueIdent, ok := pair.Value.(*Identifier); ok && valueIdent.Value == keyIdent.Value {
 			// Pattern 1: Shorthand without default {name}
@@ -3650,22 +3652,22 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 			target = pair.Value
 			defaultValue = nil
 		}
-		
+
 		// Validate that the target is a valid destructuring target
 		if !p.isValidDestructuringTarget(target) {
 			p.addError(objectLit.Token, fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String()))
 			return nil
 		}
-		
+
 		destProperty := &DestructuringProperty{
 			Key:     keyIdent,
 			Target:  target,
 			Default: defaultValue,
 		}
-		
+
 		decl.Properties = append(decl.Properties, destProperty)
 	}
-	
+
 	// Optional type annotation: let {a, b}: {a: number, b: string} = ...
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
@@ -3675,24 +3677,24 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 			return nil
 		}
 	}
-	
+
 	// Require initializer for destructuring
 	if !p.expectPeek(lexer.ASSIGN) {
 		p.addError(p.peekToken, "destructuring declaration must have an initializer")
 		return nil
 	}
-	
+
 	p.nextToken() // Move to RHS expression
 	decl.Value = p.parseExpression(LOWEST)
 	if decl.Value == nil {
 		return nil
 	}
-	
+
 	// Optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
-	
+
 	debugPrint("parseObjectDestructuringDeclaration completed: %s", decl.String())
 	return decl
 }
@@ -3948,7 +3950,7 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 
 	// Move to the next token (which should be the property name)
 	p.nextToken()
-	
+
 	// Parse property name (allowing keywords as property names)
 	propIdent := p.parsePropertyName()
 	if propIdent == nil {
@@ -4116,17 +4118,17 @@ func (p *Parser) parseTypeIdentifier() Expression {
 		p.addError(p.curToken, msg)
 		return nil
 	}
-	
+
 	// Save the identifier
 	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	
+
 	// Check if this could be a generic type reference
 	// We need to be careful here - only parse as generic if we see '<' followed by a valid type
 	if p.peekTokenIs(lexer.LT) {
 		// Try to parse as generic, but be ready to backtrack
 		return p.tryParseGenericTypeRef(ident)
 	}
-	
+
 	return ident
 }
 
@@ -4135,17 +4137,17 @@ func (p *Parser) parseTypeIdentifier() Expression {
 func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 	// For now, we'll use a simpler approach without full backtracking
 	// This is safe because we're only in type context
-	
+
 	// Consume the '<'
 	p.nextToken()
 	if !p.curTokenIs(lexer.LT) {
 		// This shouldn't happen since we checked peek
 		return name
 	}
-	
+
 	// Try to parse type arguments
 	var typeArgs []Expression
-	
+
 	// Parse first type argument
 	p.nextToken()
 	if p.curTokenIs(lexer.GT) {
@@ -4153,19 +4155,19 @@ func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 		p.addError(p.curToken, "Expected type argument after '<'")
 		return name
 	}
-	
+
 	firstArg := p.parseTypeExpression()
 	if firstArg == nil {
 		// Error already added by parseTypeExpression
 		return name
 	}
 	typeArgs = append(typeArgs, firstArg)
-	
+
 	// Parse remaining type arguments
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // consume comma
 		p.nextToken() // move to next type
-		
+
 		arg := p.parseTypeExpression()
 		if arg == nil {
 			// Error already added by parseTypeExpression
@@ -4173,12 +4175,12 @@ func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 		}
 		typeArgs = append(typeArgs, arg)
 	}
-	
+
 	// Expect closing '>' - handle >> and >>> splitting
 	if !p.expectPeekGT() {
 		return name
 	}
-	
+
 	// Success! Create generic type ref
 	return &GenericTypeRef{
 		BaseExpression: BaseExpression{},
@@ -4203,26 +4205,26 @@ func (p *Parser) parseObjectLiteral() Expression {
 			// Parse spread element: ...expression
 			spreadToken := p.curToken
 			p.nextToken() // Consume '...' to get to the expression
-			
+
 			// Parse the expression being spread
 			spreadExpr := p.parseExpression(LOWEST)
 			if spreadExpr == nil {
 				p.addError(p.curToken, "expected expression after '...' in object literal")
 				return nil
 			}
-			
-			// Create a SpreadElement 
+
+			// Create a SpreadElement
 			spreadElement := &SpreadElement{
-				Token: spreadToken,
+				Token:    spreadToken,
 				Argument: spreadExpr,
 			}
-			
+
 			// Add as a special property where Key is SpreadElement and Value is nil
 			objLit.Properties = append(objLit.Properties, &ObjectProperty{
 				Key:   spreadElement,
 				Value: nil, // No separate value for spread elements
 			})
-			
+
 			// Check for comma or closing brace
 			if p.peekTokenIs(lexer.COMMA) {
 				p.nextToken() // Consume comma
@@ -4661,7 +4663,7 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				p.addError(p.curToken, "expected property name (identifier) or call signature '(' in object type")
 				return nil
 			}
-			
+
 			prop := &ObjectTypeProperty{
 				Name: propName,
 			}
@@ -4730,10 +4732,10 @@ func (p *Parser) parsePropertyName() *Identifier {
 	switch p.curToken.Type {
 	case lexer.IDENT:
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION, 
-		 lexer.RETURN, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL, 
-		 lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, 
-		 lexer.IN, lexer.INSTANCEOF:
+	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
+		lexer.RETURN, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
+		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS,
+		lexer.IN, lexer.INSTANCEOF:
 		// Allow keywords as property names
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	default:
@@ -5506,41 +5508,41 @@ func (p *Parser) parseTypeParameters() ([]*TypeParameter, error) {
 	if !p.curTokenIs(lexer.LT) {
 		return nil, fmt.Errorf("internal error: parseTypeParameters called without '<'")
 	}
-	
+
 	var typeParams []*TypeParameter
-	
+
 	// Move to first type parameter
 	p.nextToken()
-	
+
 	// Handle empty type parameter list
 	if p.curTokenIs(lexer.GT) {
 		return typeParams, nil // Empty list is valid
 	}
-	
+
 	// Parse first type parameter
 	firstParam := p.parseTypeParameter()
 	if firstParam == nil {
 		return nil, fmt.Errorf("failed to parse type parameter")
 	}
 	typeParams = append(typeParams, firstParam)
-	
+
 	// Parse remaining type parameters
 	for p.peekTokenIs(lexer.COMMA) {
 		p.nextToken() // consume comma
 		p.nextToken() // move to next type parameter
-		
+
 		param := p.parseTypeParameter()
 		if param == nil {
 			return nil, fmt.Errorf("failed to parse type parameter")
 		}
 		typeParams = append(typeParams, param)
 	}
-	
+
 	// Expect closing '>'
 	if !p.expectPeek(lexer.GT) {
 		return nil, fmt.Errorf("expected '>' after type parameters")
 	}
-	
+
 	return typeParams, nil
 }
 
@@ -5550,17 +5552,17 @@ func (p *Parser) parseTypeParameter() *TypeParameter {
 		p.addError(p.curToken, "expected type parameter name")
 		return nil
 	}
-	
+
 	param := &TypeParameter{
 		Token: p.curToken,
 		Name:  &Identifier{Token: p.curToken, Value: p.curToken.Literal},
 	}
-	
+
 	// Check for constraint: T extends SomeType
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
 		p.nextToken() // move to constraint type
-		
+
 		constraint := p.parseTypeExpression()
 		if constraint == nil {
 			p.addError(p.curToken, "expected type after 'extends'")
@@ -5568,7 +5570,7 @@ func (p *Parser) parseTypeParameter() *TypeParameter {
 		}
 		param.Constraint = constraint
 	}
-	
+
 	return param
 }
 
@@ -5578,16 +5580,16 @@ func (p *Parser) tryParseTypeParameters() []*TypeParameter {
 	if !p.peekTokenIs(lexer.LT) {
 		return nil // No type parameters
 	}
-	
+
 	// Save current state for potential backtracking
 	savedCur := p.curToken
 	savedPeek := p.peekToken
 	savedErrorCount := len(p.errors)
-	
+
 	// Try to parse type parameters
 	p.nextToken() // consume '<'
 	typeParams, err := p.parseTypeParameters()
-	
+
 	if err != nil {
 		// Backtrack on failure
 		p.curToken = savedCur
@@ -5598,7 +5600,7 @@ func (p *Parser) tryParseTypeParameters() []*TypeParameter {
 		}
 		return nil
 	}
-	
+
 	return typeParams
 }
 
@@ -5609,26 +5611,26 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 		p.addError(p.curToken, "internal error: parseGenericArrowFunction called without '<'")
 		return nil
 	}
-	
+
 	// Parse type parameters
 	typeParams, err := p.parseTypeParameters()
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
 		return nil
 	}
-	
+
 	// Expect '(' for parameters
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
-	
+
 	// Parse regular parameters
 	params, restParam, parseErr := p.parseFunctionParameters()
 	if parseErr != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse arrow function parameters: %v", parseErr))
 		return nil
 	}
-	
+
 	// Optional return type annotation
 	var returnTypeAnnotation Expression
 	if p.peekTokenIs(lexer.COLON) {
@@ -5640,12 +5642,12 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 			return nil
 		}
 	}
-	
+
 	// Expect '=>'
 	if !p.expectPeek(lexer.ARROW) {
 		return nil
 	}
-	
+
 	return p.parseArrowFunctionBodyAndFinish(typeParams, params, restParam, returnTypeAnnotation)
 }
 
@@ -5677,16 +5679,16 @@ func (p *Parser) GetSource() *source.SourceFile {
 // parseTryStatement parses a try/catch/finally statement
 func (p *Parser) parseTryStatement() *TryStatement {
 	stmt := &TryStatement{Token: p.curToken} // 'try' token
-	
+
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil // Expected '{' after 'try'
 	}
-	
+
 	stmt.Body = p.parseBlockStatement()
 	if stmt.Body == nil {
 		return nil
 	}
-	
+
 	// Optional catch clause
 	if p.peekTokenIs(lexer.CATCH) {
 		p.nextToken() // consume 'catch'
@@ -5695,87 +5697,233 @@ func (p *Parser) parseTryStatement() *TryStatement {
 			return nil
 		}
 	}
-	
+
 	// Optional finally clause (Phase 3)
 	if p.peekTokenIs(lexer.FINALLY) {
 		p.nextToken() // consume 'finally'
-		
+
 		if !p.expectPeek(lexer.LBRACE) {
 			p.addError(p.curToken, "expected '{' after 'finally'")
 			return nil
 		}
-		
+
 		stmt.FinallyBlock = p.parseBlockStatement()
 		if stmt.FinallyBlock == nil {
 			return nil
 		}
 	}
-	
+
 	// Must have either catch or finally
 	if stmt.CatchClause == nil && stmt.FinallyBlock == nil {
 		p.addError(stmt.Token, "try statement must have a catch clause, finally clause, or both")
 		return nil
 	}
-	
+
 	return stmt
 }
 
 // parseCatchClause parses a catch clause
 func (p *Parser) parseCatchClause() *CatchClause {
 	clause := &CatchClause{Token: p.curToken} // 'catch' token
-	
+
 	// Optional parameter (ES2019+ allows catch without parameter)
 	if p.peekTokenIs(lexer.LPAREN) {
 		p.nextToken() // consume '('
-		
+
 		if !p.expectPeek(lexer.IDENT) {
 			return nil // Expected identifier for catch parameter
 		}
-		
+
 		clause.Parameter = &Identifier{
 			Token: p.curToken,
 			Value: p.curToken.Literal,
 		}
-		
+
 		if !p.expectPeek(lexer.RPAREN) {
 			return nil // Expected ')' after catch parameter
 		}
 	}
-	
+
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil // Expected '{' for catch body
 	}
-	
+
 	clause.Body = p.parseBlockStatement()
 	if clause.Body == nil {
 		return nil
 	}
-	
+
 	return clause
 }
 
 // parseThrowStatement parses a throw statement
 func (p *Parser) parseThrowStatement() *ThrowStatement {
 	stmt := &ThrowStatement{Token: p.curToken} // 'throw' token
-	
+
 	// In JavaScript, throw requires an expression on the same line
 	// We'll be lenient and just require an expression
 	if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) {
 		p.addError(p.curToken, "throw statement requires an expression")
 		return nil
 	}
-	
+
 	p.nextToken() // move to expression
 	stmt.Value = p.parseExpression(LOWEST)
 	if stmt.Value == nil {
 		return nil
 	}
-	
+
 	// Optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
-	
+
 	return stmt
 }
 
+func (p *Parser) tryParseTypeArguments() []Expression {
+	// Check if we're currently at '<' or if peek is '<'
+	if !p.curTokenIs(lexer.LT) && !p.peekTokenIs(lexer.LT) {
+		return nil // No type arguments
+	}
+
+	// Save current state for potential backtracking
+	savedCur := p.curToken
+	savedPeek := p.peekToken
+	savedErrorCount := len(p.errors)
+
+	// If we're not at '<', advance to it
+	if !p.curTokenIs(lexer.LT) {
+		p.nextToken() // consume current token to get to '<'
+	}
+
+	typeArgs, err := p.parseTypeArguments()
+
+	if err != nil {
+		// Backtrack on failure
+		p.curToken = savedCur
+		p.peekToken = savedPeek
+		// Remove any errors added during failed parse
+		if len(p.errors) > savedErrorCount {
+			p.errors = p.errors[:savedErrorCount]
+		}
+		return nil
+	}
+
+	return typeArgs
+}
+
+// parseTypeArguments parses a comma-separated list of type arguments: <T, U, V>
+func (p *Parser) parseTypeArguments() ([]Expression, error) {
+	if !p.curTokenIs(lexer.LT) {
+		return nil, fmt.Errorf("internal error: parseTypeArguments called without '<'")
+	}
+
+	var typeArgs []Expression
+
+	// Move to first type argument
+	p.nextToken()
+
+	// Handle empty type argument list (not typically valid, but graceful handling)
+	if p.curTokenIs(lexer.GT) {
+		return typeArgs, nil // Empty list
+	}
+
+	// Parse first type argument
+	firstArg := p.parseTypeExpression()
+	if firstArg == nil {
+		return nil, fmt.Errorf("failed to parse type argument")
+	}
+	typeArgs = append(typeArgs, firstArg)
+
+	// Parse remaining type arguments
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // consume comma
+		p.nextToken() // move to next type argument
+
+		arg := p.parseTypeExpression()
+		if arg == nil {
+			return nil, fmt.Errorf("failed to parse type argument")
+		}
+		typeArgs = append(typeArgs, arg)
+	}
+
+	// Expect closing '>' - handle >> and >>> splitting
+	if !p.expectPeekGT() {
+		return nil, fmt.Errorf("expected '>' after type arguments")
+	}
+
+	return typeArgs, nil
+}
+
+// looksLikeGenericCall does a simple lookahead to determine if the current '<' token
+// is likely the start of a generic call (identifier<Type>) rather than a comparison (a < b)
+func (p *Parser) looksLikeGenericCall() bool {
+	// We're currently at '<', peek should be the first token after it
+	// This is a VERY conservative heuristic to avoid false positives
+
+	// Only allow identifiers that look like type names
+	if p.peekTokenIs(lexer.IDENT) {
+		typeName := p.peekToken.Literal
+
+		// Common TypeScript type names (built-in types)
+		if typeName == "string" || typeName == "number" || typeName == "boolean" ||
+			typeName == "object" || typeName == "any" || typeName == "unknown" ||
+			typeName == "void" || typeName == "never" || typeName == "undefined" ||
+			typeName == "null" {
+			return true
+		}
+
+		// Type names that start with a capital letter (e.g., Array, Map, Set, custom types)
+		if len(typeName) > 0 && typeName[0] >= 'A' && typeName[0] <= 'Z' {
+			return true
+		}
+
+		// Reject everything else (lowercase identifiers are likely variables in comparisons)
+		return false
+	}
+
+	// Don't treat numbers, strings, booleans, etc. as potential type arguments
+	// These are much more likely to be values in comparison expressions
+	return false
+}
+
+// parseGenericCallOrComparison handles the ambiguity between generic calls (func<T>()) and comparisons (a < b)
+func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
+	// Only try generic call parsing if left is an identifier
+	if ident, ok := left.(*Identifier); ok {
+		// Check if this looks like a generic call by doing a simple lookahead
+		// We need to look for pattern: identifier < TypeExpr > (
+		if p.looksLikeGenericCall() {
+			// Save current state for potential backtracking
+			savedCur := p.curToken
+			savedPeek := p.peekToken
+			savedErrorCount := len(p.errors)
+
+			// Try to parse type arguments (current token is '<')
+			typeArgs, err := p.parseTypeArguments()
+			if err == nil && typeArgs != nil && p.peekTokenIs(lexer.LPAREN) {
+				// Success! This is a generic call: identifier<types>(args)
+				p.nextToken() // consume '('
+				callExpr := &CallExpression{
+					Token:         p.curToken, // The '(' token
+					Function:      ident,
+					TypeArguments: typeArgs,
+				}
+				callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
+				return callExpr
+			} else {
+				// Failed to parse as generic call, backtrack and parse as comparison
+				p.curToken = savedCur
+				p.peekToken = savedPeek
+				// Remove any errors added during failed parse
+				if len(p.errors) > savedErrorCount {
+					p.errors = p.errors[:savedErrorCount]
+				}
+			}
+		}
+	}
+
+	// Fall back to regular infix expression (comparison)
+	return p.parseInfixExpression(left)
+}

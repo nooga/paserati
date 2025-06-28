@@ -39,10 +39,10 @@ type Environment struct {
 // NewEnvironment creates a new top-level type environment.
 func NewEnvironment() *Environment {
 	return &Environment{
-		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases:               make(map[string]types.Type), // Initialize
-		outer:                     nil,
-		typeParameters:            make(map[string]*types.TypeParameter), // Initialize type parameters
+		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:         make(map[string]types.Type), // Initialize
+		outer:               nil,
+		typeParameters:      make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Only initialized for global environment
@@ -52,10 +52,10 @@ func NewEnvironment() *Environment {
 // NewEnclosedEnvironment creates a new environment nested within an outer one.
 func NewEnclosedEnvironment(outer *Environment) *Environment {
 	return &Environment{
-		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases:               make(map[string]types.Type), // Initialize
+		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:         make(map[string]types.Type), // Initialize
 		outer:               outer,
-		typeParameters:            make(map[string]*types.TypeParameter), // Initialize type parameters
+		typeParameters:      make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Nested environments don't need primitive prototypes
@@ -66,10 +66,10 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 // It populates the environment with built-in types using the new initializer system.
 func NewGlobalEnvironment() *Environment {
 	env := &Environment{
-		symbols:                   make(map[string]SymbolInfo), // Initialize with SymbolInfo
-		typeAliases:               make(map[string]types.Type), // Initialize
+		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
+		typeAliases:         make(map[string]types.Type), // Initialize
 		outer:               nil,
-		typeParameters:            make(map[string]*types.TypeParameter), // Initialize type parameters
+		typeParameters:      make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: make(map[string]*types.ObjectType), // Initialize for global environment
@@ -80,6 +80,12 @@ func NewGlobalEnvironment() *Environment {
 		DefineGlobal: func(name string, typ types.Type) error {
 			if !env.Define(name, typ, true) {
 				return fmt.Errorf("global %s already defined", name)
+			}
+			return nil
+		},
+		DefineTypeAlias: func(name string, typ types.Type) error {
+			if !env.DefineTypeAlias(name, typ) {
+				return fmt.Errorf("type alias %s already defined", name)
 			}
 			return nil
 		},
@@ -320,7 +326,6 @@ func (e *Environment) ResolveOverloadedFunction(name string) (*types.ObjectType,
 	return nil, false
 }
 
-
 // IsOverloadedFunction checks if a function name has overloads (either pending or completed).
 func (e *Environment) IsOverloadedFunction(name string) bool {
 	// Check completed overloads (legacy or unified)
@@ -329,7 +334,7 @@ func (e *Environment) IsOverloadedFunction(name string) bool {
 			return true
 		}
 	}
-	
+
 	// Check if the function has multiple call signatures (indicating overloads)
 	if e.overloadedFunctions != nil {
 		if unified, exists := e.overloadedFunctions[name]; exists {
@@ -363,12 +368,12 @@ func (e *Environment) DefineTypeParameter(name string, param *types.TypeParamete
 	if e.typeParameters == nil {
 		e.typeParameters = make(map[string]*types.TypeParameter)
 	}
-	
+
 	// Check if type parameter already exists in current scope
 	if _, exists := e.typeParameters[name]; exists {
 		return false
 	}
-	
+
 	e.typeParameters[name] = param
 	return true
 }
@@ -383,12 +388,12 @@ func (e *Environment) ResolveTypeParameter(name string) (*types.TypeParameter, b
 			return param, true
 		}
 	}
-	
+
 	// Check outer scopes
 	if e.outer != nil {
 		return e.outer.ResolveTypeParameter(name)
 	}
-	
+
 	return nil, false
 }
 
@@ -404,7 +409,7 @@ func (e *Environment) GetCurrentScopeTypeParameters() map[string]*types.TypePara
 	if e.typeParameters == nil {
 		return make(map[string]*types.TypeParameter)
 	}
-	
+
 	// Return a copy to prevent external modification
 	result := make(map[string]*types.TypeParameter)
 	for name, param := range e.typeParameters {

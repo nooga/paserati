@@ -2,10 +2,10 @@ package checker
 
 import (
 	"fmt"
-	"strings"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"strings"
 )
 
 // --- Helper Functions ---
@@ -34,6 +34,12 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		if typeParam, found := c.env.ResolveTypeParameter(node.Value); found {
 			debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as type parameter\n", node.Value)
 			return &types.TypeParameterType{Parameter: typeParam}
+		}
+
+		// --- NEW: Check if this is a forward reference to the current generic class ---
+		if c.currentForwardRef != nil && node.Value == c.currentForwardRef.ClassName {
+			debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as forward reference to current generic class\n", node.Value)
+			return c.currentForwardRef
 		}
 
 		// --- UPDATED: Prioritize alias resolution ---
@@ -184,7 +190,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				return nil // Error already reported
 			}
 			return &types.ArrayType{ElementType: elemType}
-			
+
 		case "Promise":
 			if len(node.TypeArguments) != 1 {
 				c.addError(node, "Promise requires exactly one type argument")
@@ -200,7 +206,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			promiseType.WithProperty("then", types.Any) // Simplified for now
 			promiseType.WithProperty("catch", types.Any)
 			return promiseType
-			
+
 		case "Readonly":
 			if len(node.TypeArguments) != 1 {
 				c.addError(node, "Readonly requires exactly one type argument")
@@ -212,24 +218,47 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			}
 			// Instantiate the Readonly<T> generic type
 			return types.NewInstantiatedType(types.ReadonlyGeneric, []types.Type{innerType}).Substitute()
-			
+
 		default:
-			// Check if this is a user-defined generic type
-			baseType, exists := c.env.ResolveType(node.Name.Value)
+			// Check if this is a forward reference to the current generic class
+			var baseType types.Type
+			var exists bool
+
+			if c.currentForwardRef != nil && node.Name.Value == c.currentForwardRef.ClassName {
+				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Resolved '%s' as forward reference to current generic class\n", node.Name.Value)
+				baseType = c.currentForwardRef
+				exists = true
+			} else {
+				// Check if this is a user-defined generic type
+				baseType, exists = c.env.ResolveType(node.Name.Value)
+			}
+
 			if !exists {
 				c.addError(node, fmt.Sprintf("Unknown generic type '%s'", node.Name.Value))
 				return nil
 			}
-			
+
+			// Check if it's a ForwardReferenceType (self-reference during class definition)
+			if forwardRefType, ok := baseType.(*types.ForwardReferenceType); ok {
+				// For forward references, we can't do full instantiation yet
+				// Return a placeholder that includes the type arguments for later resolution
+				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating forward reference placeholder for '%s' with %d type args\n",
+					node.Name.Value, len(node.TypeArguments))
+
+				// For now, just return the forward reference itself
+				// In a more complete implementation, we'd create a ForwardReferenceInstance
+				return forwardRefType
+			}
+
 			// Check if it's a GenericType
 			if genericType, ok := baseType.(*types.GenericType); ok {
 				// Validate type argument count
 				if len(node.TypeArguments) != len(genericType.TypeParameters) {
-					c.addError(node, fmt.Sprintf("Generic type '%s' expects %d type arguments, got %d", 
+					c.addError(node, fmt.Sprintf("Generic type '%s' expects %d type arguments, got %d",
 						node.Name.Value, len(genericType.TypeParameters), len(node.TypeArguments)))
 					return nil
 				}
-				
+
 				// Resolve type arguments
 				typeArgs := make([]types.Type, len(node.TypeArguments))
 				for i, argExpr := range node.TypeArguments {
@@ -239,7 +268,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 					}
 					typeArgs[i] = argType
 				}
-				
+
 				// Instantiate the generic type
 				return c.instantiateGenericType(genericType, typeArgs, node.TypeArguments)
 			} else {
@@ -370,7 +399,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 	// If it's a pure callable object with no properties and exactly one signature,
 	// we can make it a pure function type for better type display
 	if len(properties) == 0 && len(callSignatures) == 1 {
-		// Create a fresh object to ensure we get a "pure function" 
+		// Create a fresh object to ensure we get a "pure function"
 		// (the IsPureFunction helper method will return true)
 		return types.NewFunctionType(callSignatures[0])
 	}
@@ -556,24 +585,24 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	for _, t := range typeArgs {
 		typeStrs = append(typeStrs, t.String())
 	}
-	debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n", 
+	debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n",
 		genericType.Name, strings.Join(typeStrs, ", "))
-	
+
 	// Validate constraints before instantiation
 	for i, typeParam := range genericType.TypeParameters {
 		if typeParam.Constraint != nil {
 			argType := typeArgs[i]
 			constraintType := typeParam.Constraint
-			
-			debugPrintf("// [Checker] Checking constraint: %s extends %s\n", 
+
+			debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
 				argType.String(), constraintType.String())
-			
+
 			// Check if the type argument satisfies the constraint
 			if !types.IsAssignable(argType, constraintType) {
 				// Create a more detailed error message with proper node position
-				errorMsg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'", 
+				errorMsg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'",
 					argType.String(), constraintType.String(), typeParam.Name)
-				
+
 				// Use the specific type argument node for accurate error positioning
 				if i < len(typeArgNodes) && typeArgNodes[i] != nil {
 					c.addConstraintError(typeArgNodes[i], errorMsg)
@@ -585,16 +614,16 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			}
 		}
 	}
-	
+
 	// Create substitution map from type parameters to concrete types
 	substitution := make(map[string]types.Type)
 	for i, typeParam := range genericType.TypeParameters {
 		substitution[typeParam.Name] = typeArgs[i]
 	}
-	
+
 	// Perform type substitution on the body type
 	instantiatedType := c.substituteTypes(genericType.Body, substitution)
-	
+
 	debugPrintf("// [Checker] Instantiated type: %s\n", instantiatedType.String())
 	return instantiatedType
 }
@@ -604,7 +633,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 	if t == nil {
 		return nil
 	}
-	
+
 	switch typ := t.(type) {
 	case *types.TypeParameterType:
 		// Replace type parameter with concrete type
@@ -615,19 +644,25 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Type parameter not found in substitution - this shouldn't happen if validation is correct
 		debugPrintf("// [Checker] WARNING: Type parameter '%s' not found in substitution map\n", typ.Parameter.Name)
 		return typ
-		
+
+	case *types.ForwardReferenceType:
+		// Forward references should not appear in instantiated types, but handle gracefully
+		debugPrintf("// [Checker] WARNING: ForwardReferenceType '%s' found during type substitution\n", typ.ClassName)
+		// Return as-is for now - this indicates the forward reference wasn't properly resolved
+		return typ
+
 	case *types.ArrayType:
 		// Recursively substitute element type
 		newElementType := c.substituteTypes(typ.ElementType, substitution)
 		return &types.ArrayType{ElementType: newElementType}
-		
+
 	case *types.ObjectType:
 		// Handle ObjectType with properties and call signatures
 		result := &types.ObjectType{
 			Properties:         make(map[string]types.Type),
 			OptionalProperties: make(map[string]bool),
 		}
-		
+
 		// Copy and substitute property types
 		for propName, propType := range typ.Properties {
 			result.Properties[propName] = c.substituteTypes(propType, substitution)
@@ -635,7 +670,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		for propName, isOptional := range typ.OptionalProperties {
 			result.OptionalProperties[propName] = isOptional
 		}
-		
+
 		// Copy and substitute call signatures
 		if typ.CallSignatures != nil {
 			result.CallSignatures = make([]*types.Signature, len(typ.CallSignatures))
@@ -644,10 +679,10 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 				for j, paramType := range sig.ParameterTypes {
 					newParamTypes[j] = c.substituteTypes(paramType, substitution)
 				}
-				
+
 				newReturnType := c.substituteTypes(sig.ReturnType, substitution)
 				newRestParamType := c.substituteTypes(sig.RestParameterType, substitution)
-				
+
 				result.CallSignatures[i] = &types.Signature{
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
@@ -657,7 +692,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 				}
 			}
 		}
-		
+
 		// Copy construct signatures (if any)
 		if typ.ConstructSignatures != nil {
 			result.ConstructSignatures = make([]*types.Signature, len(typ.ConstructSignatures))
@@ -666,10 +701,10 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 				for j, paramType := range sig.ParameterTypes {
 					newParamTypes[j] = c.substituteTypes(paramType, substitution)
 				}
-				
+
 				newReturnType := c.substituteTypes(sig.ReturnType, substitution)
 				newRestParamType := c.substituteTypes(sig.RestParameterType, substitution)
-				
+
 				result.ConstructSignatures[i] = &types.Signature{
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
@@ -679,9 +714,9 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 				}
 			}
 		}
-		
+
 		return result
-		
+
 	case *types.UnionType:
 		// Recursively substitute union member types
 		newTypes := make([]types.Type, len(typ.Types))
@@ -689,7 +724,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			newTypes[i] = c.substituteTypes(memberType, substitution)
 		}
 		return types.NewUnionType(newTypes...)
-		
+
 	case *types.IntersectionType:
 		// Recursively substitute intersection member types
 		newTypes := make([]types.Type, len(typ.Types))
@@ -697,7 +732,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			newTypes[i] = c.substituteTypes(memberType, substitution)
 		}
 		return types.NewIntersectionType(newTypes...)
-		
+
 	case *types.TupleType:
 		// Recursively substitute tuple element types
 		newElementTypes := make([]types.Type, len(typ.ElementTypes))
@@ -705,7 +740,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			newElementTypes[i] = c.substituteTypes(elementType, substitution)
 		}
 		return &types.TupleType{ElementTypes: newElementTypes}
-		
+
 	default:
 		// For primitive types and other types that don't contain type parameters,
 		// return as-is

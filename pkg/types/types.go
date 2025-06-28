@@ -13,3 +13,22 @@ type Type interface {
 	// elsewhere and makes the type system closed for now.
 	typeNode()
 }
+
+// ForwardReferenceType represents a forward reference to a generic class being defined
+type ForwardReferenceType struct {
+	ClassName      string
+	TypeParameters []*TypeParameter
+}
+
+func (frt *ForwardReferenceType) String() string {
+	return frt.ClassName
+}
+
+func (frt *ForwardReferenceType) Equals(other Type) bool {
+	if otherFrt, ok := other.(*ForwardReferenceType); ok {
+		return frt.ClassName == otherFrt.ClassName
+	}
+	return false
+}
+
+func (frt *ForwardReferenceType) typeNode() {}

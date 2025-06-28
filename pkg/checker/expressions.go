@@ -105,15 +105,15 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				ExpectedType: arrayType.ElementType,
 				IsContextual: true,
 			})
-			
+
 			// Validate that the element is assignable to the expected element type
 			actualElemType := elemNode.GetComputedType()
 			if actualElemType == nil {
 				actualElemType = types.Any
 			}
-			
+
 			if !types.IsAssignable(actualElemType, arrayType.ElementType) {
-				c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'", 
+				c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
 					actualElemType.String(), arrayType.ElementType.String()))
 			}
 		}
@@ -157,7 +157,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if argType == nil {
 				argType = types.Any
 			}
-			
+
 			// Check if the type can be spread (is an object type)
 			widenedType := types.GetWidenedType(argType)
 			switch widenedType.(type) {
@@ -443,7 +443,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				if exists {
 					// Property found - check access control for class types
 					c.validateMemberAccess(objectType, propertyName, node.Property)
-					
+
 					if fieldType == nil { // Should ideally not happen if checker populates correctly
 						c.addError(node.Property, fmt.Sprintf("internal checker error: property '%s' has nil type in ObjectType", propertyName))
 						resultType = types.Never
@@ -489,7 +489,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			// Handle property access on readonly types
 			// Delegate to the inner type for property lookup
 			innerType := obj.InnerType
-			
+
 			// Check property access on the inner type
 			if innerType == types.Any {
 				// For Readonly<any>, allow any property access
@@ -768,14 +768,41 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 }
 
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
-	
+	debugPrintf("// [Checker NewExpression] Checking new expression with %d type arguments\n", len(node.TypeArguments))
+
 	// Check the constructor expression
 	c.visit(node.Constructor)
 	constructorType := node.Constructor.GetComputedType()
 	if constructorType == nil {
 		constructorType = types.Any
 	}
-	
+	debugPrintf("// [Checker NewExpression] Constructor type: %T = %s\n", constructorType, constructorType.String())
+
+	// Handle generic constructor calls (e.g., new Container<number>(42))
+	if len(node.TypeArguments) > 0 {
+		debugPrintf("// [Checker NewExpression] Processing %d type arguments\n", len(node.TypeArguments))
+		// Check type arguments - these are type annotations, not expressions
+		typeArgs := make([]types.Type, len(node.TypeArguments))
+		for i, arg := range node.TypeArguments {
+			// Don't call c.visit(arg) here - type arguments are not expressions
+			typeArgs[i] = c.resolveTypeAnnotation(arg)
+			if typeArgs[i] == nil {
+				typeArgs[i] = types.Any
+			}
+			debugPrintf("// [Checker NewExpression] Type arg %d: %s\n", i, typeArgs[i].String())
+		}
+
+		// If constructor is a generic type, instantiate it
+		if genericType, ok := constructorType.(*types.GenericType); ok {
+			debugPrintf("// [Checker NewExpression] Instantiating generic constructor '%s' with %d type args\n",
+				genericType.Name, len(typeArgs))
+			instantiatedConstructorType := c.instantiateGenericType(genericType, typeArgs, node.TypeArguments)
+			debugPrintf("// [Checker NewExpression] Instantiated constructor type: %T = %s\n",
+				instantiatedConstructorType, instantiatedConstructorType.String())
+			constructorType = instantiatedConstructorType
+		}
+	}
+
 	// Check if trying to instantiate an abstract class
 	if ident, ok := node.Constructor.(*parser.Identifier); ok {
 		if c.abstractClasses[ident.Value] {
@@ -805,7 +832,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		// If constructor type is Any, result is also Any
 		resultType = types.Any
 	} else {
-		// Invalid constructor type
+		// Invalid constructor type - now shows the proper instantiated type in error messages
 		c.addError(node.Constructor, fmt.Sprintf("'%s' is not a constructor", constructorType.String()))
 		resultType = types.Any
 	}

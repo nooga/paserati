@@ -88,14 +88,19 @@ type Checker struct {
 	// --- NEW: Context for 'this' type checking ---
 	// Type of 'this' in the current context (set when checking methods)
 	currentThisType types.Type
-	
+
 	// --- NEW: Context for access control checking ---
 	// Current class context for access modifier validation
 	currentClassContext *types.AccessContext
-	
+
 	// --- NEW: Abstract classes tracking ---
 	// Track abstract class names to prevent instantiation
 	abstractClasses map[string]bool
+
+	// --- NEW: Current generic class tracking ---
+	// Track the current generic class being processed to allow forward references
+	currentGenericClass *types.GenericType
+	currentForwardRef   *types.ForwardReferenceType
 }
 
 // NewChecker creates a new type checker.
@@ -146,15 +151,15 @@ func (c *Checker) validateMemberAccess(objectType types.Type, memberName string,
 func (c *Checker) createAccessError(objType *types.ObjectType, memberName string, node parser.Node) {
 	memberInfo := objType.GetMemberAccessInfo(memberName)
 	className := objType.GetClassName()
-	
+
 	var errorMsg string
 	if memberInfo != nil {
-		errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'", 
+		errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'",
 			memberName, memberInfo.AccessLevel.String(), className)
 	} else {
 		errorMsg = fmt.Sprintf("Property '%s' does not exist on type '%s'", memberName, className)
 	}
-	
+
 	c.addError(node, errorMsg)
 }
 
@@ -205,11 +210,12 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				debugPrintf("// [Checker Pass 1] Processing Class Expression: %s\n", classExpr.Name.Value)
 				// Convert to ClassDeclaration for checking
 				classDecl := &parser.ClassDeclaration{
-					Token:      classExpr.Token,
-					Name:       classExpr.Name,
-					SuperClass: classExpr.SuperClass,
-					Body:       classExpr.Body,
-					IsAbstract: classExpr.IsAbstract,
+					Token:          classExpr.Token,
+					Name:           classExpr.Name,
+					TypeParameters: classExpr.TypeParameters,
+					SuperClass:     classExpr.SuperClass,
+					Body:           classExpr.Body,
+					IsAbstract:     classExpr.IsAbstract,
 				}
 				c.checkClassDeclaration(classDecl)
 				nodesProcessedPass1[exprStmt] = true
@@ -1875,7 +1881,7 @@ func (c *Checker) visit(node parser.Node) {
 	// --- Class Declarations ---
 	case *parser.ClassDeclaration:
 		c.checkClassDeclaration(node)
-	
+
 	case *parser.ClassExpression:
 		// Convert ClassExpression to ClassDeclaration for checking
 		// The type checker treats them the same way
@@ -1886,11 +1892,12 @@ func (c *Checker) visit(node parser.Node) {
 			return
 		}
 		classDecl := &parser.ClassDeclaration{
-			Token:      node.Token,
-			Name:       node.Name,
-			SuperClass: node.SuperClass,
-			Body:       node.Body,
-			IsAbstract: node.IsAbstract,
+			Token:          node.Token,
+			Name:           node.Name,
+			TypeParameters: node.TypeParameters,
+			SuperClass:     node.SuperClass,
+			Body:           node.Body,
+			IsAbstract:     node.IsAbstract,
 		}
 		c.checkClassDeclaration(classDecl)
 		// Set the computed type on the expression node as well
