@@ -11,7 +11,7 @@ This document outlines the step-by-step implementation plan for TypeScript class
 - **✅ Phase 2 (Access Modifiers)**: 100% Complete (3/3 features)
 - **✅ Phase 3 (Optional Features)**: 100% Complete
 - **✅ Phase 4 (Inheritance)**: 100% Complete (2/2 features)
-- **✅ Phase 5 (Advanced Features)**: 100% Complete (4/4 features)
+- **✅ Phase 5 (Advanced Features)**: 100% Complete (5/5 features)
 - **✅ Bonus Features**: 100% Complete
 
 ### 🚀 What Works Now
@@ -32,6 +32,7 @@ All fundamental TypeScript class features are **fully implemented and working**:
 - **✅ Interface implementation with `implements` keyword and validation**
 - **✅ Abstract classes with `abstract` keyword and instantiation prevention**
 - **✅ Override keyword with inheritance validation**
+- **✅ Generic classes with type parameters and type inference**
 
 ## Current Status
 
@@ -499,13 +500,70 @@ class Rectangle extends Shape {
 - `tests/scripts/class_override_error.ts` - **NOW PASSING** (override validation without inheritance)
 - `tests/scripts/class_override_with_inheritance.ts` - **NOW PASSING** (override validation with inheritance)
 
-#### 5.5 Generic Classes
+#### 5.5 Generic Classes ✅ **COMPLETED**
 **Goal**: Support `class Container<T>` syntax
 
-**❌ Status**: Not yet implemented  
-- Need to enhance class parsing to handle generic type parameters
-- Need to integrate with existing generic type system
-- Need to support generic constraints: `class Container<T extends SomeType>`
+**✅ Completed Implementation**:
+```typescript
+class Container<T> {
+    private _value: T;
+    
+    constructor(value: T) {
+        this._value = value;
+    }
+    
+    get value(): T {
+        return this._value;
+    }
+}
+
+class Pair<T, U> {
+    first: T;
+    second: U;
+    
+    constructor(first: T, second: U) {
+        this.first = first;
+        this.second = second;
+    }
+}
+
+// Explicit type arguments
+let container1 = new Container<number>(42);
+
+// Type inference (NEW!)
+let container2 = new Container(42);     // T inferred as number
+let pair = new Pair("hello", 42);      // T=string, U=number
+```
+
+**✅ Files Modified**:
+- **`pkg/parser/ast.go`**: Added `TypeParameters []*TypeParameter` to `ClassDeclaration` and `ClassExpression`
+- **`pkg/parser/parse_class.go`**: Enhanced class parsing to handle generic type parameters using `tryParseTypeParameters()`
+- **`pkg/checker/class.go`**: Added `checkGenericClassDeclaration()` for generic class type checking
+- **`pkg/checker/expressions.go`**: Enhanced `checkNewExpression()` with type inference for generic constructors
+- **`pkg/checker/checker.go`**: Added `extractInferredTypeArguments()` helper function
+- **`pkg/checker/resolve.go`**: Fixed `substituteTypes()` to preserve `ClassMeta` during type substitution
+- **`pkg/compiler/compiler.go`**: Fixed `ClassExpression` to `ClassDeclaration` conversion to include all fields
+
+**✅ Features Implemented**:
+1. ✅ Parser recognizes `class Name<T, U>` syntax with type parameters
+2. ✅ Support for generic constraints: `class Container<T extends SomeType>`
+3. ✅ Integration with existing generic type system (reuses interface infrastructure)
+4. ✅ Type checking creates `GenericType` for classes with proper instantiation
+5. ✅ **Type inference for generic classes**: `new Container(42)` infers `T` as `number`
+6. ✅ Getters, setters, and methods work correctly in generic classes
+7. ✅ Multiple type parameters: `class Pair<T, U>`
+8. ✅ Preserves class metadata during type substitution for proper getter/setter detection
+
+**✅ Technical Implementation**:
+- **Parsing Strategy**: Reuses `tryParseTypeParameters()` from interface parsing for consistency
+- **Type System**: Creates `GenericType` wrapper around constructor and instance types
+- **Type Inference**: Leverages existing generic function inference infrastructure
+- **Compilation**: Properly converts `ClassExpression` to `ClassDeclaration` preserving all fields
+- **Runtime**: Class metadata preserved through type substitution ensures getters/setters work
+
+**✅ Test Files**: 
+- `tests/scripts/class_generics.ts` - **NOW PASSING** (comprehensive generic class features)
+- `tests/scripts/class_generics_inference.ts` - **NOW PASSING** (type inference demonstrations)
 
 ## Implementation Guidelines
 

@@ -435,10 +435,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			return BadRegister, NewCompileError(node, "anonymous classes are not yet supported")
 		}
 		classDecl := &parser.ClassDeclaration{
-			Token:      node.Token,
-			Name:       node.Name,
-			SuperClass: node.SuperClass,
-			Body:       node.Body,
+			Token:          node.Token,
+			Name:           node.Name,
+			TypeParameters: node.TypeParameters,
+			SuperClass:     node.SuperClass,
+			Implements:     node.Implements,
+			Body:           node.Body,
+			IsAbstract:     node.IsAbstract,
 		}
 		return c.compileClassDeclaration(classDecl, hint)
 

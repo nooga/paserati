@@ -2271,3 +2271,53 @@ func (c *Checker) checkThrowStatement(node *parser.ThrowStatement) {
 func (c *Checker) GetProgram() *parser.Program {
 	return c.program
 }
+
+// extractInferredTypeArguments extracts the inferred type arguments from a solved type inference
+// It returns an ordered list of types that matches the order of type parameters in the generic type
+func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, originalSig, inferredSig *types.Signature) []types.Type {
+	// Create a map from type parameter to inferred type by comparing original and inferred signatures
+	solution := make(map[*types.TypeParameter]types.Type)
+	
+	// Helper to extract type parameter mappings by comparing types
+	var extractMappings func(original, inferred types.Type)
+	extractMappings = func(original, inferred types.Type) {
+		switch origType := original.(type) {
+		case *types.TypeParameterType:
+			// Found a type parameter - map it to the inferred type
+			solution[origType.Parameter] = inferred
+		case *types.ArrayType:
+			if infArray, ok := inferred.(*types.ArrayType); ok {
+				extractMappings(origType.ElementType, infArray.ElementType)
+			}
+		case *types.UnionType:
+			if infUnion, ok := inferred.(*types.UnionType); ok && len(origType.Types) == len(infUnion.Types) {
+				for i := range origType.Types {
+					extractMappings(origType.Types[i], infUnion.Types[i])
+				}
+			}
+		// Add more cases as needed
+		}
+	}
+	
+	// Compare parameter types
+	for i := range originalSig.ParameterTypes {
+		if i < len(inferredSig.ParameterTypes) {
+			extractMappings(originalSig.ParameterTypes[i], inferredSig.ParameterTypes[i])
+		}
+	}
+	
+	// Build ordered type arguments based on generic type's type parameters
+	var typeArgs []types.Type
+	for _, typeParam := range genericType.TypeParameters {
+		if inferredType, found := solution[typeParam]; found {
+			typeArgs = append(typeArgs, inferredType)
+			debugPrintf("// [Checker ExtractInferred] %s = %s\n", typeParam.Name, inferredType.String())
+		} else {
+			// Type parameter not inferred - use Any as fallback
+			typeArgs = append(typeArgs, types.Any)
+			debugPrintf("// [Checker ExtractInferred] %s = any (not inferred)\n", typeParam.Name)
+		}
+	}
+	
+	return typeArgs
+}

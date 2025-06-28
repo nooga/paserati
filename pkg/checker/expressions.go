@@ -812,9 +812,59 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		}
 	}
 
-	// Check arguments
-	for _, arg := range node.Arguments {
-		c.visit(arg)
+	// Check if constructor is a generic type without explicit type arguments
+	if genericType, ok := constructorType.(*types.GenericType); ok && len(node.TypeArguments) == 0 {
+		debugPrintf("// [Checker NewExpression] Generic constructor without type arguments, attempting inference\n")
+		
+		// Check arguments to get their types
+		var argTypes []types.Type
+		for _, arg := range node.Arguments {
+			c.visit(arg)
+			argType := arg.GetComputedType()
+			if argType == nil {
+				argType = types.Any
+			}
+			argTypes = append(argTypes, argType)
+		}
+		
+		// Get the constructor signature from the generic type's body
+		if bodyObjType, ok := genericType.Body.(*types.ObjectType); ok && len(bodyObjType.ConstructSignatures) > 0 {
+			constructorSig := bodyObjType.ConstructSignatures[0]
+			
+			// Check if this is a generic signature
+			if c.isGenericSignature(constructorSig) {
+				debugPrintf("// [Checker NewExpression] Attempting type inference for generic constructor\n")
+				
+				// Create a pseudo CallExpression for the inference function
+				pseudoCall := &parser.CallExpression{
+					Arguments: node.Arguments,
+				}
+				
+				// Infer type parameters
+				inferredSig := c.inferGenericFunctionCall(pseudoCall, constructorSig)
+				if inferredSig != nil {
+					debugPrintf("// [Checker NewExpression] Type inference successful\n")
+					
+					// Extract inferred type parameters from the signature
+					// For now, we'll use a simple approach: collect all TypeParameterType replacements
+					typeArgs := c.extractInferredTypeArguments(genericType, constructorSig, inferredSig)
+					
+					if len(typeArgs) > 0 {
+						// Instantiate the generic type with inferred arguments
+						instantiatedConstructorType := c.instantiateGenericType(genericType, typeArgs, nil)
+						constructorType = instantiatedConstructorType
+						debugPrintf("// [Checker NewExpression] Instantiated constructor with inferred types: %s\n", constructorType.String())
+					}
+				} else {
+					debugPrintf("// [Checker NewExpression] Type inference failed\n")
+				}
+			}
+		}
+	} else {
+		// Check arguments normally
+		for _, arg := range node.Arguments {
+			c.visit(arg)
+		}
 	}
 
 	// Determine the result type based on the constructor type (unified ObjectType system)

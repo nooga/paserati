@@ -715,6 +715,16 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			}
 		}
 
+		// Copy ClassMeta to preserve class instance information
+		if typ.ClassMeta != nil {
+			result.ClassMeta = &types.ClassMetadata{
+				ClassName:         typ.ClassMeta.ClassName,
+				IsClassInstance:   typ.ClassMeta.IsClassInstance,
+				IsClassConstructor: typ.ClassMeta.IsClassConstructor,
+				MemberAccess:      typ.ClassMeta.MemberAccess,
+			}
+		}
+
 		return result
 
 	case *types.UnionType:
