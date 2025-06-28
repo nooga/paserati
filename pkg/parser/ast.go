@@ -2157,12 +2157,16 @@ type ClassDeclaration struct {
 	SuperClass *Identifier     // nil for basic classes (extends support)
 	Implements []*Identifier   // Interfaces this class implements
 	Body       *ClassBody      // Class body containing methods and properties
+	IsAbstract bool            // true if this is an abstract class
 }
 
 func (cd *ClassDeclaration) statementNode()       {}
 func (cd *ClassDeclaration) TokenLiteral() string { return cd.Token.Literal }
 func (cd *ClassDeclaration) String() string {
 	var out bytes.Buffer
+	if cd.IsAbstract {
+		out.WriteString("abstract ")
+	}
 	out.WriteString("class ")
 	if cd.Name != nil {
 		out.WriteString(cd.Name.String())
@@ -2195,11 +2199,15 @@ type ClassExpression struct {
 	SuperClass *Identifier     // nil for basic classes (extends support)
 	Implements []*Identifier   // Interfaces this class implements
 	Body       *ClassBody      // Class body containing methods and properties
+	IsAbstract bool            // true if this is an abstract class
 }
 
 func (ce *ClassExpression) TokenLiteral() string { return ce.Token.Literal }
 func (ce *ClassExpression) String() string {
 	var out bytes.Buffer
+	if ce.IsAbstract {
+		out.WriteString("abstract ")
+	}
 	out.WriteString("class")
 	if ce.Name != nil {
 		out.WriteString(" ")
@@ -2266,6 +2274,8 @@ type MethodDefinition struct {
 	IsPublic    bool                // For public access modifier
 	IsPrivate   bool                // For private access modifier
 	IsProtected bool                // For protected access modifier
+	IsAbstract  bool                // For abstract methods (no implementation)
+	IsOverride  bool                // For override keyword
 }
 
 func (md *MethodDefinition) TokenLiteral() string { return md.Token.Literal }
@@ -2281,6 +2291,12 @@ func (md *MethodDefinition) String() string {
 		out.WriteString("public ")
 	}
 	
+	if md.IsAbstract {
+		out.WriteString("abstract ")
+	}
+	if md.IsOverride {
+		out.WriteString("override ")
+	}
 	if md.IsStatic {
 		out.WriteString("static ")
 	}
@@ -2379,6 +2395,8 @@ type MethodSignature struct {
 	IsPublic             bool
 	IsPrivate            bool
 	IsProtected          bool
+	IsAbstract           bool           // Abstract method modifier
+	IsOverride           bool           // Override method modifier
 }
 
 func (ms *MethodSignature) statementNode()       {}
@@ -2396,6 +2414,12 @@ func (ms *MethodSignature) String() string {
 	}
 	if ms.IsStatic {
 		out.WriteString("static ")
+	}
+	if ms.IsAbstract {
+		out.WriteString("abstract ")
+	}
+	if ms.IsOverride {
+		out.WriteString("override ")
 	}
 	
 	if ms.Kind == "getter" {

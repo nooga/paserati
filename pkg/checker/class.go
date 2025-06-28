@@ -10,6 +10,12 @@ import (
 func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
 	
+	// Track abstract classes for instantiation validation
+	if node.IsAbstract {
+		c.abstractClasses[node.Name.Value] = true
+		debugPrintf("// [Checker Class] Marked class '%s' as abstract\n", node.Name.Value)
+	}
+	
 	// Set up class context for access control checking
 	prevContext := c.currentClassContext
 	c.setClassContext(node.Name.Value, types.AccessContextExternal)
@@ -101,6 +107,12 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		// Determine property type and access level
 		if getter != nil {
 			c.setClassContext(className, types.AccessContextInstanceMethod)
+			
+			// Validate override keyword usage for getter
+			if getter.IsOverride {
+				c.validateOverrideMethod(getter, superClass, className)
+			}
+			
 			methodType := c.inferMethodType(getter)
 			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
 				propType = objType.CallSignatures[0].ReturnType
@@ -112,6 +124,12 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		
 		if setter != nil {
 			c.setClassContext(className, types.AccessContextInstanceMethod)
+			
+			// Validate override keyword usage for setter
+			if setter.IsOverride {
+				c.validateOverrideMethod(setter, superClass, className)
+			}
+			
 			methodType := c.inferMethodType(setter)
 			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
 				sig := objType.CallSignatures[0]
@@ -144,6 +162,11 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			// Set method context for access control checking
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 			
+			// Validate override keyword usage
+			if method.IsOverride {
+				c.validateOverrideMethod(method, superClass, className)
+			}
+			
 			methodType := c.inferMethodType(method)
 			
 			// Determine access level
@@ -162,6 +185,11 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 	for _, methodSig := range body.MethodSigs {
 		if !methodSig.IsStatic {
 			c.setClassContext(className, types.AccessContextInstanceMethod)
+			
+			// Validate override keyword usage for method signature
+			if methodSig.IsOverride {
+				c.validateOverrideMethodSignature(methodSig, superClass, className)
+			}
 			
 			// Validate the signature types
 			c.validateMethodSignature(methodSig)
@@ -187,6 +215,38 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 	}
 	
 	return instanceType
+}
+
+// validateOverrideMethod validates the usage of the override keyword
+func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superClass *parser.Identifier, className string) {
+	// Basic validation: if there's no superclass, override doesn't make sense
+	if superClass == nil {
+		c.addError(method.Key, fmt.Sprintf("method '%s' uses 'override' but class '%s' does not extend any class", method.Key.Value, className))
+		return
+	}
+	
+	// TODO: When inheritance is implemented, add:
+	// 1. Check if the method exists in the superclass
+	// 2. Check if the method signatures are compatible
+	// 3. Check if the method is not final/sealed
+	// 4. Check access modifier compatibility
+	
+	debugPrintf("// [Checker Class] Override validation for method '%s' in class '%s' (inheritance not yet implemented)\n", 
+		method.Key.Value, className)
+}
+
+// validateOverrideMethodSignature validates the usage of the override keyword for method signatures
+func (c *Checker) validateOverrideMethodSignature(methodSig *parser.MethodSignature, superClass *parser.Identifier, className string) {
+	// Basic validation: if there's no superclass, override doesn't make sense
+	if superClass == nil {
+		c.addError(methodSig.Key, fmt.Sprintf("method signature '%s' uses 'override' but class '%s' does not extend any class", methodSig.Key.Value, className))
+		return
+	}
+	
+	// TODO: When inheritance is implemented, add similar validation as for method definitions
+	
+	debugPrintf("// [Checker Class] Override validation for method signature '%s' in class '%s' (inheritance not yet implemented)\n", 
+		methodSig.Key.Value, className)
 }
 
 // createConstructorSignature creates a signature for the class constructor

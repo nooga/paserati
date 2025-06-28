@@ -147,6 +147,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isPublic := false
 		isPrivate := false
 		isProtected := false
+		isAbstract := false
+		isOverride := false
 		
 		// Parse all modifiers until we hit something that's not a modifier
 		for {
@@ -165,6 +167,12 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else if p.curTokenIs(lexer.PROTECTED) && !isPublic && !isPrivate && !isProtected {
 				isProtected = true
 				p.nextToken()
+			} else if p.curTokenIs(lexer.ABSTRACT) && !isAbstract {
+				isAbstract = true
+				p.nextToken()
+			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride {
+				isOverride = true
+				p.nextToken()
 			} else {
 				break // No more modifiers
 			}
@@ -173,13 +181,13 @@ func (p *Parser) parseClassBody() *ClassBody {
 		// Parse constructor, method, getter, or setter
 		if p.curTokenIs(lexer.GET) {
 			// Parse getter method
-			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected)
+			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				methods = append(methods, method)
 			}
 		} else if p.curTokenIs(lexer.SET) {
 			// Parse setter method
-			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected)
+			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				methods = append(methods, method)
 			}
@@ -201,7 +209,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				// Look ahead to distinguish
 				if p.peekTokenIs(lexer.LPAREN) {
 					// It's a method - parse it and handle signatures/implementations
-					result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected)
+					result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 					if result != nil {
 						if sig, ok := result.(*MethodSignature); ok {
 							// It's a method signature
@@ -327,7 +335,7 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 
 // parseMethod parses a regular method or signature
 // Returns either *MethodSignature or *MethodDefinition based on whether it ends with ';' or '{'
-func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) interface{} {
+func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) interface{} {
 	methodToken := p.curToken
 	methodName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
@@ -360,9 +368,12 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) in
 	}
 	
 	// Check if this is a method signature (ends with semicolon) or implementation (has body)
-	if p.peekTokenIs(lexer.SEMICOLON) {
+	// Abstract methods must be signatures (no implementation)
+	if p.peekTokenIs(lexer.SEMICOLON) || isAbstract {
 		// This is a method signature, not an implementation
-		p.nextToken() // Consume semicolon
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Consume semicolon
+		}
 		
 		sig := &MethodSignature{
 			Token:                methodToken,
@@ -375,8 +386,16 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) in
 			IsPublic:             isPublic,
 			IsPrivate:            isPrivate,
 			IsProtected:          isProtected,
+			IsAbstract:           isAbstract,
+			IsOverride:           isOverride,
 		}
 		return sig
+	}
+	
+	// Abstract methods cannot have implementations
+	if isAbstract {
+		p.addError(p.curToken, "abstract methods cannot have implementations")
+		return nil
 	}
 	
 	// This is a method implementation - continue parsing the body
@@ -408,6 +427,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected bool) in
 		IsPublic:    isPublic,
 		IsPrivate:   isPrivate,
 		IsProtected: isProtected,
+		IsOverride:  isOverride,
 	}
 }
 
@@ -468,7 +488,7 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 
 // parseGetter parses a getter method in a class
 // Syntax: [static] get propertyName(): returnType { body }
-func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
+func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	getToken := p.curToken // 'get' token
 	
 	if !p.expectPeek(lexer.IDENT) {
@@ -532,12 +552,13 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected bool) *M
 		IsPublic:    isPublic,
 		IsPrivate:   isPrivate,
 		IsProtected: isProtected,
+		IsOverride:  isOverride,
 	}
 }
 
 // parseSetter parses a setter method in a class
 // Syntax: [static] set propertyName(value: type) { body }
-func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected bool) *MethodDefinition {
+func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	setToken := p.curToken // 'set' token
 	
 	if !p.expectPeek(lexer.IDENT) {
@@ -589,6 +610,7 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected bool) *M
 		IsPublic:    isPublic,
 		IsPrivate:   isPrivate,
 		IsProtected: isProtected,
+		IsOverride:  isOverride,
 	}
 }
 

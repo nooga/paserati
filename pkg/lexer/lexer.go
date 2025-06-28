@@ -195,6 +195,9 @@ const (
 	PUBLIC    TokenType = "PUBLIC"
 	PRIVATE   TokenType = "PRIVATE"
 	PROTECTED TokenType = "PROTECTED"
+	// Abstract and override keywords
+	ABSTRACT TokenType = "ABSTRACT"
+	OVERRIDE TokenType = "OVERRIDE"
 	// Getter/Setter keywords
 	GET TokenType = "GET"
 	SET TokenType = "SET"
@@ -244,6 +247,8 @@ var keywords = map[string]TokenType{
 	"public":     PUBLIC,     // Added for public access modifier
 	"private":    PRIVATE,    // Added for private access modifier
 	"protected":  PROTECTED,  // Added for protected access modifier
+	"abstract":   ABSTRACT,   // Added for abstract classes and methods
+	"override":   OVERRIDE,   // Added for method overriding
 	"get":        GET,        // Added for getter methods
 	"set":        SET,        // Added for setter methods
 }

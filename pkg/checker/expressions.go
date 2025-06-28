@@ -776,6 +776,14 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		constructorType = types.Any
 	}
 	
+	// Check if trying to instantiate an abstract class
+	if ident, ok := node.Constructor.(*parser.Identifier); ok {
+		if c.abstractClasses[ident.Value] {
+			c.addError(node, fmt.Sprintf("cannot create an instance of an abstract class '%s'", ident.Value))
+			node.SetComputedType(types.Any)
+			return
+		}
+	}
 
 	// Check arguments
 	for _, arg := range node.Arguments {

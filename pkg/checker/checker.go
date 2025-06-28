@@ -92,6 +92,10 @@ type Checker struct {
 	// --- NEW: Context for access control checking ---
 	// Current class context for access modifier validation
 	currentClassContext *types.AccessContext
+	
+	// --- NEW: Abstract classes tracking ---
+	// Track abstract class names to prevent instantiation
+	abstractClasses map[string]bool
 }
 
 // NewChecker creates a new type checker.
@@ -104,6 +108,7 @@ func NewChecker() *Checker {
 		currentInferredReturnTypes: nil,
 		currentThisType:            nil, // Initialize this type context
 		currentClassContext:        nil, // No class context initially
+		abstractClasses:            make(map[string]bool),
 	}
 }
 
@@ -204,6 +209,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					Name:       classExpr.Name,
 					SuperClass: classExpr.SuperClass,
 					Body:       classExpr.Body,
+					IsAbstract: classExpr.IsAbstract,
 				}
 				c.checkClassDeclaration(classDecl)
 				nodesProcessedPass1[exprStmt] = true
@@ -1884,6 +1890,7 @@ func (c *Checker) visit(node parser.Node) {
 			Name:       node.Name,
 			SuperClass: node.SuperClass,
 			Body:       node.Body,
+			IsAbstract: node.IsAbstract,
 		}
 		c.checkClassDeclaration(classDecl)
 		// Set the computed type on the expression node as well

@@ -416,6 +416,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseFunctionDeclarationStatement()
 	case lexer.CLASS:
 		return p.parseClassDeclarationStatement()
+	case lexer.ABSTRACT:
+		return p.parseAbstractClassDeclarationStatement()
 	case lexer.TRY:
 		return p.parseTryStatement()
 	case lexer.THROW:
@@ -464,6 +466,43 @@ func (p *Parser) parseClassDeclarationStatement() *ExpressionStatement {
 			Token:      p.curToken,
 			Expression: nil,
 		}
+	}
+	
+	// Wrap it in an ExpressionStatement
+	stmt := &ExpressionStatement{
+		Token:      p.curToken,
+		Expression: classExpr,
+	}
+	
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	
+	return stmt
+}
+
+func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
+	// We're at the 'abstract' token, peek should be 'class'
+	if !p.expectPeek(lexer.CLASS) {
+		return &ExpressionStatement{
+			Token:      p.curToken,
+			Expression: nil,
+		}
+	}
+	
+	// Parse the class as an expression (ClassExpression) 
+	classExpr := p.parseClassExpression()
+	if classExpr == nil {
+		return &ExpressionStatement{
+			Token:      p.curToken,
+			Expression: nil,
+		}
+	}
+	
+	// Mark the class as abstract
+	if classDecl, ok := classExpr.(*ClassExpression); ok {
+		classDecl.IsAbstract = true
 	}
 	
 	// Wrap it in an ExpressionStatement
