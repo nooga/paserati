@@ -24,7 +24,13 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 		return
 	}
 
-	// 3. Resolve the RHS type using the CURRENT (global) environment
+	// 3. Mark this type alias as being resolved to prevent infinite recursion
+	c.resolvingTypeAliases[node.Name.Value] = true
+	defer func() {
+		delete(c.resolvingTypeAliases, node.Name.Value)
+	}()
+
+	// 4. Resolve the RHS type using the CURRENT (global) environment
 	// This allows aliases to reference previously defined aliases in the same pass
 	aliasedType := c.resolveTypeAnnotation(node.Type) // Uses c.env (globalEnv)
 	if aliasedType == nil {
@@ -35,7 +41,7 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 		return
 	}
 
-	// 4. Define the alias in the CURRENT (global) environment
+	// 5. Define the alias in the CURRENT (global) environment
 	if !c.env.DefineTypeAlias(node.Name.Value, aliasedType) {
 		debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for '%s'.\n", node.Name.Value)
 	} else {
@@ -48,6 +54,12 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement) {
 	debugPrintf("// [Checker TypeAlias P1] Processing generic type alias '%s' with %d type parameters\n", 
 		node.Name.Value, len(node.TypeParameters))
+
+	// Mark this type alias as being resolved to prevent infinite recursion
+	c.resolvingTypeAliases[node.Name.Value] = true
+	defer func() {
+		delete(c.resolvingTypeAliases, node.Name.Value)
+	}()
 
 	// 1. Validate type parameters
 	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
@@ -131,10 +143,11 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	var indexSignatures []*types.IndexSignature
 
 	// First, inherit properties from extended interfaces
-	for _, extendedInterfaceName := range node.Extends {
-		extendedType, exists := c.env.ResolveType(extendedInterfaceName.Value)
-		if !exists {
-			c.addError(extendedInterfaceName, fmt.Sprintf("extended interface '%s' is not defined", extendedInterfaceName.Value))
+	for _, extendedInterfaceExpr := range node.Extends {
+		// Resolve the extended interface type expression (supports both simple names and generic applications)
+		extendedType := c.resolveTypeAnnotation(extendedInterfaceExpr)
+		if extendedType == nil {
+			c.addError(extendedInterfaceExpr, "failed to resolve extended interface type")
 			continue
 		}
 
@@ -148,10 +161,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 					optionalProperties[propName] = true
 				}
 			}
-			debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from '%s'\n",
-				node.Name.Value, len(extendedObjectType.Properties), extendedInterfaceName.Value)
+			debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from extended interface\n",
+				node.Name.Value, len(extendedObjectType.Properties))
 		} else {
-			c.addError(extendedInterfaceName, fmt.Sprintf("'%s' is not an interface, cannot extend", extendedInterfaceName.Value))
+			c.addError(extendedInterfaceExpr, fmt.Sprintf("'%s' is not an interface, cannot extend", extendedType.String()))
 		}
 	}
 
@@ -300,13 +313,17 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	var indexSignatures []*types.IndexSignature
 
 	// Handle extends clause with generic environment
-	for _, extendedInterfaceName := range node.Extends {
-		extendedType, exists := c.env.ResolveType(extendedInterfaceName.Value)
-		if !exists {
-			// Try resolving in parent environment
-			extendedType, exists = savedEnv.ResolveType(extendedInterfaceName.Value)
+	for _, extendedInterfaceExpr := range node.Extends {
+		// Resolve the extended interface type expression in the generic environment first
+		extendedType := c.resolveTypeAnnotation(extendedInterfaceExpr)
+		if extendedType == nil {
+			// If resolution fails in generic environment, restore original and try again
+			savedEnvTemp := c.env
+			c.env = savedEnv
+			extendedType = c.resolveTypeAnnotation(extendedInterfaceExpr)
+			c.env = savedEnvTemp
 		}
-		if !exists {
+		if extendedType == nil {
 			continue // Skip unresolved extended interfaces
 		}
 

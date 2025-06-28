@@ -13,6 +13,34 @@ func IsAssignable(source, target Type) bool {
 		return false
 	}
 
+	// Handle forward references - they should be treated as equivalent to each other
+	// This is a simple approach for now - in a full implementation, we'd resolve them properly
+	if sourceRef, ok := source.(*TypeAliasForwardReference); ok {
+		if targetRef, ok := target.(*TypeAliasForwardReference); ok {
+			return sourceRef.AliasName == targetRef.AliasName
+		}
+		// For now, we'll be permissive with forward references in one direction
+		// In a full implementation, we'd resolve the forward reference first
+		return true
+	}
+	if _, ok := target.(*TypeAliasForwardReference); ok {
+		// Target is a forward reference - be permissive for now
+		return true
+	}
+
+	// Handle generic forward references
+	if sourceGenRef, ok := source.(*GenericTypeAliasForwardReference); ok {
+		if targetGenRef, ok := target.(*GenericTypeAliasForwardReference); ok {
+			return sourceGenRef.AliasName == targetGenRef.AliasName
+		}
+		// For now, be permissive with generic forward references
+		return true
+	}
+	if _, ok := target.(*GenericTypeAliasForwardReference); ok {
+		// Target is a generic forward reference - be permissive for now
+		return true
+	}
+
 	// Basic rules:
 	if target == Any || source == Any {
 		return true
@@ -26,6 +54,11 @@ func IsAssignable(source, target Type) bool {
 	}
 
 	if source == Never {
+		return true
+	}
+
+	// TypeScript compatibility: undefined is assignable to void
+	if target == Void && source == Undefined {
 		return true
 	}
 

@@ -19,13 +19,16 @@ func (p *Parser) parseClassDeclaration() Statement {
 	// Parse type parameters if present (same pattern as interfaces)
 	typeParameters := p.tryParseTypeParameters()
 	
-	var superClass *Identifier
+	var superClass Expression
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
-		if !p.expectPeek(lexer.IDENT) {
-			return nil
+		p.nextToken() // move to start of type expression
+		
+		// Parse full type expression (supports both simple identifiers and generic types)
+		superClass = p.parseTypeExpression()
+		if superClass == nil {
+			return nil // Failed to parse superclass type
 		}
-		superClass = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 	
 	var implements []*Identifier
@@ -83,13 +86,16 @@ func (p *Parser) parseClassExpression() Expression {
 	// Note: Anonymous classes (name == nil) can still have type parameters
 	typeParameters := p.tryParseTypeParameters()
 	
-	var superClass *Identifier
+	var superClass Expression
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
-		if !p.expectPeek(lexer.IDENT) {
-			return nil
+		p.nextToken() // move to start of type expression
+		
+		// Parse full type expression (supports both simple identifiers and generic types)
+		superClass = p.parseTypeExpression()
+		if superClass == nil {
+			return nil // Failed to parse superclass type
 		}
-		superClass = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 	
 	var implements []*Identifier

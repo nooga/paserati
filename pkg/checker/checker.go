@@ -101,6 +101,10 @@ type Checker struct {
 	// Track the current generic class being processed to allow forward references
 	currentGenericClass *types.GenericType
 	currentForwardRef   *types.ForwardReferenceType
+
+	// --- NEW: Recursive type alias tracking ---
+	// Track type aliases being resolved to prevent infinite recursion
+	resolvingTypeAliases map[string]bool
 }
 
 // NewChecker creates a new type checker.
@@ -114,6 +118,7 @@ func NewChecker() *Checker {
 		currentThisType:            nil, // Initialize this type context
 		currentClassContext:        nil, // No class context initially
 		abstractClasses:            make(map[string]bool),
+		resolvingTypeAliases:       make(map[string]bool),
 	}
 }
 

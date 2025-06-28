@@ -2021,7 +2021,7 @@ type InterfaceDeclaration struct {
 	Token          lexer.Token          // The 'interface' token
 	Name           *Identifier          // Interface name
 	TypeParameters []*TypeParameter     // Generic type parameters (e.g., <T, U>)
-	Extends        []*Identifier        // Interfaces this interface extends (NEW)
+	Extends        []Expression         // Interfaces this interface extends (supports generic types)
 	Properties     []*InterfaceProperty // Interface properties/methods
 }
 
@@ -2474,7 +2474,7 @@ type ClassDeclaration struct {
 	Token          lexer.Token      // The 'class' token
 	Name           *Identifier      // Class name
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	SuperClass     *Identifier      // nil for basic classes (extends support)
+	SuperClass     Expression       // nil for basic classes (supports generic extends)
 	Implements     []*Identifier    // Interfaces this class implements
 	Body           *ClassBody       // Class body containing methods and properties
 	IsAbstract     bool             // true if this is an abstract class
@@ -2529,7 +2529,7 @@ type ClassExpression struct {
 	Token          lexer.Token      // The 'class' token
 	Name           *Identifier      // nil for anonymous classes
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	SuperClass     *Identifier      // nil for basic classes (extends support)
+	SuperClass     Expression       // nil for basic classes (supports generic extends)
 	Implements     []*Identifier    // Interfaces this class implements
 	Body           *ClassBody       // Class body containing methods and properties
 	IsAbstract     bool             // true if this is an abstract class

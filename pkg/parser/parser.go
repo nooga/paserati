@@ -4524,14 +4524,17 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // Consume 'extends'
 
-		// Parse list of extended interfaces
+		// Parse list of extended interfaces (supporting generic types)
 		for {
-			if !p.expectPeek(lexer.IDENT) {
-				return nil // Expected interface name after 'extends'
+			p.nextToken() // Move to start of type expression
+			
+			// Parse full type expression (supports both simple identifiers and generic types)
+			extendedType := p.parseTypeExpression()
+			if extendedType == nil {
+				return nil // Failed to parse extended interface type
 			}
-
-			extendedInterface := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			stmt.Extends = append(stmt.Extends, extendedInterface)
+			
+			stmt.Extends = append(stmt.Extends, extendedType)
 
 			// Check for comma to continue list, or break if not found
 			if p.peekTokenIs(lexer.COMMA) {

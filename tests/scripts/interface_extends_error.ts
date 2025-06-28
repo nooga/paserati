@@ -1,4 +1,4 @@
-// expect_compile_error: extended interface 'NonExistentInterface' is not defined
+// expect_compile_error: unknown type name: NonExistentInterface
 // This should produce a type error
 
 interface Person extends NonExistentInterface {

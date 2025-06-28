@@ -25,6 +25,17 @@ type ForwardReferenceType struct {
 	TypeParameters []*TypeParameter
 }
 
+// TypeAliasForwardReference represents a forward reference to a type alias being defined
+type TypeAliasForwardReference struct {
+	AliasName string
+}
+
+// GenericTypeAliasForwardReference represents a forward reference to a generic type alias being defined
+type GenericTypeAliasForwardReference struct {
+	AliasName     string
+	TypeArguments []Type
+}
+
 func (frt *ForwardReferenceType) String() string {
 	return frt.ClassName
 }
@@ -37,6 +48,32 @@ func (frt *ForwardReferenceType) Equals(other Type) bool {
 }
 
 func (frt *ForwardReferenceType) typeNode() {}
+
+func (tafr *TypeAliasForwardReference) String() string {
+	return tafr.AliasName
+}
+
+func (tafr *TypeAliasForwardReference) Equals(other Type) bool {
+	if otherTafr, ok := other.(*TypeAliasForwardReference); ok {
+		return tafr.AliasName == otherTafr.AliasName
+	}
+	return false
+}
+
+func (tafr *TypeAliasForwardReference) typeNode() {}
+
+func (gtafr *GenericTypeAliasForwardReference) String() string {
+	return gtafr.AliasName + "<...>"
+}
+
+func (gtafr *GenericTypeAliasForwardReference) Equals(other Type) bool {
+	if otherGtafr, ok := other.(*GenericTypeAliasForwardReference); ok {
+		return gtafr.AliasName == otherGtafr.AliasName
+	}
+	return false
+}
+
+func (gtafr *GenericTypeAliasForwardReference) typeNode() {}
 
 // MappedType represents a mapped type like { [P in K]: T }
 // This is used for utility types like Partial<T>, Readonly<T>, etc.

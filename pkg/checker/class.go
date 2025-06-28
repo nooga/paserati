@@ -168,13 +168,13 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 }
 
 // createInstanceType builds an object type representing instances of the class
-func (c *Checker) createInstanceType(className string, body *parser.ClassBody, superClass *parser.Identifier, implements []*parser.Identifier) *types.ObjectType {
+func (c *Checker) createInstanceType(className string, body *parser.ClassBody, superClass parser.Expression, implements []*parser.Identifier) *types.ObjectType {
 	// Create class instance type with metadata
 	instanceType := types.NewClassInstanceType(className)
 
 	// Handle inheritance relationships
 	if superClass != nil {
-		c.handleClassInheritance(instanceType, superClass.Value)
+		c.handleClassInheritance(instanceType, superClass)
 	}
 
 	// Handle interface implementations
@@ -325,7 +325,7 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 }
 
 // validateOverrideMethod validates the usage of the override keyword
-func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superClass *parser.Identifier, className string) {
+func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superClass parser.Expression, className string) {
 	// Basic validation: if there's no superclass, override doesn't make sense
 	if superClass == nil {
 		c.addError(method.Key, fmt.Sprintf("method '%s' uses 'override' but class '%s' does not extend any class", method.Key.Value, className))
@@ -343,7 +343,7 @@ func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superC
 }
 
 // validateOverrideMethodSignature validates the usage of the override keyword for method signatures
-func (c *Checker) validateOverrideMethodSignature(methodSig *parser.MethodSignature, superClass *parser.Identifier, className string) {
+func (c *Checker) validateOverrideMethodSignature(methodSig *parser.MethodSignature, superClass parser.Expression, className string) {
 	// Basic validation: if there's no superclass, override doesn't make sense
 	if superClass == nil {
 		c.addError(methodSig.Key, fmt.Sprintf("method signature '%s' uses 'override' but class '%s' does not extend any class", methodSig.Key.Value, className))
@@ -578,45 +578,133 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 }
 
 // handleClassInheritance processes class inheritance (extends clause)
-func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superClassName string) {
-	debugPrintf("// [Checker Class] Handling inheritance: %s extends %s\n", instanceType.GetClassName(), superClassName)
+func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superClassExpr parser.Expression) {
+	debugPrintf("// [Checker Class] === STARTING handleClassInheritance: %s extends %s ===\n", instanceType.GetClassName(), superClassExpr.String())
 
-	// Check if superclass exists and is a class
-	superType, _, exists := c.env.Resolve(superClassName)
-	if !exists {
-		c.addError(nil, fmt.Sprintf("superclass '%s' is not defined", superClassName))
+	// Resolve the superclass type expression (supports both simple names and generic applications)
+	superType := c.resolveTypeAnnotation(superClassExpr)
+	if superType == nil {
+		c.addError(superClassExpr, "failed to resolve superclass type")
 		return
 	}
 
-	// Verify superType is a constructor (class)
-	superObjType, ok := superType.(*types.ObjectType)
+	// Handle different superclass types
+	var constructorType types.Type
+	var exists bool
+	
+	debugPrintf("// [Checker Class] Analyzing superclass expression type: %T\n", superClassExpr)
+	
+	// If it's a simple identifier, try to resolve it as a variable (class constructor)
+	if ident, ok := superClassExpr.(*parser.Identifier); ok {
+		debugPrintf("// [Checker Class] Superclass is simple identifier: %s\n", ident.Value)
+		constructorType, _, exists = c.env.Resolve(ident.Value)
+		if !exists {
+			c.addError(superClassExpr, fmt.Sprintf("superclass '%s' is not defined", ident.Value))
+			return
+		}
+	} else if genRef, ok := superClassExpr.(*parser.GenericTypeRef); ok {
+		// For generic type applications like Container<T>, we need to:
+		// 1. Resolve the base type as a constructor
+		// 2. Instantiate it with the given type arguments
+		debugPrintf("// [Checker Class] Processing GenericTypeRef for '%s'\n", genRef.Name.Value)
+		debugPrintf("// [Checker Class] Looking for generic base constructor '%s'\n", genRef.Name.Value)
+		baseConstructor, _, resolveExists := c.env.Resolve(genRef.Name.Value)
+		if !resolveExists {
+			debugPrintf("// [Checker Class] Generic base constructor '%s' not found in environment\n", genRef.Name.Value)
+			c.addError(superClassExpr, fmt.Sprintf("generic superclass '%s' is not defined", genRef.Name.Value))
+			return
+		}
+		debugPrintf("// [Checker Class] Found generic base constructor '%s': %T\n", genRef.Name.Value, baseConstructor)
+		
+		// TODO: Properly instantiate the generic constructor with type arguments
+		// For now, use the base constructor (this is a simplification)
+		constructorType = baseConstructor
+		exists = true
+		debugPrintf("// [Checker Class] Set constructorType and exists=true for GenericTypeRef\n")
+	} else {
+		// For other expressions, try to use the resolved type
+		// This might not work for all cases but provides a fallback
+		debugPrintf("// [Checker Class] Processing 'else' branch for superclass type\n")
+		constructorType = superType
+		exists = true
+	}
+	
+	debugPrintf("// [Checker Class] About to check exists flag: exists=%t\n", exists)
+	if !exists {
+		debugPrintf("// [Checker Class] ERROR: exists = false after constructor resolution\n")
+		c.addError(superClassExpr, "superclass is not defined")
+		return
+	}
+	debugPrintf("// [Checker Class] Constructor resolution successful, exists = true\n")
+
+	// Verify constructorType is a constructor (class)
+	var superObjType *types.ObjectType
+	var ok bool
+	
+	// Handle both ObjectType (regular classes) and GenericType (generic classes)
+	switch ct := constructorType.(type) {
+	case *types.ObjectType:
+		superObjType = ct
+		ok = true
+	case *types.GenericType:
+		// For generic classes, we need to use the constructor from the generic
+		// For now, we'll accept the generic type and extract its constructor later
+		// TODO: Properly instantiate the generic constructor with type arguments
+		debugPrintf("// [Checker Class] Constructor is a GenericType, accepting as valid class\n")
+		// Create a placeholder ObjectType for now
+		superObjType = types.NewObjectType()
+		ok = true
+	default:
+		ok = false
+	}
+	
 	if !ok {
-		c.addError(nil, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassName))
+		c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassExpr.String()))
 		return
 	}
 
 	// Check if it has constructor signatures (indicating it's a class constructor)
-	if len(superObjType.ConstructSignatures) == 0 {
-		c.addError(nil, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassName))
-		return
+	// Skip this check for generic types for now
+	if constructorType, ok := constructorType.(*types.ObjectType); ok {
+		if len(constructorType.ConstructSignatures) == 0 {
+			c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassExpr.String()))
+			return
+		}
 	}
 
-	// Get the superclass instance type
-	superInstanceType := c.getClassInstanceType(superClassName)
-	if superInstanceType == nil {
-		c.addError(nil, fmt.Sprintf("could not find instance type for superclass '%s'", superClassName))
-		return
+	// For simple identifiers, we can get the instance type by name
+	// For generic applications, the superType should already be the instance type
+	var superInstanceType *types.ObjectType
+	if ident, ok := superClassExpr.(*parser.Identifier); ok {
+		superInstanceType = c.getClassInstanceType(ident.Value)
+		if superInstanceType == nil {
+			c.addError(superClassExpr, fmt.Sprintf("could not find instance type for superclass '%s'", ident.Value))
+			return
+		}
+	} else {
+		// For generic applications, use the resolved type as the instance type
+		if instanceType, ok := superType.(*types.ObjectType); ok {
+			superInstanceType = instanceType
+		} else {
+			// For GenericType, use the placeholder we created
+			superInstanceType = superObjType
+		}
 	}
 
 	// Set inheritance relationship in class metadata
 	if instanceType.ClassMeta != nil {
+		// For simple inheritance, use the identifier name; for generic, use the string representation
+		superClassName := superClassExpr.String()
+		if ident, ok := superClassExpr.(*parser.Identifier); ok {
+			superClassName = ident.Value
+		}
 		instanceType.ClassMeta.SetSuperClass(superClassName)
 	}
 
 	// Add superclass to BaseTypes for structural inheritance
 	instanceType.BaseTypes = append(instanceType.BaseTypes, superInstanceType)
 
-	debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassName)
+	debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassExpr.String())
 }
 
 // handleInterfaceImplementation processes interface implementation (implements clause)

@@ -42,6 +42,16 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return c.currentForwardRef
 		}
 
+		// --- NEW: Check for recursive type alias resolution ---
+		if c.resolvingTypeAliases[node.Value] {
+			debugPrintf("// [Checker resolveTypeAnno Ident] Detected recursive reference to '%s', creating placeholder\n", node.Value)
+			// Create a placeholder type for forward reference
+			// This will be resolved later when the full type is available
+			return &types.TypeAliasForwardReference{
+				AliasName: node.Value,
+			}
+		}
+
 		// --- UPDATED: Prioritize alias resolution ---
 		// 1. Attempt to resolve as a type alias in the environment
 		resolvedAlias, found := c.env.ResolveType(node.Value)
@@ -217,13 +227,32 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				baseType = c.currentForwardRef
 				exists = true
 			} else {
+				// Check if this is a recursive reference to the type alias being defined
+				if c.resolvingTypeAliases[node.Name.Value] {
+					debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Detected recursive generic reference to '%s', creating placeholder\n", node.Name.Value)
+					// Create a placeholder for the recursive reference
+					// We'll use a special GenericForwardReference type that includes type arguments
+					return &types.GenericTypeAliasForwardReference{
+						AliasName:     node.Name.Value,
+						TypeArguments: make([]types.Type, len(node.TypeArguments)), // Placeholder args
+					}
+				}
+				
+				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Resolving generic type '%s' in environment. Current resolving: %v\n", node.Name.Value, c.resolvingTypeAliases)
+				
 				// Check if this is a user-defined generic type
 				baseType, exists = c.env.ResolveType(node.Name.Value)
 			}
 
 			if !exists {
-				c.addError(node, fmt.Sprintf("Unknown generic type '%s'", node.Name.Value))
-				return nil
+				// During type alias resolution, if we encounter a forward reference to another
+				// type alias that might be defined later, create a placeholder for it
+				// This allows mutual recursion between type aliases
+				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating forward reference for unknown type '%s'\n", node.Name.Value)
+				return &types.GenericTypeAliasForwardReference{
+					AliasName:     node.Name.Value,
+					TypeArguments: make([]types.Type, len(node.TypeArguments)), // Placeholder args
+				}
 			}
 
 			// Check if it's a ForwardReferenceType (self-reference during class definition)
@@ -402,6 +431,9 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 		} else if prop.Name != nil {
 			// Regular property or method
 			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				propType = types.Any
+			}
 			properties[prop.Name.Value] = propType
 			if prop.Optional {
 				optionalProperties[prop.Name.Value] = true

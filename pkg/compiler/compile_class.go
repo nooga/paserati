@@ -116,11 +116,21 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 	defer c.regAlloc.Free(prototypeReg)
 	
 	if node.SuperClass != nil {
-		debugPrintf("// DEBUG setupClassPrototype: Class '%s' extends '%s', calling createInheritedPrototype\n", node.Name.Value, node.SuperClass.Value)
+		// Get the superclass name for compilation
+		var superClassName string
+		if ident, ok := node.SuperClass.(*parser.Identifier); ok {
+			superClassName = ident.Value
+		} else {
+			// For generic types, use string representation for now
+			// TODO: Implement proper generic class instantiation at runtime
+			superClassName = node.SuperClass.String()
+		}
+		
+		debugPrintf("// DEBUG setupClassPrototype: Class '%s' extends '%s', calling createInheritedPrototype\n", node.Name.Value, superClassName)
 		// Create prototype as an instance of the parent class
-		err := c.createInheritedPrototype(node.SuperClass.Value, prototypeReg)
+		err := c.createInheritedPrototype(superClassName, prototypeReg)
 		if err != nil {
-			debugPrintf("// DEBUG setupClassPrototype: Warning - could not set up inheritance from '%s': %v\n", node.SuperClass.Value, err)
+			debugPrintf("// DEBUG setupClassPrototype: Warning - could not set up inheritance from '%s': %v\n", superClassName, err)
 			// Fall back to empty object
 			c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
 		}
