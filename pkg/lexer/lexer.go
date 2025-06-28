@@ -1380,8 +1380,9 @@ func isDigitForBase(ch byte, base int) bool {
 // readTemplateLiteral handles template literal tokenization
 // Returns the appropriate token based on current template state
 func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
-	if !l.inTemplate {
+	if !l.inTemplate || l.braceDepth > 0 {
 		// Opening backtick - start of template literal
+		// This includes nested template literals inside interpolations
 		l.inTemplate = true
 		l.templateStart = startPos
 		l.braceDepth = 0

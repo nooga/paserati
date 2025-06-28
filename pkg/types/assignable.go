@@ -323,18 +323,39 @@ func isSignatureAssignable(source, target *Signature) bool {
 	if source == nil || target == nil {
 		return source == target
 	}
+	
 
 	// Check parameter count compatibility
 	sourceParamCount := len(source.ParameterTypes)
 	targetParamCount := len(target.ParameterTypes)
 
-	// For now, require exact parameter count match (can be relaxed later)
-	if sourceParamCount != targetParamCount {
+	// TypeScript allows functions with fewer parameters to be assigned to functions expecting more
+	// The source must have at least the required parameters of the target
+	minRequiredParams := targetParamCount
+	if target.OptionalParams != nil {
+		// Count required parameters (non-optional ones)
+		// Find the highest index of a required parameter
+		minRequiredParams = 0
+		for i := 0; i < targetParamCount && i < len(target.OptionalParams); i++ {
+			if !target.OptionalParams[i] {
+				minRequiredParams = i + 1
+			}
+		}
+	}
+
+	// Source must have at least the minimum required parameters
+	if sourceParamCount < minRequiredParams {
 		return false
 	}
 
-	// Check parameter types (contravariant)
-	for i, targetParam := range target.ParameterTypes {
+	// Check parameter types (contravariant) for the parameters that source provides
+	checkParamCount := sourceParamCount
+	if targetParamCount < sourceParamCount {
+		checkParamCount = targetParamCount
+	}
+	
+	for i := 0; i < checkParamCount; i++ {
+		targetParam := target.ParameterTypes[i]
 		sourceParam := source.ParameterTypes[i]
 		if !IsAssignable(targetParam, sourceParam) { // Note: reversed for contravariance
 			return false

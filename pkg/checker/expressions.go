@@ -511,9 +511,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if propertyName == "length" {
 				resultType = types.Number // Array.length is number
 			} else {
-				// Check prototype registry for Array methods
+				// Check prototype registry for Array methods and specialize them
 				if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
-					resultType = methodType
+					// Specialize the method type for this specific array element type
+					resultType = c.specializeArrayMethod(methodType, obj.ElementType, propertyName)
 				} else {
 					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
 					// resultType remains types.Never
@@ -1179,4 +1180,92 @@ func (c *Checker) tryGetConstantStringValue(ident *parser.Identifier) string {
 	// For now, this is a placeholder that returns empty string
 	// In a full implementation, we'd track constant assignments and evaluate them
 	return ""
+}
+
+// specializeArrayMethod specializes generic array method types for specific element types
+func (c *Checker) specializeArrayMethod(genericMethodType types.Type, elementType types.Type, methodName string) types.Type {
+	// If element type is nil, fall back to generic method
+	if elementType == nil {
+		return genericMethodType
+	}
+
+	// For array methods that should be specialized based on element type
+	switch methodName {
+	case "map":
+		// Array<T>.map<U>((value: T, index?: number, array?: T[]) => U): U[]
+		// Create callback function type: (T, number?, T[]?) => U (where U is type parameter)
+		arrayType := &types.ArrayType{ElementType: elementType}
+		callbackType := types.NewOptionalFunction(
+			[]types.Type{elementType, types.Number, arrayType}, 
+			types.Any, // Return type U will be inferred at call site
+			[]bool{false, true, true}, // Second and third parameters are optional
+		)
+		// Return function type: (callback) => U[]
+		return types.NewSimpleFunction(
+			[]types.Type{callbackType}, 
+			&types.ArrayType{ElementType: types.Any}, // Result array type - element type will be inferred
+		)
+	
+	case "filter":
+		// Array<T>.filter((value: T, index?: number, array?: T[]) => boolean): T[]
+		arrayType := &types.ArrayType{ElementType: elementType}
+		callbackType := types.NewOptionalFunction(
+			[]types.Type{elementType, types.Number, arrayType}, 
+			types.Boolean,
+			[]bool{false, true, true}, // Second and third parameters are optional
+		)
+		return types.NewSimpleFunction(
+			[]types.Type{callbackType}, 
+			arrayType, // Result is same array type
+		)
+	
+	case "forEach":
+		// Array<T>.forEach((value: T, index?: number, array?: T[]) => void): void
+		arrayType := &types.ArrayType{ElementType: elementType}
+		callbackType := types.NewOptionalFunction(
+			[]types.Type{elementType, types.Number, arrayType}, 
+			types.Undefined,
+			[]bool{false, true, true}, // Second and third parameters are optional
+		)
+		return types.NewSimpleFunction(
+			[]types.Type{callbackType}, 
+			types.Undefined,
+		)
+	
+	case "find":
+		// Array<T>.find((value: T, index?: number, array?: T[]) => boolean): T | undefined
+		arrayType := &types.ArrayType{ElementType: elementType}
+		callbackType := types.NewOptionalFunction(
+			[]types.Type{elementType, types.Number, arrayType}, 
+			types.Boolean,
+			[]bool{false, true, true}, // Second and third parameters are optional
+		)
+		resultType := types.NewUnionType(elementType, types.Undefined)
+		return types.NewSimpleFunction(
+			[]types.Type{callbackType}, 
+			resultType,
+		)
+	
+	case "every", "some":
+		// Array<T>.every/some((value: T, index?: number, array?: T[]) => boolean): boolean
+		arrayType := &types.ArrayType{ElementType: elementType}
+		callbackType := types.NewOptionalFunction(
+			[]types.Type{elementType, types.Number, arrayType}, 
+			types.Boolean,
+			[]bool{false, true, true}, // Second and third parameters are optional
+		)
+		return types.NewSimpleFunction(
+			[]types.Type{callbackType}, 
+			types.Boolean,
+		)
+	
+	case "reduce":
+		// Array<T>.reduce<U>((acc: U, value: T, index: number, array: T[]) => U, initialValue?: U): U
+		// This is more complex - for now keep generic
+		return genericMethodType
+		
+	default:
+		// For other methods, return the generic type
+		return genericMethodType
+	}
 }
