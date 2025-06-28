@@ -41,6 +41,32 @@ func IsAssignable(source, target Type) bool {
 		return true
 	}
 
+	// Handle parameterized forward references (for recursive generic classes)
+	if sourceParamRef, ok := source.(*ParameterizedForwardReferenceType); ok {
+		if targetParamRef, ok := target.(*ParameterizedForwardReferenceType); ok {
+			// Both are parameterized forward references - check if they're the same class with same type args
+			if sourceParamRef.ClassName != targetParamRef.ClassName {
+				return false
+			}
+			if len(sourceParamRef.TypeArguments) != len(targetParamRef.TypeArguments) {
+				return false
+			}
+			for i := range sourceParamRef.TypeArguments {
+				if !IsAssignable(sourceParamRef.TypeArguments[i], targetParamRef.TypeArguments[i]) {
+					return false
+				}
+			}
+			return true
+		}
+		// For now, be permissive when source is parameterized forward reference
+		return true
+	}
+	if _, ok := target.(*ParameterizedForwardReferenceType); ok {
+		// Target is a parameterized forward reference - be permissive for now
+		// This allows object types to be assigned to forward references
+		return true
+	}
+
 	// Basic rules:
 	if target == Any || source == Any {
 		return true
@@ -270,7 +296,7 @@ func IsAssignable(source, target Type) bool {
 	// Readonly type handling
 	sourceReadonly, sourceIsReadonly := source.(*ReadonlyType)
 	targetReadonly, targetIsReadonly := target.(*ReadonlyType)
-	
+
 	if sourceIsReadonly && targetIsReadonly {
 		// readonly T to readonly U: T must be assignable to U
 		return IsAssignable(sourceReadonly.InnerType, targetReadonly.InnerType)
@@ -282,7 +308,7 @@ func IsAssignable(source, target Type) bool {
 		// This is safe because we're making something more restrictive
 		return IsAssignable(source, targetReadonly.InnerType)
 	}
-	
+
 	// Note: Readonly<T> utility type is now handled via mapped type expansion
 	// The expandMappedType system will convert Readonly<T> to concrete object types
 	// so no special handling is needed here

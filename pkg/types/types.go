@@ -36,6 +36,13 @@ type GenericTypeAliasForwardReference struct {
 	TypeArguments []Type
 }
 
+// ParameterizedForwardReferenceType represents a forward reference to a generic class with type arguments
+// For example, Node<T> when used inside the Node<T> class definition
+type ParameterizedForwardReferenceType struct {
+	ClassName     string
+	TypeArguments []Type
+}
+
 func (frt *ForwardReferenceType) String() string {
 	return frt.ClassName
 }
@@ -75,13 +82,49 @@ func (gtafr *GenericTypeAliasForwardReference) Equals(other Type) bool {
 
 func (gtafr *GenericTypeAliasForwardReference) typeNode() {}
 
+func (pfrt *ParameterizedForwardReferenceType) String() string {
+	if len(pfrt.TypeArguments) == 0 {
+		return pfrt.ClassName
+	}
+
+	var argStrs []string
+	for _, arg := range pfrt.TypeArguments {
+		if arg != nil {
+			argStrs = append(argStrs, arg.String())
+		} else {
+			argStrs = append(argStrs, "unknown")
+		}
+	}
+	return fmt.Sprintf("%s<%s>", pfrt.ClassName, strings.Join(argStrs, ", "))
+}
+
+func (pfrt *ParameterizedForwardReferenceType) Equals(other Type) bool {
+	if otherPfrt, ok := other.(*ParameterizedForwardReferenceType); ok {
+		if pfrt.ClassName != otherPfrt.ClassName {
+			return false
+		}
+		if len(pfrt.TypeArguments) != len(otherPfrt.TypeArguments) {
+			return false
+		}
+		for i, arg := range pfrt.TypeArguments {
+			if !arg.Equals(otherPfrt.TypeArguments[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (pfrt *ParameterizedForwardReferenceType) typeNode() {}
+
 // MappedType represents a mapped type like { [P in K]: T }
 // This is used for utility types like Partial<T>, Readonly<T>, etc.
 type MappedType struct {
 	TypeParameter  string // The iteration variable (e.g., "P" in [P in K])
 	ConstraintType Type   // The type being iterated over (e.g., K in [P in K])
 	ValueType      Type   // The resulting value type for each property
-	
+
 	// Modifiers for the mapped type
 	ReadonlyModifier string // "+", "-", or "" (for readonly modifier)
 	OptionalModifier string // "+", "-", or "" (for optional modifier)
@@ -94,29 +137,29 @@ func (mt *MappedType) String() string {
 	} else if mt.ReadonlyModifier == "-" {
 		modifiers = append(modifiers, "-readonly")
 	}
-	
+
 	optionalMark := ""
 	if mt.OptionalModifier == "+" {
 		optionalMark = "?"
 	} else if mt.OptionalModifier == "-" {
 		optionalMark = "-?"
 	}
-	
+
 	modifierStr := ""
 	if len(modifiers) > 0 {
 		modifierStr = strings.Join(modifiers, " ") + " "
 	}
-	
+
 	constraintStr := "unknown"
 	if mt.ConstraintType != nil {
 		constraintStr = mt.ConstraintType.String()
 	}
-	
+
 	valueStr := "unknown"
 	if mt.ValueType != nil {
 		valueStr = mt.ValueType.String()
 	}
-	
+
 	return fmt.Sprintf("{ %s[%s in %s]%s: %s }", modifierStr, mt.TypeParameter, constraintStr, optionalMark, valueStr)
 }
 
@@ -125,23 +168,23 @@ func (mt *MappedType) Equals(other Type) bool {
 	if !ok {
 		return false
 	}
-	
+
 	if mt.TypeParameter != otherMt.TypeParameter {
 		return false
 	}
-	
+
 	if mt.ReadonlyModifier != otherMt.ReadonlyModifier {
 		return false
 	}
-	
+
 	if mt.OptionalModifier != otherMt.OptionalModifier {
 		return false
 	}
-	
+
 	if !mt.ConstraintType.Equals(otherMt.ConstraintType) {
 		return false
 	}
-	
+
 	return mt.ValueType.Equals(otherMt.ValueType)
 }
 
@@ -277,7 +320,7 @@ type TemplateLiteralType struct {
 
 // TemplateLiteralPart represents a part of a template literal type
 type TemplateLiteralPart struct {
-	IsLiteral bool // true for string literals, false for type interpolations
+	IsLiteral bool   // true for string literals, false for type interpolations
 	Literal   string // string content (when IsLiteral=true)
 	Type      Type   // interpolated type (when IsLiteral=false)
 }

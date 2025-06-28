@@ -1,4 +1,4 @@
-// expect_runtime_error: Cannot call non-function value
+// expect: recursive generic classes work
 
 // Test 1: Basic generic class with recursive methods
 class LinkedNode<T> {
@@ -62,8 +62,7 @@ class SortedList<T> extends Comparable<T[]> {
 
 // Test instantiation
 let node = new LinkedNode<string>("test");
-// TODO: Fix generic type resolution for recursive assignment
-// node.next = new LinkedNode<string>("next");
+node.next = new LinkedNode<string>("next");
 
 let stack = new Stack<number>();
 stack.push(42);

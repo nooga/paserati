@@ -188,6 +188,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 
 	// --- NEW: Handle GenericTypeRef ---
 	case *parser.GenericTypeRef:
+		debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Processing GenericTypeRef: %s with %d type args\n", node.Name.Value, len(node.TypeArguments))
 		// For Phase 1, we only support built-in generic types
 		switch node.Name.Value {
 		case "Array":
@@ -237,9 +238,9 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 						TypeArguments: make([]types.Type, len(node.TypeArguments)), // Placeholder args
 					}
 				}
-				
+
 				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Resolving generic type '%s' in environment. Current resolving: %v\n", node.Name.Value, c.resolvingTypeAliases)
-				
+
 				// Check if this is a user-defined generic type
 				baseType, exists = c.env.ResolveType(node.Name.Value)
 			}
@@ -256,15 +257,25 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			}
 
 			// Check if it's a ForwardReferenceType (self-reference during class definition)
-			if forwardRefType, ok := baseType.(*types.ForwardReferenceType); ok {
-				// For forward references, we can't do full instantiation yet
-				// Return a placeholder that includes the type arguments for later resolution
-				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating forward reference placeholder for '%s' with %d type args\n",
-					node.Name.Value, len(node.TypeArguments))
+			if _, ok := baseType.(*types.ForwardReferenceType); ok {
+				// Create a parameterized forward reference that preserves type arguments
+				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating ParameterizedForwardReferenceType for '%s' with %d type args\n", node.Name.Value, len(node.TypeArguments))
 
-				// For now, just return the forward reference itself
-				// In a more complete implementation, we'd create a ForwardReferenceInstance
-				return forwardRefType
+				// Resolve type arguments
+				typeArgs := make([]types.Type, len(node.TypeArguments))
+				for i, argExpr := range node.TypeArguments {
+					argType := c.resolveTypeAnnotation(argExpr)
+					if argType == nil {
+						return nil // Error already reported
+					}
+					typeArgs[i] = argType
+				}
+
+				// Return a parameterized forward reference that preserves the type arguments
+				return &types.ParameterizedForwardReferenceType{
+					ClassName:     node.Name.Value,
+					TypeArguments: typeArgs,
+				}
 			}
 
 			// Check if it's a GenericType
@@ -715,6 +726,19 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Return as-is for now - this indicates the forward reference wasn't properly resolved
 		return typ
 
+	case *types.ParameterizedForwardReferenceType:
+		// Substitute type arguments in the parameterized forward reference
+		newTypeArgs := make([]types.Type, len(typ.TypeArguments))
+		for i, argType := range typ.TypeArguments {
+			newTypeArgs[i] = c.substituteTypes(argType, substitution)
+		}
+
+		// Return a new parameterized forward reference with substituted type arguments
+		return &types.ParameterizedForwardReferenceType{
+			ClassName:     typ.ClassName,
+			TypeArguments: newTypeArgs,
+		}
+
 	case *types.ArrayType:
 		// Recursively substitute element type
 		newElementType := c.substituteTypes(typ.ElementType, substitution)
@@ -782,10 +806,10 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Copy ClassMeta to preserve class instance information
 		if typ.ClassMeta != nil {
 			result.ClassMeta = &types.ClassMetadata{
-				ClassName:         typ.ClassMeta.ClassName,
-				IsClassInstance:   typ.ClassMeta.IsClassInstance,
+				ClassName:          typ.ClassMeta.ClassName,
+				IsClassInstance:    typ.ClassMeta.IsClassInstance,
 				IsClassConstructor: typ.ClassMeta.IsClassConstructor,
-				MemberAccess:      typ.ClassMeta.MemberAccess,
+				MemberAccess:       typ.ClassMeta.MemberAccess,
 			}
 		}
 
@@ -819,9 +843,9 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Recursively substitute types in mapped type
 		newConstraintType := c.substituteTypes(typ.ConstraintType, substitution)
 		newValueType := c.substituteTypes(typ.ValueType, substitution)
-		
+
 		return &types.MappedType{
-			TypeParameter:    typ.TypeParameter,    // Keep parameter name as-is
+			TypeParameter:    typ.TypeParameter, // Keep parameter name as-is
 			ConstraintType:   newConstraintType,
 			ValueType:        newValueType,
 			OptionalModifier: typ.OptionalModifier,
@@ -849,13 +873,13 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		newExtendsType := c.substituteTypes(typ.ExtendsType, substitution)
 		newTrueType := c.substituteTypes(typ.TrueType, substitution)
 		newFalseType := c.substituteTypes(typ.FalseType, substitution)
-		
+
 		// Try to compute the result with substituted types
 		resolvedType := c.computeConditionalType(newCheckType, newExtendsType, newTrueType, newFalseType)
 		if resolvedType != nil {
 			return resolvedType
 		}
-		
+
 		// Return the conditional type with substituted parts
 		return &types.ConditionalType{
 			CheckType:   newCheckType,
@@ -881,14 +905,14 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 				}
 			}
 		}
-		
+
 		// Try to compute the template literal type with substituted parts
 		substitutedTlt := &types.TemplateLiteralType{Parts: newParts}
 		computedType := c.computeTemplateLiteralType(substitutedTlt)
 		if computedType != nil {
 			return computedType
 		}
-		
+
 		return substitutedTlt
 
 	default:
@@ -921,27 +945,27 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 	case *types.ObjectType:
 		// Extract property names and create string literal types
 		var keyTypes []types.Type
-		
+
 		// Add regular properties
 		for propName := range typ.Properties {
 			keyTypes = append(keyTypes, &types.LiteralType{
 				Value: vm.String(propName),
 			})
 		}
-		
+
 		// If there are no properties, keyof should be never
 		if len(keyTypes) == 0 {
 			return types.Never
 		}
-		
+
 		// If there's only one key, return the literal type directly
 		if len(keyTypes) == 1 {
 			return keyTypes[0]
 		}
-		
+
 		// Return union of all key literal types
 		return types.NewUnionType(keyTypes...)
-		
+
 	default:
 		// Handle special cases
 		if operandType == types.Any {
@@ -1006,7 +1030,7 @@ func (c *Checker) resolveMappedTypeExpression(node *parser.MappedTypeExpression)
 	// This allows expressions like T[P] to resolve P correctly
 	originalEnv := c.env
 	tempEnv := NewEnclosedEnvironment(c.env)
-	
+
 	// Add the type parameter to the temporary environment
 	// For now, we'll represent it as a type parameter type
 	typeParam := &types.TypeParameter{
@@ -1014,12 +1038,12 @@ func (c *Checker) resolveMappedTypeExpression(node *parser.MappedTypeExpression)
 		Constraint: constraintType, // The constraint is what P extends/iterates over
 	}
 	tempEnv.DefineTypeParameter(node.TypeParameter.Value, typeParam)
-	
+
 	// Switch to the temporary environment for resolving the value type
 	c.env = tempEnv
 	valueType := c.resolveTypeAnnotation(node.ValueType)
 	c.env = originalEnv // Restore original environment
-	
+
 	if valueType == nil {
 		// Error already reported by resolveTypeAnnotation
 		return nil
@@ -1134,9 +1158,9 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 func (c *Checker) computeConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
 	// For now, we'll implement basic conditional type resolution
 	// This can be expanded to handle more complex cases later
-	
+
 	debugPrintf("// [ConditionalType] Checking if %s extends %s\n", checkType.String(), extendsType.String())
-	
+
 	// Check if checkType extends extendsType (is assignable to it)
 	if types.IsAssignable(checkType, extendsType) {
 		debugPrintf("// [ConditionalType] YES: %s extends %s -> %s\n", checkType.String(), extendsType.String(), trueType.String())
@@ -1301,7 +1325,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	return &types.ObjectType{
 		Properties:         properties,
 		OptionalProperties: optionalProperties,
-		CallSignatures:     []*types.Signature{}, // Mapped types don't create call signatures
+		CallSignatures:     []*types.Signature{},      // Mapped types don't create call signatures
 		IndexSignatures:    []*types.IndexSignature{}, // TODO: Handle index signatures if needed
 	}
 }
@@ -1325,13 +1349,13 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 		// Handle T[P] where P is the type parameter being substituted
 		objectType := c.substituteTypeParameterInType(typ.ObjectType, paramName, replacement)
 		indexType := c.substituteTypeParameterInType(typ.IndexType, paramName, replacement)
-		
+
 		// Try to resolve the indexed access with the substituted types
 		resolvedType := c.computeIndexedAccessType(objectType, indexType)
 		if resolvedType != nil {
 			return resolvedType
 		}
-		
+
 		// If we can't resolve it, return a new IndexedAccessType with substituted parts
 		return &types.IndexedAccessType{
 			ObjectType: objectType,
@@ -1367,7 +1391,7 @@ func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
 	debugPrintf("// [Checker] isAssignableWithExpansion: source=%T target=%T\n", source, target)
 	debugPrintf("// [Checker] source: %s\n", source.String())
 	debugPrintf("// [Checker] target: %s\n", target.String())
-	
+
 	// Expand target if it's a mapped type or instantiated type containing a mapped type
 	expandedTarget := c.expandIfMappedType(target)
 
@@ -1444,7 +1468,7 @@ func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams 
 
 	// Substitute in constraint type
 	substitutedConstraint := c.substituteInType(mappedType.ConstraintType, substitutions)
-	
+
 	// Substitute in value type
 	substitutedValue := c.substituteInType(mappedType.ValueType, substitutions)
 
@@ -1546,7 +1570,7 @@ func (c *Checker) resolveTemplateLiteralTypeExpression(node *parser.TemplateLite
 // Returns nil if the template contains non-literal types that can't be computed
 func (c *Checker) computeTemplateLiteralType(tlt *types.TemplateLiteralType) types.Type {
 	var result strings.Builder
-	
+
 	for _, part := range tlt.Parts {
 		if part.IsLiteral {
 			// String literal part - add directly
@@ -1567,7 +1591,7 @@ func (c *Checker) computeTemplateLiteralType(tlt *types.TemplateLiteralType) typ
 			}
 		}
 	}
-	
+
 	// All parts were computable - return as string literal type
 	computedValue := result.String()
 	return &types.LiteralType{

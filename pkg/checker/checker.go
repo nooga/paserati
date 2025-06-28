@@ -686,8 +686,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				if assignable { // Only check index signatures if basic assignability passes
 					indexSigErrors := c.validateIndexSignatures(computedInitializerType, variableType)
 					for _, sigError := range indexSigErrors {
-						c.addError(initializer, fmt.Sprintf("Type '%s' is not assignable to type '%s' as required by index signature [%s: %s]", 
-							sigError.PropertyType.String(), sigError.ExpectedType.String(), 
+						c.addError(initializer, fmt.Sprintf("Type '%s' is not assignable to type '%s' as required by index signature [%s: %s]",
+							sigError.PropertyType.String(), sigError.ExpectedType.String(),
 							sigError.KeyType.String(), sigError.ExpectedType.String()))
 					}
 					// If there are index signature errors, treat assignment as invalid
@@ -2307,7 +2307,7 @@ func (c *Checker) GetProgram() *parser.Program {
 func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, originalSig, inferredSig *types.Signature) []types.Type {
 	// Create a map from type parameter to inferred type by comparing original and inferred signatures
 	solution := make(map[*types.TypeParameter]types.Type)
-	
+
 	// Helper to extract type parameter mappings by comparing types
 	var extractMappings func(original, inferred types.Type)
 	extractMappings = func(original, inferred types.Type) {
@@ -2325,17 +2325,17 @@ func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, o
 					extractMappings(origType.Types[i], infUnion.Types[i])
 				}
 			}
-		// Add more cases as needed
+			// Add more cases as needed
 		}
 	}
-	
+
 	// Compare parameter types
 	for i := range originalSig.ParameterTypes {
 		if i < len(inferredSig.ParameterTypes) {
 			extractMappings(originalSig.ParameterTypes[i], inferredSig.ParameterTypes[i])
 		}
 	}
-	
+
 	// Build ordered type arguments based on generic type's type parameters
 	var typeArgs []types.Type
 	for _, typeParam := range genericType.TypeParameters {
@@ -2348,6 +2348,6 @@ func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, o
 			debugPrintf("// [Checker ExtractInferred] %s = any (not inferred)\n", typeParam.Name)
 		}
 	}
-	
+
 	return typeArgs
 }
