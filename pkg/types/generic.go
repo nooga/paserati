@@ -155,7 +155,28 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		for name, isOptional := range t.OptionalProperties {
 			newObj.OptionalProperties[name] = isOptional
 		}
-		// TODO: Handle call signatures, constructor signatures, base types
+		
+		// Handle call signatures
+		for _, sig := range t.CallSignatures {
+			newSig := substituteSignature(sig, substitutions)
+			newObj.CallSignatures = append(newObj.CallSignatures, newSig)
+		}
+		
+		// Handle constructor signatures
+		for _, sig := range t.ConstructSignatures {
+			newSig := substituteSignature(sig, substitutions)
+			newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
+		}
+		
+		// Copy index signatures
+		for _, indexSig := range t.IndexSignatures {
+			newIndexSig := &IndexSignature{
+				KeyType:   substituteType(indexSig.KeyType, substitutions),
+				ValueType: substituteType(indexSig.ValueType, substitutions),
+			}
+			newObj.IndexSignatures = append(newObj.IndexSignatures, newIndexSig)
+		}
+		
 		return newObj
 		
 	case *UnionType:
@@ -245,4 +266,34 @@ func init() {
 	promiseBody.WithProperty("then", Any)
 	promiseBody.WithProperty("catch", Any)
 	PromiseGeneric = NewGenericType("Promise", []*TypeParameter{promiseT}, promiseBody)
+}
+
+// substituteSignature performs type parameter substitution in a signature
+func substituteSignature(sig *Signature, substitutions map[*TypeParameter]Type) *Signature {
+	if sig == nil {
+		return nil
+	}
+	
+	// Substitute parameter types
+	newParamTypes := make([]Type, len(sig.ParameterTypes))
+	for i, paramType := range sig.ParameterTypes {
+		newParamTypes[i] = substituteType(paramType, substitutions)
+	}
+	
+	// Substitute return type
+	newReturnType := substituteType(sig.ReturnType, substitutions)
+	
+	// Substitute rest parameter type if present
+	var newRestParamType Type
+	if sig.RestParameterType != nil {
+		newRestParamType = substituteType(sig.RestParameterType, substitutions)
+	}
+	
+	return &Signature{
+		ParameterTypes:    newParamTypes,
+		ReturnType:        newReturnType,
+		OptionalParams:    sig.OptionalParams, // Copy as-is
+		IsVariadic:        sig.IsVariadic,
+		RestParameterType: newRestParamType,
+	}
 }

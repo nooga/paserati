@@ -16,29 +16,59 @@ func (a *ArrayInitializer) Priority() int {
 }
 
 func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
-	// Create Array.prototype type with all methods
+	// Create generic type parameter T for array methods
+	tParam := &types.TypeParameter{Name: "T", Constraint: nil, Index: 0}
+	tType := &types.TypeParameterType{Parameter: tParam}
+	tArrayType := &types.ArrayType{ElementType: tType}
+
+	// Create Array.prototype type with selective generic methods
 	arrayProtoType := types.NewObjectType().
 		WithProperty("length", types.Number).
+		// Keep mutation methods non-generic for flexibility
 		WithVariadicProperty("push", []types.Type{}, types.Number, &types.ArrayType{ElementType: types.Any}).
 		WithProperty("pop", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("shift", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithVariadicProperty("unshift", []types.Type{}, types.Number, &types.ArrayType{ElementType: types.Any}).
-		WithProperty("slice", types.NewSimpleFunction([]types.Type{types.Number, types.Number}, &types.ArrayType{ElementType: types.Any})).
-		WithVariadicProperty("splice", []types.Type{types.Number, types.Number}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
+		WithProperty("slice", a.createGenericMethod("slice", tParam,
+			types.NewOptionalFunction([]types.Type{types.Number, types.Number}, tArrayType, []bool{true, true}))).
+		// Keep concat non-generic for flexibility with different array types
 		WithVariadicProperty("concat", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
 		WithProperty("join", types.NewSimpleFunction([]types.Type{types.String}, types.String)).
-		WithProperty("reverse", types.NewSimpleFunction([]types.Type{}, &types.ArrayType{ElementType: types.Any})).
-		WithProperty("sort", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Number)}, &types.ArrayType{ElementType: types.Any})).
-		WithProperty("indexOf", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Number)).
-		WithProperty("lastIndexOf", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Number)).
-		WithProperty("includes", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Boolean)).
-		WithProperty("find", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Boolean)}, types.Any)).
-		WithProperty("findIndex", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Boolean)}, types.Number)).
-		WithProperty("filter", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Boolean)}, &types.ArrayType{ElementType: types.Any})).
-		WithProperty("map", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any)}, &types.ArrayType{ElementType: types.Any})).
-		WithProperty("forEach", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Undefined)}, types.Undefined)).
-		WithProperty("every", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Boolean)}, types.Boolean)).
-		WithProperty("some", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Boolean)}, types.Boolean)).
+		WithProperty("reverse", a.createGenericMethod("reverse", tParam,
+			types.NewSimpleFunction([]types.Type{}, tArrayType))).
+		WithProperty("indexOf", a.createGenericMethod("indexOf", tParam,
+			types.NewOptionalFunction([]types.Type{tType, types.Number}, types.Number, []bool{false, true}))).
+		WithProperty("lastIndexOf", a.createGenericMethod("lastIndexOf", tParam,
+			types.NewOptionalFunction([]types.Type{tType, types.Number}, types.Number, []bool{false, true}))).
+		WithProperty("includes", a.createGenericMethod("includes", tParam,
+			types.NewOptionalFunction([]types.Type{tType, types.Number}, types.Boolean, []bool{false, true}))).
+		// Make callback-based methods generic (these are the important ones!)
+		WithProperty("find", a.createGenericMethod("find", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewUnionType(tType, types.Undefined)))).
+		WithProperty("findIndex", a.createGenericMethod("findIndex", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.Number))).
+		WithProperty("filter", a.createGenericMethod("filter", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				tArrayType))).
+		WithProperty("map", a.createGenericMapMethod(tParam)).
+		WithProperty("forEach", a.createGenericMethod("forEach", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Undefined, []bool{false, true, true})},
+				types.Undefined))).
+		WithProperty("every", a.createGenericMethod("every", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.Boolean))).
+		WithProperty("some", a.createGenericMethod("some", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.Boolean))).
+		// Keep reduce non-generic for now since it's complex
 		WithProperty("reduce", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any)).
 		WithProperty("reduceRight", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any))
 
@@ -648,4 +678,39 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Register Array constructor as global
 	return ctx.DefineGlobal("Array", arrayCtor)
+}
+
+// Helper methods for creating generic array method types
+
+// createGenericMethod creates a generic method with a single type parameter T
+func (a *ArrayInitializer) createGenericMethod(name string, tParam *types.TypeParameter, methodType types.Type) types.Type {
+	return &types.GenericType{
+		Name:           name,
+		TypeParameters: []*types.TypeParameter{tParam},
+		Body:           methodType,
+	}
+}
+
+// createGenericMapMethod creates the special map method that has two type parameters T and U
+func (a *ArrayInitializer) createGenericMapMethod(tParam *types.TypeParameter) types.Type {
+	// For map, we need both T (input element type) and U (output element type)
+	uParam := &types.TypeParameter{Name: "U", Constraint: nil, Index: 1}
+	uType := &types.TypeParameterType{Parameter: uParam}
+	tType := &types.TypeParameterType{Parameter: tParam}
+	tArrayType := &types.ArrayType{ElementType: tType}
+	uArrayType := &types.ArrayType{ElementType: uType}
+
+	// map<U>((value: T, index?: number, array?: T[]) => U): U[]
+	callbackType := types.NewOptionalFunction(
+		[]types.Type{tType, types.Number, tArrayType}, 
+		uType, 
+		[]bool{false, true, true})
+	
+	methodType := types.NewSimpleFunction([]types.Type{callbackType}, uArrayType)
+
+	return &types.GenericType{
+		Name:           "map",
+		TypeParameters: []*types.TypeParameter{tParam, uParam},
+		Body:           methodType,
+	}
 }
