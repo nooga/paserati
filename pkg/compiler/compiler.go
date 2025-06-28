@@ -426,7 +426,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ClassDeclaration:
 		return c.compileClassDeclaration(node, hint)
-	
+
 	case *parser.ClassExpression:
 		// Convert ClassExpression to ClassDeclaration for compilation
 		// The compiler treats them the same way
@@ -1396,7 +1396,7 @@ func (c *Compiler) hasMethodInType(objType *types.ObjectType, methodName string)
 	if _, exists := objType.Properties[methodName]; exists {
 		return true
 	}
-	
+
 	// Check in base types (prototypes)
 	for _, baseType := range objType.BaseTypes {
 		if baseObjType, ok := baseType.(*types.ObjectType); ok {
@@ -1405,6 +1405,6 @@ func (c *Compiler) hasMethodInType(objType *types.ObjectType, methodName string)
 			}
 		}
 	}
-	
+
 	return false
 }

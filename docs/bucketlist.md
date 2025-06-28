@@ -10,6 +10,16 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - **✅ Function.prototype.bind()** - Complete implementation with BoundFunction type
 - **🎉 CLASSES IMPLEMENTATION** - **COMPLETE!** Full TypeScript class system with inheritance, access modifiers, abstract classes, and interfaces
 - **🆕 GENERIC CLASSES** - **NEW!** Generic class support with automatic type inference (`new Container(42)` infers `T` as `number`)
+- **🚀 RECURSIVE GENERIC CLASSES** - **BREAKTHROUGH!** Self-referencing generic classes with inheritance (`class Node<T> { next?: Node<T>; }`, `class Stack<T> extends Container<T>`)
+- **🎯 ADVANCED TYPE SYSTEM** - **COMPLETE!** Full implementation of advanced TypeScript type features:
+  - **Index Signatures** - `{ [key: string]: Type }` with comprehensive validation
+  - **Mapped Types** - `{ [P in K]: T }` with expansion and utility type support
+  - **Conditional Types** - `T extends U ? X : Y` with proper substitution
+  - **Utility Types** - `Partial<T>`, `Pick<T,K>`, `Record<K,V>`, etc. working perfectly
+  - **keyof Operator** - Type-level key extraction (`keyof Person` → `"name" | "age"`)
+  - **Indexed Access Types** - `T[K]` syntax for property type access
+  - **Type Predicates** - `is` keyword for user-defined type guards
+  - **Template Literal Types** - `` `Hello ${T}!` `` for compile-time string manipulation
 
 ## Core Syntax & Basics
 
@@ -392,7 +402,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Basic Types (`number`, `string`, `boolean`, `null`, `undefined`)
 - [x] `any` Type (Implicitly used in checker)
 - [x] `void` Type (Function return type inference)
-- [x] `unknown` Type (assignment restrictions enforced, type narrowing not yet implemented)
+- [x] `unknown` Type (assignment restrictions enforced, **type narrowing implemented** with typeof guards and type predicates)
 - [x] `never` Type
 - [x] Array Types (`T[]`)
 - [x] Tuple Types (`[string, number]`) - **Enhanced!**
@@ -416,7 +426,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] Interfaces (`interface Point { x: number; y: number; }`)
   - [x] Interface Inheritance (`interface Point3D extends Point2D { z: number; }`)
   - [x] Multiple Interface Inheritance (`interface Combined extends A, B {}`)
-- [ ] Index Signatures (`{ [key: string]: number }`)
+- [x] Index Signatures (`{ [key: string]: number }`) - **Complete Implementation!**
+  - [x] Object type index signatures with string keys
+  - [x] Interface index signatures with validation
+  - [x] Index signature constraint validation for object literals
+  - [x] Property compatibility checking with index signatures
+  - [x] Integration with structural typing system
 - [x] Type Aliases (`type Name = string;`)
 - [x] Constructor Types (`new () => T`)
 
@@ -471,7 +486,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] Allows defensive null/undefined checks for practical programming
     - [x] Works with all comparison operators (`===`, `!==`, `==`, `!=`)
     - [x] Integrated with union type analysis for precise overlap detection
-- [x] Type Guards (`typeof`, `instanceof`, custom)
+- [x] Type Guards (`typeof`, `instanceof`, custom) - **Enhanced!**
+  - [x] `typeof` guards with comprehensive type narrowing
+  - [x] `instanceof` guards for constructor type checking
+  - [x] **Custom type predicates** with `is` keyword (`x is string`)
+  - [x] Integration with control flow analysis
+  - [x] Support for all literal types and union type narrowing
 - [ ] Strict Null Checks (`strictNullChecks` compiler option)
 
 ### Advanced Types
@@ -487,14 +507,55 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Built-in generic types (Array, Promise)
   - [x] **User-defined generic types** - interfaces and type aliases with generics
   - [x] **Generic classes** - `class Container<T>` with type parameters and inference
+  - [x] **Recursive generic classes** - `class Node<T> { next?: Node<T>; }` with self-references and inheritance
   - [x] Complex generic expressions and nested generics
   - [x] TypeScript-compliant error handling
   - [x] Complete integration with type system and contextual typing
-  - [x] **Comprehensive test suite** - 18+ generic-related tests covering all scenarios
+  - [x] **Comprehensive test suite** - 19+ generic-related tests covering all scenarios including recursive classes
   - [x] **Zero runtime overhead** - full type erasure
-- [ ] Conditional Types (`T extends U ? X : Y`)
-- [ ] Mapped Types (`{ [P in K]: T }`)
-- [ ] Utility Types (`Partial`, `Readonly`, `Pick`, etc.)
+- [x] Conditional Types (`T extends U ? X : Y`) - **Complete Implementation!**
+  - [x] Basic conditional type syntax and parsing
+  - [x] Type resolution with proper substitution timing
+  - [x] Advanced conditional types (NonNullable, Extract, Exclude)
+  - [x] Delayed computation until type parameters are resolved
+  - [x] Integration with type system and generic constraints
+- [x] Mapped Types (`{ [P in K]: T }`) - **Complete Implementation!**
+  - [x] Basic mapped type syntax with keyof integration
+  - [x] Optional and readonly modifiers support
+  - [x] **Mapped type expansion** - converts to concrete object types
+  - [x] Type parameter substitution (`T[P]` patterns)
+  - [x] Assignment checking with automatic expansion
+  - [x] Integration with utility types and complex expressions
+- [x] Utility Types (`Partial`, `Readonly`, `Pick`, etc.) - **Complete Implementation!**
+  - [x] Built-in utility types (`Partial<T>`, `Required<T>`, `Readonly<T>`)
+  - [x] Selection utility types (`Pick<T, K>`, `Omit<T, K>`)
+  - [x] Creation utility types (`Record<K, V>`)
+  - [x] Working with real assignments and type checking
+  - [x] Proper mapped type expansion for all utility types
+- [x] **keyof Operator** - **Complete Implementation!**
+  - [x] `keyof` type operator for extracting object keys
+  - [x] Resolution to union of literal types (`keyof Person` → `"name" | "age"`)
+  - [x] Integration with mapped types and indexed access types
+  - [x] Type checking and assignment validation
+  - [x] Support for object types and interfaces
+- [x] **Indexed Access Types** - **Complete Implementation!**
+  - [x] Property access syntax (`T[K]`) in type contexts
+  - [x] Direct property access (`Person["name"]` → `string`)
+  - [x] Union key access (`Person["name" | "age"]` → `string | number`)
+  - [x] Integration with keyof operator (`Person[keyof Person]`)
+  - [x] Type parameter support in mapped type contexts (`T[P]`)
+- [x] **Type Predicates** - **Complete Implementation!**
+  - [x] `is` keyword for user-defined type guards
+  - [x] Function return type predicates (`x is string`)
+  - [x] Integration with type narrowing system
+  - [x] Custom type guard functions
+  - [x] Control flow analysis with type predicates
+- [x] **Template Literal Types** - **Complete Implementation!**
+  - [x] Template literal syntax in type contexts (`` `Hello ${T}!` ``)
+  - [x] String manipulation at compile time
+  - [x] Multiple interpolations and complex patterns
+  - [x] Type computation engine for literal concatenation
+  - [x] Integration with generic type parameters
 
 ### Classes - **Complete Implementation!**
 
@@ -517,7 +578,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Property access and assignment with type checking
 - [x] **Methods** - **Full Implementation!**
   - [x] Instance methods with `this` context
-  - [x] Method overloads (TypeScript-style signatures)  
+  - [x] Method overloads (TypeScript-style signatures)
   - [x] Type annotations for parameters and return types
   - [x] Optional parameters and default values in methods
   - [x] Method calls with proper type checking
@@ -552,12 +613,14 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Interface property and method requirement enforcement
   - [x] Structural typing validation for implementations
   - [x] TypeScript-compliant error messages for missing implementations
-- [x] **Generic Classes** - **New! Complete with Type Inference!**
+- [x] **Generic Classes** - **Complete with Recursive Support!**
   - [x] Generic class declarations (`class Container<T>`)
   - [x] Multiple type parameters (`class Pair<T, U>`)
   - [x] Type parameter constraints (`class NumberContainer<T extends number>`)
   - [x] **Automatic type inference** (`new Container(42)` infers `T` as `number`)
   - [x] Explicit type arguments (`new Container<string>("hello")`)
+  - [x] **Recursive generic classes** - `class Node<T> { next?: Node<T>; }` with self-references
+  - [x] **Generic inheritance** - `class Stack<T> extends Container<T>` with proper type resolution
   - [x] Generic methods and properties work correctly
   - [x] Getters/setters fully functional in generic classes
 - [x] **Advanced Features**
@@ -567,9 +630,9 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] **Constructor and method overloads** (TypeScript-style function signatures)
   - [x] **Property parameter shortcuts** (planned feature)
 - [x] **Comprehensive Integration**
-  - [x] **50+ class-related tests** covering all features and edge cases
+  - [x] **51+ class-related tests** covering all features and edge cases including recursive generics
   - [x] Full TypeScript compatibility for class features
-  - [x] Integration with interface system and structural typing  
+  - [x] Integration with interface system and structural typing
   - [x] Complete type checking and error reporting
   - [x] Production-ready implementation with proper VM integration
 
