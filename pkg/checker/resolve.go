@@ -207,18 +207,6 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			promiseType.WithProperty("catch", types.Any)
 			return promiseType
 
-		case "Readonly":
-			if len(node.TypeArguments) != 1 {
-				c.addError(node, "Readonly requires exactly one type argument")
-				return nil
-			}
-			innerType := c.resolveTypeAnnotation(node.TypeArguments[0])
-			if innerType == nil {
-				return nil // Error already reported
-			}
-			// Instantiate the Readonly<T> generic type
-			return types.NewInstantiatedType(types.ReadonlyGeneric, []types.Type{innerType}).Substitute()
-
 		default:
 			// Check if this is a forward reference to the current generic class
 			var baseType types.Type
@@ -789,6 +777,34 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		}
 		return &types.TupleType{ElementTypes: newElementTypes}
 
+	case *types.MappedType:
+		// Recursively substitute types in mapped type
+		newConstraintType := c.substituteTypes(typ.ConstraintType, substitution)
+		newValueType := c.substituteTypes(typ.ValueType, substitution)
+		
+		return &types.MappedType{
+			TypeParameter:    typ.TypeParameter,    // Keep parameter name as-is
+			ConstraintType:   newConstraintType,
+			ValueType:        newValueType,
+			OptionalModifier: typ.OptionalModifier,
+			ReadonlyModifier: typ.ReadonlyModifier,
+		}
+
+	case *types.KeyofType:
+		// Substitute the operand type
+		newOperandType := c.substituteTypes(typ.OperandType, substitution)
+		// Compute the keyof type after substitution
+		return c.computeKeyofType(newOperandType)
+
+	case *types.IndexedAccessType:
+		// Substitute both object and index types
+		newObjectType := c.substituteTypes(typ.ObjectType, substitution)
+		newIndexType := c.substituteTypes(typ.IndexType, substitution)
+		return &types.IndexedAccessType{
+			ObjectType: newObjectType,
+			IndexType:  newIndexType,
+		}
+
 	default:
 		// For primitive types and other types that don't contain type parameters,
 		// return as-is
@@ -841,6 +857,11 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 		return types.NewUnionType(keyTypes...)
 		
 	default:
+		// Handle special cases
+		if operandType == types.Any {
+			// keyof any should be string | number | symbol (simplified to string for now)
+			return types.String
+		}
 		// For non-object types, keyof typically resolves to never
 		// TODO: Handle other types like arrays (which should include numeric indices)
 		return types.Never
@@ -1059,6 +1080,10 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 					Value: vm.String(propName),
 				})
 			}
+		} else if operandType == types.Any {
+			// For keyof any, we can't enumerate specific keys, so this mapped type
+			// should act like any for property access - return Any
+			return types.Any
 		}
 	} else if unionType, ok := constraintType.(*types.UnionType); ok {
 		// Handle direct union constraint: [P in "name" | "age"]
@@ -1066,6 +1091,10 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	} else if literalType, ok := constraintType.(*types.LiteralType); ok {
 		// Handle single literal constraint: [P in "name"]
 		iterationKeys = []types.Type{literalType}
+	} else if constraintType == types.String {
+		// Handle case where constraint is just 'string' (from keyof any)
+		// This means we're mapping over all possible string keys, so return Any
+		return types.Any
 	} else {
 		// Unsupported constraint type for now
 		return nil
@@ -1175,24 +1204,127 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 // isAssignableWithExpansion checks if source can be assigned to target,
 // but first expands any mapped types to concrete object types
 func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
-	// Expand target if it's a mapped type
-	expandedTarget := target
-	if mappedType, ok := target.(*types.MappedType); ok {
-		expanded := c.expandMappedType(mappedType)
-		if expanded != nil {
-			expandedTarget = expanded
-		}
-	}
+	debugPrintf("// [Checker] isAssignableWithExpansion: source=%T target=%T\n", source, target)
+	debugPrintf("// [Checker] source: %s\n", source.String())
+	debugPrintf("// [Checker] target: %s\n", target.String())
+	
+	// Expand target if it's a mapped type or instantiated type containing a mapped type
+	expandedTarget := c.expandIfMappedType(target)
 
 	// Expand source if it's a mapped type (less common but possible)
-	expandedSource := source
-	if mappedType, ok := source.(*types.MappedType); ok {
+	expandedSource := c.expandIfMappedType(source)
+
+	// Use the standard assignability check with expanded types
+	result := types.IsAssignable(expandedSource, expandedTarget)
+	debugPrintf("// [Checker] isAssignableWithExpansion result: %v\n", result)
+	return result
+}
+
+// expandIfMappedType expands a type if it's a mapped type or contains a mapped type
+func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
+	if typ == nil {
+		return typ
+	}
+
+	debugPrintf("// [Checker] expandIfMappedType called with type: %T %s\n", typ, typ.String())
+
+	// Direct mapped type
+	if mappedType, ok := typ.(*types.MappedType); ok {
+		debugPrintf("// [Checker] Found direct mapped type: %s\n", mappedType.String())
+		debugPrintf("// [Checker] Constraint: %T %s\n", mappedType.ConstraintType, mappedType.ConstraintType.String())
+		debugPrintf("// [Checker] ValueType: %T %s\n", mappedType.ValueType, mappedType.ValueType.String())
 		expanded := c.expandMappedType(mappedType)
 		if expanded != nil {
-			expandedSource = expanded
+			debugPrintf("// [Checker] Direct mapped type expanded to: %s\n", expanded.String())
+			return expanded
+		}
+		debugPrintf("// [Checker] Direct mapped type expansion failed\n")
+		return typ
+	}
+
+	// Instantiated type that might contain a mapped type
+	if instantiated, ok := typ.(*types.InstantiatedType); ok {
+		debugPrintf("// [Checker] Found InstantiatedType, checking body...\n")
+		// Check if the instantiated type's body is a mapped type
+		if instantiated.Generic != nil && instantiated.Generic.Body != nil {
+			debugPrintf("// [Checker] InstantiatedType body: %T %s\n", instantiated.Generic.Body, instantiated.Generic.Body.String())
+			if mappedType, ok := instantiated.Generic.Body.(*types.MappedType); ok {
+				debugPrintf("// [Checker] InstantiatedType contains mapped type, substituting...\n")
+				// We need to substitute the type arguments in the mapped type
+				substitutedMappedType := c.substituteMappedType(mappedType, instantiated.Generic.TypeParameters, instantiated.TypeArguments)
+				if substitutedMappedType != nil {
+					debugPrintf("// [Checker] Substituted mapped type: %s\n", substitutedMappedType.String())
+					expanded := c.expandMappedType(substitutedMappedType)
+					if expanded != nil {
+						debugPrintf("// [Checker] InstantiatedType expanded to: %s\n", expanded.String())
+						return expanded
+					}
+				}
+			}
 		}
 	}
 
-	// Use the standard assignability check with expanded types
-	return types.IsAssignable(expandedSource, expandedTarget)
+	debugPrintf("// [Checker] No expansion performed, returning original type\n")
+	return typ
+}
+
+// substituteMappedType substitutes type arguments into a mapped type
+func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams []*types.TypeParameter, typeArgs []types.Type) *types.MappedType {
+	if mappedType == nil || len(typeParams) != len(typeArgs) {
+		return mappedType
+	}
+
+	// Create substitution map
+	substitutions := make(map[string]types.Type)
+	for i, param := range typeParams {
+		if i < len(typeArgs) {
+			substitutions[param.Name] = typeArgs[i]
+		}
+	}
+
+	// Substitute in constraint type
+	substitutedConstraint := c.substituteInType(mappedType.ConstraintType, substitutions)
+	
+	// Substitute in value type
+	substitutedValue := c.substituteInType(mappedType.ValueType, substitutions)
+
+	return &types.MappedType{
+		TypeParameter:    mappedType.TypeParameter,
+		ConstraintType:   substitutedConstraint,
+		ValueType:        substitutedValue,
+		ReadonlyModifier: mappedType.ReadonlyModifier,
+		OptionalModifier: mappedType.OptionalModifier,
+	}
+}
+
+// substituteInType performs type substitution based on a substitution map
+func (c *Checker) substituteInType(typ types.Type, substitutions map[string]types.Type) types.Type {
+	if typ == nil {
+		return nil
+	}
+
+	switch t := typ.(type) {
+	case *types.TypeParameterType:
+		if t.Parameter != nil {
+			if replacement, exists := substitutions[t.Parameter.Name]; exists {
+				return replacement
+			}
+		}
+		return typ
+
+	case *types.KeyofType:
+		substitutedOperand := c.substituteInType(t.OperandType, substitutions)
+		return &types.KeyofType{OperandType: substitutedOperand}
+
+	case *types.IndexedAccessType:
+		substitutedObject := c.substituteInType(t.ObjectType, substitutions)
+		substitutedIndex := c.substituteInType(t.IndexType, substitutions)
+		return &types.IndexedAccessType{
+			ObjectType: substitutedObject,
+			IndexType:  substitutedIndex,
+		}
+
+	default:
+		return typ
+	}
 }

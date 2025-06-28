@@ -197,7 +197,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 			
 			if effectiveArgIndex < len(paramTypes) {
 				paramType := paramTypes[effectiveArgIndex]
-				if argType != nil && !types.IsAssignable(argType, paramType) {
+				if argType != nil && !c.isAssignableWithExpansion(argType, paramType) {
 					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
 					allOk = false
 				}

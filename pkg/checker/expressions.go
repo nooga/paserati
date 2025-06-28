@@ -516,6 +516,34 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					resultType = types.Never
 				}
 			}
+		case *types.MappedType:
+			// Handle property access on mapped types by expanding them first
+			debugPrintf("// [Checker MemberExpr] Found mapped type, expanding for property access: %s\n", obj.String())
+			expandedType := c.expandIfMappedType(obj)
+			if expandedObj, ok := expandedType.(*types.ObjectType); ok {
+				debugPrintf("// [Checker MemberExpr] Mapped type expanded to ObjectType: %s\n", expandedObj.String())
+				if propType, exists := expandedObj.Properties[propertyName]; exists {
+					resultType = propType
+					debugPrintf("// [Checker MemberExpr] Found property '%s' in expanded type: %s\n", propertyName, propType.String())
+				} else {
+					// Check if property is optional
+					isOptional := expandedObj.OptionalProperties != nil && expandedObj.OptionalProperties[propertyName]
+					if !isOptional {
+						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+						resultType = types.Never
+					} else {
+						resultType = types.Undefined
+					}
+				}
+			} else if expandedType == types.Any {
+				// Mapped type expanded to any (e.g., Readonly<any>)
+				debugPrintf("// [Checker MemberExpr] Mapped type expanded to any, allowing property access\n")
+				resultType = types.Any
+			} else {
+				debugPrintf("// [Checker MemberExpr] Mapped type expansion failed, result: %T %s\n", expandedType, expandedType.String())
+				c.addError(node.Object, fmt.Sprintf("property access is not supported on mapped type %s", obj.String()))
+				resultType = types.Never
+			}
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.

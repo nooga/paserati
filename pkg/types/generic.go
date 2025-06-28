@@ -231,9 +231,6 @@ var (
 	
 	// Promise<T> generic type  
 	PromiseGeneric *GenericType
-	
-	// Readonly<T> utility type
-	ReadonlyGeneric *GenericType
 )
 
 func init() {
@@ -248,9 +245,4 @@ func init() {
 	promiseBody.WithProperty("then", Any)
 	promiseBody.WithProperty("catch", Any)
 	PromiseGeneric = NewGenericType("Promise", []*TypeParameter{promiseT}, promiseBody)
-	
-	// Create Readonly<T> utility type
-	readonlyT := NewTypeParameter("T", 0, nil)
-	readonlyBody := NewReadonlyType(&TypeParameterType{Parameter: readonlyT})
-	ReadonlyGeneric = NewGenericType("Readonly", []*TypeParameter{readonlyT}, readonlyBody)
 }
