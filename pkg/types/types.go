@@ -231,3 +231,70 @@ func (ct *ConditionalType) Equals(other Type) bool {
 }
 
 func (ct *ConditionalType) typeNode() {}
+
+// TemplateLiteralType represents a template literal type like `Hello ${T}!`
+// This is used for string manipulation at the type level
+type TemplateLiteralType struct {
+	Parts []TemplateLiteralPart // Alternating string and type parts
+}
+
+// TemplateLiteralPart represents a part of a template literal type
+type TemplateLiteralPart struct {
+	IsLiteral bool // true for string literals, false for type interpolations
+	Literal   string // string content (when IsLiteral=true)
+	Type      Type   // interpolated type (when IsLiteral=false)
+}
+
+func (tlt *TemplateLiteralType) String() string {
+	var out strings.Builder
+	out.WriteString("`")
+	for _, part := range tlt.Parts {
+		if part.IsLiteral {
+			// Escape backticks and dollar signs in string parts
+			escaped := strings.ReplaceAll(part.Literal, "`", "\\`")
+			escaped = strings.ReplaceAll(escaped, "$", "\\$")
+			out.WriteString(escaped)
+		} else {
+			out.WriteString("${")
+			if part.Type != nil {
+				out.WriteString(part.Type.String())
+			} else {
+				out.WriteString("unknown")
+			}
+			out.WriteString("}")
+		}
+	}
+	out.WriteString("`")
+	return out.String()
+}
+
+func (tlt *TemplateLiteralType) Equals(other Type) bool {
+	otherTlt, ok := other.(*TemplateLiteralType)
+	if !ok {
+		return false
+	}
+	if len(tlt.Parts) != len(otherTlt.Parts) {
+		return false
+	}
+	for i, part := range tlt.Parts {
+		otherPart := otherTlt.Parts[i]
+		if part.IsLiteral != otherPart.IsLiteral {
+			return false
+		}
+		if part.IsLiteral {
+			if part.Literal != otherPart.Literal {
+				return false
+			}
+		} else {
+			if (part.Type == nil) != (otherPart.Type == nil) {
+				return false
+			}
+			if part.Type != nil && !part.Type.Equals(otherPart.Type) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (tlt *TemplateLiteralType) typeNode() {}

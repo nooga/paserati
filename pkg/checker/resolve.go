@@ -284,6 +284,9 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.ConditionalTypeExpression:
 		return c.resolveConditionalTypeExpression(node)
 
+	case *parser.TemplateLiteralTypeExpression:
+		return c.resolveTemplateLiteralTypeExpression(node)
+
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
@@ -828,6 +831,33 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			TrueType:    newTrueType,
 			FalseType:   newFalseType,
 		}
+
+	case *types.TemplateLiteralType:
+		// Substitute types in template literal type parts
+		newParts := make([]types.TemplateLiteralPart, len(typ.Parts))
+		for i, part := range typ.Parts {
+			if part.IsLiteral {
+				// String literals don't need substitution
+				newParts[i] = part
+			} else {
+				// Substitute the type in type interpolation parts
+				newType := c.substituteTypes(part.Type, substitution)
+				newParts[i] = types.TemplateLiteralPart{
+					IsLiteral: false,
+					Literal:   "",
+					Type:      newType,
+				}
+			}
+		}
+		
+		// Try to compute the template literal type with substituted parts
+		substitutedTlt := &types.TemplateLiteralType{Parts: newParts}
+		computedType := c.computeTemplateLiteralType(substitutedTlt)
+		if computedType != nil {
+			return computedType
+		}
+		
+		return substitutedTlt
 
 	default:
 		// For primitive types and other types that don't contain type parameters,
@@ -1424,5 +1454,91 @@ func (c *Checker) substituteInType(typ types.Type, substitutions map[string]type
 
 	default:
 		return typ
+	}
+}
+
+// resolveTemplateLiteralTypeExpression resolves a template literal type expression to a TemplateLiteralType
+func (c *Checker) resolveTemplateLiteralTypeExpression(node *parser.TemplateLiteralTypeExpression) types.Type {
+	if node == nil || len(node.Parts) == 0 {
+		c.addError(node, "empty template literal type")
+		return nil
+	}
+
+	var parts []types.TemplateLiteralPart
+
+	for i, part := range node.Parts {
+		if i%2 == 0 {
+			// Even indices are string parts
+			if stringPart, ok := part.(*parser.TemplateStringPart); ok {
+				parts = append(parts, types.TemplateLiteralPart{
+					IsLiteral: true,
+					Literal:   stringPart.Value,
+					Type:      nil,
+				})
+			} else {
+				c.addError(node, "expected string part in template literal type")
+				return nil
+			}
+		} else {
+			// Odd indices are type expressions
+			if typeExpr, ok := part.(parser.Expression); ok {
+				resolvedType := c.resolveTypeAnnotation(typeExpr)
+				if resolvedType == nil {
+					// Error already reported by resolveTypeAnnotation
+					return nil
+				}
+				parts = append(parts, types.TemplateLiteralPart{
+					IsLiteral: false,
+					Literal:   "",
+					Type:      resolvedType,
+				})
+			} else {
+				c.addError(node, "expected type expression in template literal type interpolation")
+				return nil
+			}
+		}
+	}
+
+	// Try to compute the template literal type to a concrete string literal
+	computedType := c.computeTemplateLiteralType(&types.TemplateLiteralType{Parts: parts})
+	if computedType != nil {
+		return computedType
+	}
+
+	return &types.TemplateLiteralType{
+		Parts: parts,
+	}
+}
+
+// computeTemplateLiteralType attempts to compute a template literal type to a concrete string literal
+// Returns nil if the template contains non-literal types that can't be computed
+func (c *Checker) computeTemplateLiteralType(tlt *types.TemplateLiteralType) types.Type {
+	var result strings.Builder
+	
+	for _, part := range tlt.Parts {
+		if part.IsLiteral {
+			// String literal part - add directly
+			result.WriteString(part.Literal)
+		} else {
+			// Type interpolation part - try to extract string literal
+			if literalType, ok := part.Type.(*types.LiteralType); ok {
+				if literalType.Value.Type() == vm.TypeString {
+					// It's a string literal - add its value
+					result.WriteString(literalType.Value.AsString())
+				} else {
+					// Non-string literal - can't compute
+					return nil
+				}
+			} else {
+				// Non-literal type - can't compute to concrete string
+				return nil
+			}
+		}
+	}
+	
+	// All parts were computable - return as string literal type
+	computedValue := result.String()
+	return &types.LiteralType{
+		Value: vm.String(computedValue),
 	}
 }

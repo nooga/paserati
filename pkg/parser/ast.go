@@ -1678,6 +1678,44 @@ func (cte *ConditionalTypeExpression) String() string {
 // GetComputedType satisfies the Expression interface
 func (cte *ConditionalTypeExpression) GetComputedType() types.Type { return cte.ComputedType }
 
+// --- NEW: TemplateLiteralTypeExpression ---
+
+// TemplateLiteralTypeExpression represents a template literal type like `Hello ${T}!`
+type TemplateLiteralTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType (types.TemplateLiteralType)
+	Token          lexer.Token // The opening '`' token
+	Parts          []Node      // Alternating string parts and type expressions
+}
+
+func (tlte *TemplateLiteralTypeExpression) expressionNode()      {}
+func (tlte *TemplateLiteralTypeExpression) TokenLiteral() string { return tlte.Token.Literal }
+func (tlte *TemplateLiteralTypeExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("`")
+	for i, part := range tlte.Parts {
+		if i%2 == 0 {
+			// String part - escape backticks and dollar signs
+			str := part.String()
+			str = strings.ReplaceAll(str, "`", "\\`")
+			str = strings.ReplaceAll(str, "$", "\\$")
+			out.WriteString(str)
+		} else {
+			// Type expression part
+			out.WriteString("${")
+			out.WriteString(part.String())
+			out.WriteString("}")
+		}
+	}
+	out.WriteString("`")
+	if tlte.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", tlte.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface
+func (tlte *TemplateLiteralTypeExpression) GetComputedType() types.Type { return tlte.ComputedType }
+
 // --- NEW: KeyofTypeExpression ---
 
 // KeyofTypeExpression represents a keyof type operator like keyof T
@@ -2034,6 +2072,12 @@ type InterfaceProperty struct {
 	IsMethod               bool        // Whether this is a method signature
 	Optional               bool        // Whether the property is optional (Name?)
 	IsConstructorSignature bool        // Whether this is a constructor signature (new (): T)
+	
+	// Index signature fields
+	IsIndexSignature bool       // Whether this is an index signature like [key: string]: Type
+	KeyName          *Identifier // The key parameter name (e.g., "key" in [key: string]: Type)
+	KeyType          Expression  // The key type (e.g., "string" in [key: string]: Type)
+	ValueType        Expression  // The value type (e.g., "Type" in [key: string]: Type)
 }
 
 func (ip *InterfaceProperty) String() string {
@@ -2041,6 +2085,20 @@ func (ip *InterfaceProperty) String() string {
 	if ip.IsConstructorSignature {
 		out.WriteString("new ")
 		out.WriteString(ip.Type.String()) // This should be a function type for the constructor
+	} else if ip.IsIndexSignature {
+		// Index signature: [key: string]: Type
+		out.WriteString("[")
+		if ip.KeyName != nil {
+			out.WriteString(ip.KeyName.String())
+		}
+		out.WriteString(": ")
+		if ip.KeyType != nil {
+			out.WriteString(ip.KeyType.String())
+		}
+		out.WriteString("]: ")
+		if ip.ValueType != nil {
+			out.WriteString(ip.ValueType.String())
+		}
 	} else {
 		out.WriteString(ip.Name.String())
 		if ip.Optional {

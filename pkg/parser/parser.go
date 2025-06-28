@@ -282,6 +282,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // 'undefined' type
 	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)       // 'void' type
 	p.registerTypePrefix(lexer.KEYOF, p.parseKeyofTypeExpression)  // 'keyof' type operator
+	p.registerTypePrefix(lexer.TEMPLATE_START, p.parseTemplateLiteralType) // Template literal types
 	// NEW: Constructor types that start with 'new'
 	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // NEW: Constructor types like 'new () => T'
 	// Literal types in TYPE context too
@@ -4609,6 +4610,11 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		return prop
 	}
 
+	// Check for index signature: [key: type]: valueType
+	if p.curTokenIs(lexer.LBRACKET) {
+		return p.parseInterfaceIndexSignature()
+	}
+
 	// Check for shorthand method syntax first (identifier or keyword as property name)
 	propName := p.parsePropertyName()
 	if propName == nil {
@@ -4654,6 +4660,50 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 	prop.Type = p.parseTypeExpression()
 	if prop.Type == nil {
 		// Error should have been added by parseTypeExpression
+		return nil
+	}
+
+	return prop
+}
+
+// parseInterfaceIndexSignature parses an interface index signature like [key: string]: Type
+func (p *Parser) parseInterfaceIndexSignature() *InterfaceProperty {
+	prop := &InterfaceProperty{
+		IsIndexSignature: true,
+	}
+
+	// Expect identifier for key name
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+	prop.KeyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	// Expect ':'
+	if !p.expectPeek(lexer.COLON) {
+		return nil
+	}
+
+	// Parse key type
+	p.nextToken() // Move to the start of the key type expression
+	prop.KeyType = p.parseTypeExpression()
+	if prop.KeyType == nil {
+		return nil
+	}
+
+	// Expect ']'
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil
+	}
+
+	// Expect ':'
+	if !p.expectPeek(lexer.COLON) {
+		return nil
+	}
+
+	// Parse value type
+	p.nextToken() // Move to the start of the value type expression
+	prop.ValueType = p.parseTypeExpression()
+	if prop.ValueType == nil {
 		return nil
 	}
 
@@ -6096,6 +6146,74 @@ func (p *Parser) parseKeyofTypeExpression() Expression {
 	}
 
 	return kte
+}
+
+// parseTemplateLiteralType parses template literal types like `Hello ${T}!`
+func (p *Parser) parseTemplateLiteralType() Expression {
+	tlte := &TemplateLiteralTypeExpression{Token: p.curToken} // TEMPLATE_START token
+	tlte.Parts = []Node{}
+
+	// Consume the opening backtick
+	p.nextToken()
+
+	// Always start with a string part (can be empty)
+	expectingString := true
+
+	for !p.curTokenIs(lexer.TEMPLATE_END) && !p.curTokenIs(lexer.EOF) {
+		if p.curTokenIs(lexer.TEMPLATE_STRING) {
+			if !expectingString {
+				p.addError(p.curToken, "unexpected string in template literal type")
+				return nil
+			}
+			// String part of the template
+			stringPart := &TemplateStringPart{Value: p.curToken.Literal}
+			tlte.Parts = append(tlte.Parts, stringPart)
+			expectingString = false
+			p.nextToken()
+		} else if p.curTokenIs(lexer.TEMPLATE_INTERPOLATION) {
+			// If we were expecting a string but got interpolation, add empty string
+			if expectingString {
+				emptyString := &TemplateStringPart{Value: ""}
+				tlte.Parts = append(tlte.Parts, emptyString)
+			}
+
+			p.nextToken() // Move past ${
+
+			// Parse the TYPE expression inside the interpolation (not value expression!)
+			typeExpr := p.parseTypeExpression()
+			if typeExpr == nil {
+				p.addError(p.curToken, "failed to parse type expression in template literal type interpolation")
+				return nil
+			}
+			tlte.Parts = append(tlte.Parts, typeExpr)
+
+			// Expect closing brace }
+			if !p.expectPeek(lexer.RBRACE) {
+				p.addError(p.curToken, "expected '}' to close template literal type interpolation")
+				return nil
+			}
+			p.nextToken()          // Move past }
+			expectingString = true // After type expression, we expect a string
+		} else {
+			// Unexpected token
+			p.addError(p.curToken, fmt.Sprintf("unexpected token in template literal type: %s", p.curToken.Type))
+			return nil
+		}
+	}
+
+	if !p.curTokenIs(lexer.TEMPLATE_END) {
+		p.addError(p.curToken, "unterminated template literal type, expected closing backtick")
+		return nil
+	}
+
+	// If we were expecting a string at the end, add empty string
+	if expectingString {
+		emptyString := &TemplateStringPart{Value: ""}
+		tlte.Parts = append(tlte.Parts, emptyString)
+	}
+
+	// Don't consume the closing backtick here - let the caller handle it
+	return tlte
 }
 
 // parseTypePredicateExpression parses a type predicate like 'x is string'

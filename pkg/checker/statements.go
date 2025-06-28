@@ -128,6 +128,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// 2. Build the ObjectType from interface properties, including inheritance
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
+	var indexSignatures []*types.IndexSignature
 
 	// First, inherit properties from extended interfaces
 	for _, extendedInterfaceName := range node.Extends {
@@ -156,7 +157,29 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 	// Then, add/override properties from this interface's declaration
 	for _, prop := range node.Properties {
-		if prop.IsConstructorSignature {
+		if prop.IsIndexSignature {
+			// Handle index signature: [key: KeyType]: ValueType
+			keyType := c.resolveTypeAnnotation(prop.KeyType)
+			if keyType == nil {
+				debugPrintf("// [Checker Interface P1] Failed to resolve key type for index signature in interface '%s'. Using string.\n", node.Name.Value)
+				keyType = types.String
+			}
+			
+			valueType := c.resolveTypeAnnotation(prop.ValueType)
+			if valueType == nil {
+				debugPrintf("// [Checker Interface P1] Failed to resolve value type for index signature in interface '%s'. Using Any.\n", node.Name.Value)
+				valueType = types.Any
+			}
+			
+			indexSignature := &types.IndexSignature{
+				KeyType:   keyType,
+				ValueType: valueType,
+			}
+			indexSignatures = append(indexSignatures, indexSignature)
+			
+			debugPrintf("// [Checker Interface P1] Interface '%s' has index signature [%s]: %s\n", 
+				node.Name.Value, keyType.String(), valueType.String())
+		} else if prop.IsConstructorSignature {
 			// For constructor signatures, add them as a special "new" property
 			// This allows the interface to describe both instance properties and constructor behavior
 			constructorType := c.resolveTypeAnnotation(prop.Type)
@@ -219,6 +242,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	interfaceType := &types.ObjectType{
 		Properties:         properties,
 		OptionalProperties: optionalProperties,
+		IndexSignatures:    indexSignatures,
 	}
 
 	// 4. Define the interface as a type alias in the environment
@@ -273,6 +297,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	// Build the ObjectType body with TypeParameterType references
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
+	var indexSignatures []*types.IndexSignature
 
 	// Handle extends clause with generic environment
 	for _, extendedInterfaceName := range node.Extends {
@@ -297,7 +322,24 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 
 	// Process interface properties with TypeParameterType references
 	for _, prop := range node.Properties {
-		if prop.IsConstructorSignature {
+		if prop.IsIndexSignature {
+			// Handle index signature: [key: KeyType]: ValueType
+			keyType := c.resolveTypeAnnotation(prop.KeyType)
+			if keyType == nil {
+				keyType = types.String
+			}
+			
+			valueType := c.resolveTypeAnnotation(prop.ValueType)
+			if valueType == nil {
+				valueType = types.Any
+			}
+			
+			indexSignature := &types.IndexSignature{
+				KeyType:   keyType,
+				ValueType: valueType,
+			}
+			indexSignatures = append(indexSignatures, indexSignature)
+		} else if prop.IsConstructorSignature {
 			constructorType := c.resolveTypeAnnotation(prop.Type)
 			if constructorType == nil {
 				constructorType = types.Any
@@ -327,6 +369,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	bodyType := &types.ObjectType{
 		Properties:         properties,
 		OptionalProperties: optionalProperties,
+		IndexSignatures:    indexSignatures,
 	}
 
 	// 3. Create the GenericType
