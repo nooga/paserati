@@ -1568,6 +1568,172 @@ func (fte *FunctionTypeExpression) String() string {
 // The actual type is determined during type checking.
 func (fte *FunctionTypeExpression) GetComputedType() types.Type { return nil }
 
+// --- NEW: MappedTypeExpression ---
+
+// MappedTypeExpression represents a mapped type like { [P in K]: T }
+// This is used for utility types like Partial<T>, Readonly<T>, etc.
+type MappedTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType (types.MappedType)
+	Token          lexer.Token // The '{' token
+	TypeParameter  *Identifier // The iteration variable (e.g., "P" in [P in K])
+	ConstraintType Expression  // The type being iterated over (e.g., K in [P in K])
+	ValueType      Expression  // The resulting value type for each property
+	
+	// Modifiers for the mapped type
+	ReadonlyModifier string // "+", "-", or "" (for readonly modifier)
+	OptionalModifier string // "+", "-", or "" (for optional modifier)
+}
+
+func (mte *MappedTypeExpression) expressionNode()      {}
+func (mte *MappedTypeExpression) TokenLiteral() string { return mte.Token.Literal }
+func (mte *MappedTypeExpression) String() string {
+	var out bytes.Buffer
+	
+	out.WriteString("{ ")
+	
+	// Add modifiers
+	if mte.ReadonlyModifier == "+" {
+		out.WriteString("readonly ")
+	} else if mte.ReadonlyModifier == "-" {
+		out.WriteString("-readonly ")
+	}
+	
+	out.WriteString("[")
+	if mte.TypeParameter != nil {
+		out.WriteString(mte.TypeParameter.String())
+	}
+	out.WriteString(" in ")
+	if mte.ConstraintType != nil {
+		out.WriteString(mte.ConstraintType.String())
+	}
+	out.WriteString("]")
+	
+	// Add optional modifier
+	if mte.OptionalModifier == "+" {
+		out.WriteString("?")
+	} else if mte.OptionalModifier == "-" {
+		out.WriteString("-?")
+	}
+	
+	out.WriteString(": ")
+	if mte.ValueType != nil {
+		out.WriteString(mte.ValueType.String())
+	}
+	
+	out.WriteString(" }")
+	
+	if mte.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", mte.ComputedType.String()))
+	}
+	
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface (placeholder)
+// The actual type is determined during type checking.
+func (mte *MappedTypeExpression) GetComputedType() types.Type { return mte.ComputedType }
+
+// --- NEW: KeyofTypeExpression ---
+
+// KeyofTypeExpression represents a keyof type operator like keyof T
+type KeyofTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'keyof' token
+	Type           Expression  // The type to get keys from
+}
+
+func (kte *KeyofTypeExpression) expressionNode()      {}
+func (kte *KeyofTypeExpression) TokenLiteral() string { return kte.Token.Literal }
+func (kte *KeyofTypeExpression) String() string {
+	var out bytes.Buffer
+	
+	out.WriteString("keyof ")
+	if kte.Type != nil {
+		out.WriteString(kte.Type.String())
+	}
+	
+	if kte.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", kte.ComputedType.String()))
+	}
+	
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface (placeholder)
+// The actual type is determined during type checking.
+func (kte *KeyofTypeExpression) GetComputedType() types.Type { return kte.ComputedType }
+
+// --- NEW: TypePredicateExpression ---
+
+// TypePredicateExpression represents a type predicate like 'x is string'
+// Used in function return types to indicate that the function is a type guard
+type TypePredicateExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'is' token
+	Parameter      *Identifier // The parameter being tested (e.g., "x" in "x is string")
+	Type           Expression  // The type being tested for
+}
+
+func (tpe *TypePredicateExpression) expressionNode()      {}
+func (tpe *TypePredicateExpression) TokenLiteral() string { return tpe.Token.Literal }
+func (tpe *TypePredicateExpression) String() string {
+	var out bytes.Buffer
+	
+	if tpe.Parameter != nil {
+		out.WriteString(tpe.Parameter.String())
+	}
+	out.WriteString(" is ")
+	if tpe.Type != nil {
+		out.WriteString(tpe.Type.String())
+	}
+	
+	if tpe.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", tpe.ComputedType.String()))
+	}
+	
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface (placeholder)
+// The actual type is determined during type checking.
+func (tpe *TypePredicateExpression) GetComputedType() types.Type { return tpe.ComputedType }
+
+// --- NEW: IndexedAccessTypeExpression ---
+
+// IndexedAccessTypeExpression represents an indexed access type like T[K]
+// Used to access properties of a type using a key type (e.g., Person["name"])
+type IndexedAccessTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The '[' token
+	ObjectType     Expression  // The type being indexed into (e.g., T in T[K])
+	IndexType      Expression  // The key type used for indexing (e.g., K in T[K])
+}
+
+func (iate *IndexedAccessTypeExpression) expressionNode()      {}
+func (iate *IndexedAccessTypeExpression) TokenLiteral() string { return iate.Token.Literal }
+func (iate *IndexedAccessTypeExpression) String() string {
+	var out bytes.Buffer
+	
+	if iate.ObjectType != nil {
+		out.WriteString(iate.ObjectType.String())
+	}
+	out.WriteString("[")
+	if iate.IndexType != nil {
+		out.WriteString(iate.IndexType.String())
+	}
+	out.WriteString("]")
+	
+	if iate.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", iate.ComputedType.String()))
+	}
+	
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface (placeholder)
+// The actual type is determined during type checking.
+func (iate *IndexedAccessTypeExpression) GetComputedType() types.Type { return iate.ComputedType }
+
 // ----------------------------------------------------------------------------
 // END Type Expressions
 // ----------------------------------------------------------------------------
@@ -1705,12 +1871,18 @@ func (ote *ObjectTypeExpression) String() string {
 
 // ObjectTypeProperty represents a property in an object type literal.
 type ObjectTypeProperty struct {
-	Name            *Identifier  // Property name (nil for call signatures)
+	Name            *Identifier  // Property name (nil for call signatures and index signatures)
 	Type            Expression   // Property type annotation or function type for call signatures
 	Optional        bool         // Whether the property is optional (for future use)
 	IsCallSignature bool         // Whether this is a call signature like (param: type): returnType
 	Parameters      []Expression // Parameters for call signatures (only used when IsCallSignature is true)
 	ReturnType      Expression   // Return type for call signatures (only used when IsCallSignature is true)
+	
+	// Index signature fields
+	IsIndexSignature bool       // Whether this is an index signature like [key: string]: Type
+	KeyName          *Identifier // The key parameter name (e.g., "key" in [key: string]: Type)
+	KeyType          Expression  // The key type (e.g., "string" in [key: string]: Type)
+	ValueType        Expression  // The value type (e.g., "Type" in [key: string]: Type)
 }
 
 func (otp *ObjectTypeProperty) String() string {
@@ -1727,6 +1899,20 @@ func (otp *ObjectTypeProperty) String() string {
 		out.WriteString("): ")
 		if otp.ReturnType != nil {
 			out.WriteString(otp.ReturnType.String())
+		}
+	} else if otp.IsIndexSignature {
+		// Index signature: [key: string]: Type
+		out.WriteString("[")
+		if otp.KeyName != nil {
+			out.WriteString(otp.KeyName.String())
+		}
+		out.WriteString(": ")
+		if otp.KeyType != nil {
+			out.WriteString(otp.KeyType.String())
+		}
+		out.WriteString("]: ")
+		if otp.ValueType != nil {
+			out.WriteString(otp.ValueType.String())
 		}
 	} else {
 		// Regular property: name?: type

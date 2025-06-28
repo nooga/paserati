@@ -281,6 +281,18 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.ConstructorTypeExpression:
 		return c.resolveConstructorTypeSignature(node)
 
+	case *parser.KeyofTypeExpression:
+		return c.resolveKeyofTypeExpression(node)
+
+	case *parser.TypePredicateExpression:
+		return c.resolveTypePredicateExpression(node)
+
+	case *parser.MappedTypeExpression:
+		return c.resolveMappedTypeExpression(node)
+
+	case *parser.IndexedAccessTypeExpression:
+		return c.resolveIndexedAccessTypeExpression(node)
+
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
@@ -342,6 +354,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
 	var callSignatures []*types.Signature
+	var indexSignatures []*types.IndexSignature
 
 	for _, prop := range node.Properties {
 		if prop.IsCallSignature {
@@ -368,6 +381,30 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			}
 
 			callSignatures = append(callSignatures, sig)
+		} else if prop.IsIndexSignature {
+			// Handle index signature like [key: string]: Type
+			// For now, we'll add them to IndexSignatures field of ObjectType
+			keyType := c.resolveTypeAnnotation(prop.KeyType)
+			if keyType == nil {
+				keyType = types.Any
+			}
+			valueType := c.resolveTypeAnnotation(prop.ValueType)
+			if valueType == nil {
+				valueType = types.Any
+			}
+
+			indexSig := &types.IndexSignature{
+				KeyType:   keyType,
+				ValueType: valueType,
+			}
+
+			// We'll add this to the ObjectType's IndexSignatures field
+			debugPrintf("// [Checker ObjectType] Index signature [%s: %s]: %s\n",
+				prop.KeyName.Value, keyType.String(), valueType.String())
+
+			// Add to our collected index signatures
+			indexSignatures = append(indexSignatures, indexSig)
+
 		} else if prop.Name != nil {
 			// Regular property or method
 			propType := c.resolveTypeAnnotation(prop.Type)
@@ -394,6 +431,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 		Properties:         properties,
 		OptionalProperties: optionalProperties,
 		CallSignatures:     callSignatures,
+		IndexSignatures:    indexSignatures,
 	}
 
 	// If it's a pure callable object with no properties and exactly one signature,
@@ -756,4 +794,405 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// return as-is
 		return typ
 	}
+}
+
+// resolveKeyofTypeExpression resolves a keyof type expression to a union of string literals
+func (c *Checker) resolveKeyofTypeExpression(node *parser.KeyofTypeExpression) types.Type {
+	if node.Type == nil {
+		c.addError(node, "keyof expression missing operand type")
+		return nil
+	}
+
+	operandType := c.resolveTypeAnnotation(node.Type)
+	if operandType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	// Compute the actual keyof type by extracting keys from the operand type
+	return c.computeKeyofType(operandType)
+}
+
+// computeKeyofType computes the keyof type for a given type
+func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
+	switch typ := operandType.(type) {
+	case *types.ObjectType:
+		// Extract property names and create string literal types
+		var keyTypes []types.Type
+		
+		// Add regular properties
+		for propName := range typ.Properties {
+			keyTypes = append(keyTypes, &types.LiteralType{
+				Value: vm.String(propName),
+			})
+		}
+		
+		// If there are no properties, keyof should be never
+		if len(keyTypes) == 0 {
+			return types.Never
+		}
+		
+		// If there's only one key, return the literal type directly
+		if len(keyTypes) == 1 {
+			return keyTypes[0]
+		}
+		
+		// Return union of all key literal types
+		return types.NewUnionType(keyTypes...)
+		
+	default:
+		// For non-object types, keyof typically resolves to never
+		// TODO: Handle other types like arrays (which should include numeric indices)
+		return types.Never
+	}
+}
+
+// resolveTypePredicateExpression resolves a type predicate expression to a TypePredicateType
+func (c *Checker) resolveTypePredicateExpression(node *parser.TypePredicateExpression) types.Type {
+	if node.Parameter == nil {
+		c.addError(node, "type predicate missing parameter name")
+		return nil
+	}
+
+	if node.Type == nil {
+		c.addError(node, "type predicate missing type")
+		return nil
+	}
+
+	predicateType := c.resolveTypeAnnotation(node.Type)
+	if predicateType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	return &types.TypePredicateType{
+		ParameterName: node.Parameter.Value,
+		Type:          predicateType,
+	}
+}
+
+// resolveMappedTypeExpression resolves a mapped type expression to a MappedType
+func (c *Checker) resolveMappedTypeExpression(node *parser.MappedTypeExpression) types.Type {
+	if node.TypeParameter == nil {
+		c.addError(node, "mapped type missing type parameter")
+		return nil
+	}
+
+	if node.ConstraintType == nil {
+		c.addError(node, "mapped type missing constraint type")
+		return nil
+	}
+
+	if node.ValueType == nil {
+		c.addError(node, "mapped type missing value type")
+		return nil
+	}
+
+	// Resolve constraint type (the type being iterated over)
+	constraintType := c.resolveTypeAnnotation(node.ConstraintType)
+	if constraintType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	// Create a temporary environment with the type parameter in scope
+	// This allows expressions like T[P] to resolve P correctly
+	originalEnv := c.env
+	tempEnv := NewEnclosedEnvironment(c.env)
+	
+	// Add the type parameter to the temporary environment
+	// For now, we'll represent it as a type parameter type
+	typeParam := &types.TypeParameter{
+		Name:       node.TypeParameter.Value,
+		Constraint: constraintType, // The constraint is what P extends/iterates over
+	}
+	tempEnv.DefineTypeParameter(node.TypeParameter.Value, typeParam)
+	
+	// Switch to the temporary environment for resolving the value type
+	c.env = tempEnv
+	valueType := c.resolveTypeAnnotation(node.ValueType)
+	c.env = originalEnv // Restore original environment
+	
+	if valueType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	return &types.MappedType{
+		TypeParameter:    node.TypeParameter.Value,
+		ConstraintType:   constraintType,
+		ValueType:        valueType,
+		ReadonlyModifier: node.ReadonlyModifier,
+		OptionalModifier: node.OptionalModifier,
+	}
+}
+
+// resolveIndexedAccessTypeExpression resolves indexed access types like T[K]
+func (c *Checker) resolveIndexedAccessTypeExpression(node *parser.IndexedAccessTypeExpression) types.Type {
+	if node.ObjectType == nil {
+		c.addError(node, "indexed access type missing object type")
+		return nil
+	}
+
+	if node.IndexType == nil {
+		c.addError(node, "indexed access type missing index type")
+		return nil
+	}
+
+	// Resolve the object type being indexed into
+	objectType := c.resolveTypeAnnotation(node.ObjectType)
+	if objectType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	// Resolve the index type used for accessing
+	indexType := c.resolveTypeAnnotation(node.IndexType)
+	if indexType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	// Try to compute the result if possible
+	resolvedType := c.computeIndexedAccessType(objectType, indexType)
+	if resolvedType != nil {
+		return resolvedType
+	}
+
+	// If we can't resolve it now, return an IndexedAccessType for later resolution
+	return &types.IndexedAccessType{
+		ObjectType: objectType,
+		IndexType:  indexType,
+	}
+}
+
+// computeIndexedAccessType computes the result of an indexed access type like T[K]
+func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) types.Type {
+	// Handle object types with specific string literal keys
+	if objType, ok := objectType.(*types.ObjectType); ok {
+		// Case: Object["propertyName"] where "propertyName" is a string literal
+		if literalType, ok := indexType.(*types.LiteralType); ok {
+			if literalType.Value.Type() == vm.TypeString {
+				strVal := literalType.Value.AsString()
+				// Look up the property directly
+				if propType, exists := objType.Properties[strVal]; exists {
+					return propType
+				}
+				// Property doesn't exist - this could be an error or return never/undefined
+				// For now, return nil to indicate it couldn't be resolved
+				return nil
+			}
+		}
+
+		// Case: Object[keyof Object] - return union of all property types
+		if keyofType, ok := indexType.(*types.KeyofType); ok {
+			if keyofType.OperandType.Equals(objectType) {
+				// Collect all property types
+				var propTypes []types.Type
+				for _, propType := range objType.Properties {
+					propTypes = append(propTypes, propType)
+				}
+				if len(propTypes) == 0 {
+					return types.Never // No properties means never
+				}
+				if len(propTypes) == 1 {
+					return propTypes[0] // Single property type
+				}
+				return types.NewUnionType(propTypes...) // Union of all property types
+			}
+		}
+
+		// Case: Object[union of string literals] - return union of corresponding property types
+		if unionType, ok := indexType.(*types.UnionType); ok {
+			var resultTypes []types.Type
+			for _, memberType := range unionType.Types {
+				if literalType, ok := memberType.(*types.LiteralType); ok {
+					if literalType.Value.Type() == vm.TypeString {
+						strVal := literalType.Value.AsString()
+						if propType, exists := objType.Properties[strVal]; exists {
+							resultTypes = append(resultTypes, propType)
+						}
+					}
+				}
+			}
+			if len(resultTypes) == 0 {
+				return nil // Couldn't resolve any properties
+			}
+			if len(resultTypes) == 1 {
+				return resultTypes[0]
+			}
+			return types.NewUnionType(resultTypes...)
+		}
+	}
+
+	// TODO: Handle other cases like:
+	// - Array[number] should return the element type
+	// - Tuple[number] should return union of tuple element types
+	// - Generic type parameters T[K] with constraints
+
+	// For now, return nil to indicate it couldn't be resolved immediately
+	return nil
+}
+
+// expandMappedType expands a mapped type to a concrete ObjectType
+// Example: { [P in keyof Person]?: Person[P] } → { name?: string; age?: number }
+func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
+	if mappedType == nil {
+		return nil
+	}
+
+	// Get the constraint type (what we're iterating over)
+	constraintType := mappedType.ConstraintType
+	if constraintType == nil {
+		return nil
+	}
+
+	// Handle keyof constraint: [P in keyof SomeType]
+	var iterationKeys []types.Type
+	if keyofType, ok := constraintType.(*types.KeyofType); ok {
+		// Get the keys from the keyof operand
+		operandType := keyofType.OperandType
+		if objType, ok := operandType.(*types.ObjectType); ok {
+			// Extract all property names as literal types
+			for propName := range objType.Properties {
+				iterationKeys = append(iterationKeys, &types.LiteralType{
+					Value: vm.String(propName),
+				})
+			}
+		}
+	} else if unionType, ok := constraintType.(*types.UnionType); ok {
+		// Handle direct union constraint: [P in "name" | "age"]
+		iterationKeys = unionType.Types
+	} else if literalType, ok := constraintType.(*types.LiteralType); ok {
+		// Handle single literal constraint: [P in "name"]
+		iterationKeys = []types.Type{literalType}
+	} else {
+		// Unsupported constraint type for now
+		return nil
+	}
+
+	if len(iterationKeys) == 0 {
+		return nil
+	}
+
+	// Create the expanded object type
+	properties := make(map[string]types.Type)
+	optionalProperties := make(map[string]bool)
+
+	// For each key in the iteration, compute the resulting property
+	for _, keyType := range iterationKeys {
+		literalType, ok := keyType.(*types.LiteralType)
+		if !ok || literalType.Value.Type() != vm.TypeString {
+			continue // Skip non-string keys for now
+		}
+
+		keyName := literalType.Value.AsString()
+
+		// Compute the value type for this property
+		// We need to substitute P with the current key in the value type
+		valueType := c.substituteTypeParameterInType(
+			mappedType.ValueType,
+			mappedType.TypeParameter,
+			keyType,
+		)
+
+		if valueType != nil {
+			properties[keyName] = valueType
+
+			// Handle optional modifier
+			if mappedType.OptionalModifier == "+" || mappedType.OptionalModifier == "" {
+				// Make property optional (default behavior for ? modifier)
+				optionalProperties[keyName] = true
+			}
+			// Note: "-" modifier would make required, but that's advanced
+		}
+	}
+
+	// Create the expanded object type
+	return &types.ObjectType{
+		Properties:         properties,
+		OptionalProperties: optionalProperties,
+		CallSignatures:     []*types.Signature{}, // Mapped types don't create call signatures
+		IndexSignatures:    []*types.IndexSignature{}, // TODO: Handle index signatures if needed
+	}
+}
+
+// substituteTypeParameterInType substitutes a type parameter with a concrete type
+// This is used when expanding mapped types to replace P with specific literal types
+func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName string, replacement types.Type) types.Type {
+	if targetType == nil {
+		return nil
+	}
+
+	switch typ := targetType.(type) {
+	case *types.TypeParameterType:
+		// If this is the type parameter we're looking for, replace it
+		if typ.Parameter != nil && typ.Parameter.Name == paramName {
+			return replacement
+		}
+		return targetType
+
+	case *types.IndexedAccessType:
+		// Handle T[P] where P is the type parameter being substituted
+		objectType := c.substituteTypeParameterInType(typ.ObjectType, paramName, replacement)
+		indexType := c.substituteTypeParameterInType(typ.IndexType, paramName, replacement)
+		
+		// Try to resolve the indexed access with the substituted types
+		resolvedType := c.computeIndexedAccessType(objectType, indexType)
+		if resolvedType != nil {
+			return resolvedType
+		}
+		
+		// If we can't resolve it, return a new IndexedAccessType with substituted parts
+		return &types.IndexedAccessType{
+			ObjectType: objectType,
+			IndexType:  indexType,
+		}
+
+	case *types.UnionType:
+		// Recursively substitute in union members
+		var substitutedTypes []types.Type
+		for _, memberType := range typ.Types {
+			substituted := c.substituteTypeParameterInType(memberType, paramName, replacement)
+			if substituted != nil {
+				substitutedTypes = append(substitutedTypes, substituted)
+			}
+		}
+		if len(substitutedTypes) == 0 {
+			return nil
+		}
+		if len(substitutedTypes) == 1 {
+			return substitutedTypes[0]
+		}
+		return types.NewUnionType(substitutedTypes...)
+
+	default:
+		// For other types (primitives, objects, etc.), no substitution needed
+		return targetType
+	}
+}
+
+// isAssignableWithExpansion checks if source can be assigned to target,
+// but first expands any mapped types to concrete object types
+func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
+	// Expand target if it's a mapped type
+	expandedTarget := target
+	if mappedType, ok := target.(*types.MappedType); ok {
+		expanded := c.expandMappedType(mappedType)
+		if expanded != nil {
+			expandedTarget = expanded
+		}
+	}
+
+	// Expand source if it's a mapped type (less common but possible)
+	expandedSource := source
+	if mappedType, ok := source.(*types.MappedType); ok {
+		expanded := c.expandMappedType(mappedType)
+		if expanded != nil {
+			expandedSource = expanded
+		}
+	}
+
+	// Use the standard assignability check with expanded types
+	return types.IsAssignable(expandedSource, expandedTarget)
 }

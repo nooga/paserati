@@ -660,7 +660,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 
 				// Perform assignability check using the type from env (e.g., Any or annotation)
-				assignable := types.IsAssignable(computedInitializerType, variableType)
+				// Use expansion to handle mapped types
+				assignable := c.isAssignableWithExpansion(computedInitializerType, variableType)
 
 				// Handle special case for assigning [] (unknown[]) to T[]
 				isEmptyArrayAssignment := false
@@ -674,6 +675,20 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				// Allow assigning empty array even if assignable check fails due to unknown element type
 				if isEmptyArrayAssignment {
 					assignable = true
+				}
+
+				// Additional validation: Check index signature constraints
+				if assignable { // Only check index signatures if basic assignability passes
+					indexSigErrors := c.validateIndexSignatures(computedInitializerType, variableType)
+					for _, sigError := range indexSigErrors {
+						c.addError(initializer, fmt.Sprintf("Type '%s' is not assignable to type '%s' as required by index signature [%s: %s]", 
+							sigError.PropertyType.String(), sigError.ExpectedType.String(), 
+							sigError.KeyType.String(), sigError.ExpectedType.String()))
+					}
+					// If there are index signature errors, treat assignment as invalid
+					if len(indexSigErrors) > 0 {
+						assignable = false
+					}
 				}
 
 				if !assignable {
@@ -876,7 +891,8 @@ func (c *Checker) visit(node parser.Node) {
 
 			if computedInitializerType != nil {
 				// Check if initializer is assignable to the declared type for error reporting
-				assignable := types.IsAssignable(computedInitializerType, declaredType)
+				// Use expansion to handle mapped types
+				assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
 
 				// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 				isEmptyArrayAssignment := false
@@ -969,7 +985,8 @@ func (c *Checker) visit(node parser.Node) {
 			finalType = declaredType
 
 			// Check if initializer is assignable to the declared type for error reporting
-			assignable := types.IsAssignable(computedInitializerType, declaredType)
+			// Use expansion to handle mapped types
+			assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
 
 			// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 			isEmptyArrayAssignment := false
@@ -1037,7 +1054,15 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			}
 
-			if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
+			// Special handling for type predicate return types
+			if _, ok := c.currentExpectedReturnType.(*types.TypePredicateType); ok {
+				// Type predicate functions should accept boolean returns
+				if !types.IsAssignable(actualReturnType, types.Boolean) {
+					msg := fmt.Sprintf("cannot return value of type %s from type predicate function expecting boolean",
+						actualReturnType)
+					c.addError(node.ReturnValue, msg)
+				}
+			} else if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
 				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
 					actualReturnType, c.currentExpectedReturnType)
 				// Report the error at the return value expression node

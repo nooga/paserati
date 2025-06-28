@@ -75,6 +75,7 @@ const (
 const (
 	_ int = iota
 	TYPE_LOWEST
+	TYPE_PREDICATE    // is (Lower precedence - should be parsed last)
 	TYPE_UNION        // |
 	TYPE_INTERSECTION // &  (Higher precedence than union)
 	TYPE_ARRAY        // [] (Higher precedence than intersection)
@@ -160,6 +161,7 @@ var precedences = map[lexer.TokenType]int{
 
 // --- NEW: Precedences map for TYPE operator tokens ---
 var typePrecedences = map[lexer.TokenType]int{
+	lexer.IS:          TYPE_PREDICATE,
 	lexer.PIPE:        TYPE_UNION,
 	lexer.BITWISE_AND: TYPE_INTERSECTION,
 	lexer.LBRACKET:    TYPE_ARRAY,
@@ -277,6 +279,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.NULL, p.parseNullLiteral)           // 'null' type
 	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // 'undefined' type
 	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)       // 'void' type
+	p.registerTypePrefix(lexer.KEYOF, p.parseKeyofTypeExpression)  // 'keyof' type operator
 	// NEW: Constructor types that start with 'new'
 	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // NEW: Constructor types like 'new () => T'
 	// Literal types in TYPE context too
@@ -295,6 +298,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)               // TYPE context: '|' is union
 	p.registerTypeInfix(lexer.BITWISE_AND, p.parseIntersectionTypeExpression) // TYPE context: '&' is intersection
 	p.registerTypeInfix(lexer.LBRACKET, p.parseArrayTypeExpression)           // TYPE context: 'T[]'
+	p.registerTypeInfix(lexer.IS, p.parseTypePredicateExpression)             // TYPE context: 'x is Type' for type predicates
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -814,16 +818,39 @@ func (p *Parser) peekTypePrecedence() int {
 // --- NEW: Helper for infix array type parsing T[] ---
 // This function does not need recursion.
 func (p *Parser) parseArrayTypeExpression(elementType Expression) Expression {
-	// ... existing implementation looks okay ...
-	arrayTypeExp := &ArrayTypeExpression{
-		Token:       p.curToken, // The '[' token
-		ElementType: elementType,
+	// This function handles both T[] (array types) and T[K] (indexed access types)
+	lbracketToken := p.curToken // Save the '[' token
+	
+	// Check if this is an empty array type T[] or indexed access T[K]
+	if p.peekTokenIs(lexer.RBRACKET) {
+		// This is an array type T[]
+		arrayTypeExp := &ArrayTypeExpression{
+			Token:       lbracketToken,
+			ElementType: elementType,
+		}
+		p.nextToken() // Consume ']'
+		return arrayTypeExp
+	} else {
+		// This is an indexed access type T[K]
+		indexedAccessExp := &IndexedAccessTypeExpression{
+			Token:      lbracketToken,
+			ObjectType: elementType,
+		}
+		
+		// Parse the index type between brackets
+		p.nextToken() // Move past '['
+		indexedAccessExp.IndexType = p.parseTypeExpression()
+		if indexedAccessExp.IndexType == nil {
+			return nil // Error parsing index type
+		}
+		
+		// Expect closing bracket
+		if !p.expectPeek(lexer.RBRACKET) {
+			return nil // Expected ']' after index type
+		}
+		
+		return indexedAccessExp
 	}
-	// We expect immediate RBRACKET for T[] syntax
-	if !p.expectPeek(lexer.RBRACKET) {
-		return nil // Expected ']' after '[' for array type
-	}
-	return arrayTypeExp
 }
 
 // --- NEW: Helper for parsing tuple types [T, U, V] ---
@@ -2554,6 +2581,52 @@ func (p *Parser) curTokenIs(t lexer.TokenType) bool {
 
 func (p *Parser) peekTokenIs(t lexer.TokenType) bool {
 	return p.peekToken.Type == t
+}
+
+// peekTokenIs2 checks if the token after peekToken matches the given type
+// This requires looking ahead 2 tokens from current position
+func (p *Parser) peekTokenIs2(t lexer.TokenType) bool {
+	// Save current state
+	curToken := p.curToken
+	peekToken := p.peekToken
+	
+	// Advance once to look at token after peek
+	p.nextToken()
+	result := p.peekTokenIs(t)
+	
+	// Restore state
+	p.curToken = curToken
+	p.peekToken = peekToken
+	
+	return result
+}
+
+// lookAhead returns the token at position 'pos' ahead of peekToken
+// pos=0 returns peekToken, pos=1 returns the token after peekToken, etc.
+// Uses lexer position save/restore to avoid corrupting parser state
+func (p *Parser) lookAhead(pos int) lexer.Token {
+	if pos == 0 {
+		return p.peekToken
+	}
+	
+	// Save current lexer state
+	savedPosition := p.l.CurrentPosition()
+	savedCur := p.curToken
+	savedPeek := p.peekToken
+	
+	// Advance pos+1 times to get to the desired position
+	// (pos=1 means one token after peekToken)
+	var token lexer.Token
+	for i := 0; i <= pos; i++ {
+		token = p.l.NextToken()
+	}
+	
+	// Restore lexer state
+	p.l.SetPosition(savedPosition)
+	p.curToken = savedCur
+	p.peekToken = savedPeek
+	
+	return token
 }
 
 // expectPeek checks the type of the next token and advances if it matches.
@@ -4610,17 +4683,44 @@ func (p *Parser) parseInterfaceConstructorSignature() Expression {
 	return cte
 }
 
-// parseObjectTypeExpression parses object type literals like { name: string; age: number }.
+// parseObjectTypeExpression parses object type literals like { name: string; age: number }
+// and mapped types like { [P in K]: T }.
 func (p *Parser) parseObjectTypeExpression() Expression {
-	objType := &ObjectTypeExpression{
-		Token:      p.curToken, // The '{' token
-		Properties: []*ObjectTypeProperty{},
-	}
+	startToken := p.curToken // The '{' token
 
 	// Handle empty object type {}
 	if p.peekTokenIs(lexer.RBRACE) {
 		p.nextToken() // Consume '}'
-		return objType
+		return &ObjectTypeExpression{
+			Token:      startToken,
+			Properties: []*ObjectTypeProperty{},
+		}
+	}
+
+	// Check if this might be a mapped type by looking ahead
+	// Pattern: { [readonly] [P in K][?: T }
+	debugPrint("Checking if mapped type: cur=%s, peek=%s", p.curToken.Literal, p.peekToken.Literal)
+	if p.peekTokenIs(lexer.LBRACKET) || 
+	   (p.peekTokenIs(lexer.READONLY) && p.peekTokenIs2(lexer.LBRACKET)) ||
+	   (p.peekTokenIs(lexer.MINUS) && p.peekTokenIs2(lexer.READONLY)) ||
+	   (p.peekTokenIs(lexer.PLUS) && p.peekTokenIs2(lexer.READONLY)) {
+		
+		debugPrint("Potential mapped type detected, checking pattern...")
+		// Look ahead to check for 'in' keyword to distinguish mapped types from index signatures
+		if isMappedType := p.isMappedTypePattern(); isMappedType {
+			debugPrint("MAPPED TYPE DETECTED! Calling parseMappedTypeExpression")
+			return p.parseMappedTypeExpression(startToken)
+		} else {
+			debugPrint("Not a mapped type pattern, continuing with object type")
+		}
+	} else {
+		debugPrint("No bracket found, not a mapped type")
+	}
+
+	// Parse regular object type
+	objType := &ObjectTypeExpression{
+		Token:      startToken,
+		Properties: []*ObjectTypeProperty{},
 	}
 
 	// Parse properties
@@ -4656,11 +4756,54 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			}
 
 			objType.Properties = append(objType.Properties, prop)
+		} else if p.curTokenIs(lexer.LBRACKET) {
+			// Check if this is an index signature starting with '['
+			// Index signature: [key: string]: Type
+			prop := &ObjectTypeProperty{
+				IsIndexSignature: true,
+			}
+
+			// Expect identifier for key name
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+			prop.KeyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+			// Expect ':'
+			if !p.expectPeek(lexer.COLON) {
+				return nil
+			}
+
+			// Parse key type
+			p.nextToken() // Move to the start of the key type expression
+			prop.KeyType = p.parseTypeExpression()
+			if prop.KeyType == nil {
+				return nil
+			}
+
+			// Expect ']'
+			if !p.expectPeek(lexer.RBRACKET) {
+				return nil
+			}
+
+			// Expect ':'
+			if !p.expectPeek(lexer.COLON) {
+				return nil
+			}
+
+			// Parse value type
+			p.nextToken() // Move to the start of the value type expression
+			prop.ValueType = p.parseTypeExpression()
+			if prop.ValueType == nil {
+				return nil
+			}
+
+			objType.Properties = append(objType.Properties, prop)
 		} else {
 			// Regular property or method signature - try to parse property name (allowing keywords)
 			propName := p.parsePropertyName()
 			if propName == nil {
-				p.addError(p.curToken, "expected property name (identifier) or call signature '(' in object type")
+				p.addError(p.curToken, "expected property name (identifier), call signature '(', or index signature '[' in object type")
 				return nil
 			}
 
@@ -5888,6 +6031,52 @@ func (p *Parser) looksLikeGenericCall() bool {
 	return false
 }
 
+// parseKeyofTypeExpression parses a keyof type expression like 'keyof T'
+func (p *Parser) parseKeyofTypeExpression() Expression {
+	kte := &KeyofTypeExpression{
+		Token: p.curToken, // The 'keyof' token
+	}
+
+	// Move to the type expression after 'keyof'
+	p.nextToken()
+	
+	// Parse the type that we're getting keys from
+	kte.Type = p.parseTypeExpression()
+	if kte.Type == nil {
+		p.addError(p.curToken, "expected type expression after 'keyof'")
+		return nil
+	}
+
+	return kte
+}
+
+// parseTypePredicateExpression parses a type predicate like 'x is string'
+func (p *Parser) parseTypePredicateExpression(left Expression) Expression {
+	// left should be an identifier representing the parameter
+	param, ok := left.(*Identifier)
+	if !ok {
+		p.addError(p.curToken, "type predicate parameter must be an identifier")
+		return nil
+	}
+
+	tpe := &TypePredicateExpression{
+		Token:     p.curToken, // The 'is' token
+		Parameter: param,
+	}
+
+	// Move to the type expression after 'is'
+	p.nextToken()
+	
+	// Parse the type that we're checking for
+	tpe.Type = p.parseTypeExpression()
+	if tpe.Type == nil {
+		p.addError(p.curToken, "expected type expression after 'is' in type predicate")
+		return nil
+	}
+
+	return tpe
+}
+
 // parseGenericCallOrComparison handles the ambiguity between generic calls (func<T>()) and comparisons (a < b)
 func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 	// Only try generic call parsing if left is an identifier
@@ -5926,4 +6115,173 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 
 	// Fall back to regular infix expression (comparison)
 	return p.parseInfixExpression(left)
+}
+
+// isMappedTypePattern looks ahead to determine if we're parsing a mapped type vs index signature
+// Mapped type: [P in K] vs Index signature: [key: string]
+// We use a simple temporary parser approach
+func (p *Parser) isMappedTypePattern() bool {
+	debugPrint("isMappedTypePattern: starting check from cur=%s, peek=%s", p.curToken.Literal, p.peekToken.Literal)
+	
+	// Simple logic: if we see '[' followed eventually by 'in', it's a mapped type
+	// We'll create a temporary lexer instance to check without affecting our state
+	
+	// Save current position
+	savedPos := p.l.CurrentPosition()
+	
+	// Skip optional modifiers and look for [ IDENT in pattern
+	found := false
+	
+	// Start from peekToken position
+	token := p.peekToken
+	tokenCount := 0
+	
+	// Skip readonly/+/- modifiers
+	for token.Type == lexer.READONLY || token.Type == lexer.PLUS || token.Type == lexer.MINUS {
+		token = p.l.NextToken()
+		tokenCount++
+		if tokenCount > 10 { // Safety limit
+			break
+		}
+	}
+	
+	// Expect '['
+	if token.Type == lexer.LBRACKET {
+		token = p.l.NextToken() // Get identifier
+		tokenCount++
+		
+		// Expect identifier
+		if token.Type == lexer.IDENT {
+			token = p.l.NextToken() // Check for 'in'
+			tokenCount++
+			
+			// Check for 'in' - this distinguishes mapped types from index signatures
+			if token.Type == lexer.IN {
+				found = true
+			}
+		}
+	}
+	
+	// Restore lexer position
+	p.l.SetPosition(savedPos)
+	
+	debugPrint("isMappedTypePattern: result=%t", found)
+	return found
+}
+
+// parseMappedTypeExpression parses mapped types like { [P in K]: T } or { readonly [P in keyof T]?: T[P] }
+func (p *Parser) parseMappedTypeExpression(startToken lexer.Token) Expression {
+	debugPrint("=== STARTING MAPPED TYPE PARSING ===")
+	debugPrint("startToken: %s, cur: %s, peek: %s", startToken.Literal, p.curToken.Literal, p.peekToken.Literal)
+	
+	mappedType := &MappedTypeExpression{
+		Token: startToken, // The '{' token
+	}
+	
+	p.nextToken() // Move past '{'
+	debugPrint("After moving past '{': cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	
+	// Parse optional readonly modifier at the beginning
+	if p.curTokenIs(lexer.PLUS) && p.peekTokenIs(lexer.READONLY) {
+		mappedType.ReadonlyModifier = "+"
+		p.nextToken() // Move to 'readonly'
+		p.nextToken() // Move past 'readonly'
+	} else if p.curTokenIs(lexer.MINUS) && p.peekTokenIs(lexer.READONLY) {
+		mappedType.ReadonlyModifier = "-"
+		p.nextToken() // Move to 'readonly'
+		p.nextToken() // Move past 'readonly'
+	} else if p.curTokenIs(lexer.READONLY) {
+		mappedType.ReadonlyModifier = "+"
+		p.nextToken() // Move past 'readonly'
+	}
+	
+	// Expect '['
+	if !p.curTokenIs(lexer.LBRACKET) {
+		p.addError(p.curToken, "expected '[' in mapped type")
+		return nil
+	}
+	
+	// Expect type parameter (P in [P in K])
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+	mappedType.TypeParameter = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	debugPrint("Parsed type parameter: %s, cur: %s, peek: %s", mappedType.TypeParameter.Value, p.curToken.Literal, p.peekToken.Literal)
+	
+	// Expect 'in'
+	if !p.expectPeek(lexer.IN) {
+		return nil
+	}
+	debugPrint("Found 'in', cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	
+	// Parse constraint type (K in [P in K])
+	p.nextToken() // Move to start of constraint type
+	debugPrint("About to parse constraint type, cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	
+	// Debug: check what token we're at
+	if p.curToken.Type == lexer.EOF {
+		p.addError(p.curToken, "unexpected EOF while parsing mapped type constraint")
+		return nil
+	}
+	
+	mappedType.ConstraintType = p.parseTypeExpression()
+	if mappedType.ConstraintType == nil {
+		return nil
+	}
+	debugPrint("Parsed constraint type, cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	
+	// After parseTypeExpression, we should be positioned at the last token of the constraint
+	// and peeking at ']'
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil
+	}
+	debugPrint("Found ']', cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	// Now: cur=']', peek=next token (could be '?', ':', etc.)
+	
+	// Parse optional '?' modifier  
+	if p.peekTokenIs(lexer.QUESTION) {
+		mappedType.OptionalModifier = "+"
+		p.nextToken() // Now: cur='?', peek=':'
+		debugPrint("Found '?', cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	} else if p.peekTokenIs(lexer.MINUS) {
+		// Check if it's -?
+		if p.peekTokenIs2(lexer.QUESTION) {
+			mappedType.OptionalModifier = "-"
+			p.nextToken() // Move to '-'
+			p.nextToken() // Move to '?'
+			debugPrint("Found '-?', cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+		}
+	} else if p.peekTokenIs(lexer.PLUS) {
+		// Check if it's +?
+		if p.peekTokenIs2(lexer.QUESTION) {
+			mappedType.OptionalModifier = "+"
+			p.nextToken() // Move to '+'
+			p.nextToken() // Move to '?'
+			debugPrint("Found '+?', cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+		}
+	}
+	
+	// Now we should be peeking at ':' (or cur=? and peek=:)
+	debugPrint("About to expect ':', cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	if !p.expectPeek(lexer.COLON) {
+		return nil
+	}
+	debugPrint("Found ':', cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	// Now: cur=':', peek=value type start
+	
+	// Parse value type
+	p.nextToken() // Move to start of value type
+	debugPrint("About to parse value type, cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	mappedType.ValueType = p.parseTypeExpression()
+	if mappedType.ValueType == nil {
+		return nil
+	}
+	debugPrint("Parsed value type, cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+	
+	// Expect '}'
+	if !p.expectPeek(lexer.RBRACE) {
+		return nil
+	}
+	
+	return mappedType
 }

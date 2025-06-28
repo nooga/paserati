@@ -18,7 +18,34 @@ type TypeGuard struct {
 // typeof obj === "number"
 // x === "foo" (literal narrowing)
 // "bar" === y (literal narrowing)
+// isString(x) (type predicate function calls)
 func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
+	// Pattern 0: Type predicate function calls like isString(x)
+	if callExpr, ok := condition.(*parser.CallExpression); ok {
+		// Check if this is a single-argument call to a function with type predicate return
+		if len(callExpr.Arguments) == 1 {
+			if ident, ok := callExpr.Arguments[0].(*parser.Identifier); ok {
+				// Check if the function being called has a type predicate return type
+				functionType := callExpr.Function.GetComputedType()
+				if functionType != nil {
+					if objType, ok := functionType.(*types.ObjectType); ok {
+						if len(objType.CallSignatures) > 0 {
+							returnType := objType.CallSignatures[0].ReturnType
+							if predType, ok := returnType.(*types.TypePredicateType); ok {
+								// This is a type predicate function call!
+								// Extract the type being tested for
+								return &TypeGuard{
+									VariableName: ident.Value,
+									NarrowedType: predType.Type,
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Look for infix comparison patterns
 	if infix, ok := condition.(*parser.InfixExpression); ok {
 		if infix.Operator == "===" || infix.Operator == "==" {

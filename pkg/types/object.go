@@ -115,6 +115,72 @@ func (sig *Signature) Equals(other *Signature) bool {
 
 // --- Object Types ---
 
+// IndexSignature represents an index signature like [key: string]: Type
+// or a mapped type pattern like [P in K]: V
+type IndexSignature struct {
+	KeyType   Type // The type of the key (e.g., string, number, symbol)
+	ValueType Type // The type of the value
+	
+	// For mapped types: [P in K]: V
+	IsMapped       bool   // Whether this is a mapped type pattern
+	TypeParameter  string // The type parameter name (e.g., "P" in [P in K])
+	ConstraintType Type   // The constraint type (e.g., K in [P in K])
+}
+
+func (is *IndexSignature) String() string {
+	if is.IsMapped {
+		// Mapped type pattern: [P in K]: V
+		constraintStr := "unknown"
+		if is.ConstraintType != nil {
+			constraintStr = is.ConstraintType.String()
+		}
+		valueStr := "unknown"
+		if is.ValueType != nil {
+			valueStr = is.ValueType.String()
+		}
+		return fmt.Sprintf("[%s in %s]: %s", is.TypeParameter, constraintStr, valueStr)
+	}
+	
+	// Regular index signature: [key: string]: Type
+	keyStr := "unknown"
+	if is.KeyType != nil {
+		keyStr = is.KeyType.String()
+	}
+	valueStr := "unknown"
+	if is.ValueType != nil {
+		valueStr = is.ValueType.String()
+	}
+	return fmt.Sprintf("[key: %s]: %s", keyStr, valueStr)
+}
+
+func (is *IndexSignature) Equals(other *IndexSignature) bool {
+	if is == nil || other == nil {
+		return is == other
+	}
+	
+	// Check if both are mapped types or both are regular index signatures
+	if is.IsMapped != other.IsMapped {
+		return false
+	}
+	
+	if is.IsMapped {
+		// For mapped types, compare type parameter and constraint
+		if is.TypeParameter != other.TypeParameter {
+			return false
+		}
+		if !is.ConstraintType.Equals(other.ConstraintType) {
+			return false
+		}
+	} else {
+		// For regular index signatures, compare key type
+		if !is.KeyType.Equals(other.KeyType) {
+			return false
+		}
+	}
+	
+	return is.ValueType.Equals(other.ValueType)
+}
+
 // ObjectType represents the type of an object literal or interface.
 type ObjectType struct {
 	// Using a map for simplicity now. Consider ordered map or slice for stability.
@@ -129,7 +195,8 @@ type ObjectType struct {
 	// NEW: Class metadata for access control
 	ClassMeta *ClassMetadata // Contains access control information for class types
 
-	// TODO: Index Signatures?
+	// Index signatures for dynamic property access
+	IndexSignatures []*IndexSignature // Index signatures like [key: string]: Type
 }
 
 func (ot *ObjectType) String() string {
@@ -167,6 +234,11 @@ func (ot *ObjectType) String() string {
 			optional = "?"
 		}
 		parts = append(parts, fmt.Sprintf("%s%s: %s", name, optional, typStr))
+	}
+
+	// Add index signatures
+	for _, indexSig := range ot.IndexSignatures {
+		parts = append(parts, indexSig.String())
 	}
 
 	if len(parts) == 0 {
@@ -260,7 +332,18 @@ func (ot *ObjectType) Equals(other Type) bool {
 		// Access modifiers are metadata, not part of the structural type
 	}
 
-	return true // All properties, signatures, base types, and class metadata match
+	// Check index signatures
+	if len(ot.IndexSignatures) != len(otherOt.IndexSignatures) {
+		return false
+	}
+	for i, sig1 := range ot.IndexSignatures {
+		sig2 := otherOt.IndexSignatures[i]
+		if !sig1.Equals(sig2) {
+			return false
+		}
+	}
+
+	return true // All properties, signatures, base types, class metadata, and index signatures match
 }
 
 // --- ObjectType Helper Methods ---
