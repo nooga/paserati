@@ -519,8 +519,18 @@ func (e *JSEmitter) emitIndexExpression(expr *IndexExpression) {
 
 func (e *JSEmitter) emitMemberExpression(expr *MemberExpression) {
 	e.emitExpression(expr.Object)
-	e.write(".")
-	e.write("%s", expr.Property.Value)
+	switch prop := expr.Property.(type) {
+	case *Identifier:
+		e.write(".")
+		e.write("%s", prop.Value)
+	case *ComputedPropertyName:
+		e.write("[")
+		e.emitExpression(prop.Expr)
+		e.write("]")
+	default:
+		e.write(".")
+		e.write("__unknown__")
+	}
 }
 
 func (e *JSEmitter) emitObjectLiteral(obj *ObjectLiteral) {

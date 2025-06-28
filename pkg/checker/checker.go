@@ -1956,6 +1956,13 @@ func (c *Checker) visit(node parser.Node) {
 		arrayType := &types.ArrayType{ElementType: elemType}
 		node.SetComputedType(arrayType)
 
+	case *parser.ComputedPropertyName:
+		// Check the computed expression and set its type
+		c.visit(node.Expr)
+		// The type of a ComputedPropertyName is the type of its expression
+		// This will be used as a key, so it should be string-like
+		node.SetComputedType(node.Expr.GetComputedType())
+
 	default:
 		// Optional: Add error for unhandled node types
 		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))

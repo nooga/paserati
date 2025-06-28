@@ -372,6 +372,9 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 
 		// Regular property: compile key and value
 		var keyConstIdx uint16 = 0xFFFF // Invalid index marker
+		var isComputedKey bool = false
+		var keyReg Register
+		
 		switch keyNode := prop.Key.(type) {
 		case *parser.Identifier:
 			keyStr := keyNode.Value
@@ -382,11 +385,24 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 		case *parser.NumberLiteral: // Allow number literal keys, convert to string
 			keyStr := keyNode.TokenLiteral()
 			keyConstIdx = c.chunk.AddConstant(vm.String(keyStr))
+		case *parser.ComputedPropertyName:
+			// Handle computed keys: [expr]
+			isComputedKey = true
+			keyReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyReg)
+			_, err := c.compileNode(keyNode.Expr, keyReg)
+			if err != nil {
+				return BadRegister, err
+			}
 		default:
-			// TODO: Handle computed keys [expr]. For Phase 1, only Ident/String/Number keys.
-			// Computed keys would require compiling the expression, ensuring it's a string/number,
-			// and potentially a different OpSetComputedProp or dynamic lookup within OpSetProp.
-			return BadRegister, NewCompileError(prop.Key, fmt.Sprintf("compiler only supports identifier, string, or number literal keys in object literals (Phase 1), got %T", prop.Key))
+			// Handle other computed expressions directly (like InfixExpression)
+			isComputedKey = true
+			keyReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyReg)
+			_, err := c.compileNode(keyNode, keyReg)
+			if err != nil {
+				return BadRegister, err
+			}
 		}
 
 		// Compile Value into a temporary register
@@ -398,8 +414,17 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 		}
 		debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
 
-		// Emit OpSetProp: hint[keyConstIdx] = valueReg
-		c.emitSetProp(hint, valueReg, keyConstIdx, line)
+		// Set the property based on whether it's computed or static
+		if isComputedKey {
+			// Use OpSetIndex for computed keys: obj[keyReg] = valueReg
+			c.emitOpCode(vm.OpSetIndex, line)
+			c.emitByte(byte(hint))    // Object register
+			c.emitByte(byte(keyReg))  // Key register (computed at runtime)
+			c.emitByte(byte(valueReg)) // Value register
+		} else {
+			// Use OpSetProp for static keys: obj[keyConstIdx] = valueReg
+			c.emitSetProp(hint, valueReg, keyConstIdx, line)
+		}
 	}
 
 	// The object is fully constructed in hint register

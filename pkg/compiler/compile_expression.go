@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+
 // Helper functions for detecting null and undefined literals
 func isNullLiteral(node parser.Expression) bool {
 	_, ok := node.(*parser.NullLiteral)
@@ -139,14 +140,32 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		return BadRegister, NewCompileError(node.Object, "error compiling object part of member expression").CausedBy(err)
 	}
 
-	// 2. Get Property Name (Assume Identifier for now: obj.prop)
-	propIdent := node.Property
-	propertyName := propIdent.Value
+	// 2. Check if this is a computed property access
+	var isComputedProperty bool
+	var propertyName string
+	var propertyReg Register
+	
+	if computedKey, ok := node.Property.(*parser.ComputedPropertyName); ok {
+		// This is a computed property: obj[expr]
+		isComputedProperty = true
+		propertyReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, propertyReg)
+		_, err := c.compileNode(computedKey.Expr, propertyReg)
+		if err != nil {
+			return BadRegister, NewCompileError(computedKey.Expr, "error compiling computed property key").CausedBy(err)
+		}
+		propertyName = "__computed__" // For debug purposes only
+	} else {
+		// Regular property access: obj.prop
+		isComputedProperty = false
+		propertyName = c.extractPropertyName(node.Property)
+	}
 
 	// 3. Check if this is a getter access (compile-time optimization)
+	// Skip getter optimization for computed properties since we can't know the property name at compile time
 	objectStaticType := node.Object.GetComputedType()
 	debugPrintf("// DEBUG compileMemberExpression: objectType for '%s': %v\n", propertyName, objectStaticType)
-	if objectStaticType != nil {
+	if !isComputedProperty && objectStaticType != nil {
 		// Check if accessing a getter property
 		widenedType := types.GetWidenedType(objectStaticType)
 		debugPrintf("// DEBUG compileMemberExpression: widenedType for '%s': %v\n", propertyName, widenedType)
@@ -177,7 +196,8 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	}
 
 	// 4. <<< NEW: Special case for .length >>>
-	if propertyName == "length" {
+	// Skip .length optimization for computed properties
+	if !isComputedProperty && propertyName == "length" {
 		// Check the static type provided by the checker
 		if objectStaticType == nil {
 			// This can happen in finally blocks where type information may not be fully tracked
@@ -203,11 +223,18 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	}
 	// --- END Special case for .length ---
 
-	// 5. Add property name string to constant pool (for generic OpGetProp)
-	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-
-	// 6. Emit OpGetProp using hint as destination register
-	c.emitGetProp(hint, objectReg, nameConstIdx, node.Token.Line) // Use '.' token line
+	// 5. Emit appropriate property access instruction
+	if isComputedProperty {
+		// Use OpGetIndex for computed properties: hint = objectReg[propertyReg]
+		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+		c.emitByte(byte(hint))        // Destination register
+		c.emitByte(byte(objectReg))   // Object register
+		c.emitByte(byte(propertyReg)) // Key register (computed at runtime)
+	} else {
+		// Use OpGetProp for static properties: hint = objectReg.propertyName
+		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitGetProp(hint, objectReg, nameConstIdx, node.Token.Line) // Use '.' token line
+	}
 
 	return hint, nil
 }
@@ -250,7 +277,7 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 	c.patchJump(jumpToPropertyAccessPos)
 
 	// 3. Get Property Name
-	propertyName := node.Property.Value
+	propertyName := c.extractPropertyName(node.Property)
 
 	// 4. Special case for .length (same as regular member access)
 	if propertyName == "length" {
@@ -408,9 +435,8 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		}
 		memberInfo.objectReg = objectReg
 
-		// Get property name (assume identifier property for now: obj.prop)
-		propIdent := argNode.Property
-		propName := propIdent.Value
+		// Get property name (handle both identifiers and computed properties)
+		propName := c.extractPropertyName(argNode.Property)
 		memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
 
 		// Load current property value
@@ -830,7 +856,7 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 				return BadRegister, err
 			}
 			// Get property name and add to constant pool
-			propName := operand.Property.Value
+			propName := c.extractPropertyName(operand.Property)
 			propIdx := c.chunk.AddConstant(vm.String(propName))
 			c.emitDeleteProp(hint, objReg, propIdx, node.Token.Line)
 			
@@ -1035,7 +1061,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		}
 
 		// 3. OPTIMIZATION: Reuse thisReg for getting the property instead of compiling the object again
-		propertyName := memberExpr.Property.Value
+		propertyName := c.extractPropertyName(memberExpr.Property)
 		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 		c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
 
@@ -1108,7 +1134,7 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 		// 2. Compile the method function
 		funcReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, funcReg)
-		propertyName := memberExpr.Property.Value
+		propertyName := c.extractPropertyName(memberExpr.Property)
 		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 		c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
 		
@@ -1403,8 +1429,7 @@ func (c *Compiler) compileSuperMemberExpression(node *parser.MemberExpression, h
 	c.emitLoadThis(thisReg, node.Token.Line)
 	
 	// Get the property name
-	propIdent := node.Property
-	propertyName := propIdent.Value
+	propertyName := c.extractPropertyName(node.Property)
 	
 	// Add property name as constant
 	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))

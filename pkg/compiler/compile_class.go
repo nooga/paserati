@@ -8,6 +8,28 @@ import (
 	"paserati/pkg/vm"
 )
 
+// extractPropertyName extracts the property name from a class member key
+func (c *Compiler) extractPropertyName(key parser.Expression) string {
+	switch k := key.(type) {
+	case *parser.Identifier:
+		return k.Value
+	case *parser.ComputedPropertyName:
+		// For computed properties, try to evaluate the expression at compile time if possible
+		// For now, use a placeholder name
+		if ident, ok := k.Expr.(*parser.Identifier); ok {
+			return fmt.Sprintf("__computed_%s", ident.Value)
+		} else if literal, ok := k.Expr.(*parser.StringLiteral); ok {
+			return literal.Value
+		} else if literal, ok := k.Expr.(*parser.NumberLiteral); ok {
+			return fmt.Sprintf("%v", literal.Value)
+		} else {
+			return fmt.Sprintf("__computed_%p", k.Expr)
+		}
+	default:
+		return fmt.Sprintf("__unknown_%p", key)
+	}
+}
+
 // compileClassDeclaration compiles a class declaration into a constructor function + prototype setup
 // This follows the approach of desugaring classes to constructor functions + prototypes
 func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
@@ -181,10 +203,10 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 
 // addMethodToPrototype compiles a method and adds it to the prototype object
 func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
-	debugPrintf("// DEBUG addMethodToPrototype: Adding method '%s' to prototype\n", method.Key.Value)
+	debugPrintf("// DEBUG addMethodToPrototype: Adding method '%s' to prototype\n", c.extractPropertyName(method.Key))
 
 	// Compile the method function with class context
-	nameHint := method.Key.Value
+	nameHint := c.extractPropertyName(method.Key)
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralWithThisClass(method.Value, nameHint, className)
 	if err != nil {
 		return err
@@ -196,19 +218,35 @@ func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototy
 	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
 
 	// Add method to prototype: prototype[methodName] = methodFunction
-	methodNameIdx := c.chunk.AddConstant(vm.String(method.Key.Value))
-	c.emitSetProp(prototypeReg, methodReg, methodNameIdx, method.Token.Line)
+	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+		// For computed properties, evaluate the key expression and use OpSetIndex
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+		// Use OpSetIndex for dynamic property access: prototype[keyReg] = methodReg
+		c.emitOpCode(vm.OpSetIndex, method.Token.Line)
+		c.emitByte(byte(prototypeReg)) // Object register
+		c.emitByte(byte(keyReg))       // Key register (computed at runtime)
+		c.emitByte(byte(methodReg))    // Value register
+	} else {
+		// For static properties, use OpSetProp
+		methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))
+		c.emitSetProp(prototypeReg, methodReg, methodNameIdx, method.Token.Line)
+	}
 
-	debugPrintf("// DEBUG addMethodToPrototype: Method '%s' added to prototype\n", method.Key.Value)
+	debugPrintf("// DEBUG addMethodToPrototype: Method '%s' added to prototype\n", c.extractPropertyName(method.Key))
 	return nil
 }
 
 // addGetterToPrototype compiles a getter and adds it to the prototype object with special naming
 func (c *Compiler) addGetterToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
-	debugPrintf("// DEBUG addGetterToPrototype: Adding getter '%s' to prototype\n", method.Key.Value)
+	debugPrintf("// DEBUG addGetterToPrototype: Adding getter '%s' to prototype\n", c.extractPropertyName(method.Key))
 
 	// Compile the getter function with class context
-	nameHint := "get " + method.Key.Value
+	nameHint := "get " + c.extractPropertyName(method.Key)
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralWithThisClass(method.Value, nameHint, className)
 	if err != nil {
 		return err
@@ -220,19 +258,19 @@ func (c *Compiler) addGetterToPrototype(method *parser.MethodDefinition, prototy
 	c.emitClosure(getterReg, funcConstIndex, method.Value, freeSymbols)
 
 	// Store getter with special naming: prototype["__get__propertyName"] = getterFunction
-	getterNameIdx := c.chunk.AddConstant(vm.String("__get__" + method.Key.Value))
+	getterNameIdx := c.chunk.AddConstant(vm.String("__get__" + c.extractPropertyName(method.Key)))
 	c.emitSetProp(prototypeReg, getterReg, getterNameIdx, method.Token.Line)
 
-	debugPrintf("// DEBUG addGetterToPrototype: Getter '%s' added to prototype as '__get__%s'\n", method.Key.Value, method.Key.Value)
+	debugPrintf("// DEBUG addGetterToPrototype: Getter '%s' added to prototype as '__get__%s'\n", c.extractPropertyName(method.Key), c.extractPropertyName(method.Key))
 	return nil
 }
 
 // addSetterToPrototype compiles a setter and adds it to the prototype object with special naming
 func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
-	debugPrintf("// DEBUG addSetterToPrototype: Adding setter '%s' to prototype\n", method.Key.Value)
+	debugPrintf("// DEBUG addSetterToPrototype: Adding setter '%s' to prototype\n", c.extractPropertyName(method.Key))
 
 	// Compile the setter function with class context
-	nameHint := "set " + method.Key.Value
+	nameHint := "set " + c.extractPropertyName(method.Key)
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralWithThisClass(method.Value, nameHint, className)
 	if err != nil {
 		return err
@@ -244,10 +282,10 @@ func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototy
 	c.emitClosure(setterReg, funcConstIndex, method.Value, freeSymbols)
 
 	// Store setter with special naming: prototype["__set__propertyName"] = setterFunction
-	setterNameIdx := c.chunk.AddConstant(vm.String("__set__" + method.Key.Value))
+	setterNameIdx := c.chunk.AddConstant(vm.String("__set__" + c.extractPropertyName(method.Key)))
 	c.emitSetProp(prototypeReg, setterReg, setterNameIdx, method.Token.Line)
 
-	debugPrintf("// DEBUG addSetterToPrototype: Setter '%s' added to prototype as '__set__%s'\n", method.Key.Value, method.Key.Value)
+	debugPrintf("// DEBUG addSetterToPrototype: Setter '%s' added to prototype as '__set__%s'\n", c.extractPropertyName(method.Key), c.extractPropertyName(method.Key))
 	return nil
 }
 
@@ -278,7 +316,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 			}
 
 			fieldInitializers = append(fieldInitializers, fieldInitStatement)
-			debugPrintf("// DEBUG injectFieldInitializers: Added field initializer for '%s'\n", property.Key.Value)
+			debugPrintf("// DEBUG injectFieldInitializers: Added field initializer for '%s'\n", c.extractPropertyName(property.Key))
 		}
 	}
 
@@ -340,7 +378,7 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 
 // addStaticProperty compiles a static property and adds it to the constructor
 func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constructorReg Register) errors.PaseratiError {
-	debugPrintf("// DEBUG addStaticProperty: Adding static property '%s'\n", property.Key.Value)
+	debugPrintf("// DEBUG addStaticProperty: Adding static property '%s'\n", c.extractPropertyName(property.Key))
 
 	// Allocate a register for the property value
 	valueReg := c.regAlloc.Alloc()
@@ -364,19 +402,19 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 	}
 
 	// Set constructor[propertyName] = value
-	propertyNameIdx := c.chunk.AddConstant(vm.String(property.Key.Value))
+	propertyNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(property.Key)))
 	c.emitSetProp(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
 
-	debugPrintf("// DEBUG addStaticProperty: Static property '%s' added to constructor\n", property.Key.Value)
+	debugPrintf("// DEBUG addStaticProperty: Static property '%s' added to constructor\n", c.extractPropertyName(property.Key))
 	return nil
 }
 
 // addStaticMethod compiles a static method and adds it to the constructor
 func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
-	debugPrintf("// DEBUG addStaticMethod: Adding static method '%s'\n", method.Key.Value)
+	debugPrintf("// DEBUG addStaticMethod: Adding static method '%s'\n", c.extractPropertyName(method.Key))
 
 	// Compile the method function (static methods don't have `this` context)
-	nameHint := method.Key.Value
+	nameHint := c.extractPropertyName(method.Key)
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
 	if err != nil {
 		return err
@@ -388,10 +426,10 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
 
 	// Set constructor[methodName] = methodFunction
-	methodNameIdx := c.chunk.AddConstant(vm.String(method.Key.Value))
+	methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))
 	c.emitSetProp(constructorReg, methodReg, methodNameIdx, method.Token.Line)
 
-	debugPrintf("// DEBUG addStaticMethod: Static method '%s' added to constructor\n", method.Key.Value)
+	debugPrintf("// DEBUG addStaticMethod: Static method '%s' added to constructor\n", c.extractPropertyName(method.Key))
 	return nil
 }
 

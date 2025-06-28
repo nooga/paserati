@@ -9,6 +9,7 @@ import (
 	"paserati/pkg/vm"
 )
 
+
 const debugAssignment = false // Enable debug output for assignment compilation
 
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
@@ -37,8 +38,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		indexReg Register
 	}
 	var memberInfo struct { // Info needed for member expr
-		objectReg    Register
-		nameConstIdx uint16
+		objectReg         Register
+		nameConstIdx      uint16  // For static properties
+		isComputed        bool    // True if this is a computed property
+		keyReg           Register // For computed properties
 	}
 
 	// Track temporary registers for cleanup
@@ -139,28 +142,56 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		}
 		memberInfo.objectReg = objectReg
 
-		// For now, assume property is an Identifier (obj.prop)
-		propIdent := lhsNode.Property
-		propName := propIdent.Value
-		memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+		// Check if this is a computed property
+		if computedKey, ok := lhsNode.Property.(*parser.ComputedPropertyName); ok {
+			// This is a computed property: obj[expr] = value
+			memberInfo.isComputed = true
+			memberInfo.keyReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, memberInfo.keyReg)
+			_, err := c.compileNode(computedKey.Expr, memberInfo.keyReg)
+			if err != nil {
+				return BadRegister, err
+			}
+		} else {
+			// Regular property access: obj.prop = value
+			memberInfo.isComputed = false
+			propName := c.extractPropertyName(lhsNode.Property)
+			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+		}
 
 		// If compound or logical assignment, load the current property value
 		if node.Operator != "=" {
-			// Check if this is a getter property for compound assignments
-			objectStaticType := lhsNode.Object.GetComputedType()
-			if objectStaticType != nil {
-				if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
-					getterMethodName := "__get__" + propName
-					if c.hasMethodInType(objType, getterMethodName) {
-						// Use getter method call for reading current value
-						currentValueReg = c.regAlloc.Alloc()
-						tempRegs = append(tempRegs, currentValueReg)
-						
-						getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
-						getterMethodReg := c.regAlloc.Alloc()
-						tempRegs = append(tempRegs, getterMethodReg)
-						c.emitGetProp(getterMethodReg, memberInfo.objectReg, getterIdx, line)
-						c.emitCallMethod(currentValueReg, getterMethodReg, memberInfo.objectReg, 0, line)
+			if memberInfo.isComputed {
+				// For computed properties, always use OpGetIndex since we can't know property name at compile time
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitOpCode(vm.OpGetIndex, line)
+				c.emitByte(byte(currentValueReg))       // Destination register
+				c.emitByte(byte(memberInfo.objectReg))  // Object register
+				c.emitByte(byte(memberInfo.keyReg))     // Key register (computed at runtime)
+			} else {
+				// For static properties, check if this is a getter property for compound assignments
+				propName := c.extractPropertyName(lhsNode.Property)
+				objectStaticType := lhsNode.Object.GetComputedType()
+				if objectStaticType != nil {
+					if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
+						getterMethodName := "__get__" + propName
+						if c.hasMethodInType(objType, getterMethodName) {
+							// Use getter method call for reading current value
+							currentValueReg = c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, currentValueReg)
+							
+							getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
+							getterMethodReg := c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, getterMethodReg)
+							c.emitGetProp(getterMethodReg, memberInfo.objectReg, getterIdx, line)
+							c.emitCallMethod(currentValueReg, getterMethodReg, memberInfo.objectReg, 0, line)
+						} else {
+							// Normal property access for reading
+							currentValueReg = c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, currentValueReg)
+							c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+						}
 					} else {
 						// Normal property access for reading
 						currentValueReg = c.regAlloc.Alloc()
@@ -173,11 +204,6 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					tempRegs = append(tempRegs, currentValueReg)
 					c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
 				}
-			} else {
-				// Normal property access for reading
-				currentValueReg = c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, currentValueReg)
-				c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
 			}
 		} else {
 			// For simple assignment '=', we don't need the current value
@@ -425,7 +451,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				objectStaticType := memberExpr.Object.GetComputedType()
 				if objectStaticType != nil {
 					if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
-						propName := memberExpr.Property.Value
+						propName := c.extractPropertyName(memberExpr.Property)
 						setterMethodName := "__set__" + propName
 						if c.hasMethodInType(objType, setterMethodName) {
 							// Use setter method call for assignment
@@ -460,8 +486,18 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			
 			if !setterDetected {
 				// Normal property assignment
-				debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
-				c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				if memberInfo.isComputed {
+					// Use OpSetIndex for computed properties: objectReg[keyReg] = hint
+					debugPrintf("// DEBUG Assign Store Member: Emitting SetIndex R%d[R%d] = R%d\n", memberInfo.objectReg, memberInfo.keyReg, hint)
+					c.emitOpCode(vm.OpSetIndex, line)
+					c.emitByte(byte(memberInfo.objectReg)) // Object register
+					c.emitByte(byte(memberInfo.keyReg))    // Key register (computed at runtime)
+					c.emitByte(byte(hint))                 // Value register
+				} else {
+					// Use OpSetProp for static properties: objectReg.nameConstIdx = hint
+					debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
+					c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				}
 			}
 		}
 	} else {

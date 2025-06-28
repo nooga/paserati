@@ -222,8 +222,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else {
 				// Could be a method or property
 				// Look ahead to distinguish
-				if p.peekTokenIs(lexer.LPAREN) {
-					// It's a method - parse it and handle signatures/implementations
+				if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
+					// It's a method (either regular or generic) - parse it and handle signatures/implementations
 					result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 					if result != nil {
 						if sig, ok := result.(*MethodSignature); ok {
@@ -242,8 +242,20 @@ func (p *Parser) parseClassBody() *ClassBody {
 					}
 				}
 			}
+		} else if p.curTokenIs(lexer.LBRACKET) {
+			// Computed property or method: [expr]: type or [expr]() {}
+			result := p.parseComputedClassMember(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+			if result != nil {
+				if sig, ok := result.(*MethodSignature); ok {
+					methodSigs = append(methodSigs, sig)
+				} else if method, ok := result.(*MethodDefinition); ok {
+					methods = append(methods, method)
+				} else if property, ok := result.(*PropertyDefinition); ok {
+					properties = append(properties, property)
+				}
+			}
 		} else {
-			p.addError(p.curToken, "expected identifier, 'get', or 'set' in class body")
+			p.addError(p.curToken, "expected identifier, 'get', 'set', or '[' in class body")
 			p.nextToken()
 		}
 	}
@@ -270,7 +282,10 @@ func (p *Parser) parseClassBody() *ClassBody {
 func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected bool) interface{} {
 	constructorToken := p.curToken
 	
-	// We're currently at the "constructor" token, next should be (
+	// Try to parse type parameters: constructor<T>()
+	typeParameters := p.tryParseTypeParameters()
+	
+	// We're currently at the "constructor" token (or after type params), next should be (
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
@@ -305,6 +320,7 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 		
 		sig := &ConstructorSignature{
 			Token:                constructorToken,
+			TypeParameters:       typeParameters,
 			Parameters:           parameters,
 			RestParameter:        restParameter,
 			ReturnTypeAnnotation: returnTypeAnnotation,
@@ -330,6 +346,7 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 	functionLiteral := &FunctionLiteral{
 		Token:                constructorToken,
 		Name:                 nil, // Constructors don't have names like regular functions
+		TypeParameters:       typeParameters,
 		Parameters:           parameters,
 		RestParameter:        restParameter,
 		ReturnTypeAnnotation: returnTypeAnnotation,
@@ -354,7 +371,10 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 	methodToken := p.curToken
 	methodName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	
-	// We're currently at the method name token, next should be (
+	// Try to parse type parameters: methodName<T, U>()
+	typeParameters := p.tryParseTypeParameters()
+	
+	// We're currently at the method name token (or after type params), next should be (
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
@@ -393,6 +413,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		sig := &MethodSignature{
 			Token:                methodToken,
 			Key:                  methodName,
+			TypeParameters:       typeParameters,
 			Parameters:           parameters,
 			RestParameter:        restParameter,
 			ReturnTypeAnnotation: returnTypeAnnotation,
@@ -427,6 +448,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 	functionLiteral := &FunctionLiteral{
 		Token:                methodToken,
 		Name:                 nil, // Methods don't have names in the traditional function sense
+		TypeParameters:       typeParameters,
 		Parameters:           parameters,
 		RestParameter:        restParameter,
 		ReturnTypeAnnotation: returnTypeAnnotation,
@@ -626,6 +648,188 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		IsPrivate:   isPrivate,
 		IsProtected: isProtected,
 		IsOverride:  isOverride,
+	}
+}
+
+// parseComputedClassMember parses computed properties and methods in class bodies
+// Syntax: [expression]: type = value or [expression]() { ... }
+func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) interface{} {
+	// We're currently at the '[' token
+	if !p.curTokenIs(lexer.LBRACKET) {
+		p.addError(p.curToken, "internal error: parseComputedClassMember called without '['")
+		return nil
+	}
+	
+	bracketToken := p.curToken
+	
+	// Parse the computed key expression
+	p.nextToken() // move past '['
+	keyExpr := p.parseExpression(LOWEST)
+	if keyExpr == nil {
+		p.addError(p.curToken, "expected expression inside computed property brackets")
+		return nil
+	}
+	
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil // Missing closing ']'
+	}
+	
+	// Now determine if this is a method or property based on what follows
+	if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
+		// It's a computed method: [expr]() {} or [expr]<T>() {}
+		return p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+	} else {
+		// It's a computed property: [expr]: type = value
+		return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected)
+	}
+}
+
+// parseComputedMethod parses a computed method in a class
+func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expression, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) interface{} {
+	// Try to parse type parameters: [expr]<T, U>()
+	typeParameters := p.tryParseTypeParameters()
+	
+	// We should be at the '(' token now
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+	
+	// Parse parameters - we're now at the '(' token
+	var parameters []*Parameter
+	var restParameter *RestParameter
+	var err error
+	parameters, restParameter, err = p.parseFunctionParameters()
+	if err != nil {
+		p.addError(p.curToken, fmt.Sprintf("failed to parse method parameters: %s", err.Error()))
+		return nil
+	}
+	
+	// Parse return type annotation if present
+	var returnTypeAnnotation Expression
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // consume ':'
+		p.nextToken() // move to start of type expression
+		
+		// Parse the return type using existing type parsing logic
+		returnTypeAnnotation = p.parseTypeExpression()
+		if returnTypeAnnotation == nil {
+			return nil
+		}
+	}
+	
+	// Check if this is a method signature (ends with semicolon) or implementation (has body)
+	// Abstract methods must be signatures (no implementation)
+	if p.peekTokenIs(lexer.SEMICOLON) || isAbstract {
+		// This is a method signature, not an implementation
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Consume semicolon
+		}
+		
+		sig := &MethodSignature{
+			Token:                bracketToken,
+			Key:                  &ComputedPropertyName{Expr: keyExpr}, // Use computed property name
+			TypeParameters:       typeParameters,
+			Parameters:           parameters,
+			RestParameter:        restParameter,
+			ReturnTypeAnnotation: returnTypeAnnotation,
+			Kind:                 "method",
+			IsStatic:             isStatic,
+			IsPublic:             isPublic,
+			IsPrivate:            isPrivate,
+			IsProtected:          isProtected,
+			IsAbstract:           isAbstract,
+			IsOverride:           isOverride,
+		}
+		return sig
+	}
+	
+	// Abstract methods cannot have implementations
+	if isAbstract {
+		p.addError(p.curToken, "abstract methods cannot have implementations")
+		return nil
+	}
+	
+	// This is a method implementation - continue parsing the body
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+	
+	body := p.parseBlockStatement()
+	
+	// parseBlockStatement leaves us at '}', advance past it
+	p.nextToken()
+	
+	// Create function literal for the implementation
+	functionLiteral := &FunctionLiteral{
+		Token:                bracketToken,
+		Name:                 nil, // Methods don't have names in the traditional function sense
+		TypeParameters:       typeParameters,
+		Parameters:           parameters,
+		RestParameter:        restParameter,
+		ReturnTypeAnnotation: returnTypeAnnotation,
+		Body:                 body,
+	}
+	
+	return &MethodDefinition{
+		Token:       bracketToken,
+		Key:         &ComputedPropertyName{Expr: keyExpr}, // Use computed property name
+		Value:       functionLiteral,
+		Kind:        "method",
+		IsStatic:    isStatic,
+		IsPublic:    isPublic,
+		IsPrivate:   isPrivate,
+		IsProtected: isProtected,
+		IsOverride:  isOverride,
+	}
+}
+
+// parseComputedProperty parses a computed property in a class
+func (p *Parser) parseComputedProperty(bracketToken lexer.Token, keyExpr Expression, isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
+	// Check for optional marker '?' first
+	var isOptional bool
+	if p.peekTokenIs(lexer.QUESTION) {
+		p.nextToken() // Consume '?'
+		isOptional = true
+	}
+	
+	// Parse optional type annotation using interface pattern
+	var typeAnnotation Expression
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Move to ':'
+		p.nextToken() // Move to the start of the type expression
+		
+		// Parse type
+		typeAnnotation = p.parseTypeExpression()
+		if typeAnnotation == nil {
+			return nil
+		}
+		
+		// After parsing type, advance to next token
+		p.nextToken()
+	}
+	
+	var initializer Expression
+	if p.curTokenIs(lexer.ASSIGN) {
+		p.nextToken() // move past '='
+		initializer = p.parseExpression(LOWEST)
+	}
+	
+	// Expect semicolon or end of class body
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	
+	return &PropertyDefinition{
+		Token:          bracketToken,
+		Key:            &ComputedPropertyName{Expr: keyExpr}, // Use computed property name
+		TypeAnnotation: typeAnnotation,
+		Value:          initializer,
+		IsStatic:       isStatic,
+		Optional:       isOptional,
+		Readonly:       isReadonly,
+		IsPublic:       isPublic,
+		IsPrivate:      isPrivate,
+		IsProtected:    isProtected,
 	}
 }
 

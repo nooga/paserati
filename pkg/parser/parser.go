@@ -4359,78 +4359,103 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 		}
 
-		// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
-		propName := p.parsePropertyName()
-		if propName != nil && p.peekTokenIs(lexer.LPAREN) {
-			// This is a shorthand method like methodName() { ... }
-			shorthandMethod := p.parseShorthandMethod()
-			if shorthandMethod == nil {
-				return nil // Error parsing shorthand method
-			}
-
-			// Create an ObjectProperty with the method name as key and the shorthand method as value
-			methodName := shorthandMethod.Name
-			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodName, Value: shorthandMethod})
-		} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE)) {
-			// --- NEW: Check for shorthand property syntax (identifier/keyword followed by ',' or '}') ---
-			// This is shorthand like { name, age } equivalent to { name: name, age: age }
-			identName := p.curToken.Literal
-			key := propName
-
-			// For shorthand property, the value is also the same identifier
-			value := &Identifier{Token: p.curToken, Value: identName}
-
-			// Append the property
-			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
-		} else {
-			// Regular property parsing
-			var key Expression
-			// --- MODIFIED: Handle Keys (Identifier/Keywords, String, NUMBER, Computed) ---
-			if propName != nil {
-				key = propName
-			} else if p.curTokenIs(lexer.STRING) {
-				key = p.parseStringLiteral()
-			} else if p.curTokenIs(lexer.NUMBER) { // <<< ADD NUMBER CASE
-				key = p.parseNumberLiteral()
-			} else if p.curTokenIs(lexer.LBRACKET) { // Computed properties
-				p.nextToken() // Consume '['
-				key = p.parseExpression(LOWEST)
-				if key == nil {
-					return nil // Error parsing expression inside []
-				}
-				if !p.expectPeek(lexer.RBRACKET) {
-					return nil // Missing closing ']'
-				}
-				// After expectPeek, curToken is RBRACKET. parseExpression below needs the next token.
-				// We need to be careful here, as the COLON is expected *next*.
-			} else {
-				// <<< UPDATE ERROR MESSAGE >>>
-				msg := fmt.Sprintf("invalid object literal key: expected identifier, string, number, or '[', got %s", p.curToken.Type)
-				p.addError(p.curToken, msg)
-				return nil
-			}
-			// --- END MODIFICATION ---
-
+		// --- Check for computed properties FIRST before parsePropertyName ---
+		if p.curTokenIs(lexer.LBRACKET) {
+			// Computed property: [expression]: value
+			p.nextToken() // Consume '['
+			key := p.parseExpression(LOWEST)
 			if key == nil {
-				// Error should have been added by the respective parse function
-				return nil
-			} // Error parsing key
-
-			// Check for Colon *after* parsing the key (including potential closing ']')
-			if !p.expectPeek(lexer.COLON) {
-				return nil // Expected ':'
+				return nil // Error parsing expression inside []
 			}
-			// p.curToken is now COLON
+			if !p.expectPeek(lexer.RBRACKET) {
+				return nil // Missing closing ']'
+			}
 
-			p.nextToken() // Consume ':' to get to the start of the value
+			// Wrap in ComputedPropertyName node
+			computedKey := &ComputedPropertyName{
+				Expr: key,
+			}
 
+			// Expect colon
+			if !p.expectPeek(lexer.COLON) {
+				return nil
+			}
+
+			// Parse the value
+			p.nextToken()
 			value := p.parseExpression(LOWEST)
 			if value == nil {
 				return nil
-			} // Error parsing value
+			}
 
-			// Append the property
-			objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
+			// Add the computed property
+			objLit.Properties = append(objLit.Properties, &ObjectProperty{
+				Key:   computedKey,
+				Value: value,
+			})
+		} else {
+			// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
+			propName := p.parsePropertyName()
+			if propName != nil && p.peekTokenIs(lexer.LPAREN) {
+				// This is a shorthand method like methodName() { ... }
+				shorthandMethod := p.parseShorthandMethod()
+				if shorthandMethod == nil {
+					return nil // Error parsing shorthand method
+				}
+
+				// Create an ObjectProperty with the method name as key and the shorthand method as value
+				methodName := shorthandMethod.Name
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodName, Value: shorthandMethod})
+			} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE)) {
+				// --- NEW: Check for shorthand property syntax (identifier/keyword followed by ',' or '}') ---
+				// This is shorthand like { name, age } equivalent to { name: name, age: age }
+				identName := p.curToken.Literal
+				key := propName
+
+				// For shorthand property, the value is also the same identifier
+				value := &Identifier{Token: p.curToken, Value: identName}
+
+				// Append the property
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
+			} else {
+				// Regular property parsing
+				var key Expression
+				// --- MODIFIED: Handle Keys (Identifier/Keywords, String, NUMBER) ---
+				if propName != nil {
+					key = propName
+				} else if p.curTokenIs(lexer.STRING) {
+					key = p.parseStringLiteral()
+				} else if p.curTokenIs(lexer.NUMBER) { // <<< ADD NUMBER CASE
+					key = p.parseNumberLiteral()
+				} else {
+					// <<< UPDATE ERROR MESSAGE >>>
+					msg := fmt.Sprintf("invalid object literal key: expected identifier, string, number, or '[', got %s", p.curToken.Type)
+					p.addError(p.curToken, msg)
+					return nil
+				}
+				// --- END MODIFICATION ---
+
+				if key == nil {
+					// Error should have been added by the respective parse function
+					return nil
+				} // Error parsing key
+
+				// Check for Colon *after* parsing the key (including potential closing ']')
+				if !p.expectPeek(lexer.COLON) {
+					return nil // Expected ':'
+				}
+				// p.curToken is now COLON
+
+				p.nextToken() // Consume ':' to get to the start of the value
+
+				value := p.parseExpression(LOWEST)
+				if value == nil {
+					return nil
+				} // Error parsing value
+
+				// Append the property
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
+			}
 		}
 
 		// Expect ',' or '}'

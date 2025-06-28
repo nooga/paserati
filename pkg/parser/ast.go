@@ -1431,7 +1431,7 @@ type MemberExpression struct {
 	BaseExpression             // Embed base for ComputedType
 	Token          lexer.Token // The '.' token
 	Object         Expression  // The expression on the left (e.g., identifier, call result)
-	Property       *Identifier // The identifier on the right (the property name)
+	Property       Expression  // The property access (identifier or computed expression)
 }
 
 func (me *MemberExpression) expressionNode()      {}
@@ -1454,7 +1454,7 @@ type OptionalChainingExpression struct {
 	BaseExpression             // Embed base for ComputedType
 	Token          lexer.Token // The '?.' token
 	Object         Expression  // The expression on the left (e.g., identifier, call result)
-	Property       *Identifier // The identifier on the right (the property name)
+	Property       Expression  // The property access (identifier or computed expression)
 }
 
 func (oce *OptionalChainingExpression) expressionNode()      {}
@@ -2612,7 +2612,7 @@ func (cb *ClassBody) String() string {
 type MethodDefinition struct {
 	BaseExpression
 	Token       lexer.Token      // The method name token
-	Key         *Identifier      // Method name
+	Key         Expression       // Method name (Identifier or ComputedPropertyName)
 	Value       *FunctionLiteral // Function implementation
 	Kind        string           // "constructor", "method"
 	IsStatic    bool             // For static method support
@@ -2681,11 +2681,12 @@ func (md *MethodDefinition) String() string {
 
 // ConstructorSignature represents a constructor overload signature in a class
 type ConstructorSignature struct {
-	Token                lexer.Token    // The 'constructor' token
-	Parameters           []*Parameter   // Parameter list
-	RestParameter        *RestParameter // Rest parameter (if any)
-	ReturnTypeAnnotation Expression     // Optional return type
-	IsStatic             bool           // Access modifiers
+	Token                lexer.Token      // The 'constructor' token
+	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	Parameters           []*Parameter     // Parameter list
+	RestParameter        *RestParameter   // Rest parameter (if any)
+	ReturnTypeAnnotation Expression       // Optional return type
+	IsStatic             bool             // Access modifiers
 	IsPublic             bool
 	IsPrivate            bool
 	IsProtected          bool
@@ -2730,13 +2731,14 @@ func (cs *ConstructorSignature) String() string {
 
 // MethodSignature represents a method overload signature in a class
 type MethodSignature struct {
-	Token                lexer.Token    // The method name token
-	Key                  *Identifier    // Method name
-	Parameters           []*Parameter   // Parameter list
-	RestParameter        *RestParameter // Rest parameter (if any)
-	ReturnTypeAnnotation Expression     // Optional return type
-	Kind                 string         // "method", "getter", "setter"
-	IsStatic             bool           // Access modifiers
+	Token                lexer.Token      // The method name token
+	Key                  Expression       // Method name (Identifier or ComputedPropertyName)
+	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	Parameters           []*Parameter     // Parameter list
+	RestParameter        *RestParameter   // Rest parameter (if any)
+	ReturnTypeAnnotation Expression       // Optional return type
+	Kind                 string           // "method", "getter", "setter"
+	IsStatic             bool             // Access modifiers
 	IsPublic             bool
 	IsPrivate            bool
 	IsProtected          bool
@@ -2797,11 +2799,20 @@ func (ms *MethodSignature) String() string {
 	return out.String()
 }
 
+// ComputedPropertyName represents a computed property name [expression]
+type ComputedPropertyName struct {
+	BaseExpression
+	Expr Expression // The computed expression
+}
+
+func (cpn *ComputedPropertyName) TokenLiteral() string { return "[" }
+func (cpn *ComputedPropertyName) String() string       { return "[" + cpn.Expr.String() + "]" }
+
 // PropertyDefinition represents a property declaration in a class
 type PropertyDefinition struct {
 	BaseExpression
 	Token          lexer.Token // The property name token
-	Key            *Identifier // Property name
+	Key            Expression  // Property name (Identifier or ComputedPropertyName)
 	TypeAnnotation Expression  // Type annotation (can be nil)
 	Value          Expression  // Initializer expression (can be nil)
 	IsStatic       bool        // For static property support

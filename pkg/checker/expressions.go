@@ -7,6 +7,7 @@ import (
 	"paserati/pkg/vm"
 )
 
+
 func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	generalizedElementTypes := []types.Type{} // Store generalized types
 	for _, elemNode := range node.Elements {
@@ -141,6 +142,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	// First pass: collect all non-function properties AND create preliminary function signatures
 	for _, prop := range node.Properties {
 		var keyName string
+		
 		switch key := prop.Key.(type) {
 		case *parser.Identifier:
 			keyName = key.Value
@@ -170,17 +172,37 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			}
 			// Skip the rest of the property processing for spread elements
 			continue
+		case *parser.ComputedPropertyName:
+			// Handle computed properties: [expression]
+			c.visit(key.Expr)
+			keyType := key.Expr.GetComputedType()
+			if keyType == nil {
+				keyType = types.Any
+			}
+			
+			// Try to get a compile-time constant key if possible
+			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
+				keyName = literal.Value
+			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
+				keyName = fmt.Sprintf("%v", literal.Value)
+			} else {
+				// Complex computed property expression - mark for index signature
+				keyName = "__COMPUTED_PROPERTY__"
+			}
 		default:
-			c.addError(prop.Key, "object key must be an identifier, string, or number literal")
-			continue // Skip this property if key type is invalid
+			// Unsupported key type
+			c.addError(prop.Key, fmt.Sprintf("unsupported object literal key type: %T", prop.Key))
+			keyName = "__UNKNOWN_KEY__"
 		}
 
-		// Check for duplicate keys
-		if seenKeys[keyName] {
-			c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
-			// Continue checking value type anyway? Yes, to catch more errors.
+		// Check for duplicate keys (but skip for computed keys since they can be dynamic)
+		if keyName != "__COMPUTED_PROPERTY__" && keyName != "__UNKNOWN_KEY__" {
+			if seenKeys[keyName] {
+				c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+				// Continue checking value type anyway? Yes, to catch more errors.
+			}
+			seenKeys[keyName] = true
 		}
-		seenKeys[keyName] = true
 
 		// For non-function properties, visit and store the type immediately
 		if _, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); !isFunctionLiteral {
@@ -204,6 +226,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	// Second pass: create preliminary function signatures for all function properties
 	for _, prop := range node.Properties {
 		var keyName string
+		
 		switch key := prop.Key.(type) {
 		case *parser.Identifier:
 			keyName = key.Value
@@ -211,8 +234,22 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			keyName = key.Value
 		case *parser.NumberLiteral:
 			keyName = fmt.Sprintf("%v", key.Value)
+		case *parser.SpreadElement:
+			continue // Skip spread elements
+		case *parser.ComputedPropertyName:
+			// Handle computed properties in the same way as first pass
+			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
+				keyName = literal.Value
+			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
+				keyName = fmt.Sprintf("%v", literal.Value)
+			} else {
+				// Complex computed property expression - mark for index signature
+				keyName = "__COMPUTED_PROPERTY__"
+			}
 		default:
-			continue // Already handled error in first pass
+			// Unsupported key type
+			c.addError(prop.Key, fmt.Sprintf("unsupported object literal key type: %T", prop.Key))
+			keyName = "__UNKNOWN_KEY__"
 		}
 
 		// Skip if already processed in first pass
@@ -278,6 +315,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	for _, prop := range node.Properties {
 		var keyName string
+		
 		switch key := prop.Key.(type) {
 		case *parser.Identifier:
 			keyName = key.Value
@@ -285,8 +323,22 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			keyName = key.Value
 		case *parser.NumberLiteral:
 			keyName = fmt.Sprintf("%v", key.Value)
+		case *parser.SpreadElement:
+			continue // Skip spread elements
 		default:
-			continue // Already handled error in first pass
+			// Handle computed properties in the same way as previous passes
+			if literal, ok := prop.Key.(*parser.StringLiteral); ok {
+				keyName = literal.Value
+			} else if literal, ok := prop.Key.(*parser.NumberLiteral); ok {
+				keyName = fmt.Sprintf("%v", literal.Value)
+			} else if _, ok := prop.Key.(*parser.Identifier); ok {
+				// For now, treat all identifier-based computed properties as needing index signatures
+				// TODO: Implement proper constant value resolution
+				keyName = "__COMPUTED_PROPERTY__"
+			} else {
+				// Complex computed property expression - mark for index signature
+				keyName = "__COMPUTED_PROPERTY__"
+			}
 		}
 
 		// Skip if already processed in first pass (non-function properties)
@@ -329,12 +381,48 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	c.currentThisType = outerThisType
 	debugPrintf("// [Checker ObjectLit] Restored this context to: %v\n", outerThisType)
 
+	// Handle computed properties by creating index signatures
+	var hasComputedProperties bool
+	var computedValueTypes []types.Type
+	finalFields := make(map[string]types.Type)
+	
+	for key, valueType := range fields {
+		if key == "__COMPUTED_PROPERTY__" {
+			hasComputedProperties = true
+			computedValueTypes = append(computedValueTypes, valueType)
+		} else {
+			finalFields[key] = valueType
+		}
+	}
+	
 	// Create the final ObjectType
-	objType := &types.ObjectType{Properties: fields}
+	objType := &types.ObjectType{Properties: finalFields}
+	
+	// If we have computed properties, add an index signature
+	if hasComputedProperties {
+		// Create union of all computed value types
+		var indexValueType types.Type
+		if len(computedValueTypes) == 1 {
+			indexValueType = computedValueTypes[0]
+		} else if len(computedValueTypes) > 1 {
+			indexValueType = types.NewUnionType(computedValueTypes...)
+		} else {
+			indexValueType = types.Any
+		}
+		
+		// Add string index signature
+		objType.IndexSignatures = []*types.IndexSignature{
+			{
+				KeyType:   types.String,
+				ValueType: indexValueType,
+			},
+		}
+	}
 
 	// Set the computed type for the ObjectLiteral node itself
 	node.SetComputedType(objType)
 	debugPrintf("// [Checker ObjectLit] Computed type: %s\n", objType.String())
+	debugPrintf("// [Checker ObjectLit] Has computed properties: %v, final fields: %v\n", hasComputedProperties, finalFields)
 }
 
 // --- NEW: Template Literal Check ---
@@ -385,8 +473,8 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		objectType = types.Any
 	}
 
-	// 2. Get the property name (Property is always an Identifier in MemberExpression)
-	propertyName := node.Property.Value // node.Property is *parser.Identifier
+	// 2. Get the property name (Property can be Identifier or ComputedPropertyName)
+	propertyName := c.extractPropertyName(node.Property)
 
 	// 3. Widen the object type for checks
 	widenedObjectType := types.GetWidenedType(objectType)
@@ -685,8 +773,8 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 		objectType = types.Any
 	}
 
-	// 2. Get the property name (Property is always an Identifier in OptionalChainingExpression)
-	propertyName := node.Property.Value // node.Property is *parser.Identifier
+	// 2. Get the property name (Property can be Identifier or ComputedPropertyName)
+	propertyName := c.extractPropertyName(node.Property)
 
 	// 3. Widen the object type for checks
 	widenedObjectType := types.GetWidenedType(objectType)
@@ -1083,4 +1171,12 @@ func (c *Checker) isConstructorType(t types.Type) bool {
 		return objType.IsCallable()
 	}
 	return false
+}
+
+// tryGetConstantStringValue attempts to resolve an identifier to a constant string value
+func (c *Checker) tryGetConstantStringValue(ident *parser.Identifier) string {
+	// TODO: Implement proper constant value tracking
+	// For now, this is a placeholder that returns empty string
+	// In a full implementation, we'd track constant assignments and evaluate them
+	return ""
 }

@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/types"
 )
 
+
 func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 	// Visit LHS (Identifier, IndexExpr, MemberExpr)
 	c.visit(node.Left)
@@ -150,7 +151,7 @@ func (c *Checker) checkReadonlyPropertyAssignment(memberExpr *parser.MemberExpre
 	if memberExpr.Property == nil {
 		return // No property to check
 	}
-	propertyName := memberExpr.Property.Value
+	propertyName := c.extractPropertyName(memberExpr.Property)
 	
 	// Check if the object type has this property and if it's readonly
 	if objType, ok := objectType.(*types.ObjectType); ok {

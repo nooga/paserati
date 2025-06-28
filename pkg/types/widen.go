@@ -55,6 +55,7 @@ func DeeplyWidenType(t Type) Type {
 			ConstructSignatures: objType.ConstructSignatures,
 			BaseTypes:           objType.BaseTypes,
 			ClassMeta:           objType.ClassMeta, // Preserve class metadata
+			IndexSignatures:     objType.IndexSignatures, // Preserve index signatures
 		}
 	}
 

@@ -6,6 +6,28 @@ import (
 	"paserati/pkg/types"
 )
 
+// extractPropertyName extracts the property name from a class member key
+func (c *Checker) extractPropertyName(key parser.Expression) string {
+	switch k := key.(type) {
+	case *parser.Identifier:
+		return k.Value
+	case *parser.ComputedPropertyName:
+		// For computed properties, try to evaluate the expression at compile time if possible
+		// For now, use a placeholder name
+		if ident, ok := k.Expr.(*parser.Identifier); ok {
+			return fmt.Sprintf("__computed_%s", ident.Value)
+		} else if literal, ok := k.Expr.(*parser.StringLiteral); ok {
+			return literal.Value
+		} else if literal, ok := k.Expr.(*parser.NumberLiteral); ok {
+			return fmt.Sprintf("%v", literal.Value)
+		} else {
+			return fmt.Sprintf("__computed_%p", k.Expr)
+		}
+	default:
+		return fmt.Sprintf("__unknown_%p", key)
+	}
+}
+
 // checkClassDeclaration handles type checking for class declarations
 func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
@@ -189,9 +211,9 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 	// First pass: collect getters and setters
 	for _, method := range body.Methods {
 		if method.Kind == "getter" && !method.IsStatic {
-			getters[method.Key.Value] = method
+			getters[c.extractPropertyName(method.Key)] = method
 		} else if method.Kind == "setter" && !method.IsStatic {
-			setters[method.Key.Value] = method
+			setters[c.extractPropertyName(method.Key)] = method
 		}
 	}
 
@@ -263,6 +285,10 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		}
 	}
 
+	// Track computed properties for index signatures
+	var hasComputedProperties bool
+	var computedValueTypes []types.Type
+
 	// Add regular methods to instance type (excluding constructor, static methods, getters, and setters)
 	for _, method := range body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic && method.Kind != "getter" && method.Kind != "setter" {
@@ -279,11 +305,20 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			// Determine access level
 			accessLevel := c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)
 
-			// Add method with access control metadata
-			instanceType.WithClassMember(method.Key.Value, methodType, accessLevel, false, false)
+			// Check if this is a computed property
+			if _, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+				// For computed methods, add to index signature instead of individual property
+				hasComputedProperties = true
+				computedValueTypes = append(computedValueTypes, methodType)
+				debugPrintf("// [Checker Class] Found computed method, adding to index signature: %s\n", methodType.String())
+			} else {
+				// Add method with access control metadata
+				methodName := c.extractPropertyName(method.Key)
+				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
 
-			debugPrintf("// [Checker Class] Added method '%s' to instance type: %s (%s)\n",
-				method.Key.Value, methodType.String(), accessLevel.String())
+				debugPrintf("// [Checker Class] Added method '%s' to instance type: %s (%s)\n",
+					methodName, methodType.String(), accessLevel.String())
+			}
 		}
 	}
 
@@ -301,7 +336,7 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			// Validate the signature types
 			c.validateMethodSignature(methodSig)
 
-			debugPrintf("// [Checker Class] Validated method signature '%s'\n", methodSig.Key.Value)
+			debugPrintf("// [Checker Class] Validated method signature '%s'\n", c.extractPropertyName(methodSig.Key))
 		}
 	}
 
@@ -313,12 +348,44 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			// Determine access level
 			accessLevel := c.getAccessLevel(prop.IsPublic, prop.IsPrivate, prop.IsProtected)
 
-			// Add property with access control metadata
-			instanceType.WithClassMember(prop.Key.Value, propType, accessLevel, false, prop.Readonly)
+			// Check if this is a computed property
+			if _, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
+				// For computed properties, add to index signature instead of individual property
+				hasComputedProperties = true
+				computedValueTypes = append(computedValueTypes, propType)
+				debugPrintf("// [Checker Class] Found computed property, adding to index signature: %s\n", propType.String())
+			} else {
+				// Add property with access control metadata
+				propName := c.extractPropertyName(prop.Key)
+				instanceType.WithClassMember(propName, propType, accessLevel, false, prop.Readonly)
 
-			debugPrintf("// [Checker Class] Added property '%s' to instance type: %s (%s, readonly: %v)\n",
-				prop.Key.Value, propType.String(), accessLevel.String(), prop.Readonly)
+				debugPrintf("// [Checker Class] Added property '%s' to instance type: %s (%s, readonly: %v)\n",
+					propName, propType.String(), accessLevel.String(), prop.Readonly)
+			}
 		}
+	}
+
+	// If class has computed properties, create index signatures
+	if hasComputedProperties {
+		// Create a union type of all computed property value types
+		var indexValueType types.Type
+		if len(computedValueTypes) == 1 {
+			indexValueType = computedValueTypes[0]
+		} else if len(computedValueTypes) > 1 {
+			indexValueType = &types.UnionType{Types: computedValueTypes}
+		} else {
+			indexValueType = types.Any
+		}
+
+		// Add index signature: [key: string]: ComputedValueType
+		instanceType.IndexSignatures = []*types.IndexSignature{
+			{
+				KeyType:   types.String,
+				ValueType: indexValueType,
+			},
+		}
+
+		debugPrintf("// [Checker Class] Added index signature for computed properties: [key: string]: %s\n", indexValueType.String())
 	}
 
 	return instanceType
@@ -327,8 +394,9 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 // validateOverrideMethod validates the usage of the override keyword
 func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superClass parser.Expression, className string) {
 	// Basic validation: if there's no superclass, override doesn't make sense
+	methodName := c.extractPropertyName(method.Key)
 	if superClass == nil {
-		c.addError(method.Key, fmt.Sprintf("method '%s' uses 'override' but class '%s' does not extend any class", method.Key.Value, className))
+		c.addError(method.Key, fmt.Sprintf("method '%s' uses 'override' but class '%s' does not extend any class", methodName, className))
 		return
 	}
 
@@ -339,21 +407,22 @@ func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superC
 	// 4. Check access modifier compatibility
 
 	debugPrintf("// [Checker Class] Override validation for method '%s' in class '%s' (inheritance not yet implemented)\n",
-		method.Key.Value, className)
+		methodName, className)
 }
 
 // validateOverrideMethodSignature validates the usage of the override keyword for method signatures
 func (c *Checker) validateOverrideMethodSignature(methodSig *parser.MethodSignature, superClass parser.Expression, className string) {
 	// Basic validation: if there's no superclass, override doesn't make sense
+	methodName := c.extractPropertyName(methodSig.Key)
 	if superClass == nil {
-		c.addError(methodSig.Key, fmt.Sprintf("method signature '%s' uses 'override' but class '%s' does not extend any class", methodSig.Key.Value, className))
+		c.addError(methodSig.Key, fmt.Sprintf("method signature '%s' uses 'override' but class '%s' does not extend any class", methodName, className))
 		return
 	}
 
 	// TODO: When inheritance is implemented, add similar validation as for method definitions
 
 	debugPrintf("// [Checker Class] Override validation for method signature '%s' in class '%s' (inheritance not yet implemented)\n",
-		methodSig.Key.Value, className)
+		methodName, className)
 }
 
 // createConstructorSignature creates a signature for the class constructor
@@ -411,7 +480,21 @@ func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceTyp
 // inferMethodType determines the type of a class method
 func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	if method.Value == nil {
-		debugPrintf("// [Checker Class] Method '%s' has no function value, using Any\n", method.Key.Value)
+		methodName := c.extractPropertyName(method.Key)
+		debugPrintf("// [Checker Class] Method '%s' has no function value, using Any\n", methodName)
+		return types.Any
+	}
+
+	// For generic methods, we need to check them properly to make type parameters available
+	if len(method.Value.TypeParameters) > 0 {
+		// Check the method's function literal which will handle type parameters
+		c.checkFunctionLiteral(method.Value)
+		
+		// Get the computed type from the function literal
+		if computedType := method.Value.GetComputedType(); computedType != nil {
+			return computedType
+		}
+		// Fallback if checking failed
 		return types.Any
 	}
 
@@ -495,10 +578,11 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 			accessLevel := c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)
 
 			// Add method with access control metadata
-			constructorType.WithClassMember(method.Key.Value, methodType, accessLevel, true, false)
+			methodName := c.extractPropertyName(method.Key)
+			constructorType.WithClassMember(methodName, methodType, accessLevel, true, false)
 
 			debugPrintf("// [Checker Class] Added static method '%s' to constructor type: %s (%s)\n",
-				method.Key.Value, methodType.String(), accessLevel.String())
+				methodName, methodType.String(), accessLevel.String())
 		}
 	}
 
@@ -511,15 +595,16 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 			accessLevel := c.getAccessLevel(prop.IsPublic, prop.IsPrivate, prop.IsProtected)
 
 			// Add property with access control metadata
-			constructorType.WithClassMember(prop.Key.Value, propType, accessLevel, true, prop.Readonly)
+			propName := c.extractPropertyName(prop.Key)
+			constructorType.WithClassMember(propName, propType, accessLevel, true, prop.Readonly)
 
 			// Handle optional properties
 			if prop.Optional {
-				constructorType.OptionalProperties[prop.Key.Value] = true
+				constructorType.OptionalProperties[propName] = true
 			}
 
 			debugPrintf("// [Checker Class] Added static property '%s' to constructor type: %s (%s, readonly: %v)\n",
-				prop.Key.Value, propType.String(), accessLevel.String(), prop.Readonly)
+				propName, propType.String(), accessLevel.String(), prop.Readonly)
 		}
 	}
 
@@ -529,6 +614,33 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 // extractParameterTypes extracts types from function parameters
 func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type {
 	var paramTypes []types.Type
+
+	// If the function has type parameters, create a temporary environment with them
+	originalEnv := c.env
+	if len(fn.TypeParameters) > 0 {
+		typeParamEnv := NewEnclosedEnvironment(c.env)
+		
+		// Define each type parameter in the environment
+		for i, typeParamNode := range fn.TypeParameters {
+			// Create the type parameter
+			typeParam := &types.TypeParameter{
+				Name:       typeParamNode.Name.Value,
+				Constraint: types.Any, // Simple constraint for now
+				Index:      i,
+			}
+			
+			// Create a type parameter type
+			typeParamType := &types.TypeParameterType{
+				Parameter: typeParam,
+			}
+			
+			// Define in the environment
+			typeParamEnv.DefineTypeAlias(typeParam.Name, typeParamType)
+		}
+		
+		// Use the type param environment for resolving parameter types
+		c.env = typeParamEnv
+	}
 
 	for _, param := range fn.Parameters {
 		if param.TypeAnnotation != nil {
@@ -544,6 +656,9 @@ func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type
 			paramTypes = append(paramTypes, types.Any)
 		}
 	}
+
+	// Restore original environment
+	c.env = originalEnv
 
 	return paramTypes
 }
@@ -566,8 +681,39 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 	}
 
 	if fn.RestParameter.TypeAnnotation != nil {
+		// If the function has type parameters, create a temporary environment with them
+		originalEnv := c.env
+		if len(fn.TypeParameters) > 0 {
+			typeParamEnv := NewEnclosedEnvironment(c.env)
+			
+			// Define each type parameter in the environment
+			for i, typeParamNode := range fn.TypeParameters {
+				// Create the type parameter
+				typeParam := &types.TypeParameter{
+					Name:       typeParamNode.Name.Value,
+					Constraint: types.Any, // Simple constraint for now
+					Index:      i,
+				}
+				
+				// Create a type parameter type
+				typeParamType := &types.TypeParameterType{
+					Parameter: typeParam,
+				}
+				
+				// Define in the environment
+				typeParamEnv.DefineTypeAlias(typeParam.Name, typeParamType)
+			}
+			
+			// Use the type param environment for resolving rest parameter type
+			c.env = typeParamEnv
+		}
+
 		// Use explicit type annotation
 		restType := c.resolveTypeAnnotation(fn.RestParameter.TypeAnnotation)
+		
+		// Restore original environment
+		c.env = originalEnv
+		
 		if restType != nil {
 			return restType
 		}
@@ -826,8 +972,39 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 // inferReturnType determines the return type of a function
 func (c *Checker) inferReturnType(fn *parser.FunctionLiteral) types.Type {
 	if fn.ReturnTypeAnnotation != nil {
+		// If the function has type parameters, create a temporary environment with them
+		originalEnv := c.env
+		if len(fn.TypeParameters) > 0 {
+			typeParamEnv := NewEnclosedEnvironment(c.env)
+			
+			// Define each type parameter in the environment
+			for i, typeParamNode := range fn.TypeParameters {
+				// Create the type parameter
+				typeParam := &types.TypeParameter{
+					Name:       typeParamNode.Name.Value,
+					Constraint: types.Any, // Simple constraint for now
+					Index:      i,
+				}
+				
+				// Create a type parameter type
+				typeParamType := &types.TypeParameterType{
+					Parameter: typeParam,
+				}
+				
+				// Define in the environment
+				typeParamEnv.DefineTypeAlias(typeParam.Name, typeParamType)
+			}
+			
+			// Use the type param environment for resolving return type
+			c.env = typeParamEnv
+		}
+
 		// Use explicit return type annotation
 		returnType := c.resolveTypeAnnotation(fn.ReturnTypeAnnotation)
+		
+		// Restore original environment
+		c.env = originalEnv
+		
 		if returnType != nil {
 			return returnType
 		}
@@ -913,7 +1090,8 @@ func (c *Checker) validateMethodSignature(sig *parser.MethodSignature) {
 	if sig.ReturnTypeAnnotation != nil {
 		returnType := c.resolveTypeAnnotation(sig.ReturnTypeAnnotation)
 		if returnType == nil {
-			c.addError(sig.Key, fmt.Sprintf("invalid return type annotation for method '%s'", sig.Key.Value))
+			methodName := c.extractPropertyName(sig.Key)
+			c.addError(sig.Key, fmt.Sprintf("invalid return type annotation for method '%s'", methodName))
 		}
 	}
 }
