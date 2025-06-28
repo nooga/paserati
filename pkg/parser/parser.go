@@ -75,6 +75,7 @@ const (
 const (
 	_ int = iota
 	TYPE_LOWEST
+	TYPE_CONDITIONAL  // extends ? : (Very low precedence - should be parsed last)
 	TYPE_PREDICATE    // is (Lower precedence - should be parsed last)
 	TYPE_UNION        // |
 	TYPE_INTERSECTION // &  (Higher precedence than union)
@@ -161,6 +162,7 @@ var precedences = map[lexer.TokenType]int{
 
 // --- NEW: Precedences map for TYPE operator tokens ---
 var typePrecedences = map[lexer.TokenType]int{
+	lexer.EXTENDS:     TYPE_CONDITIONAL,
 	lexer.IS:          TYPE_PREDICATE,
 	lexer.PIPE:        TYPE_UNION,
 	lexer.BITWISE_AND: TYPE_INTERSECTION,
@@ -299,6 +301,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypeInfix(lexer.BITWISE_AND, p.parseIntersectionTypeExpression) // TYPE context: '&' is intersection
 	p.registerTypeInfix(lexer.LBRACKET, p.parseArrayTypeExpression)           // TYPE context: 'T[]'
 	p.registerTypeInfix(lexer.IS, p.parseTypePredicateExpression)             // TYPE context: 'x is Type' for type predicates
+	p.registerTypeInfix(lexer.EXTENDS, p.parseConditionalTypeExpression)      // TYPE context: 'T extends U ? X : Y'
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -804,6 +807,51 @@ func (p *Parser) parseIntersectionTypeExpression(left Expression) Expression {
 		return nil // Error parsing right side
 	}
 	return intersectionExp
+}
+
+// --- NEW: Helper for conditional type parsing ---
+// This function handles conditional types like T extends U ? X : Y
+func (p *Parser) parseConditionalTypeExpression(left Expression) Expression {
+	conditionalExp := &ConditionalTypeExpression{
+		ExtendsToken: p.curToken, // The 'extends' token
+		CheckType:    left,       // The left side is the type being checked
+	}
+	
+	// Parse the type after 'extends'
+	precedence := TYPE_CONDITIONAL
+	p.nextToken() // Consume the token starting the extends type
+	conditionalExp.ExtendsType = p.parseTypeExpressionRecursive(precedence)
+	if conditionalExp.ExtendsType == nil {
+		return nil // Error parsing extends type
+	}
+	
+	// Expect '?' token
+	if !p.expectPeek(lexer.QUESTION) {
+		return nil
+	}
+	conditionalExp.QuestionToken = p.curToken
+	
+	// Parse the true type
+	p.nextToken() // Consume the token starting the true type
+	conditionalExp.TrueType = p.parseTypeExpressionRecursive(precedence)
+	if conditionalExp.TrueType == nil {
+		return nil // Error parsing true type
+	}
+	
+	// Expect ':' token
+	if !p.expectPeek(lexer.COLON) {
+		return nil
+	}
+	conditionalExp.ColonToken = p.curToken
+	
+	// Parse the false type
+	p.nextToken() // Consume the token starting the false type
+	conditionalExp.FalseType = p.parseTypeExpressionRecursive(precedence)
+	if conditionalExp.FalseType == nil {
+		return nil // Error parsing false type
+	}
+	
+	return conditionalExp
 }
 
 // --- NEW: Precedence helper for type operators ---

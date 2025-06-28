@@ -281,6 +281,9 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.IndexedAccessTypeExpression:
 		return c.resolveIndexedAccessTypeExpression(node)
 
+	case *parser.ConditionalTypeExpression:
+		return c.resolveConditionalTypeExpression(node)
+
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
@@ -805,6 +808,27 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			IndexType:  newIndexType,
 		}
 
+	case *types.ConditionalType:
+		// Substitute all types in conditional type
+		newCheckType := c.substituteTypes(typ.CheckType, substitution)
+		newExtendsType := c.substituteTypes(typ.ExtendsType, substitution)
+		newTrueType := c.substituteTypes(typ.TrueType, substitution)
+		newFalseType := c.substituteTypes(typ.FalseType, substitution)
+		
+		// Try to compute the result with substituted types
+		resolvedType := c.computeConditionalType(newCheckType, newExtendsType, newTrueType, newFalseType)
+		if resolvedType != nil {
+			return resolvedType
+		}
+		
+		// Return the conditional type with substituted parts
+		return &types.ConditionalType{
+			CheckType:   newCheckType,
+			ExtendsType: newExtendsType,
+			TrueType:    newTrueType,
+			FalseType:   newFalseType,
+		}
+
 	default:
 		// For primitive types and other types that don't contain type parameters,
 		// return as-is
@@ -984,6 +1008,80 @@ func (c *Checker) resolveIndexedAccessTypeExpression(node *parser.IndexedAccessT
 	return &types.IndexedAccessType{
 		ObjectType: objectType,
 		IndexType:  indexType,
+	}
+}
+
+// resolveConditionalTypeExpression resolves a conditional type expression to a ConditionalType
+func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeExpression) types.Type {
+	if node.CheckType == nil {
+		c.addError(node, "conditional type missing check type")
+		return nil
+	}
+
+	if node.ExtendsType == nil {
+		c.addError(node, "conditional type missing extends type")
+		return nil
+	}
+
+	if node.TrueType == nil {
+		c.addError(node, "conditional type missing true type")
+		return nil
+	}
+
+	if node.FalseType == nil {
+		c.addError(node, "conditional type missing false type")
+		return nil
+	}
+
+	// Resolve all component types
+	checkType := c.resolveTypeAnnotation(node.CheckType)
+	if checkType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	extendsType := c.resolveTypeAnnotation(node.ExtendsType)
+	if extendsType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	trueType := c.resolveTypeAnnotation(node.TrueType)
+	if trueType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	falseType := c.resolveTypeAnnotation(node.FalseType)
+	if falseType == nil {
+		// Error already reported by resolveTypeAnnotation
+		return nil
+	}
+
+	// Always return a ConditionalType for later resolution/substitution
+	// The computation will happen during type substitution when generics are instantiated
+	return &types.ConditionalType{
+		CheckType:   checkType,
+		ExtendsType: extendsType,
+		TrueType:    trueType,
+		FalseType:   falseType,
+	}
+}
+
+// computeConditionalType computes the result of a conditional type like T extends U ? X : Y
+func (c *Checker) computeConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
+	// For now, we'll implement basic conditional type resolution
+	// This can be expanded to handle more complex cases later
+	
+	debugPrintf("// [ConditionalType] Checking if %s extends %s\n", checkType.String(), extendsType.String())
+	
+	// Check if checkType extends extendsType (is assignable to it)
+	if types.IsAssignable(checkType, extendsType) {
+		debugPrintf("// [ConditionalType] YES: %s extends %s -> %s\n", checkType.String(), extendsType.String(), trueType.String())
+		return trueType
+	} else {
+		debugPrintf("// [ConditionalType] NO: %s does not extend %s -> %s\n", checkType.String(), extendsType.String(), falseType.String())
+		return falseType
 	}
 }
 

@@ -190,3 +190,44 @@ func (iat *IndexedAccessType) Equals(other Type) bool {
 }
 
 func (iat *IndexedAccessType) typeNode() {}
+
+// ConditionalType represents a conditional type: CheckType extends ExtendsType ? TrueType : FalseType
+type ConditionalType struct {
+	CheckType   Type // The type being checked (T in T extends U ? X : Y)
+	ExtendsType Type // The type being extended/checked against (U in T extends U ? X : Y)
+	TrueType    Type // The type when condition is true (X in T extends U ? X : Y)
+	FalseType   Type // The type when condition is false (Y in T extends U ? X : Y)
+}
+
+func (ct *ConditionalType) String() string {
+	checkStr := "unknown"
+	if ct.CheckType != nil {
+		checkStr = ct.CheckType.String()
+	}
+	extendsStr := "unknown"
+	if ct.ExtendsType != nil {
+		extendsStr = ct.ExtendsType.String()
+	}
+	trueStr := "unknown"
+	if ct.TrueType != nil {
+		trueStr = ct.TrueType.String()
+	}
+	falseStr := "unknown"
+	if ct.FalseType != nil {
+		falseStr = ct.FalseType.String()
+	}
+	return fmt.Sprintf("%s extends %s ? %s : %s", checkStr, extendsStr, trueStr, falseStr)
+}
+
+func (ct *ConditionalType) Equals(other Type) bool {
+	otherCt, ok := other.(*ConditionalType)
+	if !ok {
+		return false
+	}
+	return ct.CheckType.Equals(otherCt.CheckType) &&
+		ct.ExtendsType.Equals(otherCt.ExtendsType) &&
+		ct.TrueType.Equals(otherCt.TrueType) &&
+		ct.FalseType.Equals(otherCt.FalseType)
+}
+
+func (ct *ConditionalType) typeNode() {}

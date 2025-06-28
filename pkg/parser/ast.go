@@ -1633,6 +1633,51 @@ func (mte *MappedTypeExpression) String() string {
 // The actual type is determined during type checking.
 func (mte *MappedTypeExpression) GetComputedType() types.Type { return mte.ComputedType }
 
+// --- NEW: ConditionalTypeExpression ---
+
+// ConditionalTypeExpression represents a conditional type like T extends U ? X : Y
+type ConditionalTypeExpression struct {
+	BaseExpression               // Embed base for ComputedType (types.ConditionalType)
+	CheckType      Expression    // The type being checked (T in T extends U ? X : Y)
+	ExtendsToken   lexer.Token  // The 'extends' token
+	ExtendsType    Expression    // The type being extended/checked against (U in T extends U ? X : Y)
+	QuestionToken  lexer.Token  // The '?' token
+	TrueType       Expression    // The type when condition is true (X in T extends U ? X : Y)
+	ColonToken     lexer.Token  // The ':' token
+	FalseType      Expression    // The type when condition is false (Y in T extends U ? X : Y)
+}
+
+func (cte *ConditionalTypeExpression) expressionNode()      {}
+func (cte *ConditionalTypeExpression) TokenLiteral() string { return cte.ExtendsToken.Literal }
+func (cte *ConditionalTypeExpression) String() string {
+	var out bytes.Buffer
+	
+	if cte.CheckType != nil {
+		out.WriteString(cte.CheckType.String())
+	}
+	out.WriteString(" extends ")
+	if cte.ExtendsType != nil {
+		out.WriteString(cte.ExtendsType.String())
+	}
+	out.WriteString(" ? ")
+	if cte.TrueType != nil {
+		out.WriteString(cte.TrueType.String())
+	}
+	out.WriteString(" : ")
+	if cte.FalseType != nil {
+		out.WriteString(cte.FalseType.String())
+	}
+	
+	if cte.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", cte.ComputedType.String()))
+	}
+	
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface
+func (cte *ConditionalTypeExpression) GetComputedType() types.Type { return cte.ComputedType }
+
 // --- NEW: KeyofTypeExpression ---
 
 // KeyofTypeExpression represents a keyof type operator like keyof T
