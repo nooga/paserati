@@ -3,6 +3,8 @@ package modules
 import (
 	"context"
 	"fmt"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -45,9 +47,9 @@ type parseWorker struct {
 	resultChan chan<- *ParseResult
 	errorChan  chan<- error
 	
-	// Mock components for testing (will be replaced with real lexer/parser)
-	mockLexer  MockLexer
-	mockParser MockParser
+	// Real lexer and parser instances
+	lexerInstance  *lexer.Lexer
+	parserInstance *parser.Parser
 }
 
 // MockLexer interface for testing parallel processing without real lexer
@@ -124,8 +126,7 @@ func (wp *workerPool) Start(ctx context.Context, numWorkers int) error {
 			jobQueue:   wp.jobQueue,
 			resultChan: wp.resultChan,
 			errorChan:  wp.errorChan,
-			mockLexer:  &simpleMockLexer{},
-			mockParser: &simpleMockParser{},
+			// Lexer and parser will be created per job
 		}
 		
 		wp.workers[i] = worker
@@ -220,14 +221,17 @@ func (wp *workerPool) GetStats() WorkerPoolStats {
 // run is the main worker loop
 func (w *parseWorker) run(ctx context.Context) {
 	defer w.pool.wg.Done()
+	// Worker started
 	
 	for {
 		select {
 		case job, ok := <-w.jobQueue:
 			if !ok {
 				// Job queue closed, worker should stop
+				// Job queue closed, worker should stop
 				return
 			}
+			// Process the job
 			
 			result := w.processJob(job)
 			
@@ -250,6 +254,7 @@ func (w *parseWorker) run(ctx context.Context) {
 			// Send result
 			select {
 			case w.resultChan <- result:
+				// Result sent successfully
 			case <-ctx.Done():
 				return
 			}
@@ -270,30 +275,76 @@ func (w *parseWorker) processJob(job *ParseJob) *ParseResult {
 		Timestamp:  startTime,
 	}
 	
-	// Mock lexing phase
-	w.mockLexer.Reset(job.Source.Content)
-	tokens, err := w.mockLexer.Tokenize()
-	if err != nil {
-		result.Error = fmt.Errorf("lexing failed: %w", err)
+	// Use real lexer and parser
+	w.lexerInstance = lexer.NewLexerWithSource(job.Source)
+	w.parserInstance = parser.NewParser(w.lexerInstance)
+	
+	// Parse the module
+	program, parseErrs := w.parserInstance.ParseProgram()
+	if len(parseErrs) > 0 {
+		// Take the first error
+		result.Error = fmt.Errorf("parsing failed: %s", parseErrs[0].Error())
 		result.ParseDuration = time.Since(startTime)
 		return result
 	}
 	
-	// Mock parsing phase
-	w.mockParser.Reset(tokens)
-	ast, err := w.mockParser.Parse()
-	if err != nil {
-		result.Error = fmt.Errorf("parsing failed: %w", err)
-		result.ParseDuration = time.Since(startTime)
-		return result
-	}
+	// Store the AST
+	result.AST = program
 	
-	// Extract import/export specifications from mock AST
-	result.ImportSpecs = ast.Imports
-	result.ExportSpecs = ast.Exports
+	// Extract import/export specifications from real AST
+	result.ImportSpecs = extractImportSpecs(program)
+	result.ExportSpecs = extractExportSpecs(program)
 	
 	result.ParseDuration = time.Since(startTime)
 	return result
+}
+
+// extractImportSpecs extracts import specifications from the AST
+func extractImportSpecs(program *parser.Program) []*ImportSpec {
+	var specs []*ImportSpec
+	
+	for _, stmt := range program.Statements {
+		if importDecl, ok := stmt.(*parser.ImportDeclaration); ok {
+			if importDecl.Source != nil {
+				spec := &ImportSpec{
+					ModulePath: importDecl.Source.Value,
+				}
+				specs = append(specs, spec)
+			}
+		}
+	}
+	
+	return specs
+}
+
+// extractExportSpecs extracts export specifications from the AST
+func extractExportSpecs(program *parser.Program) []*ExportSpec {
+	var specs []*ExportSpec
+	
+	for _, stmt := range program.Statements {
+		switch node := stmt.(type) {
+		case *parser.ExportNamedDeclaration:
+			// Handle named exports
+			for _, specifier := range node.Specifiers {
+				if namedSpec, ok := specifier.(*parser.ExportNamedSpecifier); ok {
+					spec := &ExportSpec{
+						ExportName: namedSpec.Exported.Value,
+						LocalName:  namedSpec.Local.Value,
+					}
+					specs = append(specs, spec)
+				}
+			}
+		case *parser.ExportDefaultDeclaration:
+			// Handle default export
+			spec := &ExportSpec{
+				ExportName: "default",
+				IsDefault:  true,
+			}
+			specs = append(specs, spec)
+		}
+	}
+	
+	return specs
 }
 
 // simpleMockLexer is a basic mock lexer for testing

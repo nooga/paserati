@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/source"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"runtime"
 	"time"
 )
 
@@ -197,7 +198,7 @@ type LoaderConfig struct {
 func DefaultLoaderConfig() *LoaderConfig {
 	return &LoaderConfig{
 		EnableParallel:   true,
-		NumWorkers:       0, // Auto-detect based on CPU count
+		NumWorkers:       runtime.NumCPU(), // Use all available CPUs
 		JobBufferSize:    100,
 		ResultBufferSize: 100,
 		MaxParseTime:     30 * time.Second,

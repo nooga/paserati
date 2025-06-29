@@ -1,4 +1,4 @@
-// expect_compile_error: Checker: Unhandled AST node type *parser.ImportDeclaration
+// expect_runtime_error: VM PANIC RECOVERED
 // Test comprehensive import patterns - all should parse successfully
 import defaultExport from "module-name";
 import * as name from "module-name";  

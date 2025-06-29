@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"paserati/pkg/errors" // Added import
+	"paserati/pkg/modules" // Added for real ModuleLoader integration
 	"paserati/pkg/source" // Added import for source context
 
 	"paserati/pkg/parser"
@@ -108,6 +109,10 @@ type Checker struct {
 	// TODO: Add Type Registry if needed
 	env    *Environment           // Current type environment
 	errors []errors.PaseratiError // Changed from []TypeError
+	
+	// --- Module System Integration ---
+	moduleEnv    *ModuleEnvironment     // Module-aware environment (nil for non-module files)
+	moduleLoader modules.ModuleLoader   // Real ModuleLoader for dependency resolution
 
 	// --- NEW: Context for checking function bodies ---
 	// Expected return type of the function currently being checked (set by explicit annotation).
@@ -2009,6 +2014,19 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.ThrowStatement:
 		c.checkThrowStatement(node)
 
+	// --- Module System: Import/Export Statements ---
+	case *parser.ImportDeclaration:
+		c.checkImportDeclaration(node)
+
+	case *parser.ExportNamedDeclaration:
+		c.checkExportNamedDeclaration(node)
+
+	case *parser.ExportDefaultDeclaration:
+		c.checkExportDefaultDeclaration(node)
+
+	case *parser.ExportAllDeclaration:
+		c.checkExportAllDeclaration(node)
+
 	// --- Type Expressions (normally handled via resolveTypeAnnotation, but may be visited directly) ---
 	case *parser.ArrayTypeExpression:
 		// Type expressions are normally resolved via resolveTypeAnnotation
@@ -2572,4 +2590,349 @@ func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, o
 	}
 
 	return typeArgs
+}
+
+// ----------------------------------------------------------------------------
+// Module System: Environment Setup and Integration
+// ----------------------------------------------------------------------------
+
+// EnableModuleMode sets up the checker for module-aware type checking
+func (c *Checker) EnableModuleMode(modulePath string, moduleLoader modules.ModuleLoader) {
+	if c.env == nil {
+		// Create a base environment if none exists
+		c.env = NewEnvironment()
+	}
+	
+	c.moduleEnv = NewModuleEnvironment(c.env, modulePath, moduleLoader)
+	c.moduleLoader = moduleLoader
+	debugPrintf("// [Checker] Enabled module mode for: %s\n", modulePath)
+}
+
+// IsModuleMode returns true if the checker is in module-aware mode
+func (c *Checker) IsModuleMode() bool {
+	return c.moduleEnv != nil
+}
+
+// GetModuleExports returns the exports from the current module (if in module mode)
+func (c *Checker) GetModuleExports() map[string]types.Type {
+	if c.moduleEnv != nil {
+		return c.moduleEnv.GetAllExports()
+	}
+	return make(map[string]types.Type)
+}
+
+// ----------------------------------------------------------------------------
+// Module System: Import/Export Type Checking
+// ----------------------------------------------------------------------------
+
+// checkImportDeclaration handles type checking for import statements
+func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
+	if node.Source == nil {
+		c.addError(node, "import statement missing source module")
+		return
+	}
+
+	sourceModulePath := node.Source.Value
+	debugPrintf("// [Checker] Processing import from: %s\n", sourceModulePath)
+	
+	// Handle bare imports (side-effect only)
+	if len(node.Specifiers) == 0 {
+		debugPrintf("// [Checker] Bare import (side effects only): %s\n", sourceModulePath)
+		// For bare imports, we just need to ensure the module can be resolved
+		// No bindings are created in the local environment
+		return
+	}
+	
+	// Validate and process import specifiers
+	for _, spec := range node.Specifiers {
+		switch importSpec := spec.(type) {
+		case *parser.ImportDefaultSpecifier:
+			// Default import: import defaultName from "module"
+			if importSpec.Local == nil {
+				c.addError(node, "import default specifier missing local name")
+				continue
+			}
+			
+			localName := importSpec.Local.Value
+			c.processImportBinding(localName, sourceModulePath, "default", ImportDefault)
+			
+		case *parser.ImportNamedSpecifier:
+			// Named import: import { name } or import { name as alias }
+			if importSpec.Local == nil || importSpec.Imported == nil {
+				c.addError(node, "import named specifier missing names")
+				continue
+			}
+			
+			localName := importSpec.Local.Value
+			importedName := importSpec.Imported.Value
+			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamed)
+			
+		case *parser.ImportNamespaceSpecifier:
+			// Namespace import: import * as name from "module"
+			if importSpec.Local == nil {
+				c.addError(node, "import namespace specifier missing local name")
+				continue
+			}
+			
+			localName := importSpec.Local.Value
+			c.processImportBinding(localName, sourceModulePath, "*", ImportNamespace)
+			
+		default:
+			c.addError(node, fmt.Sprintf("unknown import specifier type: %T", spec))
+		}
+	}
+}
+
+// processImportBinding handles the binding of an imported name
+func (c *Checker) processImportBinding(localName, sourceModule, sourceName string, importType ImportBindingType) {
+	// If we're in module mode, use the module environment for proper tracking
+	if c.IsModuleMode() {
+		c.moduleEnv.DefineImport(localName, sourceModule, sourceName, importType)
+		
+		// Try to resolve the actual type from the source module
+		resolvedType := c.moduleEnv.ResolveImportedType(localName)
+		if resolvedType != types.Any {
+			debugPrintf("// [Checker] Imported %s: %s = %s (resolved)\n", localName, sourceName, resolvedType.String())
+		} else {
+			debugPrintf("// [Checker] Imported %s: %s = any (unresolved)\n", localName, sourceName)
+		}
+	} else {
+		// Fallback: bind to 'any' type in regular environment
+		c.env.Define(localName, types.Any, false)
+		debugPrintf("// [Checker] Imported %s: %s = any (no module mode)\n", localName, sourceName)
+	}
+}
+
+// checkExportNamedDeclaration handles type checking for named export statements
+func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaration) {
+	if node.Declaration != nil {
+		// Direct export: export const x = 1; export function foo() {}
+		debugPrintf("// [Checker] Processing direct export declaration\n")
+		c.visit(node.Declaration)
+		
+		// Extract and register exported names
+		c.processExportDeclaration(node.Declaration)
+		
+	} else if len(node.Specifiers) > 0 {
+		// Named exports: export { x, y } or export { x } from "module"
+		debugPrintf("// [Checker] Processing named export specifiers\n")
+		
+		if node.Source != nil {
+			// Re-export: export { x } from "module"
+			sourceModule := node.Source.Value
+			debugPrintf("// [Checker] Re-export from: %s\n", sourceModule)
+			
+			for _, spec := range node.Specifiers {
+				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+					localName := exportSpec.Local.Value
+					exportName := exportSpec.Exported.Value
+					
+					if c.IsModuleMode() {
+						c.moduleEnv.DefineReExport(exportName, sourceModule, localName)
+						debugPrintf("// [Checker] Re-exported: %s as %s from %s\n", localName, exportName, sourceModule)
+					}
+				}
+			}
+		} else {
+			// Local export: export { x, y }
+			// Validate that the exported names exist in current scope and register them
+			for _, spec := range node.Specifiers {
+				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+					if exportSpec.Local == nil {
+						c.addError(node, "export specifier missing local name")
+						continue
+					}
+					
+					localName := exportSpec.Local.Value
+					exportName := exportSpec.Exported.Value
+					
+					// Check if the local name exists in current scope
+					if localType, _, exists := c.env.Resolve(localName); exists {
+						// Register the export in module environment
+						if c.IsModuleMode() {
+							c.moduleEnv.DefineExport(localName, exportName, localType, nil)
+						}
+						debugPrintf("// [Checker] Exported: %s as %s (type: %s)\n", localName, exportName, localType.String())
+					} else {
+						c.addError(node, fmt.Sprintf("exported name '%s' not found in current scope", localName))
+					}
+				}
+			}
+		}
+	}
+}
+
+// checkExportDefaultDeclaration handles type checking for default export statements
+func (c *Checker) checkExportDefaultDeclaration(node *parser.ExportDefaultDeclaration) {
+	if node.Declaration == nil {
+		c.addError(node, "export default statement missing declaration")
+		return
+	}
+	
+	debugPrintf("// [Checker] Processing default export\n")
+	
+	// Type check the default export expression
+	c.visit(node.Declaration)
+	
+	// Register the default export
+	if c.IsModuleMode() {
+		exportType := node.Declaration.GetComputedType()
+		if exportType == nil {
+			exportType = types.Any
+		}
+		
+		c.moduleEnv.DefineExport("default", "default", exportType, nil)
+		debugPrintf("// [Checker] Default export registered (type: %s)\n", exportType.String())
+	} else {
+		debugPrintf("// [Checker] Default export processed (no module mode)\n")
+	}
+}
+
+// checkExportAllDeclaration handles type checking for export all statements
+func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
+	if node.Source == nil {
+		c.addError(node, "export * statement missing source module")
+		return
+	}
+	
+	sourceModule := node.Source.Value
+	debugPrintf("// [Checker] Processing export * from: %s\n", sourceModule)
+	
+	if node.Exported != nil {
+		// export * as name from "module"
+		exportName := node.Exported.Value
+		debugPrintf("// [Checker] Export all as namespace: %s\n", exportName)
+		
+		if c.IsModuleMode() {
+			// This creates a namespace export that contains all exports from the source module
+			c.moduleEnv.DefineReExport(exportName, sourceModule, "*")
+		}
+	} else {
+		// export * from "module" - re-exports all named exports (but not default)
+		debugPrintf("// [Checker] Export all (anonymous) from: %s\n", sourceModule)
+		
+		// This would need to be resolved later when we have access to the source module's exports
+		// For now, we just note the dependency
+		if c.IsModuleMode() {
+			c.moduleEnv.Dependencies[sourceModule] = true
+		}
+	}
+}
+
+// processExportDeclaration processes a declaration that's being exported directly
+func (c *Checker) processExportDeclaration(decl parser.Statement) {
+	switch node := decl.(type) {
+	case *parser.LetStatement:
+		if node.Name != nil {
+			localName := node.Name.Value
+			// Look up the type from the environment (the statement was already processed)
+			exportType, _, exists := c.env.Resolve(localName)
+			if !exists {
+				exportType = types.Any
+			}
+			
+			if c.IsModuleMode() {
+				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+			}
+			debugPrintf("// [Checker] Exported let: %s (type: %s)\n", localName, exportType.String())
+		}
+		
+	case *parser.ConstStatement:
+		if node.Name != nil {
+			localName := node.Name.Value
+			// Look up the type from the environment (the statement was already processed)
+			exportType, _, exists := c.env.Resolve(localName)
+			if !exists {
+				exportType = types.Any
+			}
+			
+			if c.IsModuleMode() {
+				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+			}
+			debugPrintf("// [Checker] Exported const: %s (type: %s)\n", localName, exportType.String())
+		}
+		
+	case *parser.VarStatement:
+		if node.Name != nil {
+			localName := node.Name.Value
+			// Look up the type from the environment (the statement was already processed)
+			exportType, _, exists := c.env.Resolve(localName)
+			if !exists {
+				exportType = types.Any
+			}
+			
+			if c.IsModuleMode() {
+				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+			}
+			debugPrintf("// [Checker] Exported var: %s (type: %s)\n", localName, exportType.String())
+		}
+		
+	case *parser.ExpressionStatement:
+		// Functions and classes are expressions wrapped in ExpressionStatement
+		switch expr := node.Expression.(type) {
+		case *parser.FunctionLiteral:
+			if expr.Name != nil {
+				localName := expr.Name.Value
+				exportType := expr.GetComputedType()
+				if exportType == nil {
+					exportType = types.Any
+				}
+				
+				if c.IsModuleMode() {
+					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+				}
+				debugPrintf("// [Checker] Exported function: %s (type: %s)\n", localName, exportType.String())
+			}
+			
+		case *parser.ClassExpression:
+			if expr.Name != nil {
+				localName := expr.Name.Value
+				exportType := expr.GetComputedType()
+				if exportType == nil {
+					exportType = types.Any
+				}
+				
+				if c.IsModuleMode() {
+					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+				}
+				debugPrintf("// [Checker] Exported class: %s (type: %s)\n", localName, exportType.String())
+			}
+			
+		default:
+			debugPrintf("// [Checker] Exported expression: %T\n", expr)
+		}
+		
+	case *parser.InterfaceDeclaration:
+		if node.Name != nil {
+			localName := node.Name.Value
+			// For interfaces, look up in both regular environment and type aliases
+			exportType, _, exists := c.env.Resolve(localName)
+			if !exists {
+				exportType = types.Any
+			}
+			
+			if c.IsModuleMode() {
+				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+			}
+			debugPrintf("// [Checker] Exported interface: %s (type: %s)\n", localName, exportType.String())
+		}
+		
+	case *parser.TypeAliasStatement:
+		if node.Name != nil {
+			localName := node.Name.Value
+			// For type aliases, look up in the type alias environment
+			exportType, _, exists := c.env.Resolve(localName)
+			if !exists {
+				exportType = types.Any
+			}
+			
+			if c.IsModuleMode() {
+				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+			}
+			debugPrintf("// [Checker] Exported type: %s (type: %s)\n", localName, exportType.String())
+		}
+		
+	default:
+		debugPrintf("// [Checker] Exported unknown declaration type: %T\n", decl)
+	}
 }

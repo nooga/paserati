@@ -9,6 +9,7 @@ import (
 	"paserati/pkg/compiler"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
+	"paserati/pkg/modules"
 	"paserati/pkg/parser"
 	"paserati/pkg/source"
 	"paserati/pkg/vm"
@@ -20,25 +21,45 @@ import (
 // allowing variables and functions defined in one evaluation
 // to be used in subsequent ones.
 type Paserati struct {
-	vmInstance *vm.VM
-	checker    *checker.Checker
-	compiler   *compiler.Compiler
+	vmInstance   *vm.VM
+	checker      *checker.Checker
+	compiler     *compiler.Compiler
+	moduleLoader modules.ModuleLoader
 }
 
 // NewPaserati creates a new Paserati session with a fresh VM and Checker.
 func NewPaserati() *Paserati {
-	checker := checker.NewChecker()
+	// Create module loader first
+	config := modules.DefaultLoaderConfig()
+	
+	// Create file system resolver for current directory
+	fsResolver := modules.NewFileSystemResolver(os.DirFS("."), ".")
+	
+	// Create module loader with file system resolver
+	moduleLoader := modules.NewModuleLoader(config, fsResolver)
+	
+	// Create checker and compiler
+	typeChecker := checker.NewChecker()
 	comp := compiler.NewCompiler()
-	comp.SetChecker(checker)
+	comp.SetChecker(typeChecker)
 
 	// Create VM and initialize builtin system
 	vmInstance := vm.NewVM()
 
 	paserati := &Paserati{
-		vmInstance: vmInstance,
-		checker:    checker,
-		compiler:   comp,
+		vmInstance:   vmInstance,
+		checker:      typeChecker,
+		compiler:     comp,
+		moduleLoader: moduleLoader,
 	}
+	
+	// Set up the checker factory for the module loader
+	// This allows the module loader to create type checkers without circular imports
+	moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
+		// Create a new checker instance for module type checking
+		newChecker := checker.NewChecker()
+		return newChecker
+	})
 
 	// Initialize builtins using new initializer system
 	if err := initializeBuiltins(paserati); err != nil {
@@ -244,6 +265,90 @@ func RunFile(filename string) bool {
 	
 	// Display the result
 	return paserati.DisplayResult(sourceCode, finalValue, runtimeErrs)
+}
+
+// LoadModule loads a module and all its dependencies using the module system.
+// This enables cross-module type checking and proper import/export resolution.
+func (p *Paserati) LoadModule(specifier string, fromPath string) (*modules.ModuleRecord, error) {
+	return p.moduleLoader.LoadModule(specifier, fromPath)
+}
+
+// RunModule loads and executes a module file with full module system support.
+// Unlike RunFile, this enables import/export statements and cross-module type checking.
+func (p *Paserati) RunModule(filename string) bool {
+	// Load the module using the module system with parallel processing
+	// This will parse all modules and perform type checking
+	moduleRecord, err := p.moduleLoader.LoadModuleParallel(filename, ".")
+	if err != nil {
+		loadErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Failed to load module '%s': %s", filename, err.Error()),
+		}
+		fmt.Fprintf(os.Stderr, "%s Error: %s\n", loadErr.Kind(), loadErr.Message())
+		return false
+	}
+	
+	// Check if module loaded successfully
+	if moduleRecord == nil {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module '%s' was not loaded", filename),
+		}
+		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
+		return false
+	}
+	
+	if moduleRecord.Error != nil {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module error in '%s': %s", filename, moduleRecord.Error.Error()),
+		}
+		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
+		return false
+	}
+	
+	// Check if AST is available
+	if moduleRecord.AST == nil {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module '%s' has no AST (possibly not parsed)", filename),
+		}
+		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
+		return false
+	}
+	
+	// Enable module mode in the checker
+	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+	
+	// Type check the module (already done during loading, but we need to compile)
+	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
+	if len(compileErrs) > 0 {
+		// Read source for error display
+		sourceCode := ""
+		if moduleRecord.Source != nil {
+			sourceCode = moduleRecord.Source.Content
+		}
+		return p.DisplayResult(sourceCode, vm.Undefined, compileErrs)
+	}
+	
+	if chunk == nil {
+		internalErr := &errors.RuntimeError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+		}
+		return p.DisplayResult("", vm.Undefined, []errors.PaseratiError{internalErr})
+	}
+	
+	// Execute the module
+	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
+	
+	// Get source code for error display
+	sourceCode := ""
+	if moduleRecord.Source != nil {
+		sourceCode = moduleRecord.Source.Content
+	}
+	
+	return p.DisplayResult(sourceCode, finalValue, runtimeErrs)
 }
 
 // EmitJavaScript parses TypeScript source and emits equivalent JavaScript code

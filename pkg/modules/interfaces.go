@@ -3,6 +3,9 @@ package modules
 import (
 	"context"
 	"io/fs"
+	"paserati/pkg/errors"
+	"paserati/pkg/parser"
+	"paserati/pkg/types"
 )
 
 // ModuleFS extends Go's standard io/fs interfaces for module loading
@@ -44,6 +47,9 @@ type ModuleLoader interface {
 	
 	// AddResolver adds a module resolver to the chain
 	AddResolver(resolver ModuleResolver)
+	
+	// SetCheckerFactory sets the factory function for creating type checkers
+	SetCheckerFactory(factory func() TypeChecker)
 	
 	// GetModule retrieves a cached module record
 	GetModule(specifier string) *ModuleRecord
@@ -109,6 +115,14 @@ type ParseWorkerPool interface {
 	GetStats() WorkerPoolStats
 }
 
+// TypeChecker interface for type checking modules
+type TypeChecker interface {
+	EnableModuleMode(modulePath string, loader ModuleLoader)
+	Check(program *parser.Program) []errors.PaseratiError
+	IsModuleMode() bool
+	GetModuleExports() map[string]types.Type
+}
+
 // DependencyAnalyzer tracks module dependencies during loading
 type DependencyAnalyzer interface {
 	// MarkDiscovered marks a module as discovered
@@ -134,6 +148,9 @@ type DependencyAnalyzer interface {
 	
 	// GetDependencies returns all dependencies of a module
 	GetDependencies(modulePath string) []string
+	
+	// GetTopologicalOrder returns modules in dependency-order for type checking
+	GetTopologicalOrder() ([]string, error)
 	
 	// Statistics
 	GetStats() DependencyStats

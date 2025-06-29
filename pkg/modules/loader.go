@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+const moduleLoaderDebug = false
+
+func debugPrintf(format string, args ...interface{}) {
+	if moduleLoaderDebug {
+		fmt.Printf(format, args...)
+	}
+}
+
 // moduleLoader implements ModuleLoader interface
 type moduleLoader struct {
 	resolvers    []ModuleResolver
@@ -19,6 +27,9 @@ type moduleLoader struct {
 	workerPool   ParseWorkerPool
 	parseQueue   *parseQueue
 	depAnalyzer  DependencyAnalyzer
+	
+	// Type checking
+	checkerFactory func() TypeChecker
 	
 	// State
 	mutex        sync.RWMutex
@@ -100,12 +111,16 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 // loadModuleParallelImpl implements parallel module loading
 func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string) (*ModuleRecord, error) {
+	debugPrintf("// [ModuleLoader] Starting parallel load for: %s from %s\n", specifier, fromPath)
+	
 	// Initialize parse queue and start discovery
 	ml.parseQueue = NewParseQueue(ml.config.JobBufferSize)
 	
 	// Create context for the loading operation
 	ctx, cancel := context.WithTimeout(context.Background(), ml.config.ResolveTimeout)
 	defer cancel()
+	
+	debugPrintf("// [ModuleLoader] Starting worker pool with %d workers\n", ml.config.NumWorkers)
 	
 	// Start the worker pool
 	err := ml.workerPool.Start(ctx, ml.config.NumWorkers)
@@ -119,10 +134,13 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 	}()
 	
 	// Queue the entry point for parsing
+	debugPrintf("// [ModuleLoader] Creating parse job for entry point\n")
 	entryJob, err := ml.createParseJob(specifier, fromPath, 0)
 	if err != nil {
+		debugPrintf("// [ModuleLoader] Failed to create parse job: %v\n", err)
 		return nil, err
 	}
+	debugPrintf("// [ModuleLoader] Created parse job for: %s\n", entryJob.ModulePath)
 	
 	// Mark the entry point as discovered
 	ml.depAnalyzer.MarkDiscovered(entryJob.ModulePath)
@@ -132,20 +150,31 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 		return nil, fmt.Errorf("failed to enqueue entry point: %w", err)
 	}
 	
+	// Mark as in-flight before submitting to worker pool
+	ml.parseQueue.MarkInFlight(entryJob.ModulePath)
+	
 	// Submit initial job to worker pool
+	debugPrintf("// [ModuleLoader] Submitting entry job to worker pool\n")
 	err = ml.workerPool.Submit(entryJob)
 	if err != nil {
+		debugPrintf("// [ModuleLoader] Failed to submit job: %v\n", err)
 		return nil, fmt.Errorf("failed to submit initial job: %w", err)
 	}
+	debugPrintf("// [ModuleLoader] Job submitted successfully\n")
 	
 	// Main processing loop
+	debugPrintf("// [ModuleLoader] Entering main processing loop\n")
 	for !ml.parseQueue.IsEmpty() || ml.workerPool.HasActiveJobs() {
+		debugPrintf("// [ModuleLoader] Loop: queue empty=%v, active jobs=%v\n", ml.parseQueue.IsEmpty(), ml.workerPool.HasActiveJobs())
 		select {
 		case result := <-ml.workerPool.Results():
+			debugPrintf("// [ModuleLoader] Received result for: %s\n", result.ModulePath)
 			err := ml.processParseResult(result)
 			if err != nil {
+				debugPrintf("// [ModuleLoader] Error processing result: %v\n", err)
 				return nil, err
 			}
+			debugPrintf("// [ModuleLoader] Processed result successfully\n")
 			
 		case err := <-ml.workerPool.Errors():
 			return nil, fmt.Errorf("worker error: %w", err)
@@ -161,8 +190,13 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 		}
 	}
 	
-	// Return the main module record
-	return ml.registry.Get(specifier), nil
+	// After parallel parsing is complete, perform dependency-ordered type checking
+	entryModule, err := ml.performDependencyOrderedTypeChecking(specifier)
+	if err != nil {
+		return nil, fmt.Errorf("type checking failed: %w", err)
+	}
+	
+	return entryModule, nil
 }
 
 // resolveModule resolves a module specifier using the resolver chain
@@ -298,6 +332,14 @@ func (ml *moduleLoader) initializeParallelComponents() error {
 	return nil
 }
 
+// SetCheckerFactory sets the factory function for creating type checkers
+func (ml *moduleLoader) SetCheckerFactory(factory func() TypeChecker) {
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+	
+	ml.checkerFactory = factory
+}
+
 // AddResolver adds a module resolver to the chain
 func (ml *moduleLoader) AddResolver(resolver ModuleResolver) {
 	ml.mutex.Lock()
@@ -355,6 +397,64 @@ func (ml *moduleLoader) GetDependencyStats() DependencyStats {
 		return da.GetStats()
 	}
 	return DependencyStats{}
+}
+
+
+// performDependencyOrderedTypeChecking performs type checking in dependency order
+// after all modules have been parsed in parallel
+func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) (*ModuleRecord, error) {
+	// Get the topologically sorted list of modules for type checking
+	checkingOrder, err := ml.depAnalyzer.GetTopologicalOrder()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine type checking order: %w", err)
+	}
+	
+	// Perform type checking in dependency order
+	for _, modulePath := range checkingOrder {
+		record := ml.registry.Get(modulePath)
+		if record == nil {
+			continue // Skip modules that weren't loaded
+		}
+		
+		if record.Error != nil {
+			continue // Skip modules that failed to parse
+		}
+		
+		// Skip if no checker factory is set
+		if ml.checkerFactory == nil {
+			debugPrintf("// [ModuleLoader] No checker factory set, skipping type checking for %s\n", modulePath)
+			record.State = ModuleLoaded
+			record.CompleteTime = time.Now()
+			continue
+		}
+		
+		// Create a new checker for this module
+		moduleChecker := ml.checkerFactory()
+		
+		// Enable module mode with this loader
+		moduleChecker.EnableModuleMode(modulePath, ml)
+		
+		// Perform type checking on this module
+		errors := moduleChecker.Check(record.AST)
+		if len(errors) > 0 {
+			// Store the first error (can be enhanced to store all errors)
+			record.Error = fmt.Errorf("type checking failed: %s", errors[0].Error())
+			record.State = ModuleError
+			continue
+		}
+		
+		// Extract exported types from the checked module
+		if moduleChecker.IsModuleMode() {
+			record.Exports = moduleChecker.GetModuleExports()
+		}
+		
+		// Mark as successfully type checked
+		record.State = ModuleLoaded
+		record.CompleteTime = time.Now()
+	}
+	
+	// Return the entry point module
+	return ml.registry.Get(entryPoint), nil
 }
 
 

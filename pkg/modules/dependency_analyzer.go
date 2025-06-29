@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -286,4 +287,78 @@ func (da *dependencyAnalyzer) hasCircularDependency(modulePath string, path map[
 	
 	globalVisited[modulePath] = true
 	return false
+}
+
+// GetTopologicalOrder returns modules in dependency order for type checking
+// Dependencies are processed before their dependents
+func (da *dependencyAnalyzer) GetTopologicalOrder() ([]string, error) {
+	da.mutex.RLock()
+	defer da.mutex.RUnlock()
+	
+	// Build a copy of the dependency graph for processing
+	graph := make(map[string][]string)
+	inDegree := make(map[string]int)
+	
+	// Initialize all discovered modules
+	for modulePath := range da.discovered {
+		graph[modulePath] = make([]string, len(da.depGraph[modulePath]))
+		copy(graph[modulePath], da.depGraph[modulePath])
+		inDegree[modulePath] = 0
+	}
+	
+	// Calculate in-degrees
+	for _, deps := range graph {
+		for _, dep := range deps {
+			inDegree[dep]++
+		}
+	}
+	
+	// Kahn's algorithm for topological sorting
+	var queue []string
+	var result []string
+	
+	// Find all modules with no dependencies (in-degree 0)
+	for modulePath, degree := range inDegree {
+		if degree == 0 {
+			queue = append(queue, modulePath)
+		}
+	}
+	
+	// Process modules in dependency order
+	for len(queue) > 0 {
+		// Remove first module from queue
+		current := queue[0]
+		queue = queue[1:]
+		result = append(result, current)
+		
+		// For each module that depends on current module
+		for _, dependent := range graph[current] {
+			inDegree[dependent]--
+			if inDegree[dependent] == 0 {
+				queue = append(queue, dependent)
+			}
+		}
+	}
+	
+	// Check if all modules were processed (no circular dependencies)
+	if len(result) != len(da.discovered) {
+		// There are circular dependencies
+		var remaining []string
+		for modulePath := range da.discovered {
+			found := false
+			for _, processed := range result {
+				if processed == modulePath {
+					found = true
+					break
+				}
+			}
+			if !found {
+				remaining = append(remaining, modulePath)
+			}
+		}
+		
+		return nil, fmt.Errorf("circular dependency detected among modules: %v", remaining)
+	}
+	
+	return result, nil
 }

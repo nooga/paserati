@@ -125,6 +125,14 @@ func (pq *parseQueue) IsEmpty() bool {
 	return pq.heap.Len() == 0 && len(pq.inFlight) == 0
 }
 
+// MarkInFlight marks a module as being processed
+func (pq *parseQueue) MarkInFlight(modulePath string) {
+	pq.mutex.Lock()
+	defer pq.mutex.Unlock()
+	
+	pq.inFlight[modulePath] = true
+}
+
 // Size returns the number of jobs in the queue
 func (pq *parseQueue) Size() int {
 	pq.mutex.RLock()

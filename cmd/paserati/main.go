@@ -19,6 +19,7 @@ func main() {
 	cacheStatsFlag := flag.Bool("cache-stats", false, "Show inline cache statistics after execution")
 	bytecodeFlag := flag.Bool("bytecode", false, "Show compiled bytecode before execution")
 	astDumpFlag := flag.Bool("ast", false, "Show AST dump before type checking")
+	moduleFlag := flag.Bool("module", false, "Enable module mode with import/export support")
 
 	flag.Parse() // Parses the command-line flags
 	
@@ -52,7 +53,11 @@ func main() {
 		os.Exit(64) // Exit code 64: command line usage error
 	} else if flag.NArg() == 1 {
 		// Execute the script file provided as an argument
-		runFile(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag)
+		if *moduleFlag {
+			runModule(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag)
+		} else {
+			runFile(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag)
+		}
 	} else {
 		// No file provided, start the REPL
 		runRepl(*cacheStatsFlag, *bytecodeFlag)
@@ -74,6 +79,23 @@ func runExpression(expr string, showCacheStats bool, showBytecode bool) {
 	// Exit with appropriate code
 	if !ok {
 		os.Exit(70) // Exit code 70: internal software error
+	}
+}
+
+// runModule uses the module system to load and execute a TypeScript module with import/export support.
+func runModule(filename string, showCacheStats bool, showBytecode bool) {
+	// Create a new Paserati session
+	paserati := driver.NewPaserati()
+	
+	// TODO: Add support for showCacheStats and showBytecode in module mode
+	if showCacheStats || showBytecode {
+		fmt.Fprintf(os.Stderr, "Warning: --cache-stats and --bytecode options are not yet supported in module mode\n")
+	}
+	
+	// Run the module
+	ok := paserati.RunModule(filename)
+	if !ok {
+		os.Exit(70)
 	}
 }
 
