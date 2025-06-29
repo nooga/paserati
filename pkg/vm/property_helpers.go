@@ -62,6 +62,10 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 	switch objVal.Type() {
 	case TypeString:
 		prototype = vm.StringPrototype.AsPlainObject()
+	case TypeFloatNumber, TypeIntegerNumber:
+		if vm.NumberPrototype.Type() == TypeObject {
+			prototype = vm.NumberPrototype.AsPlainObject()
+		}
 	case TypeArray:
 		prototype = vm.ArrayPrototype.AsPlainObject()
 	case TypeRegExp:

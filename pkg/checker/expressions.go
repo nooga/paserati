@@ -505,6 +505,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				// resultType remains types.Never
 			}
 		}
+	} else if widenedObjectType == types.Number {
+		// Check prototype registry for Number methods
+		if methodType := c.env.GetPrimitivePrototypeMethodType("number", propertyName); methodType != nil {
+			resultType = methodType
+		} else {
+			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'number'", propertyName))
+			// resultType remains types.Never
+		}
 	} else if widenedObjectType == types.RegExp {
 		// Check prototype registry for RegExp methods and properties
 		if methodType := c.env.GetPrimitivePrototypeMethodType("RegExp", propertyName); methodType != nil {
