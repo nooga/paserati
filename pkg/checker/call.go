@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
+	"paserati/pkg/vm"
 )
 
 // calculateEffectiveArgCount calculates the effective number of arguments,
@@ -283,7 +284,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	debugPrintf("// [Checker CallExpr] Processing function signature: %s, IsVariadic: %t\n", funcSignature.String(), funcSignature.IsVariadic)
 
 	// Check if this is a generic function call that needs type inference
-	if c.isGenericSignature(funcSignature) {
+	isGeneric := c.isGenericSignature(funcSignature)
+	debugPrintf("// [Checker CallExpr] isGenericSignature returned: %t for signature: %s\n", isGeneric, funcSignature.String())
+	if isGeneric {
 		debugPrintf("// [Checker CallExpr] Detected generic function call, attempting type inference\n")
 		inferredSignature := c.inferGenericFunctionCall(node, funcSignature)
 		if inferredSignature != nil {
@@ -594,6 +597,28 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 					return true
 				}
 			}
+			// Check call signatures for type parameters
+			for _, sig := range typ.CallSignatures {
+				for _, paramType := range sig.ParameterTypes {
+					if containsTypeParameters(paramType) {
+						return true
+					}
+				}
+				if sig.ReturnType != nil && containsTypeParameters(sig.ReturnType) {
+					return true
+				}
+				if sig.RestParameterType != nil && containsTypeParameters(sig.RestParameterType) {
+					return true
+				}
+			}
+			return false
+		case *types.ParameterizedForwardReferenceType:
+			// Check type arguments for type parameters
+			for _, typeArg := range typ.TypeArguments {
+				if containsTypeParameters(typeArg) {
+					return true
+				}
+			}
 			return false
 		// Add more type cases as needed
 		default:
@@ -621,48 +646,143 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 	return false
 }
 
+// isLikelyFunctionArgument checks if an argument node is likely a function (for two-phase inference)
+func (c *Checker) isLikelyFunctionArgument(argNode parser.Expression) bool {
+	switch argNode.(type) {
+	case *parser.FunctionLiteral, *parser.ArrowFunctionLiteral:
+		return true
+	default:
+		return false
+	}
+}
+
+// collectTypeParameterConstraintsPhase1 collects constraints only from non-nil argument types
+func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, argTypes []types.Type) []TypeParameterConstraint {
+	var constraints []TypeParameterConstraint
+	
+	// For each parameter, if it contains type parameters, create constraints based on the argument type
+	for i, paramType := range sig.ParameterTypes {
+		if i >= len(argTypes) || argTypes[i] == nil {
+			continue // Skip nil placeholders from phase 1
+		}
+		argType := argTypes[i]
+		
+		// Collect constraints from this parameter-argument pair
+		paramConstraints := c.collectConstraintsFromType(paramType, argType)
+		constraints = append(constraints, paramConstraints...)
+	}
+	
+	return constraints
+}
+
 // inferGenericFunctionCall attempts to infer type arguments for a generic function call
 func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
-	debugPrintf("// [Checker Inference] Starting type inference for generic function call\n")
+	debugPrintf("// [Checker Inference] Starting two-phase type inference for generic function call\n")
 	
-	// First, visit all arguments to get their types, using contextual typing
+	// === PHASE 1: Infer type parameters from non-function arguments ===
 	var argTypes []types.Type
 	for i, argNode := range callNode.Arguments {
-		// Use contextual typing if we have a corresponding parameter type
-		if i < len(genericSig.ParameterTypes) {
-			paramType := genericSig.ParameterTypes[i]
-			c.visitWithContext(argNode, &ContextualType{
-				ExpectedType: paramType,
-				IsContextual: true,
-			})
-		} else {
-			c.visit(argNode)
+		// Skip function arguments in phase 1
+		if c.isLikelyFunctionArgument(argNode) {
+			argTypes = append(argTypes, nil) // Placeholder
+			debugPrintf("// [Checker Inference] Phase 1: Skipping function argument %d\n", i)
+			continue
 		}
 		
+		// Visit non-function arguments without contextual typing to get their natural types
+		c.visit(argNode)
 		argType := argNode.GetComputedType()
 		if argType == nil {
 			argType = types.Any
 		}
 		argTypes = append(argTypes, argType)
-		debugPrintf("// [Checker Inference] Argument %d type: %s\n", i, argType.String())
+		debugPrintf("// [Checker Inference] Phase 1: Argument %d type: %s\n", i, argType.String())
 	}
 	
-	// Collect type parameter constraints
-	constraints := c.collectTypeParameterConstraints(genericSig, argTypes)
-	debugPrintf("// [Checker Inference] Collected %d type parameter constraints\n", len(constraints))
+	// Collect constraints from non-function arguments only
+	constraints := c.collectTypeParameterConstraintsPhase1(genericSig, argTypes)
+	debugPrintf("// [Checker Inference] Phase 1: Collected %d type parameter constraints\n", len(constraints))
 	
-	// Solve constraints to get type parameter bindings
-	solution := c.solveTypeParameterConstraints(constraints)
-	debugPrintf("// [Checker Inference] Solved %d type parameter bindings\n", len(solution))
+	// Solve constraints from phase 1
+	partialSolution := c.solveTypeParameterConstraints(constraints)
+	debugPrintf("// [Checker Inference] Phase 1: Solved %d type parameter bindings\n", len(partialSolution))
+	
+	// === PHASE 2: Re-visit function arguments with inferred types ===
+	if len(partialSolution) > 0 {
+		// Create partially instantiated signature for contextual typing
+		partialSig := c.substituteTypeParameters(genericSig, partialSolution)
+		debugPrintf("// [Checker Inference] Phase 2: Using partially inferred signature: %s\n", partialSig.String())
+		
+		// Re-visit function arguments with better contextual typing
+		for i, argNode := range callNode.Arguments {
+			if argTypes[i] == nil { // This was a function argument skipped in phase 1
+				if i < len(partialSig.ParameterTypes) {
+					paramType := partialSig.ParameterTypes[i]
+					debugPrintf("// [Checker Inference] Phase 2: Re-visiting function argument %d with context: %s\n", i, paramType.String())
+					c.visitWithContext(argNode, &ContextualType{
+						ExpectedType: paramType,
+						IsContextual: true,
+					})
+				} else {
+					c.visit(argNode)
+				}
+				
+				argType := argNode.GetComputedType()
+				if argType == nil {
+					argType = types.Any
+				}
+				argTypes[i] = argType
+				debugPrintf("// [Checker Inference] Phase 2: Function argument %d type: %s\n", i, argType.String())
+			}
+		}
+		
+		// Collect additional constraints from function arguments if needed
+		additionalConstraints := c.collectTypeParameterConstraints(partialSig, argTypes)
+		allConstraints := append(constraints, additionalConstraints...)
+		
+		// Solve all constraints together
+		finalSolution := c.solveTypeParameterConstraints(allConstraints)
+		debugPrintf("// [Checker Inference] Phase 2: Final solution with %d type parameter bindings\n", len(finalSolution))
+		
+		if len(finalSolution) > 0 {
+			inferredSig := c.substituteTypeParameters(genericSig, finalSolution)
+			debugPrintf("// [Checker Inference] Created final inferred signature: %s\n", inferredSig.String())
+			return inferredSig
+		}
+	}
+	
+	// Fallback: If phase 1 didn't infer anything, try the original approach
+	for i, argNode := range callNode.Arguments {
+		if argTypes[i] == nil {
+			if i < len(genericSig.ParameterTypes) {
+				paramType := genericSig.ParameterTypes[i]
+				c.visitWithContext(argNode, &ContextualType{
+					ExpectedType: paramType,
+					IsContextual: true,
+				})
+			} else {
+				c.visit(argNode)
+			}
+			
+			argType := argNode.GetComputedType()
+			if argType == nil {
+				argType = types.Any
+			}
+			argTypes[i] = argType
+		}
+	}
+	
+	// Final attempt with all arguments
+	allConstraints := c.collectTypeParameterConstraints(genericSig, argTypes)
+	solution := c.solveTypeParameterConstraints(allConstraints)
 	
 	if len(solution) == 0 {
 		debugPrintf("// [Checker Inference] No type parameters could be inferred\n")
 		return nil // Inference failed
 	}
 	
-	// Substitute type parameters with inferred types
 	inferredSig := c.substituteTypeParameters(genericSig, solution)
-	debugPrintf("// [Checker Inference] Created inferred signature: %s\n", inferredSig.String())
+	debugPrintf("// [Checker Inference] Created fallback inferred signature: %s\n", inferredSig.String())
 	
 	return inferredSig
 }
@@ -693,6 +813,47 @@ func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes
 	return constraints
 }
 
+// isNumericValue checks if a vm.Value represents a numeric type
+func isNumericValue(value vm.Value) bool {
+	valueType := value.Type()
+	switch valueType {
+	case vm.TypeFloatNumber, vm.TypeIntegerNumber, vm.TypeBigInt:
+		return true
+	default:
+		return false
+	}
+}
+
+// shouldWidenForAccumulator determines if a type parameter should be widened for accumulator patterns
+func shouldWidenForAccumulator(typeParamName string, argType types.Type) bool {
+	// Common accumulator type parameter names that should be widened
+	accumulatorNames := []string{"TResult", "TAcc", "TAccumulator", "TReduce"}
+	
+	for _, name := range accumulatorNames {
+		if typeParamName == name {
+			// Only widen if the argument type has literal types that can be widened
+			switch objType := argType.(type) {
+			case *types.ObjectType:
+				// Check if any properties have literal types that would benefit from widening
+				for _, propType := range objType.Properties {
+					if literalType, isLiteral := propType.(*types.LiteralType); isLiteral {
+						// Check if it's a numeric literal using vm.Value type
+						if isNumericValue(literalType.Value) {
+							return true
+						}
+					}
+				}
+			case *types.LiteralType:
+				// Direct literal type
+				if isNumericValue(argType.(*types.LiteralType).Value) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // collectConstraintsFromType recursively collects constraints by matching parameter and argument types
 func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
@@ -700,9 +861,17 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 	switch pType := paramType.(type) {
 	case *types.TypeParameterType:
 		// Direct constraint: T should be inferred as argType
+		// For accumulator patterns (methods like aggregate, reduce), widen literal types
+		inferredType := argType
+		if shouldWidenForAccumulator(pType.Parameter.Name, argType) {
+			inferredType = types.DeeplyWidenType(argType)
+			debugPrintf("// [Checker Constraints] Widening accumulator type for %s: %s -> %s\n", 
+				pType.Parameter.Name, argType.String(), inferredType.String())
+		}
+		
 		constraints = append(constraints, TypeParameterConstraint{
 			TypeParameter: pType.Parameter,
-			InferredType:  argType,
+			InferredType:  inferredType,
 			Confidence:    100, // High confidence for direct matches
 		})
 		debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, argType.String())
@@ -713,6 +882,33 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 			// Recurse into element types
 			elemConstraints := c.collectConstraintsFromType(pType.ElementType, aType.ElementType)
 			constraints = append(constraints, elemConstraints...)
+		}
+		
+	case *types.ObjectType:
+		// Handle function types: (T) => U matched against (A) => B
+		if aType, isObject := argType.(*types.ObjectType); isObject {
+			// Check if both are function types (have call signatures)
+			if len(pType.CallSignatures) > 0 && len(aType.CallSignatures) > 0 {
+				// Compare the first call signature (most common case)
+				pSig := pType.CallSignatures[0]
+				aSig := aType.CallSignatures[0]
+				
+				// Collect constraints from parameter types (contravariant)
+				minParams := len(pSig.ParameterTypes)
+				if len(aSig.ParameterTypes) < minParams {
+					minParams = len(aSig.ParameterTypes)
+				}
+				for i := 0; i < minParams; i++ {
+					paramConstraints := c.collectConstraintsFromType(pSig.ParameterTypes[i], aSig.ParameterTypes[i])
+					constraints = append(constraints, paramConstraints...)
+				}
+				
+				// Collect constraints from return type (covariant)
+				if pSig.ReturnType != nil && aSig.ReturnType != nil {
+					returnConstraints := c.collectConstraintsFromType(pSig.ReturnType, aSig.ReturnType)
+					constraints = append(constraints, returnConstraints...)
+				}
+			}
 		}
 		
 	// Add more cases for other generic type constructs as needed

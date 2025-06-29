@@ -162,9 +162,18 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 			// Check if the type can be spread (is an object type)
 			widenedType := types.GetWidenedType(argType)
-			switch widenedType.(type) {
-			case *types.ObjectType, *types.ArrayType:
-				// Valid object types for spreading
+			switch spreadObjType := widenedType.(type) {
+			case *types.ObjectType:
+				// Valid object type for spreading - merge its properties
+				debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadObjType.String())
+				for propName, propType := range spreadObjType.Properties {
+					fields[propName] = propType // Later properties override earlier ones
+					debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
+				}
+			case *types.ArrayType:
+				// Arrays can be spread but only add numeric indices and length
+				// For simplicity, we'll allow this but not add specific properties
+				debugPrintf("// [Checker ObjectLit Spread] Spreading array type (no properties added)\n")
 			default:
 				if widenedType != types.Any {
 					c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))

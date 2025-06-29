@@ -281,8 +281,8 @@ USER ANALYTICS:
   }
 
 SALES PERFORMANCE:
-- Total Sales: $${salesAnalysis.totalSales.toLocaleString()}
-- Average per Quarter: $${salesAnalysis.avgSales.toLocaleString()}
+- Total Sales: $${salesAnalysis.totalSales}
+- Average per Quarter: $${salesAnalysis.avgSales}
 - Quarters Tracked: ${salesAnalysis.quarters.length}
 
 ERROR HANDLING RESULTS:

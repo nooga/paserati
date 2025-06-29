@@ -18,6 +18,7 @@ type FunctionCheckContext struct {
 	AllowSelfReference        bool                        // Whether to allow recursive self-reference
 	AllowOverloadCompletion   bool                        // Whether to check for overload completion
 	ContextualParameterTypes  []types.Type               // Contextual parameter types from expected signature
+	ContextualReturnType      types.Type                 // Contextual return type (nil for generic inference)
 }
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
@@ -247,6 +248,9 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 		c.env = typeParamEnv
 		returnType = c.resolveTypeAnnotation(ctx.ReturnTypeAnnotation)
 		c.env = originalEnv
+	} else if ctx.ContextualReturnType != nil {
+		// Use contextual return type if provided and no explicit annotation
+		returnType = ctx.ContextualReturnType
 	}
 	if returnType == nil {
 		returnType = types.Any // Will be inferred during body checking
