@@ -1013,6 +1013,16 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			// Callable object but no constructor signatures - return any (matches TypeScript behavior)
 			resultType = types.Any
 		}
+	} else if genericType, ok := constructorType.(*types.GenericType); ok {
+		// Handle GenericType constructors by checking their body for constructor signatures
+		if bodyObjType, bodyOk := genericType.Body.(*types.ObjectType); bodyOk && len(bodyObjType.ConstructSignatures) > 0 {
+			// Use the first constructor signature's return type
+			resultType = bodyObjType.ConstructSignatures[0].ReturnType
+			debugPrintf("// [Checker NewExpression] GenericType constructor result: %s\n", resultType.String())
+		} else {
+			// Generic type without constructor signatures - return any
+			resultType = types.Any
+		}
 	} else if constructorType == types.Any {
 		// If constructor type is Any, result is also Any
 		resultType = types.Any

@@ -413,9 +413,23 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 	// --- END MODIFIED Checking ---
 
-	// Set Result Type (unchanged)
-	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), funcSignature.ReturnType, funcSignature.ReturnType)
-	node.SetComputedType(funcSignature.ReturnType)
+	// Set Result Type - check if we need to resolve parameterized forward references
+	resultType := funcSignature.ReturnType
+	
+	// If the result type is a ParameterizedForwardReferenceType with concrete type arguments,
+	// we need to instantiate the generic type to get a proper object type
+	if paramRef, ok := resultType.(*types.ParameterizedForwardReferenceType); ok {
+		debugPrintf("// [Checker CallExpr] Result type is parameterized forward reference: %s\n", paramRef.String())
+		
+		// Try to resolve the generic class and instantiate it
+		if resolvedType := c.resolveParameterizedForwardReference(paramRef); resolvedType != nil {
+			debugPrintf("// [Checker CallExpr] Resolved parameterized type to: %T (%s)\n", resolvedType, resolvedType.String())
+			resultType = resolvedType
+		}
+	}
+	
+	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), resultType, resultType)
+	node.SetComputedType(resultType)
 
 }
 
@@ -733,12 +747,81 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				newTypes = append(newTypes, substitute(memberType))
 			}
 			return types.NewUnionType(newTypes...)
+		case *types.ParameterizedForwardReferenceType:
+			// Substitute type parameters in the type arguments
+			var newTypeArgs []types.Type
+			for _, typeArg := range typ.TypeArguments {
+				newTypeArgs = append(newTypeArgs, substitute(typeArg))
+			}
+			// Create a new parameterized forward reference with substituted type arguments
+			return &types.ParameterizedForwardReferenceType{
+				ClassName:      typ.ClassName,
+				TypeArguments:  newTypeArgs,
+			}
+		case *types.ObjectType:
+			// For ObjectType, we need to substitute in properties and signatures
+			newObj := &types.ObjectType{
+				Properties:     make(map[string]types.Type),
+				OptionalProperties: typ.OptionalProperties, // Copy as-is
+				CallSignatures: nil,
+				ConstructSignatures: nil,
+				BaseTypes: typ.BaseTypes, // Copy as-is for now
+				IndexSignatures: typ.IndexSignatures, // Copy as-is for now
+			}
+			
+			// Substitute in properties
+			for name, propType := range typ.Properties {
+				newObj.Properties[name] = substitute(propType)
+			}
+			
+			// Substitute in call signatures
+			for _, sig := range typ.CallSignatures {
+				newSig := c.substituteInSignature(sig, solution, substitute)
+				newObj.CallSignatures = append(newObj.CallSignatures, newSig)
+			}
+			
+			// Substitute in construct signatures
+			for _, sig := range typ.ConstructSignatures {
+				newSig := c.substituteInSignature(sig, solution, substitute)
+				newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
+			}
+			
+			return newObj
 		// Add more cases as needed
 		default:
 			return typ
 		}
 	}
 	
+	// Substitute in parameter types
+	var newParamTypes []types.Type
+	for _, paramType := range sig.ParameterTypes {
+		newParamTypes = append(newParamTypes, substitute(paramType))
+	}
+	
+	// Substitute in return type
+	var newReturnType types.Type
+	if sig.ReturnType != nil {
+		newReturnType = substitute(sig.ReturnType)
+	}
+	
+	// Substitute in rest parameter type
+	var newRestParamType types.Type
+	if sig.RestParameterType != nil {
+		newRestParamType = substitute(sig.RestParameterType)
+	}
+	
+	return &types.Signature{
+		ParameterTypes:    newParamTypes,
+		ReturnType:        newReturnType,
+		OptionalParams:    sig.OptionalParams, // Copy as-is
+		IsVariadic:        sig.IsVariadic,
+		RestParameterType: newRestParamType,
+	}
+}
+
+// substituteInSignature is a helper to substitute type parameters in a signature
+func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*types.TypeParameter]types.Type, substitute func(types.Type) types.Type) *types.Signature {
 	// Substitute in parameter types
 	var newParamTypes []types.Type
 	for _, paramType := range sig.ParameterTypes {

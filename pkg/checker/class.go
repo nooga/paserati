@@ -161,38 +161,59 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		debugPrintf("// [Checker Class] Marked generic class '%s' as abstract\n", node.Name.Value)
 	}
 
-	// 3. Create the instance type body with TypeParameterType references
+	// 3. Create a placeholder GenericType for the constructor to update the forward reference
+	// This allows method bodies to reference the class constructor correctly
+	placeholderConstructorType := &types.GenericType{
+		Name:           node.Name.Value + "Constructor", // Internal name
+		TypeParameters: typeParams,
+		Body:           types.Any, // Placeholder, will be updated later
+	}
+
+	// 4. EARLY UPDATE: Replace the forward reference in the generic environment
+	// This ensures that methods inside the class can access the constructor
+	if !genericEnv.Update(node.Name.Value, placeholderConstructorType) {
+		debugPrintf("// [Checker Class] Warning: Could not update generic environment for '%s'\n", node.Name.Value)
+	} else {
+		debugPrintf("// [Checker Class] Early updated generic environment for '%s' with placeholder constructor type\n", node.Name.Value)
+	}
+
+	// 5. Create the instance type body with TypeParameterType references
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
-	// 4. Create constructor signature from constructor method
+	// 6. Create constructor signature from constructor method
 	constructorSig := c.createConstructorSignature(node.Body, instanceType)
 
-	// 5. Create constructor type
+	// 7. Create constructor type
 	constructorType := types.NewConstructorType(constructorSig)
 	constructorType = c.addStaticMembers(node.Body, constructorType)
 
-	// Restore environment and current state
-	c.env = savedEnv
-	c.currentGenericClass = savedCurrentGenericClass
-	c.currentForwardRef = savedCurrentForwardRef
-
-	// 6. Create the GenericType for the class
+	// 8. Create the GenericType for the class
 	genericClassType := &types.GenericType{
 		Name:           node.Name.Value,
 		TypeParameters: typeParams,
 		Body:           instanceType,
 	}
 
-	// 7. Create a GenericType for the constructor as well
-	// Note: The constructor GenericType is for internal use only
-	// It should not appear in user-facing error messages
+	// 9. Create the final GenericType for the constructor
 	genericConstructorType := &types.GenericType{
 		Name:           node.Name.Value + "Constructor", // Internal name
 		TypeParameters: typeParams,
 		Body:           constructorType,
 	}
 
-	// 8. Update in environment - store the generic constructor type (replacing forward reference)
+	// 10. UPDATE AGAIN: Replace the placeholder with the real constructor type
+	if !genericEnv.Update(node.Name.Value, genericConstructorType) {
+		debugPrintf("// [Checker Class] Warning: Could not update generic environment for '%s' with final type\n", node.Name.Value)
+	} else {
+		debugPrintf("// [Checker Class] Final updated generic environment for '%s' with real constructor type\n", node.Name.Value)
+	}
+
+	// Restore environment and current state
+	c.env = savedEnv
+	c.currentGenericClass = savedCurrentGenericClass
+	c.currentForwardRef = savedCurrentForwardRef
+
+	// 9. Update in main environment - store the generic constructor type (replacing forward reference)
 	if !c.env.Update(node.Name.Value, genericConstructorType) {
 		c.addError(node.Name, fmt.Sprintf("failed to update generic class '%s'", node.Name.Value))
 		return

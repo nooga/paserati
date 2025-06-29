@@ -154,11 +154,14 @@ func (e *Environment) Define(name string, typ types.Type, isConst bool) bool {
 // It does NOT change the IsConst status.
 // Returns true if the symbol was found and updated, false otherwise.
 func (e *Environment) Update(name string, typ types.Type) bool {
+	debugPrintf("// [Env Update] Attempting to update '%s' in env %p with type %T\n", name, e, typ)
 	info, exists := e.symbols[name]
 	if !exists {
+		debugPrintf("// [Env Update] Symbol '%s' not found in env %p\n", name, e)
 		return false // Symbol not found in this scope
 	}
 	// Update the type, keep the original IsConst status
+	debugPrintf("// [Env Update] Updating '%s' from %T to %T in env %p\n", name, info.Type, typ, e)
 	e.symbols[name] = SymbolInfo{Type: typ, IsConst: info.IsConst}
 	return true
 }
@@ -199,6 +202,27 @@ func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found 
 	info, ok := e.symbols[name]
 	if ok {
 		debugPrintf("// [Env Resolve] Found '%s' in env %p\n", name, e) // DEBUG
+		
+		// If this is a forward reference, continue looking in outer scopes for the real type
+		if _, isForwardRef := info.Type.(*types.ForwardReferenceType); isForwardRef {
+			if e.outer != nil {
+				debugPrintf("// [Env Resolve] '%s' is a forward reference, checking outer scope for real type...\n", name)
+				outerType, outerIsConst, outerFound := e.outer.Resolve(name)
+				if outerFound {
+					debugPrintf("// [Env Resolve] Outer type for '%s': %T = %s\n", name, outerType, outerType.String())
+					// Prefer the outer type if it's not also a forward reference
+					if _, isOuterForwardRef := outerType.(*types.ForwardReferenceType); !isOuterForwardRef {
+						debugPrintf("// [Env Resolve] Using real type from outer scope for '%s'\n", name)
+						return outerType, outerIsConst, true
+					} else {
+						debugPrintf("// [Env Resolve] Outer type for '%s' is also a forward reference\n", name)
+					}
+				} else {
+					debugPrintf("// [Env Resolve] No outer type found for '%s'\n", name)
+				}
+			}
+		}
+		
 		return info.Type, info.IsConst, true                            // Return type, const status, and found=true
 	}
 

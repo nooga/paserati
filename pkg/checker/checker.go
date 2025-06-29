@@ -65,6 +65,36 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 	return typeParams
 }
 
+// resolveParameterizedForwardReference attempts to resolve a ParameterizedForwardReferenceType
+// to its actual instantiated generic type
+func (c *Checker) resolveParameterizedForwardReference(paramRef *types.ParameterizedForwardReferenceType) types.Type {
+	debugPrintf("// [Checker ResolveParamRef] Attempting to resolve %s\n", paramRef.String())
+	
+	// Look up the generic type by class name
+	if typ, _, found := c.env.Resolve(paramRef.ClassName); found {
+		debugPrintf("// [Checker ResolveParamRef] Found type for %s: %T\n", paramRef.ClassName, typ)
+		
+		// Check if it's a generic type
+		if genericType, ok := typ.(*types.GenericType); ok {
+			debugPrintf("// [Checker ResolveParamRef] It's a generic type, instantiating with %d type args\n", len(paramRef.TypeArguments))
+			
+			// Instantiate the generic type with the provided type arguments
+			instantiated := c.instantiateGenericType(genericType, paramRef.TypeArguments, nil)
+			
+			// If the instantiation resulted in an ObjectType with the instance type, extract it
+			if objType, ok := instantiated.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+				// Return the instance type (return type of the constructor)
+				return objType.ConstructSignatures[0].ReturnType
+			}
+			
+			return instantiated
+		}
+	}
+	
+	debugPrintf("// [Checker ResolveParamRef] Could not resolve %s\n", paramRef.ClassName)
+	return nil // Could not resolve
+}
+
 // ContextualType represents type information that flows from context to sub-expressions
 type ContextualType struct {
 	ExpectedType types.Type // The type expected in this context
