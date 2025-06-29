@@ -6,6 +6,13 @@ import (
 	"strings" // Added for strings.Builder
 )
 
+// templateState represents the state of a template literal context
+type templateState struct {
+	inTemplate    bool
+	braceDepth    int
+	templateStart int
+}
+
 // --- Debug Flag ---
 const lexerDebug = false
 
@@ -279,6 +286,9 @@ type Lexer struct {
 	inTemplate    bool // true when we're inside a template literal
 	braceDepth    int  // tracks nested braces inside ${...} interpolations
 	templateStart int  // position where current template started (for error reporting)
+	
+	// --- NEW: Template stack for nested template literals ---
+	templateStack []templateState // stack to handle nested template literals
 
 	// --- NEW: Token pushback for >> splitting in generics ---
 	pushedToken *Token // Single token pushback buffer
@@ -1382,7 +1392,16 @@ func isDigitForBase(ch byte, base int) bool {
 func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
 	if !l.inTemplate || l.braceDepth > 0 {
 		// Opening backtick - start of template literal
-		// This includes nested template literals inside interpolations
+		// Push current template state onto stack if we're already in a template
+		if l.inTemplate {
+			l.templateStack = append(l.templateStack, templateState{
+				inTemplate:    l.inTemplate,
+				braceDepth:    l.braceDepth,
+				templateStart: l.templateStart,
+			})
+		}
+		
+		// Start new template literal
 		l.inTemplate = true
 		l.templateStart = startPos
 		l.braceDepth = 0
@@ -1400,11 +1419,21 @@ func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
 		}
 	} else {
 		// Closing backtick - end of template literal
-		l.inTemplate = false
-		l.braceDepth = 0
-
 		literal := string(l.ch) // The closing backtick
 		l.readChar()            // Consume the backtick
+		
+		// Pop previous template state from stack if it exists
+		if len(l.templateStack) > 0 {
+			prevState := l.templateStack[len(l.templateStack)-1]
+			l.templateStack = l.templateStack[:len(l.templateStack)-1]
+			l.inTemplate = prevState.inTemplate
+			l.braceDepth = prevState.braceDepth
+			l.templateStart = prevState.templateStart
+		} else {
+			// No previous template state, we're completely done with templates
+			l.inTemplate = false
+			l.braceDepth = 0
+		}
 
 		return Token{
 			Type:     TEMPLATE_END,
