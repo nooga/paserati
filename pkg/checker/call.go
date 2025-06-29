@@ -251,6 +251,35 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		return
 	}
 
+	// Handle TypeParameterType by checking its constraint
+	if typeParamType, ok := funcNodeType.(*types.TypeParameterType); ok {
+		// Try to resolve the type parameter to its constraint or a concrete type
+		if typeParamType.Parameter != nil && typeParamType.Parameter.Constraint != nil {
+			constraintType := typeParamType.Parameter.Constraint
+			debugPrintf("// [Checker CallExpr] Type parameter '%s' has constraint: %s\n", 
+				typeParamType.Parameter.Name, constraintType.String())
+			
+			// If the constraint is callable, use it for the call
+			if objType, ok := constraintType.(*types.ObjectType); ok && objType.IsCallable() {
+				// Use the constraint type instead of the type parameter
+				funcNodeType = constraintType
+				debugPrintf("// [Checker CallExpr] Using constraint type for type parameter call: %s\n", constraintType.String())
+			} else {
+				// If constraint is not callable, this is an error
+				c.addError(node, fmt.Sprintf("cannot call value of type '%s' (constraint '%s' is not callable)", 
+					funcNodeType.String(), constraintType.String()))
+				node.SetComputedType(types.Any)
+				return
+			}
+		} else {
+			// Type parameter without constraint or with 'any' constraint - assume it could be callable
+			// but we can't verify at compile time
+			c.addError(node, fmt.Sprintf("cannot call value of type '%s' (no callable constraint)", funcNodeType.String()))
+			node.SetComputedType(types.Any)
+			return
+		}
+	}
+
 	// Handle callable ObjectType with unified approach
 	objType, ok := funcNodeType.(*types.ObjectType)
 	if !ok {

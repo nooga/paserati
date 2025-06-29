@@ -2342,18 +2342,23 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 		if canApplyContextualTyping {
 			debugPrintf("// [Checker ArrowFuncContext] Applying contextual typing from signature: %s\n", expectedSig.String())
 
-			// Check if the return type is generic - if so, don't force it as contextual return type
+			// Check if the return type is generic - if so, try to use its constraint for contextual typing
 			var contextualReturnType types.Type = nil
 			if expectedSig.ReturnType != nil {
-				// Only use the expected return type if it's not a generic type parameter
-				if _, isTypeParam := expectedSig.ReturnType.(*types.TypeParameterType); !isTypeParam {
+				// If it's a type parameter, try to use its constraint for contextual typing
+				if typeParam, isTypeParam := expectedSig.ReturnType.(*types.TypeParameterType); isTypeParam {
+					if typeParam.Parameter != nil && typeParam.Parameter.Constraint != nil {
+						contextualReturnType = typeParam.Parameter.Constraint
+						debugPrintf("// [Checker ArrowFuncContext] Using type parameter constraint as contextual return type: %s -> %s\n", 
+							expectedSig.ReturnType.String(), contextualReturnType.String())
+					} else {
+						debugPrintf("// [Checker ArrowFuncContext] Skipping type parameter without constraint for inference: %s\n", expectedSig.ReturnType.String())
+					}
+				} else {
+					// Use concrete return type directly
 					contextualReturnType = expectedSig.ReturnType
 					debugPrintf("// [Checker ArrowFuncContext] Using concrete contextual return type: %s\n", contextualReturnType.String())
-				} else {
-					debugPrintf("// [Checker ArrowFuncContext] Skipping generic return type for inference: %s\n", expectedSig.ReturnType.String())
 				}
-				// For generic return types (TypeParameterType), leave contextualReturnType as nil
-				// so the arrow function can infer its own return type
 			}
 
 			// Create a modified arrow function context with inferred parameter types
@@ -2393,6 +2398,18 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			}
 			finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBodyCheck)
 			debugPrintf("// [Checker ArrowFuncContext] Inferred final return type: %s\n", finalReturnType.String())
+
+			// Check if we used a type parameter constraint for contextual typing
+			// If so, the final return type should be the original type parameter, not the constraint
+			if expectedSig.ReturnType != nil {
+				if typeParam, isTypeParam := expectedSig.ReturnType.(*types.TypeParameterType); isTypeParam {
+					if typeParam.Parameter != nil && typeParam.Parameter.Constraint != nil && contextualReturnType != nil {
+						// We used the constraint for inference, but the final type should be the type parameter
+						finalReturnType = expectedSig.ReturnType
+						debugPrintf("// [Checker ArrowFuncContext] Overriding final return type to type parameter: %s\n", finalReturnType.String())
+					}
+				}
+			}
 
 			// 4. Create final function type
 			finalFuncType := c.createFinalFunctionType(ctx, paramTypes, finalReturnType, restParameterType)

@@ -698,6 +698,22 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Object, fmt.Sprintf("failed to substitute generic type %s", obj.String()))
 				// resultType remains types.Never
 			}
+		case *types.TypeParameterType:
+			// Handle property access on type parameters
+			if obj.Parameter != nil && obj.Parameter.Constraint != nil {
+				// If the type parameter has a constraint, check property access on the constraint
+				constraintType := obj.Parameter.Constraint
+				debugPrintf("// [Checker MemberExpr] Type parameter '%s' has constraint: %s, checking property '%s'\n", 
+					obj.Parameter.Name, constraintType.String(), propertyName)
+				
+				// Use the helper function to get property type from the constraint
+				resultType = c.getPropertyTypeFromType(constraintType, propertyName, false)
+			} else {
+				// For unconstrained type parameters, allow property access but return 'any'
+				// This is because the type parameter could be instantiated with any type that has this property
+				resultType = types.Any
+				debugPrintf("// [Checker MemberExpr] Unconstrained type parameter, allowing property access: %s\n", propertyName)
+			}
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
@@ -919,6 +935,17 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				// Property not found - for optional chaining, this is OK, just return undefined
 				// Don't add an error like regular member access would
 				baseResultType = types.Undefined
+			}
+		case *types.TypeParameterType:
+			// Handle property access on type parameters
+			if obj.Parameter != nil && obj.Parameter.Constraint != nil {
+				// If the type parameter has a constraint, check property access on the constraint
+				constraintType := obj.Parameter.Constraint
+				baseResultType = c.getPropertyTypeFromType(constraintType, propertyName, true)
+			} else {
+				// For unconstrained type parameters, allow property access but return 'any'
+				// This is because the type parameter could be instantiated with any type that has this property
+				baseResultType = types.Any
 			}
 		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
 		default:
