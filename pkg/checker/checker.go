@@ -1552,7 +1552,37 @@ func (c *Checker) visit(node parser.Node) {
 			c.env = originalEnv
 		}
 
-		// 5. IfStatement doesn't have a value/type (it's a statement, not expression)
+		// 5. Control Flow Analysis: Check if one branch throws and apply narrowing
+		consequenceThrows := c.statementContainsThrow(node.Consequence)
+		alternativeThrows := node.Alternative != nil && c.statementContainsThrow(node.Alternative)
+
+		if typeGuard != nil {
+			if consequenceThrows && !alternativeThrows {
+				// If the "then" branch throws, apply inverted narrowing after the if
+				// (the condition must have been false to reach this point)
+				invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
+				if invertedEnv != nil {
+					debugPrintf("// [Checker IfStmt] Control flow: consequence throws, applying inverted narrowing after if\n")
+					c.env = invertedEnv
+				}
+			} else if !consequenceThrows && alternativeThrows {
+				// If the "else" branch throws, apply positive narrowing after the if
+				// (the condition must have been true to reach this point)
+				positiveEnv := c.applyTypeNarrowing(typeGuard)
+				if positiveEnv != nil {
+					debugPrintf("// [Checker IfStmt] Control flow: alternative throws, applying positive narrowing after if\n")
+					c.env = positiveEnv
+				}
+			} else {
+				// Both branches throw, or neither throws - restore original environment
+				c.env = originalEnv
+			}
+		} else {
+			// No type guard - restore original environment
+			c.env = originalEnv
+		}
+
+		// 6. IfStatement doesn't have a value/type (it's a statement, not expression)
 
 	case *parser.TernaryExpression:
 		// --- UPDATED: Handle TernaryExpression with Type Narrowing ---
@@ -2306,6 +2336,45 @@ func (c *Checker) checkThrowStatement(node *parser.ThrowStatement) {
 	// In TypeScript, throw expressions have type 'never'
 	// but for simplicity in Phase 1, we don't need to enforce much
 	// The expression can be of any type (JavaScript allows throwing anything)
+}
+
+// blockContainsThrow checks if a block statement contains a throw statement
+func (c *Checker) blockContainsThrow(block *parser.BlockStatement) bool {
+	if block == nil {
+		return false
+	}
+	
+	for _, stmt := range block.Statements {
+		if c.statementContainsThrow(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+// statementContainsThrow checks if a statement contains a throw (including nested)
+func (c *Checker) statementContainsThrow(stmt parser.Statement) bool {
+	switch node := stmt.(type) {
+	case *parser.ThrowStatement:
+		return true
+	case *parser.BlockStatement:
+		return c.blockContainsThrow(node)
+	case *parser.IfStatement:
+		// Check both branches
+		if c.statementContainsThrow(node.Consequence) {
+			return true
+		}
+		if node.Alternative != nil && c.statementContainsThrow(node.Alternative) {
+			return true
+		}
+		return false
+	case *parser.ExpressionStatement:
+		// Could contain throw in nested expressions, but for now we'll keep it simple
+		return false
+	default:
+		// For other statement types, assume no throw for simplicity
+		return false
+	}
 }
 
 // GetProgram returns the program AST being checked
