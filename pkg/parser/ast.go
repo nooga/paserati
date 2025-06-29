@@ -1531,6 +1531,248 @@ func (ss *SwitchStatement) String() string {
 }
 
 // ----------------------------------------------------------------------------
+// Module System: Import/Export Statements
+// ----------------------------------------------------------------------------
+
+// ImportDeclaration represents an import statement
+// import defaultImport from "module"
+// import * as name from "module"
+// import { export1, export2 } from "module"
+// import { export1 as alias1 } from "module"
+// import defaultImport, { export1, export2 } from "module"
+// import defaultImport, * as name from "module"
+type ImportDeclaration struct {
+	Token       lexer.Token          // The 'import' token
+	Specifiers  []ImportSpecifier    // What to import (default, named, namespace)
+	Source      *StringLiteral       // From where ("./module")
+}
+
+func (id *ImportDeclaration) statementNode()       {}
+func (id *ImportDeclaration) TokenLiteral() string { return id.Token.Literal }
+func (id *ImportDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString("import ")
+	
+	if len(id.Specifiers) > 0 {
+		specStrs := make([]string, len(id.Specifiers))
+		for i, spec := range id.Specifiers {
+			specStrs[i] = spec.String()
+		}
+		
+		// Group specifiers by type for cleaner output
+		hasDefault := false
+		hasNamed := false
+		hasNamespace := false
+		
+		for _, spec := range id.Specifiers {
+			switch spec.(type) {
+			case *ImportDefaultSpecifier:
+				hasDefault = true
+			case *ImportNamedSpecifier:
+				hasNamed = true
+			case *ImportNamespaceSpecifier:
+				hasNamespace = true
+			}
+		}
+		
+		// Output in TypeScript order: default, named, namespace
+		parts := []string{}
+		for _, spec := range id.Specifiers {
+			if _, ok := spec.(*ImportDefaultSpecifier); ok && hasDefault {
+				parts = append(parts, spec.String())
+				hasDefault = false // Only add once
+			}
+		}
+		
+		if hasNamed {
+			namedParts := []string{}
+			for _, spec := range id.Specifiers {
+				if named, ok := spec.(*ImportNamedSpecifier); ok {
+					namedParts = append(namedParts, named.String())
+				}
+			}
+			if len(namedParts) > 0 {
+				parts = append(parts, "{ "+strings.Join(namedParts, ", ")+" }")
+			}
+		}
+		
+		for _, spec := range id.Specifiers {
+			if _, ok := spec.(*ImportNamespaceSpecifier); ok && hasNamespace {
+				parts = append(parts, spec.String())
+				hasNamespace = false // Only add once
+			}
+		}
+		
+		out.WriteString(strings.Join(parts, ", "))
+	}
+	
+	if id.Source != nil {
+		out.WriteString(" from ")
+		out.WriteString(id.Source.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
+
+// ImportSpecifier is the interface for different import specifier types
+type ImportSpecifier interface {
+	Node
+	importSpecifier() // Marker method
+}
+
+// ImportDefaultSpecifier represents: import defaultName from "module"
+type ImportDefaultSpecifier struct {
+	Token lexer.Token // The identifier token
+	Local *Identifier // Local binding name
+}
+
+func (ids *ImportDefaultSpecifier) importSpecifier()      {}
+func (ids *ImportDefaultSpecifier) TokenLiteral() string  { return ids.Token.Literal }
+func (ids *ImportDefaultSpecifier) String() string        { return ids.Local.String() }
+
+// ImportNamedSpecifier represents: import { name } or import { name as alias }
+type ImportNamedSpecifier struct {
+	Token    lexer.Token // The imported name token
+	Imported *Identifier // Original export name
+	Local    *Identifier // Local binding name (same as Imported if no alias)
+}
+
+func (ins *ImportNamedSpecifier) importSpecifier()      {}
+func (ins *ImportNamedSpecifier) TokenLiteral() string  { return ins.Token.Literal }
+func (ins *ImportNamedSpecifier) String() string {
+	if ins.Imported.Value != ins.Local.Value {
+		return ins.Imported.String() + " as " + ins.Local.String()
+	}
+	return ins.Imported.String()
+}
+
+// ImportNamespaceSpecifier represents: import * as name from "module"
+type ImportNamespaceSpecifier struct {
+	Token lexer.Token // The '*' token
+	Local *Identifier // Local binding name
+}
+
+func (ins *ImportNamespaceSpecifier) importSpecifier()      {}
+func (ins *ImportNamespaceSpecifier) TokenLiteral() string  { return ins.Token.Literal }
+func (ins *ImportNamespaceSpecifier) String() string        { return "* as " + ins.Local.String() }
+
+// ExportDeclaration is the interface for different export declaration types
+type ExportDeclaration interface {
+	Statement
+	exportDeclaration() // Marker method
+}
+
+// ExportNamedDeclaration represents various named export forms:
+// export const x = 1;
+// export function foo() {}
+// export { name1, name2 };
+// export { name1 as alias1 };
+// export { name1 } from "module";
+type ExportNamedDeclaration struct {
+	Token       lexer.Token        // The 'export' token
+	Declaration Statement          // Direct export: export const x = 1
+	Specifiers  []ExportSpecifier  // Named exports: export { x, y }
+	Source      *StringLiteral     // Re-export source: export { x } from "mod"
+}
+
+func (end *ExportNamedDeclaration) statementNode()        {}
+func (end *ExportNamedDeclaration) exportDeclaration()    {}
+func (end *ExportNamedDeclaration) TokenLiteral() string  { return end.Token.Literal }
+func (end *ExportNamedDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString("export ")
+	
+	if end.Declaration != nil {
+		// Direct export: export const x = 1;
+		out.WriteString(end.Declaration.String())
+	} else if len(end.Specifiers) > 0 {
+		// Named exports: export { x, y }
+		out.WriteString("{ ")
+		specStrs := make([]string, len(end.Specifiers))
+		for i, spec := range end.Specifiers {
+			specStrs[i] = spec.String()
+		}
+		out.WriteString(strings.Join(specStrs, ", "))
+		out.WriteString(" }")
+		
+		if end.Source != nil {
+			out.WriteString(" from ")
+			out.WriteString(end.Source.String())
+		}
+		out.WriteString(";")
+	}
+	
+	return out.String()
+}
+
+// ExportDefaultDeclaration represents: export default expression
+type ExportDefaultDeclaration struct {
+	Token       lexer.Token // The 'export' token
+	Declaration Expression  // The default export expression
+}
+
+func (edd *ExportDefaultDeclaration) statementNode()        {}
+func (edd *ExportDefaultDeclaration) exportDeclaration()    {}
+func (edd *ExportDefaultDeclaration) TokenLiteral() string  { return edd.Token.Literal }
+func (edd *ExportDefaultDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString("export default ")
+	if edd.Declaration != nil {
+		out.WriteString(edd.Declaration.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
+
+// ExportAllDeclaration represents: export * from "module" or export * as name from "module"
+type ExportAllDeclaration struct {
+	Token    lexer.Token    // The 'export' token
+	Exported *Identifier    // Optional: export * as name from "module"
+	Source   *StringLiteral // The module source
+}
+
+func (ead *ExportAllDeclaration) statementNode()        {}
+func (ead *ExportAllDeclaration) exportDeclaration()    {}
+func (ead *ExportAllDeclaration) TokenLiteral() string  { return ead.Token.Literal }
+func (ead *ExportAllDeclaration) String() string {
+	var out bytes.Buffer
+	out.WriteString("export * ")
+	if ead.Exported != nil {
+		out.WriteString("as ")
+		out.WriteString(ead.Exported.String())
+		out.WriteString(" ")
+	}
+	if ead.Source != nil {
+		out.WriteString("from ")
+		out.WriteString(ead.Source.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
+
+// ExportSpecifier represents individual export specifiers in export { ... }
+type ExportSpecifier interface {
+	Node
+	exportSpecifier() // Marker method
+}
+
+// ExportNamedSpecifier represents: export { name } or export { name as alias }
+type ExportNamedSpecifier struct {
+	Token    lexer.Token // The exported name token
+	Local    *Identifier // Local name being exported
+	Exported *Identifier // Export name (same as Local if no alias)
+}
+
+func (ens *ExportNamedSpecifier) exportSpecifier()      {}
+func (ens *ExportNamedSpecifier) TokenLiteral() string  { return ens.Token.Literal }
+func (ens *ExportNamedSpecifier) String() string {
+	if ens.Local.Value != ens.Exported.Value {
+		return ens.Local.String() + " as " + ens.Exported.String()
+	}
+	return ens.Local.String()
+}
+
+// ----------------------------------------------------------------------------
 // Type Expressions (Used in Type Annotations and Type Aliases)
 // ----------------------------------------------------------------------------
 

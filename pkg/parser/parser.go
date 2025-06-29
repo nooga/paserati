@@ -428,6 +428,10 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseTryStatement()
 	case lexer.THROW:
 		return p.parseThrowStatement()
+	case lexer.IMPORT:
+		return p.parseImportDeclaration()
+	case lexer.EXPORT:
+		return p.parseExportDeclaration()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -6478,4 +6482,388 @@ func (p *Parser) parseMappedTypeExpression(startToken lexer.Token) Expression {
 	}
 	
 	return mappedType
+}
+
+// ----------------------------------------------------------------------------
+// Module System: Import/Export Parsing Methods
+// ----------------------------------------------------------------------------
+
+// parseImportDeclaration parses various import statement forms:
+// import defaultImport from "module"
+// import * as name from "module"
+// import { export1, export2 } from "module"
+// import { export1 as alias1 } from "module"
+// import defaultImport, { export1, export2 } from "module"
+// import defaultImport, * as name from "module"
+func (p *Parser) parseImportDeclaration() *ImportDeclaration {
+	stmt := &ImportDeclaration{Token: p.curToken}
+	
+	// Move to the next token to see what kind of import this is
+	p.nextToken()
+	
+	// Check for bare import: import "module-name"
+	if p.curToken.Type == lexer.STRING {
+		// This is a bare import with no specifiers
+		stmt.Source = &StringLiteral{
+			Token: p.curToken,
+			Value: p.curToken.Literal,
+		}
+		stmt.Specifiers = []ImportSpecifier{} // Empty specifiers for bare import
+		
+		// Optional semicolon
+		if p.peekToken.Type == lexer.SEMICOLON {
+			p.nextToken()
+		}
+		return stmt
+	}
+	
+	// Parse import specifiers for non-bare imports
+	var specifiers []ImportSpecifier
+	
+	// Check for different import patterns
+	if p.curToken.Type == lexer.IDENT {
+		// Default import: import defaultName from "module"
+		// Or mixed: import defaultName, { named } from "module"
+		// Or mixed: import defaultName, * as name from "module"
+		defaultSpec := &ImportDefaultSpecifier{
+			Token: p.curToken,
+			Local: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		}
+		specifiers = append(specifiers, defaultSpec)
+		
+		// Check for comma (mixed imports)
+		if p.peekToken.Type == lexer.COMMA {
+			p.nextToken() // consume identifier
+			p.nextToken() // consume comma
+			
+			// Parse additional specifiers after comma
+			additionalSpecs := p.parseImportSpecifierList()
+			if additionalSpecs == nil {
+				return nil
+			}
+			specifiers = append(specifiers, additionalSpecs...)
+		}
+	} else {
+		// Parse non-default imports: { named }, * as namespace
+		additionalSpecs := p.parseImportSpecifierList()
+		if additionalSpecs == nil {
+			return nil
+		}
+		specifiers = append(specifiers, additionalSpecs...)
+	}
+	
+	stmt.Specifiers = specifiers
+	
+	// Expect 'from' keyword
+	if !p.expectPeek(lexer.FROM) {
+		return nil
+	}
+	
+	// Parse source string
+	if !p.expectPeek(lexer.STRING) {
+		return nil
+	}
+	
+	stmt.Source = &StringLiteral{
+		Token: p.curToken,
+		Value: p.curToken.Literal,
+	}
+	
+	// Optional semicolon
+	if p.peekToken.Type == lexer.SEMICOLON {
+		p.nextToken()
+	}
+	
+	return stmt
+}
+
+// parseImportSpecifierList parses { name1, name2 as alias } or * as namespace
+func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
+	var specs []ImportSpecifier
+	
+	if p.curToken.Type == lexer.ASTERISK {
+		// Namespace import: * as name
+		if !p.expectPeek(lexer.AS) {
+			return nil
+		}
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+		
+		namespaceSpec := &ImportNamespaceSpecifier{
+			Token: p.curToken,
+			Local: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		}
+		specs = append(specs, namespaceSpec)
+		
+	} else if p.curToken.Type == lexer.LBRACE {
+		// Named imports: { name1, name2 as alias, "string name" as alias, default as alias }
+		p.nextToken() // consume '{'
+		
+		for {
+			var imported *Identifier
+			var importedToken lexer.Token
+			
+			// Handle different import name patterns
+			if p.curToken.Type == lexer.IDENT {
+				// Regular identifier: { name } or { name as alias }
+				imported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+				importedToken = p.curToken
+			} else if p.curToken.Type == lexer.STRING {
+				// String named import: { "string name" as alias }
+				imported = &Identifier{
+					Token: p.curToken,
+					Value: p.curToken.Literal, // Keep the quoted string
+				}
+				importedToken = p.curToken
+			} else if p.curToken.Type == lexer.DEFAULT {
+				// Default as alias: { default as alias }
+				imported = &Identifier{Token: p.curToken, Value: "default"}
+				importedToken = p.curToken
+			} else {
+				// Expected identifier, string, or default
+				p.addError(p.curToken, "Expected identifier, string literal, or 'default' in import specifier")
+				return nil
+			}
+			
+			local := imported // Default: same as imported name
+			
+			// Check for 'as' alias
+			if p.peekToken.Type == lexer.AS {
+				p.nextToken() // consume imported name/string/default
+				p.nextToken() // consume 'as'
+				
+				if p.curToken.Type != lexer.IDENT {
+					p.peekError(lexer.IDENT)
+					return nil
+				}
+				local = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curToken.Type == lexer.STRING {
+				// String names MUST have an alias
+				p.addError(p.curToken, "String-named imports must use 'as' to provide an alias")
+				return nil
+			} else if p.curToken.Type == lexer.DEFAULT {
+				// Default imports without alias need special handling
+				// This should be allowed: { default } (imports as 'default')
+				// But commonly you'd use: { default as something }
+			}
+			
+			namedSpec := &ImportNamedSpecifier{
+				Token:    importedToken,
+				Imported: imported,
+				Local:    local,
+			}
+			specs = append(specs, namedSpec)
+			
+			// Check for more specifiers
+			if p.peekToken.Type != lexer.COMMA {
+				break
+			}
+			p.nextToken() // consume current identifier/alias
+			p.nextToken() // consume comma
+			
+			// Next specifier should be identifier, string, or default
+			if p.curToken.Type != lexer.IDENT && p.curToken.Type != lexer.STRING && p.curToken.Type != lexer.DEFAULT {
+				p.addError(p.curToken, "Expected identifier, string literal, or 'default' in import specifier")
+				return nil
+			}
+		}
+		
+		// Expect closing brace
+		if !p.expectPeek(lexer.RBRACE) {
+			return nil
+		}
+	}
+	
+	return specs
+}
+
+// parseExportDeclaration parses various export statement forms:
+// export const x = 1;
+// export function foo() {}
+// export { name1, name2 };
+// export { name1 as alias1 };
+// export { name1 } from "module";
+// export default expression;
+// export * from "module";
+// export * as name from "module";
+func (p *Parser) parseExportDeclaration() Statement {
+	exportToken := p.curToken
+	
+	// Move to the next token to see what kind of export this is
+	p.nextToken()
+	
+	switch p.curToken.Type {
+	case lexer.DEFAULT:
+		// export default expression;
+		return p.parseExportDefaultDeclaration(exportToken)
+		
+	case lexer.ASTERISK:
+		// export * from "module" or export * as name from "module"
+		return p.parseExportAllDeclaration(exportToken)
+		
+	case lexer.LBRACE:
+		// export { name1, name2 } or export { name1 } from "module"
+		return p.parseExportNamedDeclarationWithSpecifiers(exportToken)
+		
+	case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE:
+		// export const x = 1; export function foo() {}
+		return p.parseExportNamedDeclarationWithDeclaration(exportToken)
+		
+	default:
+		// Should not reach here due to expectPeek checks above
+		return nil
+	}
+}
+
+// parseExportDefaultDeclaration parses: export default expression;
+func (p *Parser) parseExportDefaultDeclaration(exportToken lexer.Token) *ExportDefaultDeclaration {
+	stmt := &ExportDefaultDeclaration{Token: exportToken}
+	
+	// Parse the default export expression
+	p.nextToken() // Move past 'default'
+	stmt.Declaration = p.parseExpression(LOWEST)
+	if stmt.Declaration == nil {
+		return nil
+	}
+	
+	// Optional semicolon
+	if p.peekToken.Type == lexer.SEMICOLON {
+		p.nextToken()
+	}
+	
+	return stmt
+}
+
+// parseExportAllDeclaration parses: export * from "module" or export * as name from "module"
+func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token) *ExportAllDeclaration {
+	stmt := &ExportAllDeclaration{Token: exportToken}
+	
+	// Check for optional 'as name'
+	if p.peekToken.Type == lexer.AS {
+		p.nextToken() // consume '*'
+		p.nextToken() // consume 'as'
+		
+		if p.curToken.Type != lexer.IDENT {
+			p.peekError(lexer.IDENT)
+			return nil
+		}
+		
+		stmt.Exported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
+	
+	// Expect 'from' keyword
+	if !p.expectPeek(lexer.FROM) {
+		return nil
+	}
+	
+	// Parse source string
+	if !p.expectPeek(lexer.STRING) {
+		return nil
+	}
+	
+	stmt.Source = &StringLiteral{
+		Token: p.curToken,
+		Value: p.curToken.Literal,
+	}
+	
+	// Optional semicolon
+	if p.peekToken.Type == lexer.SEMICOLON {
+		p.nextToken()
+	}
+	
+	return stmt
+}
+
+// parseExportNamedDeclarationWithSpecifiers parses: export { name1, name2 } [from "module"]
+func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Token) *ExportNamedDeclaration {
+	stmt := &ExportNamedDeclaration{Token: exportToken}
+	
+	// Parse export specifiers
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+	
+	var specifiers []ExportSpecifier
+	
+	for {
+		// Parse export specifier
+		local := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		exported := local // Default: same as local name
+		
+		// Check for 'as' alias
+		if p.peekToken.Type == lexer.AS {
+			p.nextToken() // consume local name
+			p.nextToken() // consume 'as'
+			
+			if p.curToken.Type != lexer.IDENT {
+				p.peekError(lexer.IDENT)
+				return nil
+			}
+			exported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		}
+		
+		namedSpec := &ExportNamedSpecifier{
+			Token:    local.Token,
+			Local:    local,
+			Exported: exported,
+		}
+		specifiers = append(specifiers, namedSpec)
+		
+		// Check for more specifiers
+		if p.peekToken.Type != lexer.COMMA {
+			break
+		}
+		p.nextToken() // consume current identifier/alias
+		p.nextToken() // consume comma
+		
+		if p.curToken.Type != lexer.IDENT {
+			p.peekError(lexer.IDENT)
+			return nil
+		}
+	}
+	
+	stmt.Specifiers = specifiers
+	
+	// Expect closing brace
+	if !p.expectPeek(lexer.RBRACE) {
+		return nil
+	}
+	
+	// Check for optional 'from' clause
+	if p.peekToken.Type == lexer.FROM {
+		p.nextToken() // consume '}'
+		p.nextToken() // consume 'from'
+		
+		if p.curToken.Type != lexer.STRING {
+			p.peekError(lexer.STRING)
+			return nil
+		}
+		
+		stmt.Source = &StringLiteral{
+			Token: p.curToken,
+			Value: p.curToken.Literal,
+		}
+	}
+	
+	// Optional semicolon
+	if p.peekToken.Type == lexer.SEMICOLON {
+		p.nextToken()
+	}
+	
+	return stmt
+}
+
+// parseExportNamedDeclarationWithDeclaration parses: export const x = 1; export function foo() {}
+func (p *Parser) parseExportNamedDeclarationWithDeclaration(exportToken lexer.Token) *ExportNamedDeclaration {
+	stmt := &ExportNamedDeclaration{Token: exportToken}
+	
+	// Parse the declaration statement
+	declaration := p.parseStatement()
+	if declaration == nil {
+		return nil
+	}
+	
+	stmt.Declaration = declaration
+	return stmt
 }

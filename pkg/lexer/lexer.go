@@ -210,6 +210,10 @@ const (
 	// Getter/Setter keywords
 	GET TokenType = "GET"
 	SET TokenType = "SET"
+	// Module keywords
+	IMPORT TokenType = "IMPORT"
+	EXPORT TokenType = "EXPORT"
+	FROM   TokenType = "FROM"
 )
 
 var keywords = map[string]TokenType{
@@ -262,6 +266,9 @@ var keywords = map[string]TokenType{
 	"override":   OVERRIDE,   // Added for method overriding
 	"get":        GET,        // Added for getter methods
 	"set":        SET,        // Added for setter methods
+	"import":     IMPORT,     // Added for import statements
+	"export":     EXPORT,     // Added for export statements
+	"from":       FROM,       // Added for import from clauses
 }
 
 // LookupIdent checks the keywords table for an identifier.
