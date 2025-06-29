@@ -152,7 +152,8 @@ const (
 	// --- END Phase 4a ---
 
 	// --- Module System ---
-	OpEvalModule OpCode = 70 // ModulePathIdx: Execute module idempotently, switch execution context
+	OpEvalModule      OpCode = 70 // ModulePathIdx: Execute module idempotently, switch execution context
+	OpGetModuleExport OpCode = 71 // Rx ModulePathIdx ExportNameIdx: Rx = module[exportName]
 )
 
 // String returns a human-readable name for the OpCode.
@@ -318,6 +319,8 @@ func (op OpCode) String() string {
 	// --- Module System ---
 	case OpEvalModule:
 		return "OpEvalModule"
+	case OpGetModuleExport:
+		return "OpGetModuleExport"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -537,6 +540,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	// --- Module System ---
 	case OpEvalModule:
 		return c.constantInstruction16(builder, "OpEvalModule", offset)
+	case OpGetModuleExport:
+		return c.registerConstantConstantInstruction(builder, "OpGetModuleExport", offset)
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))
@@ -638,6 +643,33 @@ func (c *Chunk) constantInstruction16(builder *strings.Builder, name string, off
 		builder.WriteString(fmt.Sprintf("%-16s %d ('%s')\n", name, constantIndex, constantValue.ToString()))
 	}
 	return offset + 3 // Opcode + 2 bytes for constant index
+}
+
+// registerConstantConstantInstruction handles OpCode Rx, ConstIdx1(16bit), ConstIdx2(16bit)
+func (c *Chunk) registerConstantConstantInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+5 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+	
+	reg := c.Code[offset+1]
+	constantIndex1 := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+	constantIndex2 := uint16(c.Code[offset+4])<<8 | uint16(c.Code[offset+5])
+	
+	const1Valid := int(constantIndex1) < len(c.Constants)
+	const2Valid := int(constantIndex2) < len(c.Constants)
+	
+	if !const1Valid || !const2Valid {
+		builder.WriteString(fmt.Sprintf("%-16s R%d, %d, %d (invalid constant indices)\n", 
+			name, reg, constantIndex1, constantIndex2))
+	} else {
+		constantValue1 := c.Constants[constantIndex1]
+		constantValue2 := c.Constants[constantIndex2]
+		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%s'), %d ('%s')\n", 
+			name, reg, constantIndex1, constantValue1.ToString(), 
+			constantIndex2, constantValue2.ToString()))
+	}
+	return offset + 6 // Opcode + register + 2*2 bytes for constant indices
 }
 
 // --- New Disassembly Helpers ---

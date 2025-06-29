@@ -263,3 +263,12 @@ func (mr *ModuleRecord) GetCompiledChunk() *vm.Chunk {
 	return mr.CompiledChunk
 }
 
+// GetExportNames returns the names of all exports from this module
+func (mr *ModuleRecord) GetExportNames() []string {
+	names := make([]string, 0, len(mr.Exports))
+	for name := range mr.Exports {
+		names = append(names, name)
+	}
+	return names
+}
+

@@ -7,7 +7,6 @@ import (
 	"os"
 	"paserati/pkg/driver"
 	"paserati/pkg/errors"
-	"paserati/pkg/modules"
 	"paserati/pkg/vm"
 	"path/filepath"
 	"regexp"
@@ -190,52 +189,18 @@ func runModuleTest(t *testing.T, testCasePath string) {
 
 // compileAndRunModules sets up the module system and runs a module test
 func compileAndRunModules(testCasePath, mainModulePath string) (finalValue vm.Value, compileErrs []errors.PaseratiError, runtimeErrs []errors.PaseratiError) {
-	// Create a file system resolver for the test case directory
-	testFS := os.DirFS(testCasePath)
-	fsResolver := modules.NewFileSystemResolver(testFS, "")
-	
-	// Create module loader (for future use)
-	config := modules.DefaultLoaderConfig()
-	config.EnableParallel = false // Start with sequential for simplicity
-	_ = modules.NewModuleLoader(config, fsResolver) // Not used yet, but shows integration point
+	// Create Paserati instance with the test case directory as the base for module resolution
+	// This avoids having to change the global working directory
+	paserati := driver.NewPaseratiWithBaseDir(testCasePath)
 
-	// For now, we'll use the existing driver system
-	// TODO: In the future, this should use module-aware compilation
+	// Get just the filename from the main module path
+	mainFileName := filepath.Base(mainModulePath)
 	
-	// Read main module content
-	mainContentBytes, err := ioutil.ReadFile(mainModulePath)
-	if err != nil {
-		readErr := &errors.CompileError{
-			Position: errors.Position{Line: 0, Column: 0},
-			Msg:      fmt.Sprintf("Failed to read main module '%s': %s", mainModulePath, err.Error()),
-		}
-		return vm.Undefined, []errors.PaseratiError{readErr}, nil
-	}
+	// Run the main module using module-aware execution with ./ prefix and get the return value
+	moduleSpecifier := "./" + mainFileName
+	finalValue, compileErrs, runtimeErrs = paserati.RunModuleWithValue(moduleSpecifier)
 	
-	// Use the existing driver system for now
-	// TODO: Replace with module-aware compilation when ready
-	paserati := driver.NewPaserati()
-
-	// Run the main module
-	finalValue, allErrs := paserati.RunString(string(mainContentBytes))
-	
-	// Separate compile vs runtime errors
-	var compileErrors []errors.PaseratiError
-	var runtimeErrors []errors.PaseratiError
-	
-	for _, err := range allErrs {
-		switch err.Kind() {
-		case "Parse", "Type", "Compile":
-			compileErrors = append(compileErrors, err)
-		case "Runtime":
-			runtimeErrors = append(runtimeErrors, err)
-		default:
-			// Default to compile error if unknown
-			compileErrors = append(compileErrors, err)
-		}
-	}
-	
-	return finalValue, compileErrors, runtimeErrors
+	return finalValue, compileErrs, runtimeErrs
 }
 
 // Helper function to create test modules

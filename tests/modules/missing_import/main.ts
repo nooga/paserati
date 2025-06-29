@@ -1,4 +1,4 @@
-// expect_compile_error: Cannot find module
+// expect_runtime_error: Failed to load module
 import { missing } from './nonexistent';
 
 const result = missing();

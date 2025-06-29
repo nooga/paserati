@@ -1,4 +1,4 @@
-// expect_runtime_error: VM PANIC RECOVERED
+// expect: 42
 // Test comprehensive import patterns - all should parse successfully
 import defaultExport from "module-name";
 import * as name from "module-name";  

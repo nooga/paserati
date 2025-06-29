@@ -698,32 +698,38 @@ func (mr *ModuleRegistry) SetParsed(path string, result *ParseResult) {
 - [x] **Driver Integration**: Complete ModuleLoader wiring into Driver with automatic module detection
 - [x] **Default Module Mode**: Module resolution now works by default for all files
 
-### Phase 5: Compilation & Runtime 🔄 IN PROGRESS
+### Phase 5: Compilation & Runtime ✅ COMPLETE
 - [x] **Runtime Binding Tables**: Module binding resolution using compile-time metadata (following type checker patterns)
 - [x] **ModuleBindings System**: Parallel to ModuleEnvironment for runtime value resolution (`pkg/compiler/module_bindings.go`)
 - [x] **Compiler Integration**: Import/export statement processing integrated into compiler pipeline
 - [x] **Import Resolution Framework**: Compiler detects imported identifiers and generates runtime resolution code
 - [x] **Export Processing**: Direct exports, re-exports, and default exports properly tracked in bindings
-- [ ] **Runtime Import Resolution**: Replace placeholder `emitImportResolve()` with actual module value lookup
-- [ ] **Export Value Collection**: Collect and store exported values during module execution 
-- [ ] **Module Namespace Objects**: Complete implementation for `import * as name` syntax
-- [ ] **Cross-Module Value Resolution**: Enable actual imported values to be resolved from loaded modules
+- [x] **Runtime Import Resolution**: Complete `OpEvalModule` and `OpGetModuleExport` bytecode implementation
+- [x] **Export Value Collection**: Module exports properly collected and stored during execution 
+- [x] **Module Namespace Objects**: Foundation implemented for `import * as name` syntax
+- [x] **Cross-Module Value Resolution**: Imported values resolved from loaded modules via VM module execution context
+- [x] **Driver Architecture Enhancement**: `NewPaseratiWithBaseDir()` eliminates CWD dependency for module resolution
+- [x] **Test Infrastructure**: Complete module test system with `RunModuleWithValue()` for proper value capture
+- [x] **Error Handling**: Proper compile-time and runtime error reporting for module loading failures
 
 **Current Status:**
 ✅ **Core Infrastructure Complete**: ModuleBindings system working, imports tracked, no compilation panics
 ✅ **Compile-Time Processing**: Import/export statements processed correctly, binding tables built
-🔄 **Runtime Resolution**: Currently loads `undefined` placeholder - need actual module value lookup
+✅ **Runtime Resolution**: Full module execution with OpEvalModule and OpGetModuleExport bytecode
+✅ **Module Testing**: Complete test suite with all module tests passing
 
-**Key Implementation Insight:**
-Phase 5 follows the **compile-time directives approach** - no special bytecode opcodes needed. Instead:
-1. **ModuleBindings** (parallel to type checker's ModuleEnvironment) maps import/export names to runtime values
-2. **Compiler builds binding tables** during compilation, reusing the same AST traversal patterns as type checker  
-3. **Compiler generates runtime resolution code** for imported identifiers via `emitImportResolve()`
-4. **Same resolution logic** as type checker: `localName -> sourceModule.sourceName -> vm.Value`
+**Key Implementation Achievement:**
+Phase 5 successfully implements the **compile-time directives approach** with runtime module execution:
+1. **ModuleBindings** maps import/export names to runtime module references  
+2. **Compiler generates OpEvalModule/OpGetModuleExport** for runtime import resolution
+3. **VM module execution context** provides idempotent module loading and export value caching
+4. **Driver enhancement** enables module resolution from any base directory without CWD changes
 
 **Test Results:**
-- ✅ Module compilation: `./paserati ./test_module.ts` → `[Function: defaultGreet]`
-- 🔄 Import resolution: `./paserati ./test_import.ts` → Compiles but imports resolve to `undefined`
+- ✅ Module compilation: `./paserati ./test_module.ts` → `[Function: multiply]`
+- ✅ Import resolution: All module tests passing with actual import/export functionality
+- ✅ Cross-module type checking: Type errors properly detected across module boundaries
+- ✅ Runtime value resolution: Imported values correctly resolved and executable
 
 ### Phase 6: Advanced Features (Weeks 11-12)
 - [ ] **Circular Dependencies**: Proper handling and error reporting

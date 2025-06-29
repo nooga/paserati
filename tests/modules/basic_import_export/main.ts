@@ -1,3 +1,3 @@
-// expect_runtime_error: VM PANIC RECOVERED
+// expect: [Function: multiply]
 import { add } from './helper';
 export function multiply(a, b) { return a * b; }

@@ -151,7 +151,6 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			moduleCompiler.SetChecker(moduleChecker)
 			
 			chunk, compileErrors := moduleCompiler.Compile(record.AST)
-			debugPrintf("// [ModuleLoader] Compilation result: chunk=%v, errors=%d\n", chunk != nil, len(compileErrors))
 			if len(compileErrors) > 0 {
 				debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
 				record.Error = fmt.Errorf("compilation failed: %s", compileErrors[0].Error())
@@ -160,7 +159,6 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			}
 			
 			if chunk == nil {
-				debugPrintf("// [ModuleLoader] Compilation returned nil chunk\n")
 				record.Error = fmt.Errorf("compilation returned nil chunk")
 				record.State = ModuleError
 				return record, nil
@@ -169,13 +167,11 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			// Type assert to vm.Chunk
 			vmChunk, ok := chunk.(*vm.Chunk)
 			if !ok {
-				debugPrintf("// [ModuleLoader] Type assertion failed: %T\n", chunk)
 				record.Error = fmt.Errorf("compilation returned invalid chunk type")
 				record.State = ModuleError
 				return record, nil
 			}
 			
-			debugPrintf("// [ModuleLoader] Compilation successful, storing chunk\n")
 			record.CompiledChunk = vmChunk
 		}
 		record.State = ModuleCompiled

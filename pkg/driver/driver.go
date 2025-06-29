@@ -55,12 +55,20 @@ type Paserati struct {
 }
 
 // NewPaserati creates a new Paserati session with a fresh VM and Checker.
+// Uses the current working directory as the base for module resolution.
 func NewPaserati() *Paserati {
+	return NewPaseratiWithBaseDir(".")
+}
+
+// NewPaseratiWithBaseDir creates a new Paserati session with a custom base directory
+// for module resolution. This allows tests and other code to specify where modules
+// should be resolved from without changing the global working directory.
+func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	// Create module loader first
 	config := modules.DefaultLoaderConfig()
 	
-	// Create file system resolver for current directory
-	fsResolver := modules.NewFileSystemResolver(os.DirFS("."), ".")
+	// Create file system resolver for the specified base directory
+	fsResolver := modules.NewFileSystemResolver(os.DirFS(baseDir), baseDir)
 	
 	// Create module loader with file system resolver
 	moduleLoader := modules.NewModuleLoader(config, fsResolver)
@@ -375,6 +383,90 @@ func (p *Paserati) RunModule(filename string) bool {
 	}
 	
 	return p.DisplayResult(sourceCode, finalValue, runtimeErrs)
+}
+
+// RunModuleWithValue loads and executes a module file with full module system support
+// and returns the final value along with any errors. This combines the functionality
+// of RunModule with the value return capability of RunCode.
+func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.PaseratiError, []errors.PaseratiError) {
+	// Load the module using the module system 
+	moduleRecordInterface, err := p.moduleLoader.LoadModule(filename, ".")
+	if err != nil {
+		loadErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Failed to load module '%s': %s", filename, err.Error()),
+		}
+		return vm.Undefined, []errors.PaseratiError{loadErr}, nil
+	}
+	
+	// Check if module loaded successfully
+	if moduleRecordInterface == nil {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module '%s' was not loaded", filename),
+		}
+		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
+	}
+	
+	// Type assert to get access to the concrete ModuleRecord fields
+	moduleRecord, ok := moduleRecordInterface.(*modules.ModuleRecord)
+	if !ok {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module '%s' has invalid type", filename),
+		}
+		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
+	}
+	
+	if moduleRecord.Error != nil {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module error in '%s': %s", filename, moduleRecord.Error.Error()),
+		}
+		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
+	}
+	
+	// Check if AST is available
+	if moduleRecord.AST == nil {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module '%s' has no AST (possibly not parsed)", filename),
+		}
+		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
+	}
+	
+	// Enable module mode in the checker and compiler
+	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+	
+	// Type check the module (already done during loading, but we need to compile)
+	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
+	if len(compileErrs) > 0 {
+		return vm.Undefined, compileErrs, nil
+	}
+	
+	if chunk == nil {
+		internalErr := &errors.RuntimeError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+		}
+		return vm.Undefined, []errors.PaseratiError{internalErr}, nil
+	}
+	
+	// Store the compiled chunk in the module record for VM access
+	moduleRecord.CompiledChunk = chunk
+	
+	// Execute the module and return the final value
+	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
+	
+	// After successful execution, collect exported values from the compiler
+	if p.compiler.IsModuleMode() {
+		exportedValues := p.collectExportedValues()
+		moduleRecord.ExportValues = exportedValues
+		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
+	}
+	
+	return finalValue, []errors.PaseratiError{}, runtimeErrs
 }
 
 // EmitJavaScript parses TypeScript source and emits equivalent JavaScript code

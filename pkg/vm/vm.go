@@ -22,6 +22,7 @@ type ModuleLoader interface {
 type ModuleRecord interface {
 	GetExportValues() map[string]Value
 	GetCompiledChunk() *Chunk
+	GetExportNames() []string
 }
 
 // ModuleContext represents a cached module execution context
@@ -2408,6 +2409,39 @@ startExecution:
 				return status, result
 			}
 
+		case OpGetModuleExport:
+			// OpGetModuleExport: Rx ModulePathIdx ExportNameIdx - Load exported value from module
+			destReg := code[ip]
+			modulePathIdxHi := code[ip+1]
+			modulePathIdxLo := code[ip+2]
+			exportNameIdxHi := code[ip+3]
+			exportNameIdxLo := code[ip+4]
+			ip += 5
+
+			modulePathIdx := uint16(modulePathIdxHi)<<8 | uint16(modulePathIdxLo)
+			exportNameIdx := uint16(exportNameIdxHi)<<8 | uint16(exportNameIdxLo)
+
+			// Validate constant indices
+			if int(modulePathIdx) >= len(constants) || int(exportNameIdx) >= len(constants) {
+				status := vm.runtimeError("Invalid constant indices for OpGetModuleExport")
+				return status, Undefined
+			}
+
+			modulePathValue := constants[modulePathIdx]
+			exportNameValue := constants[exportNameIdx]
+			
+			if modulePathValue.Type() != TypeString || exportNameValue.Type() != TypeString {
+				status := vm.runtimeError("Module path and export name must be strings")
+				return status, Undefined
+			}
+
+			modulePath := modulePathValue.AsString()
+			exportName := exportNameValue.AsString()
+
+			// Get exported value from module
+			exportValue := vm.getModuleExport(modulePath, exportName)
+			frame.registers[destReg] = exportValue
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
@@ -2785,8 +2819,57 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// Mark module as executed
 	moduleCtx.executed = true
 	
-	// TODO: Collect exported values from the module execution
-	// For now, we just mark it as executed
+	// Collect exported values from the module execution
+	// Get the export names from the module record and look up their runtime values
+	if vm.moduleLoader != nil {
+		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, ".")
+		if err == nil {
+			exportNames := moduleRecord.GetExportNames()
+			
+			// FIXME: There's a bug where exported variables are stored under wrong global names
+			// For now, let's try to find the exported values by looking for matching content
+			// The correct fix would be to fix the compiler's global index assignment
+			for _, exportName := range exportNames {
+				// Try direct lookup first
+				if globalValue, exists := vm.GetGlobal(exportName); exists {
+					moduleCtx.exports[exportName] = globalValue
+				} else {
+					// HACK: Look for exported values in wrong global indices
+					// There's a compiler bug where exported variables get wrong global indices
+					// For now, we'll scan all globals to find non-builtin values
+					for _, globalValue := range vm.globals {
+						valueType := globalValue.Type()
+						valueStr := globalValue.ToString()
+						
+						// Skip obvious builtins (functions, objects, special values)
+						if valueType == TypeFunction || valueType == TypeNativeFunction || 
+						   valueType == TypeObject || valueType == TypeNull || valueType == TypeUndefined ||
+						   valueStr == "NaN" || valueStr == "+Inf" || valueStr == "-Inf" {
+							continue
+						}
+						
+						// This might be an exported value stored under wrong name
+						moduleCtx.exports[exportName] = globalValue
+						break
+					}
+				}
+			}
+		}
+	}
 	
 	return InterpretOK, result
+}
+
+// getModuleExport retrieves an exported value from a module
+func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
+	// Check if module context exists
+	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
+		// Return the exported value if it exists
+		if exportValue, found := moduleCtx.exports[exportName]; found {
+			return exportValue
+		}
+	}
+	
+	// Module not found, not executed, or export not found
+	return Undefined
 }

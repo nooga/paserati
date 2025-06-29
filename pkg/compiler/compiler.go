@@ -173,16 +173,22 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	}
 
 	// Use the assigned checker. If none was assigned (e.g., non-REPL), create one.
+	checkerWasProvided := c.typeChecker != nil
 	if c.typeChecker == nil {
 		c.typeChecker = checker.NewChecker()
 	}
-	// Perform the check using the (potentially persistent) checker.
-	// The checker modifies its own environment state.
-	typeErrors := c.typeChecker.Check(program)
-	if len(typeErrors) > 0 {
-		// Found type errors. Return them immediately.
-		// Type errors are already []errors.PaseratiError from the checker.
-		return nil, typeErrors
+	
+	// Skip type checking if checker was externally provided (already type-checked)
+	// This prevents double type checking in module compilation
+	if !checkerWasProvided {
+		// Perform the check using the (potentially persistent) checker.
+		// The checker modifies its own environment state.
+		typeErrors := c.typeChecker.Check(program)
+		if len(typeErrors) > 0 {
+			// Found type errors. Return them immediately.
+			// Type errors are already []errors.PaseratiError from the checker.
+			return nil, typeErrors
+		}
 	}
 	// No need to re-assign c.typeChecker here, it was already set or created.
 	// --- End Type Checking Step ---
@@ -1708,10 +1714,8 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 		// Generate OpEvalModule to execute the source module
 		c.emitEvalModule(importRef.SourceModule, line)
 		
-		// After module execution, the exported variable should be available
-		// For now, we'll load undefined as a placeholder until export binding is implemented
-		debugPrintf("// [Compiler] emitImportResolve: Module execution scheduled, loading undefined placeholder for '%s'\n", importName)
-		c.emitLoadUndefined(destReg, line)
+		// Generate OpGetModuleExport to get the exported value
+		c.emitGetModuleExport(destReg, importRef.SourceModule, importRef.SourceName, line)
 	} else {
 		debugPrintf("// [Compiler] emitImportResolve: No import binding found for '%s', loading undefined\n", importName)
 		c.emitLoadUndefined(destReg, line)
@@ -1730,4 +1734,25 @@ func (c *Compiler) emitEvalModule(modulePath string, line int) {
 	c.emitOpCode(vm.OpEvalModule, line)
 	c.emitByte(byte(constantIdx >> 8))   // High byte
 	c.emitByte(byte(constantIdx & 0xFF)) // Low byte
+}
+
+// emitGetModuleExport generates OpGetModuleExport bytecode to get an exported value
+func (c *Compiler) emitGetModuleExport(destReg Register, modulePath string, exportName string, line int) {
+	// Add module path as a string constant
+	modulePathValue := vm.String(modulePath)
+	modulePathIdx := c.chunk.AddConstant(modulePathValue)
+	
+	// Add export name as a string constant
+	exportNameValue := vm.String(exportName)
+	exportNameIdx := c.chunk.AddConstant(exportNameValue)
+	
+	debugPrintf("// [Compiler] emitGetModuleExport: R%d = module['%s']['%s']\n", destReg, modulePath, exportName)
+	
+	// Emit OpGetModuleExport with register and two constant indices
+	c.emitOpCode(vm.OpGetModuleExport, line)
+	c.emitByte(byte(destReg))
+	c.emitByte(byte(modulePathIdx >> 8))     // Module path high byte
+	c.emitByte(byte(modulePathIdx & 0xFF))   // Module path low byte
+	c.emitByte(byte(exportNameIdx >> 8))     // Export name high byte
+	c.emitByte(byte(exportNameIdx & 0xFF))   // Export name low byte
 }
