@@ -13,6 +13,24 @@ import (
 const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
+// ModuleLoader interface for loading modules without circular imports
+type ModuleLoader interface {
+	LoadModule(specifier string, fromPath string) (ModuleRecord, error)
+}
+
+// ModuleRecord interface to avoid circular imports
+type ModuleRecord interface {
+	GetExportValues() map[string]Value
+	GetCompiledChunk() *Chunk
+}
+
+// ModuleContext represents a cached module execution context
+type ModuleContext struct {
+	chunk     *Chunk            // Compiled module chunk
+	exports   map[string]Value  // Module's exported values
+	executed  bool              // Whether module has been executed
+}
+
 // PendingAction represents actions that should be performed after finally blocks complete
 type PendingAction int
 
@@ -116,6 +134,10 @@ type VM struct {
 	pendingAction PendingAction // Action to perform after finally blocks complete
 	pendingValue  Value         // Value associated with pending action (e.g., return value)
 	finallyDepth  int           // Track nested finally blocks
+
+	// Module system (Phase 5)
+	moduleContexts map[string]*ModuleContext // Cached module contexts by path
+	moduleLoader   ModuleLoader              // Reference to module loader for loading modules
 }
 
 // InterpretResult represents the outcome of an interpretation.
@@ -138,7 +160,8 @@ func NewVM() *VM {
 		globalNames:    make([]string, 0),              // Initialize global variable names
 		emptyRestArray: NewArray(),                     // Initialize singleton empty array for rest params
 		//initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
-		errors: make([]errors.PaseratiError, 0), // Initialize error list
+		errors:         make([]errors.PaseratiError, 0), // Initialize error list
+		moduleContexts: make(map[string]*ModuleContext), // Initialize module context cache
 	}
 
 	// Initialize built-in prototypes first
@@ -170,6 +193,25 @@ func (vm *VM) DecrementCallDepth() {
 
 // Reset clears the VM state, ready for new execution.
 // SetBuiltinGlobals initializes the VM's global variables with builtin values
+// SetModuleLoader sets the module loader for this VM instance
+func (vm *VM) SetModuleLoader(loader ModuleLoader) {
+	vm.moduleLoader = loader
+}
+
+// GetGlobal retrieves a global variable by name
+func (vm *VM) GetGlobal(name string) (Value, bool) {
+	// Look up the name in the globalNames array
+	for i, globalName := range vm.globalNames {
+		if globalName == name {
+			// Found the name, return the corresponding value
+			if i < len(vm.globals) {
+				return vm.globals[i], true
+			}
+		}
+	}
+	return Undefined, false
+}
+
 func (vm *VM) SetBuiltinGlobals(globals map[string]Value) error {
 	// Clear existing globals
 	vm.globals = make([]Value, 0)
@@ -2339,6 +2381,33 @@ startExecution:
 			// If no pending action, just continue
 		// --- END Phase 4a ---
 
+		// --- Module System ---
+		case OpEvalModule:
+			// OpEvalModule: ModulePathIdx - Execute module idempotently
+			modulePathIdxHi := code[ip]
+			modulePathIdxLo := code[ip+1]
+			modulePathIdx := uint16(modulePathIdxHi)<<8 | uint16(modulePathIdxLo)
+			ip += 2
+
+			frame.ip = ip // Save IP before module execution
+			
+			if int(modulePathIdx) >= len(constants) {
+				status := vm.runtimeError("Invalid module path index %d", modulePathIdx)
+				return status, Undefined
+			}
+
+			modulePathValue := constants[modulePathIdx]
+			if modulePathValue.Type() != TypeString {
+				status := vm.runtimeError("Module path must be a string, got %s", modulePathValue.TypeName())
+				return status, Undefined
+			}
+
+			modulePath := modulePathValue.AsString()
+			status, result := vm.executeModule(modulePath)
+			if status != InterpretOK {
+				return status, result
+			}
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
@@ -2650,4 +2719,74 @@ func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
 // This allows native functions to access the 'this' context without it being passed as an argument
 func (vm *VM) GetThis() Value {
 	return vm.currentThis
+}
+
+// executeModule executes a module idempotently with context switching
+func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
+	// Check if module is already cached and executed
+	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists && moduleCtx.executed {
+		// Module already executed, return success
+		return InterpretOK, Undefined
+	}
+	
+	// Load the module if not cached
+	if _, exists := vm.moduleContexts[modulePath]; !exists {
+		if vm.moduleLoader == nil {
+			return vm.runtimeError("No module loader available"), Undefined
+		}
+		
+		// Load the module using the module loader
+		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, ".")
+		if err != nil {
+			return vm.runtimeError("Failed to load module '%s': %s", modulePath, err.Error()), Undefined
+		}
+		
+		// Get the compiled chunk from the module
+		chunk := moduleRecord.GetCompiledChunk()
+		if chunk == nil {
+			return vm.runtimeError("Module '%s' has no compiled chunk", modulePath), Undefined
+		}
+		
+		// Create module context
+		vm.moduleContexts[modulePath] = &ModuleContext{
+			chunk:    chunk,
+			exports:  make(map[string]Value),
+			executed: false,
+		}
+	}
+	
+	moduleCtx := vm.moduleContexts[modulePath]
+	
+	// If already executed, return success
+	if moduleCtx.executed {
+		return InterpretOK, Undefined
+	}
+	
+	// Save current execution context
+	savedFrame := vm.frames[vm.frameCount-1] // Current frame
+	savedFrameCount := vm.frameCount
+	savedNextRegSlot := vm.nextRegSlot
+	
+	// Execute the module in a new context
+	// This is like calling a function but at the top level
+	chunk := moduleCtx.chunk
+	result, errs := vm.Interpret(chunk)
+	
+	// Restore execution context
+	vm.frameCount = savedFrameCount
+	vm.nextRegSlot = savedNextRegSlot
+	vm.frames[vm.frameCount-1] = savedFrame
+	
+	if len(errs) > 0 {
+		// Module execution failed
+		return InterpretRuntimeError, Undefined
+	}
+	
+	// Mark module as executed
+	moduleCtx.executed = true
+	
+	// TODO: Collect exported values from the module execution
+	// For now, we just mark it as executed
+	
+	return InterpretOK, result
 }

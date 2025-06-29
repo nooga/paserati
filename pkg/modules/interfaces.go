@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/errors"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
+	"paserati/pkg/vm"
 )
 
 // ModuleFS extends Go's standard io/fs interfaces for module loading
@@ -40,16 +41,19 @@ type ModuleResolver interface {
 // ModuleLoader is the main interface for loading modules
 type ModuleLoader interface {
 	// LoadModule loads a module and all its dependencies
-	LoadModule(specifier string, fromPath string) (*ModuleRecord, error)
+	LoadModule(specifier string, fromPath string) (vm.ModuleRecord, error)
 	
 	// LoadModuleParallel loads a module using parallel processing
-	LoadModuleParallel(specifier string, fromPath string) (*ModuleRecord, error)
+	LoadModuleParallel(specifier string, fromPath string) (vm.ModuleRecord, error)
 	
 	// AddResolver adds a module resolver to the chain
 	AddResolver(resolver ModuleResolver)
 	
 	// SetCheckerFactory sets the factory function for creating type checkers
 	SetCheckerFactory(factory func() TypeChecker)
+	
+	// SetCompilerFactory sets the factory function for creating compilers
+	SetCompilerFactory(factory func() Compiler)
 	
 	// GetModule retrieves a cached module record
 	GetModule(specifier string) *ModuleRecord
@@ -121,6 +125,13 @@ type TypeChecker interface {
 	Check(program *parser.Program) []errors.PaseratiError
 	IsModuleMode() bool
 	GetModuleExports() map[string]types.Type
+}
+
+// Compiler interface for compiling modules
+type Compiler interface {
+	EnableModuleMode(modulePath string, loader ModuleLoader)
+	SetChecker(checker TypeChecker)
+	Compile(node parser.Node) (interface{}, []errors.PaseratiError)
 }
 
 // DependencyAnalyzer tracks module dependencies during loading

@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/source"
+	"paserati/pkg/vm"
 	"sort"
 	"sync"
 	"time"
@@ -30,8 +31,9 @@ type moduleLoader struct {
 	parseQueue   *parseQueue
 	depAnalyzer  DependencyAnalyzer
 	
-	// Type checking
+	// Type checking and compilation
 	checkerFactory func() TypeChecker
+	compilerFactory func() Compiler
 	
 	// State
 	mutex        sync.RWMutex
@@ -58,13 +60,16 @@ func NewModuleLoader(config *LoaderConfig, resolvers ...ModuleResolver) ModuleLo
 }
 
 // LoadModule loads a module using sequential processing
-func (ml *moduleLoader) LoadModule(specifier string, fromPath string) (*ModuleRecord, error) {
+func (ml *moduleLoader) LoadModule(specifier string, fromPath string) (vm.ModuleRecord, error) {
+	debugPrintf("// [ModuleLoader] LoadModule called: %s from %s\n", specifier, fromPath)
 	// Use sequential loading for now
-	return ml.loadModuleSequential(specifier, fromPath)
+	result, err := ml.loadModuleSequential(specifier, fromPath)
+	debugPrintf("// [ModuleLoader] LoadModule finished: %s, error=%v\n", specifier, err)
+	return result, err
 }
 
 // LoadModuleParallel loads a module using parallel processing
-func (ml *moduleLoader) LoadModuleParallel(specifier string, fromPath string) (*ModuleRecord, error) {
+func (ml *moduleLoader) LoadModuleParallel(specifier string, fromPath string) (vm.ModuleRecord, error) {
 	ml.mutex.Lock()
 	if !ml.initialized {
 		err := ml.initializeParallelComponents()
@@ -81,7 +86,7 @@ func (ml *moduleLoader) LoadModuleParallel(specifier string, fromPath string) (*
 }
 
 // loadModuleSequential implements sequential module loading
-func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) (*ModuleRecord, error) {
+func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) (vm.ModuleRecord, error) {
 	// Check cache first
 	if record := ml.registry.Get(specifier); record != nil {
 		return record, nil
@@ -112,10 +117,74 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		return record, nil // Return record with error, don't fail completely
 	}
 	
-	// Mark as loaded after successful parsing
-	record.State = ModuleLoaded
-	record.CompleteTime = time.Now()
+	// Add type checking and compilation to sequential loading
+	debugPrintf("// [ModuleLoader] Sequential loading checkerFactory: %v, compilerFactory: %v\n", 
+		ml.checkerFactory != nil, ml.compilerFactory != nil)
+	if ml.checkerFactory != nil {
+		// Type check the module
+		record.State = ModuleChecking
+		record.CheckTime = time.Now()
+		
+		moduleChecker := ml.checkerFactory()
+		moduleChecker.EnableModuleMode(record.ResolvedPath, ml)
+		
+		checkErrors := moduleChecker.Check(record.AST)
+		if len(checkErrors) > 0 {
+			record.Error = fmt.Errorf("type checking failed: %s", checkErrors[0].Error())
+			record.State = ModuleError
+			return record, nil
+		}
+		
+		// Extract exported types
+		if moduleChecker.IsModuleMode() {
+			record.Exports = moduleChecker.GetModuleExports()
+		}
+		
+		// Compile the module
+		if ml.compilerFactory != nil {
+			debugPrintf("// [ModuleLoader] Starting compilation for module: %s\n", record.ResolvedPath)
+			record.State = ModuleCompiling
+			record.CompileTime = time.Now()
+			
+			moduleCompiler := ml.compilerFactory()
+			moduleCompiler.EnableModuleMode(record.ResolvedPath, ml)
+			moduleCompiler.SetChecker(moduleChecker)
+			
+			chunk, compileErrors := moduleCompiler.Compile(record.AST)
+			debugPrintf("// [ModuleLoader] Compilation result: chunk=%v, errors=%d\n", chunk != nil, len(compileErrors))
+			if len(compileErrors) > 0 {
+				debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
+				record.Error = fmt.Errorf("compilation failed: %s", compileErrors[0].Error())
+				record.State = ModuleError
+				return record, nil
+			}
+			
+			if chunk == nil {
+				debugPrintf("// [ModuleLoader] Compilation returned nil chunk\n")
+				record.Error = fmt.Errorf("compilation returned nil chunk")
+				record.State = ModuleError
+				return record, nil
+			}
+			
+			// Type assert to vm.Chunk
+			vmChunk, ok := chunk.(*vm.Chunk)
+			if !ok {
+				debugPrintf("// [ModuleLoader] Type assertion failed: %T\n", chunk)
+				record.Error = fmt.Errorf("compilation returned invalid chunk type")
+				record.State = ModuleError
+				return record, nil
+			}
+			
+			debugPrintf("// [ModuleLoader] Compilation successful, storing chunk\n")
+			record.CompiledChunk = vmChunk
+		}
+		record.State = ModuleCompiled
+	} else {
+		// No checker factory, just mark as parsed
+		record.State = ModuleLoaded
+	}
 	
+	record.CompleteTime = time.Now()
 	return record, nil
 }
 
@@ -393,6 +462,14 @@ func (ml *moduleLoader) SetCheckerFactory(factory func() TypeChecker) {
 	ml.checkerFactory = factory
 }
 
+// SetCompilerFactory sets the factory function for creating compilers
+func (ml *moduleLoader) SetCompilerFactory(factory func() Compiler) {
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+	
+	ml.compilerFactory = factory
+}
+
 // AddResolver adds a module resolver to the chain
 func (ml *moduleLoader) AddResolver(resolver ModuleResolver) {
 	ml.mutex.Lock()
@@ -501,8 +578,44 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 			record.Exports = moduleChecker.GetModuleExports()
 		}
 		
-		// Mark as successfully type checked
-		record.State = ModuleLoaded
+		// Phase 5: Compile the module to bytecode
+		if ml.compilerFactory != nil {
+			record.State = ModuleCompiling
+			record.CompileTime = time.Now()
+			
+			// Create a compiler for this module
+			moduleCompiler := ml.compilerFactory()
+			moduleCompiler.EnableModuleMode(modulePath, ml)
+			moduleCompiler.SetChecker(moduleChecker)
+			
+			// Compile the module to bytecode
+			chunk, compileErrors := moduleCompiler.Compile(record.AST)
+			if len(compileErrors) > 0 {
+				record.Error = fmt.Errorf("compilation failed: %s", compileErrors[0].Error())
+				record.State = ModuleError
+				continue
+			}
+			
+			if chunk == nil {
+				record.Error = fmt.Errorf("compilation returned nil chunk")
+				record.State = ModuleError
+				continue
+			}
+			
+			// Type assert to vm.Chunk
+			vmChunk, ok := chunk.(*vm.Chunk)
+			if !ok {
+				record.Error = fmt.Errorf("compilation returned invalid chunk type")
+				record.State = ModuleError
+				continue
+			}
+			
+			// Store the compiled chunk
+			record.CompiledChunk = vmChunk
+			debugPrintf("// [ModuleLoader] Module '%s' compiled successfully\n", modulePath)
+		}
+		
+		record.State = ModuleCompiled
 		record.CompleteTime = time.Now()
 	}
 	

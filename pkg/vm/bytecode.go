@@ -150,6 +150,9 @@ const (
 	// --- Phase 4a: Handle Pending Actions ---
 	OpHandlePending OpCode = 67 // Handle pending actions after finally block
 	// --- END Phase 4a ---
+
+	// --- Module System ---
+	OpEvalModule OpCode = 70 // ModulePathIdx: Execute module idempotently, switch execution context
 )
 
 // String returns a human-readable name for the OpCode.
@@ -311,6 +314,10 @@ func (op OpCode) String() string {
 	case OpHandlePending:
 		return "OpHandlePending"
 	// --- END Phase 4a ---
+
+	// --- Module System ---
+	case OpEvalModule:
+		return "OpEvalModule"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -527,6 +534,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.simpleInstruction(builder, instruction.String(), offset) // No operands
 	// --- END Phase 4a ---
 
+	// --- Module System ---
+	case OpEvalModule:
+		return c.constantInstruction16(builder, "OpEvalModule", offset)
+
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))
 		return offset + 1 // Advance by 1 for unknown opcodes
@@ -609,6 +620,24 @@ func (c *Chunk) registerConstantInstruction(builder *strings.Builder, name strin
 		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%s')\n", name, reg, constantIndex, constantValue.ToString()))
 	}
 	return offset + 1 + 1 + operandSize
+}
+
+// constantInstruction16 handles OpCode ConstIdx(16bit) - for instructions that only take a constant index
+func (c *Chunk) constantInstruction16(builder *strings.Builder, name string, offset int) int {
+	if offset+2 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+	
+	constantIndex := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+	
+	if int(constantIndex) >= len(c.Constants) {
+		builder.WriteString(fmt.Sprintf("%-16s %d (invalid constant index)\n", name, constantIndex))
+	} else {
+		constantValue := c.Constants[constantIndex]
+		builder.WriteString(fmt.Sprintf("%-16s %d ('%s')\n", name, constantIndex, constantValue.ToString()))
+	}
+	return offset + 3 // Opcode + 2 bytes for constant index
 }
 
 // --- New Disassembly Helpers ---

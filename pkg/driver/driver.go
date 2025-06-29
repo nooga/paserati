@@ -16,6 +16,33 @@ import (
 	"sort"
 )
 
+const debugDriver = false
+
+func debugPrintf(format string, args ...interface{}) {
+	if debugDriver {
+		fmt.Printf(format, args...)
+	}
+}
+
+// compilerAdapter adapts compiler.Compiler to modules.Compiler interface
+type compilerAdapter struct {
+	*compiler.Compiler
+}
+
+// Compile adapts the return type from *vm.Chunk to interface{}
+func (ca *compilerAdapter) Compile(node parser.Node) (interface{}, []errors.PaseratiError) {
+	chunk, errs := ca.Compiler.Compile(node)
+	return chunk, errs
+}
+
+// SetChecker adapts the parameter type from modules.TypeChecker to *checker.Checker
+func (ca *compilerAdapter) SetChecker(tc modules.TypeChecker) {
+	// Type assert to get the concrete checker
+	if concreteChecker, ok := tc.(*checker.Checker); ok {
+		ca.Compiler.SetChecker(concreteChecker)
+	}
+}
+
 // Paserati represents a persistent interpreter session.
 // It maintains state between separate code evaluations,
 // allowing variables and functions defined in one evaluation
@@ -53,12 +80,24 @@ func NewPaserati() *Paserati {
 		moduleLoader: moduleLoader,
 	}
 	
+	// Wire the module loader into the VM
+	vmInstance.SetModuleLoader(moduleLoader)
+	
 	// Set up the checker factory for the module loader
 	// This allows the module loader to create type checkers without circular imports
 	moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
 		// Create a new checker instance for module type checking
 		newChecker := checker.NewChecker()
 		return newChecker
+	})
+	
+	// Set up the compiler factory for the module loader
+	// This allows the module loader to create compilers without circular imports
+	moduleLoader.SetCompilerFactory(func() modules.Compiler {
+		// Create a new compiler instance for module compilation
+		newCompiler := compiler.NewCompiler()
+		// Return a wrapper that adapts the return type to interface{}
+		return &compilerAdapter{newCompiler}
 	})
 
 	// Initialize builtins using new initializer system
@@ -226,7 +265,7 @@ func RunFile(filename string) bool {
 
 // LoadModule loads a module and all its dependencies using the module system.
 // This enables cross-module type checking and proper import/export resolution.
-func (p *Paserati) LoadModule(specifier string, fromPath string) (*modules.ModuleRecord, error) {
+func (p *Paserati) LoadModule(specifier string, fromPath string) (vm.ModuleRecord, error) {
 	return p.moduleLoader.LoadModule(specifier, fromPath)
 }
 
@@ -235,7 +274,7 @@ func (p *Paserati) LoadModule(specifier string, fromPath string) (*modules.Modul
 func (p *Paserati) RunModule(filename string) bool {
 	// Load the module using the module system 
 	// Use sequential loading for now until parallel processing is fully debugged
-	moduleRecord, err := p.moduleLoader.LoadModule(filename, ".")
+	moduleRecordInterface, err := p.moduleLoader.LoadModule(filename, ".")
 	if err != nil {
 		loadErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
@@ -246,10 +285,21 @@ func (p *Paserati) RunModule(filename string) bool {
 	}
 	
 	// Check if module loaded successfully
-	if moduleRecord == nil {
+	if moduleRecordInterface == nil {
 		moduleErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
 			Msg:      fmt.Sprintf("Module '%s' was not loaded", filename),
+		}
+		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
+		return false
+	}
+	
+	// Type assert to get access to the concrete ModuleRecord fields
+	moduleRecord, ok := moduleRecordInterface.(*modules.ModuleRecord)
+	if !ok {
+		moduleErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module '%s' has invalid type", filename),
 		}
 		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
 		return false
@@ -274,8 +324,9 @@ func (p *Paserati) RunModule(filename string) bool {
 		return false
 	}
 	
-	// Enable module mode in the checker
+	// Enable module mode in the checker and compiler
 	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 	
 	// Type check the module (already done during loading, but we need to compile)
 	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
@@ -296,8 +347,26 @@ func (p *Paserati) RunModule(filename string) bool {
 		return p.DisplayResult("", vm.Undefined, []errors.PaseratiError{internalErr})
 	}
 	
+	// Store the compiled chunk in the module record for VM access
+	moduleRecord.CompiledChunk = chunk
+	
 	// Execute the module
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
+	if len(runtimeErrs) > 0 {
+		// Get source code for error display
+		sourceCode := ""
+		if moduleRecord.Source != nil {
+			sourceCode = moduleRecord.Source.Content
+		}
+		return p.DisplayResult(sourceCode, finalValue, runtimeErrs)
+	}
+	
+	// After successful execution, collect exported values from the compiler
+	if p.compiler.IsModuleMode() {
+		exportedValues := p.collectExportedValues()
+		moduleRecord.ExportValues = exportedValues
+		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
+	}
 	
 	// Get source code for error display
 	sourceCode := ""
@@ -491,4 +560,54 @@ func initializeBuiltins(paserati *Paserati) error {
 
 	// Set up global variables in VM
 	return vmInstance.SetBuiltinGlobals(globalVariables)
+}
+
+// collectExportedValues collects the runtime values of exported variables from the VM
+// This is called after successful module execution to populate the ModuleRecord.ExportValues
+func (p *Paserati) collectExportedValues() map[string]vm.Value {
+	exports := make(map[string]vm.Value)
+	
+	if !p.compiler.IsModuleMode() {
+		return exports
+	}
+	
+	// Get the export bindings from the compiler
+	moduleExports := p.compiler.GetModuleExports()
+	debugPrintf("// [Driver] collectExportedValues: Found %d module exports in compiler\n", len(moduleExports))
+	
+	// For each export binding, try to get the actual runtime value
+	// TODO: This is a simplified implementation. In a full implementation,
+	// we would need to map from the binding information to actual VM values
+	for exportName, _ := range moduleExports {
+		// For now, we'll try to get the value from the VM's global scope
+		// This is a placeholder - we need a better way to map exports to values
+		if value, exists := p.tryGetExportValue(exportName); exists {
+			exports[exportName] = value
+			debugPrintf("// [Driver] collectExportedValues: Collected export '%s' = %s\n", exportName, value.Type())
+		} else {
+			debugPrintf("// [Driver] collectExportedValues: Could not find runtime value for export '%s'\n", exportName)
+		}
+	}
+	
+	return exports
+}
+
+// tryGetExportValue attempts to get the runtime value of an exported variable
+// This looks up the variable in the VM's global space or symbol table
+func (p *Paserati) tryGetExportValue(exportName string) (vm.Value, bool) {
+	// Try to get the value from the VM's global table first
+	if globalValue, exists := p.vmInstance.GetGlobal(exportName); exists {
+		debugPrintf("// [Driver] tryGetExportValue: Found global value for '%s'\n", exportName)
+		return globalValue, true
+	}
+	
+	// If not found in globals, try getting from the compiler's symbol table
+	// This is where local variables would be stored
+	debugPrintf("// [Driver] tryGetExportValue: '%s' not found in globals, checking symbol table\n", exportName)
+	
+	// TODO: For local variables, we need a different approach
+	// Local variables are stored in registers during execution and may not be
+	// accessible after the function/module completes
+	
+	return vm.Undefined, false
 }

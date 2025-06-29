@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/checker"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
+	"paserati/pkg/modules"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -72,6 +73,10 @@ type Compiler struct {
 	// --- Phase 4a: Finally Context Tracking ---
 	inFinallyBlock  bool // Track if we're compiling inside finally block
 	tryFinallyDepth int  // Number of enclosing try-with-finally blocks
+	
+	// --- Phase 5: Module Bindings ---
+	moduleBindings  *ModuleBindings      // Module-aware binding resolver
+	moduleLoader    modules.ModuleLoader // Reference to module loader
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -100,9 +105,29 @@ func (c *Compiler) SetChecker(checker *checker.Checker) {
 	c.typeChecker = checker
 }
 
+// EnableModuleMode enables module-aware compilation with binding resolution
+// Parallels the checker's EnableModuleMode method
+func (c *Compiler) EnableModuleMode(modulePath string, loader modules.ModuleLoader) {
+	c.moduleBindings = NewModuleBindings(modulePath, loader)
+	c.moduleLoader = loader
+}
+
+// IsModuleMode returns true if the compiler is in module mode
+func (c *Compiler) IsModuleMode() bool {
+	return c.moduleBindings != nil
+}
+
+// GetModuleExports returns all exported values from the current module
+func (c *Compiler) GetModuleExports() map[string]vm.Value {
+	if c.moduleBindings == nil {
+		return make(map[string]vm.Value)
+	}
+	return c.moduleBindings.GetAllExports()
+}
+
 // newFunctionCompiler creates a compiler instance specifically for a function body.
 func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
-	// Pass the checker down to nested compilers
+	// Pass the checker and module bindings down to nested compilers
 	return &Compiler{
 		chunk:              vm.NewChunk(),
 		regAlloc:           NewRegisterAllocator(),
@@ -115,6 +140,8 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		typeChecker:        enclosingCompiler.typeChecker, // Inherit checker from enclosing
 		stats:              enclosingCompiler.stats,
 		constantCache:      make(map[uint16]Register), // Each function has its own constant cache
+		moduleBindings:     enclosingCompiler.moduleBindings, // Inherit module bindings
+		moduleLoader:       enclosingCompiler.moduleLoader,   // Inherit module loader
 	}
 }
 
@@ -491,6 +518,19 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.ThrowStatement:
 		return c.compileThrowStatement(node, hint)
 
+	// --- Module Statements ---
+	case *parser.ImportDeclaration:
+		return c.compileImportDeclaration(node, hint)
+
+	case *parser.ExportNamedDeclaration:
+		return c.compileExportNamedDeclaration(node, hint)
+
+	case *parser.ExportDefaultDeclaration:
+		return c.compileExportDefaultDeclaration(node, hint)
+
+	case *parser.ExportAllDeclaration:
+		return c.compileExportAllDeclaration(node, hint)
+
 	// --- Expressions (excluding FunctionLiteral which is handled above) ---
 	case *parser.NumberLiteral:
 		//fmt.Printf("[NUMBER LITERAL DEBUG] Compiling NumberLiteral value=%f with hint=R%d\n", node.Value, hint)
@@ -592,12 +632,20 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			srcReg := symbolRef.Register
 			debugPrintf("// DEBUG Identifier '%s': Resolved to isLocal=%v, srcReg=R%d\n", node.Value, isLocal, srcReg)
 			if srcReg == nilRegister {
-				// This panic indicates an internal logic error, like trying to use a variable
-				// during its temporary definition phase inappropriately.
-				panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
+				// Check if this is an imported identifier
+				if c.IsModuleMode() && c.moduleBindings.IsImported(node.Value) {
+					debugPrintf("// DEBUG Identifier '%s': This is an imported name, generating runtime import resolution\n", node.Value)
+					// Generate code to resolve the import at runtime
+					c.emitImportResolve(hint, node.Value, node.Token.Line)
+				} else {
+					// This panic indicates an internal logic error, like trying to use a variable
+					// during its temporary definition phase inappropriately.
+					panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
+				}
+			} else {
+				debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, hint, srcReg)
+				c.emitMove(hint, srcReg, node.Token.Line)
 			}
-			debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, hint, srcReg)
-			c.emitMove(hint, srcReg, node.Token.Line)
 		}
 		return hint, nil // ADDED: Explicit return
 
@@ -1407,4 +1455,279 @@ func (c *Compiler) hasMethodInType(objType *types.ObjectType, methodName string)
 	}
 
 	return false
+}
+
+// --- Module Compilation Methods ---
+
+// compileImportDeclaration handles compilation of import statements
+// Following the same pattern as type checker's checkImportDeclaration
+func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint Register) (Register, errors.PaseratiError) {
+	if node.Source == nil {
+		return BadRegister, NewCompileError(node, "import statement missing source module")
+	}
+
+	sourceModulePath := node.Source.Value
+	debugPrintf("// [Compiler] Processing import from: %s\n", sourceModulePath)
+	
+	// Handle bare imports (side-effect only)
+	if len(node.Specifiers) == 0 {
+		debugPrintf("// [Compiler] Bare import (side effects only): %s\n", sourceModulePath)
+		// For bare imports, we just need to ensure the module was loaded
+		// No bindings are created in the local environment
+		return BadRegister, nil
+	}
+	
+	// Process import specifiers and create bindings
+	for _, spec := range node.Specifiers {
+		switch importSpec := spec.(type) {
+		case *parser.ImportDefaultSpecifier:
+			// Default import: import defaultName from "module"
+			if importSpec.Local == nil {
+				return BadRegister, NewCompileError(node, "import default specifier missing local name")
+			}
+			
+			localName := importSpec.Local.Value
+			c.processImportBinding(localName, sourceModulePath, "default", ImportDefaultRef)
+			
+		case *parser.ImportNamedSpecifier:
+			// Named import: import { name } or import { name as alias }
+			if importSpec.Local == nil || importSpec.Imported == nil {
+				return BadRegister, NewCompileError(node, "import named specifier missing names")
+			}
+			
+			localName := importSpec.Local.Value
+			importedName := importSpec.Imported.Value
+			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamedRef)
+			
+		case *parser.ImportNamespaceSpecifier:
+			// Namespace import: import * as name from "module"
+			if importSpec.Local == nil {
+				return BadRegister, NewCompileError(node, "import namespace specifier missing local name")
+			}
+			
+			localName := importSpec.Local.Value
+			c.processImportBinding(localName, sourceModulePath, "*", ImportNamespaceRef)
+			
+		default:
+			return BadRegister, NewCompileError(node, fmt.Sprintf("unknown import specifier type: %T", spec))
+		}
+	}
+	
+	return BadRegister, nil
+}
+
+// processImportBinding handles the binding of an imported name
+// Parallels type checker's processImportBinding
+func (c *Compiler) processImportBinding(localName, sourceModule, sourceName string, importType ImportReferenceType) {
+	// If we're in module mode, use the module bindings for proper tracking
+	if c.IsModuleMode() {
+		c.moduleBindings.DefineImport(localName, sourceModule, sourceName, importType)
+		
+		// Try to resolve the actual value from the source module
+		resolvedValue := c.moduleBindings.ResolveImportedValue(localName)
+		if resolvedValue != vm.Undefined {
+			debugPrintf("// [Compiler] Imported %s: %s = %s (resolved)\n", localName, sourceName, resolvedValue.Type())
+		} else {
+			debugPrintf("// [Compiler] Imported %s: %s = undefined (unresolved)\n", localName, sourceName)
+		}
+		
+		// Define the imported name in the symbol table
+		// This allows the rest of the code to reference it normally
+		c.currentSymbolTable.Define(localName, nilRegister) // Will be resolved at runtime
+	} else {
+		// Fallback: just define the name in the symbol table
+		c.currentSymbolTable.Define(localName, nilRegister)
+		debugPrintf("// [Compiler] Imported %s: %s = undefined (no module mode)\n", localName, sourceName)
+	}
+}
+
+// compileExportNamedDeclaration handles compilation of named export statements
+// Parallels type checker's checkExportNamedDeclaration
+func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclaration, hint Register) (Register, errors.PaseratiError) {
+	if node.Declaration != nil {
+		// Direct export: export const x = 1; export function foo() {}
+		debugPrintf("// [Compiler] Processing direct export declaration\n")
+		
+		// Compile the declaration first
+		_, err := c.compileNode(node.Declaration, hint)
+		if err != nil {
+			return BadRegister, err
+		}
+		
+		// Extract and register exported names
+		c.processExportDeclaration(node.Declaration)
+		
+	} else if len(node.Specifiers) > 0 {
+		// Named exports: export { x, y } or export { x } from "module"
+		debugPrintf("// [Compiler] Processing named export specifiers\n")
+		
+		if node.Source != nil {
+			// Re-export: export { x } from "module"
+			sourceModule := node.Source.Value
+			debugPrintf("// [Compiler] Re-export from: %s\n", sourceModule)
+			
+			for _, spec := range node.Specifiers {
+				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+					localName := exportSpec.Local.Value
+					exportName := exportSpec.Exported.Value
+					
+					if c.IsModuleMode() {
+						c.moduleBindings.DefineReExport(exportName, sourceModule, localName)
+						debugPrintf("// [Compiler] Re-exported: %s as %s from %s\n", localName, exportName, sourceModule)
+					}
+				}
+			}
+		} else {
+			// Local export: export { x, y }
+			// Validate that the exported names exist and register them
+			for _, spec := range node.Specifiers {
+				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+					if exportSpec.Local == nil {
+						return BadRegister, NewCompileError(node, "export specifier missing local name")
+					}
+					
+					localName := exportSpec.Local.Value
+					exportName := exportSpec.Exported.Value
+					
+					// Check if the local name exists in current symbol table
+					if _, _, exists := c.currentSymbolTable.Resolve(localName); exists {
+						// Register the export in module bindings
+						if c.IsModuleMode() {
+							// For now, we can't get the runtime value until execution
+							// So we register it with undefined and resolve later
+							c.moduleBindings.DefineExport(localName, exportName, vm.Undefined, nil)
+						}
+						debugPrintf("// [Compiler] Exported: %s as %s\n", localName, exportName)
+					} else {
+						return BadRegister, NewCompileError(node, fmt.Sprintf("exported name '%s' not found in current scope", localName))
+					}
+				}
+			}
+		}
+	}
+	
+	return BadRegister, nil
+}
+
+// compileExportDefaultDeclaration handles compilation of default export statements
+// Parallels type checker's checkExportDefaultDeclaration
+func (c *Compiler) compileExportDefaultDeclaration(node *parser.ExportDefaultDeclaration, hint Register) (Register, errors.PaseratiError) {
+	if node.Declaration == nil {
+		return BadRegister, NewCompileError(node, "export default statement missing declaration")
+	}
+	
+	debugPrintf("// [Compiler] Processing default export\n")
+	
+	// Compile the default export expression
+	resultReg, err := c.compileNode(node.Declaration, hint)
+	if err != nil {
+		return BadRegister, err
+	}
+	
+	// Register the default export
+	if c.IsModuleMode() {
+		// For now, we can't get the runtime value until execution
+		// So we register it with undefined and resolve later
+		c.moduleBindings.DefineExport("default", "default", vm.Undefined, nil)
+		debugPrintf("// [Compiler] Default export registered\n")
+	} else {
+		debugPrintf("// [Compiler] Default export processed (no module mode)\n")
+	}
+	
+	return resultReg, nil
+}
+
+// compileExportAllDeclaration handles compilation of export all statements
+// Parallels type checker's checkExportAllDeclaration
+func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration, hint Register) (Register, errors.PaseratiError) {
+	if node.Source == nil {
+		return BadRegister, NewCompileError(node, "export * statement missing source module")
+	}
+	
+	sourceModule := node.Source.Value
+	debugPrintf("// [Compiler] Processing export * from: %s\n", sourceModule)
+	
+	// TODO: Implement export * functionality
+	// This requires getting all exports from the source module and re-exporting them
+	// For now, we'll just log that it was processed
+	
+	return BadRegister, nil
+}
+
+// processExportDeclaration processes a declaration that's being exported directly
+// Parallels type checker's processExportDeclaration
+func (c *Compiler) processExportDeclaration(decl parser.Statement) {
+	switch d := decl.(type) {
+	case *parser.LetStatement:
+		if c.IsModuleMode() {
+			if d.Name != nil {
+				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d)
+				debugPrintf("// [Compiler] Exported let: %s\n", d.Name.Value)
+				// TODO: Generate bytecode to store the value in export table at runtime
+			}
+		}
+		
+	case *parser.ConstStatement:
+		if c.IsModuleMode() {
+			if d.Name != nil {
+				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d)
+				debugPrintf("// [Compiler] Exported const: %s\n", d.Name.Value)
+				// TODO: Generate bytecode to store the value in export table at runtime
+			}
+		}
+		
+	case *parser.ExpressionStatement:
+		// Handle function declarations in expression statements
+		if expr, ok := d.Expression.(*parser.FunctionLiteral); ok && expr.Name != nil {
+			if c.IsModuleMode() {
+				c.moduleBindings.DefineExport(expr.Name.Value, expr.Name.Value, vm.Undefined, d)
+				debugPrintf("// [Compiler] Exported function: %s\n", expr.Name.Value)
+				// TODO: Generate bytecode to store the value in export table at runtime
+			}
+		}
+		
+	default:
+		debugPrintf("// [Compiler] Unhandled export declaration type: %T\n", decl)
+	}
+}
+
+// emitImportResolve generates code to resolve an imported name at runtime
+// This generates OpEvalModule to execute the source module and make imports available
+func (c *Compiler) emitImportResolve(destReg Register, importName string, line int) {
+	if !c.IsModuleMode() {
+		debugPrintf("// [Compiler] emitImportResolve: Not in module mode, loading undefined for '%s'\n", importName)
+		c.emitLoadUndefined(destReg, line)
+		return
+	}
+	
+	// Get the import reference for this name
+	if importRef, exists := c.moduleBindings.ImportedNames[importName]; exists {
+		debugPrintf("// [Compiler] emitImportResolve: Generating OpEvalModule for '%s' from module '%s'\n", 
+			importName, importRef.SourceModule)
+		
+		// Generate OpEvalModule to execute the source module
+		c.emitEvalModule(importRef.SourceModule, line)
+		
+		// After module execution, the exported variable should be available
+		// For now, we'll load undefined as a placeholder until export binding is implemented
+		debugPrintf("// [Compiler] emitImportResolve: Module execution scheduled, loading undefined placeholder for '%s'\n", importName)
+		c.emitLoadUndefined(destReg, line)
+	} else {
+		debugPrintf("// [Compiler] emitImportResolve: No import binding found for '%s', loading undefined\n", importName)
+		c.emitLoadUndefined(destReg, line)
+	}
+}
+
+// emitEvalModule generates OpEvalModule bytecode to execute a module
+func (c *Compiler) emitEvalModule(modulePath string, line int) {
+	// Add module path as a string constant
+	modulePathValue := vm.String(modulePath)
+	constantIdx := c.chunk.AddConstant(modulePathValue)
+	
+	debugPrintf("// [Compiler] emitEvalModule: Emitting OpEvalModule for '%s' (constantIdx: %d)\n", modulePath, constantIdx)
+	
+	// Emit OpEvalModule with the constant index
+	c.emitOpCode(vm.OpEvalModule, line)
+	c.emitByte(byte(constantIdx >> 8))   // High byte
+	c.emitByte(byte(constantIdx & 0xFF)) // Low byte
 }

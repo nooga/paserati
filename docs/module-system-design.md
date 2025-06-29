@@ -692,14 +692,38 @@ func (mr *ModuleRegistry) SetParsed(path string, result *ParseResult) {
 - [x] **Export Type Analysis**: Track exported types per module with proper type information
 - [x] **Module-Aware Type Checking**: Enhanced checker with module mode support
 - [x] **Import/Export Binding Management**: Comprehensive binding tracking for all import/export patterns
-- [ ] **Full ModuleLoader Integration**: Complete integration with parallel processing pipeline (Phase 4C)
-- [ ] **Sequential Type Checking**: Dependency-ordered type checking after parallel parsing (Phase 4C)
+- [x] **Full ModuleLoader Integration**: Complete integration with TypeChecker interface to avoid circular imports
+- [x] **Sequential Type Checking**: Dependency-ordered type checking after parallel parsing with topological sorting
+- [x] **Cross-Module Type Resolution**: Infrastructure for resolving imported types from loaded modules
+- [x] **Driver Integration**: Complete ModuleLoader wiring into Driver with automatic module detection
+- [x] **Default Module Mode**: Module resolution now works by default for all files
 
-### Phase 5: Compilation & Runtime (Weeks 9-10)
-- [ ] **Bytecode Extensions**: New opcodes for module operations
-- [ ] **Module Compilation**: Compile modules with dependency resolution
-- [ ] **VM Runtime Support**: Module namespace objects and import resolution
-- [ ] **Execution Pipeline**: End-to-end module loading and execution
+### Phase 5: Compilation & Runtime 🔄 IN PROGRESS
+- [x] **Runtime Binding Tables**: Module binding resolution using compile-time metadata (following type checker patterns)
+- [x] **ModuleBindings System**: Parallel to ModuleEnvironment for runtime value resolution (`pkg/compiler/module_bindings.go`)
+- [x] **Compiler Integration**: Import/export statement processing integrated into compiler pipeline
+- [x] **Import Resolution Framework**: Compiler detects imported identifiers and generates runtime resolution code
+- [x] **Export Processing**: Direct exports, re-exports, and default exports properly tracked in bindings
+- [ ] **Runtime Import Resolution**: Replace placeholder `emitImportResolve()` with actual module value lookup
+- [ ] **Export Value Collection**: Collect and store exported values during module execution 
+- [ ] **Module Namespace Objects**: Complete implementation for `import * as name` syntax
+- [ ] **Cross-Module Value Resolution**: Enable actual imported values to be resolved from loaded modules
+
+**Current Status:**
+✅ **Core Infrastructure Complete**: ModuleBindings system working, imports tracked, no compilation panics
+✅ **Compile-Time Processing**: Import/export statements processed correctly, binding tables built
+🔄 **Runtime Resolution**: Currently loads `undefined` placeholder - need actual module value lookup
+
+**Key Implementation Insight:**
+Phase 5 follows the **compile-time directives approach** - no special bytecode opcodes needed. Instead:
+1. **ModuleBindings** (parallel to type checker's ModuleEnvironment) maps import/export names to runtime values
+2. **Compiler builds binding tables** during compilation, reusing the same AST traversal patterns as type checker  
+3. **Compiler generates runtime resolution code** for imported identifiers via `emitImportResolve()`
+4. **Same resolution logic** as type checker: `localName -> sourceModule.sourceName -> vm.Value`
+
+**Test Results:**
+- ✅ Module compilation: `./paserati ./test_module.ts` → `[Function: defaultGreet]`
+- 🔄 Import resolution: `./paserati ./test_import.ts` → Compiles but imports resolve to `undefined`
 
 ### Phase 6: Advanced Features (Weeks 11-12)
 - [ ] **Circular Dependencies**: Proper handling and error reporting

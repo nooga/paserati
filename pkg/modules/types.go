@@ -75,6 +75,9 @@ type ModuleRecord struct {
 	ExportValues map[string]vm.Value   // Exported runtime values
 	Namespace    vm.Value              // Module namespace object
 	
+	// Compilation results
+	CompiledChunk *vm.Chunk       // Compiled bytecode chunk for execution
+	
 	// Dependencies
 	Dependencies []string // Direct dependencies (module paths)
 	Dependents   []string // Modules that depend on this one
@@ -242,5 +245,21 @@ type LoaderStats struct {
 	Registry       RegistryStats   // Registry statistics
 	AverageLoadTime time.Duration  // Average time to load a module
 	TotalLoadTime   time.Duration  // Total time spent loading modules
+}
+
+// VM interface methods for ModuleRecord
+// These methods implement the vm.ModuleRecord interface to avoid circular imports
+
+// GetExportValues returns the exported runtime values from this module
+func (mr *ModuleRecord) GetExportValues() map[string]vm.Value {
+	if mr.ExportValues == nil {
+		return make(map[string]vm.Value)
+	}
+	return mr.ExportValues
+}
+
+// GetCompiledChunk returns the compiled bytecode chunk for this module
+func (mr *ModuleRecord) GetCompiledChunk() *vm.Chunk {
+	return mr.CompiledChunk
 }
 
