@@ -1236,7 +1236,11 @@ func (c *Checker) visit(node parser.Node) {
 			// debugPrintf("// [Checker Debug] Identifier: Resolved type for '%s': Ptr=%p, Value=%#v\n", node.Value, typ, typ) // Re-commented
 			// --- END DEBUG ---
 
-			debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String()) // DEBUG - Uncommented
+			if typ != nil {
+				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String()) // DEBUG - Uncommented
+			} else {
+				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: <nil>\n", node.Value, c.env) // DEBUG - Nil type
+			}
 
 			// node is guaranteed non-nil here
 			node.SetComputedType(typ)

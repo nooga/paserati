@@ -11,6 +11,7 @@ import (
 type TypeGuard struct {
 	VariableName string     // The variable being narrowed (e.g., "x")
 	NarrowedType types.Type // The type it's narrowed to (e.g., types.String)
+	IsNegated    bool       // true for !== checks, false for === checks
 }
 
 // detectTypeGuard analyzes a condition expression to detect type guard patterns like:
@@ -37,6 +38,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 								return &TypeGuard{
 									VariableName: ident.Value,
 									NarrowedType: predType.Type,
+									IsNegated:    false, // Type predicate calls are always positive
 								}
 							}
 						}
@@ -48,7 +50,10 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 
 	// Look for infix comparison patterns
 	if infix, ok := condition.(*parser.InfixExpression); ok {
-		if infix.Operator == "===" || infix.Operator == "==" {
+		isPositive := infix.Operator == "===" || infix.Operator == "=="
+		isNegative := infix.Operator == "!==" || infix.Operator == "!="
+		
+		if isPositive || isNegative {
 
 			// Pattern 1: typeof identifier === "literal"
 			if typeofExpr, ok := infix.Left.(*parser.TypeofExpression); ok {
@@ -79,6 +84,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						return &TypeGuard{
 							VariableName: ident.Value,
 							NarrowedType: narrowedType,
+							IsNegated:    isNegative,
 						}
 					}
 				}
@@ -90,6 +96,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 					return &TypeGuard{
 						VariableName: ident.Value,
 						NarrowedType: narrowedType,
+						IsNegated:    isNegative,
 					}
 				}
 			}
@@ -100,6 +107,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 					return &TypeGuard{
 						VariableName: ident.Value,
 						NarrowedType: narrowedType,
+						IsNegated:    isNegative,
 					}
 				}
 			}
@@ -128,11 +136,22 @@ func (c *Checker) literalToType(expr parser.Expression) types.Type {
 
 // applyTypeNarrowing applies type narrowing to the current environment
 // Returns a new environment with the narrowed types, or nil if no narrowing was applied
+// For negated type guards, this applies inverted narrowing
 func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 	if guard == nil {
 		return nil
 	}
+	
+	// If the guard is negated (e.g., !== check), apply inverted narrowing instead
+	if guard.IsNegated {
+		return c.applyInvertedTypeNarrowing(guard)
+	}
 
+	return c.applyPositiveTypeNarrowing(guard)
+}
+
+// applyPositiveTypeNarrowing performs the actual positive type narrowing logic
+func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	// Check if the variable exists in the current environment
 	originalType, isConst, found := c.env.Resolve(guard.VariableName)
 	if !found {
@@ -194,9 +213,15 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 
 // applyInvertedTypeNarrowing creates an environment for the else branch with inverted type constraints
 // For "if (typeof x === 'string')", the else branch knows x is NOT a string
+// For negated guards (e.g., !== check), this applies positive narrowing instead
 func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 	if guard == nil {
 		return nil
+	}
+	
+	// If the guard is negated (e.g., !== check), apply positive narrowing instead
+	if guard.IsNegated {
+		return c.applyPositiveTypeNarrowing(guard)
 	}
 
 	// Check if the variable exists in the current environment

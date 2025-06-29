@@ -4,6 +4,7 @@ import (
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"strconv"
 	"time"
 )
 
@@ -60,7 +61,13 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Add clock function for backward compatibility
 	clockFunctionType := types.NewSimpleFunction([]types.Type{}, types.Number)
-	return ctx.DefineGlobal("clock", clockFunctionType)
+	if err := ctx.DefineGlobal("clock", clockFunctionType); err != nil {
+		return err
+	}
+
+	// Add parseInt function (second parameter is optional)
+	parseIntFunctionType := types.NewSimpleFunction([]types.Type{types.String}, types.Number)
+	return ctx.DefineGlobal("parseInt", parseIntFunctionType)
 }
 
 func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -82,5 +89,34 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(time.Now().UnixMilli()))
 	})
 
-	return ctx.DefineGlobal("clock", clockFunc)
+	if err := ctx.DefineGlobal("clock", clockFunc); err != nil {
+		return err
+	}
+
+	// Add parseInt function implementation
+	parseIntFunc := vm.NewNativeFunction(1, false, "parseInt", func(args []vm.Value) vm.Value {
+		if len(args) == 0 {
+			return vm.NumberValue(math.NaN())
+		}
+
+		str := args[0].ToString()
+		var radix int64 = 10
+
+		if len(args) > 1 && args[1].IsNumber() {
+			radix = int64(args[1].ToFloat())
+			if radix < 2 || radix > 36 {
+				return vm.NumberValue(math.NaN())
+			}
+		}
+
+		// Try to parse the string as an integer with the given radix
+		if result, err := strconv.ParseInt(str, int(radix), 64); err == nil {
+			return vm.NumberValue(float64(result))
+		}
+
+		// If parsing fails, return NaN
+		return vm.NumberValue(math.NaN())
+	})
+
+	return ctx.DefineGlobal("parseInt", parseIntFunc)
 }
