@@ -55,6 +55,15 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 		return
 	}
 
+	// 1.5. EARLY DEFINITION: Create a forward reference type and define it early
+	// This allows methods to reference the class constructor during processing
+	forwardRefType := &types.ForwardReferenceType{
+		ClassName:      node.Name.Value,
+		TypeParameters: nil, // Non-generic class
+	}
+	c.env.Define(node.Name.Value, forwardRefType, false)
+	debugPrintf("// [Checker Class] Early defined forward reference for non-generic class '%s'\n", node.Name.Value)
+
 	// 2. Handle inheritance relationships and create instance type from methods and properties
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
@@ -77,10 +86,10 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType)
 
-	// 6. Register the constructor function in the environment
+	// 6. Update the constructor function in the environment (replacing forward reference)
 	// When we reference "Animal", we get the constructor function, not a separate class type
-	if !c.env.Define(node.Name.Value, constructorType, false) {
-		c.addError(node.Name, fmt.Sprintf("failed to define class '%s'", node.Name.Value))
+	if !c.env.Update(node.Name.Value, constructorType) {
+		c.addError(node.Name, fmt.Sprintf("failed to update class '%s'", node.Name.Value))
 		return
 	}
 
@@ -121,15 +130,24 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
 	}
 
-	// Save current environment and switch to generic environment
-	savedEnv := c.env
-	c.env = genericEnv
-
 	// Create a forward reference type for self-references during class processing
 	forwardRefType := &types.ForwardReferenceType{
 		ClassName:      node.Name.Value,
 		TypeParameters: typeParams,
 	}
+
+	// EARLY DEFINITION: Define the class name in the OUTER environment first
+	// This allows the final update to work correctly
+	savedEnv := c.env
+	savedEnv.Define(node.Name.Value, forwardRefType, false)
+	debugPrintf("// [Checker Class] Early defined forward reference for '%s' in outer environment\n", node.Name.Value)
+
+	// Switch to generic environment
+	c.env = genericEnv
+
+	// Also define in the generic environment for method type checking
+	genericEnv.Define(node.Name.Value, forwardRefType, false)
+	debugPrintf("// [Checker Class] Early defined forward reference for '%s' in generic environment\n", node.Name.Value)
 
 	// Set as current forward reference for self-references during class processing
 	savedCurrentGenericClass := c.currentGenericClass
@@ -174,9 +192,9 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		Body:           constructorType,
 	}
 
-	// 8. Define in environment - store the generic constructor type
-	if !c.env.Define(node.Name.Value, genericConstructorType, false) {
-		c.addError(node.Name, fmt.Sprintf("failed to define generic class '%s'", node.Name.Value))
+	// 8. Update in environment - store the generic constructor type (replacing forward reference)
+	if !c.env.Update(node.Name.Value, genericConstructorType) {
+		c.addError(node.Name, fmt.Sprintf("failed to update generic class '%s'", node.Name.Value))
 		return
 	}
 

@@ -52,6 +52,14 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			}
 		}
 
+		// --- NEW: Check if this is a forward reference defined as a regular value ---
+		if value, _, found := c.env.Resolve(node.Value); found {
+			if forwardRef, ok := value.(*types.ForwardReferenceType); ok {
+				debugPrintf("// [Checker resolveTypeAnno Ident] Found forward reference for '%s'\n", node.Value)
+				return forwardRef
+			}
+		}
+
 		// --- UPDATED: Prioritize alias resolution ---
 		// 1. Attempt to resolve as a type alias in the environment
 		resolvedAlias, found := c.env.ResolveType(node.Value)
