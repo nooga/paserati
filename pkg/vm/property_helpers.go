@@ -68,6 +68,14 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		}
 	case TypeArray:
 		prototype = vm.ArrayPrototype.AsPlainObject()
+	case TypeMap:
+		if vm.MapPrototype.Type() == TypeObject {
+			prototype = vm.MapPrototype.AsPlainObject()
+		}
+	case TypeSet:
+		if vm.SetPrototype.Type() == TypeObject {
+			prototype = vm.SetPrototype.AsPlainObject()
+		}
 	case TypeRegExp:
 		if vm.RegExpPrototype.Type() == TypeObject {
 			prototype = vm.RegExpPrototype.AsPlainObject()
@@ -100,6 +108,17 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 			str := AsString(objVal)
 			// Use rune count for correct length of multi-byte strings
 			return Number(float64(utf8.RuneCountInString(str))), true
+		}
+	}
+
+	if propName == "size" {
+		switch objVal.Type() {
+		case TypeMap:
+			mapObj := AsMap(objVal)
+			return Number(float64(mapObj.Size())), true
+		case TypeSet:
+			setObj := AsSet(objVal)
+			return Number(float64(setObj.Size())), true
 		}
 	}
 

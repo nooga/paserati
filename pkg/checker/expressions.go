@@ -668,6 +668,36 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Object, fmt.Sprintf("property access is not supported on mapped type %s", obj.String()))
 				resultType = types.Never
 			}
+		case *types.InstantiatedType:
+			// Handle property access on instantiated generic types (like Map<K,V>)
+			substitutedType := obj.Substitute()
+			if substitutedType != nil {
+				// Create a temporary member expression to re-check with the substituted type
+				// but avoid infinite recursion by using the substituted type directly
+				switch subst := substitutedType.(type) {
+				case *types.ObjectType:
+					// Look for the property in the substituted object's fields
+					fieldType, exists := subst.Properties[propertyName]
+					if exists {
+						resultType = fieldType
+					} else {
+						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", obj.String()))
+						// resultType remains types.Never
+					}
+				default:
+					// For other substituted types, recursively check member access
+					// We need to temporarily change the object type and re-check
+					savedObjectType := node.Object.GetComputedType()
+					node.Object.SetComputedType(substitutedType)
+					c.checkMemberExpression(node)
+					resultType = node.GetComputedType()
+					node.Object.SetComputedType(savedObjectType)
+					return // Skip setting the computed type again at the end
+				}
+			} else {
+				c.addError(node.Object, fmt.Sprintf("failed to substitute generic type %s", obj.String()))
+				// resultType remains types.Never
+			}
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.

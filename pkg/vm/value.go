@@ -37,6 +37,8 @@ const (
 
 	TypeArray
 	TypeRegExp
+	TypeMap
+	TypeSet
 )
 
 type StringObject struct {
@@ -53,6 +55,19 @@ type ArrayObject struct {
 	Object
 	length   int
 	elements []Value
+}
+
+type MapObject struct {
+	Object
+	size    int
+	entries map[string]Value      // key -> value
+	keys    map[string]Value      // key -> original key (for key iteration)
+}
+
+type SetObject struct {
+	Object
+	size   int
+	values map[string]Value  // key -> original value (for value iteration)
 }
 
 type BigIntObject struct {
@@ -128,6 +143,53 @@ func NewArrayWithArgs(args []Value) Value {
 		// Array(element1, element2, ...) - array with specified elements
 		arrayObj.SetElements(args)
 		return arr
+	}
+}
+
+func NewMap() Value {
+	mapObj := &MapObject{
+		size:    0,
+		entries: make(map[string]Value),
+		keys:    make(map[string]Value),
+	}
+	return Value{typ: TypeMap, obj: unsafe.Pointer(mapObj)}
+}
+
+func NewSet() Value {
+	setObj := &SetObject{
+		size:   0,
+		values: make(map[string]Value),
+	}
+	return Value{typ: TypeSet, obj: unsafe.Pointer(setObj)}
+}
+
+// hashKey creates a unique string key for any JavaScript value
+// Uses SameValueZero equality (NaN === NaN, +0 === -0)
+func hashKey(v Value) string {
+	switch v.Type() {
+	case TypeNull:
+		return "null"
+	case TypeUndefined:
+		return "undefined"
+	case TypeString:
+		return "s:" + v.ToString()
+	case TypeBoolean:
+		if v.AsBoolean() {
+			return "b:true"
+		}
+		return "b:false"
+	case TypeFloatNumber, TypeIntegerNumber:
+		f := v.ToFloat()
+		if math.IsNaN(f) {
+			return "n:NaN"
+		}
+		if f == 0 {
+			return "n:0" // Treat +0 and -0 as same (SameValueZero)
+		}
+		return "n:" + strconv.FormatFloat(f, 'g', -1, 64)
+	default:
+		// For objects, use pointer address as unique key
+		return "o:" + fmt.Sprintf("%p", v.obj)
 	}
 }
 
@@ -277,6 +339,20 @@ func (v Value) AsArray() *ArrayObject {
 		panic("value is not an array")
 	}
 	return (*ArrayObject)(v.obj)
+}
+
+func (v Value) AsMap() *MapObject {
+	if v.typ != TypeMap {
+		panic("value is not a map")
+	}
+	return (*MapObject)(v.obj)
+}
+
+func (v Value) AsSet() *SetObject {
+	if v.typ != TypeSet {
+		panic("value is not a set")
+	}
+	return (*SetObject)(v.obj)
 }
 
 func (v Value) AsFunction() *FunctionObject {
@@ -583,6 +659,29 @@ func (v Value) inspectWithContext(nested bool) string {
 			elems[i] = el.InspectNested() // Use nested context
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
+	case TypeMap:
+		// Map object inspect - show as Map { key => value, ... }
+		mapObj := v.AsMap()
+		if mapObj.Size() == 0 {
+			return "Map {}"
+		}
+		var parts []string
+		for keyStr, value := range mapObj.entries {
+			key := mapObj.keys[keyStr]
+			parts = append(parts, key.InspectNested()+" => "+value.InspectNested())
+		}
+		return "Map { " + strings.Join(parts, ", ") + " }"
+	case TypeSet:
+		// Set object inspect - show as Set { value1, value2, ... }
+		setObj := v.AsSet()
+		if setObj.Size() == 0 {
+			return "Set {}"
+		}
+		var parts []string
+		for _, value := range setObj.values {
+			parts = append(parts, value.InspectNested())
+		}
+		return "Set { " + strings.Join(parts, ", ") + " }"
 	case TypeNull:
 		return "null"
 	case TypeUndefined:
@@ -676,8 +775,8 @@ func (v Value) Is(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp:
-		// Objects (including arrays, functions, regex, etc.) are equal only by reference
+	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
+		// Objects (including arrays, functions, regex, maps, sets, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
 		panic(fmt.Sprintf("Unhandled type in Is comparison: %v", v.typ)) // Should not happen
@@ -715,8 +814,8 @@ func (v Value) StrictlyEquals(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp:
-		// Objects (including arrays, functions, regex, etc.) are equal only by reference
+	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
+		// Objects (including arrays, functions, regex, maps, sets, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
 		panic(fmt.Sprintf("Unhandled type in StrictlyEquals comparison: %v", v.typ))
@@ -838,6 +937,8 @@ func AsDictObject(v Value) *DictObject { return v.AsDictObject() }
 
 // AsArray returns the ArrayObject pointer from an Array value.
 func AsArray(v Value) *ArrayObject { return v.AsArray() }
+func AsMap(v Value) *MapObject { return v.AsMap() }
+func AsSet(v Value) *SetObject { return v.AsSet() }
 
 // valuesEqual compares two values using ECMAScript SameValueZero (NaN===NaN, +0===-0).
 func valuesEqual(a, b Value) bool { return a.Is(b) }
@@ -956,6 +1057,85 @@ func (a *ArrayObject) SetElements(elements []Value) {
 func (a *ArrayObject) Append(value Value) {
 	a.elements = append(a.elements, value)
 	a.length++
+}
+
+// MapObject methods
+func (m *MapObject) Set(key, value Value) {
+	keyStr := hashKey(key)
+	if _, exists := m.entries[keyStr]; !exists {
+		m.size++
+	}
+	m.entries[keyStr] = value
+	m.keys[keyStr] = key
+}
+
+func (m *MapObject) Get(key Value) Value {
+	keyStr := hashKey(key)
+	if value, exists := m.entries[keyStr]; exists {
+		return value
+	}
+	return Undefined
+}
+
+func (m *MapObject) Has(key Value) bool {
+	keyStr := hashKey(key)
+	_, exists := m.entries[keyStr]
+	return exists
+}
+
+func (m *MapObject) Delete(key Value) bool {
+	keyStr := hashKey(key)
+	if _, exists := m.entries[keyStr]; exists {
+		delete(m.entries, keyStr)
+		delete(m.keys, keyStr)
+		m.size--
+		return true
+	}
+	return false
+}
+
+func (m *MapObject) Clear() {
+	m.entries = make(map[string]Value)
+	m.keys = make(map[string]Value)
+	m.size = 0
+}
+
+func (m *MapObject) Size() int {
+	return m.size
+}
+
+// SetObject methods
+func (s *SetObject) Add(value Value) {
+	keyStr := hashKey(value)
+	if _, exists := s.values[keyStr]; !exists {
+		s.size++
+	}
+	s.values[keyStr] = value
+}
+
+func (s *SetObject) Has(value Value) bool {
+	keyStr := hashKey(value)
+	_, exists := s.values[keyStr]
+	return exists
+}
+
+func (s *SetObject) Delete(value Value) bool {
+	keyStr := hashKey(value)
+	if _, exists := s.values[keyStr]; exists {
+		delete(s.values, keyStr)
+		s.size--
+		return true
+	}
+	return false
+}
+
+func (s *SetObject) Clear() {
+	s.values = make(map[string]Value)
+	s.size = 0
+}
+
+func (s *SetObject) Size() int {
+	return s.size
 }
 
 // NewValueFromPlainObject creates a Value from a PlainObject pointer

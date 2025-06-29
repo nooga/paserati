@@ -69,28 +69,28 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 // to its actual instantiated generic type
 func (c *Checker) resolveParameterizedForwardReference(paramRef *types.ParameterizedForwardReferenceType) types.Type {
 	debugPrintf("// [Checker ResolveParamRef] Attempting to resolve %s\n", paramRef.String())
-	
+
 	// Look up the generic type by class name
 	if typ, _, found := c.env.Resolve(paramRef.ClassName); found {
 		debugPrintf("// [Checker ResolveParamRef] Found type for %s: %T\n", paramRef.ClassName, typ)
-		
+
 		// Check if it's a generic type
 		if genericType, ok := typ.(*types.GenericType); ok {
 			debugPrintf("// [Checker ResolveParamRef] It's a generic type, instantiating with %d type args\n", len(paramRef.TypeArguments))
-			
+
 			// Instantiate the generic type with the provided type arguments
 			instantiated := c.instantiateGenericType(genericType, paramRef.TypeArguments, nil)
-			
+
 			// If the instantiation resulted in an ObjectType with the instance type, extract it
 			if objType, ok := instantiated.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
 				// Return the instance type (return type of the constructor)
 				return objType.ConstructSignatures[0].ReturnType
 			}
-			
+
 			return instantiated
 		}
 	}
-	
+
 	debugPrintf("// [Checker ResolveParamRef] Could not resolve %s\n", paramRef.ClassName)
 	return nil // Could not resolve
 }
@@ -2324,12 +2324,12 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 	// Check if the expected type is a function type
 	if objType, ok := context.ExpectedType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
 		expectedSig := objType.CallSignatures[0] // Use the first signature for contextual typing
-		
+
 		// Check if parameter counts are compatible
 		nodeParamCount := len(node.Parameters)
 		expectedParamCount := len(expectedSig.ParameterTypes)
-		
-		// Only apply contextual typing if the parameter counts match and none of the arrow function 
+
+		// Only apply contextual typing if the parameter counts match and none of the arrow function
 		// parameters have explicit type annotations
 		canApplyContextualTyping := (nodeParamCount == expectedParamCount)
 		for _, param := range node.Parameters {
@@ -2338,10 +2338,10 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				break
 			}
 		}
-		
+
 		if canApplyContextualTyping {
 			debugPrintf("// [Checker ArrowFuncContext] Applying contextual typing from signature: %s\n", expectedSig.String())
-			
+
 			// Check if the return type is generic - if so, don't force it as contextual return type
 			var contextualReturnType types.Type = nil
 			if expectedSig.ReturnType != nil {
@@ -2355,28 +2355,28 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				// For generic return types (TypeParameterType), leave contextualReturnType as nil
 				// so the arrow function can infer its own return type
 			}
-			
+
 			// Create a modified arrow function context with inferred parameter types
 			ctx := &FunctionCheckContext{
-				FunctionName:              "<arrow>",
-				TypeParameters:            node.TypeParameters,
-				Parameters:                node.Parameters,
-				RestParameter:             node.RestParameter,
-				ReturnTypeAnnotation:      node.ReturnTypeAnnotation,
-				Body:                      node.Body,
-				IsArrow:                   true,
-				AllowSelfReference:        false,
-				AllowOverloadCompletion:   false,
-				ContextualParameterTypes:  expectedSig.ParameterTypes, // Pass contextual parameter types
-				ContextualReturnType:      contextualReturnType,       // Only pass non-generic return types
+				FunctionName:             "<arrow>",
+				TypeParameters:           node.TypeParameters,
+				Parameters:               node.Parameters,
+				RestParameter:            node.RestParameter,
+				ReturnTypeAnnotation:     node.ReturnTypeAnnotation,
+				Body:                     node.Body,
+				IsArrow:                  true,
+				AllowSelfReference:       false,
+				AllowOverloadCompletion:  false,
+				ContextualParameterTypes: expectedSig.ParameterTypes, // Pass contextual parameter types
+				ContextualReturnType:     contextualReturnType,       // Only pass non-generic return types
 			}
-			
+
 			// 1. Resolve parameters with contextual types
 			preliminarySignature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv := c.resolveFunctionParametersWithContext(ctx)
-			
+
 			// 2. Setup function environment
 			originalEnv := c.setupFunctionEnvironment(ctx, paramTypes, paramNames, restParameterType, restParameterName, preliminarySignature, typeParamEnv)
-			
+
 			// 3. Check function body and determine return type
 			// If we want return type inference (contextualReturnType is nil), pass nil to checkFunctionBody
 			var expectedReturnTypeForBodyCheck types.Type
@@ -2393,20 +2393,20 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			}
 			finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBodyCheck)
 			debugPrintf("// [Checker ArrowFuncContext] Inferred final return type: %s\n", finalReturnType.String())
-			
+
 			// 4. Create final function type
 			finalFuncType := c.createFinalFunctionType(ctx, paramTypes, finalReturnType, restParameterType)
-			
+
 			// 5. Set computed type on the ArrowFunctionLiteral node
 			debugPrintf("// [Checker ArrowFuncContext] Setting contextual computed type: %s\n", finalFuncType.String())
 			node.SetComputedType(finalFuncType)
-			
+
 			// 6. Restore environment
 			c.env = originalEnv
 			return
 		}
 	}
-	
+
 	// Fallback to regular arrow function checking if contextual typing can't be applied
 	debugPrintf("// [Checker ArrowFuncContext] Cannot apply contextual typing, falling back to regular check\n")
 	c.checkArrowFunctionLiteral(node)
@@ -2468,7 +2468,7 @@ func (c *Checker) blockContainsThrow(block *parser.BlockStatement) bool {
 	if block == nil {
 		return false
 	}
-	
+
 	for _, stmt := range block.Statements {
 		if c.statementContainsThrow(stmt) {
 			return true

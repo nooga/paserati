@@ -127,7 +127,21 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		return true, InterpretOK, *dest
 	}
 
-	// 9. RegExp objects (after special properties are handled)
+	// 9. Map objects (after special properties are handled)
+	if objVal.Type() == TypeMap {
+		// Maps don't have additional own properties beyond special ones
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// 10. Set objects (after special properties are handled)
+	if objVal.Type() == TypeSet {
+		// Sets don't have additional own properties beyond special ones
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// 11. RegExp objects (after special properties are handled)
 	if objVal.Type() == TypeRegExp {
 		// RegExp objects don't have additional own properties beyond special ones
 		*dest = Undefined
