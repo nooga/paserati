@@ -17,6 +17,7 @@ type FunctionCheckContext struct {
 	IsArrow                   bool                        // Whether this is an arrow function
 	AllowSelfReference        bool                        // Whether to allow recursive self-reference
 	AllowOverloadCompletion   bool                        // Whether to check for overload completion
+	ContextualParameterTypes  []types.Type               // Contextual parameter types from expected signature
 }
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
@@ -139,6 +140,122 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 	signature := &types.Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        expectedReturnType,
+		OptionalParams:    optionalParams,
+		IsVariadic:        ctx.RestParameter != nil,
+		RestParameterType: restParameterType,
+	}
+	
+	return signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
+}
+
+// resolveFunctionParametersWithContext resolves parameter types using contextual type information
+// This version prioritizes contextual parameter types over explicit annotations for type inference
+func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext) (*types.Signature, []types.Type, []*parser.Identifier, types.Type, *parser.Identifier, *Environment) {
+	// If no contextual parameter types, fall back to regular resolution
+	if len(ctx.ContextualParameterTypes) == 0 {
+		return c.resolveFunctionParameters(ctx)
+	}
+	
+	// 1. First, create an environment for type parameters if this is a generic function
+	var typeParamEnv *Environment = c.env
+	
+	if len(ctx.TypeParameters) > 0 {
+		// Create a new environment that includes type parameters
+		typeParamEnv = NewEnclosedEnvironment(c.env)
+		
+		// Define each type parameter in the environment
+		for _, typeParamNode := range ctx.TypeParameters {
+			// Resolve constraint if present
+			var constraintType types.Type
+			if typeParamNode.Constraint != nil {
+				originalEnv := c.env
+				c.env = typeParamEnv // Use the type param environment for constraint resolution
+				constraintType = c.resolveTypeAnnotation(typeParamNode.Constraint)
+				c.env = originalEnv
+				if constraintType == nil {
+					constraintType = types.Any // Default constraint
+				}
+			} else {
+				constraintType = types.Any // Default constraint
+			}
+			
+			// Create the type parameter
+			typeParam := &types.TypeParameter{
+				Name:       typeParamNode.Name.Value,
+				Constraint: constraintType,
+			}
+			
+			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint any\n", typeParam.Name)
+			typeParamEnv.DefineTypeAlias(typeParam.Name, &types.TypeParameterType{Parameter: typeParam})
+		}
+	}
+	
+	// 2. Resolve parameter types, using contextual types when available
+	var paramTypes []types.Type
+	var paramNames []*parser.Identifier
+	var optionalParams []bool
+	
+	for i, param := range ctx.Parameters {
+		paramNames = append(paramNames, param.Name)
+		
+		var paramType types.Type
+		
+		// Use contextual type if available and no explicit annotation
+		if i < len(ctx.ContextualParameterTypes) && param.TypeAnnotation == nil {
+			paramType = ctx.ContextualParameterTypes[i]
+			debugPrintf("// [Checker FuncContextual] Using contextual type for param '%s': %s\n", param.Name.Value, paramType.String())
+		} else if param.TypeAnnotation != nil {
+			// Use explicit annotation
+			originalEnv := c.env
+			c.env = typeParamEnv // Use type param env for parameter type resolution
+			paramType = c.resolveTypeAnnotation(param.TypeAnnotation)
+			c.env = originalEnv
+			if paramType == nil {
+				paramType = types.Any
+			}
+		} else {
+			// No contextual type and no annotation - use any
+			paramType = types.Any
+		}
+		
+		paramTypes = append(paramTypes, paramType)
+		optionalParams = append(optionalParams, param.DefaultValue != nil)
+	}
+	
+	// 3. Handle rest parameter
+	var restParameterType types.Type
+	var restParameterName *parser.Identifier
+	if ctx.RestParameter != nil {
+		restParameterName = ctx.RestParameter.Name
+		
+		if ctx.RestParameter.TypeAnnotation != nil {
+			originalEnv := c.env
+			c.env = typeParamEnv
+			restParameterType = c.resolveTypeAnnotation(ctx.RestParameter.TypeAnnotation)
+			c.env = originalEnv
+		}
+		if restParameterType == nil {
+			// Default rest parameter type
+			restParameterType = &types.ArrayType{ElementType: types.Any}
+		}
+	}
+	
+	// 4. Resolve return type
+	var returnType types.Type
+	if ctx.ReturnTypeAnnotation != nil {
+		originalEnv := c.env
+		c.env = typeParamEnv
+		returnType = c.resolveTypeAnnotation(ctx.ReturnTypeAnnotation)
+		c.env = originalEnv
+	}
+	if returnType == nil {
+		returnType = types.Any // Will be inferred during body checking
+	}
+	
+	// 5. Create preliminary signature
+	signature := &types.Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
 		OptionalParams:    optionalParams,
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,

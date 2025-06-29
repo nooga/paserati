@@ -2311,10 +2311,76 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 	case *parser.ObjectLiteral:
 		// TODO: Add contextual typing for object literals
 		c.visit(node)
+	case *parser.ArrowFunctionLiteral:
+		c.checkArrowFunctionLiteralWithContext(node, context)
 	default:
 		// For other node types, use regular visit for now
 		c.visit(node)
 	}
+}
+
+// checkArrowFunctionLiteralWithContext handles contextual typing for arrow functions
+func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctionLiteral, context *ContextualType) {
+	// Check if the expected type is a function type
+	if objType, ok := context.ExpectedType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
+		expectedSig := objType.CallSignatures[0] // Use the first signature for contextual typing
+		
+		// Check if parameter counts are compatible
+		nodeParamCount := len(node.Parameters)
+		expectedParamCount := len(expectedSig.ParameterTypes)
+		
+		// Only apply contextual typing if the parameter counts match and none of the arrow function 
+		// parameters have explicit type annotations
+		canApplyContextualTyping := (nodeParamCount == expectedParamCount)
+		for _, param := range node.Parameters {
+			if param.TypeAnnotation != nil {
+				canApplyContextualTyping = false
+				break
+			}
+		}
+		
+		if canApplyContextualTyping {
+			debugPrintf("// [Checker ArrowFuncContext] Applying contextual typing from signature: %s\n", expectedSig.String())
+			
+			// Create a modified arrow function context with inferred parameter types
+			ctx := &FunctionCheckContext{
+				FunctionName:              "<arrow>",
+				TypeParameters:            node.TypeParameters,
+				Parameters:                node.Parameters,
+				RestParameter:             node.RestParameter,
+				ReturnTypeAnnotation:      node.ReturnTypeAnnotation,
+				Body:                      node.Body,
+				IsArrow:                   true,
+				AllowSelfReference:        false,
+				AllowOverloadCompletion:   false,
+				ContextualParameterTypes:  expectedSig.ParameterTypes, // Pass contextual parameter types
+			}
+			
+			// 1. Resolve parameters with contextual types
+			preliminarySignature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv := c.resolveFunctionParametersWithContext(ctx)
+			
+			// 2. Setup function environment
+			originalEnv := c.setupFunctionEnvironment(ctx, paramTypes, paramNames, restParameterType, restParameterName, preliminarySignature, typeParamEnv)
+			
+			// 3. Check function body and determine return type
+			finalReturnType := c.checkFunctionBody(ctx, preliminarySignature.ReturnType)
+			
+			// 4. Create final function type
+			finalFuncType := c.createFinalFunctionType(ctx, paramTypes, finalReturnType, restParameterType)
+			
+			// 5. Set computed type on the ArrowFunctionLiteral node
+			debugPrintf("// [Checker ArrowFuncContext] Setting contextual computed type: %s\n", finalFuncType.String())
+			node.SetComputedType(finalFuncType)
+			
+			// 6. Restore environment
+			c.env = originalEnv
+			return
+		}
+	}
+	
+	// Fallback to regular arrow function checking if contextual typing can't be applied
+	debugPrintf("// [Checker ArrowFuncContext] Cannot apply contextual typing, falling back to regular check\n")
+	c.checkArrowFunctionLiteral(node)
 }
 
 // --- Exception Handling Type Checking ---

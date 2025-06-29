@@ -192,7 +192,19 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 			}
 		} else {
 			// Regular argument
-			c.visit(argNode)
+			// Use contextual typing if we have a matching parameter type
+			if effectiveArgIndex < len(paramTypes) {
+				paramType := paramTypes[effectiveArgIndex]
+				// Use contextual typing for the argument
+				c.visitWithContext(argNode, &ContextualType{
+					ExpectedType: paramType,
+					IsContextual: true,
+				})
+			} else {
+				// No corresponding parameter type, use regular visit
+				c.visit(argNode)
+			}
+			
 			argType := argNode.GetComputedType()
 			
 			if effectiveArgIndex < len(paramTypes) {
@@ -370,7 +382,12 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 							}
 						} else {
 							// Regular arguments in variadic part
-							c.visit(argNode)
+							// Use contextual typing with the variadic element type
+							c.visitWithContext(argNode, &ContextualType{
+								ExpectedType: variadicElementType,
+								IsContextual: true,
+							})
+							
 							argType := argNode.GetComputedType()
 							if argType == nil {
 								continue
@@ -608,10 +625,20 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
 	debugPrintf("// [Checker Inference] Starting type inference for generic function call\n")
 	
-	// First, visit all arguments to get their types
+	// First, visit all arguments to get their types, using contextual typing
 	var argTypes []types.Type
 	for i, argNode := range callNode.Arguments {
-		c.visit(argNode)
+		// Use contextual typing if we have a corresponding parameter type
+		if i < len(genericSig.ParameterTypes) {
+			paramType := genericSig.ParameterTypes[i]
+			c.visitWithContext(argNode, &ContextualType{
+				ExpectedType: paramType,
+				IsContextual: true,
+			})
+		} else {
+			c.visit(argNode)
+		}
+		
 		argType := argNode.GetComputedType()
 		if argType == nil {
 			argType = types.Any

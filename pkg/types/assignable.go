@@ -309,6 +309,30 @@ func IsAssignable(source, target Type) bool {
 		return IsAssignable(source, targetReadonly.InnerType)
 	}
 
+	// TypeParameterType handling - type parameters with the same identity are assignable
+	sourceTypeParam, sourceIsTypeParam := source.(*TypeParameterType)
+	targetTypeParam, targetIsTypeParam := target.(*TypeParameterType)
+	
+	if sourceIsTypeParam && targetIsTypeParam {
+		// Type parameters are assignable if they refer to the same type parameter
+		// Since we might have different instances of the same logical type parameter,
+		// compare by name as a fallback (this is a simplification - in a full implementation
+		// we'd track scoping more carefully)
+		if sourceTypeParam.Parameter == targetTypeParam.Parameter {
+			return true
+		}
+		
+		// Fallback: compare by name if they're different instances
+		sourceName := sourceTypeParam.Parameter.Name
+		targetName := targetTypeParam.Parameter.Name
+		if sourceName == targetName {
+			// fmt.Printf("// [TypeParam Debug] Allowing name-based match: '%s'\n", sourceName)
+			return true
+		}
+		
+		return false
+	}
+	
 	// Note: Readonly<T> utility type is now handled via mapped type expansion
 	// The expandMappedType system will convert Readonly<T> to concrete object types
 	// so no special handling is needed here
@@ -330,23 +354,14 @@ func isSignatureAssignable(source, target *Signature) bool {
 	targetParamCount := len(target.ParameterTypes)
 
 	// TypeScript allows functions with fewer parameters to be assigned to functions expecting more
-	// The source must have at least the required parameters of the target
-	minRequiredParams := targetParamCount
-	if target.OptionalParams != nil {
-		// Count required parameters (non-optional ones)
-		// Find the highest index of a required parameter
-		minRequiredParams = 0
-		for i := 0; i < targetParamCount && i < len(target.OptionalParams); i++ {
-			if !target.OptionalParams[i] {
-				minRequiredParams = i + 1
-			}
-		}
-	}
-
-	// Source must have at least the minimum required parameters
-	if sourceParamCount < minRequiredParams {
-		return false
-	}
+	// This is because JavaScript allows ignoring extra parameters when calling a function
+	// Example: (a, b) => a + b can be assigned to (a, b, c, d) => number
+	
+	// The key rule: A function with fewer parameters can be assigned to one expecting more parameters
+	// We only need to check that the parameters the source DOES have are compatible with
+	// the corresponding parameters in the target
+	
+	// No minimum parameter checking needed - source can have 0 parameters and still be valid!
 
 	// Check parameter types (contravariant) for the parameters that source provides
 	checkParamCount := sourceParamCount

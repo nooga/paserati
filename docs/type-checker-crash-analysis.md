@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-29  
 **Issue:** Nested template literals causing infinite loops and type checker crashes  
-**Status:** ✅ RESOLVED
+**Status:** ✅ RESOLVED (All major issues fixed)
 
 ## Original Problem
 
@@ -98,6 +98,44 @@ While fixing the crash, we discovered and resolved several other type checking i
 - Runtime implementation with proper radix handling
 - Error handling for invalid inputs
 
+### Issue 5: Control Flow Analysis for Throw Statements
+
+**Problem:** Type checker didn't understand that `throw` statements make code unreachable, preventing type narrowing.
+
+**Solution:** Implemented `statementContainsThrow()` and control flow analysis in if statements:
+- Detects when branches throw exceptions
+- Applies inverted type narrowing when "then" branch throws
+- Correctly narrows types after if statements with throwing branches
+
+### Issue 6: Class Forward References
+
+**Problem:** Generic classes couldn't reference themselves in method bodies (e.g., `new DataProcessor(data)`).
+
+**Solution:** 
+- Early definition of forward reference types before processing class body
+- Placeholder generic type during class processing
+- Update to real generic type after class is fully defined
+- Fixed environment resolution to prefer real types over forward references
+
+### Issue 7: Generic Constructor Inference
+
+**Problem:** Generic constructors couldn't be instantiated without explicit type arguments inside generic methods.
+
+**Solution:**
+- Added support for GenericType in NewExpression checking
+- Fixed early update of generic environment with constructor type
+- Ensured methods can access the real constructor type during type checking
+
+### Issue 8: Generic Method Chaining
+
+**Problem:** Return types from generic methods remained as `ParameterizedForwardReferenceType` (e.g., `Box<U>`) instead of being instantiated.
+
+**Solution:**
+- Deep substitution of type parameters in ObjectType properties and signatures
+- Resolution of parameterized forward references after type inference
+- Proper instantiation of generic return types with inferred type arguments
+- Added `resolveParameterizedForwardReference()` to convert `Box<U>` to `Box<number>` when `U` is inferred
+
 ## Results
 
 ### Before Fixes:
@@ -109,50 +147,57 @@ While fixing the crash, we discovered and resolved several other type checking i
 ### After Fixes:
 - ✅ Nested template literals parse correctly
 - ✅ Type checker runs without crashes
-- ✅ Reduced to 11 type checking errors (30%+ improvement)
+- ✅ Control flow analysis for throw statements working
+- ✅ Generic class self-references working
+- ✅ Generic constructor inference working
+- ✅ Generic method chaining working
 - ✅ Essential built-ins now available
+- ✅ Reduced to 9 type checking errors (44% improvement)
 
 ### Error Reduction Summary:
 ```
 Before: 16+ errors (including crashes)
-After:  11 errors (all legitimate type issues)
-Improvement: 30%+ reduction in errors
+After:  9 errors (focused type issues)
+Improvement: 44% reduction in errors
 ```
 
 ## Remaining Issues (Future Work)
 
-The remaining 11 errors fall into these categories:
+The remaining 9 errors fall into these categories:
 
-### 1. Control Flow Analysis (3 errors)
-**Issue:** Type checker doesn't understand that `throw` statements make subsequent code unreachable.
+### 1. Array Reduce Callback Signature (2 errors)
+**Issue:** Mismatch between expected reduce callback signature and provided function.
 
 **Example:**
 ```typescript
-function processText(input: unknown): string {
-  if (typeof input !== "string") {
-    throw new Error("Not a string");  // Function exits here
-  }
-  // Type checker should know input is string here, but doesn't
-  return input.toUpperCase(); // ERROR: unknown type
+// Expected: (acc, value, index, array) => acc
+// Provided: (acc, value) => acc
+results.reduce((acc, user) => { ... }, initialValue)
+```
+
+**Solution Needed:** More flexible function signature compatibility or support for optional parameters in callbacks.
+
+### 2. Generic Function Composition (1 error)
+**Issue:** Type checking fails for higher-order function composition.
+
+**Example:**
+```typescript
+function compose<T, U, V>(f: (x: U) => V, g: (x: T) => U): (x: T) => V {
+  return (x: T) => f(g(x)); // ERROR: type mismatch
 }
 ```
 
-**Solution Needed:** Implement control flow analysis to track unreachable code after throw/return statements.
+**Solution Needed:** Better generic type flow through function composition.
 
-### 2. Class Forward References (1 error)
-**Issue:** `DataProcessor` class not found when constructing new instances within the same class.
+### 3. Property Access on Complex Types (6 errors)
+**Issue:** Property access fails on union types and complex expressions.
 
-**Solution Needed:** Improve class hoisting and self-reference handling.
+**Examples:**
+- Accessing properties on union types (`T | undefined`)
+- Dynamic property access on spread results
+- Nested property chains on computed values
 
-### 3. Generic Type Inference (4 errors)
-**Issue:** Complex generic method type inference failures.
-
-**Solution Needed:** Enhanced generic type constraint resolution and method chaining.
-
-### 4. Complex Function Types (3 errors)
-**Issue:** Higher-order function type checking issues.
-
-**Solution Needed:** Improved function type compatibility checking.
+**Solution Needed:** Enhanced union type property resolution and better handling of optional chaining patterns.
 
 ## Testing
 
@@ -160,6 +205,11 @@ function processText(input: unknown): string {
 - `test_nested_template.ts` - Verifies nested template literal parsing
 - `test_simple_issues.ts` - Tests type narrowing and built-ins
 - `test_positive_narrowing.ts` - Confirms positive type guards work
+- `test_throw_narrowing.ts` - Tests control flow analysis with throw statements
+- `test_dataprocessor_simple.ts` - Tests generic class self-references
+- `test_generic_constructor_simple.ts` - Tests generic constructor inference
+- `test_generic_method_chaining.ts` - Tests generic method return type instantiation
+- `test_generic_final.ts` - Demonstrates working generic method chains
 
 ### Validation:
 - Power showcase now progresses past parsing phase
@@ -178,8 +228,23 @@ function processText(input: unknown): string {
 - No breaking changes to existing code
 - Enhanced functionality only adds new capabilities
 
+## Key Technical Achievements
+
+### Generic Type System Enhancements
+The most significant achievement was fixing generic method chaining through deep type substitution:
+
+1. **Deep Type Substitution**: Implemented recursive substitution through ObjectType properties and signatures
+2. **Parameterized Type Resolution**: Added `resolveParameterizedForwardReference()` to instantiate generic types after inference
+3. **Environment Chain Fix**: Modified environment resolution to prefer real types over forward references
+
+### Control Flow Analysis
+Implemented basic control flow analysis for throw statements:
+- Tracks which branches throw exceptions
+- Applies type narrowing based on reachability
+- Enables common defensive programming patterns
+
 ## Conclusion
 
-These fixes resolved the critical stability issues preventing the power showcase from running. The type checker is now robust enough to handle complex TypeScript code without crashing, and provides a solid foundation for implementing the remaining advanced type system features.
+These fixes transformed Paserati's type system from unstable to robust, resolving all critical crashes and implementing essential TypeScript features. The generic type system now properly handles method chaining, constructor inference, and self-references - features crucial for real-world TypeScript code.
 
-The next priority should be implementing control flow analysis to handle the throw statement narrowing pattern, which is common in TypeScript codebases.
+The remaining issues are primarily about edge cases and advanced type compatibility. The next priority should be improving function signature compatibility for array methods and higher-order functions, as these are common patterns in TypeScript applications.
