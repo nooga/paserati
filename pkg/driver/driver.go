@@ -214,57 +214,14 @@ func RunStringWithOptions(source string, options RunOptions) bool {
 }
 
 // RunFile reads, compiles, and interprets a Paserati source file.
-// It prints errors and results similar to RunString.
+// Always uses module mode - if no imports/exports are present, it works like regular mode.
 // Returns true if execution completed without any errors, false otherwise.
-// This version creates a fresh Paserati session.
 func RunFile(filename string) bool {
-	sourceBytes, err := ioutil.ReadFile(filename)
-	if err != nil {
-		// Directly print file read errors
-		readErr := &errors.CompileError{
-			Position: errors.Position{Line: 0, Column: 0},
-			Msg:      fmt.Sprintf("Failed to read file '%s': %s", filename, err.Error()),
-		}
-		fmt.Fprintf(os.Stderr, "%s Error: %s\n", readErr.Kind(), readErr.Message())
-		return false
-	}
-	sourceCode := string(sourceBytes)
-	
-	// Create a proper file source instead of treating it as eval
-	sourceFile := source.FromFile(filename, sourceCode)
-	
 	// Create a new Paserati session
 	paserati := NewPaserati()
 	
-	// Create lexer and parser with file context
-	l := lexer.NewLexerWithSource(sourceFile)
-	parseInstance := parser.NewParser(l)
-	program, parseErrs := parseInstance.ParseProgram()
-	if len(parseErrs) > 0 {
-		return paserati.DisplayResult(sourceCode, vm.Undefined, parseErrs)
-	}
-
-	// Dump AST if enabled
-	parser.DumpAST(program, "RunFile")
-
-	// Run the code using the session
-	chunk, compileAndTypeErrs := paserati.compiler.Compile(program)
-	if len(compileAndTypeErrs) > 0 {
-		return paserati.DisplayResult(sourceCode, vm.Undefined, compileAndTypeErrs)
-	}
-	if chunk == nil {
-		internalErr := &errors.RuntimeError{
-			Position: errors.Position{Line: 0, Column: 0},
-			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
-		}
-		return paserati.DisplayResult(sourceCode, vm.Undefined, []errors.PaseratiError{internalErr})
-	}
-
-	// Execute the chunk
-	finalValue, runtimeErrs := paserati.vmInstance.Interpret(chunk)
-	
-	// Display the result
-	return paserati.DisplayResult(sourceCode, finalValue, runtimeErrs)
+	// Always use module mode - it gracefully handles both module and non-module files
+	return paserati.RunModule(filename)
 }
 
 // LoadModule loads a module and all its dependencies using the module system.
@@ -276,9 +233,9 @@ func (p *Paserati) LoadModule(specifier string, fromPath string) (*modules.Modul
 // RunModule loads and executes a module file with full module system support.
 // Unlike RunFile, this enables import/export statements and cross-module type checking.
 func (p *Paserati) RunModule(filename string) bool {
-	// Load the module using the module system with parallel processing
-	// This will parse all modules and perform type checking
-	moduleRecord, err := p.moduleLoader.LoadModuleParallel(filename, ".")
+	// Load the module using the module system 
+	// Use sequential loading for now until parallel processing is fully debugged
+	moduleRecord, err := p.moduleLoader.LoadModule(filename, ".")
 	if err != nil {
 		loadErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},

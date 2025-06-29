@@ -3,6 +3,8 @@ package modules
 import (
 	"context"
 	"fmt"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 	"paserati/pkg/source"
 	"sort"
 	"sync"
@@ -102,11 +104,62 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	// Store in registry
 	ml.registry.Set(specifier, record)
 	
-	// For now, just mark as loaded (we'll implement actual parsing later)
+	// Actually parse the module
+	err = ml.parseModuleSequential(record, resolved)
+	if err != nil {
+		record.Error = err
+		record.State = ModuleError
+		return record, nil // Return record with error, don't fail completely
+	}
+	
+	// Mark as loaded after successful parsing
 	record.State = ModuleLoaded
 	record.CompleteTime = time.Now()
 	
 	return record, nil
+}
+
+// parseModuleSequential parses a single module synchronously
+func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *ResolvedModule) error {
+	// Read the source content
+	defer resolved.Source.Close()
+	
+	content := make([]byte, 0, 1024)
+	buf := make([]byte, 512)
+	for {
+		n, err := resolved.Source.Read(buf)
+		if n > 0 {
+			content = append(content, buf[:n]...)
+		}
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			return fmt.Errorf("failed to read source: %w", err)
+		}
+	}
+	
+	// Create source file using the real source package
+	sourceFile := &source.SourceFile{
+		Name:    resolved.ResolvedPath,
+		Path:    resolved.ResolvedPath,
+		Content: string(content),
+	}
+	
+	// Parse using real lexer and parser
+	lexerInstance := lexer.NewLexerWithSource(sourceFile)
+	parserInstance := parser.NewParser(lexerInstance)
+	
+	program, parseErrs := parserInstance.ParseProgram()
+	if len(parseErrs) > 0 {
+		return fmt.Errorf("parsing failed: %s", parseErrs[0].Error())
+	}
+	
+	// Store the parsed AST and source
+	record.AST = program
+	record.Source = sourceFile
+	
+	return nil
 }
 
 // loadModuleParallelImpl implements parallel module loading
