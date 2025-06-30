@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"paserati/pkg/builtins"
+	"paserati/pkg/checker"
 	"paserati/pkg/compiler"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
+	"paserati/pkg/modules"
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
 	"path/filepath"
@@ -18,6 +21,25 @@ import (
 )
 
 const scriptsDebug = false
+
+// compilerAdapter adapts compiler.Compiler to modules.Compiler interface
+type compilerAdapter struct {
+	*compiler.Compiler
+}
+
+// Compile adapts the return type from *vm.Chunk to interface{}
+func (ca *compilerAdapter) Compile(node parser.Node) (interface{}, []errors.PaseratiError) {
+	chunk, errs := ca.Compiler.Compile(node)
+	return chunk, errs
+}
+
+// SetChecker adapts the parameter type from modules.TypeChecker to *checker.Checker
+func (ca *compilerAdapter) SetChecker(tc modules.TypeChecker) {
+	// Type assert to get the concrete checker
+	if concreteChecker, ok := tc.(*checker.Checker); ok {
+		ca.Compiler.SetChecker(concreteChecker)
+	}
+}
 
 // Expectation represents the expected outcome of a script.
 type Expectation struct {
@@ -286,6 +308,49 @@ func compileAndInitializeVM(scriptPath string) (*vm.Chunk, *vm.VM, []errors.Pase
 		return nil, nil, []errors.PaseratiError{compileErr}
 	}
 	
+	// Check if this is a module (has import/export statements)
+	if hasModuleStatements(program) {
+		// Create a simple module loader for testing
+		config := modules.DefaultLoaderConfig()
+		// Use the directory containing the script file as the base directory
+		scriptDir := filepath.Dir(scriptPath)
+		fsResolver := modules.NewFileSystemResolver(os.DirFS(scriptDir), scriptDir)
+		moduleLoader := modules.NewModuleLoader(config, fsResolver)
+		
+		// Set up the checker factory for the module loader
+		moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
+			newChecker := checker.NewChecker()
+			return newChecker
+		})
+		
+		// Set up the compiler factory for the module loader  
+		moduleLoader.SetCompilerFactory(func() modules.Compiler {
+			newCompiler := compiler.NewCompiler()
+			
+			// CRITICAL: Pre-populate module compiler with builtin global indices
+			// This ensures module compilers start allocating from index 21+ (after builtins 0-20)
+			var builtinNames []string
+			for name := range globalVariables {
+				builtinNames = append(builtinNames, name)
+			}
+			sort.Strings(builtinNames) // Same order as main compiler
+			
+			// Pre-assign builtin global indices to match VM ordering
+			for _, name := range builtinNames {
+				newCompiler.GetOrAssignGlobalIndex(name)
+			}
+			
+			// Return a wrapper that adapts the return type to interface{}
+			return &compilerAdapter{newCompiler}
+		})
+		
+		// Enable module mode in compiler
+		comp.EnableModuleMode(scriptPath, moduleLoader)
+		
+		// Set module loader in VM
+		vmInstance.SetModuleLoader(moduleLoader)
+	}
+	
 	// Compile
 	chunk, compileAndTypeErrs := comp.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
@@ -293,4 +358,25 @@ func compileAndInitializeVM(scriptPath string) (*vm.Chunk, *vm.VM, []errors.Pase
 	}
 	
 	return chunk, vmInstance, nil
+}
+
+// hasModuleStatements checks if a program contains import or export statements
+func hasModuleStatements(program *parser.Program) bool {
+	if program == nil || program.Statements == nil {
+		return false
+	}
+	
+	for _, stmt := range program.Statements {
+		switch stmt.(type) {
+		case *parser.ImportDeclaration:
+			return true
+		case *parser.ExportNamedDeclaration:
+			return true
+		case *parser.ExportAllDeclaration:
+			return true
+		case *parser.ExportDefaultDeclaration:
+			return true
+		}
+	}
+	return false
 }

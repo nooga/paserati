@@ -2811,10 +2811,34 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 		// export * from "module" - re-exports all named exports (but not default)
 		debugPrintf("// [Checker] Export all (anonymous) from: %s\n", sourceModule)
 		
-		// This would need to be resolved later when we have access to the source module's exports
-		// For now, we just note the dependency
 		if c.IsModuleMode() {
+			// Mark dependency first
 			c.moduleEnv.Dependencies[sourceModule] = true
+			
+			// Resolve and expand exports from the source module
+			if c.moduleLoader != nil {
+				moduleRecord, err := c.moduleLoader.LoadModule(sourceModule, c.source.Path)
+				if err != nil {
+					c.addError(node, "failed to load source module")
+					return
+				}
+				
+				// Get all export names from the source module (excluding default export)
+				exportNames := moduleRecord.GetExportNames()
+				debugPrintf("// [Checker] Source module '%s' has %d exports: %v\n", sourceModule, len(exportNames), exportNames)
+				
+				// Create individual re-export bindings for each named export
+				for _, exportName := range exportNames {
+					if exportName != "default" { // Skip default export in export *
+						debugPrintf("// [Checker] Re-exporting '%s' from '%s'\n", exportName, sourceModule)
+						c.moduleEnv.DefineReExport(exportName, sourceModule, exportName)
+					}
+				}
+				
+				debugPrintf("// [Checker] Completed export * expansion for %d exports from '%s'\n", len(exportNames), sourceModule)
+			} else {
+				c.addError(node, "module loader not available for resolving exports")
+			}
 		}
 	}
 }

@@ -30,7 +30,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = false      // Enable for debugging register allocation issue
+const debugCompiler = true      // Enable for debugging register allocation issue
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
@@ -441,6 +441,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 			// 4. Update the symbol table entry with the register holding the closure.
 			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, hint) // <<< Use closureReg
+
+			// 5. If at top level, also set as global variable
+			if c.enclosing == nil {
+				globalIdx := c.GetOrAssignGlobalIndex(funcLit.Name.Value)
+				c.emitSetGlobal(globalIdx, hint, funcLit.Token.Line)
+				c.currentSymbolTable.DefineGlobal(funcLit.Name.Value, globalIdx)
+			}
 
 			// Function declarations don't produce a value for the script result
 			return hint, nil // Handled
@@ -1428,6 +1435,7 @@ func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	}
 
 	if idx, exists := topCompiler.globalIndices[name]; exists {
+		debugPrintf("// [Compiler] GetOrAssignGlobalIndex: '%s' already has index %d\n", name, idx)
 		return uint16(idx)
 	}
 
@@ -1435,12 +1443,90 @@ func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	idx := topCompiler.globalCount
 	topCompiler.globalIndices[name] = idx
 	topCompiler.globalCount++
+	debugPrintf("// [Compiler] GetOrAssignGlobalIndex: Assigned new index %d to '%s' (total globals: %d)\n", idx, name, topCompiler.globalCount)
 
 	if idx > 65535 {
 		panic(fmt.Sprintf("Too many global variables (max 65536): %s", name))
 	}
 
 	return uint16(idx)
+}
+
+// GetGlobalNames returns a slice of all global variable names that have been assigned indices
+func (c *Compiler) GetGlobalNames() []string {
+	// Only top-level compiler should manage global indices
+	topCompiler := c
+	for topCompiler.enclosing != nil {
+		topCompiler = topCompiler.enclosing
+	}
+
+	names := make([]string, 0, len(topCompiler.globalIndices))
+	for name := range topCompiler.globalIndices {
+		names = append(names, name)
+	}
+	return names
+}
+
+// GetGlobalIndex returns the index for a global variable name, or -1 if not found
+func (c *Compiler) GetGlobalIndex(name string) int {
+	// Only top-level compiler should manage global indices
+	topCompiler := c
+	for topCompiler.enclosing != nil {
+		topCompiler = topCompiler.enclosing
+	}
+
+	if idx, exists := topCompiler.globalIndices[name]; exists {
+		return idx
+	}
+	return -1
+}
+
+// SetGlobalIndex forces a global variable name to use a specific index
+// This is used to coordinate global indices between different compiler instances
+func (c *Compiler) SetGlobalIndex(name string, index int) {
+	// Only top-level compiler should manage global indices
+	topCompiler := c
+	for topCompiler.enclosing != nil {
+		topCompiler = topCompiler.enclosing
+	}
+
+	topCompiler.globalIndices[name] = index
+	// Update global count if this index is beyond current count
+	if index >= topCompiler.globalCount {
+		topCompiler.globalCount = index + 1
+	}
+	debugPrintf("// [Compiler] SetGlobalIndex: Forced '%s' to index %d\n", name, index)
+}
+
+// GetExportGlobalIndices returns a mapping from export names to their global indices
+// This allows the VM to efficiently collect export values from the global table
+func (c *Compiler) GetExportGlobalIndices() map[string]int {
+	if !c.IsModuleMode() {
+		return make(map[string]int)
+	}
+
+	exportIndices := make(map[string]int)
+	
+	// Get all exported names from module bindings
+	for exportName := range c.moduleBindings.ExportedNames {
+		// The export name should correspond to the same name in globals
+		// (exports are stored as globals with the same name)
+		if globalIdx := c.GetGlobalIndex(exportName); globalIdx >= 0 {
+			exportIndices[exportName] = globalIdx
+			debugPrintf("// [Compiler] GetExportGlobalIndices: Export '%s' maps to global[%d]\n", exportName, globalIdx)
+		}
+	}
+
+	// Handle default export if it exists
+	if c.moduleBindings.DefaultExport != nil {
+		defaultLocalName := c.moduleBindings.DefaultExport.LocalName
+		if globalIdx := c.GetGlobalIndex(defaultLocalName); globalIdx >= 0 {
+			exportIndices["default"] = globalIdx
+			debugPrintf("// [Compiler] GetExportGlobalIndices: Default export '%s' maps to global[%d]\n", defaultLocalName, globalIdx)
+		}
+	}
+
+	return exportIndices
 }
 
 // hasMethodInType checks if an object type has a method with the given name
@@ -1644,7 +1730,7 @@ func (c *Compiler) compileExportDefaultDeclaration(node *parser.ExportDefaultDec
 }
 
 // compileExportAllDeclaration handles compilation of export all statements
-// Parallels type checker's checkExportAllDeclaration
+// Transforms "export * from './module'" into equivalent individual exports
 func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration, hint Register) (Register, errors.PaseratiError) {
 	if node.Source == nil {
 		return BadRegister, NewCompileError(node, "export * statement missing source module")
@@ -1653,11 +1739,137 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 	sourceModule := node.Source.Value
 	debugPrintf("// [Compiler] Processing export * from: %s\n", sourceModule)
 	
-	// TODO: Implement export * functionality
-	// This requires getting all exports from the source module and re-exporting them
-	// For now, we'll just log that it was processed
+	if !c.IsModuleMode() {
+		debugPrintf("// [Compiler] Not in module mode, skipping re-export\n")
+		return BadRegister, nil
+	}
 	
+	// Get the source module to find its exports
+	if c.moduleLoader == nil {
+		debugPrintf("// [Compiler] No module loader available for re-export\n")
+		return BadRegister, nil
+	}
+	
+	sourceModuleRecord, err := c.moduleLoader.LoadModule(sourceModule, ".")
+	if err != nil {
+		return BadRegister, NewCompileError(node, fmt.Sprintf("Failed to load source module '%s' for re-export: %v", sourceModule, err))
+	}
+	
+	// Get export names from the source module
+	// Try runtime values first, then fall back to export names
+	sourceExports := sourceModuleRecord.GetExportValues()
+	exportNames := sourceModuleRecord.GetExportNames()
+	
+	debugPrintf("// [Compiler] Source module '%s' has %d runtime exports and %d export names\n", sourceModule, len(sourceExports), len(exportNames))
+	
+	// If we have runtime exports, use those names (most reliable)
+	if len(sourceExports) > 0 {
+		exportNames = nil // Clear the names array
+		for exportName := range sourceExports {
+			exportNames = append(exportNames, exportName)
+		}
+		debugPrintf("// [Compiler] Using runtime export names: %v\n", exportNames)
+	} else if len(exportNames) > 0 {
+		debugPrintf("// [Compiler] Using export names from module record: %v\n", exportNames)
+	} else {
+		debugPrintf("// [Compiler] No exports found in source module\n")
+	}
+	
+	debugPrintf("// [Compiler] Will re-export %d names from '%s'\n", len(exportNames), sourceModule)
+	
+	// For each export in the source module, create an equivalent re-export
+	// This transforms "export * from './math'" into:
+	// 1. Generate import resolution for each export
+	// 2. Store each imported value as a global (like normal exports do)
+	for _, exportName := range exportNames {
+		// Skip default exports for "export *" (TypeScript behavior)
+		if exportName == "default" {
+			debugPrintf("// [Compiler] Skipping default export '%s' in re-export all\n", exportName)
+			continue
+		}
+		
+		debugPrintf("// [Compiler] Re-exporting '%s' from '%s'\n", exportName, sourceModule)
+		
+		// 1. Define the import binding (like processImportDeclaration does)
+		c.moduleBindings.DefineImport(exportName, sourceModule, exportName, ImportNamedRef)
+		
+		// 2. Define the export binding (like processExportDeclaration does)  
+		c.moduleBindings.DefineExport(exportName, exportName, vm.Undefined, nil)
+		
+		// 3. Generate bytecode to import and re-export the value
+		// Allocate a temporary register for the imported value
+		tempReg := c.regAlloc.Alloc()
+		
+		// Generate import resolution (OpEvalModule + OpGetModuleExport)
+		c.emitImportResolve(tempReg, exportName, node.Token.Line)
+		
+		// Store the imported value as a global (like normal exports do)
+		globalIdx := c.GetOrAssignGlobalIndex(exportName)
+		c.emitSetGlobal(globalIdx, tempReg, node.Token.Line)
+		
+		debugPrintf("// [Compiler] Stored re-exported '%s' as global at index %d\n", exportName, globalIdx)
+		
+		// Free the temporary register
+		c.regAlloc.Free(tempReg)
+	}
+	
+	debugPrintf("// [Compiler] Completed re-export transformation for %d exports\n", len(exportNames))
 	return BadRegister, nil
+}
+
+// extractExportNamesFromAST extracts export names from a module's AST
+// This is used when runtime export values are not yet available
+func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
+	var exportNames []string
+	
+	if program == nil || program.Statements == nil {
+		return exportNames
+	}
+	
+	for _, stmt := range program.Statements {
+		switch node := stmt.(type) {
+		case *parser.ExportNamedDeclaration:
+			if node.Declaration != nil {
+				// Direct export: export const x = 1; export function foo() {}
+				switch decl := node.Declaration.(type) {
+				case *parser.LetStatement:
+					if decl.Name != nil {
+						exportNames = append(exportNames, decl.Name.Value)
+					}
+				case *parser.ConstStatement:
+					if decl.Name != nil {
+						exportNames = append(exportNames, decl.Name.Value)
+					}
+				case *parser.ExpressionStatement:
+					// Handle function declarations: export function foo() {}
+					if expr, ok := decl.Expression.(*parser.FunctionLiteral); ok && expr.Name != nil {
+						exportNames = append(exportNames, expr.Name.Value)
+					}
+				}
+			} else if len(node.Specifiers) > 0 {
+				// Named exports: export { x, y }
+				for _, spec := range node.Specifiers {
+					if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+						if exportSpec.Local != nil {
+							// Use the export name (or local name if no alias)
+							exportName := exportSpec.Local.Value
+							if exportSpec.Exported != nil {
+								exportName = exportSpec.Exported.Value
+							}
+							exportNames = append(exportNames, exportName)
+						}
+					}
+				}
+			}
+		case *parser.ExportDefaultDeclaration:
+			exportNames = append(exportNames, "default")
+		case *parser.ExportAllDeclaration:
+			// Note: export * from "module" doesn't add any names directly
+			// The names come from the source module
+		}
+	}
+	
+	return exportNames
 }
 
 // processExportDeclaration processes a declaration that's being exported directly

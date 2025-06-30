@@ -91,6 +91,11 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	// Wire the module loader into the VM
 	vmInstance.SetModuleLoader(moduleLoader)
 	
+	// Initialize builtins using new initializer system FIRST
+	if err := initializeBuiltins(paserati); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
+	}
+
 	// Set up the checker factory for the module loader
 	// This allows the module loader to create type checkers without circular imports
 	moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
@@ -99,19 +104,19 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 		return newChecker
 	})
 	
-	// Set up the compiler factory for the module loader
+	// Set up the compiler factory for the module loader AFTER builtins are initialized
 	// This allows the module loader to create compilers without circular imports
 	moduleLoader.SetCompilerFactory(func() modules.Compiler {
 		// Create a new compiler instance for module compilation
 		newCompiler := compiler.NewCompiler()
+		
+		// CRITICAL: Pre-populate module compiler with builtin global indices
+		// This ensures module compilers start allocating from index 21+ (after builtins 0-20)
+		paserati.coordinateModuleCompilerGlobals(newCompiler)
+		
 		// Return a wrapper that adapts the return type to interface{}
 		return &compilerAdapter{newCompiler}
 	})
-
-	// Initialize builtins using new initializer system
-	if err := initializeBuiltins(paserati); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
-	}
 
 	return paserati
 }
@@ -663,21 +668,20 @@ func (p *Paserati) collectExportedValues() map[string]vm.Value {
 		return exports
 	}
 	
-	// Get the export bindings from the compiler
-	moduleExports := p.compiler.GetModuleExports()
-	debugPrintf("// [Driver] collectExportedValues: Found %d module exports in compiler\n", len(moduleExports))
+	// Get the export name to global index mapping from the compiler
+	exportIndices := p.compiler.GetExportGlobalIndices()
+	debugPrintf("// [Driver] collectExportedValues: Found %d export mappings\n", len(exportIndices))
 	
-	// For each export binding, try to get the actual runtime value
-	// TODO: This is a simplified implementation. In a full implementation,
-	// we would need to map from the binding information to actual VM values
-	for exportName, _ := range moduleExports {
-		// For now, we'll try to get the value from the VM's global scope
-		// This is a placeholder - we need a better way to map exports to values
-		if value, exists := p.tryGetExportValue(exportName); exists {
+	// For each export, get the value directly from the VM's global table using the index
+	for exportName, globalIdx := range exportIndices {
+		if value, exists := p.vmInstance.GetGlobalByIndex(globalIdx); exists {
 			exports[exportName] = value
-			debugPrintf("// [Driver] collectExportedValues: Collected export '%s' = %s\n", exportName, value.Type())
+			debugPrintf("// [Driver] collectExportedValues: Collected export '%s' from global[%d] = %s\n", 
+				exportName, globalIdx, value.Type())
 		} else {
-			debugPrintf("// [Driver] collectExportedValues: Could not find runtime value for export '%s'\n", exportName)
+			debugPrintf("// [Driver] collectExportedValues: Could not find value at global[%d] for export '%s'\n", 
+				globalIdx, exportName)
+			exports[exportName] = vm.Undefined
 		}
 	}
 	
@@ -702,4 +706,23 @@ func (p *Paserati) tryGetExportValue(exportName string) (vm.Value, bool) {
 	// accessible after the function/module completes
 	
 	return vm.Undefined, false
+}
+
+// coordinateModuleCompilerGlobals pre-populates a module compiler with builtin global indices
+// This ensures module compilers start allocating from index 21+ (after builtins 0-20)
+func (p *Paserati) coordinateModuleCompilerGlobals(moduleCompiler *compiler.Compiler) {
+	// Get all global variables that have been initialized in the main compiler
+	globalNames := p.compiler.GetGlobalNames()
+	
+	debugPrintf("// [Driver] coordinateModuleCompilerGlobals: Pre-populating %d builtin globals\n", len(globalNames))
+	
+	// Pre-assign the same global indices in the module compiler to maintain consistency
+	for _, name := range globalNames {
+		globalIdx := p.compiler.GetGlobalIndex(name)
+		if globalIdx >= 0 {
+			// Force the module compiler to use the same index for this builtin
+			moduleCompiler.SetGlobalIndex(name, globalIdx)
+			debugPrintf("// [Driver] coordinateModuleCompilerGlobals: Set '%s' to index %d\n", name, globalIdx)
+		}
+	}
 }

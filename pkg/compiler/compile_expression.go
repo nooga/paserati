@@ -1046,6 +1046,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, thisReg)
+		// fmt.Printf("// [COMPILE DEBUG] Method call: thisReg = R%d\n", thisReg)
 		_, err := c.compileNode(memberExpr.Object, thisReg)
 		if err != nil {
 			return BadRegister, err
@@ -1055,6 +1056,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		totalArgCount := c.determineTotalArgCount(node)
 		blockSize := 1 + totalArgCount // funcReg + arguments
 		funcReg := c.regAlloc.AllocContiguous(blockSize)
+		// fmt.Printf("// [COMPILE DEBUG] Method call: funcReg = R%d, blockSize = %d, totalArgCount = %d\n", funcReg, blockSize, totalArgCount)
 		// Mark the entire block for cleanup
 		for i := 0; i < blockSize; i++ {
 			tempRegs = append(tempRegs, funcReg+Register(i))
@@ -1063,6 +1065,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		// 3. OPTIMIZATION: Reuse thisReg for getting the property instead of compiling the object again
 		propertyName := c.extractPropertyName(memberExpr.Property)
 		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+		// fmt.Printf("// [COMPILE DEBUG] Method call: emitGetProp(funcReg=R%d, thisReg=R%d, property='%s')\n", funcReg, thisReg, propertyName)
 		c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
 
 		// 4. Compile arguments directly into their target positions (funcReg+1, funcReg+2, ...)
@@ -1072,6 +1075,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		}
 
 		// 5. Emit OpCallMethod using hint as result register
+		// fmt.Printf("// [COMPILE DEBUG] Method call: emitCallMethod(hint=R%d, funcReg=R%d, thisReg=R%d, argCount=%d)\n", hint, funcReg, thisReg, actualArgCount)
 		c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
 
 		return hint, nil

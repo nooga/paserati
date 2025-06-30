@@ -17,3 +17,8 @@ console.log(math.magnitude(v4)); // expect: 1
 // Type error tests (should be caught by type checker)
 // let badVector: Vector2D = { x: "not a number", y: 2 }; // expect_compile_error: Type 'string' is not assignable to type 'number'
 // add(v1, "not a vector"); // expect_compile_error: Argument of type 'string' is not assignable to parameter of type 'Vector2D'
+
+// Return the magnitude result
+magnitude(v3);
+
+// expect: 5

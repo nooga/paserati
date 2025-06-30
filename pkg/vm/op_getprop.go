@@ -1,6 +1,10 @@
 package vm
 
 func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
+	// Debug logging for property access
+	// fmt.Printf("// [VM DEBUG] opGetProp: Getting property '%s' from object type %v, value: %s\n", 
+	//	propName, objVal.Type(), objVal.Inspect())
+	
 	// Generate cache key
 	propNameHash := 0
 	for _, b := range []byte(propName) {
