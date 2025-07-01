@@ -297,13 +297,14 @@ func (rp *RestParameter) String() string {
 }
 
 // --- NEW: TypeParameter Node ---
-// Represents a type parameter in generic function declarations (e.g., T, U extends string)
-// Used in function<T, U extends string>() syntax
+// Represents a type parameter in generic function declarations (e.g., T, U extends string, V = DefaultType)
+// Used in function<T, U extends string, V = DefaultType>() syntax
 type TypeParameter struct {
 	BaseExpression             // Embed base for ComputedType
 	Token          lexer.Token // The identifier token (e.g., 'T')
 	Name           *Identifier // The type parameter name
 	Constraint     Expression  // Optional constraint (e.g., 'string' in 'T extends string')
+	DefaultType    Expression  // Optional default type (e.g., 'string' in 'T = string')
 }
 
 func (tp *TypeParameter) expressionNode()      {}
@@ -316,6 +317,10 @@ func (tp *TypeParameter) String() string {
 	if tp.Constraint != nil {
 		out.WriteString(" extends ")
 		out.WriteString(tp.Constraint.String())
+	}
+	if tp.DefaultType != nil {
+		out.WriteString(" = ")
+		out.WriteString(tp.DefaultType.String())
 	}
 	return out.String()
 }

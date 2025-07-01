@@ -47,10 +47,25 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 				constraintType = types.Any // Default constraint
 			}
 			
+			// Resolve default type if present
+			var defaultType types.Type
+			if typeParamNode.DefaultType != nil {
+				originalEnv := c.env
+				c.env = typeParamEnv // Use the type param environment for default type resolution
+				defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
+				c.env = originalEnv
+				
+				// Validate that default type satisfies constraint if both are present
+				if defaultType != nil && constraintType != types.Any && !types.IsAssignable(defaultType, constraintType) {
+					c.addError(typeParamNode.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraintType.String()))
+				}
+			}
+			
 			// Create the type parameter
 			typeParam := &types.TypeParameter{
 				Name:       typeParamNode.Name.Value,
 				Constraint: constraintType,
+				Default:    defaultType,
 				Index:      i,
 			}
 			
@@ -180,10 +195,25 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 				constraintType = types.Any // Default constraint
 			}
 			
+			// Resolve default type if present
+			var defaultType types.Type
+			if typeParamNode.DefaultType != nil {
+				originalEnv := c.env
+				c.env = typeParamEnv // Use the type param environment for default type resolution
+				defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
+				c.env = originalEnv
+				
+				// Validate that default type satisfies constraint if both are present
+				if defaultType != nil && constraintType != types.Any && !types.IsAssignable(defaultType, constraintType) {
+					c.addError(typeParamNode.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraintType.String()))
+				}
+			}
+			
 			// Create the type parameter
 			typeParam := &types.TypeParameter{
 				Name:       typeParamNode.Name.Value,
 				Constraint: constraintType,
+				Default:    defaultType,
 			}
 			
 			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint any\n", typeParam.Name)

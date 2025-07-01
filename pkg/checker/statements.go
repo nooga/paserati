@@ -77,6 +77,19 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 			}
 		}
 		
+		// Handle default type if present
+		if param.DefaultType != nil {
+			defaultType := c.resolveTypeAnnotation(param.DefaultType)
+			if defaultType != nil {
+				typeParam.Default = defaultType
+				
+				// Validate that default type satisfies constraint if both are present
+				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
+					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
+				}
+			}
+		}
+		
 		typeParams[i] = typeParam
 	}
 
@@ -285,6 +298,19 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			constraintType := c.resolveTypeAnnotation(param.Constraint)
 			if constraintType != nil {
 				typeParam.Constraint = constraintType
+			}
+		}
+		
+		// Handle default type if present
+		if param.DefaultType != nil {
+			defaultType := c.resolveTypeAnnotation(param.DefaultType)
+			if defaultType != nil {
+				typeParam.Default = defaultType
+				
+				// Validate that default type satisfies constraint if both are present
+				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
+					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
+				}
 			}
 		}
 		

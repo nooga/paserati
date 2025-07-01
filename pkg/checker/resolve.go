@@ -65,7 +65,15 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		resolvedAlias, found := c.env.ResolveType(node.Value)
 		if found {
 			debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as alias: %T\n", node.Value, resolvedAlias) // ADDED DEBUG
-			return resolvedAlias                                                                                      // Successfully resolved as an alias
+			
+			// Check if this is a GenericType that needs instantiation with defaults
+			if genericType, ok := resolvedAlias.(*types.GenericType); ok {
+				debugPrintf("// [Checker resolveTypeAnno Ident] Found generic type '%s', instantiating with defaults\n", node.Value)
+				// Instantiate with no explicit type arguments - will use defaults
+				return c.instantiateGenericType(genericType, []types.Type{}, []parser.Expression{})
+			}
+			
+			return resolvedAlias // Successfully resolved as a non-generic alias
 		}
 		debugPrintf("// [Checker resolveTypeAnno Ident] '%s' not found as alias, checking primitives...\n", node.Value) // ADDED DEBUG
 
@@ -299,9 +307,24 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			// Check if it's a GenericType
 			if genericType, ok := baseType.(*types.GenericType); ok {
 				// Validate type argument count
-				if len(node.TypeArguments) != len(genericType.TypeParameters) {
-					c.addError(node, fmt.Sprintf("Generic type '%s' expects %d type arguments, got %d",
-						node.Name.Value, len(genericType.TypeParameters), len(node.TypeArguments)))
+				// Check argument count - allow fewer arguments if defaults are available
+				minRequired := 0
+				for _, param := range genericType.TypeParameters {
+					if param.Default == nil {
+						minRequired++
+					} else {
+						break // Once we hit a parameter with a default, all following must have defaults
+					}
+				}
+				
+				if len(node.TypeArguments) < minRequired || len(node.TypeArguments) > len(genericType.TypeParameters) {
+					if minRequired == len(genericType.TypeParameters) {
+						c.addError(node, fmt.Sprintf("Generic type '%s' expects %d type arguments, got %d",
+							node.Name.Value, len(genericType.TypeParameters), len(node.TypeArguments)))
+					} else {
+						c.addError(node, fmt.Sprintf("Generic type '%s' expects %d-%d type arguments, got %d",
+							node.Name.Value, minRequired, len(genericType.TypeParameters), len(node.TypeArguments)))
+					}
 					return nil
 				}
 
@@ -673,9 +696,32 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 // instantiateGenericType creates a concrete type by substituting type arguments
 // into a GenericType's body type
 func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArgs []types.Type, typeArgNodes []parser.Expression) types.Type {
-	// Create debug string for type arguments
+	// Handle default type parameters when fewer arguments are provided
+	finalTypeArgs := make([]types.Type, len(genericType.TypeParameters))
+	
+	// Fill in provided type arguments
+	for i := 0; i < len(typeArgs) && i < len(genericType.TypeParameters); i++ {
+		finalTypeArgs[i] = typeArgs[i]
+	}
+	
+	// Fill in defaults for missing type arguments
+	for i := len(typeArgs); i < len(genericType.TypeParameters); i++ {
+		typeParam := genericType.TypeParameters[i]
+		if typeParam.Default != nil {
+			finalTypeArgs[i] = typeParam.Default
+			debugPrintf("// [Checker] Using default type '%s' for parameter '%s'\n",
+				typeParam.Default.String(), typeParam.Name)
+		} else {
+			// Error: no type argument provided and no default
+			errorMsg := fmt.Sprintf("Type parameter '%s' requires a type argument or default type", typeParam.Name)
+			c.addGenericError(errorMsg)
+			return types.Any
+		}
+	}
+
+	// Create debug string for final type arguments
 	var typeStrs []string
-	for _, t := range typeArgs {
+	for _, t := range finalTypeArgs {
 		typeStrs = append(typeStrs, t.String())
 	}
 	debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n",
@@ -684,7 +730,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	// Validate constraints before instantiation
 	for i, typeParam := range genericType.TypeParameters {
 		if typeParam.Constraint != nil {
-			argType := typeArgs[i]
+			argType := finalTypeArgs[i]
 			constraintType := typeParam.Constraint
 
 			debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
@@ -711,7 +757,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	// Create substitution map from type parameters to concrete types
 	substitution := make(map[string]types.Type)
 	for i, typeParam := range genericType.TypeParameters {
-		substitution[typeParam.Name] = typeArgs[i]
+		substitution[typeParam.Name] = finalTypeArgs[i]
 	}
 
 	// Perform type substitution on the body type
@@ -1054,6 +1100,7 @@ func (c *Checker) resolveMappedTypeExpression(node *parser.MappedTypeExpression)
 	typeParam := &types.TypeParameter{
 		Name:       node.TypeParameter.Value,
 		Constraint: constraintType, // The constraint is what P extends/iterates over
+		Default:    nil,            // Mapped types don't have defaults
 	}
 	tempEnv.DefineTypeParameter(node.TypeParameter.Value, typeParam)
 

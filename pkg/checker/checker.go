@@ -505,6 +505,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					typeParam = &types.TypeParameter{
 						Name:       typeParamNode.Name.Value,
 						Constraint: types.Any,
+						Default:    nil, // Fallback case - no default
 						Index:      i,
 					}
 					debugPrintf("// [Checker Pass 3] WARNING: Had to create new type parameter '%s'\n", typeParam.Name)

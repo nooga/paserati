@@ -118,6 +118,19 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 			}
 		}
 
+		// Handle default type if present
+		if param.DefaultType != nil {
+			defaultType := c.resolveTypeAnnotation(param.DefaultType)
+			if defaultType != nil {
+				typeParam.Default = defaultType
+				
+				// Validate that default type satisfies constraint if both are present
+				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
+					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
+				}
+			}
+		}
+
 		typeParams[i] = typeParam
 	}
 
@@ -661,10 +674,17 @@ func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type
 		
 		// Define each type parameter in the environment
 		for i, typeParamNode := range fn.TypeParameters {
+			// Resolve default type if present
+			var defaultType types.Type
+			if typeParamNode.DefaultType != nil {
+				defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
+			}
+			
 			// Create the type parameter
 			typeParam := &types.TypeParameter{
 				Name:       typeParamNode.Name.Value,
 				Constraint: types.Any, // Simple constraint for now
+				Default:    defaultType,
 				Index:      i,
 			}
 			
@@ -727,10 +747,17 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 			
 			// Define each type parameter in the environment
 			for i, typeParamNode := range fn.TypeParameters {
+				// Resolve default type if present
+				var defaultType types.Type
+				if typeParamNode.DefaultType != nil {
+					defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
+				}
+				
 				// Create the type parameter
 				typeParam := &types.TypeParameter{
 					Name:       typeParamNode.Name.Value,
 					Constraint: types.Any, // Simple constraint for now
+					Default:    defaultType,
 					Index:      i,
 				}
 				
@@ -1018,10 +1045,17 @@ func (c *Checker) inferReturnType(fn *parser.FunctionLiteral) types.Type {
 			
 			// Define each type parameter in the environment
 			for i, typeParamNode := range fn.TypeParameters {
+				// Resolve default type if present
+				var defaultType types.Type
+				if typeParamNode.DefaultType != nil {
+					defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
+				}
+				
 				// Create the type parameter
 				typeParam := &types.TypeParameter{
 					Name:       typeParamNode.Name.Value,
 					Constraint: types.Any, // Simple constraint for now
+					Default:    defaultType,
 					Index:      i,
 				}
 				

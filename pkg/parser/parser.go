@@ -3360,7 +3360,12 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 
 // parseAssignmentExpression handles variable assignment (e.g., x = value)
 func (p *Parser) parseAssignmentExpression(left Expression) Expression {
-	debugPrint("parseAssignmentExpression starting with left: %s (%T)", left.String(), left)
+	debugPrint("parseAssignmentExpression starting at line %d:%d with left: %T", p.curToken.Line, p.curToken.Column, left)
+	if left == nil {
+		debugPrint("parseAssignmentExpression ERROR: left expression is nil!")
+		return nil
+	}
+	debugPrint("parseAssignmentExpression left.String(): %s", left.String())
 
 	// Check for array destructuring assignment: [a, b, c] = expr
 	if arrayLit, ok := left.(*ArrayLiteral); ok && p.curToken.Type == lexer.ASSIGN {
@@ -3393,6 +3398,10 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 
 	debugPrint("parseAssignmentExpression parsing right side...")
 	expr.Value = p.parseExpression(precedence)
+	if expr.Value == nil {
+		debugPrint("parseAssignmentExpression ERROR: right side expression is nil!")
+		return nil
+	}
 	debugPrint("parseAssignmentExpression finished right side: %s (%T)", expr.Value.String(), expr.Value)
 
 	return expr
@@ -5819,7 +5828,7 @@ func (p *Parser) parseTypeParameters() ([]*TypeParameter, error) {
 	return typeParams, nil
 }
 
-// parseTypeParameter parses a single type parameter: T or T extends string
+// parseTypeParameter parses a single type parameter: T or T extends string or T = DefaultType or T extends string = DefaultType
 func (p *Parser) parseTypeParameter() *TypeParameter {
 	if !p.curTokenIs(lexer.IDENT) {
 		p.addError(p.curToken, "expected type parameter name")
@@ -5842,6 +5851,20 @@ func (p *Parser) parseTypeParameter() *TypeParameter {
 			return nil
 		}
 		param.Constraint = constraint
+	}
+
+	// Check for default type: T = DefaultType (can be combined with constraint: T extends string = DefaultType)
+	if p.peekTokenIs(lexer.ASSIGN) {
+		p.nextToken() // consume '='
+		p.nextToken() // move to default type
+
+		defaultType := p.parseTypeExpression()
+		if defaultType == nil {
+			p.addError(p.curToken, "expected type after '='")
+			return nil
+		}
+
+		param.DefaultType = defaultType
 	}
 
 	return param

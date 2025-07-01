@@ -9,14 +9,22 @@ import (
 type TypeParameter struct {
 	Name       string // The parameter name (e.g., "T", "U", "K", "V")
 	Constraint Type   // Optional constraint (e.g., T extends string), nil if unconstrained
+	Default    Type   // Optional default type (e.g., T = string), nil if no default
 	Index      int    // Position in the type parameter list (0-based)
 }
 
 func (tp *TypeParameter) String() string {
+	var result strings.Builder
+	result.WriteString(tp.Name)
 	if tp.Constraint != nil {
-		return fmt.Sprintf("%s extends %s", tp.Name, tp.Constraint.String())
+		result.WriteString(" extends ")
+		result.WriteString(tp.Constraint.String())
 	}
-	return tp.Name
+	if tp.Default != nil {
+		result.WriteString(" = ")
+		result.WriteString(tp.Default.String())
+	}
+	return result.String()
 }
 
 // TypeParameterType represents a reference to a type parameter within a generic type or function
