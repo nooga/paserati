@@ -35,3 +35,4 @@ venv/
 timing.py
 timing.json
 .tally.py
+scratch/

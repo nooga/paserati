@@ -146,6 +146,20 @@ func (r *FileSystemResolver) tryResolve(targetPath string) (string, error) {
 		return targetPath, nil
 	}
 	
+	// Strategy 1.5: Handle .js → .ts mapping for TypeScript projects
+	// If the requested file ends with .js but doesn't exist, try .ts
+	if strings.HasSuffix(targetPath, ".js") {
+		tsPath := strings.TrimSuffix(targetPath, ".js") + ".ts"
+		if r.isFile(tsPath) {
+			return tsPath, nil
+		}
+		// Also try .tsx as a fallback
+		tsxPath := strings.TrimSuffix(targetPath, ".js") + ".tsx"
+		if r.isFile(tsxPath) {
+			return tsxPath, nil
+		}
+	}
+	
 	// Strategy 2: Try with extensions
 	for _, ext := range r.extensions {
 		pathWithExt := targetPath + ext

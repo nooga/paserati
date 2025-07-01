@@ -6501,6 +6501,12 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 	// Move to the next token to see what kind of import this is
 	p.nextToken()
 	
+	// Check for type-only import: import type { ... } from "module"
+	if p.curToken.Type == lexer.TYPE {
+		stmt.IsTypeOnly = true
+		p.nextToken() // consume 'type' keyword
+	}
+	
 	// Check for bare import: import "module-name"
 	if p.curToken.Type == lexer.STRING {
 		// This is a bare import with no specifiers
@@ -6693,6 +6699,13 @@ func (p *Parser) parseExportDeclaration() Statement {
 	// Move to the next token to see what kind of export this is
 	p.nextToken()
 	
+	// Check for type-only export: export type { ... } from "module"
+	isTypeOnly := false
+	if p.curToken.Type == lexer.TYPE {
+		isTypeOnly = true
+		p.nextToken() // consume 'type' keyword
+	}
+	
 	switch p.curToken.Type {
 	case lexer.DEFAULT:
 		// export default expression;
@@ -6704,7 +6717,7 @@ func (p *Parser) parseExportDeclaration() Statement {
 		
 	case lexer.LBRACE:
 		// export { name1, name2 } or export { name1 } from "module"
-		return p.parseExportNamedDeclarationWithSpecifiers(exportToken)
+		return p.parseExportNamedDeclarationWithSpecifiers(exportToken, isTypeOnly)
 		
 	case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE:
 		// export const x = 1; export function foo() {}
@@ -6776,8 +6789,8 @@ func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token) *ExportAllDe
 }
 
 // parseExportNamedDeclarationWithSpecifiers parses: export { name1, name2 } [from "module"]
-func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Token) *ExportNamedDeclaration {
-	stmt := &ExportNamedDeclaration{Token: exportToken}
+func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Token, isTypeOnly bool) *ExportNamedDeclaration {
+	stmt := &ExportNamedDeclaration{Token: exportToken, IsTypeOnly: isTypeOnly}
 	
 	// Parse export specifiers
 	if !p.expectPeek(lexer.IDENT) {

@@ -1556,6 +1556,12 @@ func (c *Compiler) hasMethodInType(objType *types.ObjectType, methodName string)
 // compileImportDeclaration handles compilation of import statements
 // Following the same pattern as type checker's checkImportDeclaration
 func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint Register) (Register, errors.PaseratiError) {
+	// Type-only imports are handled during type checking only - no runtime code needed
+	if node.IsTypeOnly {
+		debugPrintf("// [Compiler] Skipping type-only import from: %s\n", node.Source.Value)
+		return BadRegister, nil
+	}
+
 	if node.Source == nil {
 		return BadRegister, NewCompileError(node, "import statement missing source module")
 	}
@@ -1638,6 +1644,12 @@ func (c *Compiler) processImportBinding(localName, sourceModule, sourceName stri
 // compileExportNamedDeclaration handles compilation of named export statements
 // Parallels type checker's checkExportNamedDeclaration
 func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclaration, hint Register) (Register, errors.PaseratiError) {
+	// Type-only exports are handled during type checking only - no runtime code needed
+	if node.IsTypeOnly {
+		debugPrintf("// [Compiler] Skipping type-only export\n")
+		return BadRegister, nil
+	}
+
 	if node.Declaration != nil {
 		// Direct export: export const x = 1; export function foo() {}
 		debugPrintf("// [Compiler] Processing direct export declaration\n")

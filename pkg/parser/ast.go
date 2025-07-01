@@ -1545,6 +1545,7 @@ type ImportDeclaration struct {
 	Token       lexer.Token          // The 'import' token
 	Specifiers  []ImportSpecifier    // What to import (default, named, namespace)
 	Source      *StringLiteral       // From where ("./module")
+	IsTypeOnly  bool                 // true for "import type" statements
 }
 
 func (id *ImportDeclaration) statementNode()       {}
@@ -1552,6 +1553,9 @@ func (id *ImportDeclaration) TokenLiteral() string { return id.Token.Literal }
 func (id *ImportDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("import ")
+	if id.IsTypeOnly {
+		out.WriteString("type ")
+	}
 	
 	if len(id.Specifiers) > 0 {
 		specStrs := make([]string, len(id.Specifiers))
@@ -1673,6 +1677,7 @@ type ExportNamedDeclaration struct {
 	Declaration Statement          // Direct export: export const x = 1
 	Specifiers  []ExportSpecifier  // Named exports: export { x, y }
 	Source      *StringLiteral     // Re-export source: export { x } from "mod"
+	IsTypeOnly  bool               // true for "export type" statements
 }
 
 func (end *ExportNamedDeclaration) statementNode()        {}
@@ -1681,6 +1686,9 @@ func (end *ExportNamedDeclaration) TokenLiteral() string  { return end.Token.Lit
 func (end *ExportNamedDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("export ")
+	if end.IsTypeOnly {
+		out.WriteString("type ")
+	}
 	
 	if end.Declaration != nil {
 		// Direct export: export const x = 1;
