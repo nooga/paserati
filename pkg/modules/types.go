@@ -272,3 +272,8 @@ func (mr *ModuleRecord) GetExportNames() []string {
 	return names
 }
 
+// GetError returns the error associated with this module record
+func (mr *ModuleRecord) GetError() error {
+	return mr.Error
+}
+

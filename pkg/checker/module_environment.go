@@ -169,10 +169,22 @@ func (me *ModuleEnvironment) createNamespaceType(exports map[string]types.Type) 
 // GetExportedType gets the type of an exported name
 func (me *ModuleEnvironment) GetExportedType(exportName string) (types.Type, bool) {
 	if exportName == "default" && me.DefaultExport != nil {
+		// Handle default export re-exports
+		if me.DefaultExport.IsReExport && me.DefaultExport.ExportedType == types.Any {
+			if resolvedType := me.resolveReExportType(me.DefaultExport); resolvedType != nil {
+				me.DefaultExport.ExportedType = resolvedType
+			}
+		}
 		return me.DefaultExport.ExportedType, true
 	}
 	
 	if binding, exists := me.ExportedNames[exportName]; exists {
+		// Handle named export re-exports
+		if binding.IsReExport && binding.ExportedType == types.Any {
+			if resolvedType := me.resolveReExportType(binding); resolvedType != nil {
+				binding.ExportedType = resolvedType
+			}
+		}
 		return binding.ExportedType, true
 	}
 	
@@ -185,11 +197,23 @@ func (me *ModuleEnvironment) GetAllExports() map[string]types.Type {
 	
 	// Add named exports
 	for exportName, binding := range me.ExportedNames {
+		// Resolve re-exports if necessary
+		if binding.IsReExport && binding.ExportedType == types.Any {
+			if resolvedType := me.resolveReExportType(binding); resolvedType != nil {
+				binding.ExportedType = resolvedType
+			}
+		}
 		exports[exportName] = binding.ExportedType
 	}
 	
 	// Add default export if it exists
 	if me.DefaultExport != nil {
+		// Resolve default re-export if necessary
+		if me.DefaultExport.IsReExport && me.DefaultExport.ExportedType == types.Any {
+			if resolvedType := me.resolveReExportType(me.DefaultExport); resolvedType != nil {
+				me.DefaultExport.ExportedType = resolvedType
+			}
+		}
 		exports["default"] = me.DefaultExport.ExportedType
 	}
 	
@@ -210,4 +234,29 @@ func (me *ModuleEnvironment) UpdateExportType(exportName string, newType types.T
 	} else if binding, exists := me.ExportedNames[exportName]; exists {
 		binding.ExportedType = newType
 	}
+}
+
+// resolveReExportType resolves the type of a re-exported binding from its source module
+func (me *ModuleEnvironment) resolveReExportType(binding *ExportBinding) types.Type {
+	if !binding.IsReExport || me.ModuleLoader == nil {
+		return nil
+	}
+	
+	debugPrintf("// [ModuleEnv] Resolving re-export: %s from %s\n", binding.LocalName, binding.SourceModule)
+	
+	// Get the source module
+	sourceModule := me.ModuleLoader.GetModule(binding.SourceModule)
+	if sourceModule == nil {
+		debugPrintf("// [ModuleEnv] Source module '%s' not found for re-export\n", binding.SourceModule)
+		return nil
+	}
+	
+	// Look up the exported type from the source module
+	if exportType, exists := sourceModule.Exports[binding.LocalName]; exists {
+		debugPrintf("// [ModuleEnv] Resolved re-export %s as: %s\n", binding.LocalName, exportType.String())
+		return exportType
+	}
+	
+	debugPrintf("// [ModuleEnv] Export '%s' not found in source module '%s'\n", binding.LocalName, binding.SourceModule)
+	return nil
 }

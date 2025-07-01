@@ -94,7 +94,17 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		case "object":
 			return types.NewObjectType()
 		default:
-			// 3. If neither alias nor primitive, it's an unknown type name
+			// 3. Check if this is an imported type (interface, type alias, etc.)
+			if c.IsModuleMode() && c.moduleEnv != nil {
+				importedType := c.moduleEnv.ResolveImportedType(node.Value)
+				if importedType != nil && importedType != types.Any {
+					debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as imported type: %T\n", node.Value, importedType)
+					return importedType
+				}
+				debugPrintf("// [Checker resolveTypeAnno Ident] '%s' not found as imported type\n", node.Value)
+			}
+			
+			// 4. If neither alias, primitive, nor imported type, it's an unknown type name
 			debugPrintf("// [Checker resolveTypeAnno Ident] Primitive check failed for '%s', reporting error.\n", node.Value) // ADDED DEBUG
 			// Use the Identifier node itself for error reporting
 			c.addError(node, fmt.Sprintf("unknown type name: %s", node.Value))

@@ -1,5 +1,5 @@
-// expect_runtime_error: Failed to load module
-import { missing } from './nonexistent';
+// Test importing a module that doesn't exist
+import { nonExistent } from "./this_module_does_not_exist";
+console.log(nonExistent);
 
-const result = missing();
-result;
+// expect_runtime_error: Failed to load module

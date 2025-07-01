@@ -16,4 +16,4 @@ export const ZERO: Vector2D = { x: 0, y: 0 };
 export const UNIT_X: Vector2D = { x: 1, y: 0 };
 export const UNIT_Y: Vector2D = { x: 0, y: 1 };
 
-export default Vector2D;
+// export default Vector2D;

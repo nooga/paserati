@@ -226,7 +226,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	functionsToVisitBody := []*parser.FunctionLiteral{} // Function literals needing body check in Pass 3
 
 	// --- Pass 1: Define ALL Type Aliases ---
-	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases, Interfaces, and Classes ---\n")
+	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases, Interfaces, Classes, and Processing Imports ---\n")
 	for _, stmt := range program.Statements {
 		debugPrintf("// [Checker Pass 1] Examining statement type: %T\n", stmt)
 		if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
@@ -244,6 +244,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.checkClassDeclaration(classStmt)
 			nodesProcessedPass1[classStmt] = true
 			nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
+		} else if importStmt, ok := stmt.(*parser.ImportDeclaration); ok {
+			debugPrintf("// [Checker Pass 1] Processing Import: %s\n", importStmt.Source.Value)
+			c.checkImportDeclaration(importStmt)
+			nodesProcessedPass1[importStmt] = true
+			nodesProcessedPass2[importStmt] = true // Also mark for Pass 2 skip  
 		} else if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
 			// Check if this is a class expression wrapped in an expression statement
 			if classExpr, isClassExpr := exprStmt.Expression.(*parser.ClassExpression); isClassExpr && classExpr.Name != nil {
@@ -2615,9 +2620,13 @@ func (c *Checker) IsModuleMode() bool {
 
 // GetModuleExports returns the exports from the current module (if in module mode)
 func (c *Checker) GetModuleExports() map[string]types.Type {
+	debugPrintf("// [Checker GetModuleExports] Called. moduleEnv=%v\n", c.moduleEnv != nil)
 	if c.moduleEnv != nil {
-		return c.moduleEnv.GetAllExports()
+		exports := c.moduleEnv.GetAllExports()
+		debugPrintf("// [Checker GetModuleExports] Returning %d exports\n", len(exports))
+		return exports
 	}
+	debugPrintf("// [Checker GetModuleExports] No moduleEnv, returning empty map\n")
 	return make(map[string]types.Type)
 }
 
@@ -2693,6 +2702,21 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 		resolvedType := c.moduleEnv.ResolveImportedType(localName)
 		if resolvedType != types.Any {
 			debugPrintf("// [Checker] Imported %s: %s = %s (resolved)\n", localName, sourceName, resolvedType.String())
+			
+			// Register the imported type in the local type environment for type annotation resolution
+			// This allows interfaces and type aliases to be used in type annotations
+			c.env.DefineTypeAlias(localName, resolvedType)
+			debugPrintf("// [Checker] Registered imported type %s in local type environment\n", localName)
+			
+			// If this is a class (constructor function), also register it in the value environment
+			// Classes need to be available for both type annotations and runtime usage (new expressions)
+			if objectType, ok := resolvedType.(*types.ObjectType); ok {
+				if len(objectType.ConstructSignatures) > 0 {
+					// This is a constructor function type (class)
+					c.env.Define(localName, resolvedType, false)
+					debugPrintf("// [Checker] Registered imported class %s in value environment\n", localName)
+				}
+			}
 		} else {
 			debugPrintf("// [Checker] Imported %s: %s = any (unresolved)\n", localName, sourceName)
 		}
@@ -2929,8 +2953,8 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 	case *parser.InterfaceDeclaration:
 		if node.Name != nil {
 			localName := node.Name.Value
-			// For interfaces, look up in both regular environment and type aliases
-			exportType, _, exists := c.env.Resolve(localName)
+			// For interfaces, look up in the type environment
+			exportType, exists := c.env.ResolveType(localName)
 			if !exists {
 				exportType = types.Any
 			}
@@ -2944,8 +2968,8 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 	case *parser.TypeAliasStatement:
 		if node.Name != nil {
 			localName := node.Name.Value
-			// For type aliases, look up in the type alias environment
-			exportType, _, exists := c.env.Resolve(localName)
+			// For type aliases, look up in the type environment
+			exportType, exists := c.env.ResolveType(localName)
 			if !exists {
 				exportType = types.Any
 			}

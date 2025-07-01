@@ -101,6 +101,9 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
 		// Create a new checker instance for module type checking
 		newChecker := checker.NewChecker()
+		// Enable module mode so the checker can resolve imports
+		newChecker.EnableModuleMode("", moduleLoader)
+		debugPrintf("// [Driver] Created new checker for module: %p\n", newChecker)
 		return newChecker
 	})
 	
@@ -117,8 +120,66 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 		// Return a wrapper that adapts the return type to interface{}
 		return &compilerAdapter{newCompiler}
 	})
+	
+	// Enable module mode for the main checker by default for consistent type checking
+	typeChecker.EnableModuleMode("", moduleLoader)
 
 	return paserati
+}
+
+// CompileProgram compiles a parsed program using the initialized Paserati session
+// This is used by the test framework to compile with proper initialization
+func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.PaseratiError) {
+	return p.compiler.Compile(program)
+}
+
+// GetVM returns the VM instance for direct access (used by test framework)
+func (p *Paserati) GetVM() *vm.VM {
+	return p.vmInstance
+}
+
+// CompileModule compiles a module file with proper dependency resolution
+// This is used by the test framework to compile modules with full module loading
+func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiError) {
+	// Load the module using the module system to ensure dependencies are resolved
+	moduleRecordInterface, err := p.moduleLoader.LoadModule(filename, ".")
+	if err != nil {
+		loadErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Failed to load module '%s': %s", filename, err.Error()),
+		}
+		return nil, []errors.PaseratiError{loadErr}
+	}
+	
+	// Extract the module record
+	moduleRecord, ok := moduleRecordInterface.(*modules.ModuleRecord)
+	if !ok {
+		typeErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module loader returned unexpected type for '%s'", filename),
+		}
+		return nil, []errors.PaseratiError{typeErr}
+	}
+	
+	if moduleRecord.Error != nil {
+		compileErr := &errors.CompileError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      fmt.Sprintf("Module error: %s", moduleRecord.Error.Error()),
+		}
+		return nil, []errors.PaseratiError{compileErr}
+	}
+	
+	// Enable module mode in the checker and compiler for this specific module
+	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+	
+	// Compile the module (type checking is already done by LoadModule)
+	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
+	if len(compileErrs) > 0 {
+		return nil, compileErrs
+	}
+	
+	return chunk, nil
 }
 
 // RunString compiles and executes the given source code in the current session.
@@ -337,31 +398,43 @@ func (p *Paserati) RunModule(filename string) bool {
 		return false
 	}
 	
-	// Enable module mode in the checker and compiler
-	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
-	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
-	
-	// Type check the module (already done during loading, but we need to compile)
-	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
-	if len(compileErrs) > 0 {
-		// Read source for error display
-		sourceCode := ""
-		if moduleRecord.Source != nil {
-			sourceCode = moduleRecord.Source.Content
+	// Check if module already has a compiled chunk from the loader
+	var chunk *vm.Chunk
+	if moduleRecord.CompiledChunk != nil {
+		// Module was already compiled by the loader, use that chunk
+		chunk = moduleRecord.CompiledChunk
+		debugPrintf("// [Driver] Using pre-compiled chunk for module '%s'\n", filename)
+	} else {
+		// Module needs compilation (shouldn't happen with current loader, but handle it)
+		debugPrintf("// [Driver] Module '%s' needs compilation\n", filename)
+		
+		// Enable module mode in the checker and compiler
+		p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+		p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+		
+		// Compile the module
+		var compileErrs []errors.PaseratiError
+		chunk, compileErrs = p.compiler.Compile(moduleRecord.AST)
+		if len(compileErrs) > 0 {
+			// Read source for error display
+			sourceCode := ""
+			if moduleRecord.Source != nil {
+				sourceCode = moduleRecord.Source.Content
+			}
+			return p.DisplayResult(sourceCode, vm.Undefined, compileErrs)
 		}
-		return p.DisplayResult(sourceCode, vm.Undefined, compileErrs)
-	}
-	
-	if chunk == nil {
-		internalErr := &errors.RuntimeError{
-			Position: errors.Position{Line: 0, Column: 0},
-			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+		
+		if chunk == nil {
+			internalErr := &errors.RuntimeError{
+				Position: errors.Position{Line: 0, Column: 0},
+				Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+			}
+			return p.DisplayResult("", vm.Undefined, []errors.PaseratiError{internalErr})
 		}
-		return p.DisplayResult("", vm.Undefined, []errors.PaseratiError{internalErr})
+		
+		// Store the compiled chunk in the module record for VM access
+		moduleRecord.CompiledChunk = chunk
 	}
-	
-	// Store the compiled chunk in the module record for VM access
-	moduleRecord.CompiledChunk = chunk
 	
 	// Execute the module
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
@@ -440,26 +513,38 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
 	}
 	
-	// Enable module mode in the checker and compiler
-	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
-	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
-	
-	// Type check the module (already done during loading, but we need to compile)
-	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
-	if len(compileErrs) > 0 {
-		return vm.Undefined, compileErrs, nil
-	}
-	
-	if chunk == nil {
-		internalErr := &errors.RuntimeError{
-			Position: errors.Position{Line: 0, Column: 0},
-			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+	// Check if module already has a compiled chunk from the loader
+	var chunk *vm.Chunk
+	if moduleRecord.CompiledChunk != nil {
+		// Module was already compiled by the loader, use that chunk
+		chunk = moduleRecord.CompiledChunk
+		debugPrintf("// [Driver] Using pre-compiled chunk for module '%s'\n", filename)
+	} else {
+		// Module needs compilation (shouldn't happen with current loader, but handle it)
+		debugPrintf("// [Driver] Module '%s' needs compilation\n", filename)
+		
+		// Enable module mode in the checker and compiler
+		p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+		p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
+		
+		// Compile the module
+		var compileErrs []errors.PaseratiError
+		chunk, compileErrs = p.compiler.Compile(moduleRecord.AST)
+		if len(compileErrs) > 0 {
+			return vm.Undefined, compileErrs, nil
 		}
-		return vm.Undefined, []errors.PaseratiError{internalErr}, nil
+		
+		if chunk == nil {
+			internalErr := &errors.RuntimeError{
+				Position: errors.Position{Line: 0, Column: 0},
+				Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+			}
+			return vm.Undefined, []errors.PaseratiError{internalErr}, nil
+		}
+		
+		// Store the compiled chunk in the module record for VM access
+		moduleRecord.CompiledChunk = chunk
 	}
-	
-	// Store the compiled chunk in the module record for VM access
-	moduleRecord.CompiledChunk = chunk
 	
 	// Execute the module and return the final value
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)

@@ -300,14 +300,33 @@ func (w *parseWorker) processJob(job *ParseJob) *ParseResult {
 }
 
 // extractImportSpecs extracts import specifications from the AST
+// This includes both import statements and re-export statements with 'from' clauses
 func extractImportSpecs(program *parser.Program) []*ImportSpec {
 	var specs []*ImportSpec
 	
 	for _, stmt := range program.Statements {
-		if importDecl, ok := stmt.(*parser.ImportDeclaration); ok {
-			if importDecl.Source != nil {
+		switch node := stmt.(type) {
+		case *parser.ImportDeclaration:
+			// Regular import statements
+			if node.Source != nil {
 				spec := &ImportSpec{
-					ModulePath: importDecl.Source.Value,
+					ModulePath: node.Source.Value,
+				}
+				specs = append(specs, spec)
+			}
+		case *parser.ExportNamedDeclaration:
+			// Re-export statements: export { name } from "module"
+			if node.Source != nil {
+				spec := &ImportSpec{
+					ModulePath: node.Source.Value,
+				}
+				specs = append(specs, spec)
+			}
+		case *parser.ExportAllDeclaration:
+			// Re-export all statements: export * from "module"
+			if node.Source != nil {
+				spec := &ImportSpec{
+					ModulePath: node.Source.Value,
 				}
 				specs = append(specs, spec)
 			}

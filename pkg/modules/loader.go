@@ -89,6 +89,7 @@ func (ml *moduleLoader) LoadModuleParallel(specifier string, fromPath string) (v
 func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) (vm.ModuleRecord, error) {
 	// Check cache first
 	if record := ml.registry.Get(specifier); record != nil {
+		debugPrintf("// [ModuleLoader] Returning cached module: %s (has error: %v)\n", specifier, record.GetError() != nil)
 		return record, nil
 	}
 	
@@ -117,6 +118,20 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		return record, nil // Return record with error, don't fail completely
 	}
 	
+	// Extract and load dependencies before type checking
+	importSpecs := extractImportSpecs(record.AST)
+	debugPrintf("// [ModuleLoader] Found %d import specs in %s\n", len(importSpecs), record.ResolvedPath)
+	
+	// Load dependencies recursively
+	for _, importSpec := range importSpecs {
+		debugPrintf("// [ModuleLoader] Loading dependency: %s from %s\n", importSpec.ModulePath, record.ResolvedPath)
+		_, err := ml.loadModuleSequential(importSpec.ModulePath, record.ResolvedPath)
+		if err != nil {
+			debugPrintf("// [ModuleLoader] Failed to load dependency %s: %v\n", importSpec.ModulePath, err)
+			// Continue with other dependencies rather than failing completely
+		}
+	}
+	
 	// Add type checking and compilation to sequential loading
 	debugPrintf("// [ModuleLoader] Sequential loading checkerFactory: %v, compilerFactory: %v\n", 
 		ml.checkerFactory != nil, ml.compilerFactory != nil)
@@ -138,6 +153,10 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		// Extract exported types
 		if moduleChecker.IsModuleMode() {
 			record.Exports = moduleChecker.GetModuleExports()
+			debugPrintf("// [ModuleLoader] Extracted %d exports from module %s\n", len(record.Exports), record.ResolvedPath)
+			for name, typ := range record.Exports {
+				debugPrintf("// [ModuleLoader]   Export '%s': %s\n", name, typ.String())
+			}
 		}
 		
 		// Compile the module

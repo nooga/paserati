@@ -24,6 +24,7 @@ type ModuleRecord interface {
 	GetExportValues() map[string]Value
 	GetCompiledChunk() *Chunk
 	GetExportNames() []string
+	GetError() error
 }
 
 // ModuleContext represents a cached module execution context
@@ -2924,11 +2925,19 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			return vm.runtimeError("Failed to load module '%s': %s", modulePath, err.Error()), Undefined
 		}
 		
+		// Check if the module had any errors during loading/compilation
+		if moduleErr := moduleRecord.GetError(); moduleErr != nil {
+			// fmt.Printf("// [VM] executeModule: Module '%s' has error: %v\n", modulePath, moduleErr)
+			return vm.runtimeError("Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
+		}
+		
 		// Get the compiled chunk from the module
 		chunk := moduleRecord.GetCompiledChunk()
 		if chunk == nil {
+			// fmt.Printf("// [VM] executeModule: Module '%s' has no compiled chunk\n", modulePath)
 			return vm.runtimeError("Module '%s' has no compiled chunk", modulePath), Undefined
 		}
+		// fmt.Printf("// [VM] executeModule: Module '%s' has compiled chunk\n", modulePath)
 		
 		// Create module context with module-scoped globals
 		// Copy global-globals (builtins 0-20) to module's global table

@@ -30,7 +30,7 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 }
 
-const debugCompiler = true      // Enable for debugging register allocation issue
+const debugCompiler = false     // Enable for debugging register allocation issue
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
@@ -173,15 +173,14 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	}
 
 	// Use the assigned checker. If none was assigned (e.g., non-REPL), create one.
-	checkerWasProvided := c.typeChecker != nil
 	if c.typeChecker == nil {
 		c.typeChecker = checker.NewChecker()
 	}
 	
-	// Skip type checking if checker was externally provided (already type-checked)
-	// This prevents double type checking in module compilation
-	if !checkerWasProvided {
-		// Perform the check using the (potentially persistent) checker.
+	// Check if this program has already been type-checked by comparing the AST
+	// In module loading flow, the checker is already used to check the program
+	if c.typeChecker.GetProgram() != program {
+		// Program hasn't been checked yet, perform type checking
 		// The checker modifies its own environment state.
 		typeErrors := c.typeChecker.Check(program)
 		if len(typeErrors) > 0 {
@@ -189,6 +188,9 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			// Type errors are already []errors.PaseratiError from the checker.
 			return nil, typeErrors
 		}
+	} else {
+		// Program was already type-checked by this checker, skip redundant check
+		debugPrintf("// [Compiler] Skipping type check - program already checked by this checker\n")
 	}
 	// No need to re-assign c.typeChecker here, it was already set or created.
 	// --- End Type Checking Step ---
@@ -1435,7 +1437,7 @@ func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	}
 
 	if idx, exists := topCompiler.globalIndices[name]; exists {
-		debugPrintf("// [Compiler] GetOrAssignGlobalIndex: '%s' already has index %d\n", name, idx)
+		// debugPrintf("// [Compiler] GetOrAssignGlobalIndex: '%s' already has index %d\n", name, idx)
 		return uint16(idx)
 	}
 
@@ -1443,7 +1445,7 @@ func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	idx := topCompiler.globalCount
 	topCompiler.globalIndices[name] = idx
 	topCompiler.globalCount++
-	debugPrintf("// [Compiler] GetOrAssignGlobalIndex: Assigned new index %d to '%s' (total globals: %d)\n", idx, name, topCompiler.globalCount)
+	// debugPrintf("// [Compiler] GetOrAssignGlobalIndex: Assigned new index %d to '%s' (total globals: %d)\n", idx, name, topCompiler.globalCount)
 
 	if idx > 65535 {
 		panic(fmt.Sprintf("Too many global variables (max 65536): %s", name))
@@ -1495,7 +1497,7 @@ func (c *Compiler) SetGlobalIndex(name string, index int) {
 	if index >= topCompiler.globalCount {
 		topCompiler.globalCount = index + 1
 	}
-	debugPrintf("// [Compiler] SetGlobalIndex: Forced '%s' to index %d\n", name, index)
+	// debugPrintf("// [Compiler] SetGlobalIndex: Forced '%s' to index %d\n", name, index)
 }
 
 // GetExportGlobalIndices returns a mapping from export names to their global indices
@@ -1513,7 +1515,7 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 		// (exports are stored as globals with the same name)
 		if globalIdx := c.GetGlobalIndex(exportName); globalIdx >= 0 {
 			exportIndices[exportName] = globalIdx
-			debugPrintf("// [Compiler] GetExportGlobalIndices: Export '%s' maps to global[%d]\n", exportName, globalIdx)
+			// debugPrintf("// [Compiler] GetExportGlobalIndices: Export '%s' maps to global[%d]\n", exportName, globalIdx)
 		}
 	}
 
