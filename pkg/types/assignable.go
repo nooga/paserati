@@ -333,6 +333,18 @@ func IsAssignable(source, target Type) bool {
 		return false
 	}
 	
+	// Handle case where source is a type parameter and target is a concrete type
+	if sourceIsTypeParam && !targetIsTypeParam {
+		// Check if the source type parameter's constraint is assignable to the target
+		// This handles cases like: U extends Date should be assignable to Date
+		if sourceTypeParam.Parameter.Constraint != nil {
+			return IsAssignable(sourceTypeParam.Parameter.Constraint, target)
+		}
+		// If no constraint, fall back to checking if the type parameter itself can be assigned
+		// (this would typically be false for concrete types)
+		return false
+	}
+	
 	// Note: Readonly<T> utility type is now handled via mapped type expansion
 	// The expandMappedType system will convert Readonly<T> to concrete object types
 	// so no special handling is needed here

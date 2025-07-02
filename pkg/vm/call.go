@@ -37,9 +37,11 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 				return false, fmt.Errorf("Expected at least %d arguments but got %d", calleeFunc.Arity, argCount)
 			}
 		} else {
-			if argCount != calleeFunc.Arity {
+			// Allow fewer arguments for functions with optional parameters
+			// The compiler handles padding with undefined for missing optional parameters
+			if argCount > calleeFunc.Arity {
 				currentFrame.ip = callerIP
-				return false, fmt.Errorf("Expected %d arguments but got %d", calleeFunc.Arity, argCount)
+				return false, fmt.Errorf("Expected at most %d arguments but got %d", calleeFunc.Arity, argCount)
 			}
 		}
 
@@ -70,10 +72,14 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 
-		// Copy fixed arguments
-		for i := 0; i < calleeFunc.Arity && i < argCount; i++ {
+		// Copy fixed arguments and initialize missing ones with undefined
+		for i := 0; i < calleeFunc.Arity; i++ {
 			if i < len(newFrame.registers) {
-				newFrame.registers[i] = args[i]
+				if i < argCount {
+					newFrame.registers[i] = args[i]
+				} else {
+					newFrame.registers[i] = Undefined
+				}
 			} else {
 				// Rollback and error
 				vm.nextRegSlot -= requiredRegs
@@ -246,6 +252,10 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 
 	default:
 		currentFrame.ip = callerIP
+		fmt.Printf("DEBUG: Trying to call non-function value:\n")
+		fmt.Printf("  Type: %v\n", calleeVal.Type())
+		fmt.Printf("  Value: %s\n", calleeVal.Inspect())
+		fmt.Printf("  Raw: %+v\n", calleeVal)
 		return false, fmt.Errorf("Cannot call non-function value of type %v", calleeVal.Type())
 	}
 }

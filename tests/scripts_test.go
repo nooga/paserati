@@ -210,8 +210,9 @@ func initializeVMBuiltins(vmInstance *vm.VM) error {
 		}
 	}
 	
-	// Set up global variables in VM
-	return vmInstance.SetBuiltinGlobals(globalVariables)
+	// Set up global variables in VM with empty index map (legacy test mode)
+	indexMap := make(map[string]int)
+	return vmInstance.SetBuiltinGlobals(globalVariables, indexMap)
 }
 
 // compileAndInitializeVM compiles a file using the unified Paserati initialization approach

@@ -5,7 +5,6 @@ import (
 	"math"
 	"os"
 	"paserati/pkg/errors"
-	"sort"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -96,10 +95,8 @@ type VM struct {
 	// Cache statistics for debugging/profiling
 	cacheStats ICacheStats
 
-	// Global variables table (indexed by global variable index for performance)
-	globals []Value
-	// Global variable names (parallel array for debugging, maps index to name)
-	globalNames []string
+	// Unified global heap for all modules and main program
+	heap *Heap
 
 	// Singleton empty array for rest parameters optimization
 	// Used when variadic functions are called with no extra arguments
@@ -181,8 +178,7 @@ func NewVM() *VM {
 		openUpvalues:   make([]*Upvalue, 0, 16),        // Pre-allocate slightly
 		propCache:      make(map[int]*PropInlineCache), // Initialize inline cache
 		cacheStats:     ICacheStats{},                  // Initialize cache statistics
-		globals:        make([]Value, 0),               // Initialize global variables table
-		globalNames:    make([]string, 0),              // Initialize global variable names
+		heap:           NewHeap(64),                     // Initialize unified global heap
 		emptyRestArray: NewArray(),                     // Initialize singleton empty array for rest params
 		//initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
 		errors:         make([]errors.PaseratiError, 0), // Initialize error list
@@ -225,49 +221,19 @@ func (vm *VM) SetModuleLoader(loader ModuleLoader) {
 
 // GetGlobal retrieves a global variable by name
 func (vm *VM) GetGlobal(name string) (Value, bool) {
-	// Look up the name in the globalNames array
-	for i, globalName := range vm.globalNames {
-		if globalName == name {
-			// Found the name, return the corresponding value
-			if i < len(vm.globals) {
-				return vm.globals[i], true
-			}
-		}
-	}
+	// This method is deprecated in favor of index-based access via HeapAlloc
+	// since the heap doesn't store names. Callers should use GetGlobalByIndex instead.
 	return Undefined, false
 }
 
 // GetGlobalByIndex retrieves a global value by its index
 func (vm *VM) GetGlobalByIndex(index int) (Value, bool) {
-	if index >= 0 && index < len(vm.globals) {
-		return vm.globals[index], true
-	}
-	return Undefined, false
+	return vm.heap.Get(index)
 }
 
-func (vm *VM) SetBuiltinGlobals(globals map[string]Value) error {
-	// Clear existing globals
-	vm.globals = make([]Value, 0)
-	vm.globalNames = make([]string, 0)
-
-	// Sort global names for deterministic ordering
-	// This is crucial for coordination with compiler's getOrAssignGlobalIndex
-	var names []string
-	for name := range globals {
-		names = append(names, name)
-	}
-
-	// Sort alphabetically for predictable indices
-	// TODO: Better coordination with compiler would be ideal
-	sort.Strings(names)
-
-	// Set builtin globals in sorted order
-	for _, name := range names {
-		vm.globals = append(vm.globals, globals[name])
-		vm.globalNames = append(vm.globalNames, name)
-	}
-
-	return nil
+func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]int) error {
+	// Use the heap's SetBuiltinGlobals method
+	return vm.heap.SetBuiltinGlobals(globals, indexMap)
 }
 
 func (vm *VM) Reset() {
@@ -282,9 +248,8 @@ func (vm *VM) Reset() {
 	}
 	// Reset cache statistics
 	vm.cacheStats = ICacheStats{}
-	// Clear global variables
-	vm.globals = make([]Value, 0)
-	vm.globalNames = make([]string, 0)
+	// Clear global heap
+	vm.heap = NewHeap(64)
 	// Clear finally state
 	vm.pendingAction = ActionNone
 	vm.pendingValue = Undefined
@@ -1860,21 +1825,22 @@ startExecution:
 			globalIdx := uint16(globalIdxHi)<<8 | uint16(globalIdxLo)
 			ip += 3
 
-			// Use module-scoped global table
-			globals, _ := vm.getGlobalTable()
-			if int(globalIdx) >= len(globals) {
+			// Use unified global heap
+			value, exists := vm.heap.Get(int(globalIdx))
+			if !exists {
 				frame.ip = ip
-				status := vm.runtimeError("Invalid global variable index %d (max: %d)", globalIdx, len(globals)-1)
+				status := vm.runtimeError("Invalid global variable index %d (heap size: %d)", globalIdx, vm.heap.Size())
 				return status, Undefined
 			}
 
-			// Direct array access from module-scoped table
-			value := vm.getGlobalFromTable(globalIdx)
+			// Store the retrieved value in the destination register
 			registers[destReg] = value
 			
-			// Debug global access
-			// fmt.Printf("// [VM DEBUG] OpGetGlobal: global[%d] -> R%d = %s (type: %v) [module: %s]\n", 
-			//	globalIdx, destReg, value.Inspect(), value.Type(), vm.currentModulePath)
+			// Debug global access (disabled)
+			// if globalIdx == 21 {
+			//	fmt.Printf("// [VM DEBUG] OpGetGlobal: global[%d] -> R%d = %s (type: %v) [module: %s]\n", 
+			//		globalIdx, destReg, value.Inspect(), value.Type(), vm.currentModulePath)
+			// }
 
 		case OpSetGlobal:
 			globalIdxHi := code[ip]
@@ -1887,9 +1853,11 @@ startExecution:
 			value := registers[srcReg]
 			vm.setGlobalInTable(globalIdx, value)
 			
-			// Debug output
-			// fmt.Printf("// [VM DEBUG] OpSetGlobal: global[%d] = R%d (%s, type: %v) [module: %s]\n", 
-			//	globalIdx, srcReg, value.Inspect(), value.Type(), vm.currentModulePath)
+			// Debug output (disabled)
+			// if globalIdx == 21 {
+			//	fmt.Printf("// [VM DEBUG] OpSetGlobal: global[%d] = R%d (%s, type: %v) [module: %s]\n", 
+			//		globalIdx, srcReg, value.Inspect(), value.Type(), vm.currentModulePath)
+			// }
 			// if int(globalIdx) < len(globalNames) && globalNames[globalIdx] != "" {
 			//	fmt.Printf("// [VM] OpSetGlobal: Global[%d] name is '%s'\n", globalIdx, globalNames[globalIdx])
 			// }
@@ -2512,10 +2480,10 @@ startExecution:
 			exportName := exportNameValue.AsString()
 
 			// Get exported value from module
-			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Getting export '%s' from module '%s' [current module: %s]\n", exportName, modulePath, vm.currentModulePath)
+			fmt.Printf("// [VM DEBUG] OpGetModuleExport: Getting export '%s' from module '%s' [current module: %s]\n", exportName, modulePath, vm.currentModulePath)
 			exportValue := vm.getModuleExport(modulePath, exportName)
-			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Retrieved '%s' from '%s' = %s (type %d, value: %s)\n", 
-			//	exportName, modulePath, exportValue.Type(), int(exportValue.Type()), exportValue.ToString())
+			fmt.Printf("// [VM DEBUG] OpGetModuleExport: Retrieved '%s' from '%s' = %d (type %d, value: %s)\n", 
+				exportName, modulePath, int(exportValue.Type()), int(exportValue.Type()), exportValue.ToString())
 			frame.registers[destReg] = exportValue
 			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Stored in R%d\n", destReg)
 
@@ -2728,6 +2696,7 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	fmt.Fprintf(os.Stderr, "[VM Runtime Error]: %s\n", msg)
 	vm.printFrameStack()
 	vm.printDisassemblyAroundIP()
+	vm.printCurrentRegisters()
 
 	return InterpretRuntimeError
 }
@@ -2778,6 +2747,25 @@ func (vm *VM) printFrameStack() {
 			i, funcName, frame.ip, regCount, len(frame.registers))
 	}
 	fmt.Fprintf(os.Stderr, "===================\n\n")
+}
+
+// printCurrentRegisters prints the current frame's registers for debugging
+func (vm *VM) printCurrentRegisters() {
+	fmt.Fprintf(os.Stderr, "\n=== Current Frame Registers ===\n")
+	if vm.frameCount == 0 {
+		fmt.Fprintf(os.Stderr, "  (no frames)\n")
+		return
+	}
+
+	frame := &vm.frames[vm.frameCount-1]
+	fmt.Fprintf(os.Stderr, "Frame registers (%d total):\n", len(frame.registers))
+	
+	for i, value := range frame.registers {
+		if i < 10 || value.Type() != TypeUndefined {  // Show first 10 and any non-undefined
+			fmt.Fprintf(os.Stderr, "  R%d: %s (type %d)\n", i, value.Inspect(), int(value.Type()))
+		}
+	}
+	fmt.Fprintf(os.Stderr, "===============================\n\n")
 }
 
 // printDisassemblyAroundIP prints disassembly around the current instruction pointer
@@ -2833,63 +2821,20 @@ func (vm *VM) GetThis() Value {
 	return vm.currentThis
 }
 
-// getGlobalTable returns the appropriate global table (module-scoped or VM-wide)
-func (vm *VM) getGlobalTable() ([]Value, []string) {
-	if vm.currentModulePath != "" {
-		if moduleCtx, exists := vm.moduleContexts[vm.currentModulePath]; exists {
-			return moduleCtx.globals, moduleCtx.globalNames
-		}
-	}
-	// Fall back to VM-wide globals
-	return vm.globals, vm.globalNames
-}
 
-// setGlobalInTable sets a global variable in the appropriate global table
+// setGlobalInTable sets a global variable in the unified global table
 func (vm *VM) setGlobalInTable(globalIdx uint16, value Value) {
-	globals, _ := vm.getGlobalTable()
-	
-	// Expand globals array if needed (for dynamic global assignment)
-	if int(globalIdx) >= len(globals) {
-		// This happens when module code allocates new globals beyond builtins
-		if vm.currentModulePath != "" {
-			if moduleCtx, exists := vm.moduleContexts[vm.currentModulePath]; exists {
-				// Expand module-scoped globals
-				for len(moduleCtx.globals) <= int(globalIdx) {
-					moduleCtx.globals = append(moduleCtx.globals, Undefined)
-					moduleCtx.globalNames = append(moduleCtx.globalNames, "") // Placeholder name
-				}
-				moduleCtx.globals[globalIdx] = value
-				return
-			}
-		}
-		// Fall back to VM-wide globals expansion
-		for len(vm.globals) <= int(globalIdx) {
-			vm.globals = append(vm.globals, Undefined)
-			vm.globalNames = append(vm.globalNames, "") // Placeholder name
-		}
-		vm.globals[globalIdx] = value
-		return
-	}
-	
-	// Direct assignment to existing slot
-	if vm.currentModulePath != "" {
-		if moduleCtx, exists := vm.moduleContexts[vm.currentModulePath]; exists {
-			moduleCtx.globals[globalIdx] = value
-			return
-		}
-	}
-	vm.globals[globalIdx] = value
+	// Use heap to store the value
+	vm.heap.Set(int(globalIdx), value)
 }
 
-// getGlobalFromTable gets a global variable from the appropriate global table
+// getGlobalFromTable gets a global variable from the unified global table
 func (vm *VM) getGlobalFromTable(globalIdx uint16) Value {
-	globals, _ := vm.getGlobalTable()
-	
-	if int(globalIdx) >= len(globals) {
+	value, exists := vm.heap.Get(int(globalIdx))
+	if !exists {
 		return Undefined // Out of bounds
 	}
-	
-	return globals[globalIdx]
+	return value
 }
 
 // executeModule executes a module idempotently with context switching
@@ -2939,20 +2884,14 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		}
 		// fmt.Printf("// [VM] executeModule: Module '%s' has compiled chunk\n", modulePath)
 		
-		// Create module context with module-scoped globals
-		// Copy global-globals (builtins 0-20) to module's global table
-		moduleGlobals := make([]Value, len(vm.globals))
-		copy(moduleGlobals, vm.globals)
-		
-		moduleGlobalNames := make([]string, len(vm.globalNames))
-		copy(moduleGlobalNames, vm.globalNames)
-		
+		// Create module context without module-scoped globals
+		// All modules now use the unified heap
 		vm.moduleContexts[modulePath] = &ModuleContext{
 			chunk:       chunk,
 			exports:     make(map[string]Value),
 			executed:    false,
-			globals:     moduleGlobals,     // Module-scoped globals (builtins 0-20 + module vars 21+)
-			globalNames: moduleGlobalNames, // Module-scoped global names
+			globals:     nil,     // No longer used - unified heap replaces this
+			globalNames: nil, // No longer used - unified heap replaces this
 		}
 	}
 	
@@ -3002,15 +2941,14 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// fmt.Printf("// [VM] executeModule: About to call vm.Interpret for module '%s' (chunk size: %d bytes)\n", modulePath, len(chunk.Code))
 	// fmt.Printf("// [VM] executeModule: Current frame count: %d, next reg slot: %d, module depth: %d\n", vm.frameCount, vm.nextRegSlot, vm.moduleExecutionDepth)
 	
-	// Debug: Show module globals state before execution
-	// fmt.Printf("// [VM] executeModule: Module globals before execution: len=%d\n", len(moduleCtx.globals))
-	for i := 0; i < len(moduleCtx.globals) && i < 25; i++ {
-		// globalName := ""
-		// if i < len(moduleCtx.globalNames) {
-		//	globalName = moduleCtx.globalNames[i]
-		// }
-		// fmt.Printf("//   module global[%d] = %s (name: '%s')\n", i, moduleCtx.globals[i].ToString(), globalName)
-	}
+	// Debug: Show unified heap state before execution (disabled)
+	// fmt.Printf("// [VM] executeModule: Unified heap before execution: size=%d\n", vm.heap.Size())
+	// for i := 0; i < vm.heap.Size() && i < 25; i++ {
+	//	value, exists := vm.heap.Get(i)
+	//	if exists {
+	//		fmt.Printf("//   unified heap[%d] = %s\n", i, value.ToString())
+	//	}
+	// }
 	
 	// Track that we're entering module execution
 	vm.inModuleExecution = true
@@ -3080,18 +3018,8 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	vm.nextRegSlot = savedNextRegSlot
 	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' completed, frameCount restored to %d\n", modulePath, vm.frameCount)
 	
-	// Copy the updated VM globals back to the module context
-	// The module execution updated vm.globals, but we need to sync it to moduleCtx.globals
-	// Ensure moduleCtx.globals is large enough to hold all vm.globals
-	if len(moduleCtx.globals) < len(vm.globals) {
-		// Expand moduleCtx.globals to match vm.globals length
-		for len(moduleCtx.globals) < len(vm.globals) {
-			moduleCtx.globals = append(moduleCtx.globals, Undefined)
-			moduleCtx.globalNames = append(moduleCtx.globalNames, "")
-		}
-	}
-	copy(moduleCtx.globals, vm.globals)
-	// fmt.Printf("// [VM] executeModule: Copied %d globals back to module context\n", len(vm.globals))
+	// With unified heap, no need to copy globals back to module context
+	// All modules share the same heap and updates are automatically visible
 	
 	// Convert result status to errors if needed
 	var errs []errors.PaseratiError

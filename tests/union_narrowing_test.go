@@ -267,8 +267,9 @@ func compileAndInitializeVMFromString(source string) (*vm.Chunk, *vm.VM, []error
 		comp.GetOrAssignGlobalIndex(name)
 	}
 
-	// Set up global variables in VM
-	if err := vmInstance.SetBuiltinGlobals(globalVariables); err != nil {
+	// Set up global variables in VM with empty index map (legacy test mode)
+	indexMap := make(map[string]int)
+	if err := vmInstance.SetBuiltinGlobals(globalVariables, indexMap); err != nil {
 		compileErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
 			Msg:      fmt.Sprintf("Failed to set VM globals: %v", err),

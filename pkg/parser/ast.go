@@ -2631,6 +2631,9 @@ type ObjectParameterPattern struct {
 func (opp *ObjectParameterPattern) expressionNode()      {}
 func (opp *ObjectParameterPattern) TokenLiteral() string { return opp.Token.Literal }
 func (opp *ObjectParameterPattern) String() string {
+	if opp == nil {
+		return "{<nil>}"
+	}
 	var out bytes.Buffer
 	elements := []string{}
 	for _, prop := range opp.Properties {

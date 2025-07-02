@@ -13,7 +13,6 @@ import (
 	"paserati/pkg/parser"
 	"paserati/pkg/source"
 	"paserati/pkg/vm"
-	"sort"
 )
 
 const debugDriver = false
@@ -52,6 +51,7 @@ type Paserati struct {
 	checker      *checker.Checker
 	compiler     *compiler.Compiler
 	moduleLoader modules.ModuleLoader
+	heapAlloc    *compiler.HeapAlloc // Unified global heap allocator
 }
 
 // NewPaserati creates a new Paserati session with a fresh VM and Checker.
@@ -73,6 +73,9 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	// Create module loader with file system resolver
 	moduleLoader := modules.NewModuleLoader(config, fsResolver)
 	
+	// Create unified heap allocator for coordinating global indices
+	heapAlloc := compiler.NewHeapAlloc()
+	
 	// Create checker and compiler
 	typeChecker := checker.NewChecker()
 	comp := compiler.NewCompiler()
@@ -86,6 +89,7 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 		checker:      typeChecker,
 		compiler:     comp,
 		moduleLoader: moduleLoader,
+		heapAlloc:    heapAlloc,
 	}
 	
 	// Wire the module loader into the VM
@@ -113,9 +117,9 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 		// Create a new compiler instance for module compilation
 		newCompiler := compiler.NewCompiler()
 		
-		// CRITICAL: Pre-populate module compiler with builtin global indices
-		// This ensures module compilers start allocating from index 21+ (after builtins 0-20)
-		paserati.coordinateModuleCompilerGlobals(newCompiler)
+		// CRITICAL: Give module compiler the SAME heap allocator instance
+		// This ensures all compilers coordinate on the exact same global indices
+		newCompiler.SetHeapAlloc(paserati.heapAlloc)
 		
 		// Return a wrapper that adapts the return type to interface{}
 		return &compilerAdapter{newCompiler}
@@ -701,11 +705,11 @@ func (p *Paserati) InterpretChunk(chunk *vm.Chunk) (vm.Value, []errors.PaseratiE
 }
 
 // initializeBuiltins sets up all builtin global variables in both the compiler and VM
-// ensuring they use the same global index ordering
+// ensuring they use the same global index ordering via the unified heap allocator
 func initializeBuiltins(paserati *Paserati) error {
 	vmInstance := paserati.vmInstance
 	comp := paserati.compiler
-	//checker := paserati.checker
+	heapAlloc := paserati.heapAlloc
 
 	// Get all standard initializers
 	initializers := builtins.GetStandardInitializers()
@@ -728,20 +732,19 @@ func initializeBuiltins(paserati *Paserati) error {
 		}
 	}
 
-	// Pre-populate compiler global indices in alphabetical order to match VM
+	// Get builtin names and preallocate indices in the heap allocator
 	var globalNames []string
 	for name := range globalVariables {
 		globalNames = append(globalNames, name)
 	}
-	sort.Strings(globalNames)
+	heapAlloc.PreallocateBuiltins(globalNames)
+	
+	// Set the heap allocator in the main compiler
+	comp.SetHeapAlloc(heapAlloc)
 
-	// Pre-assign global indices in the compiler to match VM ordering
-	for _, name := range globalNames {
-		comp.GetOrAssignGlobalIndex(name)
-	}
-
-	// Set up global variables in VM
-	return vmInstance.SetBuiltinGlobals(globalVariables)
+	// Set up global variables in VM using the coordinated indices
+	indexMap := heapAlloc.GetNameToIndexMap()
+	return vmInstance.SetBuiltinGlobals(globalVariables, indexMap)
 }
 
 // collectExportedValues collects the runtime values of exported variables from the VM

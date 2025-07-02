@@ -52,11 +52,42 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			}
 		}
 
-		// --- NEW: Check if this is a forward reference defined as a regular value ---
+		// --- NEW: Check if this is a forward reference or constructor defined as a regular value ---
 		if value, _, found := c.env.Resolve(node.Value); found {
+			debugPrintf("// [Checker resolveTypeAnno Ident] Found value for '%s': %T\n", node.Value, value)
+			
 			if forwardRef, ok := value.(*types.ForwardReferenceType); ok {
 				debugPrintf("// [Checker resolveTypeAnno Ident] Found forward reference for '%s'\n", node.Value)
 				return forwardRef
+			}
+			
+			// Check if this is a constructor type (like Date, Array, String builtins)
+			if objType, ok := value.(*types.ObjectType); ok {
+				debugPrintf("// [Checker resolveTypeAnno Ident] '%s' is ObjectType, IsCallable: %v, IsConstructable: %v\n", node.Value, objType.IsCallable(), objType.IsConstructable())
+				
+				// Check for construct signatures first (preferred for type annotations)
+				if objType.IsConstructable() {
+					constructSigs := objType.GetConstructSignatures()
+					debugPrintf("// [Checker resolveTypeAnno Ident] '%s' has %d construct signatures\n", node.Value, len(constructSigs))
+					if len(constructSigs) > 0 {
+						returnType := constructSigs[0].ReturnType
+						debugPrintf("// [Checker resolveTypeAnno Ident] Found constructor type '%s', using return type: %T\n", node.Value, returnType)
+						return returnType
+					}
+				}
+				
+				// Check for call signatures (for builtins that are callable as constructors)
+				if objType.IsCallable() {
+					callSigs := objType.GetCallSignatures()
+					debugPrintf("// [Checker resolveTypeAnno Ident] '%s' has %d call signatures\n", node.Value, len(callSigs))
+					if len(callSigs) > 0 {
+						returnType := callSigs[0].ReturnType
+						debugPrintf("// [Checker resolveTypeAnno Ident] Found callable constructor type '%s', using return type: %T\n", node.Value, returnType)
+						return returnType
+					}
+				}
+			} else {
+				debugPrintf("// [Checker resolveTypeAnno Ident] '%s' is not ObjectType\n", node.Value)
 			}
 		}
 
@@ -340,6 +371,28 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 
 				// Instantiate the generic type
 				return c.instantiateGenericType(genericType, typeArgs, node.TypeArguments)
+			} else if baseType == types.Any {
+				// Special case: if baseType is Any (unresolved import) and we have type arguments,
+				// allow it and create a placeholder generic instantiation
+				// This is common for type-only imports where we don't have the full type information
+				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Allowing generic syntax on unresolved type '%s' with %d type args\n", node.Name.Value, len(node.TypeArguments))
+				
+				// Resolve type arguments even though we don't know the base type
+				typeArgs := make([]types.Type, len(node.TypeArguments))
+				for i, argExpr := range node.TypeArguments {
+					argType := c.resolveTypeAnnotation(argExpr)
+					if argType == nil {
+						return nil // Error already reported
+					}
+					typeArgs[i] = argType
+				}
+				
+				// Return a generic forward reference that preserves the type arguments
+				// This allows interface inheritance and other generic type usage to work
+				return &types.GenericTypeAliasForwardReference{
+					AliasName:     node.Name.Value,
+					TypeArguments: typeArgs,
+				}
 			} else {
 				c.addError(node, fmt.Sprintf("Type '%s' is not a generic type", node.Name.Value))
 				return nil

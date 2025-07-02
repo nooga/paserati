@@ -8,4 +8,5 @@ export function test<T extends string = "default">(param: T): T {
     return param;
 }
 
+test;
 // expect: [Function: test]

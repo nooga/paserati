@@ -249,6 +249,26 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.checkImportDeclaration(importStmt)
 			nodesProcessedPass1[importStmt] = true
 			nodesProcessedPass2[importStmt] = true // Also mark for Pass 2 skip  
+		} else if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok {
+			// Handle exported type declarations (interfaces, type aliases, classes)
+			if exportStmt.Declaration != nil {
+				if interfaceStmt, ok := exportStmt.Declaration.(*parser.InterfaceDeclaration); ok {
+					debugPrintf("// [Checker Pass 1] Processing Exported Interface: %s\n", interfaceStmt.Name.Value)
+					c.checkInterfaceDeclaration(interfaceStmt)
+					nodesProcessedPass1[interfaceStmt] = true
+					nodesProcessedPass2[interfaceStmt] = true // Also mark for Pass 2 skip
+				} else if aliasStmt, ok := exportStmt.Declaration.(*parser.TypeAliasStatement); ok {
+					debugPrintf("// [Checker Pass 1] Processing Exported Type Alias: %s\n", aliasStmt.Name.Value)
+					c.checkTypeAliasStatement(aliasStmt)
+					nodesProcessedPass1[aliasStmt] = true
+					nodesProcessedPass2[aliasStmt] = true // Also mark for Pass 2 skip
+				} else if classStmt, ok := exportStmt.Declaration.(*parser.ClassDeclaration); ok {
+					debugPrintf("// [Checker Pass 1] Processing Exported Class: %s\n", classStmt.Name.Value)
+					c.checkClassDeclaration(classStmt)
+					nodesProcessedPass1[classStmt] = true
+					nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
+				}
+			}
 		} else if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
 			// Check if this is a class expression wrapped in an expression statement
 			if classExpr, isClassExpr := exprStmt.Expression.(*parser.ClassExpression); isClassExpr && classExpr.Name != nil {
@@ -512,12 +532,16 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 
 				// Define it in the environment
-				if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
+				// Check if it already exists to avoid false duplicates during multiple processing
+				if existing, exists := typeParamEnv.ResolveTypeParameter(typeParam.Name); exists {
+					// Already defined, reuse the existing one
+					typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: existing})
+				} else if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
 					c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+				} else {
+					// Successfully defined, set computed type on the AST node
+					typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
 				}
-
-				// Set computed type on the AST node
-				typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
 
 				debugPrintf("// [Checker Pass 3] Defined type parameter '%s' for body checking (reused from hoisting)\n", typeParam.Name)
 			}
@@ -2180,6 +2204,11 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 
 // checkObjectDestructuringDeclaration handles type checking for object destructuring declarations
 func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestructuringDeclaration) {
+	// Add nil check for the node itself
+	if node == nil {
+		return
+	}
+	
 	// Check if we have an initializer (required for const, optional for let/var)
 	if node.Value == nil {
 		if node.IsConst {
@@ -2211,10 +2240,13 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	}
 
 	// Check the RHS value
-	c.visit(node.Value)
-	valueType := node.Value.GetComputedType()
-	if valueType == nil {
-		valueType = types.Any
+	var valueType types.Type = types.Any
+	if node.Value != nil {
+		c.visit(node.Value)
+		valueType = node.Value.GetComputedType()
+		if valueType == nil {
+			valueType = types.Any
+		}
 	}
 
 	// Check if we have a type annotation
@@ -2222,7 +2254,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	if node.TypeAnnotation != nil {
 		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		// Verify that the value is assignable to the expected type
-		if !types.IsAssignable(valueType, expectedType) {
+		if node.Value != nil && expectedType != nil && valueType != nil && !types.IsAssignable(valueType, expectedType) {
 			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to type '%s'", valueType.String(), expectedType.String()))
 		}
 	}
@@ -2619,6 +2651,15 @@ func (c *Checker) IsModuleMode() bool {
 	return c.moduleEnv != nil
 }
 
+// GetImportBindings returns all import bindings from the module environment
+// This is used by the compiler to synchronize import information
+func (c *Checker) GetImportBindings() map[string]*ImportBinding {
+	if !c.IsModuleMode() {
+		return nil
+	}
+	return c.moduleEnv.ImportedNames
+}
+
 // GetModuleExports returns the exports from the current module (if in module mode)
 func (c *Checker) GetModuleExports() map[string]types.Type {
 	debugPrintf("// [Checker GetModuleExports] Called. moduleEnv=%v\n", c.moduleEnv != nil)
@@ -2643,7 +2684,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 	}
 
 	sourceModulePath := node.Source.Value
-	debugPrintf("// [Checker] Processing import from: %s\n", sourceModulePath)
+	debugPrintf("// [Checker] Processing import from: %s (IsTypeOnly: %v)\n", sourceModulePath, node.IsTypeOnly)
 	
 	// Handle bare imports (side-effect only)
 	if len(node.Specifiers) == 0 {
@@ -2664,7 +2705,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 			}
 			
 			localName := importSpec.Local.Value
-			c.processImportBinding(localName, sourceModulePath, "default", ImportDefault)
+			c.processImportBinding(localName, sourceModulePath, "default", ImportDefault, node.IsTypeOnly)
 			
 		case *parser.ImportNamedSpecifier:
 			// Named import: import { name } or import { name as alias }
@@ -2675,7 +2716,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 			
 			localName := importSpec.Local.Value
 			importedName := importSpec.Imported.Value
-			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamed)
+			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamed, node.IsTypeOnly)
 			
 		case *parser.ImportNamespaceSpecifier:
 			// Namespace import: import * as name from "module"
@@ -2685,7 +2726,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 			}
 			
 			localName := importSpec.Local.Value
-			c.processImportBinding(localName, sourceModulePath, "*", ImportNamespace)
+			c.processImportBinding(localName, sourceModulePath, "*", ImportNamespace, node.IsTypeOnly)
 			
 		default:
 			c.addError(node, fmt.Sprintf("unknown import specifier type: %T", spec))
@@ -2694,7 +2735,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 }
 
 // processImportBinding handles the binding of an imported name
-func (c *Checker) processImportBinding(localName, sourceModule, sourceName string, importType ImportBindingType) {
+func (c *Checker) processImportBinding(localName, sourceModule, sourceName string, importType ImportBindingType, isTypeOnly bool) {
 	// If we're in module mode, use the module environment for proper tracking
 	if c.IsModuleMode() {
 		c.moduleEnv.DefineImport(localName, sourceModule, sourceName, importType)
@@ -2702,29 +2743,45 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 		// Try to resolve the actual type from the source module
 		resolvedType := c.moduleEnv.ResolveImportedType(localName)
 		if resolvedType != types.Any {
-			debugPrintf("// [Checker] Imported %s: %s = %s (resolved)\n", localName, sourceName, resolvedType.String())
+			debugPrintf("// [Checker] Imported %s: %s = %s (resolved, type-only: %v)\n", localName, sourceName, resolvedType.String(), isTypeOnly)
 			
-			// Register the imported type in the local type environment for type annotation resolution
+			// Always register the imported type in the local type environment for type annotation resolution
 			// This allows interfaces and type aliases to be used in type annotations
 			c.env.DefineTypeAlias(localName, resolvedType)
 			debugPrintf("// [Checker] Registered imported type %s in local type environment\n", localName)
 			
-			// If this is a class (constructor function), also register it in the value environment
-			// Classes need to be available for both type annotations and runtime usage (new expressions)
-			if objectType, ok := resolvedType.(*types.ObjectType); ok {
-				if len(objectType.ConstructSignatures) > 0 {
-					// This is a constructor function type (class)
-					c.env.Define(localName, resolvedType, false)
-					debugPrintf("// [Checker] Registered imported class %s in value environment\n", localName)
+			// For type-only imports, don't register in the value environment
+			if !isTypeOnly {
+				// If this is a class (constructor function), also register it in the value environment
+				// Classes need to be available for both type annotations and runtime usage (new expressions)
+				if objectType, ok := resolvedType.(*types.ObjectType); ok {
+					if len(objectType.ConstructSignatures) > 0 {
+						// This is a constructor function type (class)
+						c.env.Define(localName, resolvedType, false)
+						debugPrintf("// [Checker] Registered imported class %s in value environment\n", localName)
+					}
 				}
+			} else {
+				debugPrintf("// [Checker] Skipped value environment registration for type-only import %s\n", localName)
 			}
 		} else {
-			debugPrintf("// [Checker] Imported %s: %s = any (unresolved)\n", localName, sourceName)
+			debugPrintf("// [Checker] Imported %s: %s = any (unresolved, type-only: %v)\n", localName, sourceName, isTypeOnly)
+			// Even if unresolved, we should still register the name as a type alias if it's type-only
+			// This allows type annotations to work even when the actual type can't be resolved at compile time
+			if isTypeOnly {
+				c.env.DefineTypeAlias(localName, types.Any)
+				debugPrintf("// [Checker] Registered unresolved type-only import %s as type alias\n", localName)
+			}
 		}
 	} else {
 		// Fallback: bind to 'any' type in regular environment
-		c.env.Define(localName, types.Any, false)
-		debugPrintf("// [Checker] Imported %s: %s = any (no module mode)\n", localName, sourceName)
+		// For type-only imports, don't create runtime bindings
+		if !isTypeOnly {
+			c.env.Define(localName, types.Any, false)
+			debugPrintf("// [Checker] Imported %s: %s = any (no module mode)\n", localName, sourceName)
+		} else {
+			debugPrintf("// [Checker] Skipped import binding for type-only import %s (no module mode)\n", localName)
+		}
 	}
 }
 

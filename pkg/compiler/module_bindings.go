@@ -30,6 +30,7 @@ type ImportReference struct {
 	SourceName   string                 // Name in the source module ("default" for default imports)
 	ImportType   ImportReferenceType    // Type of import binding
 	ResolvedValue vm.Value               // Resolved value from source module
+	GlobalIndex  int                    // Global heap index where this import resolves to (-1 if not resolved)
 }
 
 // ExportReference represents an exported name's runtime binding information  
@@ -41,6 +42,7 @@ type ExportReference struct {
 	Declaration  parser.Statement     // Original declaration (if any)
 	IsReExport   bool                 // True if this is a re-export from another module
 	SourceModule string               // For re-exports, the source module path
+	GlobalIndex  int                  // Global heap index where this export is stored (-1 if not stored as global)
 }
 
 // ImportReferenceType represents different kinds of import bindings
@@ -66,13 +68,14 @@ func NewModuleBindings(modulePath string, loader modules.ModuleLoader) *ModuleBi
 
 // DefineImport adds an import binding to the module bindings
 // Parallels type checker's ModuleEnvironment.DefineImport
-func (mb *ModuleBindings) DefineImport(localName, sourceModule, sourceName string, importType ImportReferenceType) {
+func (mb *ModuleBindings) DefineImport(localName, sourceModule, sourceName string, importType ImportReferenceType, globalIndex int) {
 	reference := &ImportReference{
 		LocalName:     localName,
 		SourceModule:  sourceModule, 
 		SourceName:    sourceName,
 		ImportType:    importType,
 		ResolvedValue: vm.Undefined, // Will be resolved later
+		GlobalIndex:   globalIndex,
 	}
 	
 	mb.ImportedNames[localName] = reference
@@ -81,13 +84,14 @@ func (mb *ModuleBindings) DefineImport(localName, sourceModule, sourceName strin
 
 // DefineExport adds an export binding to the module bindings
 // Parallels type checker's ModuleEnvironment.DefineExport
-func (mb *ModuleBindings) DefineExport(localName, exportName string, exportedValue vm.Value, decl parser.Statement) {
+func (mb *ModuleBindings) DefineExport(localName, exportName string, exportedValue vm.Value, decl parser.Statement, globalIndex int) {
 	reference := &ExportReference{
 		LocalName:     localName,
 		ExportName:    exportName,
 		ExportedValue: exportedValue,
 		Declaration:   decl,
 		IsReExport:    false,
+		GlobalIndex:   globalIndex,
 	}
 	
 	if exportName == "default" {

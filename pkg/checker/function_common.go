@@ -56,8 +56,16 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 				c.env = originalEnv
 				
 				// Validate that default type satisfies constraint if both are present
-				if defaultType != nil && constraintType != types.Any && !types.IsAssignable(defaultType, constraintType) {
-					c.addError(typeParamNode.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraintType.String()))
+				if defaultType != nil && constraintType != types.Any {
+					// Special case: if default type is a type parameter, be permissive
+					if _, ok := defaultType.(*types.TypeParameterType); ok {
+						// For type parameters as defaults, TypeScript allows them if there exists
+						// some valid instantiation that would satisfy the constraint.
+						// For now, we're permissive and allow all type parameter defaults.
+						// TODO: Implement proper constraint satisfaction checking
+					} else if !types.IsAssignable(defaultType, constraintType) {
+						c.addError(typeParamNode.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraintType.String()))
+					}
 				}
 			}
 			

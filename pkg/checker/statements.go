@@ -176,6 +176,11 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 			debugPrintf("// [Checker Interface P1] Interface '%s' inherited %d properties from extended interface\n",
 				node.Name.Value, len(extendedObjectType.Properties))
+		} else if _, ok := extendedType.(*types.GenericTypeAliasForwardReference); ok {
+			// Allow inheritance from generic forward references (unresolved type-only imports)
+			// We can't copy properties since we don't know the structure, but we allow the syntax
+			debugPrintf("// [Checker Interface P1] Interface '%s' extends unresolved generic type '%s', allowing for type-only imports\n",
+				node.Name.Value, extendedType.String())
 		} else {
 			c.addError(extendedInterfaceExpr, fmt.Sprintf("'%s' is not an interface, cannot extend", extendedType.String()))
 		}
