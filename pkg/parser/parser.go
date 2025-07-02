@@ -6806,10 +6806,17 @@ func (p *Parser) parseExportDeclaration() Statement {
 	p.nextToken()
 	
 	// Check for type-only export: export type { ... } from "module"
+	// But distinguish from type alias: export type TypeAlias = ...
 	isTypeOnly := false
 	if p.curToken.Type == lexer.TYPE {
-		isTypeOnly = true
-		p.nextToken() // consume 'type' keyword
+		// Look ahead to see if this is a re-export or type alias
+		if p.peekTokenIs(lexer.LBRACE) {
+			// This is a re-export: export type { ... }
+			isTypeOnly = true
+			p.nextToken() // consume 'type' keyword
+		}
+		// If peek is not '{', this is a type alias declaration, so don't consume 'type'
+		// Let it fall through to the case statement which will handle lexer.TYPE
 	}
 	
 	switch p.curToken.Type {

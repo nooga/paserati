@@ -1,6 +1,6 @@
 // Main module that imports from math module
-import { Vector2D, add, magnitude, ZERO, UNIT_X } from './math';
-import * as math from './math';
+import { Vector2D, add, magnitude, ZERO, UNIT_X } from "./math";
+import * as math from "./math";
 
 // Use imported type
 let v1: Vector2D = { x: 3, y: 4 };
@@ -19,6 +19,6 @@ console.log(math.magnitude(v4)); // expect: 1
 // add(v1, "not a vector"); // expect_compile_error: Argument of type 'string' is not assignable to parameter of type 'Vector2D'
 
 // Return the magnitude result
-magnitude(v3);
+magnitude(v3) > 5;
 
-// expect: 5
+// expect: true

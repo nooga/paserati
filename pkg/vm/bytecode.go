@@ -154,6 +154,7 @@ const (
 	// --- Module System ---
 	OpEvalModule      OpCode = 70 // ModulePathIdx: Execute module idempotently, switch execution context
 	OpGetModuleExport OpCode = 71 // Rx ModulePathIdx ExportNameIdx: Rx = module[exportName]
+	OpCreateNamespace OpCode = 72 // Rx ModulePathIdx: Create namespace object from module exports, store in Rx
 )
 
 // String returns a human-readable name for the OpCode.
@@ -321,6 +322,8 @@ func (op OpCode) String() string {
 		return "OpEvalModule"
 	case OpGetModuleExport:
 		return "OpGetModuleExport"
+	case OpCreateNamespace:
+		return "OpCreateNamespace"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -542,6 +545,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.constantInstruction16(builder, "OpEvalModule", offset)
 	case OpGetModuleExport:
 		return c.registerConstantConstantInstruction(builder, "OpGetModuleExport", offset)
+	case OpCreateNamespace:
+		return c.registerConstantInstruction(builder, "OpCreateNamespace", offset, true)
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))

@@ -87,10 +87,13 @@ func (ml *moduleLoader) LoadModuleParallel(specifier string, fromPath string) (v
 
 // loadModuleSequential implements sequential module loading
 func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) (vm.ModuleRecord, error) {
+	debugPrintf("// [ModuleLoader] loadModuleSequential START: %s from %s\n", specifier, fromPath)
 	// Check cache first
-	if record := ml.registry.Get(specifier); record != nil {
-		debugPrintf("// [ModuleLoader] Returning cached module: %s (has error: %v)\n", specifier, record.GetError() != nil)
-		return record, nil
+	cachedRecord := ml.registry.Get(specifier)
+	debugPrintf("// [ModuleLoader] Cache check for %s: %v\n", specifier, cachedRecord != nil)
+	if cachedRecord != nil {
+		debugPrintf("// [ModuleLoader] Returning cached module: %s (has error: %v)\n", specifier, cachedRecord.GetError() != nil)
+		return cachedRecord, nil
 	}
 	
 	// Resolve the module
@@ -108,6 +111,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	}
 	
 	// Store in registry
+	debugPrintf("// [ModuleLoader] Storing in registry: specifier=%s, resolvedPath=%s\n", specifier, record.ResolvedPath)
 	ml.registry.Set(specifier, record)
 	
 	// Actually parse the module
@@ -115,22 +119,29 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	if err != nil {
 		record.Error = err
 		record.State = ModuleError
+		debugPrintf("// [ModuleLoader] loadModuleSequential EARLY RETURN (parse error): %s - %v\n", specifier, err)
 		return record, nil // Return record with error, don't fail completely
 	}
 	
 	// Extract and load dependencies before type checking
+	debugPrintf("// [ModuleLoader] About to extract imports for: %s (AST=%v)\n", specifier, record.AST != nil)
 	importSpecs := extractImportSpecs(record.AST)
 	debugPrintf("// [ModuleLoader] Found %d import specs in %s\n", len(importSpecs), record.ResolvedPath)
 	
 	// Load dependencies recursively
 	for _, importSpec := range importSpecs {
 		debugPrintf("// [ModuleLoader] Loading dependency: %s from %s\n", importSpec.ModulePath, record.ResolvedPath)
+		debugPrintf("// [ModuleLoader] About to make recursive call for dependency\n")
 		_, err := ml.loadModuleSequential(importSpec.ModulePath, record.ResolvedPath)
 		if err != nil {
 			debugPrintf("// [ModuleLoader] Failed to load dependency %s: %v\n", importSpec.ModulePath, err)
 			// Continue with other dependencies rather than failing completely
+		} else {
+			debugPrintf("// [ModuleLoader] Successfully loaded dependency: %s\n", importSpec.ModulePath)
 		}
 	}
+	
+	debugPrintf("// [ModuleLoader] Finished loading dependencies for: %s\n", specifier)
 	
 	// Add type checking and compilation to sequential loading
 	debugPrintf("// [ModuleLoader] Sequential loading checkerFactory: %v, compilerFactory: %v\n", 
@@ -147,6 +158,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		if len(checkErrors) > 0 {
 			record.Error = fmt.Errorf("type checking failed: %s", checkErrors[0].Error())
 			record.State = ModuleError
+			debugPrintf("// [ModuleLoader] loadModuleSequential EARLY RETURN (type check error): %s\n", specifier)
 			return record, nil
 		}
 		
@@ -200,11 +212,13 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	}
 	
 	record.CompleteTime = time.Now()
+	debugPrintf("// [ModuleLoader] loadModuleSequential END: %s (state=%v)\n", specifier, record.State)
 	return record, nil
 }
 
 // parseModuleSequential parses a single module synchronously
 func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *ResolvedModule) error {
+	debugPrintf("// [ModuleLoader] parseModuleSequential: %s\n", record.ResolvedPath)
 	// Read the source content
 	defer resolved.Source.Close()
 	
@@ -338,12 +352,16 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 
 // resolveModule resolves a module specifier using the resolver chain
 func (ml *moduleLoader) resolveModule(specifier string, fromPath string) (*ResolvedModule, error) {
+	debugPrintf("// [ModuleLoader] resolveModule: %s from %s\n", specifier, fromPath)
 	for _, resolver := range ml.resolvers {
 		if resolver.CanResolve(specifier) {
+			debugPrintf("// [ModuleLoader] Trying resolver: %T\n", resolver)
 			resolved, err := resolver.Resolve(specifier, fromPath)
 			if err == nil {
+				debugPrintf("// [ModuleLoader] Resolved to: %s\n", resolved.ResolvedPath)
 				return resolved, nil
 			}
+			debugPrintf("// [ModuleLoader] Resolver failed: %v\n", err)
 			// Continue to next resolver if this one fails
 		}
 	}

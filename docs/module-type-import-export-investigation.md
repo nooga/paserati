@@ -240,13 +240,108 @@ The namespace import creates a namespace object but it's null at runtime. Need t
 2. Module exports are available when namespace is accessed
 3. The compiler generates correct bytecode for namespace access
 
-## Next Steps
+## ROOT CAUSE IDENTIFIED 
 
-1. **Immediate**: Apply Fix 1 to ensure type aliases are exported
-2. **Test**: Run module tests to see if type alias imports work
-3. **Debug**: If still failing, enable debug output and trace the export/import path
-4. **Module Loading**: Investigate why dependency modules aren't loaded in test framework
-5. **Runtime**: Fix namespace import resolution after type checking works
+**The core issue is that the Paserati parser does not support `export type` syntax.**
+
+### Investigation Results
+
+Through systematic debugging with module loader and checker debug output, we discovered:
+
+1. **Module loading works correctly** - both main.ts and dependency modules are found and processed
+2. **The dependency module fails to parse** with error: `Syntax Error at 2:28: no prefix parse function for = found`
+3. **The failing line is**: `export type StringOrNumber = string | number;`
+4. **Root cause**: The parser doesn't recognize `type` keyword in export statements
+
+### Evidence
+
+```bash
+# Debug output showing parse failure:
+// [ModuleLoader] loadModuleSequential EARLY RETURN (parse error): ./test_type_alias_export - parsing failed: Syntax Error at 2:28: no prefix parse function for = found
+```
+
+The error occurs at character 28 of line 2, which is the `=` in the type alias declaration. The parser expects an expression after `export type` but doesn't understand type alias syntax.
+
+### Why Interfaces Work But Type Aliases Don't
+
+- **Interfaces**: `export interface Foo { ... }` - parser recognizes `interface` keyword
+- **Type aliases**: `export type Foo = Bar` - parser doesn't recognize `type` keyword
+
+### Current Status
+
+1. ✅ **Fixed**: Interface exports work correctly with our Pass 1 fix
+2. ❌ **Missing**: Parser support for `export type` declarations  
+3. ❌ **Missing**: Parser support for standalone `type` declarations
+4. ⚠️  **Unresolved**: Runtime namespace import issues (separate from parsing)
+
+## SOLUTION IMPLEMENTED ✅
+
+### Fix 1: Parser Support for Type Aliases - **COMPLETED**
+
+**Root Cause**: The export parsing logic incorrectly consumed the `type` keyword for all cases, breaking `export type TypeAlias = ...` declarations.
+
+**Solution Applied**: Modified `parseExportDeclaration()` in `/Users/nooga/lab/paserati/pkg/parser/parser.go` to distinguish between:
+- `export type { ... }` (re-exports) - consume `type` keyword  
+- `export type TypeAlias = ...` (type alias declarations) - don't consume `type` keyword
+
+```go
+// Before: Always consumed 'type' keyword
+if p.curToken.Type == lexer.TYPE {
+    isTypeOnly = true
+    p.nextToken() // consume 'type' keyword
+}
+
+// After: Only consume for re-exports
+if p.curToken.Type == lexer.TYPE {
+    if p.peekTokenIs(lexer.LBRACE) {
+        // This is a re-export: export type { ... }
+        isTypeOnly = true
+        p.nextToken() // consume 'type' keyword
+    }
+    // If peek is not '{', this is a type alias, don't consume 'type'
+}
+```
+
+**Infrastructure Already Present**: 
+- ✅ `TYPE` token defined in lexer
+- ✅ `parseTypeAliasStatement()` implemented
+- ✅ `TypeAliasStatement` AST node defined
+- ✅ Type checker integration via Pass 1 fix
+
+### Fix 2: Type Checker Integration - **VERIFIED**
+
+The existing type checker integration works correctly:
+- ✅ Type aliases processed in Pass 1 (with our previous interface export fix)
+- ✅ Exported type aliases registered in module exports  
+- ✅ Cross-module type alias imports work correctly
+
+### Fix 3: Runtime Namespace Imports - **SEPARATE ISSUE**
+
+The namespace import runtime error (`math.add` is null) is unrelated to type alias parsing and remains to be addressed.
+
+## Test Results After Fix
+
+**Module Tests: 19/20 PASSING** ✅
+- ✅ `type_alias_export_import` - **FIXED**  
+- ✅ `type_reexport` - **FIXED**
+- ❌ `cross_module_types` - Runtime namespace import issue (unrelated)
+
+**Scripts Test: STABLE** ✅
+- Only expected failure: `class_FIXME_abstract.ts`
+
+## Verification Commands
+
+```bash
+# Test the fix
+./paserati -e "export type StringOrNumber = string | number"  # ✅ Works
+go test ./tests -run TestModules/type_alias_export_import     # ✅ Passes  
+go test ./tests -run TestModules/type_reexport                # ✅ Passes
+```
+
+## Remaining Work
+
+1. **Runtime Namespace Imports**: Fix `Cannot read property 'add' of null` in cross_module_types
+2. **Comprehensive Testing**: Verify no regressions in other module functionality
 
 ## Test Verification
 

@@ -2101,8 +2101,16 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 		// Generate OpEvalModule to execute the source module
 		c.emitEvalModule(importRef.SourceModule, line)
 		
-		// Try to resolve the import to a global index for direct access
-		if importRef.GlobalIndex != -1 {
+		// Handle namespace imports specially
+		if importRef.ImportType == ImportNamespaceRef && importRef.SourceName == "*" {
+			debugPrintf("// [Compiler] emitImportResolve: Handling namespace import for '%s'\n", importName)
+			// For namespace imports, we need to create the namespace object from module exports
+			c.emitCreateNamespace(destReg, importRef.SourceModule, line)
+			// Also store it in the global for future access
+			if importRef.GlobalIndex != -1 {
+				c.emitSetGlobal(uint16(importRef.GlobalIndex), destReg, line)
+			}
+		} else if importRef.GlobalIndex != -1 {
 			// Direct global access - much faster than module export lookup
 			debugPrintf("// [Compiler] emitImportResolve: Using direct global access for '%s' at index %d\n", 
 				importName, importRef.GlobalIndex)
@@ -2130,6 +2138,21 @@ func (c *Compiler) emitEvalModule(modulePath string, line int) {
 	c.emitOpCode(vm.OpEvalModule, line)
 	c.emitByte(byte(constantIdx >> 8))   // High byte
 	c.emitByte(byte(constantIdx & 0xFF)) // Low byte
+}
+
+// emitCreateNamespace generates bytecode to create a namespace object from module exports
+func (c *Compiler) emitCreateNamespace(destReg Register, modulePath string, line int) {
+	// Add module path as a string constant
+	modulePathValue := vm.String(modulePath)
+	modulePathIdx := c.chunk.AddConstant(modulePathValue)
+	
+	debugPrintf("// [Compiler] emitCreateNamespace: R%d = createNamespace('%s')\n", destReg, modulePath)
+	
+	// Emit OpCreateNamespace with the destination register and module path constant
+	c.emitOpCode(vm.OpCreateNamespace, line)
+	c.emitByte(byte(destReg))
+	c.emitByte(byte(modulePathIdx >> 8))   // High byte
+	c.emitByte(byte(modulePathIdx & 0xFF)) // Low byte
 }
 
 // emitGetModuleExport generates OpGetModuleExport bytecode to get an exported value

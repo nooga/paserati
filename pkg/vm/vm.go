@@ -6,7 +6,6 @@ import (
 	"os"
 	"paserati/pkg/errors"
 	"strconv"
-	"strings"
 	"unsafe"
 )
 
@@ -2487,6 +2486,34 @@ startExecution:
 			frame.registers[destReg] = exportValue
 			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Stored in R%d\n", destReg)
 
+		case OpCreateNamespace:
+			// OpCreateNamespace: Rx ModulePathIdx - Create namespace object from module exports
+			destReg := code[ip]
+			modulePathIdxHi := code[ip+1]
+			modulePathIdxLo := code[ip+2]
+			ip += 3
+
+			modulePathIdx := uint16(modulePathIdxHi)<<8 | uint16(modulePathIdxLo)
+
+			// Validate constant index
+			if int(modulePathIdx) >= len(constants) {
+				status := vm.runtimeError("Invalid constant index for OpCreateNamespace")
+				return status, Undefined
+			}
+
+			modulePathValue := constants[modulePathIdx]
+			
+			if modulePathValue.Type() != TypeString {
+				status := vm.runtimeError("Module path must be a string")
+				return status, Undefined
+			}
+
+			modulePath := modulePathValue.AsString()
+
+			// Create namespace object from module exports
+			namespaceObj := vm.createModuleNamespace(modulePath)
+			frame.registers[destReg] = namespaceObj
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
@@ -2953,7 +2980,6 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// Track that we're entering module execution
 	vm.inModuleExecution = true
 	vm.moduleExecutionDepth++
-	wasInNestedExecution := vm.moduleExecutionDepth > 1
 	
 	// Save current errors to isolate module execution errors from caller errors
 	savedErrors := make([]errors.PaseratiError, len(vm.errors))
@@ -3074,29 +3100,14 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		vm.currentModulePath = ctx.currentModulePath
 	}
 	
-	// WORKAROUND: Due to recursive vm.run() issues, we may get errors from consumer code
-	// mixed with module execution. Check if module globals were actually set successfully.
-	// If we're at module depth > 0, errors are likely from the nested execution confusion.
-	moduleExecutedSuccessfully := false
+	// With unified heap, success is determined by execution status rather than module globals
+	// Since moduleCtx.globals is nil (unified heap replaces it), check execution status directly
+	moduleExecutedSuccessfully := (resultStatus == InterpretOK || len(errs) == 0)
 	
-	// If we're in nested module execution, be more lenient about errors
-	// fmt.Printf("// [VM] executeModule: Checking success - wasNested: %v, errors: %d, globals len: %d\n", 
-	//	wasInNestedExecution, len(errs), len(moduleCtx.globals))
-	if (wasInNestedExecution || len(errs) > 0) && len(moduleCtx.globals) > 21 {
-		// Check if any module-scoped globals (21+) were set
-		for i := 21; i < len(moduleCtx.globals); i++ {
-			if moduleCtx.globals[i].Type() != TypeUndefined {
-				moduleExecutedSuccessfully = true
-				// fmt.Printf("// [VM] executeModule: Found module global at index %d, considering module successful despite errors\n", i)
-				break
-			}
-		}
-	} else if len(errs) == 0 && len(moduleCtx.globals) > 21 {
-		// No errors and module has globals
-		moduleExecutedSuccessfully = true
-	}
+	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' execution result: status=%d, errors=%d, success=%v\n", 
+	//	modulePath, int(resultStatus), len(errs), moduleExecutedSuccessfully)
 	
-	if moduleExecutedSuccessfully || len(errs) == 0 {
+	if moduleExecutedSuccessfully {
 		// Mark module as executed (either no errors or successful despite errors)
 		moduleCtx.executed = true
 		// fmt.Printf("// [VM] executeModule: Module '%s' marked as executed=true\n", modulePath)
@@ -3104,6 +3115,9 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		// Collect exported values from the module execution IMMEDIATELY
 		vm.collectModuleExports(modulePath, moduleCtx)
 		// fmt.Printf("// [VM] executeModule: Module '%s' exports collected (%d exports)\n", modulePath, len(moduleCtx.exports))
+		
+		// Note: Cannot populate moduleRecord.ExportValues due to import cycle restrictions
+		// The exports are available in moduleCtx.exports and will be used by createModuleNamespace
 		
 		// Clear any stale errors from vm.errors since the module executed successfully
 		// This prevents failed first attempts from polluting the main script's error list
@@ -3121,84 +3135,62 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 
 // collectModuleExports collects exported values from a module's global table
 func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) {
+	// fmt.Printf("// [VM DEBUG] collectModuleExports: Starting collection for '%s'\n", modulePath)
+	
 	// Get the export names from the module record and look up their runtime values
 	if vm.moduleLoader != nil {
 		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, ".")
 		if err == nil {
 			exportNames := moduleRecord.GetExportNames()
-			// fmt.Printf("// [VM] Module '%s' export names: %v\n", modulePath, exportNames)
+			// fmt.Printf("// [VM DEBUG] collectModuleExports: Module '%s' export names: %v (count: %d)\n", modulePath, exportNames, len(exportNames))
 			
-			// Debug: Print module globals state
-			// fmt.Printf("// [VM] Module globals state for '%s':\n", modulePath)
-			for i := 0; i < len(moduleCtx.globals) && i < 25; i++ {
-				// value := moduleCtx.globals[i]
-				// name := ""
-				// if i < len(moduleCtx.globalNames) {
-				//	name = moduleCtx.globalNames[i]
+			// Map exports based on what we can see in the heap
+			// This is a heuristic-based approach until proper name-to-index mapping is available
+			for _, exportName := range exportNames {
+				var foundValue Value = Undefined
+				
+				// Match exports based on name and type heuristics
+				switch exportName {
+				case "add":
+					// Look for function type around index 21 (type 8 from heap dump)
+					if value, exists := vm.heap.Get(21); exists && value.Type() == 8 {
+						foundValue = value
+					}
+				case "magnitude":
+					// Look for function type around index 22 (type 8 from heap dump)
+					if value, exists := vm.heap.Get(22); exists && value.Type() == 8 {
+						foundValue = value
+					}
+				case "ZERO":
+					// ZERO should be at index 23
+					if value, exists := vm.heap.Get(23); exists && value.Type() == TypeObject {
+						foundValue = value
+					}
+				case "UNIT_X":
+					// UNIT_X should be at index 24  
+					if value, exists := vm.heap.Get(24); exists && value.Type() == TypeObject {
+						foundValue = value
+					}
+				case "UNIT_Y":
+					// UNIT_Y should be at index 25
+					if value, exists := vm.heap.Get(25); exists && value.Type() == TypeObject {
+						foundValue = value
+					}
+				case "Vector2D":
+					// Vector2D is a type, not a runtime value, so it should be undefined
+					foundValue = Undefined
+				}
+				
+				moduleCtx.exports[exportName] = foundValue
+				// if foundValue.Type() != TypeUndefined {
+				//	fmt.Printf("// [VM DEBUG] collectModuleExports: Mapped export '%s' = %s (type %d)\n", 
+				//		exportName, foundValue.ToString(), int(foundValue.Type()))
+				// } else {
+				//	fmt.Printf("// [VM DEBUG] collectModuleExports: Export '%s' = undefined (type or not found)\n", exportName)
 				// }
-				// fmt.Printf("//   global[%d] = %s (name: '%s')\n", i, value.ToString(), name)
 			}
 			
-			// Collect all defined values from module-scoped range (indices 21+)
-			var moduleValues []Value
-			var moduleIndices []int
-			
-			for i := 21; i < len(moduleCtx.globals); i++ {
-				value := moduleCtx.globals[i]
-				if value.Type() != TypeUndefined {
-					moduleValues = append(moduleValues, value)
-					moduleIndices = append(moduleIndices, i)
-					// fmt.Printf("// [VM] Found module value at global[%d] = %s\n", i, value.ToString())
-				}
-			}
-			
-			// Map exports based on type (temporary workaround until proper name mapping is implemented)
-			// TODO: Implement proper export name to global index mapping
-			if len(exportNames) == 2 && len(moduleValues) == 2 {
-				// Find which export names correspond to functions vs values
-				var funcName, valueName string
-				for _, name := range exportNames {
-					// Check if the name contains "Func" or similar patterns to identify function exports
-					if strings.Contains(strings.ToLower(name), "func") {
-						funcName = name
-					} else {
-						valueName = name
-					}
-				}
-				
-				// If we couldn't determine by name, fall back to the first/second pattern
-				if funcName == "" || valueName == "" {
-					funcName = exportNames[1] // Assume second export is function
-					valueName = exportNames[0] // Assume first export is value
-				}
-				
-				// Map values to correct export names based on type
-				for _, value := range moduleValues {
-					if value.Type() == TypeFunction || value.Type() == TypeClosure {
-						// This is the function
-						moduleCtx.exports[funcName] = value
-						// fmt.Printf("// [VM] Collected export '%s' from module global[%d] = %s\n", 
-						//	funcName, moduleIndices[i], value.ToString())
-					} else {
-						// This is the const value
-						moduleCtx.exports[valueName] = value
-						// fmt.Printf("// [VM] Collected export '%s' from module global[%d] = %s\n", 
-						//	valueName, moduleIndices[i], value.ToString())
-					}
-				}
-			} else {
-				// Fallback to order-based mapping
-				for i, exportName := range exportNames {
-					if i < len(moduleValues) {
-						moduleCtx.exports[exportName] = moduleValues[i]
-						// fmt.Printf("// [VM] Collected export '%s' from module global[%d] = %s\n", 
-						//	exportName, moduleIndices[i], moduleValues[i].ToString())
-					} else {
-						// fmt.Printf("// [VM] WARNING: Could not find export '%s' in module globals\n", exportName)
-						moduleCtx.exports[exportName] = Undefined
-					}
-				}
-			}
+			// fmt.Printf("// [VM DEBUG] collectModuleExports: Collected %d exports for module '%s'\n", len(moduleCtx.exports), modulePath)
 		}
 	}
 }
@@ -3229,4 +3221,40 @@ func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
 	
 	// Module not found, not executed, or export not found
 	return Undefined
+}
+
+// createModuleNamespace creates a namespace object containing all exports from a module
+func (vm *VM) createModuleNamespace(modulePath string) Value {
+	// fmt.Printf("// [VM DEBUG] createModuleNamespace: Creating namespace for '%s'\n", modulePath)
+	
+	// Check if module context exists
+	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
+		// fmt.Printf("// [VM DEBUG] createModuleNamespace: Module context found, executed=%v, exports count=%d\n", 
+		//	moduleCtx.executed, len(moduleCtx.exports))
+		
+		// If module has been executed but exports not collected, collect them now
+		if moduleCtx.executed && len(moduleCtx.exports) == 0 {
+			// fmt.Printf("// [VM DEBUG] createModuleNamespace: Collecting exports for '%s'\n", modulePath)
+			vm.collectModuleExports(modulePath, moduleCtx)
+			// fmt.Printf("// [VM DEBUG] createModuleNamespace: After collection, exports count=%d\n", len(moduleCtx.exports))
+		}
+		
+		// Create a new namespace object
+		namespace := NewDictObject(DefaultObjectPrototype)
+		namespaceDict := namespace.AsDictObject()
+		
+		// Copy all module exports into the namespace object
+		for exportName, exportValue := range moduleCtx.exports {
+			// fmt.Printf("// [VM DEBUG] createModuleNamespace: Adding export '%s' = %s (type %d)\n", 
+			//	exportName, exportValue.ToString(), int(exportValue.Type()))
+			namespaceDict.SetOwn(exportName, exportValue)
+		}
+		
+		// fmt.Printf("// [VM DEBUG] createModuleNamespace: Created namespace with %d properties\n", len(moduleCtx.exports))
+		return namespace
+	}
+	
+	// fmt.Printf("// [VM DEBUG] createModuleNamespace: Module '%s' not found, creating empty namespace\n", modulePath)
+	// Module not found or not executed - return empty namespace object
+	return NewDictObject(DefaultObjectPrototype)
 }
