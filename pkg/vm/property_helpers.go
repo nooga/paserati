@@ -80,6 +80,10 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		if vm.RegExpPrototype.Type() == TypeObject {
 			prototype = vm.RegExpPrototype.AsPlainObject()
 		}
+	case TypeSymbol:
+		if vm.SymbolPrototype.Type() == TypeObject {
+			prototype = vm.SymbolPrototype.AsPlainObject()
+		}
 	default:
 		return Undefined, false
 	}

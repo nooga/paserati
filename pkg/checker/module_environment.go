@@ -42,6 +42,7 @@ type ExportBinding struct {
 	Declaration  parser.Statement     // Original declaration (if any)
 	IsReExport   bool                 // True if this is a re-export from another module
 	SourceModule string               // For re-exports, the source module path
+	IsTypeOnly   bool                 // True if this is a type-only export
 }
 
 // ImportBindingType represents different kinds of import bindings
@@ -100,7 +101,7 @@ func (me *ModuleEnvironment) DefineExport(localName, exportName string, exported
 }
 
 // DefineReExport adds a re-export binding (export { name } from "module")
-func (me *ModuleEnvironment) DefineReExport(exportName, sourceModule, sourceName string) {
+func (me *ModuleEnvironment) DefineReExport(exportName, sourceModule, sourceName string, isTypeOnly bool) {
 	binding := &ExportBinding{
 		LocalName:    sourceName,    // In re-exports, we use the source name
 		ExportName:   exportName,
@@ -108,6 +109,7 @@ func (me *ModuleEnvironment) DefineReExport(exportName, sourceModule, sourceName
 		Declaration:  nil,           // No local declaration
 		IsReExport:   true,
 		SourceModule: sourceModule,
+		IsTypeOnly:   isTypeOnly,    // Set the type-only flag
 	}
 	
 	me.ExportedNames[exportName] = binding

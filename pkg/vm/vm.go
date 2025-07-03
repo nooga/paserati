@@ -112,6 +112,7 @@ type VM struct {
 	MapPrototype      Value
 	SetPrototype      Value
 	ErrorPrototype    Value
+	SymbolPrototype   Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
 	disableMethodBinding bool
@@ -2741,6 +2742,8 @@ func getTypeofString(val Value) string {
 		return "number"
 	case TypeString:
 		return "string"
+	case TypeSymbol:
+		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		return "function"
 	case TypeObject, TypeDictObject:

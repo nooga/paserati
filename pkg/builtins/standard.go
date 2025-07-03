@@ -20,6 +20,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	// Additional builtins (to be migrated)
 	initializers = append(initializers, &StringInitializer{})
 	initializers = append(initializers, &NumberInitializer{})
+	initializers = append(initializers, &SymbolInitializer{})
 	// initializers = append(initializers, &BooleanInitializer{})
 	initializers = append(initializers, &MapInitializer{})
 	initializers = append(initializers, &SetInitializer{})

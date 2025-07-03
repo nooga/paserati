@@ -6716,6 +6716,13 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			var imported *Identifier
 			var importedToken lexer.Token
 			
+			// Check for type-only import: { type name }
+			isTypeOnlySpecifier := false
+			if p.curToken.Type == lexer.TYPE {
+				isTypeOnlySpecifier = true
+				p.nextToken() // consume 'type'
+			}
+			
 			// Handle different import name patterns
 			if p.curToken.Type == lexer.IDENT {
 				// Regular identifier: { name } or { name as alias }
@@ -6761,9 +6768,10 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			}
 			
 			namedSpec := &ImportNamedSpecifier{
-				Token:    importedToken,
-				Imported: imported,
-				Local:    local,
+				Token:      importedToken,
+				Imported:   imported,
+				Local:      local,
+				IsTypeOnly: isTypeOnlySpecifier,
 			}
 			specs = append(specs, namedSpec)
 			
@@ -6774,9 +6782,10 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			p.nextToken() // consume current identifier/alias
 			p.nextToken() // consume comma
 			
-			// Next specifier should be identifier, string, or default
-			if p.curToken.Type != lexer.IDENT && p.curToken.Type != lexer.STRING && p.curToken.Type != lexer.DEFAULT {
-				p.addError(p.curToken, "Expected identifier, string literal, or 'default' in import specifier")
+			// Next specifier should be identifier, string, default, or type
+			if p.curToken.Type != lexer.IDENT && p.curToken.Type != lexer.STRING && 
+			   p.curToken.Type != lexer.DEFAULT && p.curToken.Type != lexer.TYPE {
+				p.addError(p.curToken, "Expected identifier, string literal, 'default', or 'type' in import specifier")
 				return nil
 			}
 		}
@@ -6805,17 +6814,17 @@ func (p *Parser) parseExportDeclaration() Statement {
 	// Move to the next token to see what kind of export this is
 	p.nextToken()
 	
-	// Check for type-only export: export type { ... } from "module"
+	// Check for type-only export: export type { ... } from "module" or export type * from "module"
 	// But distinguish from type alias: export type TypeAlias = ...
 	isTypeOnly := false
 	if p.curToken.Type == lexer.TYPE {
 		// Look ahead to see if this is a re-export or type alias
-		if p.peekTokenIs(lexer.LBRACE) {
-			// This is a re-export: export type { ... }
+		if p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.ASTERISK) {
+			// This is a re-export: export type { ... } or export type * from "module"
 			isTypeOnly = true
 			p.nextToken() // consume 'type' keyword
 		}
-		// If peek is not '{', this is a type alias declaration, so don't consume 'type'
+		// If peek is not '{' or '*', this is a type alias declaration, so don't consume 'type'
 		// Let it fall through to the case statement which will handle lexer.TYPE
 	}
 	
@@ -6825,8 +6834,8 @@ func (p *Parser) parseExportDeclaration() Statement {
 		return p.parseExportDefaultDeclaration(exportToken)
 		
 	case lexer.ASTERISK:
-		// export * from "module" or export * as name from "module"
-		return p.parseExportAllDeclaration(exportToken)
+		// export * from "module" or export * as name from "module" or export type * from "module"
+		return p.parseExportAllDeclaration(exportToken, isTypeOnly)
 		
 	case lexer.LBRACE:
 		// export { name1, name2 } or export { name1 } from "module"
@@ -6861,9 +6870,9 @@ func (p *Parser) parseExportDefaultDeclaration(exportToken lexer.Token) *ExportD
 	return stmt
 }
 
-// parseExportAllDeclaration parses: export * from "module" or export * as name from "module"
-func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token) *ExportAllDeclaration {
-	stmt := &ExportAllDeclaration{Token: exportToken}
+// parseExportAllDeclaration parses: export * from "module" or export * as name from "module" or export type * from "module"
+func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token, isTypeOnly bool) *ExportAllDeclaration {
+	stmt := &ExportAllDeclaration{Token: exportToken, IsTypeOnly: isTypeOnly}
 	
 	// Check for optional 'as name'
 	if p.peekToken.Type == lexer.AS {

@@ -73,8 +73,17 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 							// as it's more complex (could be null, array, etc.)
 							return nil
 						case "function":
-							// For now, we'll skip function narrowing
-							return nil
+							// Create a generic function type for typeof narrowing
+							narrowedType = &types.ObjectType{
+								CallSignatures: []*types.Signature{
+									{
+										ParameterTypes: []types.Type{},
+										ReturnType:     types.Any,
+										OptionalParams: []bool{},
+										IsVariadic:     false,
+									},
+								},
+							}
 						case "undefined":
 							narrowedType = types.Undefined
 						default:
@@ -168,14 +177,46 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		canNarrow = true
 		narrowedType = guard.NarrowedType
 	} else if unionType, ok := originalType.(*types.UnionType); ok {
-		// Union types can be narrowed if they contain the target type
-		if unionType.ContainsType(guard.NarrowedType) {
-			canNarrow = true
-			narrowedType = guard.NarrowedType
-		} else {
-			debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
-				originalType.String(), guard.NarrowedType.String())
-			return nil
+		// For union types, check if we can narrow based on type compatibility
+		if guard.NarrowedType != nil {
+			// For typeof "function" checks, find callable members in the union
+			if objType, ok := guard.NarrowedType.(*types.ObjectType); ok && objType.IsCallable() {
+				var callableMembers []types.Type
+				debugPrintf("// [TypeNarrowing] Checking union members for callable types\n")
+				for _, memberType := range unionType.Types {
+					debugPrintf("// [TypeNarrowing] Checking member: %s (type: %T)\n", memberType.String(), memberType)
+					
+					// Resolve type aliases to their underlying types
+					resolvedType := c.resolveTypeAlias(memberType)
+					debugPrintf("// [TypeNarrowing] Resolved member to: %s (type: %T)\n", resolvedType.String(), resolvedType)
+					
+					if memberObj, ok := resolvedType.(*types.ObjectType); ok && memberObj.IsCallable() {
+						callableMembers = append(callableMembers, memberType) // Keep original for narrowed type
+						debugPrintf("// [TypeNarrowing] Found callable member: %s\n", memberType.String())
+					}
+				}
+				
+				if len(callableMembers) > 0 {
+					canNarrow = true
+					if len(callableMembers) == 1 {
+						narrowedType = callableMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(callableMembers...)
+					}
+					debugPrintf("// [TypeNarrowing] Narrowed to callable types: %s\n", narrowedType.String())
+				} else {
+					debugPrintf("// [TypeNarrowing] No callable members found in union\n")
+					return nil
+				}
+			} else if unionType.ContainsType(guard.NarrowedType) {
+				// Regular type narrowing - union contains the exact target type
+				canNarrow = true
+				narrowedType = guard.NarrowedType
+			} else {
+				debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
+					originalType.String(), guard.NarrowedType.String())
+				return nil
+			}
 		}
 	} else if types.IsAssignable(guard.NarrowedType, originalType) {
 		// Allow narrowing if the narrowed type is assignable to the original type
@@ -403,4 +444,45 @@ func (c *Checker) isLiteralAssignableToType(literal *types.LiteralType, targetTy
 func (c *Checker) areLiteralValuesEqual(val1, val2 vm.Value) bool {
 	// Use the vm.Value's built-in comparison methods
 	return val1.StrictlyEquals(val2)
+}
+
+// resolveTypeAlias recursively resolves type aliases to their underlying types
+func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
+	// Use the existing GetEffectiveType function which handles AliasType resolution
+	effective := types.GetEffectiveType(t)
+	if effective != t {
+		debugPrintf("// [TypeNarrowing] Resolved alias %s -> %s\n", t.String(), effective.String())
+		return effective
+	}
+	
+	// Handle different type structures
+	switch typ := t.(type) {
+	case *types.InstantiatedType:
+		// For instantiated generic types, try to substitute and resolve
+		debugPrintf("// [TypeNarrowing] Resolving InstantiatedType: %s\n", typ.String())
+		substituted := typ.Substitute()
+		debugPrintf("// [TypeNarrowing] InstantiatedType substituted to: %s\n", substituted.String())
+		return c.resolveTypeAlias(substituted) // Recursively resolve the result
+	case *types.GenericTypeAliasForwardReference:
+		// Try to resolve forward references by looking up the alias name
+		debugPrintf("// [TypeNarrowing] Attempting to resolve GenericTypeAliasForwardReference: %s\n", typ.AliasName)
+		if resolvedType, _, found := c.env.Resolve(typ.AliasName); found {
+			debugPrintf("// [TypeNarrowing] Found type alias '%s' in environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
+			// If it's a generic type and we have type arguments, try to instantiate it
+			if genericType, ok := resolvedType.(*types.GenericType); ok && len(typ.TypeArguments) > 0 {
+				debugPrintf("// [TypeNarrowing] Instantiating generic type with %d args\n", len(typ.TypeArguments))
+				instantiated := types.NewInstantiatedType(genericType, typ.TypeArguments)
+				return c.resolveTypeAlias(instantiated.Substitute())
+			}
+			// Otherwise, just resolve the found type
+			return c.resolveTypeAlias(resolvedType)
+		} else {
+			debugPrintf("// [TypeNarrowing] Could not resolve GenericTypeAliasForwardReference: %s\n", typ.AliasName)
+		}
+	default:
+		// Not a resolvable type, return as-is
+		return t
+	}
+	
+	return t
 }

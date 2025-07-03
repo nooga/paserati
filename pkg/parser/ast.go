@@ -1641,9 +1641,10 @@ func (ids *ImportDefaultSpecifier) String() string        { return ids.Local.Str
 
 // ImportNamedSpecifier represents: import { name } or import { name as alias }
 type ImportNamedSpecifier struct {
-	Token    lexer.Token // The imported name token
-	Imported *Identifier // Original export name
-	Local    *Identifier // Local binding name (same as Imported if no alias)
+	Token      lexer.Token // The imported name token
+	Imported   *Identifier // Original export name
+	Local      *Identifier // Local binding name (same as Imported if no alias)
+	IsTypeOnly bool        // true for "import { type name }" syntax
 }
 
 func (ins *ImportNamedSpecifier) importSpecifier()      {}
@@ -1739,9 +1740,10 @@ func (edd *ExportDefaultDeclaration) String() string {
 
 // ExportAllDeclaration represents: export * from "module" or export * as name from "module"
 type ExportAllDeclaration struct {
-	Token    lexer.Token    // The 'export' token
-	Exported *Identifier    // Optional: export * as name from "module"
-	Source   *StringLiteral // The module source
+	Token      lexer.Token    // The 'export' token
+	Exported   *Identifier    // Optional: export * as name from "module"
+	Source     *StringLiteral // The module source
+	IsTypeOnly bool           // true for "export type * from" statements
 }
 
 func (ead *ExportAllDeclaration) statementNode()        {}
@@ -1749,7 +1751,11 @@ func (ead *ExportAllDeclaration) exportDeclaration()    {}
 func (ead *ExportAllDeclaration) TokenLiteral() string  { return ead.Token.Literal }
 func (ead *ExportAllDeclaration) String() string {
 	var out bytes.Buffer
-	out.WriteString("export * ")
+	out.WriteString("export ")
+	if ead.IsTypeOnly {
+		out.WriteString("type ")
+	}
+	out.WriteString("* ")
 	if ead.Exported != nil {
 		out.WriteString("as ")
 		out.WriteString(ead.Exported.String())

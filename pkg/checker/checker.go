@@ -2716,7 +2716,9 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 			
 			localName := importSpec.Local.Value
 			importedName := importSpec.Imported.Value
-			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamed, node.IsTypeOnly)
+			// Use per-specifier type-only flag if available, otherwise fall back to declaration-level flag
+			isTypeOnly := importSpec.IsTypeOnly || node.IsTypeOnly
+			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamed, isTypeOnly)
 			
 		case *parser.ImportNamespaceSpecifier:
 			// Namespace import: import * as name from "module"
@@ -2810,7 +2812,7 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 					exportName := exportSpec.Exported.Value
 					
 					if c.IsModuleMode() {
-						c.moduleEnv.DefineReExport(exportName, sourceModule, localName)
+						c.moduleEnv.DefineReExport(exportName, sourceModule, localName, node.IsTypeOnly)
 						debugPrintf("// [Checker] Re-exported: %s as %s from %s\n", localName, exportName, sourceModule)
 					}
 				}
@@ -2878,7 +2880,8 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 	}
 	
 	sourceModule := node.Source.Value
-	debugPrintf("// [Checker] Processing export * from: %s\n", sourceModule)
+	debugPrintf("// [Checker] Processing export%s * from: %s\n", 
+		func() string { if node.IsTypeOnly { return " type" } else { return "" } }(), sourceModule)
 	
 	if node.Exported != nil {
 		// export * as name from "module"
@@ -2887,7 +2890,7 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 		
 		if c.IsModuleMode() {
 			// This creates a namespace export that contains all exports from the source module
-			c.moduleEnv.DefineReExport(exportName, sourceModule, "*")
+			c.moduleEnv.DefineReExport(exportName, sourceModule, "*", node.IsTypeOnly)
 		}
 	} else {
 		// export * from "module" - re-exports all named exports (but not default)
@@ -2913,7 +2916,7 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 				for _, exportName := range exportNames {
 					if exportName != "default" { // Skip default export in export *
 						debugPrintf("// [Checker] Re-exporting '%s' from '%s'\n", exportName, sourceModule)
-						c.moduleEnv.DefineReExport(exportName, sourceModule, exportName)
+						c.moduleEnv.DefineReExport(exportName, sourceModule, exportName, node.IsTypeOnly)
 					}
 				}
 				

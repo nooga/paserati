@@ -187,6 +187,9 @@ func (vm *VM) initializePrototypes() {
 
 	// Error.prototype inherits from Object.prototype
 	vm.ErrorPrototype = NewObject(vm.ObjectPrototype)
+
+	// Symbol.prototype inherits from Object.prototype
+	vm.SymbolPrototype = NewObject(vm.ObjectPrototype)
 }
 
 // CallFunctionFromBuiltin allows builtins to call functions through the VM
