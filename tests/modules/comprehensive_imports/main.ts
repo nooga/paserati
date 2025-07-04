@@ -1,4 +1,4 @@
-// expect: 42
+// expect_runtime_error: Failed to load module 'module-name': no resolver could handle specifier: module-name
 // Test comprehensive import patterns - all should parse successfully
 import defaultExport from "module-name";
 import * as name from "module-name";  

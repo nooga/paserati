@@ -79,6 +79,9 @@ type Compiler struct {
 	// --- Phase 5: Module Bindings ---
 	moduleBindings  *ModuleBindings      // Module-aware binding resolver
 	moduleLoader    modules.ModuleLoader // Reference to module loader
+	
+	// --- Module Import Deduplication ---
+	processedModules map[string]bool     // Track modules already processed to avoid duplicate OpEvalModule
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -98,6 +101,7 @@ func NewCompiler() *Compiler {
 		globalCount:        0,
 		line:               -1,
 		constantCache:      make(map[uint16]Register),
+		processedModules:   make(map[string]bool),
 	}
 }
 
@@ -1716,8 +1720,14 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 	debugPrintf("// [Compiler] Processing import from: %s\n", sourceModulePath)
 	
 	// Generate OpEvalModule to ensure the module is loaded and executed
-	debugPrintf("// [Compiler] Generating OpEvalModule for import from: %s\n", sourceModulePath)
-	c.emitEvalModule(sourceModulePath, node.Token.Line)
+	// Only emit if this module hasn't been processed yet
+	if !c.processedModules[sourceModulePath] {
+		debugPrintf("// [Compiler] Generating OpEvalModule for import from: %s\n", sourceModulePath)
+		c.emitEvalModule(sourceModulePath, node.Token.Line)
+		c.processedModules[sourceModulePath] = true
+	} else {
+		debugPrintf("// [Compiler] Module %s already processed, skipping OpEvalModule\n", sourceModulePath)
+	}
 	
 	// Handle bare imports (side-effect only)
 	if len(node.Specifiers) == 0 {
@@ -1972,7 +1982,8 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 		globalIdx := int(c.GetOrAssignGlobalIndex(exportName))
 		
 		// 1. Define the import binding (like processImportDeclaration does)
-		c.moduleBindings.DefineImport(exportName, sourceModule, exportName, ImportNamedRef, globalIdx)
+		// Use -1 for GlobalIndex to force module export lookup instead of direct global access
+		c.moduleBindings.DefineImport(exportName, sourceModule, exportName, ImportNamedRef, -1)
 		
 		// 2. Define the export binding (like processExportDeclaration does)  
 		c.moduleBindings.DefineExport(exportName, exportName, vm.Undefined, nil, globalIdx)
@@ -1981,8 +1992,11 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 		// Allocate a temporary register for the imported value
 		tempReg := c.regAlloc.Alloc()
 		
-		// Generate import resolution (OpEvalModule + OpGetModuleExport)
-		c.emitImportResolve(tempReg, exportName, node.Token.Line)
+		// First ensure the source module is loaded
+		c.emitEvalModule(sourceModule, node.Token.Line)
+		
+		// Then get the specific export from the source module
+		c.emitGetModuleExport(tempReg, sourceModule, exportName, node.Token.Line)
 		
 		// Store the imported value as a global (like normal exports do)
 		globalIdxUint16 := c.GetOrAssignGlobalIndex(exportName)
