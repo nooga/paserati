@@ -521,6 +521,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'RegExp'", propertyName))
 			// resultType remains types.Never
 		}
+	} else if widenedObjectType == types.Symbol {
+		// Check prototype registry for Symbol methods and properties
+		if methodType := c.env.GetPrimitivePrototypeMethodType("symbol", propertyName); methodType != nil {
+			resultType = methodType
+		} else {
+			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'symbol'", propertyName))
+			// resultType remains types.Never
+		}
 	} else {
 		// Use a type switch for struct-based types
 		switch obj := widenedObjectType.(type) {
@@ -714,6 +722,50 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				resultType = types.Any
 				debugPrintf("// [Checker MemberExpr] Unconstrained type parameter, allowing property access: %s\n", propertyName)
 			}
+		case *types.UnionType:
+			// For union types, check if the property exists on all members
+			var possibleTypes []types.Type
+			allMembersHaveProperty := true
+			
+			for _, memberType := range obj.Types {
+				// Create a temporary member expression to check this member type
+				memberHasProperty := false
+				var memberResultType types.Type
+				
+				// Check what type this member would produce for the property
+				switch member := memberType.(type) {
+				case *types.ObjectType:
+					if fieldType, exists := member.Properties[propertyName]; exists {
+						memberHasProperty = true
+						memberResultType = fieldType
+					}
+				case *types.ArrayType:
+					if propertyName == "length" {
+						memberHasProperty = true
+						memberResultType = types.Number
+					}
+				// Add other cases as needed for primitives with prototypes, etc.
+				}
+				
+				if memberHasProperty {
+					possibleTypes = append(possibleTypes, memberResultType)
+				} else {
+					allMembersHaveProperty = false
+					break
+				}
+			}
+			
+			if allMembersHaveProperty && len(possibleTypes) > 0 {
+				// All members have the property, create union of result types
+				if len(possibleTypes) == 1 {
+					resultType = possibleTypes[0]
+				} else {
+					resultType = types.NewUnionType(possibleTypes...)
+				}
+			} else {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on all members of union type %s", propertyName, obj.String()))
+				resultType = types.Never
+			}
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
@@ -773,7 +825,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 			widenedIndexType := types.GetWidenedType(indexType)
 
-			if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Any {
+			if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
 				if isIndexStringLiteral {
 					// Index is a specific string literal, look it up directly
 					propType, exists := base.Properties[indexStringValue]
@@ -796,8 +848,61 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				}
 			} else {
 				// Invalid index type for object
-				c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', or 'any', got '%s'", indexType.String()))
+				c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', 'symbol', or 'any', got '%s'", indexType.String()))
 				// resultType remains Error
+			}
+
+		case *types.UnionType:
+			// Handle index access on union types
+			// For each member of the union that supports indexing, collect the result types
+			var possibleTypes []types.Type
+			allMembersSupported := true
+			
+			for _, memberType := range base.Types {
+				switch member := memberType.(type) {
+				case *types.ObjectType:
+					// Check if this member supports the index type
+					widenedIndexType := types.GetWidenedType(indexType)
+					if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
+						// For union types with object members, we can't determine the specific property
+						// Return 'any' for the property access (conservative approach)
+						possibleTypes = append(possibleTypes, types.Any)
+					} else {
+						allMembersSupported = false
+						break
+					}
+				case *types.ArrayType:
+					// Check if index is number for array member
+					if types.IsAssignable(indexType, types.Number) {
+						if member.ElementType != nil {
+							possibleTypes = append(possibleTypes, member.ElementType)
+						} else {
+							possibleTypes = append(possibleTypes, types.Unknown)
+						}
+					} else {
+						allMembersSupported = false
+						break
+					}
+				case *types.Primitive:
+					if member == types.String && types.IsAssignable(indexType, types.Number) {
+						possibleTypes = append(possibleTypes, types.String)
+					} else {
+						allMembersSupported = false
+						break
+					}
+				default:
+					// This member doesn't support indexing
+					allMembersSupported = false
+					break
+				}
+			}
+			
+			if allMembersSupported && len(possibleTypes) > 0 {
+				// All members support indexing, create union of result types
+				resultType = types.NewUnionType(possibleTypes...)
+			} else {
+				// Some members don't support indexing
+				c.addError(node.Left, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 			}
 
 		case *types.Primitive:
@@ -1228,8 +1333,20 @@ func (c *Checker) isStringOrNumberLiteralType(t types.Type) bool {
 
 // isObjectType checks if a type represents an object (not primitive)
 func (c *Checker) isObjectType(t types.Type) bool {
-	switch t.(type) {
+	switch typ := t.(type) {
 	case *types.ObjectType, *types.ArrayType:
+		return true
+	case *types.UnionType:
+		// For union types with the 'in' operator, we should allow it if ANY member is an object
+		// because at runtime, the 'in' check will only happen on the actual object members
+		for _, memberType := range typ.Types {
+			if c.isObjectType(memberType) {
+				return true
+			}
+		}
+		return false
+	case *types.TypeParameterType:
+		// Type parameters could be objects, allow them (this might need refinement)
 		return true
 	default:
 		// Check for any type that could represent an object

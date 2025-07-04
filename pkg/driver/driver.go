@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 	"paserati/pkg/builtins"
 	"paserati/pkg/checker"
 	"paserati/pkg/compiler"
@@ -337,8 +338,22 @@ func RunFile(filename string) bool {
 	// Create a new Paserati session
 	paserati := NewPaserati()
 	
+	// Convert file path to module specifier
+	// Check if file exists first
+	if _, err := os.Stat(filename); err != nil {
+		fmt.Fprintf(os.Stderr, "File not found: %s\n", filename)
+		return false
+	}
+	
+	// Convert to module specifier
+	// If it doesn't start with ./ or ../ or /, add ./ prefix
+	moduleSpecifier := filename
+	if !strings.HasPrefix(filename, "./") && !strings.HasPrefix(filename, "../") && !strings.HasPrefix(filename, "/") {
+		moduleSpecifier = "./" + filename
+	}
+	
 	// Always use module mode - it gracefully handles both module and non-module files
-	return paserati.RunModule(filename)
+	return paserati.RunModule(moduleSpecifier)
 }
 
 // LoadModule loads a module and all its dependencies using the module system.
@@ -752,27 +767,26 @@ func initializeBuiltins(paserati *Paserati) error {
 func (p *Paserati) collectExportedValues() map[string]vm.Value {
 	exports := make(map[string]vm.Value)
 	
+	fmt.Printf("// [Driver DEBUG] collectExportedValues called, IsModuleMode=%v\n", p.compiler.IsModuleMode())
 	if !p.compiler.IsModuleMode() {
 		return exports
 	}
 	
 	// Get the export name to global index mapping from the compiler
 	exportIndices := p.compiler.GetExportGlobalIndices()
-	debugPrintf("// [Driver] collectExportedValues: Found %d export mappings\n", len(exportIndices))
+	fmt.Printf("// [Driver DEBUG] collectExportedValues: Got %d export indices: %v\n", len(exportIndices), exportIndices)
 	
 	// For each export, get the value directly from the VM's global table using the index
 	for exportName, globalIdx := range exportIndices {
 		if value, exists := p.vmInstance.GetGlobalByIndex(globalIdx); exists {
 			exports[exportName] = value
-			debugPrintf("// [Driver] collectExportedValues: Collected export '%s' from global[%d] = %s\n", 
-				exportName, globalIdx, value.Type())
+			fmt.Printf("// [Driver DEBUG] collectExportedValues: Export '%s' -> global[%d] = %s (type %d)\n", exportName, globalIdx, value.ToString(), int(value.Type()))
 		} else {
-			debugPrintf("// [Driver] collectExportedValues: Could not find value at global[%d] for export '%s'\n", 
-				globalIdx, exportName)
 			exports[exportName] = vm.Undefined
+			fmt.Printf("// [Driver DEBUG] collectExportedValues: Export '%s' -> global[%d] = undefined (not found)\n", exportName, globalIdx)
 		}
 	}
-	
+	fmt.Printf("// [Driver DEBUG] collectExportedValues: Returning %d exports\n", len(exports))
 	return exports
 }
 

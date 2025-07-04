@@ -28,8 +28,8 @@ func (d *DateInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("getMinutes", types.NewSimpleFunction([]types.Type{}, types.Number)).
 		WithProperty("getSeconds", types.NewSimpleFunction([]types.Type{}, types.Number)).
 		WithProperty("getMilliseconds", types.NewSimpleFunction([]types.Type{}, types.Number)).
-		WithProperty("setFullYear", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
-		WithProperty("setMonth", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("setFullYear", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, types.Number, []bool{false, true, true})).
+		WithProperty("setMonth", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Number, []bool{false, true})).
 		WithProperty("setDate", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
 		WithProperty("setHours", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
 		WithProperty("setMinutes", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
@@ -39,7 +39,8 @@ func (d *DateInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("toISOString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toDateString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toTimeString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number))
+		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
 
 	// Create Date constructor type
 	dateCtorType := types.NewObjectType().
@@ -161,7 +162,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN
 	}))
 
-	dateProto.SetOwn("setMonth", vm.NewNativeFunction(1, false, "setMonth", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setMonth", vm.NewNativeFunction(2, false, "setMonth", func(args []vm.Value) vm.Value {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN
@@ -169,7 +170,14 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			month := time.Month(int(args[0].ToFloat()) + 1) // JavaScript months are 0-based
-			newTime := time.Date(t.Year(), month, t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+			
+			// Use existing day if second parameter not provided
+			day := t.Day()
+			if len(args) >= 2 {
+				day = int(args[1].ToFloat())
+			}
+			
+			newTime := time.Date(t.Year(), month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
 			return vm.NumberValue(newTimestamp)
@@ -177,7 +185,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN
 	}))
 
-	dateProto.SetOwn("setFullYear", vm.NewNativeFunction(1, false, "setFullYear", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setFullYear", vm.NewNativeFunction(3, false, "setFullYear", func(args []vm.Value) vm.Value {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN
@@ -185,7 +193,20 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			year := int(args[0].ToFloat())
-			newTime := time.Date(year, t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+			
+			// Use existing month if second parameter not provided
+			month := t.Month()
+			if len(args) >= 2 {
+				month = time.Month(int(args[1].ToFloat()) + 1) // JavaScript months are 0-based
+			}
+			
+			// Use existing day if third parameter not provided
+			day := t.Day()
+			if len(args) >= 3 {
+				day = int(args[2].ToFloat())
+			}
+			
+			newTime := time.Date(year, month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
 			return vm.NumberValue(newTimestamp)
@@ -419,6 +440,9 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	dateCtor := ctorWithProps
+
+	// Set constructor property on prototype
+	dateProto.SetOwn("constructor", dateCtor)
 
 	// Set Date prototype in VM (if needed)
 	// vmInstance.DatePrototype = vm.NewValueFromPlainObject(dateProto)

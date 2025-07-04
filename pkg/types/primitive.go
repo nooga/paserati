@@ -25,6 +25,7 @@ var (
 	Number    = &Primitive{Name: "number"}
 	String    = &Primitive{Name: "string"}
 	Boolean   = &Primitive{Name: "boolean"}
+	Symbol    = &Primitive{Name: "symbol"}
 	Null      = &Primitive{Name: "null"}
 	Undefined = &Primitive{Name: "undefined"}
 	Any       = &Primitive{Name: "any"}
@@ -116,6 +117,8 @@ func GetTypeofResult(t Type) Type {
 		return &LiteralType{Value: vm.String("number")}
 	case Boolean:
 		return &LiteralType{Value: vm.String("boolean")}
+	case Symbol:
+		return &LiteralType{Value: vm.String("symbol")}
 	case Undefined:
 		return &LiteralType{Value: vm.String("undefined")}
 	case Null:

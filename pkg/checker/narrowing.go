@@ -20,6 +20,7 @@ type TypeGuard struct {
 // x === "foo" (literal narrowing)
 // "bar" === y (literal narrowing)
 // isString(x) (type predicate function calls)
+// x && typeof x === "object" (compound conditions)
 func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 	// Pattern 0: Type predicate function calls like isString(x)
 	if callExpr, ok := condition.(*parser.CallExpression); ok {
@@ -69,9 +70,9 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						case "boolean":
 							narrowedType = types.Boolean
 						case "object":
-							// For simplicity, we'll skip object narrowing for now
-							// as it's more complex (could be null, array, etc.)
-							return nil
+							// For typeof === "object", we need a special marker
+							// We'll handle this in the narrowing logic to filter to object types only
+							narrowedType = &types.ObjectTypeMarker{}
 						case "function":
 							// Create a generic function type for typeof narrowing
 							narrowedType = &types.ObjectType{
@@ -121,6 +122,69 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				}
 			}
 		}
+		
+		// Pattern 4: "property" in identifier (e.g., "foo" in obj)
+		if infix.Operator == "in" {
+			if propLit, ok := infix.Left.(*parser.StringLiteral); ok {
+				if ident, ok := infix.Right.(*parser.Identifier); ok {
+					// Create a property existence marker
+					return &TypeGuard{
+						VariableName: ident.Value,
+						NarrowedType: &types.PropertyExistenceMarker{PropertyName: propLit.Value},
+						IsNegated:    false,
+					}
+				}
+			}
+			// Also handle Symbol in identifier (e.g., symbol in obj)
+			if ident, ok := infix.Right.(*parser.Identifier); ok {
+				// For symbol properties, we need to check if the left side is a symbol
+				// For now, we'll create a general property existence check
+				return &TypeGuard{
+					VariableName: ident.Value,
+					NarrowedType: &types.PropertyExistenceMarker{PropertyName: "[[Symbol]]"},
+					IsNegated:    false,
+				}
+			}
+		}
+
+		// Pattern 5: identifier instanceof Constructor (e.g., date instanceof Date)
+		if infix.Operator == "instanceof" {
+			if ident, ok := infix.Left.(*parser.Identifier); ok {
+				// For instanceof, we need to determine what type the constructor produces
+				if constructorIdent, ok := infix.Right.(*parser.Identifier); ok {
+					switch constructorIdent.Value {
+					case "Date":
+						// For Date instanceof, narrow to the Date instance type
+						// Look up the actual Date constructor and get its instance type
+						if dateType, _, found := c.env.Resolve("Date"); found {
+							if objType, ok := dateType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
+								// Use the return type of the constructor (the instance type)
+								instanceType := objType.CallSignatures[0].ReturnType
+								return &TypeGuard{
+									VariableName: ident.Value,
+									NarrowedType: instanceType,
+									IsNegated:    false,
+								}
+							}
+						}
+					case "Array":
+						// For Array, narrow to a generic array type
+						return &TypeGuard{
+							VariableName: ident.Value,
+							NarrowedType: &types.ArrayType{ElementType: types.Any},
+							IsNegated:    false,
+						}
+					case "Object":
+						// For Object, narrow to a generic object type
+						return &TypeGuard{
+							VariableName: ident.Value,
+							NarrowedType: types.NewObjectType(),
+							IsNegated:    false,
+						}
+					}
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -159,6 +223,21 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 	return c.applyPositiveTypeNarrowing(guard)
 }
 
+// applyTypeNarrowingWithFallback tries the old approach first, then falls back to compound narrowing
+func (c *Checker) applyTypeNarrowingWithFallback(condition parser.Expression) *Environment {
+	// First try the traditional single type guard approach
+	guard := c.detectTypeGuard(condition)
+	env := c.applyTypeNarrowing(guard)
+	if env != nil {
+		debugPrintf("// [TypeNarrowing] Used traditional approach\n")
+		return env
+	}
+	
+	// If that didn't work, try the compound approach
+	debugPrintf("// [TypeNarrowing] Trying compound approach for condition: %T\n", condition)
+	return c.applyTypeNarrowingFromCondition(condition)
+}
+
 // applyPositiveTypeNarrowing performs the actual positive type narrowing logic
 func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	// Check if the variable exists in the current environment
@@ -179,8 +258,49 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	} else if unionType, ok := originalType.(*types.UnionType); ok {
 		// For union types, check if we can narrow based on type compatibility
 		if guard.NarrowedType != nil {
+			// Handle special marker types for compound type narrowing
+			if _, ok := guard.NarrowedType.(*types.ObjectTypeMarker); ok {
+				// typeof === "object" - keep only object-like types (objects, arrays, but not primitives)
+				var objectMembers []types.Type
+				for _, memberType := range unionType.Types {
+					if c.isObjectLikeType(memberType) {
+						objectMembers = append(objectMembers, memberType)
+					}
+				}
+				if len(objectMembers) > 0 {
+					canNarrow = true
+					if len(objectMembers) == 1 {
+						narrowedType = objectMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(objectMembers...)
+					}
+					debugPrintf("// [TypeNarrowing] Narrowed to object types: %s\n", narrowedType.String())
+				} else {
+					debugPrintf("// [TypeNarrowing] No object types found in union\n")
+					return nil
+				}
+			} else if propMarker, ok := guard.NarrowedType.(*types.PropertyExistenceMarker); ok {
+				// "prop" in obj - keep only types that have the property
+				var validMembers []types.Type
+				for _, memberType := range unionType.Types {
+					if c.typeHasProperty(memberType, propMarker.PropertyName) {
+						validMembers = append(validMembers, memberType)
+					}
+				}
+				if len(validMembers) > 0 {
+					canNarrow = true
+					if len(validMembers) == 1 {
+						narrowedType = validMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(validMembers...)
+					}
+					debugPrintf("// [TypeNarrowing] Narrowed to types with property '%s': %s\n", propMarker.PropertyName, narrowedType.String())
+				} else {
+					debugPrintf("// [TypeNarrowing] No types with property '%s' found in union\n", propMarker.PropertyName)
+					return nil
+				}
 			// For typeof "function" checks, find callable members in the union
-			if objType, ok := guard.NarrowedType.(*types.ObjectType); ok && objType.IsCallable() {
+			} else if objType, ok := guard.NarrowedType.(*types.ObjectType); ok && objType.IsCallable() {
 				var callableMembers []types.Type
 				debugPrintf("// [TypeNarrowing] Checking union members for callable types\n")
 				for _, memberType := range unionType.Types {
@@ -213,9 +333,28 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				canNarrow = true
 				narrowedType = guard.NarrowedType
 			} else {
-				debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
-					originalType.String(), guard.NarrowedType.String())
-				return nil
+				// For instanceof narrowing, filter union members that are compatible with the narrowed type
+				var compatibleMembers []types.Type
+				for _, memberType := range unionType.Types {
+					// Check if this member is compatible with the narrowed type
+					if c.isTypeCompatibleForInstanceof(memberType, guard.NarrowedType) {
+						compatibleMembers = append(compatibleMembers, memberType)
+					}
+				}
+				
+				if len(compatibleMembers) > 0 {
+					canNarrow = true
+					if len(compatibleMembers) == 1 {
+						narrowedType = compatibleMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(compatibleMembers...)
+					}
+					debugPrintf("// [TypeNarrowing] Narrowed to compatible types: %s\n", narrowedType.String())
+				} else {
+					debugPrintf("// [TypeNarrowing] Union '%s' does not contain type '%s' - skipping narrowing\n",
+						originalType.String(), guard.NarrowedType.String())
+					return nil
+				}
 			}
 		}
 	} else if types.IsAssignable(guard.NarrowedType, originalType) {
@@ -485,4 +624,185 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 	}
 	
 	return t
+}
+
+// applyTypeNarrowingFromCondition recursively walks logical expressions and composes narrowed environments
+// This handles compound conditions like "a && b && c" by applying each constraint in sequence
+func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *Environment {
+	// Handle logical AND expressions by composing environments
+	if infixExpr, ok := condition.(*parser.InfixExpression); ok && infixExpr.Operator == "&&" {
+		// For "a && b", first apply narrowing from "a", then apply "b" in that narrowed context
+		
+		// Apply narrowing from left side
+		leftEnv := c.applyTypeNarrowingFromCondition(infixExpr.Left)
+		if leftEnv == nil {
+			// If left side doesn't narrow, try just the right side
+			return c.applyTypeNarrowingFromCondition(infixExpr.Right)
+		}
+		
+		// Save current environment and switch to the narrowed one
+		originalEnv := c.env
+		c.env = leftEnv
+		
+		// Apply narrowing from right side in the already-narrowed environment
+		rightEnv := c.applyTypeNarrowingFromCondition(infixExpr.Right)
+		
+		// Restore original environment
+		c.env = originalEnv
+		
+		// Return the composed environment (rightEnv already includes leftEnv constraints)
+		if rightEnv != nil {
+			return rightEnv
+		}
+		return leftEnv
+	}
+	
+	// Handle logical OR expressions - for "a || b", we can't really narrow much
+	// (would need union of constraints, which is complex)
+	if infixExpr, ok := condition.(*parser.InfixExpression); ok && infixExpr.Operator == "||" {
+		// For now, don't handle OR expressions in type narrowing
+		return nil
+	}
+	
+	// Handle truthiness checks (bare identifiers)
+	if ident, ok := condition.(*parser.Identifier); ok {
+		// This is a truthiness check like "if (x)" - eliminates null and undefined
+		return c.applyTruthinessNarrowing(ident.Value)
+	}
+	
+	// Handle single type guard expressions
+	guard := c.detectTypeGuard(condition)
+	return c.applyTypeNarrowing(guard)
+}
+
+// applyTruthinessNarrowing handles bare identifier checks like "if (x)" 
+// This eliminates null and undefined from union types
+func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
+	originalType, isConst, found := c.env.Resolve(varName)
+	if !found {
+		return nil
+	}
+	
+	// If it's a union type, remove null and undefined
+	if unionType, ok := originalType.(*types.UnionType); ok {
+		var truthyMembers []types.Type
+		for _, member := range unionType.Types {
+			if member != types.Null && member != types.Undefined {
+				truthyMembers = append(truthyMembers, member)
+			}
+		}
+		
+		if len(truthyMembers) < len(unionType.Types) {
+			// We actually narrowed something
+			var narrowedType types.Type
+			if len(truthyMembers) == 0 {
+				return nil // Would be never, but that's likely an error
+			} else if len(truthyMembers) == 1 {
+				narrowedType = truthyMembers[0]
+			} else {
+				narrowedType = types.NewUnionType(truthyMembers...)
+			}
+			
+			// Create narrowed environment
+			narrowedEnv := NewEnclosedEnvironment(c.env)
+			if narrowedEnv.Define(varName, narrowedType, isConst) {
+				debugPrintf("// [TypeNarrowing] Truthiness check narrowed '%s' from '%s' to '%s'\n",
+					varName, originalType.String(), narrowedType.String())
+				return narrowedEnv
+			}
+		}
+	}
+	
+	return nil
+}
+
+// isObjectLikeType checks if a type represents an object-like value (objects, arrays, functions)
+// This is used for "typeof x === 'object'" narrowing
+func (c *Checker) isObjectLikeType(t types.Type) bool {
+	switch t.(type) {
+	case *types.ObjectType, *types.ArrayType:
+		return true
+	default:
+		// Primitives like string, number, boolean are not object-like
+		return false
+	}
+}
+
+// isTypeCompatibleForInstanceof checks if a type could be an instance of the target type
+// This is used for instanceof narrowing with union types
+func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Type) bool {
+	// If they're exactly the same, they're compatible
+	if memberType.Equals(targetType) {
+		return true
+	}
+	
+	// Check if memberType is assignable to targetType or vice versa
+	if types.IsAssignable(memberType, targetType) || types.IsAssignable(targetType, memberType) {
+		return true
+	}
+	
+	// Primitives like number, string are not compatible with Date instances
+	switch memberType {
+	case types.Number, types.String, types.Boolean, types.Null, types.Undefined:
+		return false
+	}
+	
+	// Function types (with call signatures) are not compatible with Date instances
+	if memberObj, ok := memberType.(*types.ObjectType); ok {
+		if targetObj, ok := targetType.(*types.ObjectType); ok {
+			// If memberType has call signatures but targetType doesn't, they're incompatible
+			// This prevents ContextFn<T> from being considered compatible with Date instances
+			if len(memberObj.CallSignatures) > 0 && len(targetObj.CallSignatures) == 0 {
+				return false
+			}
+			// If both are object types without call signatures, they might be compatible
+			if len(memberObj.CallSignatures) == 0 && len(targetObj.CallSignatures) == 0 {
+				return true
+			}
+		}
+	}
+	
+	return false
+}
+
+// typeHasProperty checks if a type has a specific property
+// This is used for "prop in obj" narrowing
+func (c *Checker) typeHasProperty(t types.Type, propertyName string) bool {
+	switch typ := t.(type) {
+	case *types.ObjectType:
+		// Check if the object type has this property
+		_, exists := typ.Properties[propertyName]
+		return exists
+	case *types.ArrayType:
+		// Arrays have "length" property and some built-in methods
+		if propertyName == "length" {
+			return true
+		}
+		// For other properties, check if it's a known array method
+		// We can use the existing prototype system for this
+		if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
+			return true
+		}
+		return false
+	default:
+		// For primitives, check their prototype methods
+		var primitiveKey string
+		switch t {
+		case types.String:
+			primitiveKey = "string"
+		case types.Number:
+			primitiveKey = "number"
+		case types.Boolean:
+			primitiveKey = "boolean"
+		case types.Symbol:
+			primitiveKey = "symbol"
+		default:
+			return false
+		}
+		
+		if methodType := c.env.GetPrimitivePrototypeMethodType(primitiveKey, propertyName); methodType != nil {
+			return true
+		}
+		return false
+	}
 }

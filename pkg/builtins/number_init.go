@@ -18,20 +18,7 @@ func (n *NumberInitializer) Priority() int {
 }
 
 func (n *NumberInitializer) InitTypes(ctx *TypeContext) error {
-	// Create Number.prototype type with all methods
-	// Note: 'this' is implicit and not included in type signatures
-	numberProtoType := types.NewObjectType().
-		WithProperty("toString", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
-		WithProperty("toLocaleString", types.NewOptionalFunction([]types.Type{types.String, types.Any}, types.String, []bool{true, true})).
-		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number)).
-		WithProperty("toFixed", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
-		WithProperty("toExponential", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
-		WithProperty("toPrecision", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true}))
-
-	// Register number primitive prototype
-	ctx.SetPrimitivePrototype("number", numberProtoType)
-
-	// Create Number constructor type
+	// Create Number constructor type first (needed for constructor property)
 	numberCtorType := types.NewSimpleFunction([]types.Type{types.Any}, types.Number).
 		WithProperty("MAX_VALUE", types.Number).
 		WithProperty("MIN_VALUE", types.Number).
@@ -46,8 +33,24 @@ func (n *NumberInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("isInteger", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("isSafeInteger", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("parseFloat", types.NewSimpleFunction([]types.Type{types.String}, types.Number)).
-		WithProperty("parseInt", types.NewOptionalFunction([]types.Type{types.String, types.Number}, types.Number, []bool{false, true})).
-		WithProperty("prototype", numberProtoType)
+		WithProperty("parseInt", types.NewOptionalFunction([]types.Type{types.String, types.Number}, types.Number, []bool{false, true}))
+
+	// Create Number.prototype type with all methods
+	// Note: 'this' is implicit and not included in type signatures
+	numberProtoType := types.NewObjectType().
+		WithProperty("toString", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
+		WithProperty("toLocaleString", types.NewOptionalFunction([]types.Type{types.String, types.Any}, types.String, []bool{true, true})).
+		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("toFixed", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
+		WithProperty("toExponential", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
+		WithProperty("toPrecision", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
+		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
+
+	// Register number primitive prototype
+	ctx.SetPrimitivePrototype("number", numberProtoType)
+
+	// Add prototype property to constructor
+	numberCtorType = numberCtorType.WithProperty("prototype", numberProtoType)
 
 	// Define Number constructor in global environment
 	return ctx.DefineGlobal("Number", numberCtorType)
@@ -316,6 +319,9 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.NumberPrototype)
+
+	// Set constructor property on prototype
+	numberProto.SetOwn("constructor", numberConstructor)
 
 	// Define Number constructor in global scope
 	return ctx.DefineGlobal("Number", numberConstructor)

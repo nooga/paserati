@@ -18,6 +18,10 @@ func (s *StringInitializer) Priority() int {
 }
 
 func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
+	// Create String constructor type first (needed for constructor property)
+	stringCtorType := types.NewSimpleFunction([]types.Type{types.Any}, types.String).
+		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number}))
+
 	// Create String.prototype type with all methods
 	// Note: 'this' is implicit and not included in type signatures
 	stringProtoType := types.NewObjectType().
@@ -41,15 +45,14 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("split", types.NewOptionalFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.Number}, &types.ArrayType{ElementType: types.String}, []bool{false, true})).
 		WithProperty("replace", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.String}, types.String)).
 		WithProperty("match", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.NewUnionType(&types.ArrayType{ElementType: types.String}, types.Null))).
-		WithProperty("search", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Number))
+		WithProperty("search", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Number)).
+		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
 
 	// Register string primitive prototype
 	ctx.SetPrimitivePrototype("string", stringProtoType)
 
-	// Create String constructor type
-	stringCtorType := types.NewSimpleFunction([]types.Type{types.Any}, types.String).
-		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number})).
-		WithProperty("prototype", stringProtoType)
+	// Add prototype property to constructor
+	stringCtorType = stringCtorType.WithProperty("prototype", stringProtoType)
 
 	// Define String constructor in global environment
 	return ctx.DefineGlobal("String", stringCtorType)
@@ -532,6 +535,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringCtor = ctorWithProps
+
+	// Set constructor property on prototype
+	stringProto.SetOwn("constructor", stringCtor)
 
 	// Set String prototype in VM
 	vmInstance.StringPrototype = vm.NewValueFromPlainObject(stringProto)

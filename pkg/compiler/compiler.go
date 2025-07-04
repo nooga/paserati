@@ -1640,12 +1640,28 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 	exportIndices := make(map[string]int)
 	
 	// Get all exported names from module bindings
-	for exportName := range c.moduleBindings.ExportedNames {
-		// The export name should correspond to the same name in globals
-		// (exports are stored as globals with the same name)
-		if globalIdx := c.GetGlobalIndex(exportName); globalIdx >= 0 {
-			exportIndices[exportName] = globalIdx
-			// debugPrintf("// [Compiler] GetExportGlobalIndices: Export '%s' maps to global[%d]\n", exportName, globalIdx)
+	for exportName, exportRef := range c.moduleBindings.ExportedNames {
+		if exportRef.IsReExport {
+			// For re-exports, we need to look up the import that corresponds to this re-export
+			// Re-exports are handled by import declarations, so find the corresponding import
+			if importRef, exists := c.moduleBindings.ImportedNames[exportRef.LocalName]; exists {
+				if globalIdx := importRef.GlobalIndex; globalIdx >= 0 {
+					exportIndices[exportName] = globalIdx
+					// fmt.Printf("// [Compiler] GetExportGlobalIndices: Re-export '%s' maps to imported global[%d]\n", exportName, globalIdx)
+				}
+			} else {
+				// Re-export might be an unnamed re-export (export * from), try to find by local name
+				if globalIdx := c.GetGlobalIndex(exportRef.LocalName); globalIdx >= 0 {
+					exportIndices[exportName] = globalIdx
+					// fmt.Printf("// [Compiler] GetExportGlobalIndices: Re-export '%s' maps to local global[%d]\n", exportName, globalIdx)
+				}
+			}
+		} else {
+			// Local export: The export name should correspond to the local name in globals
+			if globalIdx := c.GetGlobalIndex(exportRef.LocalName); globalIdx >= 0 {
+				exportIndices[exportName] = globalIdx
+				// fmt.Printf("// [Compiler] GetExportGlobalIndices: Local export '%s' maps to global[%d]\n", exportName, globalIdx)
+			}
 		}
 	}
 
@@ -1654,7 +1670,7 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 		defaultLocalName := c.moduleBindings.DefaultExport.LocalName
 		if globalIdx := c.GetGlobalIndex(defaultLocalName); globalIdx >= 0 {
 			exportIndices["default"] = globalIdx
-			debugPrintf("// [Compiler] GetExportGlobalIndices: Default export '%s' maps to global[%d]\n", defaultLocalName, globalIdx)
+			// fmt.Printf("// [Compiler] GetExportGlobalIndices: Default export '%s' maps to global[%d]\n", defaultLocalName, globalIdx)
 		}
 	}
 

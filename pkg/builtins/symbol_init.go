@@ -41,26 +41,26 @@ func (s *SymbolInitializer) Priority() int {
 func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Symbol constructor type
 	symbolCtorType := types.NewObjectType().
-		WithProperty("for", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("for", types.NewSimpleFunction([]types.Type{types.String}, types.Symbol)).
 		WithProperty("keyFor", types.NewSimpleFunction([]types.Type{types.Any}, types.NewUnionType(types.String, types.Undefined))).
-		// Well-known symbols - for now use Any type
-		WithProperty("iterator", types.Any).
-		WithProperty("toStringTag", types.Any).
-		WithProperty("hasInstance", types.Any).
-		WithProperty("toPrimitive", types.Any).
-		WithProperty("isConcatSpreadable", types.Any).
-		WithProperty("species", types.Any).
-		WithProperty("match", types.Any).
-		WithProperty("replace", types.Any).
-		WithProperty("search", types.Any).
-		WithProperty("split", types.Any).
-		WithProperty("unscopables", types.Any).
-		WithProperty("asyncIterator", types.Any).
-		// Symbol constructor signature - returns symbol (Any for now)
-		WithSimpleCallSignature([]types.Type{}, types.Any).  // Symbol()
+		// Well-known symbols
+		WithProperty("iterator", types.Symbol).
+		WithProperty("toStringTag", types.Symbol).
+		WithProperty("hasInstance", types.Symbol).
+		WithProperty("toPrimitive", types.Symbol).
+		WithProperty("isConcatSpreadable", types.Symbol).
+		WithProperty("species", types.Symbol).
+		WithProperty("match", types.Symbol).
+		WithProperty("replace", types.Symbol).
+		WithProperty("search", types.Symbol).
+		WithProperty("split", types.Symbol).
+		WithProperty("unscopables", types.Symbol).
+		WithProperty("asyncIterator", types.Symbol).
+		// Symbol constructor signature - returns symbol
+		WithSimpleCallSignature([]types.Type{}, types.Symbol).  // Symbol()
 		WithSimpleCallSignature(
 			[]types.Type{types.NewUnionType(types.String, types.Number, types.Undefined)},
-			types.Any,
+			types.Symbol,
 		)  // Symbol(description)
 
 	// Register Symbol constructor
@@ -70,7 +70,7 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 	symbolProtoType := types.NewObjectType().
 		WithProperty("constructor", symbolCtorType).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Symbol)).
 		WithProperty("description", types.NewUnionType(types.String, types.Undefined))
 
 	ctx.SetPrimitivePrototype("symbol", symbolProtoType)

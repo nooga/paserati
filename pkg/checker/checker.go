@@ -1538,12 +1538,9 @@ func (c *Checker) visit(node parser.Node) {
 		// 1. Check Condition
 		c.visit(node.Condition)
 
-		// 2. Detect type guards in the condition
-		typeGuard := c.detectTypeGuard(node.Condition)
-
-		// 3. Check Consequence block (potentially with narrowed environment)
+		// 2. Check Consequence block with type narrowing (supports compound conditions)
 		originalEnv := c.env
-		narrowedEnv := c.applyTypeNarrowing(typeGuard)
+		narrowedEnv := c.applyTypeNarrowingWithFallback(node.Condition)
 
 		if narrowedEnv != nil {
 			debugPrintf("// [Checker IfExpr] Applying type narrowing in consequence block\n")
@@ -1555,15 +1552,10 @@ func (c *Checker) visit(node parser.Node) {
 		// Restore original environment before checking alternative
 		c.env = originalEnv
 
-		// 4. Check Alternative block (if it exists) - potentially with inverted type narrowing
+		// 4. Check Alternative block (if it exists)
 		if node.Alternative != nil {
-			// Apply inverted type narrowing for else branch
-			invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
-
-			if invertedEnv != nil {
-				debugPrintf("// [Checker IfExpr] Applying inverted type narrowing in alternative block\n")
-				c.env = invertedEnv // Use inverted narrowed environment for alternative
-			}
+			// For compound conditions, inverted narrowing is complex, so skip for now
+			// TODO: Implement inverted narrowing for compound conditions
 
 			c.visit(node.Alternative)
 
@@ -1584,12 +1576,9 @@ func (c *Checker) visit(node parser.Node) {
 		// 1. Check Condition
 		c.visit(node.Condition)
 
-		// 2. Detect type guards in the condition
-		typeGuard := c.detectTypeGuard(node.Condition)
-
-		// 3. Check Consequence block (potentially with narrowed environment)
+		// 2. Check Consequence block with type narrowing (supports compound conditions)
 		originalEnv := c.env
-		narrowedEnv := c.applyTypeNarrowing(typeGuard)
+		narrowedEnv := c.applyTypeNarrowingWithFallback(node.Condition)
 
 		if narrowedEnv != nil {
 			debugPrintf("// [Checker IfStmt] Applying type narrowing in consequence block\n")
@@ -1601,51 +1590,15 @@ func (c *Checker) visit(node parser.Node) {
 		// Restore original environment before checking alternative
 		c.env = originalEnv
 
-		// 4. Check Alternative block (if it exists) - potentially with inverted type narrowing
+		// 4. Check Alternative block (if it exists)
 		if node.Alternative != nil {
-			// Apply inverted type narrowing for else branch
-			invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
-
-			if invertedEnv != nil {
-				debugPrintf("// [Checker IfStmt] Applying inverted type narrowing in alternative block\n")
-				c.env = invertedEnv // Use inverted narrowed environment for alternative
-			}
-
+			// For compound conditions, inverted narrowing is complex, so skip for now
+			// TODO: Implement inverted narrowing for compound conditions
 			c.visit(node.Alternative)
-
-			// Restore original environment after alternative
-			c.env = originalEnv
 		}
 
-		// 5. Control Flow Analysis: Check if one branch throws and apply narrowing
-		consequenceThrows := c.statementContainsThrow(node.Consequence)
-		alternativeThrows := node.Alternative != nil && c.statementContainsThrow(node.Alternative)
-
-		if typeGuard != nil {
-			if consequenceThrows && !alternativeThrows {
-				// If the "then" branch throws, apply inverted narrowing after the if
-				// (the condition must have been false to reach this point)
-				invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
-				if invertedEnv != nil {
-					debugPrintf("// [Checker IfStmt] Control flow: consequence throws, applying inverted narrowing after if\n")
-					c.env = invertedEnv
-				}
-			} else if !consequenceThrows && alternativeThrows {
-				// If the "else" branch throws, apply positive narrowing after the if
-				// (the condition must have been true to reach this point)
-				positiveEnv := c.applyTypeNarrowing(typeGuard)
-				if positiveEnv != nil {
-					debugPrintf("// [Checker IfStmt] Control flow: alternative throws, applying positive narrowing after if\n")
-					c.env = positiveEnv
-				}
-			} else {
-				// Both branches throw, or neither throws - restore original environment
-				c.env = originalEnv
-			}
-		} else {
-			// No type guard - restore original environment
-			c.env = originalEnv
-		}
+		// 5. Restore original environment after if statement
+		c.env = originalEnv
 
 		// 6. IfStatement doesn't have a value/type (it's a statement, not expression)
 

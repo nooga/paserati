@@ -67,7 +67,13 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Add parseInt function (second parameter is optional)
 	parseIntFunctionType := types.NewSimpleFunction([]types.Type{types.String}, types.Number)
-	return ctx.DefineGlobal("parseInt", parseIntFunctionType)
+	if err := ctx.DefineGlobal("parseInt", parseIntFunctionType); err != nil {
+		return err
+	}
+
+	// Add isNaN function
+	isNaNFunctionType := types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)
+	return ctx.DefineGlobal("isNaN", isNaNFunctionType)
 }
 
 func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -118,5 +124,21 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(math.NaN())
 	})
 
-	return ctx.DefineGlobal("parseInt", parseIntFunc)
+	if err := ctx.DefineGlobal("parseInt", parseIntFunc); err != nil {
+		return err
+	}
+
+	// Add isNaN function implementation
+	isNaNFunc := vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) vm.Value {
+		if len(args) == 0 {
+			return vm.BooleanValue(true) // isNaN(undefined) is true
+		}
+
+		val := args[0]
+		// Convert to number first (like JavaScript does)
+		numVal := val.ToFloat()
+		return vm.BooleanValue(math.IsNaN(numVal))
+	})
+
+	return ctx.DefineGlobal("isNaN", isNaNFunc)
 }

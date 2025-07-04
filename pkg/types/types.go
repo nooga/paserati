@@ -56,6 +56,34 @@ func (frt *ForwardReferenceType) Equals(other Type) bool {
 
 func (frt *ForwardReferenceType) typeNode() {}
 
+// ObjectTypeMarker is used in type narrowing to indicate "typeof x === 'object'" constraints
+// This filters union types to only object-like types (objects, arrays, but not primitives)
+type ObjectTypeMarker struct{}
+
+func (o *ObjectTypeMarker) String() string { return "object-types" }
+func (o *ObjectTypeMarker) Equals(other Type) bool { 
+	_, ok := other.(*ObjectTypeMarker)
+	return ok
+}
+func (o *ObjectTypeMarker) typeNode() {}
+
+// PropertyExistenceMarker is used in type narrowing for "prop in obj" checks
+// This filters union types to only types that have the specified property
+type PropertyExistenceMarker struct {
+	PropertyName string
+}
+
+func (p *PropertyExistenceMarker) String() string { 
+	return fmt.Sprintf("has-property-%s", p.PropertyName) 
+}
+func (p *PropertyExistenceMarker) Equals(other Type) bool { 
+	if o, ok := other.(*PropertyExistenceMarker); ok {
+		return p.PropertyName == o.PropertyName
+	}
+	return false
+}
+func (p *PropertyExistenceMarker) typeNode() {}
+
 func (tafr *TypeAliasForwardReference) String() string {
 	return tafr.AliasName
 }

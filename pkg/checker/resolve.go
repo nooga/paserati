@@ -430,6 +430,12 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 
 // --- NEW: Helper to resolve FunctionTypeExpression nodes ---
 func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpression) types.Type {
+	// If this is a generic function type, handle type parameters
+	if len(node.TypeParameters) > 0 {
+		return c.resolveGenericFunctionType(node)
+	}
+
+	// Non-generic function type - use existing logic
 	paramTypes := []types.Type{}
 	for _, paramNode := range node.Parameters {
 		paramType := c.resolveTypeAnnotation(paramNode)
@@ -475,6 +481,93 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 
 	// Create a unified ObjectType with call signature
 	return types.NewFunctionType(sig)
+}
+
+// resolveGenericFunctionType handles generic function types like <T>(x: T) => T
+func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression) types.Type {
+	// Create type parameters
+	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
+	for i, paramNode := range node.TypeParameters {
+		typeParam := &types.TypeParameter{
+			Name:       paramNode.Name.Value,
+			Constraint: types.Any, // Default constraint
+		}
+		
+		// Handle constraint if present
+		if paramNode.Constraint != nil {
+			constraint := c.resolveTypeAnnotation(paramNode.Constraint)
+			if constraint != nil {
+				typeParam.Constraint = constraint
+			}
+		}
+		
+		typeParams[i] = typeParam
+	}
+
+	// Create environment with type parameters in scope
+	typeParamEnv := NewEnclosedEnvironment(c.env)
+	for _, typeParam := range typeParams {
+		typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam)
+	}
+
+	// Temporarily switch to type parameter environment
+	originalEnv := c.env
+	c.env = typeParamEnv
+
+	// Resolve parameter types and return type in the new environment
+	paramTypes := []types.Type{}
+	for _, paramNode := range node.Parameters {
+		paramType := c.resolveTypeAnnotation(paramNode)
+		if paramType == nil {
+			c.env = originalEnv // Restore environment
+			return nil
+		}
+		paramTypes = append(paramTypes, paramType)
+	}
+
+	// Handle rest parameter if present
+	var restParameterType types.Type
+	if node.RestParameter != nil {
+		resolvedRestType := c.resolveTypeAnnotation(node.RestParameter)
+		if resolvedRestType != nil {
+			if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+				resolvedRestType = &types.ArrayType{ElementType: types.Any}
+			}
+		} else {
+			resolvedRestType = &types.ArrayType{ElementType: types.Any}
+		}
+		restParameterType = resolvedRestType
+	}
+
+	returnType := c.resolveTypeAnnotation(node.ReturnType)
+	if returnType == nil {
+		c.env = originalEnv // Restore environment
+		return nil
+	}
+
+	// Restore original environment
+	c.env = originalEnv
+
+	// Create the function signature
+	sig := &types.Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		IsVariadic:        node.RestParameter != nil,
+		RestParameterType: restParameterType,
+	}
+	
+	// Create the function type
+	functionType := types.NewFunctionType(sig)
+
+	// Wrap in a GenericType
+	genericType := &types.GenericType{
+		Name:           "Function", // Generic function type
+		TypeParameters: typeParams,
+		Body:           functionType,
+	}
+
+	return genericType
 }
 
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---

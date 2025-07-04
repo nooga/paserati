@@ -298,6 +298,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.LBRACE, p.parseObjectTypeExpression) // NEW: Object type literals like { name: string; age: number }
 	// --- NEW: Tuple type literals that start with '[' ---
 	p.registerTypePrefix(lexer.LBRACKET, p.parseTupleTypeExpression) // NEW: Tuple type literals like [string, number, boolean?]
+	// --- NEW: Leading pipe union types that start with '|' ---
+	p.registerTypePrefix(lexer.PIPE, p.parseLeadingPipeUnionType) // NEW: Leading pipe union types like | A | B
 
 	// --- Register TYPE Infix Functions ---
 	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)               // TYPE context: '|' is union
@@ -4891,6 +4893,7 @@ func (p *Parser) parseInterfaceBracketProperty() *InterfaceProperty {
 		}
 		
 		// Check if this is a shorthand method signature like [expr](...): ReturnType
+		// or a generic method signature like [expr]<T>(...): ReturnType
 		if p.peekTokenIs(lexer.LPAREN) {
 			// This is a shorthand method signature 
 			p.nextToken() // Move to '('
@@ -4901,6 +4904,36 @@ func (p *Parser) parseInterfaceBracketProperty() *InterfaceProperty {
 				return nil // Error parsing method type
 			}
 
+			prop.Type = funcType
+			prop.IsMethod = true
+			return prop
+		} else if p.peekTokenIs(lexer.LT) {
+			// This is a generic method signature like [expr]<T>(...): ReturnType
+			p.nextToken() // Move to '<'
+			
+			// Parse type parameters
+			typeParams, err := p.parseTypeParameters()
+			if err != nil {
+				p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
+				return nil
+			}
+			
+			// Expect '(' for parameters
+			if !p.expectPeek(lexer.LPAREN) {
+				return nil
+			}
+			
+			// Parse method type signature (uses ':' syntax, not '=>')
+			funcType := p.parseMethodTypeSignature()
+			if funcType == nil {
+				return nil // Error parsing method type
+			}
+			
+			// Add type parameters to the function type
+			if methodType, ok := funcType.(*FunctionTypeExpression); ok {
+				methodType.TypeParameters = typeParams
+			}
+			
 			prop.Type = funcType
 			prop.IsMethod = true
 			return prop
@@ -5852,6 +5885,13 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 			p.nextToken() // Consume ','
 			p.nextToken() // Move to next token
 
+			// Handle trailing comma - if we see ')' after a comma, we're done
+			if p.curTokenIs(lexer.RPAREN) {
+				// This is a trailing comma, we're already at the closing paren
+				// Don't need to expectPeek for RPAREN later
+				break
+			}
+
 			// Handle optional parameter name with potential '?' token
 			if p.curTokenIs(lexer.IDENT) {
 				if p.peekTokenIs(lexer.QUESTION) {
@@ -5879,8 +5919,8 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 			params = append(params, paramType)
 		}
 
-		// Expect closing parenthesis
-		if !p.expectPeek(lexer.RPAREN) {
+		// Expect closing parenthesis (unless we already consumed it due to trailing comma)
+		if !p.curTokenIs(lexer.RPAREN) && !p.expectPeek(lexer.RPAREN) {
 			return nil
 		}
 	}
@@ -7225,4 +7265,41 @@ func (p *Parser) parseExportNamedDeclarationWithDeclaration(exportToken lexer.To
 	
 	stmt.Declaration = declaration
 	return stmt
+}
+
+// parseLeadingPipeUnionType handles union types that start with | like:
+// | A | B | C
+// This is equivalent to A | B | C but with leading pipe formatting
+func (p *Parser) parseLeadingPipeUnionType() Expression {
+	// Current token is the first '|'
+	// Move to the first type after the leading pipe
+	p.nextToken()
+	
+	// Parse the first type
+	leftType := p.parseTypeExpression()
+	if leftType == nil {
+		p.addError(p.curToken, "expected type after leading '|'")
+		return nil
+	}
+	
+	// Now check if there are more union members (more | tokens)
+	for p.peekTokenIs(lexer.PIPE) {
+		p.nextToken() // consume the '|'
+		
+		unionExp := &UnionTypeExpression{
+			Token: p.curToken, // The '|' token
+			Left:  leftType,
+		}
+		
+		p.nextToken() // move to the right-hand type
+		unionExp.Right = p.parseTypeExpression()
+		if unionExp.Right == nil {
+			p.addError(p.curToken, "expected type after '|'")
+			return nil
+		}
+		
+		leftType = unionExp // Set up for potential next iteration
+	}
+	
+	return leftType
 }

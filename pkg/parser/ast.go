@@ -1797,17 +1797,31 @@ func (ens *ExportNamedSpecifier) String() string {
 
 // FunctionTypeExpression represents a type like (number, string) => boolean
 type FunctionTypeExpression struct {
-	BaseExpression              // Embed base for ComputedType (Function type)
-	Token          lexer.Token  // The '(' token starting the parameter list
-	Parameters     []Expression // Slice of Expression nodes representing parameter types
-	RestParameter  Expression   // Optional rest parameter type (e.g., ...args: string[])
-	ReturnType     Expression   // Expression node for the return type
+	BaseExpression                // Embed base for ComputedType (Function type)
+	Token          lexer.Token    // The '(' token starting the parameter list
+	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	Parameters     []Expression   // Slice of Expression nodes representing parameter types
+	RestParameter  Expression     // Optional rest parameter type (e.g., ...args: string[])
+	ReturnType     Expression     // Expression node for the return type
 }
 
 func (fte *FunctionTypeExpression) expressionNode()      {}
 func (fte *FunctionTypeExpression) TokenLiteral() string { return fte.Token.Literal }
 func (fte *FunctionTypeExpression) String() string {
 	var out bytes.Buffer
+	
+	// Add type parameters if present
+	if len(fte.TypeParameters) > 0 {
+		out.WriteString("<")
+		for i, tp := range fte.TypeParameters {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(tp.String())
+		}
+		out.WriteString(">")
+	}
+	
 	params := []string{}
 	for _, p := range fte.Parameters {
 		params = append(params, p.String())
@@ -2329,10 +2343,12 @@ func (id *InterfaceDeclaration) String() string {
 // InterfaceProperty represents a property or method signature in an interface.
 type InterfaceProperty struct {
 	Name                   *Identifier // Property/method name
+	ComputedName           Expression  // Computed property name for [expression]: syntax
 	Type                   Expression  // Type annotation (for properties) or function type (for methods)
 	IsMethod               bool        // Whether this is a method signature
 	Optional               bool        // Whether the property is optional (Name?)
 	IsConstructorSignature bool        // Whether this is a constructor signature (new (): T)
+	IsComputedProperty     bool        // Whether this is a computed property name [expr]:
 	
 	// Index signature fields
 	IsIndexSignature bool       // Whether this is an index signature like [key: string]: Type
@@ -2360,6 +2376,18 @@ func (ip *InterfaceProperty) String() string {
 		if ip.ValueType != nil {
 			out.WriteString(ip.ValueType.String())
 		}
+	} else if ip.IsComputedProperty {
+		// Computed property: [expr]: Type
+		out.WriteString("[")
+		if ip.ComputedName != nil {
+			out.WriteString(ip.ComputedName.String())
+		}
+		out.WriteString("]")
+		if ip.Optional {
+			out.WriteString("?")
+		}
+		out.WriteString(": ")
+		out.WriteString(ip.Type.String())
 	} else {
 		out.WriteString(ip.Name.String())
 		if ip.Optional {

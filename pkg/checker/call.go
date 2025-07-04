@@ -226,6 +226,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// --- UPDATED: Handle CallExpression with Overload Support ---
 	// 1. Check the expression being called
 	debugPrintf("// [Checker CallExpr] Checking call at line %d\n", node.Token.Line)
+	
+	
 	c.visit(node.Function)
 	funcNodeType := node.Function.GetComputedType()
 	debugPrintf("// [Checker CallExpr] Function type resolved to: %T (%v)\n", funcNodeType, funcNodeType)
