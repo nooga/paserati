@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -650,8 +651,32 @@ func (v Value) inspectWithContext(nested bool) string {
 		}
 		return "[Function (anonymous)]"
 	case TypeObject:
-		// Plain object literal inspect
+		// Plain object literal inspect - check for toString() first
 		obj := v.AsPlainObject()
+		
+		// Fast path: Check for special built-in objects with known patterns
+		if toStringResult := tryBuiltinToString(obj); toStringResult != "" {
+			// In nested context, quote the toString result like a string
+			if nested {
+				return fmt.Sprintf(`"%s"`, toStringResult)
+			}
+			return toStringResult
+		}
+		
+		// General path: Look for toString method in prototype chain
+		if toStringMethod := findToStringMethod(obj); toStringMethod.Type() != TypeUndefined && toStringMethod.IsFunction() {
+			// For now, we'll handle specific cases rather than calling the method
+			// to avoid VM state complications in the inspect method
+			if dateString := tryFormatAsDate(obj); dateString != "" {
+				// In nested context, quote the date string like a string
+				if nested {
+					return fmt.Sprintf(`"%s"`, dateString)
+				}
+				return dateString
+			}
+		}
+		
+		// Default object literal representation
 		var b strings.Builder
 		b.WriteString("{")
 		for i, field := range obj.shape.fields {
@@ -1194,4 +1219,65 @@ func (v Value) GetArity() int {
 	default:
 		panic("value is not callable")
 	}
+}
+
+// Helper functions for toString() method resolution and built-in object formatting
+
+// tryBuiltinToString checks for specific built-in object patterns and formats them
+func tryBuiltinToString(obj *PlainObject) string {
+	// Check for Date objects with __timestamp__ property
+	if timestampValue, exists := obj.GetOwn("__timestamp__"); exists && timestampValue.IsNumber() {
+		return formatDateTimestamp(timestampValue.ToFloat())
+	}
+	
+	// Add other built-in object patterns here as needed
+	// e.g., RegExp, Error objects, etc.
+	
+	return ""
+}
+
+// findToStringMethod looks for toString method in the prototype chain
+func findToStringMethod(obj *PlainObject) Value {
+	// Check own properties first
+	if toStringMethod, exists := obj.GetOwn("toString"); exists {
+		return toStringMethod
+	}
+	
+	// Walk the prototype chain
+	current := obj
+	depth := 0
+	
+	for current != nil && depth < 10 { // Prevent infinite loops
+		// Move up the prototype chain
+		protoVal := current.GetPrototype()
+		if !protoVal.IsObject() {
+			break
+		}
+		
+		current = protoVal.AsPlainObject()
+		if current != nil {
+			if toStringMethod, exists := current.GetOwn("toString"); exists {
+				return toStringMethod
+			}
+		}
+		depth++
+	}
+	
+	return Undefined
+}
+
+// tryFormatAsDate attempts to format an object as a Date if it has the right structure
+func tryFormatAsDate(obj *PlainObject) string {
+	if timestampValue, exists := obj.GetOwn("__timestamp__"); exists && timestampValue.IsNumber() {
+		return formatDateTimestamp(timestampValue.ToFloat())
+	}
+	return ""
+}
+
+// formatDateTimestamp formats a timestamp like JavaScript Date.toString()
+func formatDateTimestamp(timestamp float64) string {
+	// Use Go's time package to format the timestamp
+	// This should match the format used in date_init.go
+	t := time.UnixMilli(int64(timestamp))
+	return t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")
 }

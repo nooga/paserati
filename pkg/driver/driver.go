@@ -248,6 +248,7 @@ func (p *Paserati) DisplayResult(sourceCode string, value vm.Value, errs []error
 	return true
 }
 
+
 // CompileString takes Paserati source code as a string, compiles it,
 // and returns the resulting VM chunk or an aggregated list of Paserati errors.
 // This version does NOT use a persistent session.

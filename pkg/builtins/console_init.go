@@ -52,9 +52,9 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return ""
 		}
 		
-		result := args[0].ToString()
+		result := args[0].Inspect()
 		for i := 1; i < len(args); i++ {
-			result += " " + args[i].ToString()
+			result += " " + args[i].Inspect()
 		}
 		return result
 	}
