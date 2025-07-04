@@ -407,6 +407,11 @@ startExecution:
 		
 		opcode := OpCode(code[ip]) // Use local OpCode
 		
+		// Debug main script opcodes to track function calls
+		// if vm.currentModulePath == "" {
+		//	fmt.Printf("// [VM DEBUG] Main script opcode: %s (%d) at IP %d\n", opcode.String(), int(opcode), ip)
+		// }
+		
 		// Debug output for current instruction execution
 		// chunkName := "<unknown>"
 		// if frame.closure != nil && frame.closure.Fn != nil {
@@ -492,7 +497,7 @@ startExecution:
 			srcReg := code[ip+1]
 			ip += 2
 			srcVal := registers[srcReg]
-			// Convert value to number using the ToFloat() method
+			// Convert value to number, handling Date objects specially
 			registers[destReg] = Number(srcVal.ToFloat())
 
 		case OpStringConcat:
@@ -900,8 +905,8 @@ startExecution:
 			ip = frame.ip // Restore caller's IP
 			
 			// Debug: Show frame restoration
-			// fmt.Printf("// [VM DEBUG] OpReturn: Restored caller frame (frameCount: %d, newIP: %d, newChunk: %s)\n", 
-			//	vm.frameCount, ip, function.Name)
+			// fmt.Printf("// [VM DEBUG] OpReturn: Restored caller frame (frameCount: %d, newIP: %d, newChunk: %s, currentModule: %s)\n", 
+			//	vm.frameCount, ip, function.Name, vm.currentModulePath)
 
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
@@ -2486,10 +2491,10 @@ startExecution:
 			exportName := exportNameValue.AsString()
 
 			// Get exported value from module
-			fmt.Printf("// [VM DEBUG] OpGetModuleExport: Getting export '%s' from module '%s' [current module: %s]\n", exportName, modulePath, vm.currentModulePath)
+			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Getting export '%s' from module '%s' [current module: %s]\n", exportName, modulePath, vm.currentModulePath)
 			exportValue := vm.getModuleExport(modulePath, exportName)
-			fmt.Printf("// [VM DEBUG] OpGetModuleExport: Retrieved '%s' from '%s' = %d (type %d, value: %s)\n", 
-				exportName, modulePath, int(exportValue.Type()), int(exportValue.Type()), exportValue.ToString())
+			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Retrieved '%s' from '%s' = %d (type %d, value: %s)\n", 
+			//	exportName, modulePath, int(exportValue.Type()), int(exportValue.Type()), exportValue.ToString())
 			frame.registers[destReg] = exportValue
 			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Stored in R%d\n", destReg)
 
@@ -3347,3 +3352,4 @@ func (vm *VM) findExportValueInHeap(exportName string) Value {
 	// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Could not find '%s' in heap\n", exportName)
 	return Undefined
 }
+

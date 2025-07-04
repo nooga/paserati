@@ -334,6 +334,22 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if arg.IsNumber() {
 				// new Date(timestamp)
 				timestamp = arg.ToFloat()
+			} else if arg.IsObject() {
+				// Check if it's a Date object by looking for __timestamp__
+				if ts, ok := getDateTimestamp(arg); ok {
+					// new Date(dateObject) - copy constructor
+					timestamp = ts
+				} else {
+					// Not a Date object, try string parsing
+					dateStr := arg.ToString()
+					if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
+						timestamp = float64(parsedTime.UnixMilli())
+					} else if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
+						timestamp = float64(parsedTime.UnixMilli())
+					} else {
+						timestamp = float64(time.Now().UnixMilli()) // fallback
+					}
+				}
 			} else {
 				// new Date(dateString) - simplified parsing
 				dateStr := arg.ToString()

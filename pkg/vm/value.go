@@ -505,9 +505,35 @@ func (v Value) ToFloat() float64 {
 			return f
 		}
 		return math.NaN()
+	case TypeObject, TypeDictObject, TypeArray, TypeRegExp, TypeMap, TypeSet:
+		// Special case for Date objects - directly get timestamp
+		if obj := v.AsPlainObject(); obj != nil {
+			if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
+				return timestampValue.ToFloat()
+			}
+		}
+		// For other objects, try to convert to primitive using valueOf
+		if prim := v.ToPrimitive("number"); prim.typ != v.typ {
+			// Successfully converted to primitive, now convert that to number
+			return prim.ToFloat()
+		}
+		return math.NaN()
 	default:
 		return math.NaN()
 	}
+}
+
+// ToPrimitive converts a value to a primitive type following ECMAScript specification
+// hint can be "number", "string", or "default"
+func (v Value) ToPrimitive(hint string) Value {
+	// If already primitive, return as-is
+	if !v.IsObject() && v.typ != TypeArray && v.typ != TypeRegExp && v.typ != TypeMap && v.typ != TypeSet {
+		return v
+	}
+
+	// For objects, we don't have proper valueOf/toString calling implemented yet
+	// So just return the original value. Date objects are handled specially in ToFloat()
+	return v
 }
 
 func (v Value) ToInteger() int32 {

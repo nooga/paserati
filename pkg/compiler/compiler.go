@@ -1715,6 +1715,10 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 	sourceModulePath := node.Source.Value
 	debugPrintf("// [Compiler] Processing import from: %s\n", sourceModulePath)
 	
+	// Generate OpEvalModule to ensure the module is loaded and executed
+	debugPrintf("// [Compiler] Generating OpEvalModule for import from: %s\n", sourceModulePath)
+	c.emitEvalModule(sourceModulePath, node.Token.Line)
+	
 	// Handle bare imports (side-effect only)
 	if len(node.Specifiers) == 0 {
 		debugPrintf("// [Compiler] Bare import (side effects only): %s\n", sourceModulePath)
@@ -2111,23 +2115,18 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 	
 	// Get the import reference for this name
 	if importRef, exists := c.moduleBindings.ImportedNames[importName]; exists {
-		debugPrintf("// [Compiler] emitImportResolve: Generating OpEvalModule for '%s' from module '%s'\n", 
-			importName, importRef.SourceModule)
-		
-		// Generate OpEvalModule to execute the source module
-		c.emitEvalModule(importRef.SourceModule, line)
-		
 		// Handle namespace imports specially
 		if importRef.ImportType == ImportNamespaceRef && importRef.SourceName == "*" {
 			debugPrintf("// [Compiler] emitImportResolve: Handling namespace import for '%s'\n", importName)
 			// For namespace imports, we need to create the namespace object from module exports
+			// TODO: This might need special handling for namespace creation
 			c.emitCreateNamespace(destReg, importRef.SourceModule, line)
 			// Also store it in the global for future access
 			if importRef.GlobalIndex != -1 {
 				c.emitSetGlobal(uint16(importRef.GlobalIndex), destReg, line)
 			}
 		} else if importRef.GlobalIndex != -1 {
-			// Direct global access - much faster than module export lookup
+			// Direct global access - imported values should already be loaded
 			debugPrintf("// [Compiler] emitImportResolve: Using direct global access for '%s' at index %d\n", 
 				importName, importRef.GlobalIndex)
 			c.emitGetGlobal(destReg, uint16(importRef.GlobalIndex), line)
