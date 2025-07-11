@@ -55,9 +55,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	objectProto := vm.NewObject(vm.Null).AsPlainObject()
 
 	// Add prototype methods
-	objectProto.SetOwn("hasOwnProperty", vm.NewNativeFunction(1, false, "hasOwnProperty", func(args []vm.Value) vm.Value {
+	objectProto.SetOwn("hasOwnProperty", vm.NewNativeFunction(1, false, "hasOwnProperty", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		thisValue := vmInstance.GetThis()
 		propName := args[0].ToString()
@@ -65,56 +65,56 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Check if this object has the property as own property
 		if plainObj := thisValue.AsPlainObject(); plainObj != nil {
 			_, hasOwn := plainObj.GetOwn(propName)
-			return vm.BooleanValue(hasOwn)
+			return vm.BooleanValue(hasOwn), nil
 		}
 		if dictObj := thisValue.AsDictObject(); dictObj != nil {
 			_, hasOwn := dictObj.GetOwn(propName)
-			return vm.BooleanValue(hasOwn)
+			return vm.BooleanValue(hasOwn), nil
 		}
 		if arrObj := thisValue.AsArray(); arrObj != nil {
 			// For arrays, check if it's a valid index or 'length'
 			if propName == "length" {
-				return vm.BooleanValue(true)
+				return vm.BooleanValue(true), nil
 			}
 			// Check numeric indices
 			if index, err := strconv.Atoi(propName); err == nil {
-				return vm.BooleanValue(index >= 0 && index < arrObj.Length())
+				return vm.BooleanValue(index >= 0 && index < arrObj.Length()), nil
 			}
 		}
-		return vm.BooleanValue(false)
+		return vm.BooleanValue(false), nil
 	}))
 
-	objectProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) vm.Value {
+	objectProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 
 		// Return appropriate string representation based on type
 		switch thisValue.Type() {
 		case vm.TypeNull:
-			return vm.NewString("[object Null]")
+			return vm.NewString("[object Null]"), nil
 		case vm.TypeUndefined:
-			return vm.NewString("[object Undefined]")
+			return vm.NewString("[object Undefined]"), nil
 		case vm.TypeBoolean:
-			return vm.NewString("[object Boolean]")
+			return vm.NewString("[object Boolean]"), nil
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			return vm.NewString("[object Number]")
+			return vm.NewString("[object Number]"), nil
 		case vm.TypeString:
-			return vm.NewString("[object String]")
+			return vm.NewString("[object String]"), nil
 		case vm.TypeArray:
-			return vm.NewString("[object Array]")
+			return vm.NewString("[object Array]"), nil
 		case vm.TypeFunction, vm.TypeNativeFunction, vm.TypeClosure:
-			return vm.NewString("[object Function]")
+			return vm.NewString("[object Function]"), nil
 		default:
-			return vm.NewString("[object Object]")
+			return vm.NewString("[object Object]"), nil
 		}
 	}))
 
-	objectProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) vm.Value {
-		return vmInstance.GetThis() // Return this
+	objectProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+		return vmInstance.GetThis(), nil // Return this
 	}))
 
-	objectProto.SetOwn("isPrototypeOf", vm.NewNativeFunction(1, false, "isPrototypeOf", func(args []vm.Value) vm.Value {
+	objectProto.SetOwn("isPrototypeOf", vm.NewNativeFunction(1, false, "isPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		thisValue := vmInstance.GetThis()
 		obj := args[0]
@@ -139,26 +139,26 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			// Check if this prototype is the one we're looking for
 			if proto.Is(thisValue) {
-				return vm.BooleanValue(true)
+				return vm.BooleanValue(true), nil
 			}
 
 			current = proto
 		}
 
-		return vm.BooleanValue(false)
+		return vm.BooleanValue(false), nil
 	}))
 
 	// Create Object constructor
-	objectCtor := vm.NewNativeFunction(-1, true, "Object", func(args []vm.Value) vm.Value {
+	objectCtor := vm.NewNativeFunction(-1, true, "Object", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NewObject(vm.NewValueFromPlainObject(objectProto))
+			return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
 		}
 		arg := args[0]
 		if arg.IsObject() {
-			return arg
+			return arg, nil
 		}
 		// TODO: Box primitives properly
-		return vm.NewObject(vm.NewValueFromPlainObject(objectProto))
+		return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
 	})
 
 	// Make it a proper constructor with static methods
@@ -191,10 +191,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // Static method implementations
 
-func objectCreateImpl(args []vm.Value) vm.Value {
+func objectCreateImpl(args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined
+		return vm.Undefined, nil
 	}
 
 	proto := args[0]
@@ -202,7 +202,7 @@ func objectCreateImpl(args []vm.Value) vm.Value {
 	// Check if proto is null or an object
 	if proto.Type() != vm.TypeNull && proto.Type() != vm.TypeObject {
 		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined
+		return vm.Undefined, nil
 	}
 
 	// Create a new object with the specified prototype
@@ -212,23 +212,23 @@ func objectCreateImpl(args []vm.Value) vm.Value {
 		if plainObj := obj.AsPlainObject(); plainObj != nil {
 			plainObj.SetPrototype(vm.Null)
 		}
-		return obj
+		return obj, nil
 	} else {
 		// For object prototype, NewObject handles it correctly
-		return vm.NewObject(proto)
+		return vm.NewObject(proto), nil
 	}
 }
 
-func objectKeysImpl(args []vm.Value) vm.Value {
+func objectKeysImpl(args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		// TODO: Throw TypeError when error objects are implemented
-		return vm.NewArray()
+		return vm.NewArray(), nil
 	}
 
 	obj := args[0]
 	if !obj.IsObject() {
 		// TODO: Throw TypeError when error objects are implemented
-		return vm.NewArray()
+		return vm.NewArray(), nil
 	}
 
 	keys := vm.NewArray()
@@ -244,12 +244,12 @@ func objectKeysImpl(args []vm.Value) vm.Value {
 		}
 	}
 
-	return keys
+	return keys, nil
 }
 
-func objectGetPrototypeOfImpl(args []vm.Value) vm.Value {
+func objectGetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		return vm.Undefined
+		return vm.Undefined, nil
 	}
 
 	obj := args[0]
@@ -260,29 +260,29 @@ func objectGetPrototypeOfImpl(args []vm.Value) vm.Value {
 		// For plain objects, get their actual prototype
 		plainObj := obj.AsPlainObject()
 		if plainObj != nil {
-			return plainObj.GetPrototype()
+			return plainObj.GetPrototype(), nil
 		}
-		return vm.Null
+		return vm.Null, nil
 	case vm.TypeArray:
 		// For arrays, return Array.prototype if available
 		// This will be set up when ArrayInitializer runs
-		return vm.Null // TODO: Return proper Array.prototype
+		return vm.Null, nil // TODO: Return proper Array.prototype
 	case vm.TypeString:
 		// For strings, return String.prototype if available
-		return vm.Null // TODO: Return proper String.prototype
+		return vm.Null, nil // TODO: Return proper String.prototype
 	case vm.TypeFunction, vm.TypeClosure:
 		// For functions, return Function.prototype if available
-		return vm.Null // TODO: Return proper Function.prototype
+		return vm.Null, nil // TODO: Return proper Function.prototype
 	default:
 		// For primitive values, return null
-		return vm.Null
+		return vm.Null, nil
 	}
 }
 
-func objectSetPrototypeOfImpl(args []vm.Value) vm.Value {
+func objectSetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 	if len(args) < 2 {
 		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined
+		return vm.Undefined, nil
 	}
 
 	obj := args[0]
@@ -291,13 +291,13 @@ func objectSetPrototypeOfImpl(args []vm.Value) vm.Value {
 	// First argument must be an object
 	if obj.Type() != vm.TypeObject {
 		// TODO: Throw TypeError when error objects are implemented
-		return obj // Return the object unchanged as per spec
+		return obj, nil // Return the object unchanged as per spec
 	}
 
 	// Second argument must be an object or null
 	if proto.Type() != vm.TypeNull && proto.Type() != vm.TypeObject {
 		// TODO: Throw TypeError when error objects are implemented
-		return obj // Return the object unchanged
+		return obj, nil // Return the object unchanged
 	}
 
 	// Set the prototype
@@ -308,5 +308,5 @@ func objectSetPrototypeOfImpl(args []vm.Value) vm.Value {
 	}
 
 	// Return the object
-	return obj
+	return obj, nil
 }

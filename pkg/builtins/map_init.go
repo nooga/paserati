@@ -89,87 +89,87 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mapProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Map prototype methods
-	mapProto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) vm.Value {
+	mapProto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		
 		if thisMap.Type() != vm.TypeMap {
 			// TODO: Should throw TypeError
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		if len(args) < 2 {
-			return thisMap // Return the map for chaining
+			return thisMap, nil // Return the map for chaining
 		}
 		
 		mapObj := thisMap.AsMap()
 		mapObj.Set(args[0], args[1])
-		return thisMap // Return the map for chaining
+		return thisMap, nil // Return the map for chaining
 	}))
 
-	mapProto.SetOwn("get", vm.NewNativeFunction(1, false, "get", func(args []vm.Value) vm.Value {
+	mapProto.SetOwn("get", vm.NewNativeFunction(1, false, "get", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		
 		if thisMap.Type() != vm.TypeMap {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		if len(args) < 1 {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		mapObj := thisMap.AsMap()
-		return mapObj.Get(args[0])
+		return mapObj.Get(args[0]), nil
 	}))
 
-	mapProto.SetOwn("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) vm.Value {
+	mapProto.SetOwn("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		
 		if thisMap.Type() != vm.TypeMap {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		mapObj := thisMap.AsMap()
-		return vm.BooleanValue(mapObj.Has(args[0]))
+		return vm.BooleanValue(mapObj.Has(args[0])), nil
 	}))
 
-	mapProto.SetOwn("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) vm.Value {
+	mapProto.SetOwn("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		
 		if thisMap.Type() != vm.TypeMap {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		mapObj := thisMap.AsMap()
-		return vm.BooleanValue(mapObj.Delete(args[0]))
+		return vm.BooleanValue(mapObj.Delete(args[0])), nil
 	}))
 
-	mapProto.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) vm.Value {
+	mapProto.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		
 		if thisMap.Type() != vm.TypeMap {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		mapObj := thisMap.AsMap()
 		mapObj.Clear()
-		return vm.Undefined
+		return vm.Undefined, nil
 	}))
 
 	// Set Map.prototype
 	vmInstance.MapPrototype = vm.NewValueFromPlainObject(mapProto)
 
 	// Create Map constructor function
-	mapConstructor := vm.NewNativeFunctionWithProps(0, false, "Map", func(args []vm.Value) vm.Value {
+	mapConstructor := vm.NewNativeFunctionWithProps(0, false, "Map", func(args []vm.Value) (vm.Value, error) {
 		// Create new Map instance
-		return vm.NewMap()
+		return vm.NewMap(), nil
 	})
 
 	// Add prototype property

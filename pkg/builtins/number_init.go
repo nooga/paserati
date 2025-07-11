@@ -66,17 +66,17 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	numberProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Number prototype methods
-	numberProto.SetOwn("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) vm.Value {
+	numberProto.SetOwn("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 		
 		// Check if this is a number
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
 			// Try to convert or throw error
 			if thisNum.Type() == vm.TypeBigInt {
-				return vm.NewString(thisNum.ToString())
+				return vm.NewString(thisNum.ToString()), nil
 			}
 			// For non-numbers, we could throw a TypeError but for now return string conversion
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		var radix int = 10
@@ -89,49 +89,49 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if radix == 10 {
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		// Handle different radix
 		if thisNum.Type() == vm.TypeIntegerNumber {
-			return vm.NewString(strconv.FormatInt(int64(thisNum.AsInteger()), radix))
+			return vm.NewString(strconv.FormatInt(int64(thisNum.AsInteger()), radix)), nil
 		} else {
 			// For float numbers with non-10 radix, convert to int first (JS behavior)
 			intVal := int64(thisNum.ToFloat())
-			return vm.NewString(strconv.FormatInt(intVal, radix))
+			return vm.NewString(strconv.FormatInt(intVal, radix)), nil
 		}
 	}))
 
-	numberProto.SetOwn("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) vm.Value {
+	numberProto.SetOwn("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 		
 		// Check if this is a number
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber && thisNum.Type() != vm.TypeBigInt {
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		// For now, just return the string representation (proper locale support would be complex)
 		// TODO: Implement proper locale formatting
-		return vm.NewString(thisNum.ToString())
+		return vm.NewString(thisNum.ToString()), nil
 	}))
 
-	numberProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) vm.Value {
+	numberProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 		
 		// Return the primitive number value
 		if thisNum.Type() == vm.TypeFloatNumber || thisNum.Type() == vm.TypeIntegerNumber {
-			return thisNum
+			return thisNum, nil
 		}
 		
 		// Convert if possible
-		return vm.NumberValue(thisNum.ToFloat())
+		return vm.NumberValue(thisNum.ToFloat()), nil
 	}))
 
-	numberProto.SetOwn("toFixed", vm.NewNativeFunction(1, false, "toFixed", func(args []vm.Value) vm.Value {
+	numberProto.SetOwn("toFixed", vm.NewNativeFunction(1, false, "toFixed", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 		
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		digits := 0
@@ -144,14 +144,14 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		numVal := thisNum.ToFloat()
-		return vm.NewString(strconv.FormatFloat(numVal, 'f', digits, 64))
+		return vm.NewString(strconv.FormatFloat(numVal, 'f', digits, 64)), nil
 	}))
 
-	numberProto.SetOwn("toExponential", vm.NewNativeFunction(1, false, "toExponential", func(args []vm.Value) vm.Value {
+	numberProto.SetOwn("toExponential", vm.NewNativeFunction(1, false, "toExponential", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 		
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		digits := -1
@@ -164,63 +164,63 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		numVal := thisNum.ToFloat()
-		return vm.NewString(strconv.FormatFloat(numVal, 'e', digits, 64))
+		return vm.NewString(strconv.FormatFloat(numVal, 'e', digits, 64)), nil
 	}))
 
-	numberProto.SetOwn("toPrecision", vm.NewNativeFunction(1, false, "toPrecision", func(args []vm.Value) vm.Value {
+	numberProto.SetOwn("toPrecision", vm.NewNativeFunction(1, false, "toPrecision", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 		
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		if len(args) == 0 {
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		precision := int(args[0].ToFloat())
 		if precision < 1 || precision > 21 {
 			// In real JS this would throw RangeError
-			return vm.NewString(thisNum.ToString())
+			return vm.NewString(thisNum.ToString()), nil
 		}
 
 		numVal := thisNum.ToFloat()
-		return vm.NewString(strconv.FormatFloat(numVal, 'g', precision, 64))
+		return vm.NewString(strconv.FormatFloat(numVal, 'g', precision, 64)), nil
 	}))
 
 	// Set Number.prototype
 	vmInstance.NumberPrototype = vm.NewValueFromPlainObject(numberProto)
 
 	// Create Number constructor function
-	numberConstructor := vm.NewNativeFunctionWithProps(1, false, "Number", func(args []vm.Value) vm.Value {
+	numberConstructor := vm.NewNativeFunctionWithProps(1, false, "Number", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NumberValue(0)
+			return vm.NumberValue(0), nil
 		}
 		
 		arg := args[0]
 		switch arg.Type() {
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			return arg
+			return arg, nil
 		case vm.TypeString:
 			str := arg.ToString()
 			if str == "" {
-				return vm.NumberValue(0)
+				return vm.NumberValue(0), nil
 			}
 			if val, err := strconv.ParseFloat(str, 64); err == nil {
-				return vm.NumberValue(val)
+				return vm.NumberValue(val), nil
 			}
-			return vm.NaN
+			return vm.NaN, nil
 		case vm.TypeBoolean:
 			if arg.AsBoolean() {
-				return vm.NumberValue(1)
+				return vm.NumberValue(1), nil
 			}
-			return vm.NumberValue(0)
+			return vm.NumberValue(0), nil
 		case vm.TypeNull:
-			return vm.NumberValue(0)
+			return vm.NumberValue(0), nil
 		case vm.TypeUndefined:
-			return vm.NaN
+			return vm.NaN, nil
 		default:
-			return vm.NaN
+			return vm.NaN, nil
 		}
 	})
 
@@ -235,68 +235,68 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("EPSILON", vm.NumberValue(math.Nextafter(1.0, 2.0)-1.0))
 
 	// Add Number static methods
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isNaN", vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) vm.Value {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isNaN", vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		val := args[0]
 		if val.Type() != vm.TypeFloatNumber && val.Type() != vm.TypeIntegerNumber {
-			return vm.BooleanValue(false) // Only numbers can be NaN
+			return vm.BooleanValue(false), nil // Only numbers can be NaN
 		}
-		return vm.BooleanValue(math.IsNaN(val.ToFloat()))
+		return vm.BooleanValue(math.IsNaN(val.ToFloat())), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isFinite", vm.NewNativeFunction(1, false, "isFinite", func(args []vm.Value) vm.Value {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isFinite", vm.NewNativeFunction(1, false, "isFinite", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		val := args[0]
 		if val.Type() != vm.TypeFloatNumber && val.Type() != vm.TypeIntegerNumber {
-			return vm.BooleanValue(false) // Only numbers can be finite
+			return vm.BooleanValue(false), nil // Only numbers can be finite
 		}
 		f := val.ToFloat()
-		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f))
+		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f)), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isInteger", vm.NewNativeFunction(1, false, "isInteger", func(args []vm.Value) vm.Value {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isInteger", vm.NewNativeFunction(1, false, "isInteger", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		val := args[0]
 		if val.Type() != vm.TypeFloatNumber && val.Type() != vm.TypeIntegerNumber {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		f := val.ToFloat()
-		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f) && math.Floor(f) == f)
+		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f) && math.Floor(f) == f), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isSafeInteger", vm.NewNativeFunction(1, false, "isSafeInteger", func(args []vm.Value) vm.Value {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isSafeInteger", vm.NewNativeFunction(1, false, "isSafeInteger", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		val := args[0]
 		if val.Type() != vm.TypeFloatNumber && val.Type() != vm.TypeIntegerNumber {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		f := val.ToFloat()
 		maxSafe := 9007199254740991.0 // 2^53 - 1
-		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f) && math.Floor(f) == f && f >= -maxSafe && f <= maxSafe)
+		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f) && math.Floor(f) == f && f >= -maxSafe && f <= maxSafe), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("parseFloat", vm.NewNativeFunction(1, false, "parseFloat", func(args []vm.Value) vm.Value {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("parseFloat", vm.NewNativeFunction(1, false, "parseFloat", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		str := args[0].ToString()
 		if val, err := strconv.ParseFloat(str, 64); err == nil {
-			return vm.NumberValue(val)
+			return vm.NumberValue(val), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("parseInt", vm.NewNativeFunction(2, false, "parseInt", func(args []vm.Value) vm.Value {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("parseInt", vm.NewNativeFunction(2, false, "parseInt", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		
 		str := args[0].ToString()
@@ -309,13 +309,13 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 			radix = 10 // Default radix
 		}
 		if radix < 2 || radix > 36 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		
 		if val, err := strconv.ParseInt(str, radix, 64); err == nil {
-			return vm.NumberValue(float64(val))
+			return vm.NumberValue(float64(val)), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
 	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.NumberPrototype)

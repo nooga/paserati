@@ -46,7 +46,7 @@ func createBoundMethod(vm *VM, thisValue Value, method Value) Value {
 		nativeMethod := method.AsNativeFunction()
 
 		// Create a bound method that sets 'this' in the VM context
-		boundFn := func(args []Value) Value {
+		boundFn := func(args []Value) (Value, error) {
 			// Set the current 'this' value in the VM context
 			oldThis := vm.currentThis
 			vm.currentThis = thisValue
@@ -84,7 +84,7 @@ func createBoundMethod(vm *VM, thisValue Value, method Value) Value {
 
 	case TypeNativeFunctionWithProps:
 		nativeMethodWithProps := method.AsNativeFunctionWithProps()
-		boundFn := func(args []Value) Value {
+		boundFn := func(args []Value) (Value, error) {
 			// Set the current 'this' value in the VM context
 			oldThis := vm.currentThis
 			vm.currentThis = thisValue

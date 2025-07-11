@@ -40,6 +40,8 @@ const (
 	TypeRegExp
 	TypeMap
 	TypeSet
+	TypeArrayBuffer
+	TypeTypedArray
 )
 
 type StringObject struct {
@@ -478,6 +480,35 @@ func (v Value) ToString() string {
 			return "/" + regex.source + "/" + regex.flags
 		}
 		return "/(?:)/"
+	case TypeArrayBuffer:
+		return "[object ArrayBuffer]"
+	case TypeTypedArray:
+		ta := v.AsTypedArray()
+		if ta != nil {
+			switch ta.elementType {
+			case TypedArrayInt8:
+				return "[object Int8Array]"
+			case TypedArrayUint8:
+				return "[object Uint8Array]"
+			case TypedArrayUint8Clamped:
+				return "[object Uint8ClampedArray]"
+			case TypedArrayInt16:
+				return "[object Int16Array]"
+			case TypedArrayUint16:
+				return "[object Uint16Array]"
+			case TypedArrayInt32:
+				return "[object Int32Array]"
+			case TypedArrayUint32:
+				return "[object Uint32Array]"
+			case TypedArrayFloat32:
+				return "[object Float32Array]"
+			case TypedArrayFloat64:
+				return "[object Float64Array]"
+			default:
+				return "[object TypedArray]"
+			}
+		}
+		return "[object TypedArray]"
 	}
 	return fmt.Sprintf("<unknown type %d>", v.typ)
 }
@@ -506,7 +537,7 @@ func (v Value) ToFloat() float64 {
 			return f
 		}
 		return math.NaN()
-	case TypeObject, TypeDictObject, TypeArray, TypeRegExp, TypeMap, TypeSet:
+	case TypeObject, TypeDictObject, TypeArray, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeTypedArray:
 		// Special case for Date objects - directly get timestamp
 		if obj := v.AsPlainObject(); obj != nil {
 			if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
@@ -743,6 +774,41 @@ func (v Value) inspectWithContext(nested bool) string {
 			return "/" + regex.source + "/" + regex.flags
 		}
 		return "/(?:)/"
+	case TypeArrayBuffer:
+		buffer := v.AsArrayBuffer()
+		if buffer != nil {
+			return fmt.Sprintf("ArrayBuffer { [Uint8Contents]: <%d bytes> }", len(buffer.data))
+		}
+		return "ArrayBuffer {}"
+	case TypeTypedArray:
+		ta := v.AsTypedArray()
+		if ta != nil {
+			typeName := ""
+			switch ta.elementType {
+			case TypedArrayInt8:
+				typeName = "Int8Array"
+			case TypedArrayUint8:
+				typeName = "Uint8Array"
+			case TypedArrayUint8Clamped:
+				typeName = "Uint8ClampedArray"
+			case TypedArrayInt16:
+				typeName = "Int16Array"
+			case TypedArrayUint16:
+				typeName = "Uint16Array"
+			case TypedArrayInt32:
+				typeName = "Int32Array"
+			case TypedArrayUint32:
+				typeName = "Uint32Array"
+			case TypedArrayFloat32:
+				typeName = "Float32Array"
+			case TypedArrayFloat64:
+				typeName = "Float64Array"
+			default:
+				typeName = "TypedArray"
+			}
+			return fmt.Sprintf("%s { length: %d }", typeName, ta.length)
+		}
+		return "TypedArray {}"
 	default:
 		return fmt.Sprintf("<unknown %d>", v.typ)
 	}
@@ -780,6 +846,11 @@ func (v Value) IsFalsey() bool {
 // IsTruthy checks if the value is considered truthy (opposite of IsFalsey).
 func (v Value) IsTruthy() bool {
 	return !v.IsFalsey()
+}
+
+// IsUndefined checks if the value is undefined
+func (v Value) IsUndefined() bool {
+	return v.typ == TypeUndefined
 }
 
 // --- Equality ---

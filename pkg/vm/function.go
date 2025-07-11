@@ -48,7 +48,7 @@ type NativeFunctionObject struct {
 	Arity    int
 	Variadic bool
 	Name     string
-	Fn       func(args []Value) Value
+	Fn       func(args []Value) (Value, error)
 }
 
 // BoundNativeFunctionObject represents a native function bound to a 'this' value
@@ -75,7 +75,7 @@ type NativeFunctionObjectWithProps struct {
 	Arity      int
 	Variadic   bool
 	Name       string
-	Fn         func(args []Value) Value
+	Fn         func(args []Value) (Value, error)
 	Properties *PlainObject // Can have properties like static methods
 }
 
@@ -148,7 +148,7 @@ func NewClosure(fn *FunctionObject, upvalues []*Upvalue) Value {
 	return Value{typ: TypeClosure, obj: unsafe.Pointer(closureObj)}
 }
 
-func NewNativeFunction(arity int, variadic bool, name string, fn func(args []Value) Value) Value {
+func NewNativeFunction(arity int, variadic bool, name string, fn func(args []Value) (Value, error)) Value {
 	return Value{typ: TypeNativeFunction, obj: unsafe.Pointer(&NativeFunctionObject{
 		Arity:    arity,
 		Variadic: variadic,
@@ -157,7 +157,7 @@ func NewNativeFunction(arity int, variadic bool, name string, fn func(args []Val
 	})}
 }
 
-func NewNativeFunctionWithProps(arity int, variadic bool, name string, fn func(args []Value) Value) Value {
+func NewNativeFunctionWithProps(arity int, variadic bool, name string, fn func(args []Value) (Value, error)) Value {
 	props := NewObject(Undefined).AsPlainObject()
 	return Value{typ: TypeNativeFunctionWithProps, obj: unsafe.Pointer(&NativeFunctionObjectWithProps{
 		Arity:      arity,

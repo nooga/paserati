@@ -85,39 +85,39 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	symbolProto := vmInstance.SymbolPrototype.AsPlainObject()
 
 	// Symbol.prototype.toString
-	symbolProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) vm.Value {
+	symbolProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' value
 		thisVal := vmInstance.GetThis()
 		
 		// Check if it's a symbol
 		if !thisVal.IsSymbol() {
 			// Should throw TypeError
-			return vm.NewString("Symbol()")
+			return vm.NewString("Symbol()"), nil
 		}
 		
 		desc := thisVal.AsSymbol()
 		if desc == "" {
-			return vm.NewString("Symbol()")
+			return vm.NewString("Symbol()"), nil
 		}
-		return vm.NewString("Symbol(" + desc + ")")
+		return vm.NewString("Symbol(" + desc + ")"), nil
 	}))
 
 	// Symbol.prototype.valueOf
-	symbolProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) vm.Value {
+	symbolProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' value
 		thisVal := vmInstance.GetThis()
 		
 		// Check if it's a symbol
 		if !thisVal.IsSymbol() {
 			// Should throw TypeError
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
-		return thisVal
+		return thisVal, nil
 	}))
 
 	// Create Symbol constructor with properties (like Date does)
-	ctorWithProps := vm.NewNativeFunctionWithProps(0, true, "Symbol", func(args []vm.Value) vm.Value {
+	ctorWithProps := vm.NewNativeFunctionWithProps(0, true, "Symbol", func(args []vm.Value) (vm.Value, error) {
 		// Get description argument
 		var description string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -125,7 +125,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Create new symbol
-		return vm.NewSymbol(description)
+		return vm.NewSymbol(description), nil
 	})
 
 	// Add prototype property - use the VM's SymbolPrototype
@@ -149,10 +149,10 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	SymbolAsyncIterator = vm.NewSymbol("Symbol.asyncIterator")
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("for", vm.NewNativeFunction(1, false, "for", func(args []vm.Value) vm.Value {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("for", vm.NewNativeFunction(1, false, "for", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			// Should throw TypeError, but return undefined for now
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 
 		key := args[0].ToString()
@@ -162,19 +162,19 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Check if symbol already exists in registry
 		if sym, exists := globalSymbolRegistry[key]; exists {
-			return sym
+			return sym, nil
 		}
 
 		// Create new symbol and register it
 		sym := vm.NewSymbol(key)
 		globalSymbolRegistry[key] = sym
-		return sym
+		return sym, nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("keyFor", vm.NewNativeFunction(1, false, "keyFor", func(args []vm.Value) vm.Value {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("keyFor", vm.NewNativeFunction(1, false, "keyFor", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 || !args[0].IsSymbol() {
 			// Should throw TypeError, but return undefined for now
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 
 		sym := args[0]
@@ -185,12 +185,12 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Search for the symbol in the registry
 		for key, registeredSym := range globalSymbolRegistry {
 			if sym.Is(registeredSym) {
-				return vm.NewString(key)
+				return vm.NewString(key), nil
 			}
 		}
 
 		// Symbol not found in registry
-		return vm.Undefined
+		return vm.Undefined, nil
 	}))
 
 	// Add well-known symbols as static properties

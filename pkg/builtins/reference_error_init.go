@@ -52,7 +52,7 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	referenceErrorPrototype.SetOwn("name", vm.NewString("ReferenceError"))
 	
 	// ReferenceError constructor function
-	referenceErrorConstructor := vm.NewNativeFunction(-1, true, "ReferenceError", func(args []vm.Value) vm.Value {
+	referenceErrorConstructor := vm.NewNativeFunction(-1, true, "ReferenceError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -71,7 +71,7 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		stackTrace := vmInstance.CaptureStackTrace()
 		referenceErrorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
 		
-		return referenceErrorInstance
+		return referenceErrorInstance, nil
 	})
 
 	// Make it a proper constructor with prototype property

@@ -123,21 +123,21 @@ func InitializeRegistry() {
 // --- Built-in Implementations ---
 
 // clockImpl implements the native clock() function.
-func clockImpl(args []vm.Value) vm.Value {
+func clockImpl(args []vm.Value) (vm.Value, error) {
 	// Arity check is handled by the VM before calling this.
 	// clock() takes 0 arguments.
 	now := float64(time.Now().UnixNano()) / 1e9 // Seconds since epoch
-	return vm.Number(now)
+	return vm.Number(now), nil
 }
 
 // arrayImpl implements the native Array() constructor function.
-func arrayImpl(args []vm.Value) vm.Value {
+func arrayImpl(args []vm.Value) (vm.Value, error) {
 	// Use the new helper function that properly handles Array constructor semantics
-	return vm.NewArrayWithArgs(args)
+	return vm.NewArrayWithArgs(args), nil
 }
 
 // register is a helper to add a built-in function to the registry.
-func register(name string, arity int, isVariadic bool, goFunc func([]vm.Value) vm.Value, fnType types.Type) {
+func register(name string, arity int, isVariadic bool, goFunc func([]vm.Value) (vm.Value, error), fnType types.Type) {
 	if fnType == nil {
 		panic(fmt.Sprintf("Builtin registration for '%s' requires a non-nil Type", name))
 	}

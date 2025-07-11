@@ -91,8 +91,8 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Add clock function for backward compatibility (returns current time in milliseconds)
-	clockFunc := vm.NewNativeFunction(0, false, "clock", func(args []vm.Value) vm.Value {
-		return vm.NumberValue(float64(time.Now().UnixMilli()))
+	clockFunc := vm.NewNativeFunction(0, false, "clock", func(args []vm.Value) (vm.Value, error) {
+		return vm.NumberValue(float64(time.Now().UnixMilli())), nil
 	})
 
 	if err := ctx.DefineGlobal("clock", clockFunc); err != nil {
@@ -100,9 +100,9 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Add parseInt function implementation
-	parseIntFunc := vm.NewNativeFunction(1, false, "parseInt", func(args []vm.Value) vm.Value {
+	parseIntFunc := vm.NewNativeFunction(1, false, "parseInt", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NumberValue(math.NaN())
+			return vm.NumberValue(math.NaN()), nil
 		}
 
 		str := args[0].ToString()
@@ -111,17 +111,17 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 1 && args[1].IsNumber() {
 			radix = int64(args[1].ToFloat())
 			if radix < 2 || radix > 36 {
-				return vm.NumberValue(math.NaN())
+				return vm.NumberValue(math.NaN()), nil
 			}
 		}
 
 		// Try to parse the string as an integer with the given radix
 		if result, err := strconv.ParseInt(str, int(radix), 64); err == nil {
-			return vm.NumberValue(float64(result))
+			return vm.NumberValue(float64(result)), nil
 		}
 
 		// If parsing fails, return NaN
-		return vm.NumberValue(math.NaN())
+		return vm.NumberValue(math.NaN()), nil
 	})
 
 	if err := ctx.DefineGlobal("parseInt", parseIntFunc); err != nil {
@@ -129,15 +129,15 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Add isNaN function implementation
-	isNaNFunc := vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) vm.Value {
+	isNaNFunc := vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.BooleanValue(true) // isNaN(undefined) is true
+			return vm.BooleanValue(true), nil // isNaN(undefined) is true
 		}
 
 		val := args[0]
 		// Convert to number first (like JavaScript does)
 		numVal := val.ToFloat()
-		return vm.BooleanValue(math.IsNaN(numVal))
+		return vm.BooleanValue(math.IsNaN(numVal)), nil
 	})
 
 	return ctx.DefineGlobal("isNaN", isNaNFunc)

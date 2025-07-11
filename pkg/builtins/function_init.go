@@ -50,30 +50,30 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add prototype methods
 	// Function.prototype.call
-	callImpl := func(args []vm.Value) vm.Value {
-		return functionPrototypeCallImpl(vmInstance, args)
+	callImpl := func(args []vm.Value) (vm.Value, error) {
+		return functionPrototypeCallImpl(vmInstance, args), nil
 	}
 	functionProto.SetOwn("call", vm.NewNativeFunction(0, true, "call", callImpl))
 
 	// Function.prototype.apply
-	applyImpl := func(args []vm.Value) vm.Value {
-		return functionPrototypeApplyImpl(vmInstance, args)
+	applyImpl := func(args []vm.Value) (vm.Value, error) {
+		return functionPrototypeApplyImpl(vmInstance, args), nil
 	}
 	functionProto.SetOwn("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
 
 	// Function.prototype.bind
-	bindImpl := func(args []vm.Value) vm.Value {
-		return functionPrototypeBindImpl(vmInstance, args)
+	bindImpl := func(args []vm.Value) (vm.Value, error) {
+		return functionPrototypeBindImpl(vmInstance, args), nil
 	}
 	functionProto.SetOwn("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
 
 	// Create Function constructor
-	functionCtor := vm.NewNativeFunction(-1, true, "Function", func(args []vm.Value) vm.Value {
+	functionCtor := vm.NewNativeFunction(-1, true, "Function", func(args []vm.Value) (vm.Value, error) {
 		// TODO: Implement Function constructor (creates functions from strings)
 		// For now, return a simple function
-		return vm.NewNativeFunction(0, false, "anonymous", func([]vm.Value) vm.Value {
-			return vm.Undefined
-		})
+		return vm.NewNativeFunction(0, false, "anonymous", func([]vm.Value) (vm.Value, error) {
+			return vm.Undefined, nil
+		}), nil
 	})
 
 	// Make it a proper constructor with static methods

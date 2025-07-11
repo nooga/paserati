@@ -66,90 +66,90 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	dateProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Date prototype methods
-	dateProto.SetOwn("getTime", vm.NewNativeFunction(0, false, "getTime", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getTime", vm.NewNativeFunction(0, false, "getTime", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			return vm.NumberValue(timestamp)
+			return vm.NumberValue(timestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getFullYear", vm.NewNativeFunction(0, false, "getFullYear", func(args []vm.Value) vm.Value {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Year()))
-		}
-		return vm.NaN
-	}))
-
-	dateProto.SetOwn("getMonth", vm.NewNativeFunction(0, false, "getMonth", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getFullYear", vm.NewNativeFunction(0, false, "getFullYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Month() - 1)) // JavaScript months are 0-based
+			return vm.NumberValue(float64(t.Year())), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getDate", vm.NewNativeFunction(0, false, "getDate", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getMonth", vm.NewNativeFunction(0, false, "getMonth", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Day()))
+			return vm.NumberValue(float64(t.Month() - 1)), nil // JavaScript months are 0-based
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getDay", vm.NewNativeFunction(0, false, "getDay", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getDate", vm.NewNativeFunction(0, false, "getDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Weekday())) // Sunday = 0 in JavaScript
+			return vm.NumberValue(float64(t.Day())), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getHours", vm.NewNativeFunction(0, false, "getHours", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getDay", vm.NewNativeFunction(0, false, "getDay", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Hour()))
+			return vm.NumberValue(float64(t.Weekday())), nil // Sunday = 0 in JavaScript
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getMinutes", vm.NewNativeFunction(0, false, "getMinutes", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getHours", vm.NewNativeFunction(0, false, "getHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Minute()))
+			return vm.NumberValue(float64(t.Hour())), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getSeconds", vm.NewNativeFunction(0, false, "getSeconds", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getMinutes", vm.NewNativeFunction(0, false, "getMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Second()))
+			return vm.NumberValue(float64(t.Minute())), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getMilliseconds", vm.NewNativeFunction(0, false, "getMilliseconds", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getSeconds", vm.NewNativeFunction(0, false, "getSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Nanosecond() / 1000000))
+			return vm.NumberValue(float64(t.Second())), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setDate", vm.NewNativeFunction(1, false, "setDate", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("getMilliseconds", vm.NewNativeFunction(0, false, "getMilliseconds", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp))
+			return vm.NumberValue(float64(t.Nanosecond() / 1000000)), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setDate", vm.NewNativeFunction(1, false, "setDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -157,15 +157,15 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTime := time.Date(t.Year(), t.Month(), day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setMonth", vm.NewNativeFunction(2, false, "setMonth", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setMonth", vm.NewNativeFunction(2, false, "setMonth", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -180,15 +180,15 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTime := time.Date(t.Year(), month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setFullYear", vm.NewNativeFunction(3, false, "setFullYear", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setFullYear", vm.NewNativeFunction(3, false, "setFullYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -209,15 +209,15 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTime := time.Date(year, month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setHours", vm.NewNativeFunction(1, false, "setHours", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setHours", vm.NewNativeFunction(1, false, "setHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -225,15 +225,15 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setMinutes", vm.NewNativeFunction(1, false, "setMinutes", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setMinutes", vm.NewNativeFunction(1, false, "setMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -241,15 +241,15 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setSeconds", vm.NewNativeFunction(1, false, "setSeconds", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setSeconds", vm.NewNativeFunction(1, false, "setSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -257,15 +257,15 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setMilliseconds", vm.NewNativeFunction(1, false, "setMilliseconds", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("setMilliseconds", vm.NewNativeFunction(1, false, "setMilliseconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -273,57 +273,57 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), millisecond, t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NewString(t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)"))
+			return vm.NewString(t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")), nil
 		}
-		return vm.NewString("Invalid Date")
+		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toISOString", vm.NewNativeFunction(0, false, "toISOString", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("toISOString", vm.NewNativeFunction(0, false, "toISOString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NewString(t.Format("2006-01-02T15:04:05.000Z"))
+			return vm.NewString(t.Format("2006-01-02T15:04:05.000Z")), nil
 		}
-		return vm.NewString("Invalid Date")
+		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toDateString", vm.NewNativeFunction(0, false, "toDateString", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("toDateString", vm.NewNativeFunction(0, false, "toDateString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NewString(t.Format("Mon Jan 02 2006"))
+			return vm.NewString(t.Format("Mon Jan 02 2006")), nil
 		}
-		return vm.NewString("Invalid Date")
+		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toTimeString", vm.NewNativeFunction(0, false, "toTimeString", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("toTimeString", vm.NewNativeFunction(0, false, "toTimeString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
-			return vm.NewString(t.Format("15:04:05 GMT-0700 (MST)"))
+			return vm.NewString(t.Format("15:04:05 GMT-0700 (MST)")), nil
 		}
-		return vm.NewString("Invalid Date")
+		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) vm.Value {
+	dateProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			return vm.NumberValue(timestamp)
+			return vm.NumberValue(timestamp), nil
 		}
-		return vm.NaN
+		return vm.NaN, nil
 	}))
 
 	// Create Date constructor
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Date", func(args []vm.Value) vm.Value {
+	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Date", func(args []vm.Value) (vm.Value, error) {
 		var timestamp float64
 
 		if len(args) == 0 {
@@ -391,20 +391,20 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		dateObj := vm.NewObject(vm.NewValueFromPlainObject(dateProto))
 		dateObj.AsPlainObject().SetOwn("__timestamp__", vm.NumberValue(timestamp))
 		
-		return dateObj
+		return dateObj, nil
 	})
 
 	// Add prototype property
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(dateProto))
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("now", vm.NewNativeFunction(0, false, "now", func(args []vm.Value) vm.Value {
-		return vm.NumberValue(float64(time.Now().UnixMilli()))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("now", vm.NewNativeFunction(0, false, "now", func(args []vm.Value) (vm.Value, error) {
+		return vm.NumberValue(float64(time.Now().UnixMilli())), nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) vm.Value {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 		dateStr := args[0].ToString()
 
@@ -419,16 +419,16 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		for _, format := range formats {
 			if parsedTime, err := time.Parse(format, dateStr); err == nil {
-				return vm.NumberValue(float64(parsedTime.UnixMilli()))
+				return vm.NumberValue(float64(parsedTime.UnixMilli())), nil
 			}
 		}
 
-		return vm.NaN // Invalid date
+		return vm.NaN, nil // Invalid date
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("UTC", vm.NewNativeFunction(2, true, "UTC", func(args []vm.Value) vm.Value {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("UTC", vm.NewNativeFunction(2, true, "UTC", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
-			return vm.NaN
+			return vm.NaN, nil
 		}
 
 		year := int(args[0].ToFloat())
@@ -452,7 +452,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		t := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
-		return vm.NumberValue(float64(t.UnixMilli()))
+		return vm.NumberValue(float64(t.UnixMilli())), nil
 	}))
 
 	dateCtor := ctorWithProps

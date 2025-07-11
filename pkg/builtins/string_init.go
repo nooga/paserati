@@ -68,35 +68,35 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	stringProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add String prototype methods
-	stringProto.SetOwn("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
 		index := int(args[0].ToFloat())
 		if index < 0 || index >= len(thisStr) {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
-		return vm.NewString(string(thisStr[index]))
+		return vm.NewString(string(thisStr[index])), nil
 	}))
 
-	stringProto.SetOwn("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.NumberValue(float64(0x7FFFFFFF)) // NaN equivalent
+			return vm.NumberValue(float64(0x7FFFFFFF)), nil // NaN equivalent
 		}
 		index := int(args[0].ToFloat())
 		if index < 0 || index >= len(thisStr) {
-			return vm.NumberValue(float64(0x7FFFFFFF)) // NaN equivalent
+			return vm.NumberValue(float64(0x7FFFFFFF)), nil // NaN equivalent
 		}
-		return vm.NumberValue(float64(thisStr[index]))
+		return vm.NumberValue(float64(thisStr[index])), nil
 	}))
 
-	stringProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
 		if len(args) < 1 {
-			return vm.NewString(thisStr)
+			return vm.NewString(thisStr), nil
 		}
 		start := int(args[0].ToFloat())
 		if start < 0 {
@@ -120,16 +120,16 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		if start >= end {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
-		return vm.NewString(thisStr[start:end])
+		return vm.NewString(thisStr[start:end]), nil
 	}))
 
-	stringProto.SetOwn("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
 		if len(args) < 1 {
-			return vm.NewString(thisStr)
+			return vm.NewString(thisStr), nil
 		}
 		start := int(args[0].ToFloat())
 		if start < 0 {
@@ -150,14 +150,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if start > end {
 			start, end = end, start
 		}
-		return vm.NewString(thisStr[start:end])
+		return vm.NewString(thisStr[start:end]), nil
 	}))
 
-	stringProto.SetOwn("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
 		if len(args) < 1 {
-			return vm.NewString(thisStr)
+			return vm.NewString(thisStr), nil
 		}
 		start := int(args[0].ToFloat())
 		if start < 0 {
@@ -166,26 +166,26 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				start = 0
 			}
 		} else if start >= length {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
 		substrLength := length - start
 		if len(args) >= 2 {
 			substrLength = int(args[1].ToFloat())
 			if substrLength < 0 {
-				return vm.NewString("")
+				return vm.NewString(""), nil
 			}
 		}
 		end := start + substrLength
 		if end > length {
 			end = length
 		}
-		return vm.NewString(thisStr[start:end])
+		return vm.NewString(thisStr[start:end]), nil
 	}))
 
-	stringProto.SetOwn("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.NumberValue(-1)
+			return vm.NumberValue(-1), nil
 		}
 		searchStr := args[0].ToString()
 		position := 0
@@ -196,19 +196,19 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		if position >= len(thisStr) {
-			return vm.NumberValue(-1)
+			return vm.NumberValue(-1), nil
 		}
 		index := strings.Index(thisStr[position:], searchStr)
 		if index == -1 {
-			return vm.NumberValue(-1)
+			return vm.NumberValue(-1), nil
 		}
-		return vm.NumberValue(float64(position + index))
+		return vm.NumberValue(float64(position + index)), nil
 	}))
 
-	stringProto.SetOwn("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.NumberValue(-1)
+			return vm.NumberValue(-1), nil
 		}
 		searchStr := args[0].ToString()
 		position := len(thisStr)
@@ -221,13 +221,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		index := strings.LastIndex(thisStr[:position+len(searchStr)], searchStr)
-		return vm.NumberValue(float64(index))
+		return vm.NumberValue(float64(index)), nil
 	}))
 
-	stringProto.SetOwn("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		searchStr := args[0].ToString()
 		position := 0
@@ -238,15 +238,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		if position >= len(thisStr) {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(strings.Contains(thisStr[position:], searchStr))
+		return vm.BooleanValue(strings.Contains(thisStr[position:], searchStr)), nil
 	}))
 
-	stringProto.SetOwn("startsWith", vm.NewNativeFunction(2, false, "startsWith", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("startsWith", vm.NewNativeFunction(2, false, "startsWith", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		searchStr := args[0].ToString()
 		position := 0
@@ -257,15 +257,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		if position >= len(thisStr) {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(strings.HasPrefix(thisStr[position:], searchStr))
+		return vm.BooleanValue(strings.HasPrefix(thisStr[position:], searchStr)), nil
 	}))
 
-	stringProto.SetOwn("endsWith", vm.NewNativeFunction(2, false, "endsWith", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("endsWith", vm.NewNativeFunction(2, false, "endsWith", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		searchStr := args[0].ToString()
 		length := len(thisStr)
@@ -278,66 +278,66 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		if length < len(searchStr) {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(strings.HasSuffix(thisStr[:length], searchStr))
+		return vm.BooleanValue(strings.HasSuffix(thisStr[:length], searchStr)), nil
 	}))
 
-	stringProto.SetOwn("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.ToLower(thisStr))
+		return vm.NewString(strings.ToLower(thisStr)), nil
 	}))
 
-	stringProto.SetOwn("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.ToUpper(thisStr))
+		return vm.NewString(strings.ToUpper(thisStr)), nil
 	}))
 
-	stringProto.SetOwn("trim", vm.NewNativeFunction(0, false, "trim", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("trim", vm.NewNativeFunction(0, false, "trim", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.TrimSpace(thisStr))
+		return vm.NewString(strings.TrimSpace(thisStr)), nil
 	}))
 
-	stringProto.SetOwn("trimStart", vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("trimStart", vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.TrimLeftFunc(thisStr, unicode.IsSpace))
+		return vm.NewString(strings.TrimLeftFunc(thisStr, unicode.IsSpace)), nil
 	}))
 
-	stringProto.SetOwn("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.TrimRightFunc(thisStr, unicode.IsSpace))
+		return vm.NewString(strings.TrimRightFunc(thisStr, unicode.IsSpace)), nil
 	}))
 
-	stringProto.SetOwn("repeat", vm.NewNativeFunction(1, false, "repeat", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("repeat", vm.NewNativeFunction(1, false, "repeat", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
 		count := int(args[0].ToFloat())
 		if count < 0 {
 			// TODO: Should throw RangeError
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
 		if count == 0 || thisStr == "" {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
-		return vm.NewString(strings.Repeat(thisStr, count))
+		return vm.NewString(strings.Repeat(thisStr, count)), nil
 	}))
 
-	stringProto.SetOwn("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		result := thisStr
 		for i := 0; i < len(args); i++ {
 			result += args[i].ToString()
 		}
-		return vm.NewString(result)
+		return vm.NewString(result), nil
 	}))
 
-	stringProto.SetOwn("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) == 0 {
 			// No separator - return array with whole string
-			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)})
+			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)}), nil
 		}
 		
 		separatorArg := args[0]
@@ -347,7 +347,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if limitVal > 0 {
 				limit = int(limitVal)
 			} else if limitVal <= 0 {
-				return vm.NewArray()
+				return vm.NewArray(), nil
 			}
 		}
 		
@@ -364,7 +364,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			for i, part := range parts {
 				elements[i] = vm.NewString(part)
 			}
-			return vm.NewArrayWithArgs(elements)
+			return vm.NewArrayWithArgs(elements), nil
 		} else {
 			// String separator
 			separator := separatorArg.ToString()
@@ -379,7 +379,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				for i := 0; i < count; i++ {
 					elements[i] = vm.NewString(string(runes[i]))
 				}
-				return vm.NewArrayWithArgs(elements)
+				return vm.NewArrayWithArgs(elements), nil
 			}
 			
 			// Normal string split
@@ -391,14 +391,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			for i, part := range parts {
 				elements[i] = vm.NewString(part)
 			}
-			return vm.NewArrayWithArgs(elements)
+			return vm.NewArrayWithArgs(elements), nil
 		}
 	}))
 
-	stringProto.SetOwn("replace", vm.NewNativeFunction(2, false, "replace", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("replace", vm.NewNativeFunction(2, false, "replace", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 2 {
-			return vm.NewString(thisStr)
+			return vm.NewString(thisStr), nil
 		}
 		
 		searchArg := args[0]
@@ -412,28 +412,28 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if regex.IsGlobal() {
 				// Global replace: replace all matches
 				result := compiledRegex.ReplaceAllString(thisStr, replaceValue)
-				return vm.NewString(result)
+				return vm.NewString(result), nil
 			} else {
 				// Non-global: replace first match only
 				if loc := compiledRegex.FindStringIndex(thisStr); loc != nil {
 					// Replace only the first match
 					result := thisStr[:loc[0]] + replaceValue + thisStr[loc[1]:]
-					return vm.NewString(result)
+					return vm.NewString(result), nil
 				}
-				return vm.NewString(thisStr)
+				return vm.NewString(thisStr), nil
 			}
 		} else {
 			// String argument - legacy behavior (replace first occurrence only)
 			searchValue := searchArg.ToString()
 			result := strings.Replace(thisStr, searchValue, replaceValue, 1)
-			return vm.NewString(result)
+			return vm.NewString(result), nil
 		}
 	}))
 
-	stringProto.SetOwn("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.Null
+			return vm.Null, nil
 		}
 		
 		arg := args[0]
@@ -446,41 +446,41 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Global match: find all matches
 				matches := compiledRegex.FindAllString(thisStr, -1)
 				if len(matches) == 0 {
-					return vm.Null
+					return vm.Null, nil
 				}
 				result := vm.NewArray()
 				arr := result.AsArray()
 				for _, match := range matches {
 					arr.Append(vm.NewString(match))
 				}
-				return result
+				return result, nil
 			} else {
 				// Non-global: find first match with capture groups
 				matches := compiledRegex.FindStringSubmatch(thisStr)
 				if matches == nil {
-					return vm.Null
+					return vm.Null, nil
 				}
 				result := vm.NewArray()
 				arr := result.AsArray()
 				for _, match := range matches {
 					arr.Append(vm.NewString(match))
 				}
-				return result
+				return result, nil
 			}
 		} else {
 			// String argument - legacy behavior
 			pattern := arg.ToString()
 			if strings.Contains(thisStr, pattern) {
-				return vm.NewArrayWithArgs([]vm.Value{vm.NewString(pattern)})
+				return vm.NewArrayWithArgs([]vm.Value{vm.NewString(pattern)}), nil
 			}
-			return vm.Null
+			return vm.Null, nil
 		}
 	}))
 
-	stringProto.SetOwn("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) vm.Value {
+	stringProto.SetOwn("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
-			return vm.NumberValue(-1)
+			return vm.NumberValue(-1), nil
 		}
 		
 		arg := args[0]
@@ -491,47 +491,47 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			
 			loc := compiledRegex.FindStringIndex(thisStr)
 			if loc == nil {
-				return vm.NumberValue(-1)
+				return vm.NumberValue(-1), nil
 			}
-			return vm.NumberValue(float64(loc[0]))
+			return vm.NumberValue(float64(loc[0])), nil
 		} else {
 			// String argument - legacy behavior
 			searchValue := arg.ToString()
 			index := strings.Index(thisStr, searchValue)
-			return vm.NumberValue(float64(index))
+			return vm.NumberValue(float64(index)), nil
 		}
 	}))
 
 	// Create String constructor
-	stringCtor := vm.NewNativeFunction(-1, true, "String", func(args []vm.Value) vm.Value {
+	stringCtor := vm.NewNativeFunction(-1, true, "String", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
-		return vm.NewString(args[0].ToString())
+		return vm.NewString(args[0].ToString()), nil
 	})
 
 	// Make it a proper constructor with static methods
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "String", func(args []vm.Value) vm.Value {
+	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "String", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
-		return vm.NewString(args[0].ToString())
+		return vm.NewString(args[0].ToString()), nil
 	})
 
 	// Add prototype property
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(stringProto))
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("fromCharCode", vm.NewNativeFunction(0, true, "fromCharCode", func(args []vm.Value) vm.Value {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("fromCharCode", vm.NewNativeFunction(0, true, "fromCharCode", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.NewString("")
+			return vm.NewString(""), nil
 		}
 		result := make([]byte, len(args))
 		for i, arg := range args {
 			code := int(arg.ToFloat()) & 0xFFFF // Mask to 16 bits like JS
 			result[i] = byte(code)
 		}
-		return vm.NewString(string(result))
+		return vm.NewString(string(result)), nil
 	}))
 
 	stringCtor = ctorWithProps

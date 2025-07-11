@@ -48,7 +48,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	errorPrototype.SetOwn("message", vm.NewString(""))
 	
 	// Error.prototype.toString()
-	errorPrototype.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) vm.Value {
+	errorPrototype.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' context from VM
 		thisValue := vmInstance.GetThis()
 		
@@ -77,13 +77,13 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		
 		// Return "name: message" format, or just "name" if no message
 		if message == "" {
-			return vm.NewString(name)
+			return vm.NewString(name), nil
 		}
-		return vm.NewString(name + ": " + message)
+		return vm.NewString(name + ": " + message), nil
 	}))
 	
 	// Error constructor function
-	errorConstructor := vm.NewNativeFunction(-1, true, "Error", func(args []vm.Value) vm.Value {
+	errorConstructor := vm.NewNativeFunction(-1, true, "Error", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -102,7 +102,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		stackTrace := vmInstance.CaptureStackTrace()
 		errorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
 		
-		return errorInstance
+		return errorInstance, nil
 	})
 
 	// Make it a proper constructor with prototype property

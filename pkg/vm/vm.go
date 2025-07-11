@@ -111,8 +111,13 @@ type VM struct {
 	RegExpPrototype   Value
 	MapPrototype      Value
 	SetPrototype      Value
-	ErrorPrototype    Value
-	SymbolPrototype   Value
+	ErrorPrototype       Value
+	SymbolPrototype      Value
+	
+	// TypedArray prototypes
+	Uint8ArrayPrototype    Value
+	Int32ArrayPrototype    Value
+	Float32ArrayPrototype  Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
 	disableMethodBinding bool
@@ -1172,9 +1177,19 @@ startExecution:
 					registers[destReg] = String(string(runes[idx])) // Return char as string
 				}
 
+			case TypeTypedArray:
+				if !IsNumber(indexVal) {
+					frame.ip = ip
+					status := vm.runtimeError("TypedArray index must be a number, got '%v'", indexVal.Type())
+					return status, Undefined
+				}
+				ta := baseVal.AsTypedArray()
+				idx := int(AsNumber(indexVal))
+				registers[destReg] = ta.GetElement(idx)
+
 			default:
 				frame.ip = ip
-				status := vm.runtimeError("Cannot index non-array/object/string type '%v' at IP %d", baseVal.Type(), ip)
+				status := vm.runtimeError("Cannot index non-array/object/string/typedarray type '%v' at IP %d", baseVal.Type(), ip)
 				return status, Undefined
 			}
 			// --- END MODIFICATION ---
@@ -1250,9 +1265,19 @@ startExecution:
 					obj.SetOwn(key, valueVal)
 				}
 
+			case TypeTypedArray:
+				if !IsNumber(indexVal) {
+					frame.ip = ip
+					status := vm.runtimeError("TypedArray index must be a number, got '%v'", indexVal.Type())
+					return status, Undefined
+				}
+				ta := baseVal.AsTypedArray()
+				idx := int(AsNumber(indexVal))
+				ta.SetElement(idx, valueVal)
+
 			default:
 				frame.ip = ip
-				status := vm.runtimeError("Cannot set index on non-array/object type '%v'", baseVal.Type())
+				status := vm.runtimeError("Cannot set index on non-array/object/typedarray type '%v'", baseVal.Type())
 				return status, Undefined
 			}
 			// --- END MODIFICATION ---
@@ -1767,7 +1792,12 @@ startExecution:
 
 				// Execute builtin constructor
 				// For builtins, we let them handle instance creation
-				result := builtin.Fn(args)
+				result, err := builtin.Fn(args)
+				if err != nil {
+					frame.ip = callerIP
+					status := vm.runtimeError("Runtime Error: %s", err.Error())
+					return status, Undefined
+				}
 
 				// Store result in caller's target register
 				if int(destReg) < len(callerRegisters) {
@@ -1804,7 +1834,12 @@ startExecution:
 
 				// Execute builtin constructor
 				// For builtins, we let them handle instance creation
-				result := builtinWithProps.Fn(args)
+				result, err := builtinWithProps.Fn(args)
+				if err != nil {
+					frame.ip = callerIP
+					status := vm.runtimeError("Runtime Error: %s", err.Error())
+					return status, Undefined
+				}
 
 				// Store result in caller's target register
 				if int(destReg) < len(callerRegisters) {

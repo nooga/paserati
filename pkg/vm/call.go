@@ -154,7 +154,11 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		// Set the current 'this' value for native function access
 		vm.currentThis = thisValue
 		// Native functions execute immediately in caller's context
-		result := nativeFunc.Fn(args)
+		result, err := nativeFunc.Fn(args)
+		if err != nil {
+			// Return error to be handled by the VM
+			return false, err
+		}
 
 		//fmt.Printf("DEBUG prepareCall: result=%v\n", result.Inspect())
 
@@ -194,7 +198,11 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		// Set the current 'this' value for native function access
 		vm.currentThis = thisValue
 		// Execute immediately
-		result := nativeFuncWithProps.Fn(args)
+		result, err := nativeFuncWithProps.Fn(args)
+		if err != nil {
+			// Return error to be handled by the VM
+			return false, err
+		}
 
 		// Store result
 		if int(destReg) < len(callerRegisters) {

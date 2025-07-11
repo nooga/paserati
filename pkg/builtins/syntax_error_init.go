@@ -52,7 +52,7 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	syntaxErrorPrototype.SetOwn("name", vm.NewString("SyntaxError"))
 	
 	// SyntaxError constructor function
-	syntaxErrorConstructor := vm.NewNativeFunction(-1, true, "SyntaxError", func(args []vm.Value) vm.Value {
+	syntaxErrorConstructor := vm.NewNativeFunction(-1, true, "SyntaxError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -71,7 +71,7 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		stackTrace := vmInstance.CaptureStackTrace()
 		syntaxErrorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
 		
-		return syntaxErrorInstance
+		return syntaxErrorInstance, nil
 	})
 
 	// Make it a proper constructor with prototype property

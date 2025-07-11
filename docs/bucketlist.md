@@ -38,7 +38,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] **Enhanced Parser Robustness** - improved function declaration parsing and error recovery
 - [x] **Module System (`import`/`export`)** - **Complete Implementation!**
   - [x] **All Import Patterns**: Default, named, namespace, and mixed imports
-  - [x] **All Export Patterns**: Direct exports, re-exports, and default exports  
+  - [x] **All Export Patterns**: Direct exports, re-exports, and default exports
   - [x] **Runtime Module Execution**: OpEvalModule and OpGetModuleExport bytecode
   - [x] **Cross-Module Type Checking**: Full TypeScript-compliant module type analysis
   - [x] **Module Resolution**: Configurable base directory without CWD dependency
@@ -189,7 +189,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] **19+ comprehensive tests** covering all scenarios, edge cases, and error handling
 - [ ] `yield` / `yield*` (Generators)
 - [ ] `await` (Async/Await) - **Blocked by event loop implementation**
-- [ ] **Symbols** (`Symbol.iterator`, `Symbol.for`, etc.)
+- [x] **Symbols** (`Symbol.iterator`, `Symbol.for`, etc.)
 - [ ] **Iterators** (`Symbol.iterator` protocol, `next()` method)
 - [x] Destructuring Assignment - **Complete Implementation!**
   - [x] **Array Destructuring** - Full support with rest elements
@@ -393,15 +393,15 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `Date` Object (partial)
   - [x] `Date.now()` static method
   - [x] Date constructor (basic implementation)
-  - [ ] Date prototype methods (`.getTime`, `.getFullYear`, etc.) - planned
-  - [ ] Full constructor support (`new Date()`)
+  - [x] Date prototype methods (`.getTime`, `.getFullYear`, etc.) - planned
+  - [x] Full constructor support (`new Date()`)
 - [x] `JSON` Object
   - [x] `JSON.parse()` - converts JSON strings to JavaScript objects/arrays/primitives
   - [x] `JSON.stringify()` - converts JavaScript values to JSON strings
   - [x] **Complete JSON serialization/deserialization support**
   - [x] Proper type conversion between VM values and JSON representation
   - [x] Handles all standard JavaScript types (objects, arrays, primitives)
-- [ ] `Map` / `Set` collections
+- [x] `Map` / `Set` collections
 - [ ] `WeakMap` / `WeakSet` collections
 - [ ] Typed Arrays (`Int8Array`, `Uint8Array`, `Float32Array`, etc.)
 - [ ] `Promise` (basic object exists, no async/await integration)

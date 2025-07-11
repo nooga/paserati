@@ -203,12 +203,14 @@ func (vm *VM) CallFunctionFromBuiltin(fn Value, thisValue Value, args []Value) (
 		// For native functions, call directly
 		nativeFunc := AsNativeFunction(fn)
 		// For method calls on native functions, we could prepend 'this' to args here if needed
-		return nativeFunc.Fn(args), nil
+		result, err := nativeFunc.Fn(args)
+		return result, err
 
 	case TypeNativeFunctionWithProps:
 		// Handle native function with properties
 		nativeFuncWithProps := fn.AsNativeFunctionWithProps()
-		return nativeFuncWithProps.Fn(args), nil
+		result, err := nativeFuncWithProps.Fn(args)
+		return result, err
 
 	case TypeClosure, TypeFunction:
 		// For user-defined functions, we create a re-entrant execution context

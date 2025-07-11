@@ -523,7 +523,7 @@ func TestFunctionValue(t *testing.T) {
 
 func TestNativeFunctionValue(t *testing.T) {
 	var called bool
-	dummyNativeFn := func(args []Value) Value { called = true; return Null }
+	dummyNativeFn := func(args []Value) (Value, error) { called = true; return Null, nil }
 	v := NewNativeFunction(1, true, "nativeLog", dummyNativeFn) // Use constructor
 
 	if v.Type() != TypeNativeFunction {
@@ -560,7 +560,7 @@ func TestNativeFunctionValue(t *testing.T) {
 	}
 
 	// Check that calling the retrieved function works
-	result := nativeFnObj.Fn(nil)
+	result, _ := nativeFnObj.Fn(nil)
 	if !result.Is(Null) {
 		t.Errorf("Native function call result mismatch. Expected Null, got %v", result)
 	}

@@ -85,72 +85,72 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Set prototype methods
-	setProto.SetOwn("add", vm.NewNativeFunction(1, false, "add", func(args []vm.Value) vm.Value {
+	setProto.SetOwn("add", vm.NewNativeFunction(1, false, "add", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		
 		if thisSet.Type() != vm.TypeSet {
 			// TODO: Should throw TypeError
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		if len(args) < 1 {
-			return thisSet // Return the set for chaining
+			return thisSet, nil // Return the set for chaining
 		}
 		
 		setObj := thisSet.AsSet()
 		setObj.Add(args[0])
-		return thisSet // Return the set for chaining
+		return thisSet, nil // Return the set for chaining
 	}))
 
-	setProto.SetOwn("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) vm.Value {
+	setProto.SetOwn("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		
 		if thisSet.Type() != vm.TypeSet {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		setObj := thisSet.AsSet()
-		return vm.BooleanValue(setObj.Has(args[0]))
+		return vm.BooleanValue(setObj.Has(args[0])), nil
 	}))
 
-	setProto.SetOwn("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) vm.Value {
+	setProto.SetOwn("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		
 		if thisSet.Type() != vm.TypeSet {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		if len(args) < 1 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		
 		setObj := thisSet.AsSet()
-		return vm.BooleanValue(setObj.Delete(args[0]))
+		return vm.BooleanValue(setObj.Delete(args[0])), nil
 	}))
 
-	setProto.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) vm.Value {
+	setProto.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		
 		if thisSet.Type() != vm.TypeSet {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		setObj := thisSet.AsSet()
 		setObj.Clear()
-		return vm.Undefined
+		return vm.Undefined, nil
 	}))
 
 	// Set Set.prototype
 	vmInstance.SetPrototype = vm.NewValueFromPlainObject(setProto)
 
 	// Create Set constructor function
-	setConstructor := vm.NewNativeFunctionWithProps(0, false, "Set", func(args []vm.Value) vm.Value {
+	setConstructor := vm.NewNativeFunctionWithProps(0, false, "Set", func(args []vm.Value) (vm.Value, error) {
 		// Create new Set instance
-		return vm.NewSet()
+		return vm.NewSet(), nil
 	})
 
 	// Add prototype property

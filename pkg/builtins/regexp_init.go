@@ -57,28 +57,28 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	regexpProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add RegExp prototype methods
-	regexpProto.SetOwn("test", vm.NewNativeFunction(1, false, "test", func(args []vm.Value) vm.Value {
+	regexpProto.SetOwn("test", vm.NewNativeFunction(1, false, "test", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		regex := thisRegex.AsRegExpObject()
 		if len(args) == 0 {
-			return vm.BooleanValue(false)
+			return vm.BooleanValue(false), nil
 		}
 		str := args[0].ToString()
 		matched := regex.GetCompiledRegex().MatchString(str)
-		return vm.BooleanValue(matched)
+		return vm.BooleanValue(matched), nil
 	}))
 
-	regexpProto.SetOwn("exec", vm.NewNativeFunction(1, false, "exec", func(args []vm.Value) vm.Value {
+	regexpProto.SetOwn("exec", vm.NewNativeFunction(1, false, "exec", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		regex := thisRegex.AsRegExpObject()
 		if len(args) == 0 {
-			return vm.Null
+			return vm.Null, nil
 		}
 		str := args[0].ToString()
 		compiledRegex := regex.GetCompiledRegex()
@@ -101,7 +101,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if regex.IsGlobal() {
 				regex.SetLastIndex(0) // Reset lastIndex on failure
 			}
-			return vm.Null
+			return vm.Null, nil
 		}
 
 		// Create result array with matches
@@ -110,26 +110,26 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		for _, match := range matches {
 			arr.Append(vm.NewString(match))
 		}
-		return result
+		return result, nil
 	}))
 
-	regexpProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) vm.Value {
+	regexpProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		regex := thisRegex.AsRegExpObject()
 		result := "/" + regex.GetSource() + "/" + regex.GetFlags()
-		return vm.NewString(result)
+		return vm.NewString(result), nil
 	}))
 
 	// Create RegExp constructor function with properties
-	regexpCtor := vm.NewNativeFunctionWithProps(-1, true, "RegExp", func(args []vm.Value) vm.Value {
+	regexpCtor := vm.NewNativeFunctionWithProps(-1, true, "RegExp", func(args []vm.Value) (vm.Value, error) {
 		// Constructor logic
 		if len(args) == 0 {
 			// new RegExp() - empty pattern
 			result, _ := vm.NewRegExp("(?:)", "")
-			return result
+			return result, nil
 		}
 
 		if len(args) == 1 {
@@ -138,12 +138,12 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Copy constructor: new RegExp(regexObj)
 				existing := arg.AsRegExpObject()
 				result, _ := vm.NewRegExp(existing.GetSource(), existing.GetFlags())
-				return result
+				return result, nil
 			} else {
 				// new RegExp(pattern) - convert to string and use empty flags
 				pattern := arg.ToString()
 				result, _ := vm.NewRegExp(pattern, "")
-				return result
+				return result, nil
 			}
 		}
 
@@ -151,7 +151,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		pattern := args[0].ToString()
 		flags := args[1].ToString()
 		result, _ := vm.NewRegExp(pattern, flags)
-		return result
+		return result, nil
 	})
 
 	// Set up prototype relationship

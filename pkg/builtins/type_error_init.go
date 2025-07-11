@@ -52,7 +52,7 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	typeErrorPrototype.SetOwn("name", vm.NewString("TypeError"))
 	
 	// TypeError constructor function
-	typeErrorConstructor := vm.NewNativeFunction(-1, true, "TypeError", func(args []vm.Value) vm.Value {
+	typeErrorConstructor := vm.NewNativeFunction(-1, true, "TypeError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -71,7 +71,7 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		stackTrace := vmInstance.CaptureStackTrace()
 		typeErrorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
 		
-		return typeErrorInstance
+		return typeErrorInstance, nil
 	})
 
 	// Make it a proper constructor with prototype property

@@ -1,6 +1,9 @@
 package vm
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+	"unsafe"
+)
 
 // handleCallableProperty handles property access on functions and closures
 // This consolidates the duplicate logic for these callable types
@@ -84,6 +87,26 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		if vm.SymbolPrototype.Type() == TypeObject {
 			prototype = vm.SymbolPrototype.AsPlainObject()
 		}
+	case TypeTypedArray:
+		// Get the appropriate typed array prototype based on element type
+		ta := objVal.AsTypedArray()
+		if ta != nil {
+			switch ta.GetElementType() {
+			case TypedArrayUint8, TypedArrayUint8Clamped:
+				if vm.Uint8ArrayPrototype.Type() == TypeObject {
+					prototype = vm.Uint8ArrayPrototype.AsPlainObject()
+				}
+			case TypedArrayInt32:
+				if vm.Int32ArrayPrototype.Type() == TypeObject {
+					prototype = vm.Int32ArrayPrototype.AsPlainObject()
+				}
+			case TypedArrayFloat32:
+				if vm.Float32ArrayPrototype.Type() == TypeObject {
+					prototype = vm.Float32ArrayPrototype.AsPlainObject()
+				}
+			// Add more cases as we implement more TypedArray types
+			}
+		}
 	default:
 		return Undefined, false
 	}
@@ -145,6 +168,36 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 				return BooleanValue(regexObj.IsDotAll()), true
 			case "lastIndex":
 				return Number(float64(regexObj.GetLastIndex())), true
+			}
+		}
+	}
+
+	// Handle ArrayBuffer properties
+	if objVal.Type() == TypeArrayBuffer {
+		buffer := objVal.AsArrayBuffer()
+		if buffer != nil {
+			switch propName {
+			case "byteLength":
+				return Number(float64(len(buffer.GetData()))), true
+			}
+		}
+	}
+
+	// Handle TypedArray properties
+	if objVal.Type() == TypeTypedArray {
+		ta := objVal.AsTypedArray()
+		if ta != nil {
+			switch propName {
+			case "length":
+				return Number(float64(ta.GetLength())), true
+			case "byteLength":
+				return Number(float64(ta.GetByteLength())), true
+			case "byteOffset":
+				return Number(float64(ta.GetByteOffset())), true
+			case "buffer":
+				return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(ta.GetBuffer())}, true
+			case "BYTES_PER_ELEMENT":
+				return Number(float64(ta.GetBytesPerElement())), true
 			}
 		}
 	}

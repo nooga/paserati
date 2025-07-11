@@ -37,29 +37,29 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	jsonObj := vm.NewObject(vm.Null).AsPlainObject()
 
 	// Add parse method
-	jsonObj.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) vm.Value {
+	jsonObj.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			// TODO: Throw SyntaxError  
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		text := args[0].ToString()
-		return parseJSONToValue(text)
+		return parseJSONToValue(text), nil
 	}))
 
 	// Add stringify method (supports optional replacer and space parameters)
-	jsonObj.SetOwn("stringify", vm.NewNativeFunction(1, true, "stringify", func(args []vm.Value) vm.Value {
+	jsonObj.SetOwn("stringify", vm.NewNativeFunction(1, true, "stringify", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
 		
 		value := args[0]
 		// TODO: Handle replacer (args[1]) and space (args[2]) parameters
 		result := stringifyValueToJSON(value)
 		if result == "" {
-			return vm.Undefined
+			return vm.Undefined, nil
 		}
-		return vm.NewString(result)
+		return vm.NewString(result), nil
 	}))
 
 	// Register JSON object as global
