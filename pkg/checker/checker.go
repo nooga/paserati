@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"math/big"
+	"os"
 	"paserati/pkg/errors" // Added import
 	"paserati/pkg/modules" // Added for real ModuleLoader integration
 	"paserati/pkg/source" // Added import for source context
@@ -16,7 +17,7 @@ const checkerDebug = false
 
 func debugPrintf(format string, args ...interface{}) {
 	if checkerDebug {
-		fmt.Printf(format, args...)
+		fmt.Fprintf(os.Stderr, "[DEBUG] "+format, args...)
 	}
 }
 
@@ -772,24 +773,17 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 
 				if !assignable {
-					// Use widened types for error messages to match TypeScript format
-					widenedSourceType := types.GetWidenedType(computedInitializerType)
-					sourceTypeStr := widenedSourceType.String()
-					targetTypeStr := variableType.String()
-					
-					// For enum types, use a simplified representation
-					if enumType, ok := variableType.(*types.UnionType); ok {
-						// Check if this is an enum union type
-						if len(enumType.Types) > 0 {
-							if types.IsEnumMemberType(enumType.Types[0]) {
-								if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
-									targetTypeStr = memberType.EnumName
-								}
-							}
-						}
+					// Check if this is an enum assignment to use appropriate error format
+					if c.isEnumType(variableType) {
+						// For enum assignments, use widened source type and no variable name
+						sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, variableType)
+						c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+					} else {
+						// For regular variable assignments, use literal types and include variable name
+						sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, variableType)
+						variableName := varName.Value
+						c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
 					}
-					
-					c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
 				}
 
 				// --- FIX: Refine variable type in environment if no annotation ---
@@ -843,6 +837,9 @@ func (c *Checker) resolveForwardReferences() {
 	// Walk through all type aliases and resolve any TypeofType forward references
 	// We need to iterate through the environment to find type aliases
 	c.resolveTypeofForwardReferences(c.env)
+	
+	// After resolving type aliases, we need to update any variable types that reference resolved aliases
+	c.updateVariableTypesAfterAliasResolution(c.env)
 }
 
 // resolveTypeofForwardReferences recursively resolves typeof forward references in the environment
@@ -857,10 +854,137 @@ func (c *Checker) resolveTypeofForwardReferences(env *Environment) {
 
 // resolveTypeofInEnvironment resolves typeof types in the given environment
 func (c *Checker) resolveTypeofInEnvironment(env *Environment) {
-	// For a proper implementation, we'd need to add methods to Environment
-	// to iterate through type aliases and update them
-	// For now, this is a placeholder that should be implemented
-	debugPrintf("// [Checker resolveTypeofInEnvironment] Placeholder for typeof resolution\n")
+	debugPrintf("// [Checker resolveTypeofInEnvironment] Starting typeof resolution\n")
+	
+	// Get all type aliases from the environment
+	aliases := env.GetAllTypeAliases()
+	debugPrintf("// [Checker resolveTypeofInEnvironment] Found %d type aliases to check\n", len(aliases))
+	
+	// For each type alias, check if it contains TypeofType and resolve it
+	for name, aliasType := range aliases {
+		debugPrintf("// [Checker resolveTypeofInEnvironment] Checking alias '%s': %T\n", name, aliasType)
+		
+		// Recursively resolve any TypeofType instances in the alias
+		resolvedType := c.resolveTypeofInType(aliasType)
+		if resolvedType != aliasType {
+			debugPrintf("// [Checker resolveTypeofInEnvironment] Updated alias '%s' from %s to %s\n", 
+				name, aliasType.String(), resolvedType.String())
+			env.DefineTypeAlias(name, resolvedType)
+		}
+	}
+}
+
+// resolveTypeofInType recursively resolves TypeofType instances in a type
+func (c *Checker) resolveTypeofInType(t types.Type) types.Type {
+	if t == nil {
+		return nil
+	}
+	
+	switch typ := t.(type) {
+	case *types.TypeofType:
+		// Try to resolve the typeof type
+		return c.resolveTypeofTypeIfNeeded(typ)
+		
+	case *types.ConditionalType:
+		// Recursively resolve in conditional type components
+		resolvedCheckType := c.resolveTypeofInType(typ.CheckType)
+		resolvedExtendsType := c.resolveTypeofInType(typ.ExtendsType)
+		resolvedTrueType := c.resolveTypeofInType(typ.TrueType)
+		resolvedFalseType := c.resolveTypeofInType(typ.FalseType)
+		
+		// If any component changed, re-evaluate the conditional type
+		if resolvedCheckType != typ.CheckType || resolvedExtendsType != typ.ExtendsType ||
+		   resolvedTrueType != typ.TrueType || resolvedFalseType != typ.FalseType {
+			debugPrintf("// [resolveTypeofInType] Re-evaluating conditional type after typeof resolution\n")
+			// Re-evaluate the conditional type with resolved typeof types
+			return c.computeConditionalType(resolvedCheckType, resolvedExtendsType, resolvedTrueType, resolvedFalseType)
+		}
+		
+	case *types.ArrayType:
+		resolvedElementType := c.resolveTypeofInType(typ.ElementType)
+		if resolvedElementType != typ.ElementType {
+			return &types.ArrayType{ElementType: resolvedElementType}
+		}
+		
+	case *types.UnionType:
+		changed := false
+		resolvedTypes := make([]types.Type, len(typ.Types))
+		for i, memberType := range typ.Types {
+			resolved := c.resolveTypeofInType(memberType)
+			resolvedTypes[i] = resolved
+			if resolved != memberType {
+				changed = true
+			}
+		}
+		if changed {
+			return types.NewUnionType(resolvedTypes...)
+		}
+		
+	// Add more cases as needed for other composite types
+	}
+	
+	// Return the original type if no TypeofType was found
+	return t
+}
+
+// containsUnresolvedTypeofType checks if a type contains unresolved TypeofType instances
+func (c *Checker) containsUnresolvedTypeofType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	
+	switch typ := t.(type) {
+	case *types.TypeofType:
+		// Check if this typeof can be resolved right now
+		resolvedType := c.resolveTypeofTypeIfNeeded(typ)
+		// If it's still a TypeofType, it's unresolved
+		_, stillUnresolved := resolvedType.(*types.TypeofType)
+		return stillUnresolved
+		
+	case *types.ConditionalType:
+		// Check recursively in conditional type components
+		return c.containsUnresolvedTypeofType(typ.CheckType) ||
+		       c.containsUnresolvedTypeofType(typ.ExtendsType) ||
+		       c.containsUnresolvedTypeofType(typ.TrueType) ||
+		       c.containsUnresolvedTypeofType(typ.FalseType)
+		
+	case *types.ArrayType:
+		return c.containsUnresolvedTypeofType(typ.ElementType)
+		
+	case *types.UnionType:
+		for _, memberType := range typ.Types {
+			if c.containsUnresolvedTypeofType(memberType) {
+				return true
+			}
+		}
+		
+	// Add more cases as needed for other composite types
+	}
+	
+	return false
+}
+
+// updateVariableTypesAfterAliasResolution updates variable types that reference resolved type aliases
+func (c *Checker) updateVariableTypesAfterAliasResolution(env *Environment) {
+	debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Starting variable type updates\n")
+	
+	// Get all variables from the environment
+	variables := env.GetAllVariables()
+	debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Found %d variables to check\n", len(variables))
+	
+	// For each variable, check if its type needs to be updated
+	for name, symbolInfo := range variables {
+		debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Checking variable '%s': %T\n", name, symbolInfo.Type)
+		
+		// Check if the variable's type contains unresolved conditional types or type aliases
+		updatedType := c.resolveTypeofInType(symbolInfo.Type)
+		if updatedType != symbolInfo.Type {
+			debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Updated variable '%s' from %s to %s\n", 
+				name, symbolInfo.Type.String(), updatedType.String())
+			// Update the variable's type in the environment
+			env.Update(name, updatedType)
+		}
+	}
 }
 
 // visit is the main dispatch method for AST traversal (Visitor pattern lite).
@@ -868,6 +992,7 @@ func (c *Checker) visit(node parser.Node) {
 	if node == nil {
 		return
 	}
+	debugPrintf("// [DEBUG TEST] This is a debug test message\n")
 	debugPrintf("// [Checker Visit Enter] Node: %T, Env: %p\n", node, c.env)
 	//fmt.Printf("DEBUG: Visiting node type: %T\n", node)
 
@@ -1030,24 +1155,17 @@ func (c *Checker) visit(node parser.Node) {
 				// --- END SPECIAL CASE ---
 
 				if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
-					// Use widened types for error messages to match TypeScript format
-					widenedSourceType := types.GetWidenedType(computedInitializerType)
-					sourceTypeStr := widenedSourceType.String()
-					targetTypeStr := finalVariableType.String()
-					
-					// For enum types, use a simplified representation
-					if enumType, ok := finalVariableType.(*types.UnionType); ok {
-						// Check if this is an enum union type
-						if len(enumType.Types) > 0 {
-							if types.IsEnumMemberType(enumType.Types[0]) {
-								if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
-									targetTypeStr = memberType.EnumName
-								}
-							}
-						}
+					// Check if this is an enum assignment to use appropriate error format
+					if c.isEnumType(finalVariableType) {
+						// For enum assignments, use widened source type and no variable name
+						sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
+						c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+					} else {
+						// For regular variable assignments, use literal types and include variable name
+						sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
+						variableName := nameValueStr
+						c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
 					}
-					
-					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
 				}
 			} // else: No initializer, declaredType is fine
 		} else {
@@ -1285,24 +1403,17 @@ func (c *Checker) visit(node parser.Node) {
 				}
 
 				if !assignable && !isEmptyArrayAssignment {
-					// Use widened types for error messages to match TypeScript format
-					widenedSourceType := types.GetWidenedType(computedInitializerType)
-					sourceTypeStr := widenedSourceType.String()
-					targetTypeStr := finalVariableType.String()
-					
-					// For enum types, use a simplified representation
-					if enumType, ok := finalVariableType.(*types.UnionType); ok {
-						// Check if this is an enum union type
-						if len(enumType.Types) > 0 {
-							if types.IsEnumMemberType(enumType.Types[0]) {
-								if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
-									targetTypeStr = memberType.EnumName
-								}
-							}
-						}
+					// Check if this is an enum assignment to use appropriate error format
+					if c.isEnumType(finalVariableType) {
+						// For enum assignments, use widened source type and no variable name
+						sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
+						c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+					} else {
+						// For regular variable assignments, use literal types and include variable name
+						sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
+						variableName := nameValueStr
+						c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
 					}
-					
-					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
 				}
 			}
 		} else {
@@ -3364,4 +3475,88 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 	default:
 		debugPrintf("// [Checker] Exported unknown declaration type: %T\n", decl)
 	}
+}
+
+// getAssignmentErrorTypes returns appropriate type strings for assignment error messages
+func (c *Checker) getAssignmentErrorTypes(sourceType, targetType types.Type) (string, string) {
+	var sourceTypeStr, targetTypeStr string
+	
+	// For most cases, use literal types for source to match TypeScript behavior
+	sourceTypeStr = sourceType.String()
+	
+	// For target type, handle enum types specially
+	if enumType, ok := targetType.(*types.UnionType); ok {
+		// Check if this is an enum union type
+		if len(enumType.Types) > 0 {
+			if types.IsEnumMemberType(enumType.Types[0]) {
+				if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
+					targetTypeStr = memberType.EnumName
+				} else {
+					targetTypeStr = targetType.String()
+				}
+			} else {
+				targetTypeStr = targetType.String()
+			}
+		} else {
+			targetTypeStr = targetType.String()
+		}
+	} else {
+		targetTypeStr = targetType.String()
+	}
+	
+	return sourceTypeStr, targetTypeStr
+}
+
+// getEnumAssignmentErrorTypes returns appropriate type strings for enum assignment error messages
+func (c *Checker) getEnumAssignmentErrorTypes(sourceType, targetType types.Type) (string, string) {
+	var sourceTypeStr, targetTypeStr string
+	
+	// For enum assignments, use widened source type for better error messages
+	if literalType, ok := sourceType.(*types.LiteralType); ok {
+		switch literalType.Value.Type() {
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			sourceTypeStr = "number"
+		case vm.TypeString:
+			sourceTypeStr = "string" 
+		case vm.TypeBoolean:
+			sourceTypeStr = "boolean"
+		default:
+			sourceTypeStr = sourceType.String()
+		}
+	} else {
+		sourceTypeStr = sourceType.String()
+	}
+	
+	// For enum target types, use the enum name or full string representation
+	if enumType, ok := targetType.(*types.UnionType); ok {
+		// Check if this is an enum union type
+		if len(enumType.Types) > 0 {
+			if types.IsEnumMemberType(enumType.Types[0]) {
+				if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
+					targetTypeStr = memberType.EnumName
+				} else {
+					targetTypeStr = targetType.String()
+				}
+			} else {
+				targetTypeStr = targetType.String()
+			}
+		} else {
+			targetTypeStr = targetType.String()
+		}
+	} else {
+		targetTypeStr = targetType.String()
+	}
+	
+	return sourceTypeStr, targetTypeStr
+}
+
+// isEnumType checks if a type is an enum type
+func (c *Checker) isEnumType(t types.Type) bool {
+	if enumType, ok := t.(*types.UnionType); ok {
+		if len(enumType.Types) > 0 {
+			return types.IsEnumMemberType(enumType.Types[0])
+		}
+	}
+	// Also check for specific enum member literal types
+	return types.IsEnumMemberType(t)
 }

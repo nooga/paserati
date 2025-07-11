@@ -270,6 +270,34 @@ func (e *Environment) ResolveType(name string) (types.Type, bool) {
 	return nil, false
 }
 
+// GetAllTypeAliases returns all type aliases in the current environment (not including outer scopes)
+func (e *Environment) GetAllTypeAliases() map[string]types.Type {
+	if e.typeAliases == nil {
+		return make(map[string]types.Type)
+	}
+	
+	// Create a copy to avoid external modifications
+	result := make(map[string]types.Type)
+	for name, typ := range e.typeAliases {
+		result[name] = typ
+	}
+	return result
+}
+
+// GetAllVariables returns all variables in the current environment (not including outer scopes)
+func (e *Environment) GetAllVariables() map[string]SymbolInfo {
+	if e.symbols == nil {
+		return make(map[string]SymbolInfo)
+	}
+	
+	// Create a copy to avoid external modifications
+	result := make(map[string]SymbolInfo)
+	for name, symbolInfo := range e.symbols {
+		result[name] = symbolInfo
+	}
+	return result
+}
+
 // --- NEW: Function Overload Support ---
 
 // AddOverloadSignature adds a function signature to the pending overloads for the given function name.

@@ -34,7 +34,7 @@ function test() {
     let one: OneParam = ["Alice"];
     let multi: MultiParams = ["Bob", 30, true];
     let optional: OptionalParams = ["Charlie", 25]; // Include optional parameter
-    let rest: RestParams = ["Dave", [100, 95, 87]]; // Rest params as array
+    let rest: RestParams = ["Dave", 100, 95, 87]; // Rest params spread out
     
     // Test with non-constructor types (should be never)
     type NotConstructorParams = ConstructorParameters<string>; // Should be never

@@ -214,6 +214,20 @@ func IsAssignable(source, target Type) bool {
 	sourceTuple, sourceIsTuple := source.(*TupleType)
 	targetTuple, targetIsTuple := target.(*TupleType)
 
+	// Handle tuple to array assignability: [string, number] should be assignable to any[]
+	if sourceIsTuple && targetIsArray {
+		if targetArray.ElementType == nil {
+			return false
+		}
+		// All tuple elements must be assignable to the array element type
+		for _, tupleElementType := range sourceTuple.ElementTypes {
+			if !IsAssignable(tupleElementType, targetArray.ElementType) {
+				return false
+			}
+		}
+		return true
+	}
+
 	if sourceIsTuple && targetIsTuple {
 		sourceLen := len(sourceTuple.ElementTypes)
 		targetLen := len(targetTuple.ElementTypes)

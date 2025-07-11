@@ -52,10 +52,29 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 	if tupleType, isTuple := expectedType.(*types.TupleType); isTuple {
 		debugPrintf("// [Checker ArrayLitContext] Expected tuple with %d element types\n", len(tupleType.ElementTypes))
 
-		// For tuple context, we need the array literal to have exactly the right number of elements
-		if len(node.Elements) != len(tupleType.ElementTypes) {
-			// If length doesn't match, fall back to regular array literal checking
-			debugPrintf("// [Checker ArrayLitContext] Element count mismatch: expected %d, got %d. Using regular array checking.\n", len(tupleType.ElementTypes), len(node.Elements))
+		// For tuple context, check if we have enough elements
+		// Count required (non-optional) elements
+		minRequired := 0
+		for i := 0; i < len(tupleType.ElementTypes); i++ {
+			if tupleType.OptionalElements == nil || i >= len(tupleType.OptionalElements) || !tupleType.OptionalElements[i] {
+				minRequired = i + 1
+			}
+		}
+		
+		hasRestElement := tupleType.RestElementType != nil
+		maxAllowed := len(tupleType.ElementTypes)
+		if hasRestElement {
+			maxAllowed = -1 // No upper limit with rest element
+		}
+		
+		// Check element count
+		if len(node.Elements) < minRequired {
+			debugPrintf("// [Checker ArrayLitContext] Not enough elements: expected at least %d, got %d. Using regular array checking.\n", minRequired, len(node.Elements))
+			c.checkArrayLiteral(node)
+			return
+		}
+		if maxAllowed >= 0 && len(node.Elements) > maxAllowed {
+			debugPrintf("// [Checker ArrayLitContext] Too many elements: expected at most %d, got %d. Using regular array checking.\n", maxAllowed, len(node.Elements))
 			c.checkArrayLiteral(node)
 			return
 		}
@@ -63,7 +82,25 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 		// Check each element against the corresponding tuple element type
 		elementTypesMatch := true
 		for i, elemNode := range node.Elements {
-			expectedElemType := tupleType.ElementTypes[i]
+			var expectedElemType types.Type
+			
+			if i < len(tupleType.ElementTypes) {
+				// Fixed element
+				expectedElemType = tupleType.ElementTypes[i]
+			} else if hasRestElement {
+				// Rest element - for [...number[]], each rest element should be number
+				if arrayType, ok := tupleType.RestElementType.(*types.ArrayType); ok {
+					expectedElemType = arrayType.ElementType
+				} else {
+					// Fallback if rest element is not an array type
+					expectedElemType = tupleType.RestElementType
+				}
+			} else {
+				// Should not happen - we checked count above
+				elementTypesMatch = false
+				break
+			}
+			
 			// Use contextual typing for each element
 			c.visitWithContext(elemNode, &ContextualType{
 				ExpectedType: expectedElemType,

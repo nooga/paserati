@@ -22,7 +22,7 @@ function test() {
     let one: OneParamType = ["hello"];
     let two: TwoParamsType = ["hello", 42];
     let opt: OptionalParamType = ["hello", 42]; // Include optional parameter
-    let rest: RestParamType = ["hello", [1, 2, 3]]; // Rest params as array in tuple
+    let rest: RestParamType = ["hello", 1, 2, 3]; // Rest params spread out
     
     // Test with non-function types (should be never)
     type NotFunctionParams = Parameters<string>; // Should be never

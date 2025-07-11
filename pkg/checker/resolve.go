@@ -851,6 +851,9 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 // instantiateGenericType creates a concrete type by substituting type arguments
 // into a GenericType's body type
 func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArgs []types.Type, typeArgNodes []parser.Expression) types.Type {
+	debugPrintf("// [InstantiateGeneric] === INSTANTIATING GENERIC TYPE ===\n")
+	debugPrintf("// [InstantiateGeneric] Generic name: %s\n", genericType.Name)
+	debugPrintf("// [InstantiateGeneric] Body type: %s (Go type: %T)\n", genericType.Body.String(), genericType.Body)
 	// Handle default type parameters when fewer arguments are provided
 	finalTypeArgs := make([]types.Type, len(genericType.TypeParameters))
 	
@@ -1098,10 +1101,13 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		newTrueType := c.substituteTypesPreservingInfer(typ.TrueType, substitution)
 
 		// Try to compute the result with substituted types
+		debugPrintf("// [SubstituteTypes] About to compute conditional type...\n")
 		resolvedType := c.computeConditionalType(newCheckType, newExtendsType, newTrueType, newFalseType)
 		if resolvedType != nil {
+			debugPrintf("// [SubstituteTypes] Conditional type resolved to: %s\n", resolvedType.String())
 			return resolvedType
 		}
+		debugPrintf("// [SubstituteTypes] Conditional type computation returned nil, keeping conditional type\n")
 
 		// Return the conditional type with substituted parts
 		return &types.ConditionalType{
@@ -1442,7 +1448,30 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 // computeConditionalType computes the result of a conditional type like T extends U ? X : Y
 // Enhanced to handle infer types for type inference
 func (c *Checker) computeConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
-	debugPrintf("// [ConditionalType] Checking if %s extends %s\n", checkType.String(), extendsType.String())
+	debugPrintf("// [ConditionalType] === STARTING CONDITIONAL TYPE COMPUTATION ===\n")
+	debugPrintf("// [ConditionalType] CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
+	debugPrintf("// [ConditionalType] ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
+	debugPrintf("// [ConditionalType] TrueType: %s (Go type: %T)\n", trueType.String(), trueType)
+	debugPrintf("// [ConditionalType] FalseType: %s (Go type: %T)\n", falseType.String(), falseType)
+
+	// Check if we have unresolved TypeofType that we should defer
+	if c.containsUnresolvedTypeofType(checkType) || c.containsUnresolvedTypeofType(extendsType) {
+		debugPrintf("// [ConditionalType] Contains unresolved TypeofType, deferring evaluation\n")
+		// Return the conditional type as-is to be resolved later
+		return &types.ConditionalType{
+			CheckType:   checkType,
+			ExtendsType: extendsType,
+			TrueType:    trueType,
+			FalseType:   falseType,
+		}
+	}
+
+	// Resolve typeof forward references before processing
+	checkType = c.resolveTypeofTypeIfNeeded(checkType)
+	extendsType = c.resolveTypeofTypeIfNeeded(extendsType)
+	
+	debugPrintf("// [ConditionalType] After resolving typeof: CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
+	debugPrintf("// [ConditionalType] After resolving typeof: ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
 
 	// Check if the extends type contains infer types that we need to match
 	inferences := make(map[string]types.Type)
@@ -1753,6 +1782,7 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 
 // tryInferTypes attempts to match checkType against extendsType and capture infer types
 func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences map[string]types.Type) bool {
+	debugPrintf("// [TryInfer] Trying to infer from %s to %s\n", checkType.String(), extendsType.String())
 	switch et := extendsType.(type) {
 	case *types.InferType:
 		// This is an infer type - capture the checkType
@@ -1767,24 +1797,44 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		
 	case *types.ObjectType:
 		// Handle function type inference like (...args: any[]) => infer R
+		debugPrintf("// [TryInfer] Both are ObjectType\n")
 		if ct, ok := checkType.(*types.ObjectType); ok {
+			debugPrintf("// [TryInfer] Check has %d call sigs, %d construct sigs\n", len(ct.CallSignatures), len(ct.ConstructSignatures))
+			debugPrintf("// [TryInfer] Extends has %d call sigs, %d construct sigs\n", len(et.CallSignatures), len(et.ConstructSignatures))
 			// Try call signatures first
 			if len(ct.CallSignatures) > 0 && len(et.CallSignatures) > 0 {
 				// Match function signature structure (use first call signature)
+				debugPrintf("// [TryInfer] Trying call signature inference\n")
 				return c.tryInferFromFunctionTypes(ct.CallSignatures[0], et.CallSignatures[0], inferences)
 			}
 			// Try constructor signatures for ConstructorParameters<T> and InstanceType<T>
 			if len(ct.ConstructSignatures) > 0 && len(et.ConstructSignatures) > 0 {
 				// Match constructor signature structure (use first construct signature)
+				debugPrintf("// [TryInfer] Trying constructor signature inference\n")
 				return c.tryInferFromFunctionTypes(ct.ConstructSignatures[0], et.ConstructSignatures[0], inferences)
 			}
 		}
+		debugPrintf("// [TryInfer] ObjectType inference failed\n")
 		return false
 		
 	case *types.ArrayType:
 		// Handle array type inference like (infer U)[]
 		if ct, ok := checkType.(*types.ArrayType); ok {
 			return c.tryInferTypes(ct.ElementType, et.ElementType, inferences)
+		}
+		// Handle tuple to array inference like [string] to any[]
+		if ct, ok := checkType.(*types.TupleType); ok {
+			debugPrintf("// [TryInfer] Tuple to array: checking if all tuple elements match array element type\n")
+			// All tuple elements must be assignable to the array element type
+			for i, tupleElementType := range ct.ElementTypes {
+				debugPrintf("// [TryInfer] Checking tuple element %d: %s -> %s\n", i, tupleElementType.String(), et.ElementType.String())
+				if !c.tryInferTypes(tupleElementType, et.ElementType, inferences) {
+					debugPrintf("// [TryInfer] Tuple element %d failed inference\n", i)
+					return false
+				}
+			}
+			debugPrintf("// [TryInfer] All tuple elements matched array element type\n")
+			return true
 		}
 		return false
 		
@@ -1796,46 +1846,96 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 
 // tryInferFromFunctionTypes handles function type inference
 func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signature, inferences map[string]types.Type) bool {
-	// Try to infer from return type
-	if !c.tryInferTypes(checkSig.ReturnType, extendsSig.ReturnType, inferences) {
+	debugPrintf("// [TryInferFunc] === Function inference ===\n")
+	
+	// Add nil checks to prevent panic
+	if checkSig == nil || extendsSig == nil {
+		debugPrintf("// [TryInferFunc] One of the signatures is nil\n")
 		return false
 	}
 	
+	// Check for nil return types
+	if checkSig.ReturnType == nil {
+		debugPrintf("// [TryInferFunc] Check return type is nil\n")
+		return false
+	}
+	if extendsSig.ReturnType == nil {
+		debugPrintf("// [TryInferFunc] Extends return type is nil\n")
+		return false
+	}
+	
+	debugPrintf("// [TryInferFunc] Check return: %s\n", checkSig.ReturnType.String())
+	debugPrintf("// [TryInferFunc] Extends return: %s\n", extendsSig.ReturnType.String())
+	// Try to infer from return type
+	if !c.tryInferTypes(checkSig.ReturnType, extendsSig.ReturnType, inferences) {
+		debugPrintf("// [TryInferFunc] Return type inference failed\n")
+		return false
+	}
+	debugPrintf("// [TryInferFunc] Return type inference succeeded\n")
+	
 	// Try to infer from parameter types
+	debugPrintf("// [TryInferFunc] Check params: %d, Extends params: %d\n", len(checkSig.ParameterTypes), len(extendsSig.ParameterTypes))
 	minParams := len(checkSig.ParameterTypes)
 	if len(extendsSig.ParameterTypes) < minParams {
 		minParams = len(extendsSig.ParameterTypes)
 	}
 	
 	for i := 0; i < minParams; i++ {
+		// Add nil checks for parameter types
+		if checkSig.ParameterTypes[i] == nil || extendsSig.ParameterTypes[i] == nil {
+			debugPrintf("// [TryInferFunc] Parameter %d type is nil\n", i)
+			return false
+		}
+		debugPrintf("// [TryInferFunc] Inferring param %d: %s -> %s\n", i, checkSig.ParameterTypes[i].String(), extendsSig.ParameterTypes[i].String())
 		if !c.tryInferTypes(checkSig.ParameterTypes[i], extendsSig.ParameterTypes[i], inferences) {
+			debugPrintf("// [TryInferFunc] Parameter %d inference failed\n", i)
 			return false
 		}
 	}
+	debugPrintf("// [TryInferFunc] All parameters inferred successfully\n")
 	
 	// NEW: Handle rest parameter inference
 	// This is crucial for Parameters<T> utility type
 	if extendsSig.RestParameterType != nil {
+		debugPrintf("// [TryInferFunc] Rest parameter inference needed. Extends rest type: %s\n", extendsSig.RestParameterType.String())
 		// For Parameters<T>, we want to infer the parameter types as a tuple
 		// The extends pattern is (...args: infer P) => any where P should be the parameter tuple
 		
 		// Create a tuple from ALL function parameters (both regular and rest)
 		var allParamTypes []types.Type
+		var optionalElements []bool
+		var restElementType types.Type
 		
 		// Add all regular parameters first
 		allParamTypes = append(allParamTypes, checkSig.ParameterTypes...)
 		
-		// If there's a rest parameter, we need to handle it specially
+		// Mark optional parameters
+		if checkSig.OptionalParams != nil {
+			// Extend optionalElements to match the length of allParamTypes
+			optionalElements = make([]bool, len(allParamTypes))
+			copy(optionalElements, checkSig.OptionalParams)
+		} else {
+			optionalElements = make([]bool, len(allParamTypes))
+		}
+		
+		// If there's a rest parameter, handle it as a rest element type
 		if checkSig.RestParameterType != nil {
-			// The function has a rest parameter like (...rest: number[])
-			// For Parameters<T>, this should be represented as [...number[]] in the tuple
-			// But for now, let's just include the rest array type
-			allParamTypes = append(allParamTypes, checkSig.RestParameterType)
+			// For Parameters<T>, the rest parameter type (e.g., number[]) 
+			// becomes the rest element type in the tuple
+			// So f(...rest: number[]) -> [...number[]]
+			restElementType = checkSig.RestParameterType
 		}
 		
 		// Create tuple type from all parameters
-		tupleType := &types.TupleType{ElementTypes: allParamTypes}
+		tupleType := &types.TupleType{
+			ElementTypes:     allParamTypes,
+			OptionalElements: optionalElements,
+			RestElementType:  restElementType,
+		}
+		debugPrintf("// [TryInferFunc] Created tuple: %s\n", tupleType.String())
+		
 		if !c.tryInferTypes(tupleType, extendsSig.RestParameterType, inferences) {
+			debugPrintf("// [TryInferFunc] Rest parameter inference failed\n")
 			return false
 		}
 	}
