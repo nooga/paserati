@@ -38,6 +38,15 @@ func (u *UtilityTypesInitializer) InitTypes(ctx *TypeContext) error {
 	// ReturnType<T> = T extends (...args: any[]) => infer R ? R : never
 	u.registerReturnType(ctx)
 	
+	// Parameters<T> = T extends (...args: infer P) => any ? P : never
+	u.registerParametersType(ctx)
+	
+	// ConstructorParameters<T> = T extends new (...args: infer P) => any ? P : never
+	u.registerConstructorParametersType(ctx)
+	
+	// InstanceType<T> = T extends new (...args: any[]) => infer R ? R : any
+	u.registerInstanceType(ctx)
+	
 	return nil
 }
 
@@ -256,4 +265,130 @@ func (u *UtilityTypesInitializer) registerOmitType(ctx *TypeContext) {
 	
 	// Register it in the environment
 	ctx.DefineTypeAlias("Omit", omitGeneric)
+}
+
+// registerParametersType registers Parameters<T> = T extends (...args: infer P) => any ? P : never
+func (u *UtilityTypesInitializer) registerParametersType(ctx *TypeContext) {
+	// Create type parameter T
+	tParam := types.NewTypeParameter("T", 0, nil)
+	
+	// Create infer P for parameters
+	inferP := &types.InferType{
+		TypeParameter: "P",
+	}
+	
+	// Create function call signature pattern: (...args: infer P) => any
+	callSignature := &types.Signature{
+		ParameterTypes:    []types.Type{}, // Will be empty, rest parameter handles variadic
+		ReturnType:        types.Any,
+		OptionalParams:    []bool{},
+		IsVariadic:        true,
+		RestParameterType: inferP, // This will be inferred as the parameter tuple
+	}
+	
+	// Create function object type with the call signature
+	functionType := &types.ObjectType{
+		Properties:         map[string]types.Type{},
+		OptionalProperties: map[string]bool{},
+		CallSignatures:     []*types.Signature{callSignature},
+	}
+	
+	// Create conditional type: T extends (...args: infer P) => any ? P : never
+	conditionalType := &types.ConditionalType{
+		CheckType:   &types.TypeParameterType{Parameter: tParam},
+		ExtendsType: functionType,
+		TrueType:    inferP, // Return the inferred parameters as tuple
+		FalseType:   types.Never,
+	}
+	
+	// Create the generic type
+	parametersGeneric := types.NewGenericType("Parameters", []*types.TypeParameter{tParam}, conditionalType)
+	
+	// Register it in the environment
+	ctx.DefineTypeAlias("Parameters", parametersGeneric)
+}
+
+// registerConstructorParametersType registers ConstructorParameters<T> = T extends new (...args: infer P) => any ? P : never
+func (u *UtilityTypesInitializer) registerConstructorParametersType(ctx *TypeContext) {
+	// Create type parameter T
+	tParam := types.NewTypeParameter("T", 0, nil)
+	
+	// Create infer P for constructor parameters
+	inferP := &types.InferType{
+		TypeParameter: "P",
+	}
+	
+	// Create constructor signature pattern: new (...args: infer P) => any
+	constructSignature := &types.Signature{
+		ParameterTypes:    []types.Type{}, // Will be empty, rest parameter handles variadic
+		ReturnType:        types.Any,
+		OptionalParams:    []bool{},
+		IsVariadic:        true,
+		RestParameterType: inferP, // This will be inferred as the parameter tuple
+	}
+	
+	// Create constructor object type with the construct signature
+	constructorType := &types.ObjectType{
+		Properties:         map[string]types.Type{},
+		OptionalProperties: map[string]bool{},
+		ConstructSignatures: []*types.Signature{constructSignature},
+	}
+	
+	// Create conditional type: T extends new (...args: infer P) => any ? P : never
+	conditionalType := &types.ConditionalType{
+		CheckType:   &types.TypeParameterType{Parameter: tParam},
+		ExtendsType: constructorType,
+		TrueType:    inferP, // Return the inferred parameters as tuple
+		FalseType:   types.Never,
+	}
+	
+	// Create the generic type
+	constructorParametersGeneric := types.NewGenericType("ConstructorParameters", []*types.TypeParameter{tParam}, conditionalType)
+	
+	// Register it in the environment
+	ctx.DefineTypeAlias("ConstructorParameters", constructorParametersGeneric)
+}
+
+// registerInstanceType registers InstanceType<T> = T extends new (...args: any[]) => infer R ? R : any
+func (u *UtilityTypesInitializer) registerInstanceType(ctx *TypeContext) {
+	// Create type parameter T
+	tParam := types.NewTypeParameter("T", 0, nil)
+	
+	// Create infer R for instance type
+	inferR := &types.InferType{
+		TypeParameter: "R",
+	}
+	
+	// Create any[] for constructor parameters
+	anyArray := &types.ArrayType{ElementType: types.Any}
+	
+	// Create constructor signature pattern: new (...args: any[]) => infer R
+	constructSignature := &types.Signature{
+		ParameterTypes:    []types.Type{}, // Will be empty, rest parameter handles variadic
+		ReturnType:        inferR, // This will be inferred as the instance type
+		OptionalParams:    []bool{},
+		IsVariadic:        true,
+		RestParameterType: anyArray, // Accept any parameters
+	}
+	
+	// Create constructor object type with the construct signature
+	constructorType := &types.ObjectType{
+		Properties:         map[string]types.Type{},
+		OptionalProperties: map[string]bool{},
+		ConstructSignatures: []*types.Signature{constructSignature},
+	}
+	
+	// Create conditional type: T extends new (...args: any[]) => infer R ? R : any
+	conditionalType := &types.ConditionalType{
+		CheckType:   &types.TypeParameterType{Parameter: tParam},
+		ExtendsType: constructorType,
+		TrueType:    inferR, // Return the inferred instance type
+		FalseType:   types.Any, // Fallback to any if not a constructor
+	}
+	
+	// Create the generic type
+	instanceTypeGeneric := types.NewGenericType("InstanceType", []*types.TypeParameter{tParam}, conditionalType)
+	
+	// Register it in the environment
+	ctx.DefineTypeAlias("InstanceType", instanceTypeGeneric)
 }

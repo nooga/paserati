@@ -1731,9 +1731,17 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		
 	case *types.ObjectType:
 		// Handle function type inference like (...args: any[]) => infer R
-		if ct, ok := checkType.(*types.ObjectType); ok && len(ct.CallSignatures) > 0 && len(et.CallSignatures) > 0 {
-			// Match function signature structure (use first call signature)
-			return c.tryInferFromFunctionTypes(ct.CallSignatures[0], et.CallSignatures[0], inferences)
+		if ct, ok := checkType.(*types.ObjectType); ok {
+			// Try call signatures first
+			if len(ct.CallSignatures) > 0 && len(et.CallSignatures) > 0 {
+				// Match function signature structure (use first call signature)
+				return c.tryInferFromFunctionTypes(ct.CallSignatures[0], et.CallSignatures[0], inferences)
+			}
+			// Try constructor signatures for ConstructorParameters<T> and InstanceType<T>
+			if len(ct.ConstructSignatures) > 0 && len(et.ConstructSignatures) > 0 {
+				// Match constructor signature structure (use first construct signature)
+				return c.tryInferFromFunctionTypes(ct.ConstructSignatures[0], et.ConstructSignatures[0], inferences)
+			}
 		}
 		return false
 		
@@ -1765,6 +1773,33 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 	
 	for i := 0; i < minParams; i++ {
 		if !c.tryInferTypes(checkSig.ParameterTypes[i], extendsSig.ParameterTypes[i], inferences) {
+			return false
+		}
+	}
+	
+	// NEW: Handle rest parameter inference
+	// This is crucial for Parameters<T> utility type
+	if extendsSig.RestParameterType != nil {
+		// For Parameters<T>, we want to infer the parameter types as a tuple
+		// The extends pattern is (...args: infer P) => any where P should be the parameter tuple
+		
+		// Create a tuple from ALL function parameters (both regular and rest)
+		var allParamTypes []types.Type
+		
+		// Add all regular parameters first
+		allParamTypes = append(allParamTypes, checkSig.ParameterTypes...)
+		
+		// If there's a rest parameter, we need to handle it specially
+		if checkSig.RestParameterType != nil {
+			// The function has a rest parameter like (...rest: number[])
+			// For Parameters<T>, this should be represented as [...number[]] in the tuple
+			// But for now, let's just include the rest array type
+			allParamTypes = append(allParamTypes, checkSig.RestParameterType)
+		}
+		
+		// Create tuple type from all parameters
+		tupleType := &types.TupleType{ElementTypes: allParamTypes}
+		if !c.tryInferTypes(tupleType, extendsSig.RestParameterType, inferences) {
 			return false
 		}
 	}
