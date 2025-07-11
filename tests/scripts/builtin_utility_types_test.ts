@@ -20,4 +20,7 @@ let contact: Pick<Person, "name" | "email"> = { name: "David", email: "david@tes
 // Test Record<K, V>
 let scores: Record<"math" | "english", number> = { math: 95, english: 88 };
 
+// Test Omit<T, K>
+let basicInfo: Omit<Person, "email"> = { name: "Eve", age: 28 };
+
 "builtin utility types work";

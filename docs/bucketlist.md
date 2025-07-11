@@ -82,6 +82,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Type checker support for BigInt literal types
   - [x] `typeof` operator returning "bigint"
   - [x] Support for hex (0xFFn), binary (0b1111n), and decimal BigInt literals
+  - [x] **BigInt constructor and arithmetic operations** - **Complete!**
+    - [x] `BigInt()` constructor with number, string, and boolean conversion
+    - [x] BigInt arithmetic: addition, subtraction, multiplication, division, remainder, exponentiation
+    - [x] Type-safe arithmetic (BigInt and Number cannot be mixed, JavaScript-compliant)
+    - [x] BigInt prototype methods: `toString()`, `valueOf()`
+    - [x] Comprehensive test suite covering all BigInt operations
 
 ## Operators
 
@@ -576,12 +582,31 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Type parameter substitution (`T[P]` patterns)
   - [x] Assignment checking with automatic expansion
   - [x] Integration with utility types and complex expressions
-- [x] Utility Types (`Partial`, `Readonly`, `Pick`, etc.) - **Complete Implementation!**
-  - [x] Built-in utility types (`Partial<T>`, `Required<T>`, `Readonly<T>`)
-  - [x] Selection utility types (`Pick<T, K>`, `Omit<T, K>`)
-  - [x] Creation utility types (`Record<K, V>`)
-  - [x] Working with real assignments and type checking
-  - [x] Proper mapped type expansion for all utility types
+- [x] **Utility Types** - **Comprehensive Implementation!**
+  - [x] **Property Manipulation Types**
+    - [x] `Partial<T>` - Makes all properties optional (`{ name?: string; age?: number }`)
+    - [x] `Required<T>` - Makes all properties required (removes optional modifiers)
+    - [x] `Readonly<T>` - Makes all properties readonly (prevents modification)
+  - [x] **Property Selection Types**
+    - [x] `Pick<T, K>` - Selects subset of properties from T (`Pick<User, "name" | "email">`)
+    - [x] `Record<K, V>` - Creates object type with specific keys and value type (`Record<"a" | "b", number>`)
+    - [x] `Omit<T, K>` - Excludes specific properties from T (`Omit<User, "password" | "secret">`)
+  - [x] **Conditional Utility Types**
+    - [x] `Extract<T, U>` - Extracts types from T that are assignable to U
+    - [x] `Exclude<T, U>` - Excludes types from T that are assignable to U  
+    - [x] `NonNullable<T>` - Removes null and undefined from union types
+  - [ ] **Function Utility Types** (Missing - require `typeof` operator enhancement)
+    - [ ] `ReturnType<T>` - Extracts return type from function type
+    - [ ] `Parameters<T>` - Extracts parameter types as tuple from function type
+    - [ ] `ConstructorParameters<T>` - Extracts constructor parameter types
+    - [ ] `InstanceType<T>` - Extracts instance type from constructor function
+    - [ ] `ThisParameterType<T>` - Extracts this parameter type from function
+    - [ ] `OmitThisParameter<T>` - Removes this parameter from function type
+  - [x] **Working Implementation Features**
+    - [x] Real assignment and type checking validation
+    - [x] Proper mapped type expansion for all implemented utility types
+    - [x] Integration with generic type system and constraints
+    - [x] TypeScript-compliant behavior and error messages
 - [x] **keyof Operator** - **Complete Implementation!**
   - [x] `keyof` type operator for extracting object keys
   - [x] Resolution to union of literal types (`keyof Person` → `"name" | "age"`)

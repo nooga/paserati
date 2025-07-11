@@ -29,7 +29,9 @@ func (u *UtilityTypesInitializer) InitTypes(ctx *TypeContext) error {
 	// Pick<T, K> = { [P in K]: T[P] }
 	u.registerPickType(ctx)
 	
-	// Omit<T, K> = { [P in Exclude<keyof T, K>]: T[P] } (simplified for now)
+	// Omit<T, K> = { [P in Exclude<keyof T, K>]: T[P] }
+	u.registerOmitType(ctx)
+	
 	// Record<K, T> = { [P in K]: T }
 	u.registerRecordType(ctx)
 	
@@ -185,4 +187,45 @@ func (u *UtilityTypesInitializer) registerRecordType(ctx *TypeContext) {
 	
 	// Register it in the environment
 	ctx.DefineTypeAlias("Record", recordGeneric)
+}
+
+// registerOmitType registers Omit<T, K> = { [P in Exclude<keyof T, K>]: T[P] }
+func (u *UtilityTypesInitializer) registerOmitType(ctx *TypeContext) {
+	// Create type parameters T and K
+	tParam := types.NewTypeParameter("T", 0, nil)
+	kParam := types.NewTypeParameter("K", 1, nil)
+	
+	// Create keyof T
+	keyofT := &types.KeyofType{
+		OperandType: &types.TypeParameterType{Parameter: tParam},
+	}
+	
+	// Create Exclude<keyof T, K> as a conditional type
+	excludeType := &types.ConditionalType{
+		CheckType:   keyofT,
+		ExtendsType: &types.TypeParameterType{Parameter: kParam},
+		TrueType:    types.Never, // If keyof T extends K, exclude it (never)
+		FalseType:   keyofT,      // If keyof T doesn't extend K, keep it
+	}
+	
+	// Create T[P] (indexed access)
+	indexedAccess := &types.IndexedAccessType{
+		ObjectType: &types.TypeParameterType{Parameter: tParam},
+		IndexType:  &types.TypeParameterType{Parameter: types.NewTypeParameter("P", 2, nil)},
+	}
+	
+	// Create the mapped type { [P in Exclude<keyof T, K>]: T[P] }
+	mappedType := &types.MappedType{
+		TypeParameter:    "P",
+		ConstraintType:   excludeType, // Iterate over Exclude<keyof T, K>
+		ValueType:        indexedAccess,
+		OptionalModifier: "", // No optional modifier
+		ReadonlyModifier: "", // No readonly modifier
+	}
+	
+	// Create the generic type
+	omitGeneric := types.NewGenericType("Omit", []*types.TypeParameter{tParam, kParam}, mappedType)
+	
+	// Register it in the environment
+	ctx.DefineTypeAlias("Omit", omitGeneric)
 }
