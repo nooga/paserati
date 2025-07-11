@@ -242,6 +242,26 @@ func (kt *KeyofType) Equals(other Type) bool {
 
 func (kt *KeyofType) typeNode() {}
 
+// TypeofType represents a typeof type operator like typeof someVariable
+// This extracts the type of a value from the type environment
+type TypeofType struct {
+	Identifier string // The identifier whose type we're extracting
+}
+
+func (tt *TypeofType) String() string {
+	return fmt.Sprintf("typeof %s", tt.Identifier)
+}
+
+func (tt *TypeofType) Equals(other Type) bool {
+	otherTt, ok := other.(*TypeofType)
+	if !ok {
+		return false
+	}
+	return tt.Identifier == otherTt.Identifier
+}
+
+func (tt *TypeofType) typeNode() {}
+
 // TypePredicateType represents a type predicate like 'x is string'
 // This is used in function return types to indicate type guards
 type TypePredicateType struct {

@@ -2032,6 +2032,35 @@ func (kte *KeyofTypeExpression) String() string {
 // The actual type is determined during type checking.
 func (kte *KeyofTypeExpression) GetComputedType() types.Type { return kte.ComputedType }
 
+// --- NEW: TypeofTypeExpression ---
+
+// TypeofTypeExpression represents a typeof type operator like typeof someVariable
+// Used in type contexts to extract the type of a value
+type TypeofTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'typeof' token
+	Identifier     string      // The identifier whose type we want to get
+}
+
+func (tte *TypeofTypeExpression) expressionNode()      {}
+func (tte *TypeofTypeExpression) TokenLiteral() string { return tte.Token.Literal }
+func (tte *TypeofTypeExpression) String() string {
+	var out bytes.Buffer
+	
+	out.WriteString("typeof ")
+	out.WriteString(tte.Identifier)
+	
+	if tte.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", tte.ComputedType.String()))
+	}
+	
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface (placeholder)
+// The actual type is determined during type checking.
+func (tte *TypeofTypeExpression) GetComputedType() types.Type { return tte.ComputedType }
+
 // --- NEW: TypePredicateExpression ---
 
 // TypePredicateExpression represents a type predicate like 'x is string'

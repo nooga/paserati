@@ -283,6 +283,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // 'undefined' type
 	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)       // 'void' type
 	p.registerTypePrefix(lexer.KEYOF, p.parseKeyofTypeExpression)  // 'keyof' type operator
+	p.registerTypePrefix(lexer.TYPEOF, p.parseTypeofTypeExpression) // 'typeof' type operator
 	p.registerTypePrefix(lexer.TEMPLATE_START, p.parseTemplateLiteralType) // Template literal types
 	// NEW: Constructor types that start with 'new'
 	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // NEW: Constructor types like 'new () => T'
@@ -6604,6 +6605,26 @@ func (p *Parser) parseKeyofTypeExpression() Expression {
 	}
 
 	return kte
+}
+
+// parseTypeofTypeExpression parses a typeof type expression like 'typeof someVariable'
+func (p *Parser) parseTypeofTypeExpression() Expression {
+	tte := &TypeofTypeExpression{
+		Token: p.curToken, // The 'typeof' token
+	}
+
+	// Move to the identifier after 'typeof'
+	p.nextToken()
+	
+	// The next token should be an identifier
+	if p.curToken.Type != lexer.IDENT {
+		p.addError(p.curToken, "expected identifier after 'typeof'")
+		return nil
+	}
+	
+	tte.Identifier = p.curToken.Literal
+
+	return tte
 }
 
 // parseTemplateLiteralType parses template literal types like `Hello ${T}!`

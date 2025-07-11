@@ -406,6 +406,9 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.KeyofTypeExpression:
 		return c.resolveKeyofTypeExpression(node)
 
+	case *parser.TypeofTypeExpression:
+		return c.resolveTypeofTypeExpression(node)
+
 	case *parser.TypePredicateExpression:
 		return c.resolveTypePredicateExpression(node)
 
@@ -1147,6 +1150,24 @@ func (c *Checker) resolveKeyofTypeExpression(node *parser.KeyofTypeExpression) t
 
 	// Compute the actual keyof type by extracting keys from the operand type
 	return c.computeKeyofType(operandType)
+}
+
+// resolveTypeofTypeExpression resolves a typeof type expression to the type of a variable
+func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression) types.Type {
+	if node.Identifier == "" {
+		c.addError(node, "typeof expression missing identifier")
+		return nil
+	}
+
+	// Look up the identifier in the type environment
+	varType, _, found := c.env.Resolve(node.Identifier)
+	if !found {
+		c.addError(node, fmt.Sprintf("Cannot find name '%s'", node.Identifier))
+		return nil
+	}
+
+	// Return the type of the variable
+	return varType
 }
 
 // computeKeyofType computes the keyof type for a given type

@@ -595,7 +595,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] `Extract<T, U>` - Extracts types from T that are assignable to U
     - [x] `Exclude<T, U>` - Excludes types from T that are assignable to U  
     - [x] `NonNullable<T>` - Removes null and undefined from union types
-  - [ ] **Function Utility Types** (Missing - require `typeof` operator enhancement)
+  - [ ] **Function Utility Types** (Ready to implement - now that `typeof` is available)
     - [ ] `ReturnType<T>` - Extracts return type from function type
     - [ ] `Parameters<T>` - Extracts parameter types as tuple from function type
     - [ ] `ConstructorParameters<T>` - Extracts constructor parameter types
@@ -631,11 +631,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Multiple interpolations and complex patterns
   - [x] Type computation engine for literal concatenation
   - [x] Integration with generic type parameters
-- [ ] **Type-level `typeof`** - Type queries for values (`typeof someValue`)
-  - [ ] Variable type extraction (`type T = typeof myVariable`)
-  - [ ] Function type extraction (`type F = typeof myFunction`)
-  - [ ] Object type extraction (`type O = typeof myObject`)
-  - [ ] Integration with conditional types and generics
+- [x] **Type-level `typeof`** - **Complete Implementation!**
+  - [x] Variable type extraction (`type T = typeof myVariable`)
+  - [x] Function type extraction (`type F = typeof myFunction`)
+  - [x] Object type extraction (`type O = typeof myObject`)
+  - [x] Integration with conditional types and generics
+  - [x] Proper scope resolution and symbol lookup
+  - [x] Works with utility types like `ReturnType<typeof func>`
 - [ ] **`infer` Keyword** - Type inference in conditional types
   - [ ] Basic inference (`T extends (infer U)[] ? U : never`)
   - [ ] Multiple inference sites with same name
