@@ -11,6 +11,8 @@ func GetWidenedType(t Type) Type {
 		switch litType.Value.Type() {
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 			return Number
+		case vm.TypeBigInt:
+			return BigInt
 		case vm.TypeString:
 			return String
 		case vm.TypeBoolean:

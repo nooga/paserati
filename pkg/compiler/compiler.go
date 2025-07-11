@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"paserati/pkg/checker"
 	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
@@ -642,6 +643,15 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		//fmt.Printf("[NUMBER LITERAL DEBUG] Compiling NumberLiteral value=%f with hint=R%d\n", node.Value, hint)
 		c.emitLoadNewConstant(hint, vm.Number(node.Value), node.Token.Line)
 		return hint, nil // ADDED: Explicit return
+
+	case *parser.BigIntLiteral:
+		// Parse the numeric part and create a big.Int
+		bigIntValue := new(big.Int)
+		if _, ok := bigIntValue.SetString(node.Value, 0); !ok {
+			return BadRegister, NewCompileError(node, fmt.Sprintf("invalid BigInt literal: %s", node.Value))
+		}
+		c.emitLoadNewConstant(hint, vm.NewBigInt(bigIntValue), node.Token.Line)
+		return hint, nil
 
 	case *parser.StringLiteral:
 		// Handle string literals by adding them to constants

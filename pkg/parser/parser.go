@@ -188,6 +188,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	// --- Register VALUE Prefix Functions ---
 	p.registerPrefix(lexer.IDENT, p.parseIdentifier)
 	p.registerPrefix(lexer.NUMBER, p.parseNumberLiteral)
+	p.registerPrefix(lexer.BIGINT, p.parseBigIntLiteral)
 	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerPrefix(lexer.REGEX_LITERAL, p.parseRegexLiteral)     // NEW: Regex literals
 	p.registerPrefix(lexer.TEMPLATE_START, p.parseTemplateLiteral) // NEW: Template literals
@@ -288,6 +289,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	// Literal types in TYPE context too
 	p.registerTypePrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerTypePrefix(lexer.NUMBER, p.parseNumberLiteral)
+	p.registerTypePrefix(lexer.BIGINT, p.parseBigIntLiteral)
 	p.registerTypePrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerTypePrefix(lexer.FALSE, p.parseBooleanLiteral)
 	// Function types that start with '('
@@ -1467,6 +1469,37 @@ func (p *Parser) parseNumberLiteral() Expression {
 		lit.Value = float64(value)
 	}
 
+	return lit
+}
+
+func (p *Parser) parseBigIntLiteral() Expression {
+	lit := &BigIntLiteral{Token: p.curToken}
+
+	rawLiteral := p.curToken.Literal
+	
+	// Remove the 'n' suffix to get the numeric part
+	if !strings.HasSuffix(rawLiteral, "n") {
+		msg := fmt.Sprintf("BigInt literal %q must end with 'n'", rawLiteral)
+		p.addError(p.curToken, msg)
+		return nil
+	}
+	
+	// Extract numeric part (without 'n')
+	numericPart := rawLiteral[:len(rawLiteral)-1]
+	
+	// Remove separators and validate format
+	cleanedLiteral := strings.ReplaceAll(numericPart, "_", "")
+	
+	// BigInt can't be float, so we don't allow dots or exponents
+	if strings.Contains(cleanedLiteral, ".") || strings.ContainsAny(cleanedLiteral, "eE") {
+		msg := fmt.Sprintf("BigInt literal %q cannot contain decimal point or exponent", rawLiteral)
+		p.addError(p.curToken, msg)
+		return nil
+	}
+	
+	// Store the cleaned numeric part
+	lit.Value = cleanedLiteral
+	
 	return lit
 }
 

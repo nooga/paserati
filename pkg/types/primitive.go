@@ -26,6 +26,7 @@ var (
 	String    = &Primitive{Name: "string"}
 	Boolean   = &Primitive{Name: "boolean"}
 	Symbol    = &Primitive{Name: "symbol"}
+	BigInt    = &Primitive{Name: "bigint"}
 	Null      = &Primitive{Name: "null"}
 	Undefined = &Primitive{Name: "undefined"}
 	Any       = &Primitive{Name: "any"}
@@ -40,10 +41,11 @@ var TypeofResultType = NewUnionType(
 	&LiteralType{Value: vm.String("undefined")},
 	&LiteralType{Value: vm.String("boolean")},
 	&LiteralType{Value: vm.String("number")},
+	&LiteralType{Value: vm.String("bigint")},
 	&LiteralType{Value: vm.String("string")},
 	&LiteralType{Value: vm.String("function")},
 	&LiteralType{Value: vm.String("object")},
-	// Note: In TypeScript/JavaScript, typeof can also return "symbol" and "bigint" in newer versions
+	// Note: In TypeScript/JavaScript, typeof can also return "symbol" in newer versions
 	// but for now we'll stick to the basic set that our VM supports
 )
 
@@ -76,6 +78,8 @@ func (lt *LiteralType) Equals(other Type) bool {
 	switch lt.Value.Type() {
 	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 		return vm.AsNumber(lt.Value) == vm.AsNumber(otherLt.Value)
+	case vm.TypeBigInt:
+		return lt.Value.AsBigInt().Cmp(otherLt.Value.AsBigInt()) == 0
 	case vm.TypeString:
 		return vm.AsString(lt.Value) == vm.AsString(otherLt.Value)
 	case vm.TypeBoolean:
@@ -115,6 +119,8 @@ func GetTypeofResult(t Type) Type {
 		return &LiteralType{Value: vm.String("string")}
 	case Number:
 		return &LiteralType{Value: vm.String("number")}
+	case BigInt:
+		return &LiteralType{Value: vm.String("bigint")}
 	case Boolean:
 		return &LiteralType{Value: vm.String("boolean")}
 	case Symbol:

@@ -365,6 +365,17 @@ func (n *NumberLiteral) expressionNode()      {}
 func (n *NumberLiteral) TokenLiteral() string { return n.Token.Literal }
 func (n *NumberLiteral) String() string       { return n.Token.Literal }
 
+// BigIntLiteral represents BigInt literals (e.g., 123n).
+type BigIntLiteral struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.BIGINT token
+	Value          string      // Store the numeric part (without 'n' suffix)
+}
+
+func (b *BigIntLiteral) expressionNode()      {}
+func (b *BigIntLiteral) TokenLiteral() string { return b.Token.Literal }
+func (b *BigIntLiteral) String() string       { return b.Token.Literal }
+
 // StringLiteral represents string literals.
 type StringLiteral struct {
 	BaseExpression             // Embed base for ComputedType
@@ -3376,6 +3387,9 @@ func dumpNode(node Node, indent string) {
 
 	case *NumberLiteral:
 		fmt.Fprintf(os.Stderr, "NumberLiteral { value: %g }", n.Value)
+
+	case *BigIntLiteral:
+		fmt.Fprintf(os.Stderr, "BigIntLiteral { value: %q }", n.Value)
 
 	case *BooleanLiteral:
 		fmt.Fprintf(os.Stderr, "BooleanLiteral { value: %t }", n.Value)

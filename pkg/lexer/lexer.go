@@ -46,6 +46,7 @@ const (
 	// Identifiers + Literals
 	IDENT         TokenType = "IDENT"         // functionName, variableName
 	NUMBER        TokenType = "NUMBER"        // 123, 45.67
+	BIGINT        TokenType = "BIGINT"        // 123n
 	STRING        TokenType = "STRING"        // "hello world"
 	REGEX_LITERAL TokenType = "REGEX_LITERAL" // /pattern/flags
 	NULL          TokenType = "NULL"          // Added
@@ -939,7 +940,14 @@ func (l *Lexer) NextToken() Token {
 		} else if isDigit(l.ch) {
 			literal := l.readNumber() // Consumes digits and potentially '.'
 			// readNumber leaves l.position *after* the last char of the number
-			tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			
+			// Check for BigInt suffix 'n'
+			if l.ch == 'n' {
+				l.readChar() // Consume the 'n' suffix
+				tok = Token{Type: BIGINT, Literal: literal + "n", Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else {
+				tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
 			//return tok // Return early, readNumber already called readChar()
 		} else {
 			// Illegal character

@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"paserati/pkg/errors"
 	"strconv"
@@ -107,6 +108,7 @@ type VM struct {
 	ArrayPrototype    Value
 	StringPrototype   Value
 	NumberPrototype   Value
+	BigIntPrototype   Value
 	BooleanPrototype  Value
 	RegExpPrototype   Value
 	MapPrototype      Value
@@ -532,9 +534,23 @@ startExecution:
 			// Type checking specific to operation groups
 			switch opcode {
 			case OpAdd:
-				// Allow string concatenation or number addition
+				// Allow string concatenation, number addition, or BigInt addition
 				if IsNumber(leftVal) && IsNumber(rightVal) {
 					registers[destReg] = Number(AsNumber(leftVal) + AsNumber(rightVal))
+				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
+					// BigInt + BigInt = BigInt
+					result := new(big.Int).Add(leftVal.AsBigInt(), rightVal.AsBigInt())
+					registers[destReg] = NewBigInt(result)
+				} else if leftVal.IsBigInt() && IsNumber(rightVal) {
+					// BigInt + Number is not allowed in JavaScript
+					frame.ip = ip
+					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
+					return status, Undefined
+				} else if IsNumber(leftVal) && rightVal.IsBigInt() {
+					// Number + BigInt is not allowed in JavaScript
+					frame.ip = ip
+					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
+					return status, Undefined
 				} else if IsString(leftVal) && IsString(rightVal) {
 					// Consider performance of string concat later
 					registers[destReg] = String(AsString(leftVal) + AsString(rightVal))
@@ -542,6 +558,12 @@ startExecution:
 					registers[destReg] = String(AsString(leftVal) + fmt.Sprintf("%v", AsNumber(rightVal)))
 				} else if IsNumber(leftVal) && IsString(rightVal) {
 					registers[destReg] = String(fmt.Sprintf("%v", AsNumber(leftVal)) + AsString(rightVal))
+				} else if IsString(leftVal) && rightVal.IsBigInt() {
+					// String + BigInt concatenation
+					registers[destReg] = String(AsString(leftVal) + rightVal.AsBigInt().String() + "n")
+				} else if leftVal.IsBigInt() && IsString(rightVal) {
+					// BigInt + String concatenation
+					registers[destReg] = String(leftVal.AsBigInt().String() + "n" + AsString(rightVal))
 				} else if IsString(leftVal) && rightVal.IsBoolean() {
 					// String + Boolean concatenation (boolean converted to string)
 					boolStr := "false"
@@ -558,56 +580,131 @@ startExecution:
 					registers[destReg] = String(boolStr + AsString(rightVal))
 				} else {
 					frame.ip = ip
-					status := vm.runtimeError("Operands must be two numbers, two strings, a string and a number, or a string and a boolean for '+'.")
+					status := vm.runtimeError("Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.")
 					return status, Undefined
 				}
 			case OpSubtract, OpMultiply, OpDivide:
-				// Strictly numbers for these
-				if !IsNumber(leftVal) || !IsNumber(rightVal) {
-					frame.ip = ip
-					opStr := opcode.String()                                                 // Get opcode name
-					status := vm.runtimeError("Operands must be numbers for %s.", opStr[2:]) // Simple way to get op name like Subtract
-					return status, Undefined
-				}
-				leftNum := AsNumber(leftVal)
-				rightNum := AsNumber(rightVal)
-				switch opcode {
-				case OpSubtract:
-					registers[destReg] = Number(leftNum - rightNum)
-				case OpMultiply:
-					registers[destReg] = Number(leftNum * rightNum)
-				case OpDivide:
-					if rightNum == 0 {
-						frame.ip = ip
-						status := vm.runtimeError("Division by zero.")
-						return status, Undefined
+				// Handle numbers and BigInts separately (no mixing allowed)
+				if IsNumber(leftVal) && IsNumber(rightVal) {
+					// Number arithmetic
+					leftNum := AsNumber(leftVal)
+					rightNum := AsNumber(rightVal)
+					switch opcode {
+					case OpSubtract:
+						registers[destReg] = Number(leftNum - rightNum)
+					case OpMultiply:
+						registers[destReg] = Number(leftNum * rightNum)
+					case OpDivide:
+						if rightNum == 0 {
+							frame.ip = ip
+							status := vm.runtimeError("Division by zero.")
+							return status, Undefined
+						}
+						registers[destReg] = Number(leftNum / rightNum)
 					}
-					registers[destReg] = Number(leftNum / rightNum)
+				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
+					// BigInt arithmetic
+					leftBig := leftVal.AsBigInt()
+					rightBig := rightVal.AsBigInt()
+					result := new(big.Int)
+					switch opcode {
+					case OpSubtract:
+						result.Sub(leftBig, rightBig)
+						registers[destReg] = NewBigInt(result)
+					case OpMultiply:
+						result.Mul(leftBig, rightBig)
+						registers[destReg] = NewBigInt(result)
+					case OpDivide:
+						if rightBig.Sign() == 0 {
+							frame.ip = ip
+							status := vm.runtimeError("Division by zero.")
+							return status, Undefined
+						}
+						result.Div(leftBig, rightBig)
+						registers[destReg] = NewBigInt(result)
+					}
+				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
+					// Cannot mix BigInt and Number
+					frame.ip = ip
+					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
+					return status, Undefined
+				} else {
+					frame.ip = ip
+					opStr := opcode.String()                                                            // Get opcode name
+					status := vm.runtimeError("Operands must be two numbers or two BigInts for %s.", opStr[2:]) // Simple way to get op name like Subtract
+					return status, Undefined
 				}
 			case OpRemainder:
-				if !IsNumber(leftVal) || !IsNumber(rightVal) {
+				// Handle numbers and BigInts separately (no mixing allowed)
+				if IsNumber(leftVal) && IsNumber(rightVal) {
+					// Number remainder
+					leftNum := AsNumber(leftVal)
+					rightNum := AsNumber(rightVal)
+					if rightNum == 0 {
+						frame.ip = ip
+						status := vm.runtimeError("Division by zero (in remainder operation).")
+						return status, Undefined
+					}
+					registers[destReg] = Number(math.Mod(leftNum, rightNum))
+				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
+					// BigInt remainder
+					leftBig := leftVal.AsBigInt()
+					rightBig := rightVal.AsBigInt()
+					if rightBig.Sign() == 0 {
+						frame.ip = ip
+						status := vm.runtimeError("Division by zero (in remainder operation).")
+						return status, Undefined
+					}
+					result := new(big.Int)
+					result.Rem(leftBig, rightBig)
+					registers[destReg] = NewBigInt(result)
+				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
+					// Cannot mix BigInt and Number
 					frame.ip = ip
-					status := vm.runtimeError("Operands must be numbers for %%.")
+					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
+					return status, Undefined
+				} else {
+					frame.ip = ip
+					status := vm.runtimeError("Operands must be two numbers or two BigInts for %%.")
 					return status, Undefined
 				}
-				leftNum := AsNumber(leftVal)
-				rightNum := AsNumber(rightVal)
-				if rightNum == 0 {
-					frame.ip = ip
-					status := vm.runtimeError("Division by zero (in remainder operation).")
-					return status, Undefined
-				}
-				registers[destReg] = Number(math.Mod(leftNum, rightNum))
 
 			case OpExponent:
-				if !IsNumber(leftVal) || !IsNumber(rightVal) {
+				// Handle numbers and BigInts separately (no mixing allowed)
+				if IsNumber(leftVal) && IsNumber(rightVal) {
+					// Number exponentiation
+					leftNum := AsNumber(leftVal)
+					rightNum := AsNumber(rightVal)
+					registers[destReg] = Number(math.Pow(leftNum, rightNum))
+				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
+					// BigInt exponentiation
+					leftBig := leftVal.AsBigInt()
+					rightBig := rightVal.AsBigInt()
+					// BigInt exponentiation requires non-negative exponent
+					if rightBig.Sign() < 0 {
+						frame.ip = ip
+						status := vm.runtimeError("BigInt negative exponent not supported.")
+						return status, Undefined
+					}
+					// Check if exponent is too large to fit in int
+					if !rightBig.IsInt64() {
+						frame.ip = ip
+						status := vm.runtimeError("BigInt exponent too large.")
+						return status, Undefined
+					}
+					result := new(big.Int)
+					result.Exp(leftBig, rightBig, nil) // nil modulus means no modular exponentiation
+					registers[destReg] = NewBigInt(result)
+				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
+					// Cannot mix BigInt and Number
 					frame.ip = ip
-					status := vm.runtimeError("Operands must be numbers for **.")
+					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
+					return status, Undefined
+				} else {
+					frame.ip = ip
+					status := vm.runtimeError("Operands must be two numbers or two BigInts for **.")
 					return status, Undefined
 				}
-				leftNum := AsNumber(leftVal)
-				rightNum := AsNumber(rightVal)
-				registers[destReg] = Number(math.Pow(leftNum, rightNum))
 			case OpEqual, OpNotEqual:
 				// Use a helper for equality check (handles type differences)
 				isEqual := valuesEqual(leftVal, rightVal)
@@ -2788,6 +2885,8 @@ func getTypeofString(val Value) string {
 		return "boolean"
 	case TypeFloatNumber, TypeIntegerNumber:
 		return "number"
+	case TypeBigInt:
+		return "bigint"
 	case TypeString:
 		return "string"
 	case TypeSymbol:

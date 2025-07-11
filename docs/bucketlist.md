@@ -73,7 +73,15 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Comprehensive test suite with 20+ regex test files
   - [x] String method integration: match(), replace(), search(), split() with RegExp arguments
 - [x] Template Literals (backticks, `${}`)
-- [ ] BigInt Literals (`100n`)
+- [x] **BigInt Literals (`100n`)** - **Complete Implementation!**
+  - [x] Lexer support for BigInt token type and 'n' suffix parsing
+  - [x] Parser support for BigIntLiteral AST node
+  - [x] Type system integration with BigInt primitive type
+  - [x] VM value representation using math/big.Int
+  - [x] Compiler bytecode generation for BigInt constants
+  - [x] Type checker support for BigInt literal types
+  - [x] `typeof` operator returning "bigint"
+  - [x] Support for hex (0xFFn), binary (0b1111n), and decimal BigInt literals
 
 ## Operators
 
@@ -720,11 +728,11 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 ### Extended Built-ins
 
-- [ ] **Complete Date Implementation** - Missing most Date prototype methods
-  - [ ] Date parsing from strings (`new Date("2023-01-01")`)
-  - [ ] Date formatting methods (`.toISOString()`, `.toDateString()`, etc.)
-  - [ ] Date arithmetic and comparison
-  - [ ] Timezone handling
+- [x] **Complete Date Implementation** - Missing most Date prototype methods
+  - [x] Date parsing from strings (`new Date("2023-01-01")`)
+  - [x] Date formatting methods (`.toISOString()`, `.toDateString()`, etc.)
+  - [x] Date arithmetic and comparison
+  - [x] Timezone handling
 - [ ] **Error Stack Traces Enhancement** - More detailed stack information
 - [ ] **Performance API** (`performance.now()`, `performance.mark()`)
 

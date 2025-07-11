@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"math/big"
 	"paserati/pkg/errors" // Added import
 	"paserati/pkg/modules" // Added for real ModuleLoader integration
 	"paserati/pkg/source" // Added import for source context
@@ -1377,6 +1378,17 @@ func (c *Checker) visit(node parser.Node) {
 		literalType := &types.LiteralType{Value: vm.Number(node.Value)}
 		node.SetComputedType(literalType) // <<< USE NODE METHOD
 
+	case *parser.BigIntLiteral:
+		// Parse the numeric part and create a big.Int
+		bigIntValue := new(big.Int)
+		if _, ok := bigIntValue.SetString(node.Value, 0); !ok {
+			c.addError(node, fmt.Sprintf("Invalid BigInt literal: %s", node.Value))
+			node.SetComputedType(types.Never)
+		} else {
+			literalType := &types.LiteralType{Value: vm.NewBigInt(bigIntValue)}
+			node.SetComputedType(literalType)
+		}
+
 	case *parser.StringLiteral:
 		literalType := &types.LiteralType{Value: vm.String(node.Value)}
 		node.SetComputedType(literalType) // <<< USE NODE METHOD
@@ -1585,11 +1597,20 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
+				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
+					resultType = types.BigInt
+				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
+					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					// Keep resultType = types.Any (default)
 				} else if widenedLeftType == types.String && widenedRightType == types.String {
 					resultType = types.String
-					// <<< NEW: Handle String + Number Coercion >>>
+					// <<< NEW: Handle String + Number/BigInt Coercion >>>
 				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.String) {
+					resultType = types.String
+				} else if (widenedLeftType == types.String && widenedRightType == types.BigInt) ||
+					(widenedLeftType == types.BigInt && widenedRightType == types.String) {
 					resultType = types.String
 				} else if (widenedLeftType == types.String && widenedRightType == types.Boolean) ||
 					(widenedLeftType == types.Boolean && widenedRightType == types.String) {
@@ -1603,6 +1624,12 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
+				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
+					resultType = types.BigInt
+				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
+					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					// Keep resultType = types.Any (default)
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
@@ -1614,6 +1641,12 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
+				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
+					resultType = types.BigInt
+				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
+					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					// Keep resultType = types.Any (default)
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any
