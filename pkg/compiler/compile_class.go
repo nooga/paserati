@@ -320,6 +320,35 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 		}
 	}
 
+	// ADDED: Extract parameter property assignments from constructor parameters
+	if functionLiteral.Parameters != nil {
+		for _, param := range functionLiteral.Parameters {
+			// Check if this parameter has property modifiers
+			if param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly {
+				// Create assignment statement: this.paramName = paramName
+				assignment := &parser.AssignmentExpression{
+					Token:    param.Token,
+					Operator: "=",
+					Left: &parser.MemberExpression{
+						Token:    param.Token,
+						Object:   &parser.ThisExpression{Token: param.Token},
+						Property: param.Name, // Use parameter name as property name
+					},
+					Value: param.Name, // Assign parameter value to property
+				}
+
+				// Wrap in expression statement
+				paramPropStatement := &parser.ExpressionStatement{
+					Token:      param.Token,
+					Expression: assignment,
+				}
+
+				fieldInitializers = append(fieldInitializers, paramPropStatement)
+				debugPrintf("// DEBUG injectFieldInitializers: Added parameter property assignment for '%s'\n", param.Name.Value)
+			}
+		}
+	}
+
 	// If no field initializers, return original function literal
 	if len(fieldInitializers) == 0 {
 		return functionLiteral

@@ -245,12 +245,33 @@ type Parameter struct {
 	DefaultValue    Expression  // Default value expression (param = defaultValue)
 	IsThis          bool        // Whether this is an explicit 'this' parameter
 	IsDestructuring bool        // Whether this parameter uses destructuring pattern
+	
+	// Parameter property modifiers (only valid in constructor context)
+	IsPublic    bool // true if marked with 'public' (constructor parameter property)
+	IsPrivate   bool // true if marked with 'private' (constructor parameter property)
+	IsProtected bool // true if marked with 'protected' (constructor parameter property)
+	IsReadonly  bool // true if marked with 'readonly' (constructor parameter property)
 }
 
 func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
 func (p *Parameter) TokenLiteral() string { return p.Token.Literal }
 func (p *Parameter) String() string {
 	var out bytes.Buffer
+	
+	// Add access modifiers for parameter properties
+	if p.IsPublic {
+		out.WriteString("public ")
+	}
+	if p.IsPrivate {
+		out.WriteString("private ")
+	}
+	if p.IsProtected {
+		out.WriteString("protected ")
+	}
+	if p.IsReadonly {
+		out.WriteString("readonly ")
+	}
+	
 	if p.IsThis {
 		out.WriteString("this")
 	} else if p.IsDestructuring && p.Pattern != nil {

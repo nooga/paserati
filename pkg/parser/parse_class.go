@@ -294,7 +294,7 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 	var parameters []*Parameter
 	var restParameter *RestParameter
 	var err error
-	parameters, restParameter, err = p.parseFunctionParameters()
+	parameters, restParameter, err = p.parseFunctionParameters(true) // Allow parameter properties in constructors
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse constructor parameters: %s", err.Error()))
 		return nil
@@ -383,7 +383,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 	var parameters []*Parameter
 	var restParameter *RestParameter
 	var err error
-	parameters, restParameter, err = p.parseFunctionParameters()
+	parameters, restParameter, err = p.parseFunctionParameters(false) // No parameter properties in regular methods
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse method parameters: %s", err.Error()))
 		return nil
@@ -546,7 +546,7 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	
 	// Parse parameters - we're now at the '(' token
 	var err error
-	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters()
+	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters(false) // No parameter properties in getters
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse getter parameters: %s", err.Error()))
 		return nil
@@ -616,7 +616,7 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	
 	// Parse parameters - we're now at the '(' token
 	var err error
-	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters()
+	functionLiteral.Parameters, functionLiteral.RestParameter, err = p.parseFunctionParameters(false) // No parameter properties in setters
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse setter parameters: %s", err.Error()))
 		return nil
@@ -698,7 +698,7 @@ func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expressio
 	var parameters []*Parameter
 	var restParameter *RestParameter
 	var err error
-	parameters, restParameter, err = p.parseFunctionParameters()
+	parameters, restParameter, err = p.parseFunctionParameters(false) // No parameter properties in computed methods
 	if err != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse method parameters: %s", err.Error()))
 		return nil

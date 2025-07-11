@@ -1683,7 +1683,7 @@ func (p *Parser) parseFunctionLiteral() Expression {
 	}
 
 	// --- MODIFIED: Use parseFunctionParameters ---
-	lit.Parameters, lit.RestParameter, _ = p.parseFunctionParameters() // Includes consuming RPAREN
+	lit.Parameters, lit.RestParameter, _ = p.parseFunctionParameters(false) // No parameter properties in function literals
 	if lit.Parameters == nil && lit.RestParameter == nil {
 		return nil
 	} // Propagate error
@@ -1754,7 +1754,7 @@ func (p *Parser) parseFunctionSignature() *FunctionSignature {
 	}
 
 	// Parse parameters
-	sig.Parameters, sig.RestParameter, _ = p.parseFunctionParameters()
+	sig.Parameters, sig.RestParameter, _ = p.parseFunctionParameters(false) // No parameter properties in function type signatures
 	if sig.Parameters == nil && sig.RestParameter == nil {
 		return nil
 	}
@@ -1783,7 +1783,7 @@ func (p *Parser) parseFunctionSignature() *FunctionSignature {
 
 // --- MODIFIED: parseFunctionParameters to handle Parameter struct & types ---
 // Returns ([]*Parameter, *RestParameter)
-func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error) {
+func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Parameter, *RestParameter, error) {
 	parameters := []*Parameter{}
 	var restParam *RestParameter
 
@@ -1808,14 +1808,35 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 		return parameters, restParam, nil
 	}
 
-	// Parse first regular parameter (could be 'this' parameter or destructuring pattern)
+	// Parse first regular parameter (could have access modifiers in constructor context)
+	param := &Parameter{Token: p.curToken}
+	
+	// Check for access modifiers if we're in constructor parameter context
+	if allowParameterProperties {
+		for p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.READONLY) {
+			switch p.curToken.Type {
+			case lexer.PUBLIC:
+				param.IsPublic = true
+			case lexer.PRIVATE:
+				param.IsPrivate = true
+			case lexer.PROTECTED:
+				param.IsProtected = true
+			case lexer.READONLY:
+				param.IsReadonly = true
+			}
+			p.nextToken() // Consume access modifier and move to next token
+		}
+		// Update the parameter token to point to the actual parameter name
+		param.Token = p.curToken
+	}
+	
+	// Parse the parameter (could be 'this' parameter or destructuring pattern)
 	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
 		msg := fmt.Sprintf("expected identifier, 'this', or destructuring pattern for parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
 		return nil, nil, fmt.Errorf("%s", msg)
 	}
-	param := &Parameter{Token: p.curToken}
 
 	// Check if this is an explicit 'this' parameter
 	if p.curTokenIs(lexer.THIS) {
@@ -1935,13 +1956,34 @@ func (p *Parser) parseFunctionParameters() ([]*Parameter, *RestParameter, error)
 			return nil, nil, fmt.Errorf("'this' parameter can only be the first parameter")
 		}
 
+		// Parse subsequent parameter (could have access modifiers in constructor context)
+		param := &Parameter{Token: p.curToken}
+		
+		// Check for access modifiers if we're in constructor parameter context
+		if allowParameterProperties {
+			for p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.READONLY) {
+				switch p.curToken.Type {
+				case lexer.PUBLIC:
+					param.IsPublic = true
+				case lexer.PRIVATE:
+					param.IsPrivate = true
+				case lexer.PROTECTED:
+					param.IsProtected = true
+				case lexer.READONLY:
+					param.IsReadonly = true
+				}
+				p.nextToken() // Consume access modifier and move to next token
+			}
+			// Update the parameter token to point to the actual parameter name
+			param.Token = p.curToken
+		}
+		
 		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
 			msg := fmt.Sprintf("expected identifier or destructuring pattern for parameter after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
 			return nil, nil, fmt.Errorf("%s", msg)
 		}
-		param := &Parameter{Token: p.curToken}
 
 		if p.curTokenIs(lexer.LBRACKET) {
 			// Array destructuring parameter
@@ -4680,7 +4722,7 @@ func (p *Parser) parseShorthandMethod() *ShorthandMethod {
 	}
 
 	// Parse parameters
-	method.Parameters, method.RestParameter, _ = p.parseFunctionParameters()
+	method.Parameters, method.RestParameter, _ = p.parseFunctionParameters(false) // No parameter properties in interface method signatures
 	if method.Parameters == nil && method.RestParameter == nil {
 		return nil // Error parsing parameters
 	}
@@ -6276,7 +6318,7 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 	}
 
 	// Parse regular parameters
-	params, restParam, parseErr := p.parseFunctionParameters()
+	params, restParam, parseErr := p.parseFunctionParameters(false) // No parameter properties in function type parameter lists
 	if parseErr != nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse arrow function parameters: %v", parseErr))
 		return nil

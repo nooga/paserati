@@ -392,6 +392,9 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		}
 	}
 
+	// ADDED: Synthesize parameter properties from constructor before processing regular properties
+	c.synthesizeParameterProperties(body)
+	
 	// Add properties to instance type (excluding static properties)
 	for _, prop := range body.Properties {
 		if !prop.IsStatic {
@@ -1165,6 +1168,49 @@ func (c *Checker) validateMethodSignature(sig *parser.MethodSignature) {
 		if returnType == nil {
 			methodName := c.extractPropertyName(sig.Key)
 			c.addError(sig.Key, fmt.Sprintf("invalid return type annotation for method '%s'", methodName))
+		}
+	}
+}
+
+// synthesizeParameterProperties creates PropertyDefinition nodes for constructor parameter properties
+// This allows parameter properties to be processed by the regular property checking logic
+func (c *Checker) synthesizeParameterProperties(body *parser.ClassBody) {
+	// Find the constructor method
+	var constructor *parser.MethodDefinition
+	for _, method := range body.Methods {
+		if method.Kind == "constructor" {
+			constructor = method
+			break
+		}
+	}
+	
+	if constructor == nil || constructor.Value == nil {
+		return // No constructor or no function literal
+	}
+	
+	// Process constructor parameters
+	for _, param := range constructor.Value.Parameters {
+		// Check if this parameter has property modifiers
+		if param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly {
+			// Create a synthetic PropertyDefinition for this parameter property
+			propDef := &parser.PropertyDefinition{
+				Token:       param.Token,
+				Key:         param.Name, // Use parameter name as property key
+				Value:       nil,        // Parameter properties have no initializer
+				TypeAnnotation: param.TypeAnnotation, // Use parameter's type annotation
+				Optional:    param.Optional, // Parameter properties inherit optional status
+				IsStatic:    false,      // Parameter properties are always instance properties
+				Readonly:    param.IsReadonly,
+				IsPublic:    param.IsPublic,
+				IsPrivate:   param.IsPrivate,
+				IsProtected: param.IsProtected,
+			}
+			
+			// Add this synthetic property to the class body
+			body.Properties = append(body.Properties, propDef)
+			
+			debugPrintf("// [Checker Class] Synthesized parameter property '%s' (public: %t, private: %t, protected: %t, readonly: %t)\n", 
+				param.Name.Value, param.IsPublic, param.IsPrivate, param.IsProtected, param.IsReadonly)
 		}
 	}
 }
