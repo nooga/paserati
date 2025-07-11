@@ -1734,9 +1734,11 @@ startExecution:
 				// Constructor call on closure
 				constructorClosure := AsClosure(constructorVal)
 				constructorFunc := constructorClosure.Fn
-				if argCount != constructorFunc.Arity {
+				// Allow fewer arguments for constructors with optional parameters
+				// The compiler handles padding with undefined for missing optional parameters
+				if argCount > constructorFunc.Arity {
 					frame.ip = callerIP
-					status := vm.runtimeError("Constructor expected %d arguments but got %d.", constructorFunc.Arity, argCount)
+					status := vm.runtimeError("Constructor expected at most %d arguments but got %d.", constructorFunc.Arity, argCount)
 					return status, Undefined
 				}
 				if vm.frameCount == MaxFrames {
@@ -1803,9 +1805,11 @@ startExecution:
 				constructorClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
 				constructorFunc := constructorClosure.Fn
 
-				if argCount != constructorFunc.Arity {
+				// Allow fewer arguments for constructors with optional parameters
+				// The compiler handles padding with undefined for missing optional parameters
+				if argCount > constructorFunc.Arity {
 					frame.ip = callerIP
-					status := vm.runtimeError("Constructor expected %d arguments but got %d.", constructorFunc.Arity, argCount)
+					status := vm.runtimeError("Constructor expected at most %d arguments but got %d.", constructorFunc.Arity, argCount)
 					return status, Undefined
 				}
 				if vm.frameCount == MaxFrames {

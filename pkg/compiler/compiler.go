@@ -558,6 +558,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.ClassDeclaration:
 		return c.compileClassDeclaration(node, hint)
 
+	case *parser.EnumDeclaration:
+		return c.compileEnumDeclaration(node, hint)
+
 	case *parser.ClassExpression:
 		// Convert ClassExpression to ClassDeclaration for compilation
 		// The compiler treats them the same way

@@ -200,6 +200,8 @@ const (
 	FINALLY TokenType = "FINALLY"
 	// Class keyword
 	CLASS TokenType = "CLASS"
+	// Enum keyword
+	ENUM TokenType = "ENUM"
 	// Static keyword (for future use)
 	STATIC TokenType = "STATIC"
 	// Readonly keyword
@@ -263,6 +265,7 @@ var keywords = map[string]TokenType{
 	"throw":      THROW,      // Added for throw statements
 	"finally":    FINALLY,    // Added for finally blocks
 	"class":      CLASS,      // Added for class declarations/expressions
+	"enum":       ENUM,       // Added for enum declarations
 	"static":     STATIC,     // Added for static members
 	"readonly":   READONLY,   // Added for readonly modifier
 	"public":     PUBLIC,     // Added for public access modifier

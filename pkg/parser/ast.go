@@ -3318,6 +3318,58 @@ func DumpAST(program *Program, title string) {
 	fmt.Fprintf(os.Stderr, "\n}\n=== END AST DUMP ===\n\n")
 }
 
+// EnumDeclaration represents an enum declaration (enum Name { ... })
+type EnumDeclaration struct {
+	BaseExpression
+	Token   lexer.Token   // The 'enum' token
+	Name    *Identifier   // Enum name
+	Members []*EnumMember // Enum members
+	IsConst bool          // true for const enums
+}
+
+func (ed *EnumDeclaration) statementNode()       {}
+func (ed *EnumDeclaration) TokenLiteral() string { return ed.Token.Literal }
+func (ed *EnumDeclaration) String() string {
+	var out bytes.Buffer
+	if ed.IsConst {
+		out.WriteString("const ")
+	}
+	out.WriteString("enum ")
+	if ed.Name != nil {
+		out.WriteString(ed.Name.String())
+	}
+	out.WriteString(" {\n")
+	for i, member := range ed.Members {
+		if i > 0 {
+			out.WriteString(",\n")
+		}
+		out.WriteString("  ")
+		out.WriteString(member.String())
+	}
+	out.WriteString("\n}")
+	return out.String()
+}
+
+// EnumMember represents a member of an enum
+type EnumMember struct {
+	Token lexer.Token // The member name token
+	Name  *Identifier // Member name
+	Value Expression  // Optional initializer (nil for auto-increment)
+}
+
+func (em *EnumMember) TokenLiteral() string { return em.Token.Literal }
+func (em *EnumMember) String() string {
+	var out bytes.Buffer
+	if em.Name != nil {
+		out.WriteString(em.Name.String())
+	}
+	if em.Value != nil {
+		out.WriteString(" = ")
+		out.WriteString(em.Value.String())
+	}
+	return out.String()
+}
+
 // dumpNode prints a structured representation of an AST node
 func dumpNode(node Node, indent string) {
 	if node == nil {

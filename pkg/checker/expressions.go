@@ -766,6 +766,15 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on all members of union type %s", propertyName, obj.String()))
 				resultType = types.Never
 			}
+		case *types.EnumType:
+			// Handle property access on enum types (enum member access)
+			if memberType, exists := obj.Members[propertyName]; exists {
+				resultType = memberType
+				debugPrintf("// [Checker MemberExpr] Found enum member '%s.%s': %s\n", obj.Name, propertyName, memberType.String())
+			} else {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on enum %s", propertyName, obj.Name))
+				resultType = types.Never
+			}
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
@@ -919,6 +928,23 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				resultType = types.String
 			} else {
 				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+			}
+
+		case *types.EnumType:
+			// Handle index access on enum types (reverse mapping for numeric enums)
+			// Check if this is a numeric index access
+			if types.IsAssignable(indexType, types.Number) {
+				// Allow reverse mapping for numeric indices (works for both numeric and heterogeneous enums)
+				resultType = types.String // Reverse mapping returns string member name
+				debugPrintf("// [Checker IndexExpr] Enum reverse mapping: %s[number] -> string\n", base.Name)
+			} else if types.IsAssignable(indexType, types.String) {
+				// String index access - this is allowed but typically returns undefined for reverse mapping
+				// For type checking purposes, we'll allow it as it could return string | undefined
+				resultType = types.Any // In practice, this would be string | undefined
+				debugPrintf("// [Checker IndexExpr] String index access on enum %s[string] -> any\n", base.Name)
+			} else {
+				// For other index types, this is an error
+				c.addError(node.Index, fmt.Sprintf("enum %s can only be indexed with number or string, got %s", base.Name, indexType.String()))
 			}
 
 		default:

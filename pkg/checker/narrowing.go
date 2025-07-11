@@ -515,6 +515,55 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 		return false
 	}
 
+	// Handle enum member types - they overlap with their underlying values
+	if enumMember1, ok := type1.(*types.EnumMemberType); ok {
+		// Check if enum member's value overlaps with type2
+		if enumMember1.Value != nil {
+			switch val := enumMember1.Value.(type) {
+			case int:
+				// Numeric enum member overlaps with number literals and number type
+				if lit2, isLit2 := type2.(*types.LiteralType); isLit2 && lit2.Value.IsNumber() {
+					if lit2.Value.IsIntegerNumber() {
+						return int(lit2.Value.AsInteger()) == val
+					} else {
+						return int(lit2.Value.AsFloat()) == val
+					}
+				}
+				return type2 == types.Number
+			case string:
+				// String enum member overlaps with string literals and string type
+				if lit2, isLit2 := type2.(*types.LiteralType); isLit2 && lit2.Value.IsString() {
+					return lit2.Value.ToString() == val
+				}
+				return type2 == types.String
+			}
+		}
+	}
+	
+	if enumMember2, ok := type2.(*types.EnumMemberType); ok {
+		// Check if enum member's value overlaps with type1
+		if enumMember2.Value != nil {
+			switch val := enumMember2.Value.(type) {
+			case int:
+				// Numeric enum member overlaps with number literals and number type
+				if lit1, isLit1 := type1.(*types.LiteralType); isLit1 && lit1.Value.IsNumber() {
+					if lit1.Value.IsIntegerNumber() {
+						return int(lit1.Value.AsInteger()) == val
+					} else {
+						return int(lit1.Value.AsFloat()) == val
+					}
+				}
+				return type1 == types.Number
+			case string:
+				// String enum member overlaps with string literals and string type
+				if lit1, isLit1 := type1.(*types.LiteralType); isLit1 && lit1.Value.IsString() {
+					return lit1.Value.ToString() == val
+				}
+				return type1 == types.String
+			}
+		}
+	}
+
 	// Handle literal types
 	isLiteral1 := types.IsLiteral(type1)
 	isLiteral2 := types.IsLiteral(type2)

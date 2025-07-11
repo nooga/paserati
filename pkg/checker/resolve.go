@@ -427,6 +427,9 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.TemplateLiteralTypeExpression:
 		return c.resolveTemplateLiteralTypeExpression(node)
 
+	case *parser.MemberExpression:
+		return c.resolveEnumMemberTypeExpression(node)
+
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
 		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
@@ -1161,6 +1164,8 @@ func (c *Checker) resolveKeyofTypeExpression(node *parser.KeyofTypeExpression) t
 
 // resolveTypeofTypeExpression resolves a typeof type expression to the type of a variable
 func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression) types.Type {
+	debugPrintf("// [Checker resolveTypeofType] Resolving typeof %s\n", node.Identifier)
+	
 	if node.Identifier == "" {
 		c.addError(node, "typeof expression missing identifier")
 		return nil
@@ -1168,13 +1173,40 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 
 	// Look up the identifier in the type environment
 	varType, _, found := c.env.Resolve(node.Identifier)
+	debugPrintf("// [Checker resolveTypeofType] Looking up '%s' in env: found=%v\n", node.Identifier, found)
+	
 	if !found {
-		c.addError(node, fmt.Sprintf("Cannot find name '%s'", node.Identifier))
-		return nil
+		// Instead of failing immediately, create a forward reference for typeof
+		// This will be resolved later when the variable is defined
+		debugPrintf("// [Checker resolveTypeofType] Creating forward reference for typeof %s\n", node.Identifier)
+		return &types.TypeofType{
+			Identifier: node.Identifier,
+		}
 	}
 
+	debugPrintf("// [Checker resolveTypeofType] Found type for '%s': %T\n", node.Identifier, varType)
 	// Return the type of the variable
 	return varType
+}
+
+// resolveTypeofTypeIfNeeded resolves a TypeofType forward reference if needed
+func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
+	if typeofType, ok := t.(*types.TypeofType); ok {
+		debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Resolving forward reference for typeof %s\n", typeofType.Identifier)
+		
+		// Look up the identifier in the environment
+		varType, _, found := c.env.Resolve(typeofType.Identifier)
+		if found {
+			debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Successfully resolved typeof %s to %T\n", typeofType.Identifier, varType)
+			return varType
+		} else {
+			debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Still cannot resolve typeof %s, keeping forward reference\n", typeofType.Identifier)
+			// Keep the forward reference for now
+			return typeofType
+		}
+	}
+	// Not a TypeofType, return as-is
+	return t
 }
 
 // resolveInferTypeExpression resolves an infer type expression
@@ -1655,6 +1687,10 @@ func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
 	debugPrintf("// [Checker] source: %s\n", source.String())
 	debugPrintf("// [Checker] target: %s\n", target.String())
 
+	// Resolve typeof forward references before assignability checking
+	source = c.resolveTypeofTypeIfNeeded(source)
+	target = c.resolveTypeofTypeIfNeeded(target)
+
 	// Expand target if it's a mapped type or instantiated type containing a mapped type
 	expandedTarget := c.expandIfMappedType(target)
 
@@ -2056,4 +2092,53 @@ func (c *Checker) computeTemplateLiteralType(tlt *types.TemplateLiteralType) typ
 	return &types.LiteralType{
 		Value: vm.String(computedValue),
 	}
+}
+
+// resolveEnumMemberTypeExpression resolves enum member type access like 'Color.Red' in type context
+func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression) types.Type {
+	debugPrintf("// [Checker resolveEnumMemberType] Resolving %s.%s\n", 
+		node.Object.String(), node.Property.String())
+
+	// Object should be an identifier representing the enum name
+	enumIdent, ok := node.Object.(*parser.Identifier)
+	if !ok {
+		c.addError(node.Object, "enum member access requires identifier before '.'")
+		return nil
+	}
+
+	// Property should be an identifier representing the member name  
+	memberIdent, ok := node.Property.(*parser.Identifier)
+	if !ok {
+		c.addError(node.Property, "enum member access requires identifier after '.'")
+		return nil
+	}
+
+	enumName := enumIdent.Value
+	memberName := memberIdent.Value
+
+	// Look up the enum type in the environment
+	enumType, _, found := c.env.Resolve(enumName)
+	if !found {
+		c.addError(node.Object, fmt.Sprintf("Cannot find name '%s'", enumName))
+		return nil
+	}
+
+	// Check if it's actually an enum type
+	enum, ok := enumType.(*types.EnumType)
+	if !ok {
+		c.addError(node.Object, fmt.Sprintf("'%s' is not an enum type", enumName))
+		return nil
+	}
+
+	// Check if the member exists in the enum
+	memberType, exists := enum.Members[memberName]
+	if !exists {
+		c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on enum %s", memberName, enumName))
+		return nil
+	}
+
+	debugPrintf("// [Checker resolveEnumMemberType] Resolved %s.%s to %s\n", 
+		enumName, memberName, memberType.String())
+
+	return memberType
 }

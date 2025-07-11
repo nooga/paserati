@@ -271,8 +271,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 			}
 		} else if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
-			// Check if this is a class expression wrapped in an expression statement
-			if classExpr, isClassExpr := exprStmt.Expression.(*parser.ClassExpression); isClassExpr && classExpr.Name != nil {
+			// Check if this is a class or enum expression wrapped in an expression statement
+			if enumDecl, isEnumDecl := exprStmt.Expression.(*parser.EnumDeclaration); isEnumDecl && enumDecl.Name != nil {
+				debugPrintf("// [Checker Pass 1] Processing Enum Declaration: %s\n", enumDecl.Name.Value)
+				c.checkEnumDeclaration(enumDecl)
+				nodesProcessedPass1[exprStmt] = true
+				nodesProcessedPass2[exprStmt] = true // Also mark for Pass 2 skip
+			} else if classExpr, isClassExpr := exprStmt.Expression.(*parser.ClassExpression); isClassExpr && classExpr.Name != nil {
 				debugPrintf("// [Checker Pass 1] Processing Class Expression: %s\n", classExpr.Name.Value)
 				// Convert to ClassDeclaration for checking
 				classDecl := &parser.ClassDeclaration{
@@ -651,8 +656,12 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
 
-	// --- Pass 4: Final Check of Remaining Statements & Initializers ---
-	debugPrintf("\n// --- Checker - Pass 4: Final Checks & Remaining Statements ---\n")
+	// --- Pass 4: Resolve forward references ---
+	debugPrintf("\n// --- Checker - Pass 4: Resolve Forward References ---\n")
+	c.resolveForwardReferences()
+
+	// --- Pass 5: Final Check of Remaining Statements & Initializers ---
+	debugPrintf("\n// --- Checker - Pass 5: Final Checks & Remaining Statements ---\n")
 	c.env = globalEnv // Ensure global scope
 	for _, stmt := range program.Statements {
 		// Skip nodes processed in initial passes OR function literals visited in Pass 3
@@ -676,14 +685,14 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 
 			if !needsInitializerCheck {
-				debugPrintf("// [Checker Pass 4] Skipping already processed/visited node: %T\n", stmt)
+				debugPrintf("// [Checker Pass 5] Skipping already processed/visited node: %T\n", stmt)
 				continue
 			} else {
-				debugPrintf("// [Checker Pass 4] Re-visiting Let/Const/Var for initializer check: %T\n", stmt)
+				debugPrintf("// [Checker Pass 5] Re-visiting Let/Const/Var for initializer check: %T\n", stmt)
 			}
 		}
 
-		debugPrintf("// [Checker Pass 4] Visiting node: %T\n", stmt)
+		debugPrintf("// [Checker Pass 5] Visiting node: %T\n", stmt)
 
 		// Re-visit Let/Const/Var to check initializers OR visit other statements like ExpressionStatement
 		switch node := stmt.(type) {
@@ -705,18 +714,18 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 			if initializer != nil {
 				// Initializer exists and wasn't a function literal handled before
-				debugPrintf("// [Checker Pass 4] Checking initializer for variable '%s'\n", varName.Value)
+				debugPrintf("// [Checker Pass 5] Checking initializer for variable '%s'\n", varName.Value)
 
 				// Get the variable's type defined in Pass 2 to check if we have a type annotation
 				variableType, _, found := globalEnv.Resolve(varName.Value)
 				if !found { // Should not happen
-					debugPrintf("// [Checker Pass 4] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
+					debugPrintf("// [Checker Pass 5] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
 					continue
 				}
 
 				// Use contextual typing if we have a type annotation (not Any)
 				if typeAnnotation != nil && variableType != types.Any {
-					debugPrintf("// [Checker Pass 4] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
+					debugPrintf("// [Checker Pass 5] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
 					c.visitWithContext(initializer, &ContextualType{
 						ExpectedType: variableType,
 						IsContextual: true,
@@ -763,7 +772,24 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 
 				if !assignable {
-					c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), varName.Value, variableType.String()))
+					// Use widened types for error messages to match TypeScript format
+					widenedSourceType := types.GetWidenedType(computedInitializerType)
+					sourceTypeStr := widenedSourceType.String()
+					targetTypeStr := variableType.String()
+					
+					// For enum types, use a simplified representation
+					if enumType, ok := variableType.(*types.UnionType); ok {
+						// Check if this is an enum union type
+						if len(enumType.Types) > 0 {
+							if types.IsEnumMemberType(enumType.Types[0]) {
+								if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
+									targetTypeStr = memberType.EnumName
+								}
+							}
+						}
+					}
+					
+					c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
 				}
 
 				// --- FIX: Refine variable type in environment if no annotation ---
@@ -778,14 +804,14 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 					// Update the environment only if the refined type is different from the current one
 					if variableType != finalInferredType {
-						debugPrintf("// [Checker Pass 4] Refining type for '%s' (no annotation). Old: %s, New: %s\n", varName.Value, variableType.String(), finalInferredType.String())
+						debugPrintf("// [Checker Pass 5] Refining type for '%s' (no annotation). Old: %s, New: %s\n", varName.Value, variableType.String(), finalInferredType.String())
 						if !globalEnv.Update(varName.Value, finalInferredType) {
-							debugPrintf("// [Checker Pass 4] WARNING: Failed env update refinement for '%s'\n", varName.Value)
+							debugPrintf("// [Checker Pass 5] WARNING: Failed env update refinement for '%s'\n", varName.Value)
 						}
 						// Also update the type on the name node itself for consistency
 						varName.SetComputedType(finalInferredType)
 					} else {
-						debugPrintf("// [Checker Pass 4] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
+						debugPrintf("// [Checker Pass 5] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
 					}
 				}
 				// --- END FIX ---
@@ -801,13 +827,40 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// TODO: Handle other top-level statement types if necessary
 		default:
-			debugPrintf("// [Checker Pass 4] Visiting unhandled statement type %T\n", node)
+			debugPrintf("// [Checker Pass 5] Visiting unhandled statement type %T\n", node)
 			c.visit(node) // Fallback visit? Might be unnecessary
 		}
 	}
-	debugPrintf("// --- Checker - Pass 4: Complete ---\n")
+	debugPrintf("// --- Checker - Pass 5: Complete ---\n")
 
 	return c.errors
+}
+
+// resolveForwardReferences resolves typeof forward references after variables have been defined
+func (c *Checker) resolveForwardReferences() {
+	debugPrintf("// [Checker resolveForwardReferences] Starting forward reference resolution\n")
+	
+	// Walk through all type aliases and resolve any TypeofType forward references
+	// We need to iterate through the environment to find type aliases
+	c.resolveTypeofForwardReferences(c.env)
+}
+
+// resolveTypeofForwardReferences recursively resolves typeof forward references in the environment
+func (c *Checker) resolveTypeofForwardReferences(env *Environment) {
+	// We need to resolve TypeofType instances in type aliases
+	// This requires walking through the environment's type aliases and replacing TypeofType with actual types
+	
+	// Since we can't easily iterate through environment internals, 
+	// let's use a visitor pattern to find and resolve TypeofType instances
+	c.resolveTypeofInEnvironment(env)
+}
+
+// resolveTypeofInEnvironment resolves typeof types in the given environment
+func (c *Checker) resolveTypeofInEnvironment(env *Environment) {
+	// For a proper implementation, we'd need to add methods to Environment
+	// to iterate through type aliases and update them
+	// For now, this is a placeholder that should be implemented
+	debugPrintf("// [Checker resolveTypeofInEnvironment] Placeholder for typeof resolution\n")
 }
 
 // visit is the main dispatch method for AST traversal (Visitor pattern lite).
@@ -977,7 +1030,24 @@ func (c *Checker) visit(node parser.Node) {
 				// --- END SPECIAL CASE ---
 
 				if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
-					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalVariableType.String()))
+					// Use widened types for error messages to match TypeScript format
+					widenedSourceType := types.GetWidenedType(computedInitializerType)
+					sourceTypeStr := widenedSourceType.String()
+					targetTypeStr := finalVariableType.String()
+					
+					// For enum types, use a simplified representation
+					if enumType, ok := finalVariableType.(*types.UnionType); ok {
+						// Check if this is an enum union type
+						if len(enumType.Types) > 0 {
+							if types.IsEnumMemberType(enumType.Types[0]) {
+								if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
+									targetTypeStr = memberType.EnumName
+								}
+							}
+						}
+					}
+					
+					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
 				}
 			} // else: No initializer, declaredType is fine
 		} else {
@@ -1215,7 +1285,24 @@ func (c *Checker) visit(node parser.Node) {
 				}
 
 				if !assignable && !isEmptyArrayAssignment {
-					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalVariableType.String()))
+					// Use widened types for error messages to match TypeScript format
+					widenedSourceType := types.GetWidenedType(computedInitializerType)
+					sourceTypeStr := widenedSourceType.String()
+					targetTypeStr := finalVariableType.String()
+					
+					// For enum types, use a simplified representation
+					if enumType, ok := finalVariableType.(*types.UnionType); ok {
+						// Check if this is an enum union type
+						if len(enumType.Types) > 0 {
+							if types.IsEnumMemberType(enumType.Types[0]) {
+								if memberType, ok := enumType.Types[0].(*types.EnumMemberType); ok {
+									targetTypeStr = memberType.EnumName
+								}
+							}
+						}
+					}
+					
+					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
 				}
 			}
 		} else {
@@ -1601,6 +1688,35 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
+				} else if types.IsEnumMemberType(leftType) && types.IsEnumMemberType(rightType) {
+					// Check if both enum members are numeric
+					leftValue, _ := types.GetEnumMemberValue(leftType)
+					rightValue, _ := types.GetEnumMemberValue(rightType)
+					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
+						if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
+							resultType = types.Number
+						} else {
+							c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+						}
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
+				} else if types.IsEnumMemberType(leftType) && widenedRightType == types.Number {
+					// Enum member + number
+					leftValue, _ := types.GetEnumMemberValue(leftType)
+					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
+						resultType = types.Number
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
+				} else if widenedLeftType == types.Number && types.IsEnumMemberType(rightType) {
+					// Number + enum member
+					rightValue, _ := types.GetEnumMemberValue(rightType)
+					if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
+						resultType = types.Number
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
 				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
@@ -1628,6 +1744,35 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
+				} else if types.IsEnumMemberType(leftType) && types.IsEnumMemberType(rightType) {
+					// Check if both enum members are numeric
+					leftValue, _ := types.GetEnumMemberValue(leftType)
+					rightValue, _ := types.GetEnumMemberValue(rightType)
+					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
+						if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
+							resultType = types.Number
+						} else {
+							c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+						}
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
+				} else if types.IsEnumMemberType(leftType) && widenedRightType == types.Number {
+					// Enum member with number
+					leftValue, _ := types.GetEnumMemberValue(leftType)
+					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
+						resultType = types.Number
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
+				} else if widenedLeftType == types.Number && types.IsEnumMemberType(rightType) {
+					// Number with enum member
+					rightValue, _ := types.GetEnumMemberValue(rightType)
+					if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
+						resultType = types.Number
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
 				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
@@ -1645,6 +1790,35 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					resultType = types.Number
+				} else if types.IsEnumMemberType(leftType) && types.IsEnumMemberType(rightType) {
+					// Check if both enum members are numeric
+					leftValue, _ := types.GetEnumMemberValue(leftType)
+					rightValue, _ := types.GetEnumMemberValue(rightType)
+					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
+						if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
+							resultType = types.Number
+						} else {
+							c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+						}
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
+				} else if types.IsEnumMemberType(leftType) && widenedRightType == types.Number {
+					// Enum member with number
+					leftValue, _ := types.GetEnumMemberValue(leftType)
+					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
+						resultType = types.Number
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
+				} else if widenedLeftType == types.Number && types.IsEnumMemberType(rightType) {
+					// Number with enum member
+					rightValue, _ := types.GetEnumMemberValue(rightType)
+					if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
+						resultType = types.Number
+					} else {
+						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
+					}
 				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||

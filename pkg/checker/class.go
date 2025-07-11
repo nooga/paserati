@@ -730,7 +730,9 @@ func (c *Checker) extractOptionalParams(fn *parser.FunctionLiteral) []bool {
 	optionalParams := make([]bool, len(fn.Parameters))
 
 	for i, param := range fn.Parameters {
-		optionalParams[i] = param.Optional
+		// A parameter is optional if it's explicitly marked optional (y?: number) 
+		// or if it has a default value (y: number = 42)
+		optionalParams[i] = param.Optional || param.DefaultValue != nil
 	}
 
 	return optionalParams

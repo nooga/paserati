@@ -80,6 +80,7 @@ const (
 	TYPE_UNION        // |
 	TYPE_INTERSECTION // &  (Higher precedence than union)
 	TYPE_ARRAY        // [] (Higher precedence than intersection)
+	TYPE_MEMBER       // . (Highest precedence - member access)
 )
 
 // Precedences map for VALUE operator tokens
@@ -168,6 +169,7 @@ var typePrecedences = map[lexer.TokenType]int{
 	lexer.PIPE:        TYPE_UNION,
 	lexer.BITWISE_AND: TYPE_INTERSECTION,
 	lexer.LBRACKET:    TYPE_ARRAY,
+	lexer.DOT:         TYPE_MEMBER,
 }
 
 // NewParser creates a new Parser.
@@ -313,6 +315,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypeInfix(lexer.LBRACKET, p.parseArrayTypeExpression)           // TYPE context: 'T[]'
 	p.registerTypeInfix(lexer.IS, p.parseTypePredicateExpression)             // TYPE context: 'x is Type' for type predicates
 	p.registerTypeInfix(lexer.EXTENDS, p.parseConditionalTypeExpression)      // TYPE context: 'T extends U ? X : Y'
+	p.registerTypeInfix(lexer.DOT, p.parseEnumMemberTypeExpression)           // TYPE context: 'EnumName.MemberName'
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -449,6 +452,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseFunctionDeclarationStatement()
 	case lexer.CLASS:
 		return p.parseClassDeclarationStatement()
+	case lexer.ENUM:
+		return p.parseEnumDeclarationStatement()
 	case lexer.ABSTRACT:
 		return p.parseAbstractClassDeclarationStatement()
 	case lexer.TRY:
@@ -1143,6 +1148,9 @@ func (p *Parser) parseConstStatement() Statement {
 	p.nextToken() // Move to what comes after 'const'
 
 	switch p.curToken.Type {
+	case lexer.ENUM:
+		// Const enum: const enum Name { ... }
+		return p.parseConstEnumDeclarationStatement(constToken)
 	case lexer.LBRACKET:
 		// Array destructuring: const [a, b] = ...
 		return p.parseArrayDestructuringDeclaration(constToken, true)
@@ -7464,4 +7472,49 @@ func (p *Parser) parseLeadingPipeUnionType() Expression {
 	}
 	
 	return leftType
+}
+
+// parseEnumMemberTypeExpression handles enum member type access like 'Color.Red' in type context
+func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
+	debugPrint("parseEnumMemberTypeExpression: left=%T, cur='%s'", left, p.curToken.Literal)
+	
+	// Current token should be DOT
+	if !p.curTokenIs(lexer.DOT) {
+		msg := fmt.Sprintf("internal error: parseEnumMemberTypeExpression called on non-DOT token %s", p.curToken.Type)
+		p.addError(p.curToken, msg)
+		return nil
+	}
+
+	// Left side should be an identifier (the enum name)
+	enumName, ok := left.(*Identifier)
+	if !ok {
+		p.addError(p.curToken, "enum member type access requires identifier before '.'")
+		return nil
+	}
+
+	dotToken := p.curToken
+	
+	// Move to the member name
+	p.nextToken()
+	
+	// Member name should be an identifier
+	if !p.curTokenIs(lexer.IDENT) {
+		p.addError(p.curToken, fmt.Sprintf("expected member name after '.', got %s", p.curToken.Type))
+		return nil
+	}
+
+	memberName := &Identifier{
+		Token: p.curToken,
+		Value: p.curToken.Literal,
+	}
+
+	// Create a member expression to represent EnumName.MemberName in type context
+	memberExpr := &MemberExpression{
+		Token:    dotToken,
+		Object:   enumName,
+		Property: memberName,
+	}
+
+	debugPrint("parseEnumMemberTypeExpression: created %s.%s", enumName.Value, memberName.Value)
+	return memberExpr
 }
