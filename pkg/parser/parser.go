@@ -284,6 +284,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)       // 'void' type
 	p.registerTypePrefix(lexer.KEYOF, p.parseKeyofTypeExpression)  // 'keyof' type operator
 	p.registerTypePrefix(lexer.TYPEOF, p.parseTypeofTypeExpression) // 'typeof' type operator
+	p.registerTypePrefix(lexer.INFER, p.parseInferTypeExpression)   // 'infer' type operator
 	p.registerTypePrefix(lexer.TEMPLATE_START, p.parseTemplateLiteralType) // Template literal types
 	// NEW: Constructor types that start with 'new'
 	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // NEW: Constructor types like 'new () => T'
@@ -6625,6 +6626,26 @@ func (p *Parser) parseTypeofTypeExpression() Expression {
 	tte.Identifier = p.curToken.Literal
 
 	return tte
+}
+
+// parseInferTypeExpression parses an infer type expression like 'infer R'
+func (p *Parser) parseInferTypeExpression() Expression {
+	ite := &InferTypeExpression{
+		Token: p.curToken, // The 'infer' token
+	}
+
+	// Move to the type parameter name after 'infer'
+	p.nextToken()
+	
+	// The next token should be an identifier (the type parameter name)
+	if p.curToken.Type != lexer.IDENT {
+		p.addError(p.curToken, "expected identifier after 'infer'")
+		return nil
+	}
+	
+	ite.TypeParameter = p.curToken.Literal
+
+	return ite
 }
 
 // parseTemplateLiteralType parses template literal types like `Hello ${T}!`

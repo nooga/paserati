@@ -2061,6 +2061,35 @@ func (tte *TypeofTypeExpression) String() string {
 // The actual type is determined during type checking.
 func (tte *TypeofTypeExpression) GetComputedType() types.Type { return tte.ComputedType }
 
+// --- NEW: InferTypeExpression ---
+
+// InferTypeExpression represents an infer type in conditional types like infer R
+// Used within conditional types to infer and capture types
+type InferTypeExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'infer' token
+	TypeParameter  string      // The type parameter being inferred (e.g., 'R' in 'infer R')
+}
+
+func (ite *InferTypeExpression) expressionNode()      {}
+func (ite *InferTypeExpression) TokenLiteral() string { return ite.Token.Literal }
+func (ite *InferTypeExpression) String() string {
+	var out bytes.Buffer
+	
+	out.WriteString("infer ")
+	out.WriteString(ite.TypeParameter)
+	
+	if ite.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ite.ComputedType.String()))
+	}
+	
+	return out.String()
+}
+
+// GetComputedType satisfies the Expression interface (placeholder)
+// The actual type is determined during type checking.
+func (ite *InferTypeExpression) GetComputedType() types.Type { return ite.ComputedType }
+
 // --- NEW: TypePredicateExpression ---
 
 // TypePredicateExpression represents a type predicate like 'x is string'

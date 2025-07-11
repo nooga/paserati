@@ -151,6 +151,7 @@ const (
 	TYPEOF   TokenType = "TYPEOF"   // Added for typeof operator
 	VOID     TokenType = "VOID"     // Added for void operator
 	KEYOF    TokenType = "KEYOF"    // Added for keyof operator
+	INFER    TokenType = "INFER"    // Added for infer keyword in conditional types
 	IS       TokenType = "IS"       // Added for type predicates (x is Type)
 
 	// Logical Operators
@@ -247,6 +248,7 @@ var keywords = map[string]TokenType{
 	"typeof":     TYPEOF,     // Added for typeof operator
 	"void":       VOID,       // Added for void operator
 	"keyof":      KEYOF,      // Added for keyof operator
+	"infer":      INFER,      // Added for infer keyword
 	"is":         IS,         // Added for type predicates
 	"of":         OF,         // Added for for...of loops
 	"as":         AS,         // Added for type assertions

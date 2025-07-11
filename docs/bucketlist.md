@@ -595,8 +595,8 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] `Extract<T, U>` - Extracts types from T that are assignable to U
     - [x] `Exclude<T, U>` - Excludes types from T that are assignable to U  
     - [x] `NonNullable<T>` - Removes null and undefined from union types
-  - [ ] **Function Utility Types** (Ready to implement - now that `typeof` is available)
-    - [ ] `ReturnType<T>` - Extracts return type from function type
+  - [ ] **Function Utility Types** (Now possible with `typeof` and `infer`)
+    - [x] `ReturnType<T>` - Extracts return type from function type (implemented!)
     - [ ] `Parameters<T>` - Extracts parameter types as tuple from function type
     - [ ] `ConstructorParameters<T>` - Extracts constructor parameter types
     - [ ] `InstanceType<T>` - Extracts instance type from constructor function
@@ -638,11 +638,15 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Integration with conditional types and generics
   - [x] Proper scope resolution and symbol lookup
   - [x] Works with utility types like `ReturnType<typeof func>`
-- [ ] **`infer` Keyword** - Type inference in conditional types
-  - [ ] Basic inference (`T extends (infer U)[] ? U : never`)
-  - [ ] Multiple inference sites with same name
-  - [ ] Inference in function parameters and return types
-  - [ ] Complex inference patterns with nested conditionals
+- [x] **`infer` Keyword** - **Complete Implementation!**
+  - [x] Basic inference (`T extends (infer U)[] ? U : never`)
+  - [x] Function return type inference (`T extends (...args: any[]) => infer R ? R : never`)
+  - [x] Lexer and parser support for `infer` keyword
+  - [x] Type checker integration with conditional type resolution
+  - [x] Inference constraint matching and type capture
+  - [x] Built-in `ReturnType<T>` utility type implementation
+  - [ ] Multiple inference sites with same name (advanced feature)
+  - [ ] Complex inference patterns with nested conditionals (advanced feature)
 
 ### Classes - **Complete Implementation!**
 

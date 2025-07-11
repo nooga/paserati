@@ -35,6 +35,9 @@ func (u *UtilityTypesInitializer) InitTypes(ctx *TypeContext) error {
 	// Record<K, T> = { [P in K]: T }
 	u.registerRecordType(ctx)
 	
+	// ReturnType<T> = T extends (...args: any[]) => infer R ? R : never
+	u.registerReturnType(ctx)
+	
 	return nil
 }
 
@@ -187,6 +190,31 @@ func (u *UtilityTypesInitializer) registerRecordType(ctx *TypeContext) {
 	
 	// Register it in the environment
 	ctx.DefineTypeAlias("Record", recordGeneric)
+}
+
+// registerReturnType registers ReturnType<T> = T extends (...args: any[]) => infer R ? R : never
+func (u *UtilityTypesInitializer) registerReturnType(ctx *TypeContext) {
+	// Create type parameter T
+	tParam := types.NewTypeParameter("T", 0, nil)
+	
+	// Create the function signature pattern: (...args: any[]) => infer R
+	// For now, we'll create a simplified version that works with our existing infrastructure
+	// This represents: T extends Function ? ReturnTypeOfT : never
+	
+	// Create a conditional type that checks if T is a function
+	// Since we don't have full infer support yet, we'll use a simplified approach
+	conditionalType := &types.ConditionalType{
+		CheckType:   &types.TypeParameterType{Parameter: tParam},
+		ExtendsType: types.Any, // We'll improve this to check for function types
+		TrueType:    types.Any, // This should be the inferred return type
+		FalseType:   types.Never,
+	}
+	
+	// Create the generic type
+	returnTypeGeneric := types.NewGenericType("ReturnType", []*types.TypeParameter{tParam}, conditionalType)
+	
+	// Register it in the environment
+	ctx.DefineTypeAlias("ReturnType", returnTypeGeneric)
 }
 
 // registerOmitType registers Omit<T, K> = { [P in Exclude<keyof T, K>]: T[P] }

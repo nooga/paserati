@@ -262,6 +262,26 @@ func (tt *TypeofType) Equals(other Type) bool {
 
 func (tt *TypeofType) typeNode() {}
 
+// InferType represents an infer type in conditional types like infer R
+// This is used to capture and infer types during conditional type resolution
+type InferType struct {
+	TypeParameter string // The type parameter being inferred (e.g., 'R' in 'infer R')
+}
+
+func (it *InferType) String() string {
+	return fmt.Sprintf("infer %s", it.TypeParameter)
+}
+
+func (it *InferType) Equals(other Type) bool {
+	otherIt, ok := other.(*InferType)
+	if !ok {
+		return false
+	}
+	return it.TypeParameter == otherIt.TypeParameter
+}
+
+func (it *InferType) typeNode() {}
+
 // TypePredicateType represents a type predicate like 'x is string'
 // This is used in function return types to indicate type guards
 type TypePredicateType struct {

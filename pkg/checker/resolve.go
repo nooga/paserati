@@ -409,6 +409,9 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	case *parser.TypeofTypeExpression:
 		return c.resolveTypeofTypeExpression(node)
 
+	case *parser.InferTypeExpression:
+		return c.resolveInferTypeExpression(node)
+
 	case *parser.TypePredicateExpression:
 		return c.resolveTypePredicateExpression(node)
 
@@ -1081,11 +1084,15 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		}
 
 	case *types.ConditionalType:
-		// Substitute all types in conditional type
+		// Substitute check type and false type
 		newCheckType := c.substituteTypes(typ.CheckType, substitution)
-		newExtendsType := c.substituteTypes(typ.ExtendsType, substitution)
-		newTrueType := c.substituteTypes(typ.TrueType, substitution)
 		newFalseType := c.substituteTypes(typ.FalseType, substitution)
+		
+		// For extends type, don't substitute infer types - they should remain as inference placeholders
+		newExtendsType := c.substituteTypesPreservingInfer(typ.ExtendsType, substitution)
+		
+		// For true type, don't substitute infer types - they will be replaced by inference results
+		newTrueType := c.substituteTypesPreservingInfer(typ.TrueType, substitution)
 
 		// Try to compute the result with substituted types
 		resolvedType := c.computeConditionalType(newCheckType, newExtendsType, newTrueType, newFalseType)
@@ -1168,6 +1175,20 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 
 	// Return the type of the variable
 	return varType
+}
+
+// resolveInferTypeExpression resolves an infer type expression
+func (c *Checker) resolveInferTypeExpression(node *parser.InferTypeExpression) types.Type {
+	if node.TypeParameter == "" {
+		c.addError(node, "infer expression missing type parameter")
+		return nil
+	}
+
+	// Create an InferType that represents the inferred type placeholder
+	// The actual inference happens during conditional type resolution
+	return &types.InferType{
+		TypeParameter: node.TypeParameter,
+	}
 }
 
 // computeKeyofType computes the keyof type for a given type
@@ -1387,13 +1408,23 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 }
 
 // computeConditionalType computes the result of a conditional type like T extends U ? X : Y
+// Enhanced to handle infer types for type inference
 func (c *Checker) computeConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
-	// For now, we'll implement basic conditional type resolution
-	// This can be expanded to handle more complex cases later
-
 	debugPrintf("// [ConditionalType] Checking if %s extends %s\n", checkType.String(), extendsType.String())
 
-	// Check if checkType extends extendsType (is assignable to it)
+	// Check if the extends type contains infer types that we need to match
+	inferences := make(map[string]types.Type)
+	if c.tryInferTypes(checkType, extendsType, inferences) {
+		debugPrintf("// [ConditionalType] Inference successful with %d captured types\n", len(inferences))
+		
+		// Apply the inferences to the true type
+		substitutedTrueType := c.substituteInferredTypes(trueType, inferences)
+		debugPrintf("// [ConditionalType] YES with inference: %s extends %s -> %s\n", 
+			checkType.String(), extendsType.String(), substitutedTrueType.String())
+		return substitutedTrueType
+	}
+
+	// Fallback to basic assignability check without inference
 	if types.IsAssignable(checkType, extendsType) {
 		debugPrintf("// [ConditionalType] YES: %s extends %s -> %s\n", checkType.String(), extendsType.String(), trueType.String())
 		return trueType
@@ -1684,6 +1715,81 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 	return typ
 }
 
+// tryInferTypes attempts to match checkType against extendsType and capture infer types
+func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences map[string]types.Type) bool {
+	switch et := extendsType.(type) {
+	case *types.InferType:
+		// This is an infer type - capture the checkType
+		inferences[et.TypeParameter] = checkType
+		return true
+		
+	case *types.ObjectType:
+		// Handle function type inference like (...args: any[]) => infer R
+		if ct, ok := checkType.(*types.ObjectType); ok && len(ct.CallSignatures) > 0 && len(et.CallSignatures) > 0 {
+			// Match function signature structure (use first call signature)
+			return c.tryInferFromFunctionTypes(ct.CallSignatures[0], et.CallSignatures[0], inferences)
+		}
+		return false
+		
+	case *types.ArrayType:
+		// Handle array type inference like (infer U)[]
+		if ct, ok := checkType.(*types.ArrayType); ok {
+			return c.tryInferTypes(ct.ElementType, et.ElementType, inferences)
+		}
+		return false
+		
+	default:
+		// For other types, check if they're structurally compatible
+		return types.IsAssignable(checkType, extendsType)
+	}
+}
+
+// tryInferFromFunctionTypes handles function type inference
+func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signature, inferences map[string]types.Type) bool {
+	// Try to infer from return type
+	if !c.tryInferTypes(checkSig.ReturnType, extendsSig.ReturnType, inferences) {
+		return false
+	}
+	
+	// For now, we'll focus on return type inference (most common case)
+	// Parameter inference can be added later if needed
+	return true
+}
+
+// substituteInferredTypes substitutes inferred types into the target type
+func (c *Checker) substituteInferredTypes(targetType types.Type, inferences map[string]types.Type) types.Type {
+	if targetType == nil {
+		return nil
+	}
+	
+	switch t := targetType.(type) {
+	case *types.InferType:
+		// Replace infer type with inferred type
+		if inferredType, found := inferences[t.TypeParameter]; found {
+			return inferredType
+		}
+		return targetType
+		
+	case *types.ArrayType:
+		// Recursively substitute in array element type
+		substitutedElement := c.substituteInferredTypes(t.ElementType, inferences)
+		return &types.ArrayType{ElementType: substitutedElement}
+		
+	case *types.UnionType:
+		// Recursively substitute in union members
+		var substitutedTypes []types.Type
+		for _, memberType := range t.Types {
+			substituted := c.substituteInferredTypes(memberType, inferences)
+			substitutedTypes = append(substitutedTypes, substituted)
+		}
+		return types.NewUnionType(substitutedTypes...)
+		
+	default:
+		// For other types, return as-is
+		return targetType
+	}
+}
+
 // substituteMappedType substitutes type arguments into a mapped type
 func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams []*types.TypeParameter, typeArgs []types.Type) *types.MappedType {
 	if mappedType == nil || len(typeParams) != len(typeArgs) {
@@ -1795,6 +1901,76 @@ func (c *Checker) resolveTemplateLiteralTypeExpression(node *parser.TemplateLite
 
 	return &types.TemplateLiteralType{
 		Parts: parts,
+	}
+}
+
+// substituteTypesPreservingInfer performs type substitution but preserves InferType nodes
+func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution map[string]types.Type) types.Type {
+	if typ == nil {
+		return nil
+	}
+
+	switch t := typ.(type) {
+	case *types.InferType:
+		// Don't substitute infer types - they should remain as inference placeholders
+		return typ
+		
+	case *types.TypeParameterType:
+		// Substitute type parameters as normal
+		if t.Parameter != nil {
+			if replacement, found := substitution[t.Parameter.Name]; found {
+				return replacement
+			}
+		}
+		return typ
+		
+	case *types.ArrayType:
+		// Recursively preserve infer in array element type
+		substitutedElement := c.substituteTypesPreservingInfer(t.ElementType, substitution)
+		return &types.ArrayType{ElementType: substitutedElement}
+		
+	case *types.UnionType:
+		// Recursively preserve infer in union members
+		var substitutedTypes []types.Type
+		for _, memberType := range t.Types {
+			substituted := c.substituteTypesPreservingInfer(memberType, substitution)
+			substitutedTypes = append(substitutedTypes, substituted)
+		}
+		return types.NewUnionType(substitutedTypes...)
+		
+	case *types.ObjectType:
+		// For function types, recursively handle call signatures
+		if len(t.CallSignatures) > 0 {
+			newSigs := make([]*types.Signature, len(t.CallSignatures))
+			for i, sig := range t.CallSignatures {
+				// Substitute in signature parameters and return type while preserving infer
+				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
+				for j, paramType := range sig.ParameterTypes {
+					newParamTypes[j] = c.substituteTypesPreservingInfer(paramType, substitution)
+				}
+				newReturnType := c.substituteTypesPreservingInfer(sig.ReturnType, substitution)
+				
+				newSigs[i] = &types.Signature{
+					ParameterTypes:    newParamTypes,
+					ReturnType:        newReturnType,
+					OptionalParams:    sig.OptionalParams,
+					IsVariadic:        sig.IsVariadic,
+					RestParameterType: sig.RestParameterType,
+				}
+			}
+			
+			// Create new ObjectType with substituted signatures
+			newObj := types.NewObjectType()
+			for _, sig := range newSigs {
+				newObj.WithCallSignature(sig)
+			}
+			return newObj
+		}
+		return typ
+		
+	default:
+		// For other types, fall back to regular substitution
+		return c.substituteTypes(typ, substitution)
 	}
 }
 
