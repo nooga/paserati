@@ -185,6 +185,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Runtime behavior (assertions are no-ops after type checking)
   - [x] Support for primitive types, interfaces, and complex types
   - [x] Integration with union types and contextual typing
+- [x] **Satisfies Operator** (`satisfies`) - **New!**
+  - [x] Type validation without type widening (`value satisfies Type`)
+  - [x] Strict object literal checking (rejects excess properties)
+  - [x] Preserves original expression type (key difference from `as`)
+  - [x] TypeScript 4.9+ feature implementation
+  - [x] Full integration with type system and error reporting
 - [x] Spread Syntax (`...`) - **Complete Implementation!**
   - [x] Spread in function calls (`func(...args)`) with tuple types
   - [x] Contextual typing for spread array literals (`sum(...[1, 2, 3])`)
@@ -759,7 +765,14 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Full access control enforcement (public, private, protected, readonly)
   - [x] Integration with existing class property system
   - [x] Comprehensive test coverage with access control validation
-- [ ] **Satisfies Operator** (`value satisfies Type`) - TypeScript 4.9+ feature
+- [x] **Satisfies Operator** (`value satisfies Type`) - **Complete Implementation!**
+  - [x] SATISFIES token and keyword support in lexer
+  - [x] SatisfiesExpression AST node and parser integration
+  - [x] Type checking with strict object literal excess property validation
+  - [x] Preserves original expression type (unlike `as` which changes type)
+  - [x] Compiler support with runtime no-op behavior
+  - [x] TypeScript-compliant error messages for type mismatches
+  - [x] Comprehensive test suite covering basic usage, errors, and edge cases
 
 ### Runtime Features
 

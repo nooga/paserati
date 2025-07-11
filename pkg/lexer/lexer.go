@@ -185,6 +185,8 @@ const (
 	OF TokenType = "OF"
 	// AS keyword
 	AS TokenType = "AS"
+	// SATISFIES keyword
+	SATISFIES TokenType = "SATISFIES"
 	// IN keyword
 	IN TokenType = "IN"
 	// INSTANCEOF keyword
@@ -252,6 +254,7 @@ var keywords = map[string]TokenType{
 	"is":         IS,         // Added for type predicates
 	"of":         OF,         // Added for for...of loops
 	"as":         AS,         // Added for type assertions
+	"satisfies":  SATISFIES,  // Added for satisfies operator
 	"in":         IN,         // Added for in operator
 	"instanceof": INSTANCEOF, // Added for instanceof operator
 	"delete":     DELETE,     // Added for delete operator

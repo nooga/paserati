@@ -801,6 +801,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.TypeAssertionExpression:
 		return c.compileTypeAssertionExpression(node, hint)
 
+	case *parser.SatisfiesExpression:
+		return c.compileSatisfiesExpression(node, hint)
+
 	case *parser.InfixExpression:
 		return c.compileInfixExpression(node, hint) // TODO: Fix this
 

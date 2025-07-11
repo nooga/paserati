@@ -147,7 +147,8 @@ var precedences = map[lexer.TokenType]int{
 	// lexer.DEC prefix/postfix handled by registration
 
 	// Type Assertion
-	lexer.AS: ASSERTION,
+	lexer.AS:        ASSERTION,
+	lexer.SATISFIES: ASSERTION,
 
 	// Call, Index, Member Access
 	lexer.LPAREN:            CALL,
@@ -247,6 +248,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.UNSIGNED_RIGHT_SHIFT, p.parseInfixExpression)
 	// Type Assertion
 	p.registerInfix(lexer.AS, p.parseTypeAssertionExpression)
+	p.registerInfix(lexer.SATISFIES, p.parseSatisfiesExpression)
 
 	// Call, Index, Member, Ternary
 	p.registerInfix(lexer.LPAREN, p.parseCallExpression)    // Value context: function call
@@ -2935,6 +2937,24 @@ func (p *Parser) parseTypeAssertionExpression(left Expression) Expression {
 	return expression
 }
 
+func (p *Parser) parseSatisfiesExpression(left Expression) Expression {
+	expression := &SatisfiesExpression{
+		Token:      p.curToken, // The 'satisfies' token
+		Expression: left,       // The expression being validated
+	}
+
+	p.nextToken() // Move past 'satisfies'
+
+	// Parse the target type expression
+	expression.TargetType = p.parseTypeExpression()
+	if expression.TargetType == nil {
+		p.addError(p.curToken, "expected type after 'satisfies'")
+		return nil
+	}
+
+	return expression
+}
+
 // parseGroupedExpression handles expressions like (expr) OR arrow functions like () => expr or (a, b) => expr
 func (p *Parser) parseGroupedExpression() Expression {
 	startPos := p.l.CurrentPosition()
@@ -5369,7 +5389,7 @@ func (p *Parser) parsePropertyName() *Identifier {
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
 		lexer.RETURN, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
-		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS,
+		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, lexer.SATISFIES,
 		lexer.IN, lexer.INSTANCEOF:
 		// Allow keywords as property names
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}

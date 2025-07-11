@@ -1079,6 +1079,33 @@ func (tae *TypeAssertionExpression) String() string {
 	return out.String()
 }
 
+// SatisfiesExpression represents a satisfies expression (value satisfies Type)
+type SatisfiesExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'satisfies' token
+	Expression     Expression  // The expression being validated
+	TargetType     Expression  // The target type annotation
+}
+
+func (se *SatisfiesExpression) expressionNode()      {}
+func (se *SatisfiesExpression) TokenLiteral() string { return se.Token.Literal }
+func (se *SatisfiesExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	if se.Expression != nil {
+		out.WriteString(se.Expression.String())
+	}
+	out.WriteString(" satisfies ")
+	if se.TargetType != nil {
+		out.WriteString(se.TargetType.String())
+	}
+	out.WriteString(")")
+	if se.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", se.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // InfixExpression represents an infix operator expression.
 // <Left> <operator> <Right>
 // e.g., 5 + 5, x == y

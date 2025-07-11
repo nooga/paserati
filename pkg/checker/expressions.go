@@ -1271,6 +1271,71 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 	node.SetComputedType(targetType)
 }
 
+// checkSatisfiesExpression handles satisfies expressions (value satisfies Type)
+func (c *Checker) checkSatisfiesExpression(node *parser.SatisfiesExpression) {
+	// Visit the expression being validated
+	c.visit(node.Expression)
+	sourceType := node.Expression.GetComputedType()
+	if sourceType == nil {
+		sourceType = types.Any
+	}
+
+	// Resolve the target type
+	targetType := c.resolveTypeAnnotation(node.TargetType)
+	if targetType == nil {
+		c.addError(node.TargetType, "invalid type in satisfies expression")
+		node.SetComputedType(types.Any)
+		return
+	}
+
+	// For satisfies, we need strict checking including excess property checks for object literals
+	if objectLit, ok := node.Expression.(*parser.ObjectLiteral); ok {
+		// Special handling for object literals - check for excess properties
+		c.checkObjectLiteralSatisfies(objectLit, targetType, node)
+	} else {
+		// For non-object literals, use regular assignability check
+		if !types.IsAssignable(sourceType, targetType) {
+			c.addError(node, fmt.Sprintf("type '%s' does not satisfy the constraint '%s'",
+				sourceType.String(), targetType.String()))
+		}
+	}
+
+	// The result type is the ORIGINAL expression type, NOT the target type
+	// This is the key difference from type assertions
+	node.SetComputedType(sourceType)
+}
+
+// checkObjectLiteralSatisfies performs strict checking for object literals in satisfies expressions
+func (c *Checker) checkObjectLiteralSatisfies(objectLit *parser.ObjectLiteral, targetType types.Type, satisfiesNode *parser.SatisfiesExpression) {
+	sourceType := objectLit.GetComputedType()
+	if sourceType == nil {
+		return
+	}
+
+	// First check if the source type is assignable to the target type
+	if !types.IsAssignable(sourceType, targetType) {
+		c.addError(satisfiesNode, fmt.Sprintf("type '%s' does not satisfy the constraint '%s'",
+			sourceType.String(), targetType.String()))
+		return
+	}
+
+	// For object literals with satisfies, we need to check for excess properties
+	// This is stricter than regular assignment
+	sourceObjType, sourceIsObj := sourceType.(*types.ObjectType)
+	targetObjType, targetIsObj := targetType.(*types.ObjectType)
+
+	if sourceIsObj && targetIsObj {
+		// Check for excess properties in the source object literal
+		for propName := range sourceObjType.Properties {
+			if _, exists := targetObjType.Properties[propName]; !exists {
+				// This is an excess property - satisfies should reject it
+				c.addError(satisfiesNode, fmt.Sprintf("Object literal may only specify known properties, and '%s' does not exist in type '%s'",
+					propName, targetType.String()))
+			}
+		}
+	}
+}
+
 // isValidTypeAssertion checks if a type assertion is valid according to TypeScript rules
 func (c *Checker) isValidTypeAssertion(sourceType, targetType types.Type) bool {
 	// Allow any assertion involving 'any' or 'unknown'

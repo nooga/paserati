@@ -1562,6 +1562,10 @@ func (c *Checker) visit(node parser.Node) {
 		// --- NEW: Handle TypeAssertionExpression ---
 		c.checkTypeAssertionExpression(node)
 
+	case *parser.SatisfiesExpression:
+		// --- NEW: Handle SatisfiesExpression ---
+		c.checkSatisfiesExpression(node)
+
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
 		c.visit(node.Left)
