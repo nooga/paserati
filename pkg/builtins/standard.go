@@ -35,8 +35,11 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &DateInitializer{})
 	initializers = append(initializers, &ArrayBufferInitializer{})
 	initializers = append(initializers, &Uint8ArrayInitializer{})
+	initializers = append(initializers, &Uint8ClampedArrayInitializer{})
+	initializers = append(initializers, &Uint16ArrayInitializer{})
 	initializers = append(initializers, &Int32ArrayInitializer{})
 	initializers = append(initializers, &Float32ArrayInitializer{})
+	initializers = append(initializers, &Float64ArrayInitializer{})
 	
 	// Sort by priority (lower numbers first)
 	sort.Slice(initializers, func(i, j int) bool {

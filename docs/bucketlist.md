@@ -264,7 +264,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Basic overload declarations (`function f(x: string): string; function f(x: number): number;`)
   - [x] Implementation signature matching
   - [x] Integration with default/optional parameters
-    - [ ] TypeScript compliant type-checking for default/optional parameters
+    - [x] TypeScript compliant type-checking for default/optional parameters
 - [x] Default Parameter Values
   - [x] Basic default values (`function f(x = 5)`)
   - [x] Multiple default parameters
@@ -403,7 +403,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Handles all standard JavaScript types (objects, arrays, primitives)
 - [x] `Map` / `Set` collections
 - [ ] `WeakMap` / `WeakSet` collections
-- [ ] Typed Arrays (`Int8Array`, `Uint8Array`, `Float32Array`, etc.)
+- [x] Typed Arrays (`Int8Array`, `Uint8Array`, `Float32Array`, etc.)
 - [ ] `Promise` (basic object exists, no async/await integration)
 - [ ] **Event Loop** - Required for async/await functionality
 - [x] `console` Object

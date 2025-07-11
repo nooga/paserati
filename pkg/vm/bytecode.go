@@ -113,7 +113,7 @@ const (
 	OpJumpIfNull      OpCode = 54 // Ry Offset(16bit): Jump if Ry === null
 	OpJumpIfUndefined OpCode = 55 // Ry Offset(16bit): Jump if Ry === undefined
 	OpJumpIfNullish   OpCode = 56 // Ry Offset(16bit): Jump if Ry is null or undefined
-	
+
 	// --- NEW: Spread Call Support ---
 	OpSpreadCall       OpCode = 57 // Rx FuncReg SpreadArgReg: Call function with spread array as arguments, result in Rx
 	OpSpreadCallMethod OpCode = 58 // Rx FuncReg ThisReg SpreadArgReg: Call method with spread array as arguments, result in Rx
@@ -142,11 +142,11 @@ const (
 	// --- Exception Handling ---
 	OpThrow OpCode = 65 // Rx: Throw exception in register Rx
 	// --- END Exception Handling ---
-	
+
 	// --- Phase 4a: Return in Finally ---
 	OpReturnFinally OpCode = 66 // Rx: Return value from register Rx (finally context)
 	// --- END Phase 4a ---
-	
+
 	// --- Phase 4a: Handle Pending Actions ---
 	OpHandlePending OpCode = 67 // Handle pending actions after finally block
 	// --- END Phase 4a ---
@@ -301,17 +301,17 @@ func (op OpCode) String() string {
 	case OpCopyObjectExcluding:
 		return "OpCopyObjectExcluding"
 	// --- END NEW ---
-	
+
 	// --- Exception Handling ---
 	case OpThrow:
 		return "OpThrow"
 	// --- END Exception Handling ---
-	
+
 	// --- Phase 4a: Return in Finally ---
 	case OpReturnFinally:
 		return "OpReturnFinally"
 	// --- END Phase 4a ---
-	
+
 	// --- Phase 4a: Handle Pending Actions ---
 	case OpHandlePending:
 		return "OpHandlePending"
@@ -332,20 +332,20 @@ func (op OpCode) String() string {
 
 // ExceptionHandler represents an entry in the exception table
 type ExceptionHandler struct {
-	TryStart     int    // PC where try block starts (inclusive)
-	TryEnd       int    // PC where try block ends (exclusive)
-	HandlerPC    int    // Where to jump when exception caught
-	CatchReg     int    // Register to store exception (-1 if finally only)
-	IsCatch      bool   // true for catch, false for finally
-	IsFinally    bool   // true for finally blocks (Phase 3)
-	FinallyReg   int    // Register to store pending action/value (-1 if not needed)
+	TryStart   int  // PC where try block starts (inclusive)
+	TryEnd     int  // PC where try block ends (exclusive)
+	HandlerPC  int  // Where to jump when exception caught
+	CatchReg   int  // Register to store exception (-1 if finally only)
+	IsCatch    bool // true for catch, false for finally
+	IsFinally  bool // true for finally blocks (Phase 3)
+	FinallyReg int  // Register to store pending action/value (-1 if not needed)
 }
 
 // Chunk represents a sequence of bytecode instructions and associated data.
 type Chunk struct {
-	Code      []byte  // The bytecode instructions (OpCodes and operands)
-	Constants []Value // Constant pool (Now uses Value from vm package)
-	Lines     []int   // Line number corresponding to the start of each instruction
+	Code           []byte             // The bytecode instructions (OpCodes and operands)
+	Constants      []Value            // Constant pool (Now uses Value from vm package)
+	Lines          []int              // Line number corresponding to the start of each instruction
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
 	// Add MaxRegs later for function definitions
 }
@@ -422,7 +422,7 @@ func (c *Chunk) DisassembleChunk(name string) string {
 	for offset < len(c.Code) {
 		offset = c.disassembleInstruction(&builder, offset)
 	}
-	
+
 	// Add exception table information
 	if len(c.ExceptionTable) > 0 {
 		builder.WriteString("\n=== Exception Table ===\n")
@@ -432,7 +432,7 @@ func (c *Chunk) DisassembleChunk(name string) string {
 		}
 		builder.WriteString("=======================\n")
 	}
-	
+
 	return builder.String()
 }
 
@@ -529,12 +529,12 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpThrow:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	// --- END Exception Handling ---
-	
+
 	// --- Phase 4a: Return in Finally Disassembly ---
 	case OpReturnFinally:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	// --- END Phase 4a ---
-	
+
 	// --- Phase 4a: Handle Pending Actions Disassembly ---
 	case OpHandlePending:
 		return c.simpleInstruction(builder, instruction.String(), offset) // No operands
@@ -638,9 +638,9 @@ func (c *Chunk) constantInstruction16(builder *strings.Builder, name string, off
 		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
 		return offset + 1
 	}
-	
+
 	constantIndex := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
-	
+
 	if int(constantIndex) >= len(c.Constants) {
 		builder.WriteString(fmt.Sprintf("%-16s %d (invalid constant index)\n", name, constantIndex))
 	} else {
@@ -656,22 +656,22 @@ func (c *Chunk) registerConstantConstantInstruction(builder *strings.Builder, na
 		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
 		return offset + 1
 	}
-	
+
 	reg := c.Code[offset+1]
 	constantIndex1 := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
 	constantIndex2 := uint16(c.Code[offset+4])<<8 | uint16(c.Code[offset+5])
-	
+
 	const1Valid := int(constantIndex1) < len(c.Constants)
 	const2Valid := int(constantIndex2) < len(c.Constants)
-	
+
 	if !const1Valid || !const2Valid {
-		builder.WriteString(fmt.Sprintf("%-16s R%d, %d, %d (invalid constant indices)\n", 
+		builder.WriteString(fmt.Sprintf("%-16s R%d, %d, %d (invalid constant indices)\n",
 			name, reg, constantIndex1, constantIndex2))
 	} else {
 		constantValue1 := c.Constants[constantIndex1]
 		constantValue2 := c.Constants[constantIndex2]
-		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%s'), %d ('%s')\n", 
-			name, reg, constantIndex1, constantValue1.ToString(), 
+		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%s'), %d ('%s')\n",
+			name, reg, constantIndex1, constantValue1.ToString(),
 			constantIndex2, constantValue2.ToString()))
 	}
 	return offset + 6 // Opcode + register + 2*2 bytes for constant indices
@@ -960,7 +960,7 @@ func (c *Chunk) constantRegisterInstruction(builder *strings.Builder, name strin
 		}
 	}
 
-	builder.WriteString(fmt.Sprintf("%-16s %s %d (%s), R%d\n", name, constName, constIdx, constValue, regY))
+	fmt.Fprintf(builder, "%-16s %s %d (%s), R%d\n", name, constName, constIdx, constValue, regY)
 	return offset + 4 // Opcode + ConstIdx(2 bytes) + Ry
 }
 

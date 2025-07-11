@@ -15,19 +15,6 @@ type ExceptionState struct {
 
 // --- Exception Handler Operations ---
 
-// findExceptionHandler searches the exception table for a handler that covers the given PC
-func (vm *VM) findExceptionHandler(pc int) *ExceptionHandler {
-	chunk := vm.frames[vm.frameCount-1].closure.Fn.Chunk
-
-	for i := range chunk.ExceptionTable {
-		handler := &chunk.ExceptionTable[i]
-		if pc >= handler.TryStart && pc < handler.TryEnd {
-			return handler
-		}
-	}
-	return nil
-}
-
 // findAllExceptionHandlers searches the exception table for all handlers that cover the given PC
 // This is needed for finally blocks which may coexist with catch handlers
 func (vm *VM) findAllExceptionHandlers(pc int) []*ExceptionHandler {
@@ -184,7 +171,7 @@ func (vm *VM) handleUncaughtException() {
 					} else {
 						displayStr = name + ": " + message
 					}
-					
+
 					// Try to get stack trace from Error object
 					if stackVal, hasStack := obj.GetOwn("stack"); hasStack {
 						stackTrace = stackVal.ToString()
@@ -207,7 +194,7 @@ func (vm *VM) handleUncaughtException() {
 	if stackTrace != "" {
 		errorMsg += "\n" + stackTrace
 	}
-	
+
 	// Create runtime error directly without the extra printing from vm.runtimeError
 	runtimeErr := &errors.RuntimeError{
 		Position: errors.Position{Line: 1, Column: 1, StartPos: 0, EndPos: 0},

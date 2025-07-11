@@ -27,12 +27,12 @@ type ModuleRecord interface {
 
 // ModuleContext represents a cached module execution context
 type ModuleContext struct {
-	chunk       *Chunk            // Compiled module chunk
-	exports     map[string]Value  // Module's exported values
-	executed    bool              // Whether module has been executed
-	executing   bool              // Whether module is currently being executed
-	globals     []Value           // Module-specific global variables (indices 0+ within module)
-	globalNames []string          // Module-specific global variable names (for debugging)
+	chunk       *Chunk           // Compiled module chunk
+	exports     map[string]Value // Module's exported values
+	executed    bool             // Whether module has been executed
+	executing   bool             // Whether module is currently being executed
+	globals     []Value          // Module-specific global variables (indices 0+ within module)
+	globalNames []string         // Module-specific global variable names (for debugging)
 }
 
 // PendingAction represents actions that should be performed after finally blocks complete
@@ -111,13 +111,13 @@ type VM struct {
 	RegExpPrototype   Value
 	MapPrototype      Value
 	SetPrototype      Value
-	ErrorPrototype       Value
-	SymbolPrototype      Value
-	
+	ErrorPrototype    Value
+	SymbolPrototype   Value
+
 	// TypedArray prototypes
-	Uint8ArrayPrototype    Value
-	Int32ArrayPrototype    Value
-	Float32ArrayPrototype  Value
+	Uint8ArrayPrototype   Value
+	Int32ArrayPrototype   Value
+	Float32ArrayPrototype Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
 	disableMethodBinding bool
@@ -137,7 +137,7 @@ type VM struct {
 	// Exception handling state
 	currentException Value // Current thrown exception
 	unwinding        bool  // True during exception unwinding
-	
+
 	// Finally block state (Phase 3)
 	pendingAction PendingAction // Action to perform after finally blocks complete
 	pendingValue  Value         // Value associated with pending action (e.g., return value)
@@ -147,24 +147,24 @@ type VM struct {
 	moduleContexts    map[string]*ModuleContext // Cached module contexts by path
 	moduleLoader      ModuleLoader              // Reference to module loader for loading modules
 	currentModulePath string                    // Currently executing module path (for module-scoped globals)
-	
+
 	// Execution context stack for recursive module execution
 	executionContextStack []ExecutionContext
-	
+
 	// Track if we're in module execution to handle errors differently
-	inModuleExecution bool
+	inModuleExecution    bool
 	moduleExecutionDepth int
 }
 
 // ExecutionContext saves the complete VM state for recursive execution
 type ExecutionContext struct {
-	frame            CallFrame
-	frameCount       int
-	nextRegSlot      int
+	frame             CallFrame
+	frameCount        int
+	nextRegSlot       int
 	currentModulePath string
 	// Deep copy of register state for proper isolation
-	savedRegisters   []Value        // Deep copy of actual register values
-	savedRegisterCount int           // How many registers to restore
+	savedRegisters     []Value // Deep copy of actual register values
+	savedRegisterCount int     // How many registers to restore
 }
 
 // InterpretResult represents the outcome of an interpretation.
@@ -183,7 +183,7 @@ func NewVM() *VM {
 		openUpvalues:   make([]*Upvalue, 0, 16),        // Pre-allocate slightly
 		propCache:      make(map[int]*PropInlineCache), // Initialize inline cache
 		cacheStats:     ICacheStats{},                  // Initialize cache statistics
-		heap:           NewHeap(64),                     // Initialize unified global heap
+		heap:           NewHeap(64),                    // Initialize unified global heap
 		emptyRestArray: NewArray(),                     // Initialize singleton empty array for rest params
 		//initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
 		errors:         make([]errors.PaseratiError, 0), // Initialize error list
@@ -325,13 +325,13 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 
 	// Run the VM
 	// fmt.Printf("// [VM] Interpret: About to call vm.run() for chunk '%s' (stack depth: %d)\n", mainFuncObj.Name, len(vm.executionContextStack))
-	
+
 	// Check if we're already in a nested execution
 	if len(vm.executionContextStack) > 0 {
 		// We're in a nested execution - this is problematic
 		// fmt.Printf("// [VM] Interpret: WARNING - Nested vm.run() call detected!\n")
 	}
-	
+
 	resultStatus, finalValue := vm.run() // Capture both status and value
 	// fmt.Printf("// [VM] Interpret: vm.run() returned for chunk '%s' with status %v\n", mainFuncObj.Name, resultStatus)
 	// fmt.Printf("// [VM] Interpret: vm.errors length: %d\n", len(vm.errors))
@@ -409,22 +409,22 @@ startExecution:
 			status := vm.runtimeError("IP %d beyond code length %d", ip, len(code))
 			return status, Undefined
 		}
-		
+
 		opcode := OpCode(code[ip]) // Use local OpCode
-		
+
 		// Debug main script opcodes to track function calls
 		// if vm.currentModulePath == "" {
 		//	fmt.Printf("// [VM DEBUG] Main script opcode: %s (%d) at IP %d\n", opcode.String(), int(opcode), ip)
 		// }
-		
+
 		// Debug output for current instruction execution
 		// chunkName := "<unknown>"
 		// if frame.closure != nil && frame.closure.Fn != nil {
 		//	chunkName = frame.closure.Fn.Name
 		// }
-		// fmt.Printf("// [VM DEBUG] IP %d: %s (chunk: %s, module: %s)\n", 
+		// fmt.Printf("// [VM DEBUG] IP %d: %s (chunk: %s, module: %s)\n",
 		//	ip, opcode.String(), chunkName, vm.currentModulePath)
-		
+
 		ip++ // Advance IP past the opcode itself
 
 		switch opcode {
@@ -812,7 +812,7 @@ startExecution:
 				// Set pending return action and let finally blocks execute
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = result
-				
+
 				// Find the finally handler and jump to it
 				for _, handler := range handlers {
 					if handler.IsFinally {
@@ -908,9 +908,9 @@ startExecution:
 			constants = function.Chunk.Constants
 			registers = frame.registers
 			ip = frame.ip // Restore caller's IP
-			
+
 			// Debug: Show frame restoration
-			// fmt.Printf("// [VM DEBUG] OpReturn: Restored caller frame (frameCount: %d, newIP: %d, newChunk: %s, currentModule: %s)\n", 
+			// fmt.Printf("// [VM DEBUG] OpReturn: Restored caller frame (frameCount: %d, newIP: %d, newChunk: %s, currentModule: %s)\n",
 			//	vm.frameCount, ip, function.Name, vm.currentModulePath)
 
 		case OpReturnUndefined:
@@ -1539,38 +1539,38 @@ startExecution:
 
 			// Get the object
 			obj := registers[objReg]
-			
+
 			// Handle delete operation
 			var success bool
 			if obj.IsObject() {
 				if plainObj := obj.AsPlainObject(); plainObj != nil {
 					// ERSATZ SOLUTION: Set property to undefined on original object (for existing references)
 					plainObj.SetOwn(propName, Undefined)
-					
+
 					// Also create a new DictObject and replace the register (for future operations)
 					dictValue := NewDictObject(plainObj.GetPrototype())
 					dict := dictValue.AsDictObject()
-					
+
 					// Copy all properties from shape (except the one we're deleting)
 					for _, field := range plainObj.shape.fields {
 						if field.offset < len(plainObj.properties) && field.name != propName {
 							dict.SetOwn(field.name, plainObj.properties[field.offset])
 						}
 					}
-					
+
 					// Delete operation always succeeds since we didn't copy the target property
 					success = true
 					// Replace the register with the dict object
 					registers[objReg] = dictValue
-					
+
 				} else if dictObj := obj.AsDictObject(); dictObj != nil {
 					// DictObject supports deletion directly
 					success = dictObj.DeleteOwn(propName)
-					
+
 				} else if arrObj := obj.AsArray(); arrObj != nil {
 					// Arrays don't support property deletion (only element deletion in the future)
 					success = false
-					
+
 				} else {
 					// Other object types don't support property deletion
 					success = false
@@ -1579,7 +1579,7 @@ startExecution:
 				// Non-object types don't support property deletion
 				success = false
 			}
-			
+
 			// Store the result (boolean) in the destination register
 			registers[destReg] = BooleanValue(success)
 
@@ -1599,7 +1599,7 @@ startExecution:
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
 			// Debug logging for method calls
-			// fmt.Printf("// [VM DEBUG] OpCallMethod at IP %d: Calling function in R%d (type: %v, value: %s) with this=R%d (type: %v, value: %s), args=%d [module: %s]\n", 
+			// fmt.Printf("// [VM DEBUG] OpCallMethod at IP %d: Calling function in R%d (type: %v, value: %s) with this=R%d (type: %v, value: %s), args=%d [module: %s]\n",
 			//	ip-4, funcReg, calleeVal.Type(), calleeVal.Inspect(), thisReg, thisVal.Type(), thisVal.Inspect(), argCount, vm.currentModulePath)
 
 			shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, args, destReg, callerRegisters, callerIP)
@@ -1881,10 +1881,10 @@ startExecution:
 
 			// Store the retrieved value in the destination register
 			registers[destReg] = value
-			
+
 			// Debug global access (disabled)
 			// if globalIdx == 21 {
-			//	fmt.Printf("// [VM DEBUG] OpGetGlobal: global[%d] -> R%d = %s (type: %v) [module: %s]\n", 
+			//	fmt.Printf("// [VM DEBUG] OpGetGlobal: global[%d] -> R%d = %s (type: %v) [module: %s]\n",
 			//		globalIdx, destReg, value.Inspect(), value.Type(), vm.currentModulePath)
 			// }
 
@@ -1898,10 +1898,10 @@ startExecution:
 			// Use module-scoped global table
 			value := registers[srcReg]
 			vm.setGlobalInTable(globalIdx, value)
-			
+
 			// Debug output (disabled)
 			// if globalIdx == 21 {
-			//	fmt.Printf("// [VM DEBUG] OpSetGlobal: global[%d] = R%d (%s, type: %v) [module: %s]\n", 
+			//	fmt.Printf("// [VM DEBUG] OpSetGlobal: global[%d] = R%d (%s, type: %v) [module: %s]\n",
 			//		globalIdx, srcReg, value.Inspect(), value.Type(), vm.currentModulePath)
 			// }
 			// if int(globalIdx) < len(globalNames) && globalNames[globalIdx] != "" {
@@ -2176,7 +2176,7 @@ startExecution:
 			}
 
 			excludeArray := excludeValue.AsArray()
-			
+
 			// Create set of property names to exclude
 			excludeNames := make(map[string]struct{})
 			for i := 0; i < excludeArray.Length(); i++ {
@@ -2188,13 +2188,13 @@ startExecution:
 
 			// Create new object and copy properties not in exclude list
 			var resultObj Value
-			
+
 			switch sourceValue.Type() {
 			case TypeObject:
 				sourceObj := sourceValue.AsPlainObject()
 				resultPlainObj := NewObject(vm.ObjectPrototype)
 				resultPlainObjPtr := resultPlainObj.AsPlainObject()
-				
+
 				// Copy properties not in exclude list
 				for _, key := range sourceObj.OwnKeys() {
 					if _, shouldExclude := excludeNames[key]; !shouldExclude {
@@ -2204,12 +2204,12 @@ startExecution:
 					}
 				}
 				resultObj = resultPlainObj
-				
+
 			case TypeDictObject:
 				sourceDict := sourceValue.AsDictObject()
 				resultPlainObj := NewObject(vm.ObjectPrototype)
 				resultPlainObjPtr := resultPlainObj.AsPlainObject()
-				
+
 				// Copy properties not in exclude list
 				for _, key := range sourceDict.OwnKeys() {
 					if _, shouldExclude := excludeNames[key]; !shouldExclude {
@@ -2219,7 +2219,7 @@ startExecution:
 					}
 				}
 				resultObj = resultPlainObj
-				
+
 			default:
 				// For other object-like types, create empty object
 				resultObj = NewObject(vm.ObjectPrototype)
@@ -2258,7 +2258,7 @@ startExecution:
 			ip++
 			result := registers[srcReg]
 			frame.ip = ip // Save final IP of this frame
-			
+
 			// Returns from finally blocks clear any pending exceptions
 			// because the return takes precedence over the exception
 			vm.currentException = Null
@@ -2283,18 +2283,18 @@ startExecution:
 				// There are more finally blocks - trigger them to execute
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = result
-				
+
 				// Find the first finally handler and jump to it
 				for _, handler := range handlers {
 					if handler.IsFinally {
 						frame.ip = handler.HandlerPC
-						ip = handler.HandlerPC  // Sync local IP variable
+						ip = handler.HandlerPC // Sync local IP variable
 						vm.finallyDepth++
 						continue startExecution // Jump to the outer finally block
 					}
 				}
 			} else {
-				// No more finally handlers - this return takes effect immediately  
+				// No more finally handlers - this return takes effect immediately
 				vm.pendingAction = ActionNone
 				vm.pendingValue = Undefined
 				vm.finallyDepth = 0
@@ -2379,32 +2379,33 @@ startExecution:
 			// This instruction is emitted at the end of finally blocks
 			// to execute any pending actions (return or throw)
 			frame.ip = ip // Save current position
-			
+
 			// fmt.Printf("[DEBUG] OpHandlePending: pendingAction=%d, pendingValue=%s\n", vm.pendingAction, vm.pendingValue.ToString())
-			
-			if vm.pendingAction == ActionReturn {
+
+			switch vm.pendingAction {
+			case ActionReturn:
 				// Execute the pending return
 				result := vm.pendingValue
 				vm.pendingAction = ActionNone
 				vm.pendingValue = Undefined
-				
+
 				// Close upvalues for the returning frame
 				vm.closeUpvalues(frame.registers)
-				
+
 				// Pop the current frame
 				returningFrameRegSize := function.RegisterSize
 				callerTargetRegister := frame.targetRegister
 				isConstructor := frame.isConstructorCall
 				constructorThisValue := frame.thisValue
-				
+
 				vm.frameCount--
 				vm.nextRegSlot -= returningFrameRegSize
-				
+
 				if vm.frameCount == 0 {
 					// Returned from the top-level script frame
 					return InterpretOK, result
 				}
-				
+
 				// Handle the return value in the caller frame
 				if frame.isDirectCall {
 					var finalResult Value
@@ -2419,10 +2420,10 @@ startExecution:
 					}
 					return InterpretOK, finalResult
 				}
-				
+
 				// Get the caller frame
 				callerFrame := &vm.frames[vm.frameCount-1]
-				
+
 				// Handle constructor return semantics
 				var finalResult Value
 				if isConstructor {
@@ -2434,7 +2435,7 @@ startExecution:
 				} else {
 					finalResult = result
 				}
-				
+
 				// Place the result in the caller's target register
 				if int(callerTargetRegister) < len(callerFrame.registers) {
 					callerFrame.registers[callerTargetRegister] = finalResult
@@ -2442,7 +2443,7 @@ startExecution:
 					status := vm.runtimeError("Internal Error: Invalid target register %d for pending return.", callerTargetRegister)
 					return status, Undefined
 				}
-				
+
 				// Restore cached variables for the caller frame
 				frame = callerFrame
 				closure = frame.closure
@@ -2451,8 +2452,8 @@ startExecution:
 				constants = function.Chunk.Constants
 				registers = frame.registers
 				ip = frame.ip
-				
-			} else if vm.pendingAction == ActionThrow {
+
+			case ActionThrow:
 				// Execute the pending throw
 				vm.currentException = vm.pendingValue
 				vm.pendingAction = ActionNone
@@ -2473,7 +2474,7 @@ startExecution:
 			ip += 2
 
 			frame.ip = ip // Save IP before module execution
-			
+
 			if int(modulePathIdx) >= len(constants) {
 				status := vm.runtimeError("Invalid module path index %d", modulePathIdx)
 				return status, Undefined
@@ -2516,7 +2517,7 @@ startExecution:
 
 			modulePathValue := constants[modulePathIdx]
 			exportNameValue := constants[exportNameIdx]
-			
+
 			if modulePathValue.Type() != TypeString || exportNameValue.Type() != TypeString {
 				status := vm.runtimeError("Module path and export name must be strings")
 				return status, Undefined
@@ -2528,7 +2529,7 @@ startExecution:
 			// Get exported value from module
 			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Getting export '%s' from module '%s' [current module: %s]\n", exportName, modulePath, vm.currentModulePath)
 			exportValue := vm.getModuleExport(modulePath, exportName)
-			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Retrieved '%s' from '%s' = %d (type %d, value: %s)\n", 
+			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Retrieved '%s' from '%s' = %d (type %d, value: %s)\n",
 			//	exportName, modulePath, int(exportValue.Type()), int(exportValue.Type()), exportValue.ToString())
 			frame.registers[destReg] = exportValue
 			// fmt.Printf("// [VM DEBUG] OpGetModuleExport: Stored in R%d\n", destReg)
@@ -2549,7 +2550,7 @@ startExecution:
 			}
 
 			modulePathValue := constants[modulePathIdx]
-			
+
 			if modulePathValue.Type() != TypeString {
 				status := vm.runtimeError("Module path must be a string")
 				return status, Undefined
@@ -2586,7 +2587,7 @@ startExecution:
 			ip = frame.ip
 			continue
 		}
-		
+
 		// Check if we've exited finally blocks and handle pending actions
 		// NOTE: Disabled the automatic finallyDepth decrement based on IP position
 		// because it was causing premature pending action execution. The finallyDepth
@@ -2602,13 +2603,13 @@ startExecution:
 		//             break
 		//         }
 		//     }
-		//     
+		//
 		//     // If we've exited the finally range, decrement depth
 		//     if !inFinallyRange {
 		//         vm.finallyDepth--
 		//     }
 		// }
-		
+
 		// Check for pending actions after finally blocks complete
 		if vm.finallyDepth == 0 && vm.pendingAction != ActionNone {
 			// fmt.Printf("[DEBUG] Finally depth is 0, executing pending action %d\n", vm.pendingAction)
@@ -2639,7 +2640,8 @@ startExecution:
 	// This could be due to either:
 	// 1. Ongoing unwinding (vm.unwinding == true) - continue unwinding in parent frame
 	// 2. Completed exception handling (vm.unwinding == false) - resume execution at handler
-	
+
+	// CAUTION: this is commmented out because apparently it's unreachable according to Go compiler
 	if vm.frameCount == 0 {
 		// No frames left - either uncaught exception or completed execution
 		if vm.unwinding {
@@ -2648,7 +2650,7 @@ startExecution:
 			return InterpretOK, Undefined
 		}
 	}
-	
+
 	// Update cached variables for the current frame and continue execution
 	frame = &vm.frames[vm.frameCount-1]
 	closure = frame.closure
@@ -2728,7 +2730,7 @@ func (vm *VM) closeUpvalues(frameRegisters []Value) {
 // runtimeError formats a runtime error message, appends it to the VM's error list,
 // and returns the InterpretRuntimeError status.
 func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
-	
+
 	// Get the current frame to access chunk and IP
 	if vm.frameCount == 0 {
 		// Should not happen if called during run()
@@ -2835,9 +2837,9 @@ func (vm *VM) printCurrentRegisters() {
 
 	frame := &vm.frames[vm.frameCount-1]
 	fmt.Fprintf(os.Stderr, "Frame registers (%d total):\n", len(frame.registers))
-	
+
 	for i, value := range frame.registers {
-		if i < 10 || value.Type() != TypeUndefined {  // Show first 10 and any non-undefined
+		if i < 10 || value.Type() != TypeUndefined { // Show first 10 and any non-undefined
 			fmt.Fprintf(os.Stderr, "  R%d: %s (type %d)\n", i, value.Inspect(), int(value.Type()))
 		}
 	}
@@ -2890,13 +2892,11 @@ func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
 	return args, nil
 }
 
-
 // GetThis returns the current 'this' value for native function execution
 // This allows native functions to access the 'this' context without it being passed as an argument
 func (vm *VM) GetThis() Value {
 	return vm.currentThis
 }
-
 
 // setGlobalInTable sets a global variable in the unified global table
 func (vm *VM) setGlobalInTable(globalIdx uint16, value Value) {
@@ -2905,13 +2905,13 @@ func (vm *VM) setGlobalInTable(globalIdx uint16, value Value) {
 }
 
 // getGlobalFromTable gets a global variable from the unified global table
-func (vm *VM) getGlobalFromTable(globalIdx uint16) Value {
-	value, exists := vm.heap.Get(int(globalIdx))
-	if !exists {
-		return Undefined // Out of bounds
-	}
-	return value
-}
+// func (vm *VM) getGlobalFromTable(globalIdx uint16) Value {
+// 	value, exists := vm.heap.Get(int(globalIdx))
+// 	if !exists {
+// 		return Undefined // Out of bounds
+// 	}
+// 	return value
+// }
 
 // executeModule executes a module idempotently with context switching
 func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
@@ -2933,25 +2933,25 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			return InterpretOK, Undefined
 		}
 	}
-	
+
 	// Load the module if not cached
 	if _, exists := vm.moduleContexts[modulePath]; !exists {
 		if vm.moduleLoader == nil {
 			return vm.runtimeError("No module loader available"), Undefined
 		}
-		
+
 		// Load the module using the module loader
 		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, ".")
 		if err != nil {
 			return vm.runtimeError("Failed to load module '%s': %s", modulePath, err.Error()), Undefined
 		}
-		
+
 		// Check if the module had any errors during loading/compilation
 		if moduleErr := moduleRecord.GetError(); moduleErr != nil {
 			// fmt.Printf("// [VM] executeModule: Module '%s' has error: %v\n", modulePath, moduleErr)
 			return vm.runtimeError("Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
 		}
-		
+
 		// Get the compiled chunk from the module
 		chunk := moduleRecord.GetCompiledChunk()
 		if chunk == nil {
@@ -2959,64 +2959,64 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			return vm.runtimeError("Module '%s' has no compiled chunk", modulePath), Undefined
 		}
 		// fmt.Printf("// [VM] executeModule: Module '%s' has compiled chunk\n", modulePath)
-		
+
 		// Create module context without module-scoped globals
 		// All modules now use the unified heap
 		vm.moduleContexts[modulePath] = &ModuleContext{
 			chunk:       chunk,
 			exports:     make(map[string]Value),
 			executed:    false,
-			globals:     nil,     // No longer used - unified heap replaces this
+			globals:     nil, // No longer used - unified heap replaces this
 			globalNames: nil, // No longer used - unified heap replaces this
 		}
 	}
-	
+
 	moduleCtx := vm.moduleContexts[modulePath]
-	
+
 	// If already executed, return success
 	if moduleCtx.executed {
 		return InterpretOK, Undefined
 	}
-	
+
 	// Mark module as currently executing to prevent recursion
 	moduleCtx.executing = true
 	defer func() {
 		// Clear executing flag when done (whether success or failure)
 		moduleCtx.executing = false
 	}()
-	
+
 	// Push current execution context onto stack with deep copy of registers
 	if vm.frameCount > 0 {
 		currentFrame := vm.frames[vm.frameCount-1]
-		
+
 		// Deep copy the register values for proper isolation
 		registerCount := len(currentFrame.registers)
 		savedRegisters := make([]Value, registerCount)
 		copy(savedRegisters, currentFrame.registers)
-		
+
 		ctx := ExecutionContext{
-			frame:             currentFrame,
-			frameCount:        vm.frameCount,
-			nextRegSlot:       vm.nextRegSlot,
-			currentModulePath: vm.currentModulePath,
-			savedRegisters:    savedRegisters,
+			frame:              currentFrame,
+			frameCount:         vm.frameCount,
+			nextRegSlot:        vm.nextRegSlot,
+			currentModulePath:  vm.currentModulePath,
+			savedRegisters:     savedRegisters,
 			savedRegisterCount: registerCount,
 		}
 		vm.executionContextStack = append(vm.executionContextStack, ctx)
-		
+
 		// fmt.Printf("// [VM] executeModule: Saved execution context with %d registers deep copied\n", registerCount)
 	}
-	
+
 	// Set current module context for module-scoped globals
 	// savedPath := vm.currentModulePath
 	vm.currentModulePath = modulePath
 	// fmt.Printf("// [VM DEBUG] executeModule: Context switch from '%s' to '%s'\n", savedPath, modulePath)
-	
+
 	// Execute the module with isolated error handling
 	chunk := moduleCtx.chunk
 	// fmt.Printf("// [VM] executeModule: About to call vm.Interpret for module '%s' (chunk size: %d bytes)\n", modulePath, len(chunk.Code))
 	// fmt.Printf("// [VM] executeModule: Current frame count: %d, next reg slot: %d, module depth: %d\n", vm.frameCount, vm.nextRegSlot, vm.moduleExecutionDepth)
-	
+
 	// Debug: Show unified heap state before execution (disabled)
 	// fmt.Printf("// [VM] executeModule: Unified heap before execution: size=%d\n", vm.heap.Size())
 	// for i := 0; i < vm.heap.Size() && i < 25; i++ {
@@ -3025,28 +3025,28 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	//		fmt.Printf("//   unified heap[%d] = %s\n", i, value.ToString())
 	//	}
 	// }
-	
+
 	// Track that we're entering module execution
 	vm.inModuleExecution = true
 	vm.moduleExecutionDepth++
-	
+
 	// Save current errors to isolate module execution errors from caller errors
 	savedErrors := make([]errors.PaseratiError, len(vm.errors))
 	copy(savedErrors, vm.errors)
 	vm.errors = vm.errors[:0] // Clear errors for clean module execution
-	
+
 	// fmt.Printf("// [VM DEBUG] === STARTING MODULE EXECUTION: %s ===\n", modulePath)
-	
+
 	// Debug: Show the chunk being executed
 	// fmt.Printf("// [VM DEBUG] Module chunk disassembly for '%s':\n", modulePath)
 	// chunkName := fmt.Sprintf("module:%s", modulePath)
 	// disassembly := chunk.DisassembleChunk(chunkName)
 	// fmt.Print(disassembly)
 	// fmt.Printf("// [VM DEBUG] === END CHUNK DISASSEMBLY ===\n")
-	
+
 	// Instead of calling vm.Interpret recursively, execute the module chunk directly
 	// to avoid nested frame management issues
-	
+
 	// Set up module frame directly
 	scriptRegSize := 128 // Same as Interpret method
 	mainFuncObj := &FunctionObject{
@@ -3067,11 +3067,11 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// Save current frame state for isolation
 	savedFrameCount := vm.frameCount
 	savedNextRegSlot := vm.nextRegSlot
-	
+
 	// Execute module as top-level frame (frameCount=1) for proper isolation
 	vm.frameCount = 0
 	vm.nextRegSlot = 0
-	
+
 	// Push module frame as the ONLY frame (frameCount will become 1)
 	frame := &vm.frames[vm.frameCount]
 	frame.closure = mainClosureObj
@@ -3081,21 +3081,21 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	frame.thisValue = Undefined
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
-	
+
 	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' executing with frameCount=%d (isolated)\n", modulePath, vm.frameCount)
 
 	// Execute module directly using isolated vm.run() call
 	// Now the module will execute as frameCount=1 and OpReturn will exit at frameCount=0
 	resultStatus, result := vm.run()
-	
+
 	// Restore frame state after module execution
 	vm.frameCount = savedFrameCount
 	vm.nextRegSlot = savedNextRegSlot
 	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' completed, frameCount restored to %d\n", modulePath, vm.frameCount)
-	
+
 	// With unified heap, no need to copy globals back to module context
 	// All modules share the same heap and updates are automatically visible
-	
+
 	// Convert result status to errors if needed
 	var errs []errors.PaseratiError
 	if resultStatus == InterpretRuntimeError {
@@ -3103,36 +3103,36 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		copy(errs, vm.errors)
 	}
 	// fmt.Printf("// [VM DEBUG] === FINISHED MODULE EXECUTION: %s (result: %s, errors: %d) ===\n", modulePath, result.Inspect(), len(errs))
-	
+
 	// Restore previous errors after module execution (errors from caller context)
 	// Module execution errors are in 'errs', caller errors are in 'savedErrors'
 	if len(savedErrors) > 0 {
 		vm.errors = append(vm.errors, savedErrors...)
 	}
-	
+
 	// Leaving module execution
 	vm.moduleExecutionDepth--
 	if vm.moduleExecutionDepth == 0 {
 		vm.inModuleExecution = false
 	}
-	
+
 	// fmt.Printf("// [VM] executeModule: vm.Interpret completed for module '%s', errors: %d, result: %s\n", modulePath, len(errs), result.ToString())
 	if len(errs) > 0 {
 		for i, err := range errs {
 			fmt.Printf("// [VM] executeModule: Error %d: %s\n", i, err.Error())
 		}
 	}
-	
+
 	// Pop and restore execution context from stack with deep copied registers
 	if len(vm.executionContextStack) > 0 {
 		ctx := vm.executionContextStack[len(vm.executionContextStack)-1]
 		vm.executionContextStack = vm.executionContextStack[:len(vm.executionContextStack)-1]
-		
+
 		vm.frameCount = ctx.frameCount
 		vm.nextRegSlot = ctx.nextRegSlot
 		if vm.frameCount > 0 {
 			vm.frames[vm.frameCount-1] = ctx.frame
-			
+
 			// Restore the deep copied register values for proper isolation
 			if len(ctx.savedRegisters) > 0 && ctx.savedRegisterCount > 0 {
 				// Ensure we don't exceed the current frame's register capacity
@@ -3140,7 +3140,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 				if restoreCount > len(vm.frames[vm.frameCount-1].registers) {
 					restoreCount = len(vm.frames[vm.frameCount-1].registers)
 				}
-				
+
 				copy(vm.frames[vm.frameCount-1].registers[:restoreCount], ctx.savedRegisters[:restoreCount])
 				// fmt.Printf("// [VM] executeModule: Restored execution context with %d registers deep copied back\n", restoreCount)
 			}
@@ -3148,33 +3148,33 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		// fmt.Printf("// [VM DEBUG] executeModule: Context restore from '%s' to '%s'\n", vm.currentModulePath, ctx.currentModulePath)
 		vm.currentModulePath = ctx.currentModulePath
 	}
-	
+
 	// With unified heap, success is determined by execution status rather than module globals
 	// Since moduleCtx.globals is nil (unified heap replaces it), check execution status directly
 	moduleExecutedSuccessfully := (resultStatus == InterpretOK || len(errs) == 0)
-	
-	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' execution result: status=%d, errors=%d, success=%v\n", 
+
+	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' execution result: status=%d, errors=%d, success=%v\n",
 	//	modulePath, int(resultStatus), len(errs), moduleExecutedSuccessfully)
-	
+
 	if moduleExecutedSuccessfully {
 		// Mark module as executed (either no errors or successful despite errors)
 		moduleCtx.executed = true
 		// fmt.Printf("// [VM] executeModule: Module '%s' marked as executed=true\n", modulePath)
-		
+
 		// Collect exported values from the module execution IMMEDIATELY
 		vm.collectModuleExports(modulePath, moduleCtx)
 		// fmt.Printf("// [VM] executeModule: Module '%s' exports collected (%d exports)\n", modulePath, len(moduleCtx.exports))
-		
+
 		// Note: Cannot populate moduleRecord.ExportValues due to import cycle restrictions
 		// The exports are available in moduleCtx.exports and will be used by createModuleNamespace
-		
+
 		// Clear any stale errors from vm.errors since the module executed successfully
 		// This prevents failed first attempts from polluting the main script's error list
 		if len(errs) > 0 {
 			// fmt.Printf("// [VM] executeModule: Clearing %d stale errors since module succeeded\n", len(vm.errors))
 			vm.errors = vm.errors[:0]
 		}
-		
+
 		return InterpretOK, result
 	} else {
 		// Module execution truly failed
@@ -3191,13 +3191,13 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 			// Use the already-collected export values from the module record
 			// These were populated by the driver's collectExportedValues() function
 			exportValues := moduleRecord.GetExportValues()
-			
+
 			// If no export values were collected, try to collect them manually from VM globals
 			if len(exportValues) == 0 {
-						// fmt.Printf("// [VM DEBUG] collectModuleExports: No export values found for module '%s', attempting manual collection\n", modulePath)
+				// fmt.Printf("// [VM DEBUG] collectModuleExports: No export values found for module '%s', attempting manual collection\n", modulePath)
 				exportNames := moduleRecord.GetExportNames()
 				// fmt.Printf("// [VM DEBUG] collectModuleExports: Expected export names: %v\n", exportNames)
-				
+
 				// Manual collection: scan the VM's heap for values that match exported names
 				// This is a fallback when the driver's collectExportedValues() wasn't called
 				manuallyCollected := make(map[string]Value)
@@ -3207,23 +3207,23 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 						manuallyCollected[exportName] = Undefined
 						continue
 					}
-					
+
 					// Try to find a global variable or heap value that corresponds to this export
 					foundValue := vm.findExportValueInHeap(exportName)
 					manuallyCollected[exportName] = foundValue
 					// if foundValue.Type() != TypeUndefined {
-					//	fmt.Printf("// [VM DEBUG] collectModuleExports: Manually found '%s' = %s (type %d)\n", 
+					//	fmt.Printf("// [VM DEBUG] collectModuleExports: Manually found '%s' = %s (type %d)\n",
 					//		exportName, foundValue.ToString(), int(foundValue.Type()))
 					// } else {
 					//	fmt.Printf("// [VM DEBUG] collectModuleExports: Could not find value for export '%s'\n", exportName)
 					// }
 				}
-				
+
 				// Use the manually collected values
 				for exportName, exportValue := range manuallyCollected {
 					moduleCtx.exports[exportName] = exportValue
 				}
-				
+
 				// fmt.Printf("// [VM DEBUG] collectModuleExports: Manually collected %d export values for module '%s'\n", len(manuallyCollected), modulePath)
 			} else {
 				// Copy the export values directly to the module context
@@ -3240,15 +3240,15 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
 	// Check if module context exists
 	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
-		// fmt.Printf("// [VM DEBUG] getModuleExport: Module '%s' found, executed=%v, exports count=%d\n", 
+		// fmt.Printf("// [VM DEBUG] getModuleExport: Module '%s' found, executed=%v, exports count=%d\n",
 		//	modulePath, moduleCtx.executed, len(moduleCtx.exports))
-		
+
 		// If module has been executed but exports not collected, collect them now
 		if moduleCtx.executed && len(moduleCtx.exports) == 0 {
 			// fmt.Printf("// [VM DEBUG] getModuleExport: Module '%s' executed but exports not collected, collecting now\n", modulePath)
 			vm.collectModuleExports(modulePath, moduleCtx)
 		}
-		
+
 		// Return the exported value if it exists
 		if exportValue, found := moduleCtx.exports[exportName]; found {
 			// fmt.Printf("// [VM DEBUG] getModuleExport: Found export '%s' = %s\n", exportName, exportValue.ToString())
@@ -3259,7 +3259,7 @@ func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
 	} else {
 		// fmt.Printf("// [VM DEBUG] getModuleExport: Module '%s' not found in contexts\n", modulePath)
 	}
-	
+
 	// Module not found, not executed, or export not found
 	return Undefined
 }
@@ -3273,34 +3273,34 @@ func (vm *VM) DebugPrintGlobals() {
 
 func (vm *VM) createModuleNamespace(modulePath string) Value {
 	// fmt.Printf("// [VM DEBUG] createModuleNamespace: Creating namespace for '%s'\n", modulePath)
-	
+
 	// Check if module context exists
 	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
-		// fmt.Printf("// [VM DEBUG] createModuleNamespace: Module context found, executed=%v, exports count=%d\n", 
+		// fmt.Printf("// [VM DEBUG] createModuleNamespace: Module context found, executed=%v, exports count=%d\n",
 		//	moduleCtx.executed, len(moduleCtx.exports))
-		
+
 		// If module has been executed but exports not collected, collect them now
 		if moduleCtx.executed && len(moduleCtx.exports) == 0 {
 			// fmt.Printf("// [VM DEBUG] createModuleNamespace: Collecting exports for '%s'\n", modulePath)
 			vm.collectModuleExports(modulePath, moduleCtx)
 			// fmt.Printf("// [VM DEBUG] createModuleNamespace: After collection, exports count=%d\n", len(moduleCtx.exports))
 		}
-		
+
 		// Create a new namespace object
 		namespace := NewDictObject(DefaultObjectPrototype)
 		namespaceDict := namespace.AsDictObject()
-		
+
 		// Copy all module exports into the namespace object
 		for exportName, exportValue := range moduleCtx.exports {
-			// fmt.Printf("// [VM DEBUG] createModuleNamespace: Adding export '%s' = %s (type %d)\n", 
+			// fmt.Printf("// [VM DEBUG] createModuleNamespace: Adding export '%s' = %s (type %d)\n",
 			//	exportName, exportValue.ToString(), int(exportValue.Type()))
 			namespaceDict.SetOwn(exportName, exportValue)
 		}
-		
+
 		// fmt.Printf("// [VM DEBUG] createModuleNamespace: Created namespace with %d properties\n", len(moduleCtx.exports))
 		return namespace
 	}
-	
+
 	// fmt.Printf("// [VM DEBUG] createModuleNamespace: Module '%s' not found, creating empty namespace\n", modulePath)
 	// Module not found or not executed - return empty namespace object
 	return NewDictObject(DefaultObjectPrototype)
@@ -3310,21 +3310,21 @@ func (vm *VM) createModuleNamespace(modulePath string) Value {
 // This is a fallback method when proper export mapping is not available
 func (vm *VM) findExportValueInHeap(exportName string) Value {
 	// This is a heuristic approach - scan the heap for values that could correspond to exports
-	
+
 	// Skip builtin globals (these are at lower indices)
 	// The exact range depends on how many builtins are registered
 	const BUILTIN_GLOBALS_END = 22 // Approximate end of builtin globals
-	
+
 	// Search for heap values that might correspond to this export
 	heapSize := vm.heap.Size()
-	// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Searching for '%s' in heap (size=%d, scanning from %d)\n", 
+	// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Searching for '%s' in heap (size=%d, scanning from %d)\n",
 	//	exportName, heapSize, BUILTIN_GLOBALS_END)
-	
+
 	// Collect all functions and objects from the heap first
 	var functions []Value
 	var objects []Value
-	
-	for i := BUILTIN_GLOBALS_END; i < heapSize && i < BUILTIN_GLOBALS_END + 20; i++ {
+
+	for i := BUILTIN_GLOBALS_END; i < heapSize && i < BUILTIN_GLOBALS_END+20; i++ {
 		if value, exists := vm.heap.Get(i); exists {
 			// fmt.Printf("// [VM DEBUG] findExportValueInHeap: heap[%d] = %s (type %d)\n", i, value.ToString(), int(value.Type()))
 			if value.Type() == TypeFunction {
@@ -3336,7 +3336,7 @@ func (vm *VM) findExportValueInHeap(exportName string) Value {
 			}
 		}
 	}
-	
+
 	// Now map exports to specific values based on name matching
 	switch exportName {
 	case "add":
@@ -3396,14 +3396,13 @@ func (vm *VM) findExportValueInHeap(exportName string) Value {
 			return value
 		}
 		// Fallback: scan for any number in the range
-		for i := BUILTIN_GLOBALS_END; i < heapSize && i < BUILTIN_GLOBALS_END + 20; i++ {
+		for i := BUILTIN_GLOBALS_END; i < heapSize && i < BUILTIN_GLOBALS_END+20; i++ {
 			if value, exists := vm.heap.Get(i); exists && (value.Type() == TypeFloatNumber || value.Type() == TypeIntegerNumber) {
 				return value
 			}
 		}
 	}
-	
+
 	// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Could not find '%s' in heap\n", exportName)
 	return Undefined
 }
-
