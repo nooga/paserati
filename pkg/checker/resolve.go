@@ -1720,7 +1720,13 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 	switch et := extendsType.(type) {
 	case *types.InferType:
 		// This is an infer type - capture the checkType
-		inferences[et.TypeParameter] = checkType
+		// If we already have an inference for this parameter, create a union
+		if existingType, found := inferences[et.TypeParameter]; found {
+			// Create union of existing and new inferred types
+			inferences[et.TypeParameter] = types.NewUnionType(existingType, checkType)
+		} else {
+			inferences[et.TypeParameter] = checkType
+		}
 		return true
 		
 	case *types.ObjectType:
@@ -1751,8 +1757,18 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 		return false
 	}
 	
-	// For now, we'll focus on return type inference (most common case)
-	// Parameter inference can be added later if needed
+	// Try to infer from parameter types
+	minParams := len(checkSig.ParameterTypes)
+	if len(extendsSig.ParameterTypes) < minParams {
+		minParams = len(extendsSig.ParameterTypes)
+	}
+	
+	for i := 0; i < minParams; i++ {
+		if !c.tryInferTypes(checkSig.ParameterTypes[i], extendsSig.ParameterTypes[i], inferences) {
+			return false
+		}
+	}
+	
 	return true
 }
 

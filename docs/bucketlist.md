@@ -645,7 +645,7 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Type checker integration with conditional type resolution
   - [x] Inference constraint matching and type capture
   - [x] Built-in `ReturnType<T>` utility type implementation
-  - [ ] Multiple inference sites with same name (advanced feature)
+  - [x] Multiple inference sites with same name (creates union types correctly)
   - [ ] Complex inference patterns with nested conditionals (advanced feature)
 
 ### Classes - **Complete Implementation!**

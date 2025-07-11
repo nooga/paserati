@@ -5297,14 +5297,16 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			objType.Properties = append(objType.Properties, prop)
 		}
 
-		// Expect ';' or '}' next
+		// Expect ';', ',' or '}' next
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Consume ';'
+		} else if p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
 		} else if p.peekTokenIs(lexer.RBRACE) {
 			// End of object type, will be consumed by outer loop condition
 			break
 		} else {
-			p.addError(p.peekToken, "expected ';' or '}' after object type property")
+			p.addError(p.peekToken, "expected ';', ',' or '}' after object type property")
 			return nil
 		}
 	}
