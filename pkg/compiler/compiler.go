@@ -578,6 +578,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.LetStatement:
 		return c.compileLetStatement(node, hint) // TODO: Fix this
 
+	case *parser.VarStatement:
+		return c.compileVarStatement(node, hint)
+
 	case *parser.ConstStatement:
 		return c.compileConstStatement(node, hint) // TODO: Fix this
 
@@ -2031,6 +2034,10 @@ func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 					if decl.Name != nil {
 						exportNames = append(exportNames, decl.Name.Value)
 					}
+				case *parser.VarStatement:
+					if decl.Name != nil {
+						exportNames = append(exportNames, decl.Name.Value)
+					}
 				case *parser.ConstStatement:
 					if decl.Name != nil {
 						exportNames = append(exportNames, decl.Name.Value)
@@ -2081,6 +2088,19 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 				}
 				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
 				debugPrintf("// [Compiler] Exported let: %s at global[%d]\n", d.Name.Value, globalIdx)
+			}
+		}
+		
+	case *parser.VarStatement:
+		if c.IsModuleMode() {
+			if d.Name != nil {
+				// Var declarations also get stored as globals at top-level
+				globalIdx := c.GetGlobalIndex(d.Name.Value)
+				if globalIdx == -1 {
+					globalIdx = int(c.GetOrAssignGlobalIndex(d.Name.Value))
+				}
+				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
+				debugPrintf("// [Compiler] Exported var: %s at global[%d]\n", d.Name.Value, globalIdx)
 			}
 		}
 		

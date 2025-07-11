@@ -1092,6 +1092,162 @@ func (c *Checker) visit(node parser.Node) {
 		// Set computed type on the Name Identifier node itself
 		node.Name.SetComputedType(finalType) // <<< USE NODE METHOD
 
+	case *parser.VarStatement:
+		// <<< Capture pointers at entry >>>
+		varNodePtr := node
+		varNamePtr := node.Name
+		varValuePtr := node.Value
+		var nameValueStr string
+		if varNamePtr != nil {
+			nameValueStr = varNamePtr.Value
+		} else {
+			nameValueStr = "<nil_name>"
+		}
+		debugPrintf("// [Checker VarStmt Entry] NodePtr: %p, NamePtr: %p (%s), ValuePtr: %p\n", varNodePtr, varNamePtr, nameValueStr, varValuePtr)
+
+		// --- Handle VarStatement (same as LetStatement with block scoping) ---
+		// 1. Handle Type Annotation (if present)
+		var declaredType types.Type
+		if node.TypeAnnotation != nil {
+			declaredType = c.resolveTypeAnnotation(node.TypeAnnotation)
+		} else {
+			declaredType = nil // Indicates type inference is needed
+		}
+
+		// --- FIX V2 for recursive functions assigned to variables ---
+		// Determine a preliminary type for the initializer if it's a function literal.
+		var preliminaryInitializerType types.Type = nil
+		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
+			// Extract param types (default Any)
+			prelimParamTypes := []types.Type{}
+			for _, p := range funcLit.Parameters {
+				if p.TypeAnnotation != nil {
+					pt := c.resolveTypeAnnotation(p.TypeAnnotation)
+					if pt != nil {
+						prelimParamTypes = append(prelimParamTypes, pt)
+					} else {
+						prelimParamTypes = append(prelimParamTypes, types.Any) // Error resolving, use Any
+					}
+				} else {
+					prelimParamTypes = append(prelimParamTypes, types.Any) // No annotation, use Any
+				}
+			}
+			// Extract return type annotation (can be nil)
+			prelimReturnType := c.resolveTypeAnnotation(funcLit.ReturnTypeAnnotation)
+			// Create unified ObjectType for preliminary function type
+			prelimSig := &types.Signature{
+				ParameterTypes: prelimParamTypes,
+				ReturnType:     prelimReturnType,
+			}
+			preliminaryInitializerType = types.NewFunctionType(prelimSig)
+		}
+
+		// Temporarily define the variable name in the current scope before visiting the value.
+		tempType := preliminaryInitializerType
+		if tempType == nil {
+			tempType = declaredType // Use annotation if no prelim func type
+		}
+		if tempType == nil {
+			tempType = types.Any // Fallback to Any
+		}
+		if !c.env.Define(node.Name.Value, tempType, false) {
+			// If Define fails here, it's a true redeclaration error.
+			c.addError(node.Name, fmt.Sprintf("variable '%s' already declared in this scope", node.Name.Value))
+		}
+		debugPrintf("// [Checker VarStmt] Temp Define '%s' as: %s\n", node.Name.Value, tempType.String())
+
+		// 2. Handle Initializer (if present)
+		var computedInitializerType types.Type
+		if node.Value != nil {
+			// Use contextual typing if we have a declared type
+			if declaredType != nil {
+				c.visitWithContext(node.Value, &ContextualType{
+					ExpectedType: declaredType,
+					IsContextual: true,
+				})
+			} else {
+				c.visit(node.Value) // Regular visit if no type annotation
+			}
+
+			if node.Name == nil {
+				panic(fmt.Sprintf("PANIC CHECKER: node.Name for VarStatement '%s' became nil IMMEDIATELY AFTER visiting the value node! NodePtr: %p", nameValueStr, node))
+			}
+
+			currentNamePtr := varNodePtr.Name
+			var currentNameValueStr string
+			if currentNamePtr != nil {
+				currentNameValueStr = currentNamePtr.Value
+			} else {
+				currentNameValueStr = "<nil_name>"
+			}
+			debugPrintf("// [Checker VarStmt Post-Visit] NodePtr: %p, NamePtr: %p (%s), ValuePtr: %p\n", varNodePtr, currentNamePtr, currentNameValueStr, varNodePtr.Value)
+
+			if node.Value == nil {
+				panic(fmt.Sprintf("PANIC CHECKER: node.Value for VarStatement '%s' became nil AFTER visiting the value node!", currentNameValueStr))
+			}
+
+			computedInitializerType = node.Value.GetComputedType()
+			debugPrintf("// [Checker VarStmt] '%s': computedInitializerType from node.Value (%T): %T (%v)\n", nameValueStr, node.Value, computedInitializerType, computedInitializerType)
+		} else {
+			computedInitializerType = nil // No initializer
+		}
+
+		// 3. Determine the final type and check assignment errors
+		var finalVariableType types.Type
+
+		if declaredType != nil {
+			// --- If annotation exists, variable type IS the annotation ---
+			finalVariableType = declaredType
+
+			if computedInitializerType != nil {
+				// Check if initializer is assignable to the declared type for error reporting
+				assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
+
+				// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
+				isEmptyArrayAssignment := false
+				if _, isTargetArray := declaredType.(*types.ArrayType); isTargetArray {
+					if sourceArrayType, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
+						if sourceArrayType.ElementType == types.Unknown {
+							isEmptyArrayAssignment = true
+						}
+					}
+				}
+
+				if !assignable && !isEmptyArrayAssignment {
+					c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalVariableType.String()))
+				}
+			}
+		} else {
+			// --- No annotation: Infer type ---
+			if computedInitializerType != nil {
+				if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
+					finalVariableType = types.GetWidenedType(computedInitializerType)
+					debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+				} else {
+					finalVariableType = computedInitializerType
+					debugPrintf("// [Checker VarStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+				}
+			} else {
+				finalVariableType = types.Undefined
+				debugPrintf("// [Checker VarStmt] '%s': Inferred final type (no initializer): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+			}
+		}
+
+		// 4. UPDATE variable type in the current environment with the final type
+		currentType, _, _ := c.env.Resolve(node.Name.Value)
+		debugPrintf("// [Checker VarStmt] Updating '%s'. Current type: %s, Final type: %s\n", node.Name.Value, currentType.String(), finalVariableType.String())
+		if !c.env.Update(node.Name.Value, finalVariableType) {
+			debugPrintf("// [Checker VarStmt] WARNING: Update failed unexpectedly for '%s'\n", node.Name.Value)
+		}
+		updatedType, _, _ := c.env.Resolve(node.Name.Value)
+		debugPrintf("// [Checker VarStmt] Updated '%s'. Type after update: %s\n", node.Name.Value, updatedType.String())
+
+		// Set computed type on the Name Identifier node itself
+		if node.Name == nil {
+			panic(fmt.Sprintf("PANIC CHECKER: node.Name is nil before final SetComputedType for %s", nameValueStr))
+		}
+		node.Name.SetComputedType(finalVariableType)
+
 	case *parser.ArrayDestructuringDeclaration:
 		c.checkArrayDestructuringDeclaration(node)
 

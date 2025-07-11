@@ -104,6 +104,102 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 	return BadRegister, nil
 }
 
+func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register) (Register, errors.PaseratiError) {
+	debugPrintf("// DEBUG compileVarStatement: Defining '%s' (is top-level: %v)\n", node.Name.Value, c.enclosing == nil)
+	var valueReg Register = nilRegister
+	var err errors.PaseratiError
+	isValueFunc := false // Flag to track if value is a function literal
+
+	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
+		isValueFunc = true
+		// --- Handle var f = function g() {} or var f = function() {} ---
+		// 1. Define the *variable name (f)* temporarily for potential recursion
+		//    within the function body (e.g., recursive anonymous function).
+		debugPrintf("// DEBUG compileVarStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value)
+		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+
+		// 2. Compile the function literal body.
+		//    Pass the variable name (f) as the hint for the function object's name
+		//    if the function literal itself is anonymous.
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
+		if err != nil {
+			// Error already added to c.errors by compileFunctionLiteral
+			return BadRegister, nil // Return nil error here, main error is tracked
+		}
+		// 3. Create the closure object
+		closureReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(closureReg)
+		debugPrintf("// DEBUG compileVarStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols))
+		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
+
+		// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
+		debugPrintf("// DEBUG compileVarStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg)
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+
+		// The variable's value (the closure) is now set.
+		// We don't need to assign to valueReg anymore for this path.
+
+	} else if node.Value != nil {
+		// Compile other value types normally
+		valueReg = c.regAlloc.Alloc()
+		defer c.regAlloc.Free(valueReg)
+		_, err = c.compileNode(node.Value, valueReg)
+		if err != nil {
+			return BadRegister, err
+		}
+	} // else: node.Value is nil (implicit undefined handled below)
+
+	// Handle implicit undefined (`var x;`)
+	if valueReg == nilRegister && !isValueFunc {
+		undefReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(undefReg)
+		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
+		valueReg = undefReg
+		// Define symbol for the `var x;` case
+		debugPrintf("// DEBUG compileVarStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg)
+		if c.enclosing == nil {
+			// Top-level: use global variable
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+		} else {
+			// Function scope: use local symbol table
+			c.currentSymbolTable.Define(node.Name.Value, valueReg)
+			// Pin the register since local variables can be captured by upvalues
+			c.regAlloc.Pin(valueReg)
+		}
+	} else if !isValueFunc {
+		// Define symbol ONLY for non-function values.
+		// Function assignments were handled above by UpdateRegister.
+		debugPrintf("// DEBUG compileVarStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg)
+		if c.enclosing == nil {
+			// Top-level: use global variable
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+		} else {
+			// Function scope: use local symbol table
+			c.currentSymbolTable.Define(node.Name.Value, valueReg)
+			// Pin the register since local variables can be captured by upvalues
+			c.regAlloc.Pin(valueReg)
+		}
+	} else if c.enclosing == nil {
+		// Top-level function: also set as global
+		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+		// Get the closure register from the symbol table
+		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+		if found && symbolRef.Register != nilRegister {
+			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+			// Update the symbol to be global
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+			// Pin the register since function closures can be captured by upvalues
+			c.regAlloc.Pin(symbolRef.Register)
+		}
+	}
+
+	return BadRegister, nil
+}
+
 func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Register) (Register, errors.PaseratiError) {
 	if node.Value == nil {
 		// Parser should prevent this, but defensive check

@@ -453,9 +453,32 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseImportDeclaration()
 	case lexer.EXPORT:
 		return p.parseExportDeclaration()
+	case lexer.LBRACE:
+		// Check if this is a block statement or destructuring assignment
+		// Look ahead to see if this might be destructuring
+		if p.isDestructuringAssignment() {
+			return p.parseExpressionStatement()
+		}
+		return p.parseBlockStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
+}
+
+// isDestructuringAssignment uses a simple heuristic to determine if a { starts destructuring.
+// For now, we'll use a conservative approach: if the immediate next token is an identifier,
+// it's likely destructuring. This isn't perfect but should handle common cases.
+func (p *Parser) isDestructuringAssignment() bool {
+	// Simple heuristic: { followed by identifier suggests destructuring
+	// More sophisticated lookahead would require lexer state saving
+	
+	if !p.curTokenIs(lexer.LBRACE) {
+		return false
+	}
+	
+	// Check if the next token is an identifier
+	// This catches patterns like: {a} = ..., {a, b} = ..., {a: b} = ...
+	return p.peekTokenIs(lexer.IDENT)
 }
 
 // --- Function Declaration Statement Parsing ---

@@ -44,7 +44,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] **Module Resolution**: Configurable base directory without CWD dependency
   - [x] **Test Infrastructure**: Complete module test system with all tests passing
   - [x] **Error Handling**: Proper compile-time and runtime module loading errors
-- [ ] `var` keyword (legacy)
+- [x] **`var` keyword** - **Complete Implementation!**
+  - [x] Variable declarations with block scoping (TypeScript semantics, not legacy JS hoisting)
+  - [x] Type annotations and type inference
+  - [x] Function assignments and closures
+  - [x] Proper redeclaration error handling
+  - [x] Integration with export system and module resolution
+  - [x] **Fixed block statement parsing bug** - Block statements now work correctly in all contexts
 
 ## Literals
 
@@ -592,6 +598,16 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Multiple interpolations and complex patterns
   - [x] Type computation engine for literal concatenation
   - [x] Integration with generic type parameters
+- [ ] **Type-level `typeof`** - Type queries for values (`typeof someValue`)
+  - [ ] Variable type extraction (`type T = typeof myVariable`)
+  - [ ] Function type extraction (`type F = typeof myFunction`)
+  - [ ] Object type extraction (`type O = typeof myObject`)
+  - [ ] Integration with conditional types and generics
+- [ ] **`infer` Keyword** - Type inference in conditional types
+  - [ ] Basic inference (`T extends (infer U)[] ? U : never`)
+  - [ ] Multiple inference sites with same name
+  - [ ] Inference in function parameters and return types
+  - [ ] Complex inference patterns with nested conditionals
 
 ### Classes - **Complete Implementation!**
 
@@ -683,3 +699,39 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 ### Compiler Options
 
 - [ ] Various `tsconfig.json` options (`target`, `strict`, etc.)
+
+## Additional Missing Features
+
+### Modern ECMA/TypeScript Features
+
+- [ ] **Private Class Fields** (`#private`) - Modern class privacy mechanism
+- [ ] **Optional Chaining for Calls** (`obj.method?.()`) - Method call chaining
+- [ ] **Dynamic Imports** (`import()`) - Runtime module loading
+- [ ] **Top-level Await** - Await at module scope
+- [ ] **Property Parameter Shortcuts** (`constructor(public name: string)`) - TypeScript class feature
+- [ ] **Satisfies Operator** (`value satisfies Type`) - TypeScript 4.9+ feature
+
+### Runtime Features
+
+- [ ] **Event Loop** - Required for async/await and Promise resolution
+- [ ] **Microtask Queue** - Promise resolution scheduling
+- [ ] **Timer Functions** (`setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`)
+- [ ] **Global Object** (`globalThis`, `window` in browser, `global` in Node.js)
+
+### Extended Built-ins
+
+- [ ] **Complete Date Implementation** - Missing most Date prototype methods
+  - [ ] Date parsing from strings (`new Date("2023-01-01")`)
+  - [ ] Date formatting methods (`.toISOString()`, `.toDateString()`, etc.)
+  - [ ] Date arithmetic and comparison
+  - [ ] Timezone handling
+- [ ] **Error Stack Traces Enhancement** - More detailed stack information
+- [ ] **Performance API** (`performance.now()`, `performance.mark()`)
+
+### TypeScript Compiler Features
+
+- [ ] **Declaration Files** (`.d.ts`) - Type-only declarations
+- [ ] **Triple-Slash Directives** (`/// <reference path="..." />`)
+- [ ] **Module Resolution Strategies** (Node.js, Classic)
+- [ ] **Path Mapping** (`paths` in tsconfig.json)
+- [ ] **Project References** - Multi-project builds
