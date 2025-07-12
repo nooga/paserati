@@ -2468,6 +2468,10 @@ func (c *Checker) visit(node parser.Node) {
 			node.SetComputedType(types.Any)
 		}
 
+	// --- Enum Declarations ---
+	case *parser.EnumDeclaration:
+		c.checkEnumDeclaration(node)
+
 	// --- Exception Handling Statements ---
 	case *parser.TryStatement:
 		c.checkTryStatement(node)
@@ -3436,6 +3440,20 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 				}
 				debugPrintf("// [Checker] Exported class: %s (type: %s)\n", localName, exportType.String())
+			}
+			
+		case *parser.EnumDeclaration:
+			if expr.Name != nil {
+				localName := expr.Name.Value
+				exportType := expr.GetComputedType()
+				if exportType == nil {
+					exportType = types.Any
+				}
+				
+				if c.IsModuleMode() {
+					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+				}
+				debugPrintf("// [Checker] Exported enum: %s (type: %s)\n", localName, exportType.String())
 			}
 			
 		default:

@@ -395,10 +395,14 @@ func (c *Chunk) WriteUint16(val uint16) {
 // Returns a uint16 as we might need more than 256 constants.
 // Deduplicates constants to avoid storing the same value multiple times.
 func (c *Chunk) AddConstant(v Value) uint16 {
-	// Check if constant already exists to avoid duplicates
-	for i, existing := range c.Constants {
-		if existing.Is(v) {
-			return uint16(i)
+	// Skip deduplication for DictObject to avoid memory corruption issues
+	// (DictObjects like enums are typically unique anyway)
+	if v.Type() != TypeDictObject {
+		// Check if constant already exists to avoid duplicates
+		for i, existing := range c.Constants {
+			if existing.Is(v) {
+				return uint16(i)
+			}
 		}
 	}
 
