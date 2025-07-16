@@ -589,8 +589,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				resultType = types.Any
 				debugPrintf("// [Checker MemberExpr] Function.prototype access, returning 'any' type\n")
 			} else {
-				// Look for the property in the object's fields
-				fieldType, exists := obj.Properties[propertyName]
+				// Look for the property in the object's fields, including inherited properties
+				effectiveProps := obj.GetEffectiveProperties()
+				fieldType, exists := effectiveProps[propertyName]
 				if exists {
 					// Property found - check access control for class types
 					c.validateMemberAccess(objectType, propertyName, node.Property)

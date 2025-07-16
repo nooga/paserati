@@ -1,4 +1,4 @@
-// expect: "Circle area: 78.54"
+// expect: Circle area: 78.54
 // Test abstract classes and methods
 
 abstract class Shape {

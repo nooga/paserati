@@ -374,7 +374,19 @@ func (ot *ObjectType) GetClassName() string {
 // GetMemberAccessInfo returns access information for a member, or nil if not a class type
 func (ot *ObjectType) GetMemberAccessInfo(memberName string) *MemberAccessInfo {
 	if ot.ClassMeta != nil {
-		return ot.ClassMeta.GetMemberAccess(memberName)
+		// First check this class
+		if info := ot.ClassMeta.GetMemberAccess(memberName); info != nil {
+			return info
+		}
+		
+		// Then check parent classes
+		for _, baseType := range ot.BaseTypes {
+			if baseObj, ok := baseType.(*ObjectType); ok {
+				if info := baseObj.GetMemberAccessInfo(memberName); info != nil {
+					return info
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -382,7 +394,22 @@ func (ot *ObjectType) GetMemberAccessInfo(memberName string) *MemberAccessInfo {
 // IsAccessibleFrom checks if a member is accessible from the given context
 func (ot *ObjectType) IsAccessibleFrom(memberName string, accessContext *AccessContext) bool {
 	if ot.ClassMeta != nil {
-		return ot.ClassMeta.IsAccessibleFrom(memberName, accessContext)
+		// First check if member exists in this class
+		if ot.ClassMeta.HasMember(memberName) {
+			return ot.ClassMeta.IsAccessibleFrom(memberName, accessContext)
+		}
+		
+		// Then check parent classes
+		for _, baseType := range ot.BaseTypes {
+			if baseObj, ok := baseType.(*ObjectType); ok {
+				if baseObj.IsAccessibleFrom(memberName, accessContext) {
+					return true
+				}
+			}
+		}
+		
+		// Member not found in class hierarchy
+		return false
 	}
 	return true // Non-class types have no access restrictions
 }
