@@ -37,6 +37,7 @@ const (
 	TypeDictObject
 
 	TypeArray
+	TypeArguments
 	TypeRegExp
 	TypeMap
 	TypeSet
@@ -58,6 +59,12 @@ type ArrayObject struct {
 	Object
 	length   int
 	elements []Value
+}
+
+type ArgumentsObject struct {
+	Object
+	length int
+	args   []Value
 }
 
 type MapObject struct {
@@ -121,6 +128,15 @@ func NewSymbol(value string) Value {
 
 func NewArray() Value {
 	return Value{typ: TypeArray, obj: unsafe.Pointer(&ArrayObject{})}
+}
+
+func NewArguments(args []Value) Value {
+	argObj := &ArgumentsObject{
+		length: len(args),
+		args:   make([]Value, len(args)),
+	}
+	copy(argObj.args, args)
+	return Value{typ: TypeArguments, obj: unsafe.Pointer(argObj)}
 }
 
 // NewArrayWithArgs creates an array based on the Array constructor arguments:
@@ -225,7 +241,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeRegExp
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeRegExp
 }
 
 func (v Value) IsDictObject() bool {
@@ -234,6 +250,10 @@ func (v Value) IsDictObject() bool {
 
 func (v Value) IsArray() bool {
 	return v.typ == TypeArray
+}
+
+func (v Value) IsArguments() bool {
+	return v.typ == TypeArguments
 }
 
 func (v Value) IsCallable() bool {
@@ -274,7 +294,7 @@ func (v Value) TypeName() string {
 		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		return "function"
-	case TypeObject, TypeDictObject, TypeArray, TypeRegExp:
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)
@@ -342,6 +362,13 @@ func (v Value) AsArray() *ArrayObject {
 		panic("value is not an array")
 	}
 	return (*ArrayObject)(v.obj)
+}
+
+func (v Value) AsArguments() *ArgumentsObject {
+	if v.typ != TypeArguments {
+		panic("value is not an arguments object")
+	}
+	return (*ArgumentsObject)(v.obj)
 }
 
 func (v Value) AsMap() *MapObject {
@@ -470,6 +497,9 @@ func (v Value) ToString() string {
 			parts[i] = el.ToString()
 		}
 		return strings.Join(parts, ",")
+	case TypeArguments:
+		// Arguments object toString -> [object Arguments]
+		return "[object Arguments]"
 	case TypeNull:
 		return "null"
 	case TypeUndefined:
@@ -537,7 +567,7 @@ func (v Value) ToFloat() float64 {
 			return f
 		}
 		return math.NaN()
-	case TypeObject, TypeDictObject, TypeArray, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeTypedArray:
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeTypedArray:
 		// Special case for Date objects - directly get timestamp
 		if obj := v.AsPlainObject(); obj != nil {
 			if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
@@ -559,7 +589,7 @@ func (v Value) ToFloat() float64 {
 // hint can be "number", "string", or "default"
 func (v Value) ToPrimitive(hint string) Value {
 	// If already primitive, return as-is
-	if !v.IsObject() && v.typ != TypeArray && v.typ != TypeRegExp && v.typ != TypeMap && v.typ != TypeSet {
+	if !v.IsObject() && v.typ != TypeArray && v.typ != TypeArguments && v.typ != TypeRegExp && v.typ != TypeMap && v.typ != TypeSet {
 		return v
 	}
 
@@ -741,6 +771,14 @@ func (v Value) inspectWithContext(nested bool) string {
 			elems[i] = el.InspectNested() // Use nested context
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
+	case TypeArguments:
+		// Arguments object inspect - show like array but with [Arguments] tag
+		args := v.AsArguments()
+		elems := make([]string, len(args.args))
+		for i, el := range args.args {
+			elems[i] = el.InspectNested() // Use nested context
+		}
+		return "[Arguments] { 0: " + strings.Join(elems, ", ") + " }"
 	case TypeMap:
 		// Map object inspect - show as Map { key => value, ... }
 		mapObj := v.AsMap()
@@ -835,7 +873,7 @@ func (v Value) IsFalsey() bool {
 		return v.AsBigInt().Cmp(bigZero) == 0
 	case TypeString:
 		return v.AsString() == ""
-	case TypeSymbol, TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp:
+	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp:
 		// All object types (including symbols and regex) are truthy
 		return false
 	default:
@@ -897,7 +935,7 @@ func (v Value) Is(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
+	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
 		// Objects (including arrays, functions, regex, maps, sets, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
@@ -936,7 +974,7 @@ func (v Value) StrictlyEquals(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
+	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
 		// Objects (including arrays, functions, regex, maps, sets, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
@@ -1059,6 +1097,9 @@ func AsDictObject(v Value) *DictObject { return v.AsDictObject() }
 
 // AsArray returns the ArrayObject pointer from an Array value.
 func AsArray(v Value) *ArrayObject { return v.AsArray() }
+
+// AsArguments returns the ArgumentsObject pointer from an Arguments value.
+func AsArguments(v Value) *ArgumentsObject { return v.AsArguments() }
 func AsMap(v Value) *MapObject { return v.AsMap() }
 func AsSet(v Value) *SetObject { return v.AsSet() }
 
@@ -1179,6 +1220,25 @@ func (a *ArrayObject) SetElements(elements []Value) {
 func (a *ArrayObject) Append(value Value) {
 	a.elements = append(a.elements, value)
 	a.length++
+}
+
+// ArgumentsObject methods
+func (a *ArgumentsObject) Length() int {
+	return a.length
+}
+
+func (a *ArgumentsObject) Get(index int) Value {
+	if index < 0 || index >= len(a.args) {
+		return Undefined
+	}
+	return a.args[index]
+}
+
+func (a *ArgumentsObject) Set(index int, value Value) {
+	if index < 0 || index >= len(a.args) {
+		return // Arguments object doesn't expand like arrays
+	}
+	a.args[index] = value
 }
 
 // MapObject methods

@@ -51,15 +51,16 @@ type RuntimeContext struct {
 
 // Priority constants for initialization order
 const (
-	PriorityObject   = 0   // Object must be first (base prototype)
-	PriorityFunction = 1   // Function second (inherits from Object)
-	PriorityArray    = 2   // Array third (inherits from Object)
-	PriorityString   = 10  // String primitives
-	PriorityNumber   = 11  // Number primitives
-	PriorityBoolean  = 12  // Boolean primitives
-	PriorityRegExp   = 13  // RegExp constructor
-	PriorityMath     = 100 // Math object
-	PriorityJSON     = 101 // JSON object
-	PriorityConsole  = 102 // Console object
-	PriorityDate     = 103 // Date constructor
+	PriorityObject    = 0   // Object must be first (base prototype)
+	PriorityFunction  = 1   // Function second (inherits from Object)
+	PriorityArray     = 2   // Array third (inherits from Object)
+	PriorityArguments = 3   // Arguments object (array-like)
+	PriorityString    = 10  // String primitives
+	PriorityNumber    = 11  // Number primitives
+	PriorityBoolean   = 12  // Boolean primitives
+	PriorityRegExp    = 13  // RegExp constructor
+	PriorityMath      = 100 // Math object
+	PriorityJSON      = 101 // JSON object
+	PriorityConsole   = 102 // Console object
+	PriorityDate      = 103 // Date constructor
 )

@@ -69,6 +69,7 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 		newFrame.thisValue = thisValue
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false
+		newFrame.argCount = argCount // Store actual argument count for arguments object
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 

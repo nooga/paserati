@@ -59,6 +59,7 @@ type CallFrame struct {
 	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
 	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
 	isDirectCall      bool  // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
+	argCount          int   // Actual number of arguments passed to this function (for arguments object)
 
 	// For async native functions that can call bytecode
 	isNativeFrame    bool
@@ -1210,7 +1211,7 @@ startExecution:
 			baseVal := registers[baseReg]
 			indexVal := registers[indexReg]
 
-			// --- MODIFIED: Handle Array, Object, String ---
+			// --- MODIFIED: Handle Array, Arguments, Object, String ---
 			switch baseVal.Type() {
 			case TypeArray:
 				if !IsNumber(indexVal) {
@@ -1224,6 +1225,20 @@ startExecution:
 					registers[destReg] = Undefined // Out of bounds -> undefined
 				} else {
 					registers[destReg] = arr.elements[idx]
+				}
+
+			case TypeArguments:
+				if !IsNumber(indexVal) {
+					frame.ip = ip
+					status := vm.runtimeError("Arguments index must be a number, got '%v'", indexVal.Type())
+					return status, Undefined
+				}
+				args := AsArguments(baseVal)
+				idx := int(AsNumber(indexVal))
+				if idx < 0 || idx >= args.Length() {
+					registers[destReg] = Undefined // Out of bounds -> undefined
+				} else {
+					registers[destReg] = args.Get(idx)
 				}
 
 			case TypeObject, TypeDictObject: // <<< NEW
@@ -2662,6 +2677,60 @@ startExecution:
 			// Create namespace object from module exports
 			namespaceObj := vm.createModuleNamespace(modulePath)
 			frame.registers[destReg] = namespaceObj
+
+		case OpGetArguments:
+			// OpGetArguments: Rx - Create arguments object from current function arguments
+			destReg := code[ip]
+			ip++
+
+			// Get function arguments from current call frame
+			// For function calls, arguments are stored in the beginning of the register space
+			// We need to determine how many arguments were passed to the current function
+			
+			if frame.closure == nil || frame.closure.Fn == nil {
+				status := vm.runtimeError("Cannot access arguments outside of function")
+				return status, Undefined
+			}
+
+			// Use the actual argument count that was passed to this function
+			// (stored in frame.argCount during function call setup)
+			argCount := frame.argCount
+			
+			// Collect the arguments that were passed to this function
+			args := make([]Value, argCount)
+			
+			// Special handling for variadic functions
+			if frame.closure.Fn.Variadic && argCount > 0 {
+				// For variadic functions, all arguments are packed into an array in register 0
+				if frame.registers[0].Type() == TypeArray {
+					arr := frame.registers[0].AsArray()
+					for i := 0; i < argCount && i < arr.Length(); i++ {
+						args[i] = arr.Get(i)
+					}
+				} else {
+					// Fallback to regular method
+					for i := 0; i < argCount; i++ {
+						if i < len(frame.registers) {
+							args[i] = frame.registers[i]
+						} else {
+							args[i] = Undefined
+						}
+					}
+				}
+			} else {
+				// Regular function - arguments are in separate registers
+				for i := 0; i < argCount; i++ {
+					if i < len(frame.registers) {
+						args[i] = frame.registers[i]
+					} else {
+						args[i] = Undefined
+					}
+				}
+			}
+
+			// Create arguments object
+			argsObj := NewArguments(args)
+			frame.registers[destReg] = argsObj
 
 		default:
 			frame.ip = ip // Save IP before erroring

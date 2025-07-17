@@ -1650,6 +1650,27 @@ func (c *Checker) visit(node parser.Node) {
 
 		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
 		if !found {
+			// Special handling for 'arguments' identifier - only available in function scope
+			if node.Value == "arguments" {
+				// Check if we're inside a function (not global scope)
+				if c.env.outer != nil { // Function scope has an outer environment
+					// Get IArguments type that was defined by the builtin initializer
+					// Walk up to the global environment to find IArguments
+					globalEnv := c.env
+					for globalEnv.outer != nil {
+						globalEnv = globalEnv.outer
+					}
+					iArgumentsType, _, hasIArguments := globalEnv.Resolve("IArguments")
+					if hasIArguments {
+						debugPrintf("// [Checker Debug] visit(Identifier): 'arguments' resolved as IArguments type in function scope\n")
+						node.SetComputedType(iArgumentsType)
+						node.IsConstant = false // arguments is not a constant
+						return // Successfully handled 'arguments' identifier
+					}
+				}
+				// If in global scope or IArguments type not found, fall through to error
+			}
+
 			// Check for built-in function before reporting error
 			builtinType := c.getBuiltinType(node.Value)
 			if builtinType != nil {

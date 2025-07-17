@@ -702,6 +702,17 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil
 
 	case *parser.Identifier:
+		// Special handling for 'arguments' identifier - only available in non-arrow functions
+		if node.Value == "arguments" {
+			// Check if we're inside a function (not global scope)
+			if c.currentSymbolTable.Outer != nil {
+				// Emit OpGetArguments to create arguments object on demand
+				c.emitGetArguments(hint, node.Token.Line)
+				return hint, nil
+			}
+			// If in global scope, treat as regular identifier (will likely be undefined)
+		}
+
 		// All identifiers (including builtins) now use standard variable lookup
 		// Builtins are registered as global variables via the new initializer system
 		scopeName := "Function"

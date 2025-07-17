@@ -216,6 +216,12 @@ func (c *Compiler) emitLoadThis(dest Register, line int) {
 	c.emitByte(byte(dest))
 }
 
+// emitGetArguments emits OpGetArguments to create arguments object from current function arguments
+func (c *Compiler) emitGetArguments(dest Register, line int) {
+	c.emitOpCode(vm.OpGetArguments, line)
+	c.emitByte(byte(dest))
+}
+
 // emitFinalReturn adds the final OpReturnUndefined instruction.
 func (c *Compiler) emitFinalReturn(line int) {
 	// No need to load undefined first

@@ -131,6 +131,9 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 		case TypeArray:
 			arr := AsArray(objVal)
 			return Number(float64(len(arr.elements))), true
+		case TypeArguments:
+			args := AsArguments(objVal)
+			return Number(float64(args.Length())), true
 		case TypeString:
 			str := AsString(objVal)
 			// Use rune count for correct length of multi-byte strings
