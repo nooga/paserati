@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"fmt"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
@@ -51,19 +52,19 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Add prototype methods
 	// Function.prototype.call
 	callImpl := func(args []vm.Value) (vm.Value, error) {
-		return functionPrototypeCallImpl(vmInstance, args), nil
+		return functionPrototypeCallImpl(vmInstance, args)
 	}
 	functionProto.SetOwn("call", vm.NewNativeFunction(0, true, "call", callImpl))
 
 	// Function.prototype.apply
 	applyImpl := func(args []vm.Value) (vm.Value, error) {
-		return functionPrototypeApplyImpl(vmInstance, args), nil
+		return functionPrototypeApplyImpl(vmInstance, args)
 	}
 	functionProto.SetOwn("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
 
 	// Function.prototype.bind
 	bindImpl := func(args []vm.Value) (vm.Value, error) {
-		return functionPrototypeBindImpl(vmInstance, args), nil
+		return functionPrototypeBindImpl(vmInstance, args)
 	}
 	functionProto.SetOwn("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
 
@@ -100,41 +101,115 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // Implementation methods
 
-func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
-	// Get 'this' from VM instead of first argument
-	thisValue := vmInstance.GetThis()
+func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	// Get 'this' function from VM context
+	thisFunction := vmInstance.GetThis()
 
-	if !thisValue.IsCallable() {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined
+	if !thisFunction.IsCallable() {
+		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
 	}
 
-	// For now, just return undefined to break the infinite recursion
-	// TODO: Re-implement call functionality without causing recursion
-	return vm.Undefined
-}
+	// Extract thisArg and function arguments
+	var thisArg vm.Value = vm.Undefined
+	var functionArgs []vm.Value
 
-func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
-	// Get 'this' from VM instead of first argument
-	thisValue := vmInstance.GetThis()
-
-	if !thisValue.IsCallable() {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined
+	if len(args) > 0 {
+		thisArg = args[0]
+		functionArgs = args[1:]
 	}
 
-	// For now, just return undefined to break the infinite recursion
-	// TODO: Re-implement apply functionality without causing recursion
-	return vm.Undefined
+	// Handle different function types to avoid recursion
+	var result vm.Value
+	var err error
+	
+	switch thisFunction.Type() {
+	case vm.TypeNativeFunction:
+		// For native functions, call directly (but set 'this' context if needed)
+		nativeFunc := vm.AsNativeFunction(thisFunction)
+		result, err = nativeFunc.Fn(functionArgs)
+	case vm.TypeNativeFunctionWithProps:
+		// Handle native function with properties
+		nativeFuncWithProps := thisFunction.AsNativeFunctionWithProps()
+		result, err = nativeFuncWithProps.Fn(functionArgs)
+	case vm.TypeClosure, vm.TypeFunction:
+		// For user-defined functions, use CallFunctionDirectly to avoid recursion
+		result, err = vmInstance.CallFunctionDirectly(thisFunction, thisArg, functionArgs)
+	default:
+		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
+	}
+
+	if err != nil {
+		return vm.Undefined, err
+	}
+
+	return result, nil
 }
 
-func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
+func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	// Get 'this' function from VM context
+	thisFunction := vmInstance.GetThis()
+
+	if !thisFunction.IsCallable() {
+		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
+	}
+
+	// Extract thisArg and arguments array
+	var thisArg vm.Value = vm.Undefined
+	var functionArgs []vm.Value
+
+	if len(args) > 0 {
+		thisArg = args[0]
+	}
+
+	if len(args) > 1 {
+		argsArray := args[1]
+		// Handle array-like arguments
+		if argsArray.IsArray() {
+			arrayObj := argsArray.AsArray()
+			functionArgs = make([]vm.Value, arrayObj.Length())
+			for i := 0; i < arrayObj.Length(); i++ {
+				functionArgs[i] = arrayObj.Get(i)
+			}
+		} else if !argsArray.IsUndefined() {
+			// TODO: Handle array-like objects (with length property)
+			// For now, treat non-array as empty arguments
+			functionArgs = []vm.Value{}
+		}
+	}
+
+	// Handle different function types to avoid recursion
+	var result vm.Value
+	var err error
+	
+	switch thisFunction.Type() {
+	case vm.TypeNativeFunction:
+		// For native functions, call directly (but set 'this' context if needed)
+		nativeFunc := vm.AsNativeFunction(thisFunction)
+		result, err = nativeFunc.Fn(functionArgs)
+	case vm.TypeNativeFunctionWithProps:
+		// Handle native function with properties
+		nativeFuncWithProps := thisFunction.AsNativeFunctionWithProps()
+		result, err = nativeFuncWithProps.Fn(functionArgs)
+	case vm.TypeClosure, vm.TypeFunction:
+		// For user-defined functions, use CallFunctionDirectly to avoid recursion
+		result, err = vmInstance.CallFunctionDirectly(thisFunction, thisArg, functionArgs)
+	default:
+		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
+	}
+
+	if err != nil {
+		return vm.Undefined, err
+	}
+
+	return result, nil
+}
+
+func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	// Get 'this' from VM instead of first argument
 	originalFunc := vmInstance.GetThis()
 
 	if !originalFunc.IsCallable() {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined
+		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", originalFunc.Type())
 	}
 
 	var boundThis vm.Value = vm.Undefined
@@ -172,5 +247,5 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) vm.Value {
 
 	// Create a bound function using the new BoundFunction type
 	result := vm.NewBoundFunction(originalFunc, boundThis, partialArgs, functionName)
-	return result
+	return result, nil
 }
