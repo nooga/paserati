@@ -1042,6 +1042,23 @@ startExecution:
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
 
+			// Check if this is a generator function completion
+			if frame.generatorObj != nil {
+				genObj := frame.generatorObj
+				// Mark generator as completed
+				genObj.State = GeneratorCompleted
+				genObj.Done = true
+				genObj.Frame = nil // Clean up execution frame
+
+				// Create iterator result { value: undefined, done: true }
+				result := NewObject(vm.ObjectPrototype).AsPlainObject()
+				result.SetOwn("value", Undefined)
+				result.SetOwn("done", BooleanValue(true))
+
+				// Return the iterator result from generator execution
+				return InterpretOK, NewValueFromPlainObject(result)
+			}
+
 			// Check if there are finally handlers that should execute
 			handlers := vm.findAllExceptionHandlers(frame.ip)
 			hasFinallyHandler := false
@@ -3202,63 +3219,52 @@ func (vm *VM) executeGenerator(genObj *GeneratorObject, sentValue Value) (Value,
 	return NewValueFromPlainObject(result), nil
 }
 
-// startGenerator begins execution of a generator function
+// startGenerator begins execution of a generator function using sentinel frame isolation
 func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
 	// Get the generator function
 	funcVal := genObj.Function
 
-	var funcObj *FunctionObject
-	var closureObj *ClosureObject
+	// Set up the caller context for sentinel frame approach (like executeUserFunctionSafe)
+	callerRegisters := make([]Value, 1)
+	destReg := byte(0)
+	callerIP := 0
 
-	// Extract function object from Value
-	if funcVal.Type() == TypeFunction {
-		funcObj = funcVal.AsFunction()
-	} else if funcVal.Type() == TypeClosure {
-		closureObj = funcVal.AsClosure()
-		funcObj = closureObj.Fn
-	} else {
-		return Undefined, fmt.Errorf("Invalid generator function type")
-	}
-
-	// Create a new call frame for the generator
-	if vm.frameCount >= MaxFrames {
-		return Undefined, fmt.Errorf("Stack overflow")
-	}
-
-	// Allocate registers for the generator function
-	regSize := funcObj.RegisterSize
-	if vm.nextRegSlot+regSize > len(vm.registerStack) {
-		return Undefined, fmt.Errorf("Out of registers")
-	}
-
-	// Set up the generator frame
-	frame := &vm.frames[vm.frameCount]
-	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.ip = 0
-	frame.targetRegister = 0                                                 // Will be set when generator yields/returns
-	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
-	frame.isConstructorCall = false
-	frame.isDirectCall = false
-	frame.argCount = 0
-	frame.generatorObj = genObj // Link frame to generator object
-
-	if closureObj != nil {
-		frame.closure = closureObj
-	} else {
-		// Create a temporary closure for the function
-		closureVal := NewClosure(funcObj, nil)
-		frame.closure = closureVal.AsClosure()
-	}
-
-	// Update VM state
+	// Add a sentinel frame that will cause vm.run() to return when generator yields/returns
+	sentinelFrame := &vm.frames[vm.frameCount]
+	sentinelFrame.isSentinelFrame = true
+	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.targetRegister = destReg    // Target register in caller
+	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
-	vm.nextRegSlot += regSize
+
+	// Use prepareCall to set up the generator function call with no arguments
+	shouldSwitch, err := vm.prepareCall(funcVal, Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)}, []Value{}, destReg, callerRegisters, callerIP)
+	if err != nil {
+		// Remove sentinel frame on error
+		vm.frameCount--
+		return Undefined, err
+	}
+
+	if !shouldSwitch {
+		// Native function was executed directly (shouldn't happen for generators)
+		// Remove sentinel frame
+		vm.frameCount--
+		return callerRegisters[destReg], nil
+	}
+
+	// We have a new frame set up for the generator
+	if vm.frameCount > 1 { // frameCount includes the sentinel frame
+		// Set the generator object reference and mark as direct call for proper return handling
+		vm.frames[vm.frameCount-1].generatorObj = genObj
+		vm.frames[vm.frameCount-1].isDirectCall = true
+	}
 
 	// Initialize generator state
 	genObj.State = GeneratorExecuting
 
-	// Execute using the main VM loop - it will handle yields properly
+	// Execute the VM run loop - it will return when the generator yields or the sentinel frame is hit
 	status, result := vm.run()
+
 	if status == InterpretRuntimeError {
 		return Undefined, fmt.Errorf("runtime error during generator execution")
 	}
@@ -3266,9 +3272,9 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	return result, nil
 }
 
-// resumeGenerator resumes execution from a yield point
+// resumeGenerator resumes execution from a yield point using sentinel frame isolation
 func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
-	// Restore generator execution state
+	// Check if generator has saved state
 	if genObj.Frame == nil {
 		// Generator has no saved frame - it must be completed
 		genObj.State = GeneratorCompleted
@@ -3295,25 +3301,39 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 		return Undefined, fmt.Errorf("Invalid generator function type")
 	}
 
-	// Create a new call frame for resuming the generator
+	// Set up caller context for sentinel frame approach
+	callerRegisters := make([]Value, 1)
+	destReg := byte(0)
+
+	// Add a sentinel frame that will cause vm.run() to return when generator yields/returns
+	sentinelFrame := &vm.frames[vm.frameCount]
+	sentinelFrame.isSentinelFrame = true
+	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.targetRegister = destReg    // Target register in caller
+	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.frameCount++
+
+	// Check if we have space for the generator frame
 	if vm.frameCount >= MaxFrames {
+		vm.frameCount-- // Remove sentinel frame
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
 
 	// Allocate registers for the generator function
 	regSize := funcObj.RegisterSize
 	if vm.nextRegSlot+regSize > len(vm.registerStack) {
+		vm.frameCount-- // Remove sentinel frame
 		return Undefined, fmt.Errorf("Out of registers")
 	}
 
-	// Set up the generator frame for resumption
+	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
 	frame.ip = genObj.Frame.pc                                               // Resume from saved PC
-	frame.targetRegister = 0                                                 // Will be set when generator yields/returns
+	frame.targetRegister = destReg                                           // Target in sentinel frame
 	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
 	frame.isConstructorCall = false
-	frame.isDirectCall = false
+	frame.isDirectCall = true // Mark as direct call for proper return handling
 	frame.argCount = 0
 	frame.generatorObj = genObj // Link frame to generator object
 
@@ -3339,7 +3359,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Update generator state
 	genObj.State = GeneratorExecuting
 
-	// Execute using the main VM loop - it will handle yields properly
+	// Execute the VM run loop - it will return when the generator yields or the sentinel frame is hit
 	status, result := vm.run()
 	if status == InterpretRuntimeError {
 		return Undefined, fmt.Errorf("runtime error during generator resumption")
