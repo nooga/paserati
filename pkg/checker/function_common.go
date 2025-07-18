@@ -349,9 +349,11 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	// Set return context
 	outerExpectedReturnType := c.currentExpectedReturnType
 	outerInferredReturnTypes := c.currentInferredReturnTypes
+	outerInferredYieldTypes := c.currentInferredYieldTypes
 	
 	c.currentExpectedReturnType = expectedReturnType
 	c.currentInferredReturnTypes = nil
+	c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 	if expectedReturnType == nil {
 		c.currentInferredReturnTypes = []types.Type{}
 	}
@@ -419,6 +421,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	// Restore return context and this context
 	c.currentExpectedReturnType = outerExpectedReturnType
 	c.currentInferredReturnTypes = outerInferredReturnTypes
+	c.currentInferredYieldTypes = outerInferredYieldTypes
 	c.currentThisType = outerThisType
 	
 	return finalReturnType
@@ -432,7 +435,7 @@ func (c *Checker) inferFinalReturnType(expectedReturnType types.Type, functionNa
 	
 	// Infer from collected return types
 	if len(c.currentInferredReturnTypes) == 0 {
-		return types.Undefined
+		return types.Void // Functions with no return statements have void return type
 	}
 	
 	// Use NewUnionType to combine inferred return types

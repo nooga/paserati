@@ -21,6 +21,47 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
+// isStringConcatenatable checks if a type can be coerced to string in concatenation
+// TypeScript allows concatenation with string for most types
+func (c *Checker) isStringConcatenatable(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	
+	switch t {
+	case types.String, types.Number, types.Boolean, types.BigInt:
+		return true
+	case types.Null, types.Undefined, types.Void:
+		return true // These convert to strings in JS
+	case types.Any:
+		return true
+	}
+	
+	// Handle union types - all members must be string-concatenatable
+	if unionType, ok := t.(*types.UnionType); ok {
+		for _, member := range unionType.Types {
+			if !c.isStringConcatenatable(member) {
+				return false
+			}
+		}
+		return true
+	}
+	
+	// Handle literal types
+	if _, ok := t.(*types.LiteralType); ok {
+		// Number and string literals are always concatenatable
+		return true
+	}
+	
+	// Handle enum member types
+	if types.IsEnumMemberType(t) {
+		return true // Enum members can be coerced to strings
+	}
+	
+	// Be conservative for other types
+	return false
+}
+
 // extractTypeParametersFromSignature extracts type parameter instances from a function signature
 // This helps maintain consistency between hoisting and body checking phases
 func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*types.TypeParameter {
@@ -121,6 +162,8 @@ type Checker struct {
 	currentExpectedReturnType types.Type
 	// List of types found in return statements within the current function (used for inference).
 	currentInferredReturnTypes []types.Type
+	// List of types found in yield expressions within the current generator function (used for inference).
+	currentInferredYieldTypes []types.Type
 
 	// --- NEW: Context for 'this' type checking ---
 	// Type of 'this' in the current context (set when checking methods)
@@ -493,9 +536,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		// Save outer context & Set context for body check
 		outerExpectedReturnType := c.currentExpectedReturnType
 		outerInferredReturnTypes := c.currentInferredReturnTypes
+		outerInferredYieldTypes := c.currentInferredYieldTypes
 		outerThisType := c.currentThisType
 		c.currentExpectedReturnType = funcSignature.ReturnType // Use return type from initial signature
 		c.currentInferredReturnTypes = nil
+		c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 		if c.currentExpectedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
 		}
@@ -605,7 +650,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			actualReturnType = funcSignature.ReturnType
 		} else { // No annotation, infer
 			if len(c.currentInferredReturnTypes) == 0 {
-				actualReturnType = types.Undefined
+				actualReturnType = types.Void // Functions with no return statements have void return type
 			} else {
 				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
 			}
@@ -615,7 +660,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		// For generator functions, wrap the return type in Generator<T, TReturn, TNext>
 		if funcLit.IsGenerator {
 			debugPrintf("// [Checker Pass 3] Generator function detected, wrapping return type in Generator\n")
-			generatorType := c.createGeneratorType(actualReturnType)
+			generatorType := c.createGeneratorType(actualReturnType, c.currentInferredYieldTypes)
 			actualReturnType = generatorType
 			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
 		}
@@ -669,6 +714,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.env = originalEnv
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
+		c.currentInferredYieldTypes = outerInferredYieldTypes
 		c.currentThisType = outerThisType
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
@@ -1883,6 +1929,10 @@ func (c *Checker) visit(node parser.Node) {
 				} else if (widenedLeftType == types.String && widenedRightType == types.Boolean) ||
 					(widenedLeftType == types.Boolean && widenedRightType == types.String) {
 					resultType = types.String
+				} else if (widenedLeftType == types.String && c.isStringConcatenatable(rightType)) ||
+					(c.isStringConcatenatable(leftType) && widenedRightType == types.String) {
+					// TypeScript allows string concatenation with most types (including unions)
+					resultType = types.String
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
@@ -2428,7 +2478,7 @@ func (c *Checker) visit(node parser.Node) {
 			actualReturnType = resolvedReturnType
 		} else {
 			if len(c.currentInferredReturnTypes) == 0 {
-				actualReturnType = types.Undefined
+				actualReturnType = types.Void // Functions with no return statements have void return type
 			} else {
 				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
 			}

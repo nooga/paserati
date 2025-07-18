@@ -1562,5 +1562,10 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 	// TODO: Implement generator function context tracking
 	// For now, we'll just allow it and let the compiler handle validation
 
+	// 4. Collect yield type for generator type inference (similar to return type collection)
+	if c.currentInferredYieldTypes != nil {
+		c.currentInferredYieldTypes = append(c.currentInferredYieldTypes, yieldedType)
+	}
+	
 	debugPrintf("// [Checker YieldExpression] Yielded type: %s\n", yieldedType.String())
 }

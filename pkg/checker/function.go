@@ -62,15 +62,12 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	// 4. Handle generator functions - wrap return type in Generator<T, TReturn, TNext>
 	if node.IsGenerator {
 		// For generator functions, the actual return type becomes Generator<YieldType, ReturnType, any>
-		// For now, we'll use a simplified approach and set it to Any
-		// TODO: Implement proper Generator<T, TReturn, TNext> type construction
 		debugPrintf("// [Checker FuncLit] Generator function detected, wrapping return type\n")
 		
-		// For basic functionality, we'll create a generic Generator type
-		// In a full implementation, this would be Generator<YieldType, ReturnType, TNext>
-		// For now, we'll use a placeholder that has the .next() method
-		generatorType := c.createGeneratorType(finalReturnType)
+		// Use the collected yield types to create the proper Generator<T, TReturn, TNext> type
+		generatorType := c.createGeneratorType(finalReturnType, c.currentInferredYieldTypes)
 		finalReturnType = generatorType
+		debugPrintf("// [Checker FuncLit] Created generator type: %s\n", finalReturnType.String())
 	}
 
 	// 5. Create final function type
@@ -92,29 +89,37 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 
 // createGeneratorType creates an instantiated Generator<T, TReturn, TNext> type
 // based on the yielded and returned types from the generator function
-func (c *Checker) createGeneratorType(returnType types.Type) types.Type {
-	// For now, we'll use a simplified approach:
-	// - T (yield type): types.Any for now (would need to analyze yield expressions)
-	// - TReturn (return type): the actual return type from function body
-	// - TNext (sent type): types.Any (values sent via .next())
-	
-	// Handle nil return type (generators without explicit return default to undefined)
+func (c *Checker) createGeneratorType(returnType types.Type, yieldTypes []types.Type) types.Type {
+	// Handle nil return type (generators without explicit return default to void)  
 	if returnType == nil {
-		returnType = types.Undefined
+		returnType = types.Void
 	}
 	
-	// Create an instantiated Generator<any, TReturn, any> type
+	// Determine the yield type (T) from collected yield expressions
+	var yieldType types.Type
+	if len(yieldTypes) == 0 {
+		// No yield expressions found, use undefined
+		yieldType = types.Undefined
+	} else if len(yieldTypes) == 1 {
+		// Single yield type
+		yieldType = yieldTypes[0]
+	} else {
+		// Multiple yield types, create a union
+		yieldType = types.NewUnionType(yieldTypes...)
+	}
+	
+	// Create an instantiated Generator<T, TReturn, TNext> type
 	if types.GeneratorGeneric != nil {
 		return types.NewInstantiatedType(types.GeneratorGeneric, []types.Type{
-			types.Any,       // T (yield type) - TODO: analyze yield expressions
-			returnType,      // TReturn (return type)
-			types.Any,       // TNext (sent type)
+			yieldType,        // T (yield type) - inferred from yield expressions
+			returnType,       // TReturn (return type) 
+			types.Unknown,    // TNext (sent type) - TypeScript uses unknown for this
 		})
 	}
 	
 	// Fallback if GeneratorGeneric is not initialized
 	generatorObj := types.NewObjectType()
-	generatorObj.WithProperty("next", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
+	generatorObj.WithProperty("next", types.NewOptionalFunction([]types.Type{types.Unknown}, types.Any, []bool{true}))
 	generatorObj.WithProperty("return", types.NewOptionalFunction([]types.Type{returnType}, types.Any, []bool{true}))
 	generatorObj.WithProperty("throw", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
 	return generatorObj
