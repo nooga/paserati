@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-
 // Helper functions for detecting null and undefined literals
 func isNullLiteral(node parser.Expression) bool {
 	_, ok := node.(*parser.NullLiteral)
@@ -27,7 +26,7 @@ func (c *Compiler) isDataProperty(propType types.Type) bool {
 	if propType == types.String || propType == types.Number || propType == types.Boolean {
 		return true
 	}
-	
+
 	switch propType.(type) {
 	case *types.Primitive:
 		return true // All primitive types are data properties
@@ -53,26 +52,26 @@ func (c *Compiler) emitOptimisticGetterCall(hint Register, methodReg Register, o
 	undefinedReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(undefinedReg)
 	c.emitLoadUndefined(undefinedReg, line)
-	
+
 	// Compare getter method with undefined
 	compareReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(compareReg)
 	c.emitStrictEqual(compareReg, methodReg, undefinedReg, line)
-	
+
 	// Jump to fallback if getter is undefined (comparison is true)
 	jumpToFallbackPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, line)
-	
+
 	// Fallback: regular property access (getter is undefined)
 	propertyIdx := c.chunk.AddConstant(vm.String(propertyName))
 	c.emitGetProp(hint, objectReg, propertyIdx, line)
-	
+
 	// Jump over getter call
 	jumpOverGetterPos := c.emitPlaceholderJump(vm.OpJump, 0, line)
-	
+
 	// Getter exists - call it
 	c.patchJump(jumpToFallbackPos)
 	c.emitCallMethod(hint, methodReg, objectReg, 0, line)
-	
+
 	// Patch the jump over getter call
 	c.patchJump(jumpOverGetterPos)
 }
@@ -88,23 +87,23 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 
 	// 1. Determine total argument count needed (including optional parameter padding)
 	totalArgCount := c.determineTotalArgCountForNew(node)
-	
+
 	// 2. For OpNew, we need constructor + arguments in contiguous registers
 	// Allocate a contiguous block: [constructor, arg1, arg2, ...]
 	totalRegs := 1 + totalArgCount // constructor + arguments
-	
+
 	constructorReg := c.regAlloc.AllocContiguous(totalRegs)
 	// Add all registers to tempRegs for cleanup
 	for i := 0; i < totalRegs; i++ {
 		tempRegs = append(tempRegs, constructorReg+Register(i))
 	}
-	
+
 	// 3. Compile constructor into first register
 	_, err := c.compileNode(node.Constructor, constructorReg)
 	if err != nil {
 		return BadRegister, err
 	}
-	
+
 	// 4. Compile arguments with optional parameter handling (same as CallExpression)
 	_, actualArgCount, err := c.compileArgumentsWithOptionalHandlingForNew(node, constructorReg+1)
 	if err != nil {
@@ -144,7 +143,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	var isComputedProperty bool
 	var propertyName string
 	var propertyReg Register
-	
+
 	if computedKey, ok := node.Property.(*parser.ComputedPropertyName); ok {
 		// This is a computed property: obj[expr]
 		isComputedProperty = true
@@ -185,7 +184,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 					methodReg := c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, methodReg)
 					c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
-					
+
 					// Check if the getter exists before calling it
 					c.emitOptimisticGetterCall(hint, methodReg, objectReg, propertyName, node.Token.Line)
 					debugPrintf("// DEBUG compileMemberExpression: Emitted optimistic getter call for '%s'\n", propertyName)
@@ -205,20 +204,20 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			debugPrintf("// DEBUG CompileMember: .length requested but object type is nil. Falling through to OpGetProp.\n")
 		} else {
 
-		// Widen the type to handle cases like `string | null` having `.length`
-		widenedObjectType := types.GetWidenedType(objectStaticType)
+			// Widen the type to handle cases like `string | null` having `.length`
+			widenedObjectType := types.GetWidenedType(objectStaticType)
 
-		// Check if the widened type supports .length
-		_, isArray := widenedObjectType.(*types.ArrayType)
-		if isArray || widenedObjectType == types.String {
-			// Emit specialized OpGetLength using hint as destination
-			c.emitGetLength(hint, objectReg, node.Token.Line)
-			return hint, nil // Handled by OpGetLength
-		}
-		// If type doesn't support .length, fall through to generic OpGetProp
-		// The type checker *should* have caught this, but OpGetProp will likely return undefined/error at runtime.
-		debugPrintf("// DEBUG CompileMember: .length requested on non-array/string type %s (widened from %s). Falling through to OpGetProp.\n",
-			widenedObjectType.String(), objectStaticType.String())
+			// Check if the widened type supports .length
+			_, isArray := widenedObjectType.(*types.ArrayType)
+			if isArray || widenedObjectType == types.String {
+				// Emit specialized OpGetLength using hint as destination
+				c.emitGetLength(hint, objectReg, node.Token.Line)
+				return hint, nil // Handled by OpGetLength
+			}
+			// If type doesn't support .length, fall through to generic OpGetProp
+			// The type checker *should* have caught this, but OpGetProp will likely return undefined/error at runtime.
+			debugPrintf("// DEBUG CompileMember: .length requested on non-array/string type %s (widened from %s). Falling through to OpGetProp.\n",
+				widenedObjectType.String(), objectStaticType.String())
 		}
 	}
 	// --- END Special case for .length ---
@@ -859,7 +858,7 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			propName := c.extractPropertyName(operand.Property)
 			propIdx := c.chunk.AddConstant(vm.String(propName))
 			c.emitDeleteProp(hint, objReg, propIdx, node.Token.Line)
-			
+
 		case *parser.IndexExpression:
 			// delete obj[key]
 			// For now, we'll handle this similarly to member expressions if the key is a string literal
@@ -878,7 +877,7 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 				// For now, compile error
 				return BadRegister, NewCompileError(node, "delete with dynamic property keys not yet supported")
 			}
-			
+
 		default:
 			// For other expressions (like identifiers), the type checker should have caught this
 			// But let's return a compile error just in case
@@ -985,7 +984,7 @@ func (c *Compiler) determineTotalArgCount(node *parser.CallExpression) int {
 			sig := objType.CallSignatures[0] // Default to first signature
 			bestMatch := sig
 			bestScore := -1
-			
+
 			for _, candidateSig := range objType.CallSignatures {
 				score := 0
 				// Prefer exact parameter count match
@@ -1002,13 +1001,13 @@ func (c *Compiler) determineTotalArgCount(node *parser.CallExpression) int {
 				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
 					score += 5
 				}
-				
+
 				if score > bestScore {
 					bestScore = score
 					bestMatch = candidateSig
 				}
 			}
-			
+
 			expectedParamCount = len(bestMatch.ParameterTypes)
 			optionalParams = bestMatch.OptionalParams
 		}
@@ -1115,8 +1114,69 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 	// Arguments are already in correct positions - no moves needed!
 
-	// 4. Emit OpCall using hint as result register
-	c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+	// 4. Check if this is a generator function call
+	// Look at the function's return type to see if it's Generator<...>
+	functionType := node.Function.GetComputedType()
+	isGeneratorCall := false
+
+	// Debug: Print function type information
+	debugPrintf("// [Generator Detection] Function type: %T\n", functionType)
+	if functionType != nil {
+		debugPrintf("// [Generator Detection] Function type string: %s\n", functionType.String())
+	}
+
+	// Check if the function type indicates it's a generator by examining return type
+	if functionType != nil {
+		if objType, ok := functionType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
+			// Check if this function's return type is a Generator<...> or generator-like ObjectType
+			sig := objType.CallSignatures[0]
+			if sig.ReturnType != nil {
+				debugPrintf("// [Generator Detection] Return type: %T (%s)\n", sig.ReturnType, sig.ReturnType.String())
+			} else {
+				debugPrintf("// [Generator Detection] Return type is nil\n")
+			}
+
+			// Only check return type if it's not nil
+			if sig.ReturnType != nil {
+				// First check for InstantiatedType (ideal case)
+				if instantiated, ok := sig.ReturnType.(*types.InstantiatedType); ok {
+					debugPrintf("// [Generator Detection] InstantiatedType generic: %s\n", instantiated.Generic.Name)
+					if instantiated.Generic != nil && instantiated.Generic.Name == "Generator" {
+						isGeneratorCall = true
+						debugPrintf("// [Generator Detection] GENERATOR DETECTED (InstantiatedType)!\n")
+					}
+				}
+
+				// Also check for ObjectType with generator methods (fallback case)
+				if returnObjType, ok := sig.ReturnType.(*types.ObjectType); ok {
+					// Check if it has the characteristic generator methods
+					hasNext := returnObjType.Properties["next"] != nil
+					hasReturn := returnObjType.Properties["return"] != nil
+					hasThrow := returnObjType.Properties["throw"] != nil
+
+					if hasNext && hasReturn && hasThrow {
+						isGeneratorCall = true
+						debugPrintf("// [Generator Detection] GENERATOR DETECTED (ObjectType with generator methods)!\n")
+					}
+				}
+			}
+		} else {
+			debugPrintf("// [Generator Detection] Not an object type or not callable\n")
+		}
+	}
+
+	// 5. Emit appropriate opcode based on function type
+	if isGeneratorCall {
+		// Generator function call - create generator object instead of executing
+		c.emitOpCode(vm.OpCreateGenerator, node.Token.Line)
+		c.emitByte(byte(hint))    // Destination register for generator object
+		c.emitByte(byte(funcReg)) // Function register
+		// Note: argCount is not used for generator creation, but let's keep it for consistency
+		c.emitByte(byte(actualArgCount)) // Argument count
+	} else {
+		// Regular function call
+		c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+	}
 
 	return hint, nil
 }
@@ -1127,16 +1187,16 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 	if len(node.Arguments) != 1 {
 		return BadRegister, NewCompileError(node, "spread calls currently only support a single spread argument")
 	}
-	
+
 	spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement)
 	if !isSpread {
 		return BadRegister, NewCompileError(node, "expected spread argument")
 	}
-	
+
 	// Check if this is a method call
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Method call with spread: obj.method(...args)
-		
+
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, thisReg)
@@ -1144,14 +1204,14 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 		if err != nil {
 			return BadRegister, err
 		}
-		
+
 		// 2. Compile the method function
 		funcReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, funcReg)
 		propertyName := c.extractPropertyName(memberExpr.Property)
 		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 		c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
-		
+
 		// 3. Compile the spread argument (array to spread)
 		spreadArgReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, spreadArgReg)
@@ -1159,14 +1219,14 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 		if err != nil {
 			return BadRegister, err
 		}
-		
+
 		// 4. Emit OpSpreadCallMethod
 		c.emitSpreadCallMethod(hint, funcReg, thisReg, spreadArgReg, node.Token.Line)
-		
+
 		return hint, nil
 	} else {
 		// Regular function call with spread: func(...args)
-		
+
 		// 1. Compile the function
 		funcReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, funcReg)
@@ -1174,7 +1234,7 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 		if err != nil {
 			return BadRegister, err
 		}
-		
+
 		// 2. Compile the spread argument (array to spread)
 		spreadArgReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, spreadArgReg)
@@ -1182,10 +1242,10 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 		if err != nil {
 			return BadRegister, err
 		}
-		
+
 		// 3. Emit OpSpreadCall
 		c.emitSpreadCall(hint, funcReg, spreadArgReg, node.Token.Line)
-		
+
 		return hint, nil
 	}
 }
@@ -1267,7 +1327,7 @@ func (c *Compiler) determineTotalArgCountForNew(node *parser.NewExpression) int 
 			sig := objType.ConstructSignatures[0] // Default to first signature
 			bestMatch := sig
 			bestScore := -1
-			
+
 			for _, candidateSig := range objType.ConstructSignatures {
 				score := 0
 				// Prefer exact parameter count match
@@ -1284,13 +1344,13 @@ func (c *Compiler) determineTotalArgCountForNew(node *parser.NewExpression) int 
 				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
 					score += 5
 				}
-				
+
 				if score > bestScore {
 					bestScore = score
 					bestMatch = candidateSig
 				}
 			}
-			
+
 			expectedParamCount = len(bestMatch.ParameterTypes)
 			optionalParams = bestMatch.OptionalParams
 		}
@@ -1371,34 +1431,34 @@ func (c *Compiler) compileArgumentsWithOptionalHandlingForNew(node *parser.NewEx
 func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
 	// Find the current class context to determine the parent constructor
 	// For now, we'll use a simplified approach similar to Function.call pattern
-	
+
 	// Load 'this' for the method call context
 	thisReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, thisReg)
 	c.emitLoadThis(thisReg, node.Token.Line)
-	
+
 	// Get the parent constructor from the current constructor's prototype chain
 	// This follows the pattern: ParentConstructor.call(this, ...args)
-	
+
 	// For simplicity in this WIP implementation, we'll determine the total argument count
 	totalArgCount := len(node.Arguments)
-	
+
 	// Allocate contiguous registers for the call: [function, this, arg1, arg2, ...]
 	totalRegs := 2 + totalArgCount // function + this + arguments
-	
+
 	functionReg := c.regAlloc.AllocContiguous(totalRegs)
 	for i := 0; i < totalRegs; i++ {
 		*tempRegs = append(*tempRegs, functionReg+Register(i))
 	}
-	
+
 	// Load the parent constructor - this is simplified for WIP
 	// In a full implementation, we would look up the actual parent class constructor
 	// For now, we'll load a dummy function that just sets up the instance properties
 	c.emitLoadUndefined(functionReg, node.Token.Line)
-	
+
 	// Load 'this' as the receiver
 	c.emitMove(functionReg+1, thisReg, node.Token.Line)
-	
+
 	// Compile arguments
 	for i, arg := range node.Arguments {
 		argReg := functionReg + Register(2+i)
@@ -1407,26 +1467,26 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 			return BadRegister, err
 		}
 	}
-	
+
 	// For now, manually call the parent constructor logic
 	// This is a simplified implementation that directly sets properties
 	// based on common TypeScript constructor patterns
-	
+
 	if totalArgCount >= 1 {
 		// Set this.name = first argument (common pattern)
 		nameConstIdx := c.chunk.AddConstant(vm.String("name"))
 		c.emitSetProp(thisReg, functionReg+2, nameConstIdx, node.Token.Line)
 	}
-	
+
 	if totalArgCount >= 2 {
 		// Set this.species = second argument (for Animal class compatibility)
 		speciesConstIdx := c.chunk.AddConstant(vm.String("species"))
 		c.emitSetProp(thisReg, functionReg+3, speciesConstIdx, node.Token.Line)
 	}
-	
+
 	// Return undefined (constructor calls don't return values)
 	c.emitLoadUndefined(hint, node.Token.Line)
-	
+
 	return hint, nil
 }
 
@@ -1436,20 +1496,54 @@ func (c *Compiler) compileSuperMemberExpression(node *parser.MemberExpression, h
 	// This is a simplified approach - a full implementation would need to:
 	// 1. Look up the method in the parent class prototype
 	// 2. Bind it to the current 'this' context
-	
+
 	// Load 'this' as the object
 	thisReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, thisReg)
 	c.emitLoadThis(thisReg, node.Token.Line)
-	
+
 	// Get the property name
 	propertyName := c.extractPropertyName(node.Property)
-	
+
 	// Add property name as constant
 	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-	
+
 	// Emit property access on 'this' instead of 'super'
 	c.emitGetProp(hint, thisReg, nameConstIdx, node.Token.Line)
-	
+
+	return hint, nil
+}
+
+// compileYieldExpression compiles yield expressions in generator functions
+func (c *Compiler) compileYieldExpression(node *parser.YieldExpression, hint Register) (Register, errors.PaseratiError) {
+	// Manage temporary registers with automatic cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
+	// 1. Compile the value being yielded (if any)
+	var valueReg Register
+	if node.Value != nil {
+		valueReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, valueReg)
+		_, err := c.compileNode(node.Value, valueReg)
+		if err != nil {
+			return BadRegister, err
+		}
+	} else {
+		// yield with no value yields undefined
+		valueReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, valueReg)
+		c.emitLoadUndefined(valueReg, node.Token.Line)
+	}
+
+	// 2. Emit OpYield instruction
+	// The VM will suspend execution and return the yielded value
+	c.emitOpCode(vm.OpYield, node.Token.Line)
+	c.emitByte(byte(valueReg)) // Value being yielded
+
 	return hint, nil
 }

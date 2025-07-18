@@ -158,6 +158,11 @@ const (
 
 	// --- Arguments Object ---
 	OpGetArguments OpCode = 73 // Rx: Create arguments object from current function arguments, store in Rx
+	
+	// --- Generator Support ---
+	OpCreateGenerator OpCode = 74 // Rx FuncReg: Create generator object from function in FuncReg, store in Rx
+	OpYield           OpCode = 75 // Rx: Suspend generator execution and yield value in Rx
+	OpResumeGenerator OpCode = 76 // Internal: Resume generator execution (used by .next() calls)
 )
 
 // String returns a human-readable name for the OpCode.
@@ -331,6 +336,14 @@ func (op OpCode) String() string {
 	// --- Arguments Object ---
 	case OpGetArguments:
 		return "OpGetArguments"
+	
+	// --- Generator Support ---
+	case OpCreateGenerator:
+		return "OpCreateGenerator"
+	case OpYield:
+		return "OpYield"
+	case OpResumeGenerator:
+		return "OpResumeGenerator"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -562,6 +575,14 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	// --- Arguments Object ---
 	case OpGetArguments:
 		return c.registerInstruction(builder, instruction.String(), offset)
+	
+	// --- Generator Support ---
+	case OpCreateGenerator:
+		return c.callInstruction(builder, "OpCreateGenerator", offset)
+	case OpYield:
+		return c.registerInstruction(builder, "OpYield", offset)
+	case OpResumeGenerator:
+		return c.simpleInstruction(builder, "OpResumeGenerator", offset)
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))

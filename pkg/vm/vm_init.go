@@ -281,3 +281,94 @@ func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Val
 
 	return result, nil
 }
+
+// Call is a unified function calling interface that handles all function types properly
+// This replaces the complex web of CallFunctionDirectly, CallUserFunction, etc.
+func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
+	switch fn.Type() {
+	case TypeNativeFunction:
+		// For native functions, call directly with proper 'this' context
+		nativeFunc := AsNativeFunction(fn)
+		prevThis := vm.currentThis
+		vm.currentThis = thisValue
+		defer func() { vm.currentThis = prevThis }()
+		return nativeFunc.Fn(args)
+		
+	case TypeNativeFunctionWithProps:
+		// Handle native function with properties
+		nativeFuncWithProps := fn.AsNativeFunctionWithProps()
+		prevThis := vm.currentThis
+		vm.currentThis = thisValue
+		defer func() { vm.currentThis = prevThis }()
+		return nativeFuncWithProps.Fn(args)
+		
+	case TypeClosure, TypeFunction:
+		// For user-defined functions, always use the sentinel frame approach
+		// This ensures we don't have recursion issues with vm.run()
+		return vm.executeUserFunctionSafe(fn, thisValue, args)
+		
+	case TypeBoundFunction:
+		// Handle bound functions by delegating to the original function
+		boundFunc := fn.AsBoundFunction()
+		// Combine partial args with call-time args
+		finalArgs := make([]Value, len(boundFunc.PartialArgs)+len(args))
+		copy(finalArgs, boundFunc.PartialArgs)
+		copy(finalArgs[len(boundFunc.PartialArgs):], args)
+		// Use the bound 'this' value
+		return vm.Call(boundFunc.OriginalFunction, boundFunc.BoundThis, finalArgs)
+		
+	default:
+		return Undefined, fmt.Errorf("cannot call non-function value of type %v", fn.Type())
+	}
+}
+
+// executeUserFunctionSafe executes a user function from a native function using sentinel frames
+// This allows proper nested calls without infinite recursion
+func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (Value, error) {
+	// Set up the caller context first
+	callerRegisters := make([]Value, 1)
+	destReg := byte(0)
+	callerIP := 0
+	
+	// Add a sentinel frame that will cause vm.run() to return when it hits this frame
+	sentinelFrame := &vm.frames[vm.frameCount]
+	sentinelFrame.isSentinelFrame = true
+	sentinelFrame.closure = nil // Sentinel frames don't have closures
+	sentinelFrame.targetRegister = destReg // Target register in caller
+	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.frameCount++
+	
+	// Use prepareCall to set up the function call
+	shouldSwitch, err := vm.prepareCall(fn, thisValue, args, destReg, callerRegisters, callerIP)
+	if err != nil {
+		// Remove sentinel frame on error
+		vm.frameCount--
+		return Undefined, err
+	}
+	
+	if !shouldSwitch {
+		// Native function was executed directly
+		// Remove sentinel frame
+		vm.frameCount--
+		return callerRegisters[destReg], nil
+	}
+	
+	// We have a new frame set up, mark it as direct call
+	if vm.frameCount > 1 { // frameCount includes the sentinel frame
+		vm.frames[vm.frameCount-1].isDirectCall = true
+	}
+	
+	// Execute the VM run loop - it will return when it hits the sentinel frame
+	status, result := vm.run()
+	
+	if status == InterpretRuntimeError {
+		return Undefined, fmt.Errorf("runtime error during user function execution")
+	}
+	
+	return result, nil
+}
+
+// ExecuteGenerator is the public interface for generator execution
+func (vm *VM) ExecuteGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
+	return vm.executeGenerator(genObj, sentValue)
+}

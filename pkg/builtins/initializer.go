@@ -55,6 +55,7 @@ const (
 	PriorityFunction  = 1   // Function second (inherits from Object)
 	PriorityArray     = 2   // Array third (inherits from Object)
 	PriorityArguments = 3   // Arguments object (array-like)
+	PriorityGenerator = 4   // Generator objects (inherits from Object)
 	PriorityString    = 10  // String primitives
 	PriorityNumber    = 11  // Number primitives
 	PriorityBoolean   = 12  // Boolean primitives

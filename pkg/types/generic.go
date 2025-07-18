@@ -260,6 +260,9 @@ var (
 	
 	// Promise<T> generic type  
 	PromiseGeneric *GenericType
+	
+	// Generator<T, TReturn, TNext> generic type
+	GeneratorGeneric *GenericType
 )
 
 func init() {
@@ -274,6 +277,41 @@ func init() {
 	promiseBody.WithProperty("then", Any)
 	promiseBody.WithProperty("catch", Any)
 	PromiseGeneric = NewGenericType("Promise", []*TypeParameter{promiseT}, promiseBody)
+	
+	// Create Generator<T, TReturn, TNext> generic type
+	t := NewTypeParameter("T", 0, nil)
+	tReturn := NewTypeParameter("TReturn", 1, nil)
+	tNext := NewTypeParameter("TNext", 2, nil)
+	
+	// Create types for the parameters
+	tType := &TypeParameterType{Parameter: t}
+	tReturnType := &TypeParameterType{Parameter: tReturn}
+	tNextType := &TypeParameterType{Parameter: tNext}
+	
+	// Create IteratorResult<T, TReturn> type
+	iteratorResultType := NewObjectType().
+		WithProperty("value", NewUnionType(tType, tReturnType)).
+		WithProperty("done", Boolean)
+	
+	// Create generator body with iterator protocol methods
+	generatorBody := NewObjectType().
+		// next(value?: TNext): IteratorResult<T, TReturn>
+		WithProperty("next", NewOptionalFunction(
+			[]Type{tNextType}, 
+			iteratorResultType, 
+			[]bool{true})).
+		// return(value?: TReturn): IteratorResult<T, TReturn>
+		WithProperty("return", NewOptionalFunction(
+			[]Type{tReturnType}, 
+			iteratorResultType, 
+			[]bool{true})).
+		// throw(exception?: any): IteratorResult<T, TReturn>
+		WithProperty("throw", NewOptionalFunction(
+			[]Type{Any}, 
+			iteratorResultType, 
+			[]bool{true}))
+	
+	GeneratorGeneric = NewGenericType("Generator", []*TypeParameter{t, tReturn, tNext}, generatorBody)
 }
 
 // substituteSignature performs type parameter substitution in a signature

@@ -137,7 +137,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			arity++
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk)
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk, false)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
@@ -678,7 +678,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			arity++
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk)
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// <<< REMOVE OpClosure EMISSION FROM HERE (should already be removed) >>>

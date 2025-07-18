@@ -13,6 +13,7 @@ type FunctionObject struct {
 	Name         string
 	UpvalueCount int
 	RegisterSize int
+	IsGenerator  bool         // True for generator functions (function*)
 	Properties   *PlainObject // For properties like .prototype (created lazily)
 }
 
@@ -95,7 +96,7 @@ type VMCaller interface {
 	CallBytecode(fn Value, thisValue Value, args []Value) Value
 }
 
-func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk) Value {
+func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool) Value {
 	fnObj := &FunctionObject{
 		Arity:        arity,
 		Variadic:     variadic,
@@ -103,6 +104,7 @@ func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name stri
 		Name:         name,
 		UpvalueCount: upvalueCount,
 		RegisterSize: registerSize,
+		IsGenerator:  isGenerator,
 		Properties:   nil, // Start with nil - create lazily
 	}
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}

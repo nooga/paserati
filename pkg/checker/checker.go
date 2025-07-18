@@ -317,6 +317,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				ReturnTypeAnnotation:    funcLit.ReturnTypeAnnotation,
 				Body:                    nil, // Don't process body during hoisting
 				IsArrow:                 false,
+				IsGenerator:             funcLit.IsGenerator, // Detect generator functions during hoisting
 				AllowSelfReference:      false, // Don't allow self-reference during hoisting
 				AllowOverloadCompletion: false, // Don't check overloads during hoisting
 			}
@@ -331,6 +332,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				for i := range initialSignature.ParameterTypes {
 					initialSignature.ParameterTypes[i] = types.Any
 				}
+			}
+
+			// Wrap return type in Generator if this is a generator function
+			if funcLit.IsGenerator {
+				debugPrintf("// [Checker Pass 2] Wrapping return type in Generator for function: %s\n", name)
+				// For hoisting, we create a basic Generator type without analyzing yield types
+				// The actual yield type analysis will happen in Pass 3
+				generatorType := c.createGeneratorType(initialSignature.ReturnType)
+				initialSignature.ReturnType = generatorType
 			}
 
 			// Convert signature to ObjectType for storage
@@ -2174,6 +2184,9 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.CallExpression:
 		c.checkCallExpression(node)
 
+	case *parser.YieldExpression:
+		c.checkYieldExpression(node)
+
 	case *parser.AssignmentExpression:
 		c.checkAssignmentExpression(node)
 
@@ -2882,6 +2895,7 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				ReturnTypeAnnotation:     node.ReturnTypeAnnotation,
 				Body:                     node.Body,
 				IsArrow:                  true,
+				IsGenerator:              false, // Arrow functions cannot be generators
 				AllowSelfReference:       false,
 				AllowOverloadCompletion:  false,
 				ContextualParameterTypes: expectedSig.ParameterTypes, // Pass contextual parameter types

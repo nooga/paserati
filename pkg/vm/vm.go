@@ -59,6 +59,7 @@ type CallFrame struct {
 	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
 	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
 	isDirectCall      bool  // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
+	isSentinelFrame   bool  // Whether this frame is a sentinel that should cause vm.run() to return immediately
 	argCount          int   // Actual number of arguments passed to this function (for arguments object)
 
 	// For async native functions that can call bytecode
@@ -66,6 +67,9 @@ type CallFrame struct {
 	nativeReturnCh   chan Value         // Channel to receive return values from bytecode calls
 	nativeYieldCh    chan *BytecodeCall // Channel to send bytecode calls to VM
 	nativeCompleteCh chan Value         // Channel to signal native function completion
+
+	// For generator functions
+	generatorObj *GeneratorObject // Reference to the generator object (if this is a generator frame)
 }
 
 // BytecodeCall represents a request from a native function to call bytecode
@@ -104,18 +108,19 @@ type VM struct {
 	emptyRestArray Value
 
 	// Built-in prototypes owned by this VM
-	ObjectPrototype   Value
-	FunctionPrototype Value
-	ArrayPrototype    Value
-	StringPrototype   Value
-	NumberPrototype   Value
-	BigIntPrototype   Value
-	BooleanPrototype  Value
-	RegExpPrototype   Value
-	MapPrototype      Value
-	SetPrototype      Value
-	ErrorPrototype    Value
-	SymbolPrototype   Value
+	ObjectPrototype    Value
+	FunctionPrototype  Value
+	ArrayPrototype     Value
+	StringPrototype    Value
+	NumberPrototype    Value
+	BigIntPrototype    Value
+	BooleanPrototype   Value
+	RegExpPrototype    Value
+	MapPrototype       Value
+	SetPrototype       Value
+	GeneratorPrototype Value
+	ErrorPrototype     Value
+	SymbolPrototype    Value
 
 	// TypedArray prototypes
 	Uint8ArrayPrototype   Value
@@ -127,6 +132,12 @@ type VM struct {
 
 	// Counter to track Function.prototype.call recursion depth
 	callDepth int
+
+	// Flag to prevent infinite recursion in CallUserFunction
+	inCallUserFunction bool
+
+	// Flag to track if we're in a builtin calling a user function
+	inBuiltinCall bool
 
 	// Instance-specific initialization callbacks
 	//initCallbacks []VMInitCallback
@@ -402,8 +413,13 @@ startExecution:
 				status := vm.runtimeError("Implicit return missing in function?")
 				return status, Undefined
 			} else {
-				// Running off end of main script is okay, return Undefined implicitly
-				return InterpretOK, Undefined
+				// Running off end of main script - return the final expression result
+				// For scripts, the final expression result should be in register 0
+				if len(registers) > 0 {
+					return InterpretOK, registers[0]
+				} else {
+					return InterpretOK, Undefined
+				}
 			}
 		}
 
@@ -631,7 +647,7 @@ startExecution:
 					return status, Undefined
 				} else {
 					frame.ip = ip
-					opStr := opcode.String()                                                            // Get opcode name
+					opStr := opcode.String()                                                                    // Get opcode name
 					status := vm.runtimeError("Operands must be two numbers or two BigInts for %s.", opStr[2:]) // Simple way to get op name like Subtract
 					return status, Undefined
 				}
@@ -950,6 +966,18 @@ startExecution:
 				return InterpretOK, result
 			}
 
+			// Check if we hit a sentinel frame - if so, remove it and return immediately
+			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+				// Place the result in the sentinel frame's target register
+				if vm.frames[vm.frameCount-1].registers != nil && int(vm.frames[vm.frameCount-1].targetRegister) < len(vm.frames[vm.frameCount-1].registers) {
+					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = result
+				}
+				// Remove the sentinel frame
+				vm.frameCount--
+				// Return the result from the function that just returned
+				return InterpretOK, result
+			}
+
 			// Check if this was a direct call frame and should return early
 			if frame.isDirectCall {
 				// Handle constructor return semantics for direct call
@@ -1047,6 +1075,18 @@ startExecution:
 
 			if vm.frameCount == 0 {
 				// Returned undefined from top-level
+				return InterpretOK, Undefined
+			}
+
+			// Check if we hit a sentinel frame - if so, remove it and return immediately
+			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+				// Place the result in the sentinel frame's target register
+				if vm.frames[vm.frameCount-1].registers != nil && int(vm.frames[vm.frameCount-1].targetRegister) < len(vm.frames[vm.frameCount-1].registers) {
+					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = Undefined
+				}
+				// Remove the sentinel frame
+				vm.frameCount--
+				// Return the result from the function that just returned
 				return InterpretOK, Undefined
 			}
 
@@ -2686,7 +2726,7 @@ startExecution:
 			// Get function arguments from current call frame
 			// For function calls, arguments are stored in the beginning of the register space
 			// We need to determine how many arguments were passed to the current function
-			
+
 			if frame.closure == nil || frame.closure.Fn == nil {
 				status := vm.runtimeError("Cannot access arguments outside of function")
 				return status, Undefined
@@ -2695,10 +2735,10 @@ startExecution:
 			// Use the actual argument count that was passed to this function
 			// (stored in frame.argCount during function call setup)
 			argCount := frame.argCount
-			
+
 			// Collect the arguments that were passed to this function
 			args := make([]Value, argCount)
-			
+
 			// Special handling for variadic functions
 			if frame.closure.Fn.Variadic && argCount > 0 {
 				// For variadic functions, all arguments are packed into an array in register 0
@@ -2731,6 +2771,81 @@ startExecution:
 			// Create arguments object
 			argsObj := NewArguments(args)
 			frame.registers[destReg] = argsObj
+
+		// --- Generator Support ---
+		case OpCreateGenerator:
+			// OpCreateGenerator destReg, funcReg, argCount
+			// Create a generator object instead of calling the function
+			destReg := code[ip]
+			funcReg := code[ip+1]
+			// argCount is not used for generator creation, but compiler emits it for consistency
+
+			// Get the generator function
+			funcVal := registers[funcReg]
+			if !funcVal.IsFunction() && !funcVal.IsClosure() {
+				status := vm.runtimeError("OpCreateGenerator: not a function")
+				return status, Undefined
+			}
+
+			// Create generator object using the proper constructor
+			genVal := NewGenerator(funcVal)
+
+			// Set result in destination register
+			registers[destReg] = genVal
+
+			ip += 3
+
+		case OpYield:
+			// OpYield valueReg
+			// Suspend current generator execution and yield a value
+			valueReg := code[ip]
+			ip += 1
+
+			// Get the yielded value
+			yieldedValue := registers[valueReg]
+
+			// Find the generator object associated with this frame
+			if frame.generatorObj == nil {
+				status := vm.runtimeError("Yield can only be used inside generator functions")
+				return status, Undefined
+			}
+
+			genObj := frame.generatorObj
+
+			// Suspend the generator and save its state
+			genObj.State = GeneratorSuspendedYield
+			genObj.YieldedValue = yieldedValue
+
+			// Save the execution frame state
+			if genObj.Frame == nil {
+				genObj.Frame = &GeneratorFrame{
+					pc:        ip, // Resume after this yield instruction (IP already advanced)
+					registers: make([]Value, len(registers)),
+					locals:    make([]Value, 0), // TODO: implement locals if needed
+					stackBase: 0,
+					yieldPC:   ip - 1,
+				}
+			} else {
+				genObj.Frame.pc = ip
+				genObj.Frame.yieldPC = ip - 1
+			}
+
+			// Copy register state to generator frame
+			copy(genObj.Frame.registers, registers)
+
+			// Create iterator result { value: yieldedValue, done: false }
+			result := NewObject(vm.ObjectPrototype).AsPlainObject()
+			result.SetOwn("value", yieldedValue)
+			result.SetOwn("done", BooleanValue(false))
+
+			// Return from generator execution
+			return InterpretOK, NewValueFromPlainObject(result)
+
+		case OpResumeGenerator:
+			// OpResumeGenerator is used internally to resume generator execution
+			// This should not be directly encountered in normal execution
+			status := vm.runtimeError("OpResumeGenerator is an internal opcode")
+			return status, Undefined
 
 		default:
 			frame.ip = ip // Save IP before erroring
@@ -3068,6 +3183,169 @@ func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
 // This allows native functions to access the 'this' context without it being passed as an argument
 func (vm *VM) GetThis() Value {
 	return vm.currentThis
+}
+
+// executeGenerator starts or resumes generator execution
+func (vm *VM) executeGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
+	if genObj.State == GeneratorSuspendedStart {
+		// First call - start generator function execution
+		return vm.startGenerator(genObj, sentValue)
+	} else if genObj.State == GeneratorSuspendedYield {
+		// Resume from yield point
+		return vm.resumeGenerator(genObj, sentValue)
+	}
+
+	// Generator is completed
+	result := NewObject(vm.ObjectPrototype).AsPlainObject()
+	result.SetOwn("value", Undefined)
+	result.SetOwn("done", BooleanValue(true))
+	return NewValueFromPlainObject(result), nil
+}
+
+// startGenerator begins execution of a generator function
+func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
+	// Get the generator function
+	funcVal := genObj.Function
+
+	var funcObj *FunctionObject
+	var closureObj *ClosureObject
+
+	// Extract function object from Value
+	if funcVal.Type() == TypeFunction {
+		funcObj = funcVal.AsFunction()
+	} else if funcVal.Type() == TypeClosure {
+		closureObj = funcVal.AsClosure()
+		funcObj = closureObj.Fn
+	} else {
+		return Undefined, fmt.Errorf("Invalid generator function type")
+	}
+
+	// Create a new call frame for the generator
+	if vm.frameCount >= MaxFrames {
+		return Undefined, fmt.Errorf("Stack overflow")
+	}
+
+	// Allocate registers for the generator function
+	regSize := funcObj.RegisterSize
+	if vm.nextRegSlot+regSize > len(vm.registerStack) {
+		return Undefined, fmt.Errorf("Out of registers")
+	}
+
+	// Set up the generator frame
+	frame := &vm.frames[vm.frameCount]
+	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.ip = 0
+	frame.targetRegister = 0                                                 // Will be set when generator yields/returns
+	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
+	frame.isConstructorCall = false
+	frame.isDirectCall = false
+	frame.argCount = 0
+	frame.generatorObj = genObj // Link frame to generator object
+
+	if closureObj != nil {
+		frame.closure = closureObj
+	} else {
+		// Create a temporary closure for the function
+		closureVal := NewClosure(funcObj, nil)
+		frame.closure = closureVal.AsClosure()
+	}
+
+	// Update VM state
+	vm.frameCount++
+	vm.nextRegSlot += regSize
+
+	// Initialize generator state
+	genObj.State = GeneratorExecuting
+
+	// Execute using the main VM loop - it will handle yields properly
+	status, result := vm.run()
+	if status == InterpretRuntimeError {
+		return Undefined, fmt.Errorf("runtime error during generator execution")
+	}
+
+	return result, nil
+}
+
+// resumeGenerator resumes execution from a yield point
+func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
+	// Restore generator execution state
+	if genObj.Frame == nil {
+		// Generator has no saved frame - it must be completed
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		result := NewObject(vm.ObjectPrototype).AsPlainObject()
+		result.SetOwn("value", Undefined)
+		result.SetOwn("done", BooleanValue(true))
+		return NewValueFromPlainObject(result), nil
+	}
+
+	// Get the generator function
+	funcVal := genObj.Function
+
+	var funcObj *FunctionObject
+	var closureObj *ClosureObject
+
+	// Extract function object from Value
+	if funcVal.Type() == TypeFunction {
+		funcObj = funcVal.AsFunction()
+	} else if funcVal.Type() == TypeClosure {
+		closureObj = funcVal.AsClosure()
+		funcObj = closureObj.Fn
+	} else {
+		return Undefined, fmt.Errorf("Invalid generator function type")
+	}
+
+	// Create a new call frame for resuming the generator
+	if vm.frameCount >= MaxFrames {
+		return Undefined, fmt.Errorf("Stack overflow")
+	}
+
+	// Allocate registers for the generator function
+	regSize := funcObj.RegisterSize
+	if vm.nextRegSlot+regSize > len(vm.registerStack) {
+		return Undefined, fmt.Errorf("Out of registers")
+	}
+
+	// Set up the generator frame for resumption
+	frame := &vm.frames[vm.frameCount]
+	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.ip = genObj.Frame.pc                                               // Resume from saved PC
+	frame.targetRegister = 0                                                 // Will be set when generator yields/returns
+	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
+	frame.isConstructorCall = false
+	frame.isDirectCall = false
+	frame.argCount = 0
+	frame.generatorObj = genObj // Link frame to generator object
+
+	if closureObj != nil {
+		frame.closure = closureObj
+	} else {
+		// Create a temporary closure for the function
+		closureVal := NewClosure(funcObj, nil)
+		frame.closure = closureVal.AsClosure()
+	}
+
+	// Restore register state from saved frame
+	copy(frame.registers, genObj.Frame.registers)
+
+	// If sentValue is provided, store it in a register (this will be used for x = yield ... patterns)
+	// For now, we'll just continue execution without parameter passing
+	_ = sentValue
+
+	// Update VM state
+	vm.frameCount++
+	vm.nextRegSlot += regSize
+
+	// Update generator state
+	genObj.State = GeneratorExecuting
+
+	// Execute using the main VM loop - it will handle yields properly
+	status, result := vm.run()
+	if status == InterpretRuntimeError {
+		return Undefined, fmt.Errorf("runtime error during generator resumption")
+	}
+
+	return result, nil
 }
 
 // setGlobalInTable sets a global variable in the unified global table

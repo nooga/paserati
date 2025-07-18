@@ -17,6 +17,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &FunctionInitializer{})
 	initializers = append(initializers, &ArrayInitializer{})
 	initializers = append(initializers, &ArgumentsInitializer{})
+	initializers = append(initializers, &GeneratorInitializer{})
 	
 	// Additional builtins (to be migrated)
 	initializers = append(initializers, &StringInitializer{})

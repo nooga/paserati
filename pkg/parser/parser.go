@@ -210,6 +210,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.TYPEOF, p.parseTypeofExpression) // Added for typeof operator
 	p.registerPrefix(lexer.VOID, p.parseVoidExpression)     // Added for void operator
 	p.registerPrefix(lexer.DELETE, p.parsePrefixExpression) // Added for delete operator
+	p.registerPrefix(lexer.YIELD, p.parseYieldExpression)   // Added for yield expressions
 	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
@@ -1671,6 +1672,12 @@ func (p *Parser) parseNewExpression() Expression {
 func (p *Parser) parseFunctionLiteral() Expression {
 	lit := &FunctionLiteral{Token: p.curToken}
 
+	// Check for generator syntax (function*)
+	if p.peekTokenIs(lexer.ASTERISK) {
+		p.nextToken() // Consume the '*'
+		lit.IsGenerator = true
+	}
+
 	// Optional Function Name
 	if p.peekTokenIs(lexer.IDENT) {
 		p.nextToken() // Consume name identifier
@@ -2921,6 +2928,28 @@ func (p *Parser) parseTypeofExpression() Expression {
 	if expression.Operand == nil {
 		p.addError(p.curToken, "expected expression after 'typeof'")
 		return nil
+	}
+
+	return expression
+}
+
+// parseYieldExpression handles yield expressions in generator functions
+func (p *Parser) parseYieldExpression() Expression {
+	expression := &YieldExpression{
+		Token: p.curToken, // The 'yield' token
+	}
+
+	p.nextToken() // Move past 'yield'
+
+	// yield can have an optional value
+	// Check if there's an expression following yield
+	if !p.curTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+		// Parse the value to yield with PREFIX precedence
+		expression.Value = p.parseExpression(PREFIX)
+		if expression.Value == nil {
+			// If parsing failed, treat as yield with no value
+			expression.Value = nil
+		}
 	}
 
 	return expression

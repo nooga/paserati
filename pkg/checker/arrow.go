@@ -14,6 +14,7 @@ func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 		ReturnTypeAnnotation:      node.ReturnTypeAnnotation,
 		Body:                      node.Body,
 		IsArrow:                   true,
+		IsGenerator:               false, // Arrow functions cannot be generators
 		AllowSelfReference:        false, // Arrow functions don't have self-reference
 		AllowOverloadCompletion:   false, // Arrow functions don't support overloads
 	}

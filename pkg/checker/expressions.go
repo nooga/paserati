@@ -7,7 +7,6 @@ import (
 	"paserati/pkg/vm"
 )
 
-
 func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	generalizedElementTypes := []types.Type{} // Store generalized types
 	for _, elemNode := range node.Elements {
@@ -60,13 +59,13 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				minRequired = i + 1
 			}
 		}
-		
+
 		hasRestElement := tupleType.RestElementType != nil
 		maxAllowed := len(tupleType.ElementTypes)
 		if hasRestElement {
 			maxAllowed = -1 // No upper limit with rest element
 		}
-		
+
 		// Check element count
 		if len(node.Elements) < minRequired {
 			debugPrintf("// [Checker ArrayLitContext] Not enough elements: expected at least %d, got %d. Using regular array checking.\n", minRequired, len(node.Elements))
@@ -83,7 +82,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 		elementTypesMatch := true
 		for i, elemNode := range node.Elements {
 			var expectedElemType types.Type
-			
+
 			if i < len(tupleType.ElementTypes) {
 				// Fixed element
 				expectedElemType = tupleType.ElementTypes[i]
@@ -100,7 +99,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				elementTypesMatch = false
 				break
 			}
-			
+
 			// Use contextual typing for each element
 			c.visitWithContext(elemNode, &ContextualType{
 				ExpectedType: expectedElemType,
@@ -179,7 +178,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	// First pass: collect all non-function properties AND create preliminary function signatures
 	for _, prop := range node.Properties {
 		var keyName string
-		
+
 		switch key := prop.Key.(type) {
 		case *parser.Identifier:
 			keyName = key.Value
@@ -225,7 +224,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if keyType == nil {
 				keyType = types.Any
 			}
-			
+
 			// Try to get a compile-time constant key if possible
 			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
 				keyName = literal.Value
@@ -272,7 +271,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	// Second pass: create preliminary function signatures for all function properties
 	for _, prop := range node.Properties {
 		var keyName string
-		
+
 		switch key := prop.Key.(type) {
 		case *parser.Identifier:
 			keyName = key.Value
@@ -361,7 +360,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	for _, prop := range node.Properties {
 		var keyName string
-		
+
 		switch key := prop.Key.(type) {
 		case *parser.Identifier:
 			keyName = key.Value
@@ -431,7 +430,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	var hasComputedProperties bool
 	var computedValueTypes []types.Type
 	finalFields := make(map[string]types.Type)
-	
+
 	for key, valueType := range fields {
 		if key == "__COMPUTED_PROPERTY__" {
 			hasComputedProperties = true
@@ -440,10 +439,10 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			finalFields[key] = valueType
 		}
 	}
-	
+
 	// Create the final ObjectType
 	objType := &types.ObjectType{Properties: finalFields}
-	
+
 	// If we have computed properties, add an index signature
 	if hasComputedProperties {
 		// Create union of all computed value types
@@ -455,7 +454,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		} else {
 			indexValueType = types.Any
 		}
-		
+
 		// Add string index signature
 		objType.IndexSignatures = []*types.IndexSignature{
 			{
@@ -616,7 +615,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 							// TODO: Handle number index signatures, symbol index signatures, etc.
 						}
 					}
-					
+
 					if resultType == types.Never {
 						if obj.IsCallable() {
 							// Check for function prototype methods if this is a callable object
@@ -749,9 +748,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if obj.Parameter != nil && obj.Parameter.Constraint != nil {
 				// If the type parameter has a constraint, check property access on the constraint
 				constraintType := obj.Parameter.Constraint
-				debugPrintf("// [Checker MemberExpr] Type parameter '%s' has constraint: %s, checking property '%s'\n", 
+				debugPrintf("// [Checker MemberExpr] Type parameter '%s' has constraint: %s, checking property '%s'\n",
 					obj.Parameter.Name, constraintType.String(), propertyName)
-				
+
 				// Use the helper function to get property type from the constraint
 				resultType = c.getPropertyTypeFromType(constraintType, propertyName, false)
 			} else {
@@ -764,12 +763,12 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			// For union types, check if the property exists on all members
 			var possibleTypes []types.Type
 			allMembersHaveProperty := true
-			
+
 			for _, memberType := range obj.Types {
 				// Create a temporary member expression to check this member type
 				memberHasProperty := false
 				var memberResultType types.Type
-				
+
 				// Check what type this member would produce for the property
 				switch member := memberType.(type) {
 				case *types.ObjectType:
@@ -782,9 +781,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						memberHasProperty = true
 						memberResultType = types.Number
 					}
-				// Add other cases as needed for primitives with prototypes, etc.
+					// Add other cases as needed for primitives with prototypes, etc.
 				}
-				
+
 				if memberHasProperty {
 					possibleTypes = append(possibleTypes, memberResultType)
 				} else {
@@ -792,7 +791,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					break
 				}
 			}
-			
+
 			if allMembersHaveProperty && len(possibleTypes) > 0 {
 				// All members have the property, create union of result types
 				if len(possibleTypes) == 1 {
@@ -904,7 +903,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			// For each member of the union that supports indexing, collect the result types
 			var possibleTypes []types.Type
 			allMembersSupported := true
-			
+
 			for _, memberType := range base.Types {
 				switch member := memberType.(type) {
 				case *types.ObjectType:
@@ -943,7 +942,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					break
 				}
 			}
-			
+
 			if allMembersSupported && len(possibleTypes) > 0 {
 				// All members support indexing, create union of result types
 				resultType = types.NewUnionType(possibleTypes...)
@@ -1193,7 +1192,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	// Check if constructor is a generic type without explicit type arguments
 	if genericType, ok := constructorType.(*types.GenericType); ok && len(node.TypeArguments) == 0 {
 		debugPrintf("// [Checker NewExpression] Generic constructor without type arguments, attempting inference\n")
-		
+
 		// Check arguments to get their types
 		var argTypes []types.Type
 		for _, arg := range node.Arguments {
@@ -1204,29 +1203,29 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			}
 			argTypes = append(argTypes, argType)
 		}
-		
+
 		// Get the constructor signature from the generic type's body
 		if bodyObjType, ok := genericType.Body.(*types.ObjectType); ok && len(bodyObjType.ConstructSignatures) > 0 {
 			constructorSig := bodyObjType.ConstructSignatures[0]
-			
+
 			// Check if this is a generic signature
 			if c.isGenericSignature(constructorSig) {
 				debugPrintf("// [Checker NewExpression] Attempting type inference for generic constructor\n")
-				
+
 				// Create a pseudo CallExpression for the inference function
 				pseudoCall := &parser.CallExpression{
 					Arguments: node.Arguments,
 				}
-				
+
 				// Infer type parameters
 				inferredSig := c.inferGenericFunctionCall(pseudoCall, constructorSig)
 				if inferredSig != nil {
 					debugPrintf("// [Checker NewExpression] Type inference successful\n")
-					
+
 					// Extract inferred type parameters from the signature
 					// For now, we'll use a simple approach: collect all TypeParameterType replacements
 					typeArgs := c.extractInferredTypeArguments(genericType, constructorSig, inferredSig)
-					
+
 					if len(typeArgs) > 0 {
 						// Instantiate the generic type with inferred arguments
 						instantiatedConstructorType := c.instantiateGenericType(genericType, typeArgs, nil)
@@ -1517,7 +1516,8 @@ func (c *Checker) instantiateGenericMethod(methodType types.Type, elementType ty
 	// If the method type is a generic type, instantiate it with the element type
 	if genericType, ok := methodType.(*types.GenericType); ok {
 		var typeArgs []types.Type
-		
+
+		// FIXME why is this hardcoded?
 		if genericType.Name == "map" && len(genericType.TypeParameters) == 2 {
 			// For map<T, U>, we only provide T (element type)
 			// U will be inferred from the callback return type later
@@ -1526,14 +1526,41 @@ func (c *Checker) instantiateGenericMethod(methodType types.Type, elementType ty
 			// For other methods with single type parameter T
 			typeArgs = []types.Type{elementType}
 		}
-		
+
 		instantiated := &types.InstantiatedType{
 			Generic:       genericType,
 			TypeArguments: typeArgs,
 		}
 		return instantiated.Substitute()
 	}
-	
+
 	// If it's not generic, return as-is
 	return methodType
+}
+
+// checkYieldExpression handles type checking for yield expressions in generator functions
+func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
+	// TODO: Check if we're currently in a generator function context
+	// For now, we'll allow yield expressions and assign them a generic type
+
+	// 1. Check the yielded value (if present)
+	var yieldedType types.Type = types.Undefined
+	if node.Value != nil {
+		c.visit(node.Value)
+		yieldedType = node.Value.GetComputedType()
+		if yieldedType == nil {
+			yieldedType = types.Any
+		}
+	}
+
+	// 2. For now, set the computed type to the yielded value type
+	// In a full implementation, this would be IteratorResult<T, TReturn>
+	// but for basic functionality, we'll use the yielded type
+	node.SetComputedType(yieldedType)
+
+	// 3. Add validation that yield can only be used in generator functions
+	// TODO: Implement generator function context tracking
+	// For now, we'll just allow it and let the compiler handle validation
+
+	debugPrintf("// [Checker YieldExpression] Yielded type: %s\n", yieldedType.String())
 }

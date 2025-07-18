@@ -2,9 +2,9 @@ package vm
 
 func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
 	// Debug logging for property access
-	// fmt.Printf("// [VM DEBUG] opGetProp: Getting property '%s' from object type %v, value: %s\n", 
-	//	propName, objVal.Type(), objVal.Inspect())
-	
+	// fmt.Printf("// [VM DEBUG] opGetProp: Getting property '%s' from object type %v (%s), value: %s\n",
+	//	propName, objVal.Type(), objVal.TypeName(), objVal.Inspect())
+
 	// Generate cache key
 	propNameHash := 0
 	for _, b := range []byte(propName) {
@@ -145,7 +145,14 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		return true, InterpretOK, *dest
 	}
 
-	// 11. RegExp objects (after special properties are handled)
+	// 11. Generator objects
+	if objVal.Type() == TypeGenerator {
+		// Generator objects don't have additional own properties beyond special ones
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// 12. RegExp objects (after special properties are handled)
 	if objVal.Type() == TypeRegExp {
 		// RegExp objects don't have additional own properties beyond special ones
 		*dest = Undefined

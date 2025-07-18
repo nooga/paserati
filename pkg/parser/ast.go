@@ -509,6 +509,7 @@ type FunctionLiteral struct {
 	BaseExpression                        // Embed base for ComputedType (Function type)
 	Token                lexer.Token      // The 'function' token
 	Name                 *Identifier      // Optional function name
+	IsGenerator          bool             // true for function* (generator functions)
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter     // Regular parameters
 	RestParameter        *RestParameter   // Optional rest parameter (...args)
@@ -1048,6 +1049,29 @@ func (te *TypeofExpression) String() string {
 	}
 	if te.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", te.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// YieldExpression represents a yield expression in generator functions.
+// yield [expression]
+type YieldExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'yield' token
+	Value          Expression  // The expression to yield (optional, can be nil)
+}
+
+func (ye *YieldExpression) expressionNode()      {}
+func (ye *YieldExpression) TokenLiteral() string { return ye.Token.Literal }
+func (ye *YieldExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("yield")
+	if ye.Value != nil {
+		out.WriteString(" ")
+		out.WriteString(ye.Value.String())
+	}
+	if ye.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ye.ComputedType.String()))
 	}
 	return out.String()
 }

@@ -118,31 +118,8 @@ func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 		functionArgs = args[1:]
 	}
 
-	// Handle different function types to avoid recursion
-	var result vm.Value
-	var err error
-	
-	switch thisFunction.Type() {
-	case vm.TypeNativeFunction:
-		// For native functions, call directly (but set 'this' context if needed)
-		nativeFunc := vm.AsNativeFunction(thisFunction)
-		result, err = nativeFunc.Fn(functionArgs)
-	case vm.TypeNativeFunctionWithProps:
-		// Handle native function with properties
-		nativeFuncWithProps := thisFunction.AsNativeFunctionWithProps()
-		result, err = nativeFuncWithProps.Fn(functionArgs)
-	case vm.TypeClosure, vm.TypeFunction:
-		// For user-defined functions, use CallFunctionDirectly to avoid recursion
-		result, err = vmInstance.CallFunctionDirectly(thisFunction, thisArg, functionArgs)
-	default:
-		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
-	}
-
-	if err != nil {
-		return vm.Undefined, err
-	}
-
-	return result, nil
+	// Use the unified Call method to handle all function types properly
+	return vmInstance.Call(thisFunction, thisArg, functionArgs)
 }
 
 func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
@@ -177,31 +154,8 @@ func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 	}
 
-	// Handle different function types to avoid recursion
-	var result vm.Value
-	var err error
-	
-	switch thisFunction.Type() {
-	case vm.TypeNativeFunction:
-		// For native functions, call directly (but set 'this' context if needed)
-		nativeFunc := vm.AsNativeFunction(thisFunction)
-		result, err = nativeFunc.Fn(functionArgs)
-	case vm.TypeNativeFunctionWithProps:
-		// Handle native function with properties
-		nativeFuncWithProps := thisFunction.AsNativeFunctionWithProps()
-		result, err = nativeFuncWithProps.Fn(functionArgs)
-	case vm.TypeClosure, vm.TypeFunction:
-		// For user-defined functions, use CallFunctionDirectly to avoid recursion
-		result, err = vmInstance.CallFunctionDirectly(thisFunction, thisArg, functionArgs)
-	default:
-		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
-	}
-
-	if err != nil {
-		return vm.Undefined, err
-	}
-
-	return result, nil
+	// Use the unified Call method to handle all function types properly
+	return vmInstance.Call(thisFunction, thisArg, functionArgs)
 }
 
 func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {

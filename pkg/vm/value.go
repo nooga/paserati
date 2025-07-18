@@ -38,6 +38,7 @@ const (
 
 	TypeArray
 	TypeArguments
+	TypeGenerator
 	TypeRegExp
 	TypeMap
 	TypeSet
@@ -65,6 +66,38 @@ type ArgumentsObject struct {
 	Object
 	length int
 	args   []Value
+}
+
+// GeneratorState represents the execution state of a generator
+type GeneratorState int
+
+const (
+	GeneratorSuspendedStart GeneratorState = iota // Initial state, not yet started
+	GeneratorSuspendedYield                       // Suspended at a yield expression
+	GeneratorExecuting                            // Currently executing
+	GeneratorCompleted                            // Completed (returned or threw)
+)
+
+// GeneratorFrame stores the execution state of a suspended generator
+// This allows the generator to resume execution from where it left off
+type GeneratorFrame struct {
+	pc        int       // Program counter - next instruction to execute
+	registers []Value   // Register state at suspension point
+	locals    []Value   // Local variable state
+	stackBase int       // Base of this frame's stack
+	yieldPC   int       // PC of the yield instruction (for resumption)
+}
+
+// GeneratorObject represents a JavaScript generator instance
+// Based on the design from generators-implementation-plan.md
+type GeneratorObject struct {
+	Object
+	Function     Value              // The generator function
+	State        GeneratorState     // Current state (suspended/completed/executing)
+	Frame        *GeneratorFrame    // Execution frame (nil if completed)
+	YieldedValue Value              // Last yielded value
+	ReturnValue  Value              // Final return value (when completed)
+	Done         bool               // True when generator is exhausted
 }
 
 type MapObject struct {
@@ -137,6 +170,19 @@ func NewArguments(args []Value) Value {
 	}
 	copy(argObj.args, args)
 	return Value{typ: TypeArguments, obj: unsafe.Pointer(argObj)}
+}
+
+// NewGenerator creates a new generator object with the given generator function
+func NewGenerator(function Value) Value {
+	genObj := &GeneratorObject{
+		Function:     function,
+		State:        GeneratorSuspendedStart,
+		Frame:        nil, // Will be created when generator starts
+		YieldedValue: Undefined,
+		ReturnValue:  Undefined,
+		Done:         false,
+	}
+	return Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)}
 }
 
 // NewArrayWithArgs creates an array based on the Array constructor arguments:
@@ -241,7 +287,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeRegExp
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeRegExp
 }
 
 func (v Value) IsDictObject() bool {
@@ -254,6 +300,10 @@ func (v Value) IsArray() bool {
 
 func (v Value) IsArguments() bool {
 	return v.typ == TypeArguments
+}
+
+func (v Value) IsGenerator() bool {
+	return v.typ == TypeGenerator
 }
 
 func (v Value) IsCallable() bool {
@@ -369,6 +419,13 @@ func (v Value) AsArguments() *ArgumentsObject {
 		panic("value is not an arguments object")
 	}
 	return (*ArgumentsObject)(v.obj)
+}
+
+func (v Value) AsGenerator() *GeneratorObject {
+	if v.typ != TypeGenerator {
+		panic("value is not a generator")
+	}
+	return (*GeneratorObject)(v.obj)
 }
 
 func (v Value) AsMap() *MapObject {
@@ -500,6 +557,9 @@ func (v Value) ToString() string {
 	case TypeArguments:
 		// Arguments object toString -> [object Arguments]
 		return "[object Arguments]"
+	case TypeGenerator:
+		// Generator object toString -> [object Generator]
+		return "[object Generator]"
 	case TypeNull:
 		return "null"
 	case TypeUndefined:

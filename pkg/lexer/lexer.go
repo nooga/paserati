@@ -220,6 +220,8 @@ const (
 	IMPORT TokenType = "IMPORT"
 	EXPORT TokenType = "EXPORT"
 	FROM   TokenType = "FROM"
+	// Generator keyword
+	YIELD TokenType = "YIELD"
 )
 
 var keywords = map[string]TokenType{
@@ -278,6 +280,7 @@ var keywords = map[string]TokenType{
 	"import":     IMPORT,     // Added for import statements
 	"export":     EXPORT,     // Added for export statements
 	"from":       FROM,       // Added for import from clauses
+	"yield":      YIELD,      // Added for generator yield expressions
 }
 
 // LookupIdent checks the keywords table for an identifier.

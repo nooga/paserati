@@ -87,6 +87,10 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		if vm.SymbolPrototype.Type() == TypeObject {
 			prototype = vm.SymbolPrototype.AsPlainObject()
 		}
+	case TypeGenerator:
+		if vm.GeneratorPrototype.Type() == TypeObject {
+			prototype = vm.GeneratorPrototype.AsPlainObject()
+		}
 	case TypeTypedArray:
 		// Get the appropriate typed array prototype based on element type
 		ta := objVal.AsTypedArray()
