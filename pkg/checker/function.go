@@ -33,7 +33,31 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	originalEnv := c.setupFunctionEnvironment(ctx, paramTypes, paramNames, restParameterType, restParameterName, preliminarySignature, typeParamEnv)
 
 	// 3. Check function body and determine return type
-	finalReturnType := c.checkFunctionBody(ctx, preliminarySignature.ReturnType)
+	// For generator functions, we need to check the body against the inner return type,
+	// not the full Generator<T, TReturn, TNext> type
+	expectedReturnTypeForBody := preliminarySignature.ReturnType
+	var innerReturnTypeFromAnnotation types.Type
+	
+	if node.IsGenerator {
+		// For generators, we want to check the body against the inner return type
+		if preliminarySignature.ReturnType != nil {
+			// If there's an explicit return type annotation, extract TReturn from Generator<T, TReturn, TNext>
+			if instType, ok := preliminarySignature.ReturnType.(*types.InstantiatedType); ok {
+				if instType.Generic.Name == "Generator" && len(instType.TypeArguments) >= 2 {
+					innerReturnTypeFromAnnotation = instType.TypeArguments[1] // TReturn parameter
+					expectedReturnTypeForBody = innerReturnTypeFromAnnotation
+					debugPrintf("// [Checker FuncLit] Generator function: using TReturn type %s for body checking\n", 
+						expectedReturnTypeForBody.String())
+				}
+			}
+		} else {
+			// No explicit return type annotation - use nil to allow inference
+			expectedReturnTypeForBody = nil
+			debugPrintf("// [Checker FuncLit] Generator function: no explicit return type, allowing inference\n")
+		}
+	}
+	
+	finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBody)
 
 	// 4. Handle generator functions - wrap return type in Generator<T, TReturn, TNext>
 	if node.IsGenerator {

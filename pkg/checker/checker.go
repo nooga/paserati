@@ -334,13 +334,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 			}
 
-			// Wrap return type in Generator if this is a generator function
+			// For generator functions, defer the Generator wrapping to detailed checking (Pass 3)
+			// to ensure proper return type validation within the function body
 			if funcLit.IsGenerator {
-				debugPrintf("// [Checker Pass 2] Wrapping return type in Generator for function: %s\n", name)
-				// For hoisting, we create a basic Generator type without analyzing yield types
-				// The actual yield type analysis will happen in Pass 3
-				generatorType := c.createGeneratorType(initialSignature.ReturnType)
-				initialSignature.ReturnType = generatorType
+				debugPrintf("// [Checker Pass 2] Generator function %s - deferring Generator wrapping to Pass 3\n", name)
+				// Keep the inner return type for hoisting, Generator wrapping happens in Pass 3
 			}
 
 			// Convert signature to ObjectType for storage
@@ -612,6 +610,14 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				actualReturnType = types.NewUnionType(c.currentInferredReturnTypes...)
 			}
 			debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
+		}
+
+		// For generator functions, wrap the return type in Generator<T, TReturn, TNext>
+		if funcLit.IsGenerator {
+			debugPrintf("// [Checker Pass 3] Generator function detected, wrapping return type in Generator\n")
+			generatorType := c.createGeneratorType(actualReturnType)
+			actualReturnType = generatorType
+			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
 		}
 
 		// Create the FINAL ObjectType with updated signature

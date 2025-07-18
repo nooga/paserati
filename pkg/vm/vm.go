@@ -942,6 +942,17 @@ startExecution:
 			// Close upvalues for the returning frame
 			vm.closeUpvalues(frame.registers)
 
+			// Check if this is a generator function returning (not yielding)
+			if frame.generatorObj != nil {
+				// Generator function completed with return statement
+				// Update generator state and create iterator result
+				frame.generatorObj.State = GeneratorCompleted
+				iterResult := NewObject(vm.ObjectPrototype).AsPlainObject()
+				iterResult.SetOwn("value", result)
+				iterResult.SetOwn("done", BooleanValue(true))
+				result = NewValueFromPlainObject(iterResult)
+			}
+
 			// Pop the current frame
 			// Stash required info before modifying frameCount/nextRegSlot
 			returningFrameRegSize := function.RegisterSize
