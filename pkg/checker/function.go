@@ -74,8 +74,21 @@ func (c *Checker) createGeneratorType(returnType types.Type) types.Type {
 	// - TReturn (return type): the actual return type from function body
 	// - TNext (sent type): types.Any (values sent via .next())
 	
-	// Temporarily use ObjectType instead of InstantiatedType to avoid GeneratorGeneric panic
-	// TODO: Fix GeneratorGeneric initialization issue
+	// Handle nil return type (generators without explicit return default to undefined)
+	if returnType == nil {
+		returnType = types.Undefined
+	}
+	
+	// Create an instantiated Generator<any, TReturn, any> type
+	if types.GeneratorGeneric != nil {
+		return types.NewInstantiatedType(types.GeneratorGeneric, []types.Type{
+			types.Any,       // T (yield type) - TODO: analyze yield expressions
+			returnType,      // TReturn (return type)
+			types.Any,       // TNext (sent type)
+		})
+	}
+	
+	// Fallback if GeneratorGeneric is not initialized
 	generatorObj := types.NewObjectType()
 	generatorObj.WithProperty("next", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
 	generatorObj.WithProperty("return", types.NewOptionalFunction([]types.Type{returnType}, types.Any, []bool{true}))

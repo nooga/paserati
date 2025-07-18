@@ -19,6 +19,10 @@ import (
 //
 // Returns (shouldSwitchFrame, error)
 func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
+	return vm.prepareCallWithGeneratorMode(calleeVal, thisValue, args, destReg, callerRegisters, callerIP, false)
+}
+
+func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int, isGeneratorExecution bool) (bool, error) {
 	argCount := len(args)
 	currentFrame := &vm.frames[vm.frameCount-1]
 
@@ -29,6 +33,21 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 	case TypeClosure:
 		calleeClosure := AsClosure(calleeVal)
 		calleeFunc := calleeClosure.Fn
+
+		// Check if this is a generator function (but skip if we're already executing a generator)
+		if calleeFunc.IsGenerator && !isGeneratorExecution {
+			// Create a generator object instead of calling the function
+			genVal := NewGenerator(calleeVal)
+			genObj := genVal.AsGenerator()
+			
+			// Store the arguments for when the generator starts
+			// We'll need to pass these when ExecuteGenerator is called
+			genObj.Args = make([]Value, len(args))
+			copy(genObj.Args, args)
+			
+			callerRegisters[destReg] = genVal
+			return false, nil // Don't switch frames
+		}
 
 		// Arity checking
 		if calleeFunc.Variadic {
@@ -125,7 +144,7 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 			Upvalues: []*Upvalue{},
 		}
 		closureVal := Value{typ: TypeClosure, obj: unsafe.Pointer(tempClosure)}
-		return vm.prepareCall(closureVal, thisValue, args, destReg, callerRegisters, callerIP)
+		return vm.prepareCallWithGeneratorMode(closureVal, thisValue, args, destReg, callerRegisters, callerIP, isGeneratorExecution)
 
 	case TypeNativeFunction:
 		nativeFunc := AsNativeFunction(calleeVal)

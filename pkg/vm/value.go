@@ -98,6 +98,7 @@ type GeneratorObject struct {
 	YieldedValue Value              // Last yielded value
 	ReturnValue  Value              // Final return value (when completed)
 	Done         bool               // True when generator is exhausted
+	Args         []Value            // Arguments passed when the generator was created
 }
 
 type MapObject struct {

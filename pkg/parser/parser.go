@@ -2944,8 +2944,8 @@ func (p *Parser) parseYieldExpression() Expression {
 	// yield can have an optional value
 	// Check if there's an expression following yield
 	if !p.curTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
-		// Parse the value to yield with PREFIX precedence
-		expression.Value = p.parseExpression(PREFIX)
+		// Parse the value to yield with LOWEST precedence to consume the entire right-hand side
+		expression.Value = p.parseExpression(LOWEST)
 		if expression.Value == nil {
 			// If parsing failed, treat as yield with no value
 			expression.Value = nil

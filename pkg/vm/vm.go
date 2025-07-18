@@ -3237,8 +3237,12 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
 
-	// Use prepareCall to set up the generator function call with no arguments
-	shouldSwitch, err := vm.prepareCall(funcVal, Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)}, []Value{}, destReg, callerRegisters, callerIP)
+	// Use prepareCall to set up the generator function call with the stored arguments
+	args := genObj.Args
+	if args == nil {
+		args = []Value{}
+	}
+	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)}, args, destReg, callerRegisters, callerIP, true)
 	if err != nil {
 		// Remove sentinel frame on error
 		vm.frameCount--
