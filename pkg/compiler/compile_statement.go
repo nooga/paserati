@@ -794,8 +794,32 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 		return BadRegister, err
 	}
 
-	// 2. Set up iteration variables
-	// For arrays: we need an index counter and length
+	// 2. Runtime dispatch: check type and choose iteration strategy
+	// We'll generate code that checks the object type and branches to the appropriate path
+	
+	// Check if iterable is an array (fast path)
+	typeCheckReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, typeCheckReg)
+	c.emitOpCode(vm.OpTypeof, node.Token.Line)
+	c.emitByte(byte(typeCheckReg))
+	c.emitByte(byte(iterableReg))
+	
+	// Compare with "array" type
+	arrayTypeReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, arrayTypeReg)
+	c.emitLoadNewConstant(arrayTypeReg, vm.String("array"), node.Token.Line)
+	
+	isArrayReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, isArrayReg)
+	c.emitOpCode(vm.OpStrictEqual, node.Token.Line)
+	c.emitByte(byte(isArrayReg))
+	c.emitByte(byte(typeCheckReg))
+	c.emitByte(byte(arrayTypeReg))
+	
+	// Jump to iterator protocol if not array
+	iteratorPathJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, isArrayReg, node.Token.Line)
+	
+	// === FAST PATH: Array iteration ===
 	indexReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, indexReg)
 	lengthReg := c.regAlloc.Alloc()
@@ -806,8 +830,7 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 	// Initialize index to 0
 	c.emitLoadNewConstant(indexReg, vm.Number(0), node.Token.Line)
 
-	// Get length of iterable (for arrays, use .length property)
-	// For now, assume it's an array and get its length
+	// Get length of array
 	c.emitOpCode(vm.OpGetProp, node.Token.Line)
 	c.emitByte(byte(lengthReg))   // destination register
 	c.emitByte(byte(iterableReg)) // object register
@@ -901,11 +924,112 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 	c.emitOpCode(vm.OpJump, node.Body.Token.Line)
 	c.emitUint16(uint16(int16(backOffset)))
 
+	// Jump to end after array iteration is complete
+	skipIteratorPathJump := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+	
+	// === ITERATOR PROTOCOL PATH: For generators, user-defined iterables ===
+	c.patchJump(iteratorPathJump) // Patch to land here
+	
+	// Get Symbol.iterator method
+	symbolIteratorIdx := c.chunk.AddConstant(vm.String("@@symbol:Symbol.iterator"))
+	iteratorMethodReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iteratorMethodReg)
+	c.emitGetProp(iteratorMethodReg, iterableReg, symbolIteratorIdx, node.Token.Line)
+	
+	// Call the iterator method to get iterator
+	iteratorObjReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iteratorObjReg)
+	c.emitCall(iteratorObjReg, iteratorMethodReg, 0, node.Token.Line)
+	
+	// Iterator loop setup - reuse loop context but update positions
+	iteratorLoopStart := len(c.chunk.Code)
+	loopContext.LoopStartPos = iteratorLoopStart
+	
+	// Call iterator.next()
+	nextMethodReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, nextMethodReg)
+	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
+	c.emitGetProp(nextMethodReg, iteratorObjReg, nextConstIdx, node.Token.Line)
+	
+	// Call next() to get {value, done}
+	resultReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, resultReg)
+	c.emitCall(resultReg, nextMethodReg, 0, node.Token.Line)
+	
+	// Get result.done
+	doneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, doneReg)
+	doneConstIdx := c.chunk.AddConstant(vm.String("done"))
+	c.emitGetProp(doneReg, resultReg, doneConstIdx, node.Token.Line)
+	
+	// Exit loop if done is true (using same logic as yield*)
+	notDoneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, notDoneReg)
+	c.emitOpCode(vm.OpNot, node.Token.Line)
+	c.emitByte(byte(notDoneReg))
+	c.emitByte(byte(doneReg))
+	
+	iteratorExitJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
+	
+	// Get result.value for loop variable
+	valueReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, valueReg)
+	valueConstIdx := c.chunk.AddConstant(vm.String("value"))
+	c.emitGetProp(valueReg, resultReg, valueConstIdx, node.Token.Line)
+	
+	// Assign value to loop variable (reuse the assignment logic from array path)
+	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
+		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
+		c.regAlloc.Pin(symbol.Register)
+		c.emitMove(symbol.Register, valueReg, node.Token.Line)
+	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
+		symbol := c.currentSymbolTable.Define(constStmt.Name.Value, c.regAlloc.Alloc())
+		c.regAlloc.Pin(symbol.Register)
+		c.emitMove(symbol.Register, valueReg, node.Token.Line)
+	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
+		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
+			symbolRef, _, found := c.currentSymbolTable.Resolve(ident.Value)
+			if !found {
+				return BadRegister, NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+			}
+			if symbolRef.IsGlobal {
+				c.emitSetGlobal(symbolRef.GlobalIndex, valueReg, node.Token.Line)
+			} else {
+				c.emitMove(symbolRef.Register, valueReg, node.Token.Line)
+			}
+		}
+	}
+	
+	// Compile loop body for iterator path
+	iteratorBodyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iteratorBodyReg)
+	if _, err := c.compileNode(node.Body, iteratorBodyReg); err != nil {
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+		return BadRegister, err
+	}
+	
+	// Patch continue jumps for iterator loop
+	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
+		c.patchJump(continuePos)
+	}
+	
+	// Jump back to iterator loop start
+	iteratorJumpBackPos := len(c.chunk.Code) + 1 + 2
+	iteratorBackOffset := iteratorLoopStart - iteratorJumpBackPos
+	c.emitOpCode(vm.OpJump, node.Body.Token.Line)
+	c.emitUint16(uint16(int16(iteratorBackOffset)))
+	
+	// Patch iterator exit jump
+	c.patchJump(iteratorExitJump)
+	
+	// Patch skip iterator path jump (from array completion)
+	c.patchJump(skipIteratorPathJump)
+
 	// 10. Clean up loop context and patch jumps
 	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
 	c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 
-	// Patch condition exit jump
+	// Patch condition exit jump (from array path)
 	c.patchJump(conditionExitJumpPos)
 
 	// Patch all break jumps

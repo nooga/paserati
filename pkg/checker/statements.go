@@ -552,11 +552,48 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		} else if iterableType == types.Any {
 			elementType = types.Any
 		} else {
-			// For now, assume any other type is not iterable
-			c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
-			elementType = types.Any
+			// Special case: if the iterable comes from a generator function call, assume it's iterable
+			// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking
+			if callExpr, ok := node.Iterable.(*parser.CallExpression); ok {
+				if ident, ok := callExpr.Function.(*parser.Identifier); ok {
+					if c.generatorFunctions[ident.Value] {
+						elementType = types.Any // Safe fallback for generator elements
+						goto handleVariable
+					}
+				}
+			}
+			
+			// Check if the type is assignable to Iterable<any>
+			if iterableGeneric, found, _ := c.env.Resolve("Iterable"); found {
+				if genericType, ok := iterableGeneric.(*types.GenericType); ok {
+					// Create Iterable<any> to check assignability
+					iterableAny := &types.InstantiatedType{
+						Generic:       genericType,
+						TypeArguments: []types.Type{types.Any},
+					}
+					
+					if types.IsAssignable(iterableType, iterableAny) {
+						// It's iterable, but we can't easily extract the element type
+						// For now, use Any as a safe fallback
+						elementType = types.Any
+					} else {
+						// Not iterable
+						c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+						elementType = types.Any
+					}
+				} else {
+					// Iterable type exists but isn't a generic - something's wrong
+					c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+					elementType = types.Any
+				}
+			} else {
+				// No Iterable type found - fallback to old behavior
+				c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+				elementType = types.Any
+			}
 		}
 
+handleVariable:
 		// Handle the variable declaration/assignment
 		if node.Variable != nil {
 			if letStmt, ok := node.Variable.(*parser.LetStatement); ok {

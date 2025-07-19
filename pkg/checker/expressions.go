@@ -230,6 +230,30 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
 				keyName = fmt.Sprintf("%v", literal.Value)
+			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
+				// Check for Symbol.iterator access
+				if objectIdent, ok := memberExpr.Object.(*parser.Identifier); ok {
+					if objectIdent.Value == "Symbol" {
+						if propertyIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
+							if propertyIdent.Value == "iterator" {
+								// This is Symbol.iterator - use the internal representation
+								keyName = "@@symbol:Symbol.iterator"
+							} else {
+								// Other Symbol properties - use generic @@symbol: prefix
+								keyName = "@@symbol:" + propertyIdent.Value
+							}
+						} else {
+							// Complex Symbol property access
+							keyName = "__COMPUTED_PROPERTY__"
+						}
+					} else {
+						// Non-Symbol member expression
+						keyName = "__COMPUTED_PROPERTY__"
+					}
+				} else {
+					// Complex computed property expression - mark for index signature
+					keyName = "__COMPUTED_PROPERTY__"
+				}
 			} else {
 				// Complex computed property expression - mark for index signature
 				keyName = "__COMPUTED_PROPERTY__"
@@ -287,6 +311,30 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
 				keyName = fmt.Sprintf("%v", literal.Value)
+			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
+				// Check for Symbol.iterator access
+				if objectIdent, ok := memberExpr.Object.(*parser.Identifier); ok {
+					if objectIdent.Value == "Symbol" {
+						if propertyIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
+							if propertyIdent.Value == "iterator" {
+								// This is Symbol.iterator - use the internal representation
+								keyName = "@@symbol:Symbol.iterator"
+							} else {
+								// Other Symbol properties - use generic @@symbol: prefix
+								keyName = "@@symbol:" + propertyIdent.Value
+							}
+						} else {
+							// Complex Symbol property access
+							keyName = "__COMPUTED_PROPERTY__"
+						}
+					} else {
+						// Non-Symbol member expression
+						keyName = "__COMPUTED_PROPERTY__"
+					}
+				} else {
+					// Complex computed property expression - mark for index signature
+					keyName = "__COMPUTED_PROPERTY__"
+				}
 			} else {
 				// Complex computed property expression - mark for index signature
 				keyName = "__COMPUTED_PROPERTY__"
@@ -370,20 +418,43 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			keyName = fmt.Sprintf("%v", key.Value)
 		case *parser.SpreadElement:
 			continue // Skip spread elements
-		default:
+		case *parser.ComputedPropertyName:
 			// Handle computed properties in the same way as previous passes
-			if literal, ok := prop.Key.(*parser.StringLiteral); ok {
+			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
 				keyName = literal.Value
-			} else if literal, ok := prop.Key.(*parser.NumberLiteral); ok {
+			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
 				keyName = fmt.Sprintf("%v", literal.Value)
-			} else if _, ok := prop.Key.(*parser.Identifier); ok {
-				// For now, treat all identifier-based computed properties as needing index signatures
-				// TODO: Implement proper constant value resolution
-				keyName = "__COMPUTED_PROPERTY__"
+			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
+				// Check for Symbol.iterator access
+				if objectIdent, ok := memberExpr.Object.(*parser.Identifier); ok {
+					if objectIdent.Value == "Symbol" {
+						if propertyIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
+							if propertyIdent.Value == "iterator" {
+								// This is Symbol.iterator - use the internal representation
+								keyName = "@@symbol:Symbol.iterator"
+							} else {
+								// Other Symbol properties - use generic @@symbol: prefix
+								keyName = "@@symbol:" + propertyIdent.Value
+							}
+						} else {
+							// Complex Symbol property access
+							keyName = "__COMPUTED_PROPERTY__"
+						}
+					} else {
+						// Non-Symbol member expression
+						keyName = "__COMPUTED_PROPERTY__"
+					}
+				} else {
+					// Complex computed property expression - mark for index signature
+					keyName = "__COMPUTED_PROPERTY__"
+				}
 			} else {
 				// Complex computed property expression - mark for index signature
 				keyName = "__COMPUTED_PROPERTY__"
 			}
+		default:
+			// Unsupported key type
+			keyName = "__UNKNOWN_KEY__"
 		}
 
 		// Skip if already processed in first pass (non-function properties)

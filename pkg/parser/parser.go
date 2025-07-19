@@ -4661,23 +4661,70 @@ func (p *Parser) parseObjectLiteral() Expression {
 				Expr: key,
 			}
 
-			// Expect colon
-			if !p.expectPeek(lexer.COLON) {
-				return nil
-			}
+			// Check if this is a computed method: [expr]() { ... }
+			if p.peekTokenIs(lexer.LPAREN) {
+				// Parse as computed method - create a function literal
+				funcLit := &FunctionLiteral{
+					Token: p.curToken, // Current token (should be after ']')
+				}
 
-			// Parse the value
-			p.nextToken()
-			value := p.parseExpression(LOWEST)
-			if value == nil {
-				return nil
-			}
+				// Expect '(' for parameters
+				if !p.expectPeek(lexer.LPAREN) {
+					return nil
+				}
 
-			// Add the computed property
-			objLit.Properties = append(objLit.Properties, &ObjectProperty{
-				Key:   computedKey,
-				Value: value,
-			})
+				// Parse parameters
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+					return nil // Error parsing parameters
+				}
+
+				// Check for optional return type annotation
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ')'
+					p.nextToken() // Consume ':'
+					funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+					if funcLit.ReturnTypeAnnotation == nil {
+						return nil // Error parsing return type
+					}
+				}
+
+				// Expect '{' for body
+				if !p.expectPeek(lexer.LBRACE) {
+					return nil
+				}
+
+				// Parse function body
+				funcLit.Body = p.parseBlockStatement()
+				if funcLit.Body == nil {
+					return nil
+				}
+
+				// Add the computed method
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{
+					Key:   computedKey,
+					Value: funcLit,
+				})
+			} else {
+				// Regular computed property: [expr]: value
+				// Expect colon
+				if !p.expectPeek(lexer.COLON) {
+					return nil
+				}
+
+				// Parse the value
+				p.nextToken()
+				value := p.parseExpression(LOWEST)
+				if value == nil {
+					return nil
+				}
+
+				// Add the computed property
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{
+					Key:   computedKey,
+					Value: value,
+				})
+			}
 		} else {
 			// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
 			propName := p.parsePropertyName()

@@ -98,6 +98,18 @@ func IsAssignable(source, target Type) bool {
 		return true
 	}
 
+	// Handle InstantiatedType - substitute to get concrete type and check assignability
+	if sourceInst, ok := source.(*InstantiatedType); ok {
+		// Substitute the generic type with concrete type arguments
+		concreteSource := sourceInst.Substitute()
+		return IsAssignable(concreteSource, target)
+	}
+	if targetInst, ok := target.(*InstantiatedType); ok {
+		// Substitute the generic type with concrete type arguments
+		concreteTarget := targetInst.Substitute()
+		return IsAssignable(source, concreteTarget)
+	}
+
 	// Union type handling
 	sourceUnion, sourceIsUnion := source.(*UnionType)
 	targetUnion, targetIsUnion := target.(*UnionType)
