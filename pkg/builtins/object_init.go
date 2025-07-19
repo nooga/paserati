@@ -33,6 +33,11 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		// Static methods
 		WithProperty("create", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.String})).
+		WithProperty("values", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("entries", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: &types.TupleType{ElementTypes: []types.Type{types.String, types.Any}}})).
+		WithProperty("assign", types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("hasOwn", types.NewSimpleFunction([]types.Type{types.Any, types.String}, types.Boolean)).
+		WithProperty("fromEntries", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("getPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("setPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("prototype", objectProtoType)
@@ -173,6 +178,11 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Add static methods
 		ctorPropsObj.Properties.SetOwn("create", vm.NewNativeFunction(1, false, "create", objectCreateImpl))
 		ctorPropsObj.Properties.SetOwn("keys", vm.NewNativeFunction(1, false, "keys", objectKeysImpl))
+		ctorPropsObj.Properties.SetOwn("values", vm.NewNativeFunction(1, false, "values", objectValuesImpl))
+		ctorPropsObj.Properties.SetOwn("entries", vm.NewNativeFunction(1, false, "entries", objectEntriesImpl))
+		ctorPropsObj.Properties.SetOwn("assign", vm.NewNativeFunction(1, true, "assign", objectAssignImpl))
+		ctorPropsObj.Properties.SetOwn("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", objectHasOwnImpl))
+		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
 		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOfImpl))
 		ctorPropsObj.Properties.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", objectSetPrototypeOfImpl))
 
@@ -309,4 +319,221 @@ func objectSetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 
 	// Return the object
 	return obj, nil
+}
+
+func objectValuesImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.NewArray(), nil
+	}
+
+	obj := args[0]
+	if !obj.IsObject() {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.NewArray(), nil
+	}
+
+	values := vm.NewArray()
+	valuesArray := values.AsArray()
+
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		for _, key := range plainObj.OwnKeys() {
+			value, _ := plainObj.GetOwn(key)
+			valuesArray.Append(value)
+		}
+	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+		for _, key := range dictObj.OwnKeys() {
+			value, _ := dictObj.GetOwn(key)
+			valuesArray.Append(value)
+		}
+	} else if arrObj := obj.AsArray(); arrObj != nil {
+		// For arrays, return the element values
+		for i := 0; i < arrObj.Length(); i++ {
+			valuesArray.Append(arrObj.Get(i))
+		}
+	}
+
+	return values, nil
+}
+
+func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.NewArray(), nil
+	}
+
+	obj := args[0]
+	if !obj.IsObject() {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.NewArray(), nil
+	}
+
+	entries := vm.NewArray()
+	entriesArray := entries.AsArray()
+
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		for _, key := range plainObj.OwnKeys() {
+			value, _ := plainObj.GetOwn(key)
+			entry := vm.NewArray()
+			entry.AsArray().Append(vm.NewString(key))
+			entry.AsArray().Append(value)
+			entriesArray.Append(entry)
+		}
+	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+		for _, key := range dictObj.OwnKeys() {
+			value, _ := dictObj.GetOwn(key)
+			entry := vm.NewArray()
+			entry.AsArray().Append(vm.NewString(key))
+			entry.AsArray().Append(value)
+			entriesArray.Append(entry)
+		}
+	} else if arrObj := obj.AsArray(); arrObj != nil {
+		// For arrays, return [index, value] pairs
+		for i := 0; i < arrObj.Length(); i++ {
+			entry := vm.NewArray()
+			entry.AsArray().Append(vm.NewString(strconv.Itoa(i)))
+			entry.AsArray().Append(arrObj.Get(i))
+			entriesArray.Append(entry)
+		}
+	}
+
+	return entries, nil
+}
+
+func objectAssignImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined, nil
+	}
+
+	// First argument is the target
+	target := args[0]
+	
+	// Convert primitives to objects (except null/undefined)
+	if target.Type() == vm.TypeNull || target.Type() == vm.TypeUndefined {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined, nil
+	}
+
+	// If target is not an object, box it
+	if !target.IsObject() {
+		// TODO: Implement primitive boxing
+		return target, nil
+	}
+
+	// Copy properties from all source objects
+	for i := 1; i < len(args); i++ {
+		source := args[i]
+		
+		// Skip null and undefined sources
+		if source.Type() == vm.TypeNull || source.Type() == vm.TypeUndefined {
+			continue
+		}
+
+		// Get own enumerable properties from source
+		if plainObj := source.AsPlainObject(); plainObj != nil {
+			for _, key := range plainObj.OwnKeys() {
+				value, _ := plainObj.GetOwn(key)
+				// Set on target
+				if targetPlain := target.AsPlainObject(); targetPlain != nil {
+					targetPlain.SetOwn(key, value)
+				} else if targetDict := target.AsDictObject(); targetDict != nil {
+					targetDict.SetOwn(key, value)
+				}
+			}
+		} else if dictObj := source.AsDictObject(); dictObj != nil {
+			for _, key := range dictObj.OwnKeys() {
+				value, _ := dictObj.GetOwn(key)
+				// Set on target
+				if targetPlain := target.AsPlainObject(); targetPlain != nil {
+					targetPlain.SetOwn(key, value)
+				} else if targetDict := target.AsDictObject(); targetDict != nil {
+					targetDict.SetOwn(key, value)
+				}
+			}
+		} else if arrObj := source.AsArray(); arrObj != nil {
+			// For arrays, copy indexed properties
+			for i := 0; i < arrObj.Length(); i++ {
+				key := strconv.Itoa(i)
+				value := arrObj.Get(i)
+				// Set on target
+				if targetPlain := target.AsPlainObject(); targetPlain != nil {
+					targetPlain.SetOwn(key, value)
+				} else if targetDict := target.AsDictObject(); targetDict != nil {
+					targetDict.SetOwn(key, value)
+				}
+			}
+			// Also copy length property
+			if targetPlain := target.AsPlainObject(); targetPlain != nil {
+				targetPlain.SetOwn("length", vm.NumberValue(float64(arrObj.Length())))
+			} else if targetDict := target.AsDictObject(); targetDict != nil {
+				targetDict.SetOwn("length", vm.NumberValue(float64(arrObj.Length())))
+			}
+		}
+	}
+
+	return target, nil
+}
+
+func objectHasOwnImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) < 2 {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.BooleanValue(false), nil
+	}
+
+	obj := args[0]
+	propName := args[1].ToString()
+
+	// Check if object has the property as own property
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		_, hasOwn := plainObj.GetOwn(propName)
+		return vm.BooleanValue(hasOwn), nil
+	}
+	if dictObj := obj.AsDictObject(); dictObj != nil {
+		_, hasOwn := dictObj.GetOwn(propName)
+		return vm.BooleanValue(hasOwn), nil
+	}
+	if arrObj := obj.AsArray(); arrObj != nil {
+		// For arrays, check if it's a valid index or 'length'
+		if propName == "length" {
+			return vm.BooleanValue(true), nil
+		}
+		// Check numeric indices
+		if index, err := strconv.Atoi(propName); err == nil {
+			return vm.BooleanValue(index >= 0 && index < arrObj.Length()), nil
+		}
+	}
+	
+	return vm.BooleanValue(false), nil
+}
+
+func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		// TODO: Throw TypeError when error objects are implemented
+		// Create an empty plain object (this should use the Object prototype)
+		return vm.NewObject(vm.Undefined), nil
+	}
+
+	iterable := args[0]
+	
+	// Create new object to populate (use undefined to get Object.prototype)
+	result := vm.NewObject(vm.Undefined)
+	resultObj := result.AsPlainObject()
+
+	// If it's an array, iterate through it
+	if arr := iterable.AsArray(); arr != nil {
+		for i := 0; i < arr.Length(); i++ {
+			entry := arr.Get(i)
+			
+			// Each entry should be an array-like with at least 2 elements
+			if entryArr := entry.AsArray(); entryArr != nil && entryArr.Length() >= 2 {
+				key := entryArr.Get(0).ToString()
+				value := entryArr.Get(1)
+				resultObj.SetOwn(key, value)
+			}
+		}
+	}
+	// TODO: Support other iterables when iterator protocol is implemented
+
+	return result, nil
 }
