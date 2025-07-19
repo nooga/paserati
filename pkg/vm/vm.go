@@ -985,6 +985,10 @@ startExecution:
 				}
 				// Remove the sentinel frame
 				vm.frameCount--
+				// Check if we're unwinding due to an exception
+				if vm.unwinding {
+					return InterpretRuntimeError, vm.currentException
+				}
 				// Return the result from the function that just returned
 				return InterpretOK, result
 			}
@@ -3543,9 +3547,20 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// This will be handled by the VM's exception handling system
 	vm.throwException(exception)
 
+	// Check if the exception unwound all frames (uncaught exception)
+	if vm.frameCount == 0 && vm.unwinding {
+		// Exception propagated through all frames - return the exception
+		exceptionMsg := vm.currentException.ToString()
+		return Undefined, fmt.Errorf("exception thrown: %s", exceptionMsg)
+	}
+
 	// Execute the VM run loop - it will return when the exception is handled or propagates
 	status, result := vm.run()
+	
 	if status == InterpretRuntimeError {
+		if vm.currentException.Type() != TypeUndefined && vm.currentException.Type() != TypeNull {
+			return Undefined, fmt.Errorf("exception thrown: %s", vm.currentException.ToString())
+		}
 		return Undefined, fmt.Errorf("runtime error during generator exception handling")
 	}
 

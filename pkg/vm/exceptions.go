@@ -23,7 +23,13 @@ func (vm *VM) findAllExceptionHandlers(pc int) []*ExceptionHandler {
 		return nil
 	}
 
-	chunk := vm.frames[vm.frameCount-1].closure.Fn.Chunk
+	frame := &vm.frames[vm.frameCount-1]
+	if frame.closure == nil {
+		// No closure means no exception table
+		return nil
+	}
+
+	chunk := frame.closure.Fn.Chunk
 	var handlers []*ExceptionHandler
 
 	for i := range chunk.ExceptionTable {
