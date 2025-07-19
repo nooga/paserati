@@ -48,6 +48,21 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("search", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Number)).
 		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
 
+	// Add Symbol.iterator to string prototype type to make strings iterable
+	// Get the Iterator<T> generic type if available
+	if iteratorType, found := ctx.GetType("Iterator"); found {
+		if iteratorGeneric, ok := iteratorType.(*types.GenericType); ok {
+			// Create Iterator<string> type for strings
+			iteratorOfString := &types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{types.String},
+			}
+			// Add [Symbol.iterator](): Iterator<string> method
+			stringProtoType = stringProtoType.WithProperty("@@symbol:Symbol.iterator", 
+				types.NewSimpleFunction([]types.Type{}, iteratorOfString.Substitute()))
+		}
+	}
+
 	// Register string primitive prototype
 	ctx.SetPrimitivePrototype("string", stringProtoType)
 

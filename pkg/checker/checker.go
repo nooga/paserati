@@ -181,6 +181,10 @@ type Checker struct {
 	// Track the current generic class being processed to allow forward references
 	currentGenericClass *types.GenericType
 	currentForwardRef   *types.ForwardReferenceType
+	
+	// --- NEW: Generator function tracking ---
+	// Track generator function names for yield* validation
+	generatorFunctions map[string]bool
 
 	// --- NEW: Recursive type alias tracking ---
 	// Track type aliases being resolved to prevent infinite recursion
@@ -198,6 +202,7 @@ func NewChecker() *Checker {
 		currentThisType:            nil, // Initialize this type context
 		currentClassContext:        nil, // No class context initially
 		abstractClasses:            make(map[string]bool),
+		generatorFunctions:         make(map[string]bool),
 		resolvingTypeAliases:       make(map[string]bool),
 	}
 }
@@ -381,6 +386,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// to ensure proper return type validation within the function body
 			if funcLit.IsGenerator {
 				debugPrintf("// [Checker Pass 2] Generator function %s - deferring Generator wrapping to Pass 3\n", name)
+				// Track this as a generator function for yield* validation
+				c.generatorFunctions[name] = true
 				// Keep the inner return type for hoisting, Generator wrapping happens in Pass 3
 			}
 

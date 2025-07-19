@@ -1524,6 +1524,11 @@ func (c *Compiler) compileYieldExpression(node *parser.YieldExpression, hint Reg
 		}
 	}()
 
+	if node.Delegate {
+		// yield* delegation - more complex compilation
+		return c.compileYieldDelegation(node, hint)
+	}
+
 	// 1. Compile the value being yielded (if any)
 	var valueReg Register
 	if node.Value != nil {
@@ -1545,6 +1550,102 @@ func (c *Compiler) compileYieldExpression(node *parser.YieldExpression, hint Reg
 	c.emitOpCode(vm.OpYield, node.Token.Line)
 	c.emitByte(byte(valueReg)) // Value being yielded
 	c.emitByte(byte(hint))     // Register to store sent value when resuming
+
+	return hint, nil
+}
+
+// compileYieldDelegation compiles yield* expressions which delegate to another iterator
+func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Register) (Register, errors.PaseratiError) {
+	// Manage temporary registers with automatic cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
+	// 1. Compile the iterable expression
+	iterableReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iterableReg)
+	_, err := c.compileNode(node.Value, iterableReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. Get the Symbol.iterator method
+	// Load Symbol.iterator constant
+	symbolIteratorIdx := c.chunk.AddConstant(vm.String("@@symbol:Symbol.iterator"))
+	iteratorMethodReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iteratorMethodReg)
+	c.emitGetProp(iteratorMethodReg, iterableReg, symbolIteratorIdx, node.Token.Line)
+
+	// 3. Call the iterator method to get the iterator
+	iteratorReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iteratorReg)
+	c.emitCall(iteratorReg, iteratorMethodReg, 0, node.Token.Line) // 0 arguments
+
+	// 4. Set up loop variables
+	sentValueReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, sentValueReg)
+	c.emitLoadUndefined(sentValueReg, node.Token.Line) // Initial sent value is undefined
+
+	// 5. Loop: call iterator.next(sentValue) and yield the result
+	loopStart := len(c.chunk.Code)
+
+	// Get iterator.next method
+	nextMethodReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, nextMethodReg)
+	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
+	c.emitGetProp(nextMethodReg, iteratorReg, nextConstIdx, node.Token.Line)
+
+	// Call iterator.next(sentValue)
+	resultReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, resultReg)
+	// For now, we'll call next() without arguments since we don't have a way to pass
+	// arguments dynamically. This is a simplification - a full implementation would
+	// need to handle passing the sent value to next()
+	c.emitCall(resultReg, nextMethodReg, 0, node.Token.Line)
+
+	// Get result.done
+	doneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, doneReg)
+	doneConstIdx := c.chunk.AddConstant(vm.String("done"))
+	c.emitGetProp(doneReg, resultReg, doneConstIdx, node.Token.Line)
+
+	// Jump to exit if done is truthy (exit loop)
+	// First negate done, then jump if false (i.e., jump if done was originally true)
+	notDoneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, notDoneReg)
+	c.emitOpCode(vm.OpNot, node.Token.Line)
+	c.emitByte(byte(notDoneReg))
+	c.emitByte(byte(doneReg))
+	
+	// Now jump if notDone is false (i.e., done was true)
+	exitLoopJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
+
+	// Get result.value
+	valueReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, valueReg)
+	valueConstIdx := c.chunk.AddConstant(vm.String("value"))
+	c.emitGetProp(valueReg, resultReg, valueConstIdx, node.Token.Line)
+
+	// Yield the value and store the sent value
+	c.emitOpCode(vm.OpYield, node.Token.Line)
+	c.emitByte(byte(valueReg))     // Value being yielded
+	c.emitByte(byte(sentValueReg)) // Register to store sent value when resuming
+
+	// Jump back to loop start
+	c.emitOpCode(vm.OpJump, node.Token.Line)
+	// The jump offset is relative to the position AFTER the jump instruction
+	currentPos := len(c.chunk.Code) + 2 // Position after the 2-byte offset
+	jumpBackOffset := loopStart - currentPos
+	c.emitUint16(uint16(int16(jumpBackOffset)))
+
+	// Done label: iterator is exhausted - patch the exit jump to come here
+	c.patchJump(exitLoopJump)
+
+	// Return the final value in hint register
+	c.emitGetProp(hint, resultReg, valueConstIdx, node.Token.Line)
 
 	return hint, nil
 }

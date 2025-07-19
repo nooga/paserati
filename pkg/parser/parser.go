@@ -2941,8 +2941,14 @@ func (p *Parser) parseYieldExpression() Expression {
 
 	p.nextToken() // Move past 'yield'
 
+	// Check for yield* delegation
+	if p.curTokenIs(lexer.ASTERISK) {
+		expression.Delegate = true
+		p.nextToken() // Move past '*'
+	}
+
 	// yield can have an optional value
-	// Check if there's an expression following yield
+	// Check if there's an expression following yield (or yield*)
 	if !p.curTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		// Parse the value to yield with LOWEST precedence to consume the entire right-hand side
 		expression.Value = p.parseExpression(LOWEST)

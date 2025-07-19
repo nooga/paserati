@@ -72,6 +72,22 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("reduce", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any)).
 		WithProperty("reduceRight", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any))
 
+	// Add Symbol.iterator to array prototype type to make arrays iterable
+	// Get the Iterator<T> generic type if available
+	if iteratorType, found := ctx.GetType("Iterator"); found {
+		if iteratorGeneric, ok := iteratorType.(*types.GenericType); ok {
+			// Create Iterator<T> type for arrays
+			iteratorOfT := &types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{tType},
+			}
+			// Add [Symbol.iterator](): Iterator<T> method
+			arrayProtoType = arrayProtoType.WithProperty("@@symbol:Symbol.iterator", 
+				a.createGenericMethod("[Symbol.iterator]", tParam,
+					types.NewSimpleFunction([]types.Type{}, iteratorOfT.Substitute())))
+		}
+	}
+
 	// Register array primitive prototype
 	ctx.SetPrimitivePrototype("array", arrayProtoType)
 

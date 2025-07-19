@@ -1593,12 +1593,100 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 	var yieldedType types.Type = types.Undefined
 	if node.Value != nil {
 		c.visit(node.Value)
-		yieldedType = node.Value.GetComputedType()
-		if yieldedType == nil {
-			yieldedType = types.Any
+		valueType := node.Value.GetComputedType()
+		if valueType == nil {
+			valueType = types.Any
+		}
+
+		if node.Delegate {
+			// yield* delegation - the value must be iterable
+			// Check if the value has Symbol.iterator method
+			// Check if the type has Symbol.iterator property
+			debugPrintf("// [Checker yield*] Checking if valueType %T (%s) is iterable\n", valueType, valueType.String())
+			
+			// Special case: if the value comes from a generator function call, assume it's iterable
+			// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking
+			if callExpr, ok := node.Value.(*parser.CallExpression); ok {
+				if ident, ok := callExpr.Function.(*parser.Identifier); ok {
+					// Check if this identifier refers to a generator function
+					// Look for the function declaration in the checker's state
+					if c.generatorFunctions[ident.Value] {
+						debugPrintf("// [Checker yield*] Detected generator function call, assuming iterable\n")
+						yieldedType = types.Any // Safe fallback
+						goto setYieldedType
+					}
+				}
+			}
+			
+			iteratorMethodType := c.getPropertyTypeFromType(valueType, "@@symbol:Symbol.iterator", false)
+			debugPrintf("// [Checker yield*] Symbol.iterator method type: %T (%s)\n", iteratorMethodType, 
+				func() string { if iteratorMethodType != nil { return iteratorMethodType.String() } else { return "nil" } }())
+			
+			if iteratorMethodType != nil && iteratorMethodType != types.Never {
+				// The value has Symbol.iterator - it's iterable
+				// Check if it's a function that returns an Iterator<T>
+				if genericType, ok := iteratorMethodType.(*types.GenericType); ok {
+					// It's a generic method - we need to instantiate it for the array element type
+					// For arrays, instantiate with the element type
+					if arrayType, ok := valueType.(*types.ArrayType); ok {
+						instantiated := &types.InstantiatedType{
+							Generic:       genericType,
+							TypeArguments: []types.Type{arrayType.ElementType},
+						}
+						iteratorMethodType = instantiated.Substitute()
+					}
+				}
+				
+				if objType, ok := iteratorMethodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
+					// Extract the return type of Symbol.iterator method
+					signature := objType.CallSignatures[0]
+					returnType := signature.ReturnType
+					
+					// The return type should be Iterator<T>
+					// Try to extract T from the iterator
+					if instType, ok := returnType.(*types.InstantiatedType); ok {
+						if instType.Generic != nil && instType.Generic.Name == "Iterator" && len(instType.TypeArguments) > 0 {
+							// Extract T from Iterator<T>
+							yieldedType = instType.TypeArguments[0]
+						} else {
+							// Fallback - try to extract from known types
+							switch vt := valueType.(type) {
+							case *types.ArrayType:
+								yieldedType = vt.ElementType
+							case *types.InstantiatedType:
+								if vt.Generic != nil && vt.Generic.Name == "Generator" && len(vt.TypeArguments) > 0 {
+									yieldedType = vt.TypeArguments[0]
+								} else {
+									yieldedType = types.Any
+								}
+							default:
+								yieldedType = types.Any
+							}
+						}
+					} else {
+						// Fallback - try to extract from known types
+						switch vt := valueType.(type) {
+						case *types.ArrayType:
+							yieldedType = vt.ElementType
+						default:
+							yieldedType = types.Any
+						}
+					}
+				} else {
+					c.addError(node, "yield* expression must be an iterable")
+					yieldedType = types.Any
+				}
+			} else {
+				c.addError(node, "yield* expression must be an iterable")
+				yieldedType = types.Any
+			}
+		} else {
+			// Regular yield expression
+			yieldedType = valueType
 		}
 	}
 
+setYieldedType:
 	// 2. For now, set the computed type to the yielded value type
 	// In a full implementation, this would be IteratorResult<T, TReturn>
 	// but for basic functionality, we'll use the yielded type
@@ -1613,5 +1701,8 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 		c.currentInferredYieldTypes = append(c.currentInferredYieldTypes, yieldedType)
 	}
 	
-	debugPrintf("// [Checker YieldExpression] Yielded type: %s\n", yieldedType.String())
+	// Debug commented out
+	// fmt.Fprintf(os.Stderr, "// [Checker YieldExpression] %s type: %s\n", 
+	//   func() string { if node.Delegate { return "yield* delegation" } else { return "yield" } }(), 
+	//   yieldedType.String())
 }

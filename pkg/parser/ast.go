@@ -1054,11 +1054,12 @@ func (te *TypeofExpression) String() string {
 }
 
 // YieldExpression represents a yield expression in generator functions.
-// yield [expression]
+// yield [expression] or yield* [expression] for delegation
 type YieldExpression struct {
 	BaseExpression             // Embed base for ComputedType
 	Token          lexer.Token // The 'yield' token
 	Value          Expression  // The expression to yield (optional, can be nil)
+	Delegate       bool        // True for yield* delegation
 }
 
 func (ye *YieldExpression) expressionNode()      {}
@@ -1066,6 +1067,9 @@ func (ye *YieldExpression) TokenLiteral() string { return ye.Token.Literal }
 func (ye *YieldExpression) String() string {
 	var out bytes.Buffer
 	out.WriteString("yield")
+	if ye.Delegate {
+		out.WriteString("*")
+	}
 	if ye.Value != nil {
 		out.WriteString(" ")
 		out.WriteString(ye.Value.String())

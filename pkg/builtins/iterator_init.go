@@ -11,7 +11,7 @@ func (i *IteratorInitializer) Name() string {
 }
 
 func (i *IteratorInitializer) Priority() int {
-	return 150 // After Symbol (1) and before other built-ins
+	return PriorityIterator
 }
 
 func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
