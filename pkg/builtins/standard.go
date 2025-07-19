@@ -39,6 +39,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &JSONInitializer{})
 	initializers = append(initializers, &ConsoleInitializer{})
 	initializers = append(initializers, &DateInitializer{})
+	initializers = append(initializers, &PerformanceInitializer{})
 	initializers = append(initializers, &ArrayBufferInitializer{})
 	initializers = append(initializers, &Uint8ArrayInitializer{})
 	initializers = append(initializers, &Uint8ClampedArrayInitializer{})
