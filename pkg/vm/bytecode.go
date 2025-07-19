@@ -161,7 +161,7 @@ const (
 	
 	// --- Generator Support ---
 	OpCreateGenerator OpCode = 74 // Rx FuncReg: Create generator object from function in FuncReg, store in Rx
-	OpYield           OpCode = 75 // Rx: Suspend generator execution and yield value in Rx
+	OpYield           OpCode = 75 // Rx, Ry: Suspend generator execution, yield value in Rx, store sent value in Ry
 	OpResumeGenerator OpCode = 76 // Internal: Resume generator execution (used by .next() calls)
 )
 
@@ -580,7 +580,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpCreateGenerator:
 		return c.callInstruction(builder, "OpCreateGenerator", offset)
 	case OpYield:
-		return c.registerInstruction(builder, "OpYield", offset)
+		return c.registerRegisterInstruction(builder, "OpYield", offset)
 	case OpResumeGenerator:
 		return c.simpleInstruction(builder, "OpResumeGenerator", offset)
 

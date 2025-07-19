@@ -1540,10 +1540,11 @@ func (c *Compiler) compileYieldExpression(node *parser.YieldExpression, hint Reg
 		c.emitLoadUndefined(valueReg, node.Token.Line)
 	}
 
-	// 2. Emit OpYield instruction
-	// The VM will suspend execution and return the yielded value
+	// 2. Emit OpYield instruction with both input and output registers
+	// The VM will suspend execution, yield the value, and store sent value in hint register
 	c.emitOpCode(vm.OpYield, node.Token.Line)
 	c.emitByte(byte(valueReg)) // Value being yielded
+	c.emitByte(byte(hint))     // Register to store sent value when resuming
 
 	return hint, nil
 }

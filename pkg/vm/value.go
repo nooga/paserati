@@ -81,11 +81,12 @@ const (
 // GeneratorFrame stores the execution state of a suspended generator
 // This allows the generator to resume execution from where it left off
 type GeneratorFrame struct {
-	pc        int       // Program counter - next instruction to execute
-	registers []Value   // Register state at suspension point
-	locals    []Value   // Local variable state
-	stackBase int       // Base of this frame's stack
-	yieldPC   int       // PC of the yield instruction (for resumption)
+	pc         int       // Program counter - next instruction to execute
+	registers  []Value   // Register state at suspension point
+	locals     []Value   // Local variable state
+	stackBase  int       // Base of this frame's stack
+	yieldPC    int       // PC of the yield instruction (for resumption)
+	outputReg  byte      // Register where sent value should be stored on resumption
 }
 
 // GeneratorObject represents a JavaScript generator instance

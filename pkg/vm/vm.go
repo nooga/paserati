@@ -2824,10 +2824,11 @@ startExecution:
 			ip += 3
 
 		case OpYield:
-			// OpYield valueReg
-			// Suspend current generator execution and yield a value
+			// OpYield valueReg, outputReg
+			// Suspend current generator execution, yield value from valueReg, store sent value in outputReg
 			valueReg := code[ip]
-			ip += 1
+			outputReg := code[ip+1]
+			ip += 2
 
 			// Get the yielded value
 			yieldedValue := registers[valueReg]
@@ -2851,11 +2852,13 @@ startExecution:
 					registers: make([]Value, len(registers)),
 					locals:    make([]Value, 0), // TODO: implement locals if needed
 					stackBase: 0,
-					yieldPC:   ip - 1,
+					yieldPC:   ip - 2, // IP was advanced by 2 for two-register instruction
+					outputReg: outputReg, // Store where to put sent value on resume
 				}
 			} else {
 				genObj.Frame.pc = ip
-				genObj.Frame.yieldPC = ip - 1
+				genObj.Frame.yieldPC = ip - 2
+				genObj.Frame.outputReg = outputReg
 			}
 
 			// Copy register state to generator frame
@@ -3363,9 +3366,11 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Restore register state from saved frame
 	copy(frame.registers, genObj.Frame.registers)
 
-	// If sentValue is provided, store it in a register (this will be used for x = yield ... patterns)
-	// For now, we'll just continue execution without parameter passing
-	_ = sentValue
+	// Store the sent value in the register specified by the yield instruction
+	// This eliminates the need to hardcode R2 and makes the codegen explicit
+	if genObj.Frame != nil && int(genObj.Frame.outputReg) < len(frame.registers) {
+		frame.registers[genObj.Frame.outputReg] = sentValue
+	}
 
 	// Update VM state
 	vm.frameCount++
