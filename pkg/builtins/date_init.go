@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"time"
@@ -28,17 +29,38 @@ func (d *DateInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("getMinutes", types.NewSimpleFunction([]types.Type{}, types.Number)).
 		WithProperty("getSeconds", types.NewSimpleFunction([]types.Type{}, types.Number)).
 		WithProperty("getMilliseconds", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCFullYear", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCMonth", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCDate", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCDay", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCHours", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCMinutes", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCSeconds", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getUTCMilliseconds", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("getTimezoneOffset", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("setTime", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
 		WithProperty("setFullYear", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, types.Number, []bool{false, true, true})).
 		WithProperty("setMonth", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Number, []bool{false, true})).
 		WithProperty("setDate", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
-		WithProperty("setHours", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
-		WithProperty("setMinutes", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
-		WithProperty("setSeconds", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("setHours", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number, types.Number}, types.Number, []bool{false, true, true, true})).
+		WithProperty("setMinutes", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, types.Number, []bool{false, true, true})).
+		WithProperty("setSeconds", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Number, []bool{false, true})).
 		WithProperty("setMilliseconds", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("setUTCFullYear", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, types.Number, []bool{false, true, true})).
+		WithProperty("setUTCMonth", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Number, []bool{false, true})).
+		WithProperty("setUTCDate", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("setUTCHours", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number, types.Number}, types.Number, []bool{false, true, true, true})).
+		WithProperty("setUTCMinutes", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, types.Number, []bool{false, true, true})).
+		WithProperty("setUTCSeconds", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Number, []bool{false, true})).
+		WithProperty("setUTCMilliseconds", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toISOString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toDateString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toTimeString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toLocaleString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toLocaleDateString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toLocaleTimeString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toJSON", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number)).
 		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
 
@@ -146,6 +168,100 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
+	// UTC getter methods
+	dateProto.SetOwn("getUTCFullYear", vm.NewNativeFunction(0, false, "getUTCFullYear", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Year())), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getUTCMonth", vm.NewNativeFunction(0, false, "getUTCMonth", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Month() - 1)), nil // JavaScript months are 0-based
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getUTCDate", vm.NewNativeFunction(0, false, "getUTCDate", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Day())), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getUTCDay", vm.NewNativeFunction(0, false, "getUTCDay", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Weekday())), nil // Sunday = 0 in JavaScript
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getUTCHours", vm.NewNativeFunction(0, false, "getUTCHours", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Hour())), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getUTCMinutes", vm.NewNativeFunction(0, false, "getUTCMinutes", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Minute())), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getUTCSeconds", vm.NewNativeFunction(0, false, "getUTCSeconds", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Second())), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getUTCMilliseconds", vm.NewNativeFunction(0, false, "getUTCMilliseconds", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NumberValue(float64(t.Nanosecond() / 1000000)), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("getTimezoneOffset", vm.NewNativeFunction(0, false, "getTimezoneOffset", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp))
+			_, offset := t.Zone()
+			return vm.NumberValue(float64(-offset / 60)), nil // JavaScript returns minutes, negative for east of UTC
+		}
+		return vm.NaN, nil
+	}))
+
+	// setTime method
+	dateProto.SetOwn("setTime", vm.NewNativeFunction(1, false, "setTime", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		newTimestamp := args[0].ToFloat()
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
+	}))
+
 	dateProto.SetOwn("setDate", vm.NewNativeFunction(1, false, "setDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
@@ -214,7 +330,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setHours", vm.NewNativeFunction(1, false, "setHours", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwn("setHours", vm.NewNativeFunction(4, false, "setHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -222,7 +338,25 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			hour := int(args[0].ToFloat())
-			newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+			
+			// Use existing values if additional parameters not provided
+			minute := t.Minute()
+			if len(args) >= 2 {
+				minute = int(args[1].ToFloat())
+			}
+			
+			second := t.Second()
+			if len(args) >= 3 {
+				second = int(args[2].ToFloat())
+			}
+			
+			nanosecond := t.Nanosecond()
+			if len(args) >= 4 {
+				millisecond := int(args[3].ToFloat())
+				nanosecond = millisecond * 1000000
+			}
+			
+			newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanosecond, t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
 			return vm.NumberValue(newTimestamp), nil
@@ -230,7 +364,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setMinutes", vm.NewNativeFunction(1, false, "setMinutes", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwn("setMinutes", vm.NewNativeFunction(3, false, "setMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -238,7 +372,20 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			minute := int(args[0].ToFloat())
-			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, t.Second(), t.Nanosecond(), t.Location())
+			
+			// Use existing values if additional parameters not provided
+			second := t.Second()
+			if len(args) >= 2 {
+				second = int(args[1].ToFloat())
+			}
+			
+			nanosecond := t.Nanosecond()
+			if len(args) >= 3 {
+				millisecond := int(args[2].ToFloat())
+				nanosecond = millisecond * 1000000
+			}
+			
+			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, second, nanosecond, t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
 			return vm.NumberValue(newTimestamp), nil
@@ -246,7 +393,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setSeconds", vm.NewNativeFunction(1, false, "setSeconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwn("setSeconds", vm.NewNativeFunction(2, false, "setSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -254,7 +401,15 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			second := int(args[0].ToFloat())
-			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, t.Nanosecond(), t.Location())
+			
+			// Use existing value if additional parameter not provided
+			nanosecond := t.Nanosecond()
+			if len(args) >= 2 {
+				millisecond := int(args[1].ToFloat())
+				nanosecond = millisecond * 1000000
+			}
+			
+			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, nanosecond, t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
 			return vm.NumberValue(newTimestamp), nil
@@ -322,6 +477,225 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
+	// Locale methods
+	dateProto.SetOwn("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp))
+			// Simple locale format - could be enhanced with actual locale support
+			return vm.NewString(t.Format("1/2/2006, 3:04:05 PM")), nil
+		}
+		return vm.NewString("Invalid Date"), nil
+	}))
+
+	dateProto.SetOwn("toLocaleDateString", vm.NewNativeFunction(0, false, "toLocaleDateString", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp))
+			// Simple locale format - could be enhanced with actual locale support
+			return vm.NewString(t.Format("1/2/2006")), nil
+		}
+		return vm.NewString("Invalid Date"), nil
+	}))
+
+	dateProto.SetOwn("toLocaleTimeString", vm.NewNativeFunction(0, false, "toLocaleTimeString", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp))
+			// Simple locale format - could be enhanced with actual locale support
+			return vm.NewString(t.Format("3:04:05 PM")), nil
+		}
+		return vm.NewString("Invalid Date"), nil
+	}))
+
+	// toJSON method
+	dateProto.SetOwn("toJSON", vm.NewNativeFunction(0, false, "toJSON", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			// Check if the timestamp is NaN (invalid date)
+			if math.IsNaN(timestamp) {
+				return vm.Null, nil
+			}
+			// toJSON returns the same as toISOString
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			return vm.NewString(t.Format("2006-01-02T15:04:05.000Z")), nil
+		}
+		// For invalid dates, toJSON returns null
+		return vm.Null, nil
+	}))
+
+	// UTC setter methods
+	dateProto.SetOwn("setUTCFullYear", vm.NewNativeFunction(3, false, "setUTCFullYear", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			year := int(args[0].ToFloat())
+			
+			// Use existing month if second parameter not provided
+			month := t.Month()
+			if len(args) >= 2 {
+				month = time.Month(int(args[1].ToFloat()) + 1) // JavaScript months are 0-based
+			}
+			
+			// Use existing day if third parameter not provided
+			day := t.Day()
+			if len(args) >= 3 {
+				day = int(args[2].ToFloat())
+			}
+			
+			newTime := time.Date(year, month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
+			newTimestamp := float64(newTime.UnixMilli())
+			setDateTimestamp(thisDate, newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setUTCMonth", vm.NewNativeFunction(2, false, "setUTCMonth", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			month := time.Month(int(args[0].ToFloat()) + 1) // JavaScript months are 0-based
+			
+			// Use existing day if second parameter not provided
+			day := t.Day()
+			if len(args) >= 2 {
+				day = int(args[1].ToFloat())
+			}
+			
+			newTime := time.Date(t.Year(), month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
+			newTimestamp := float64(newTime.UnixMilli())
+			setDateTimestamp(thisDate, newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setUTCDate", vm.NewNativeFunction(1, false, "setUTCDate", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			day := int(args[0].ToFloat())
+			newTime := time.Date(t.Year(), t.Month(), day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
+			newTimestamp := float64(newTime.UnixMilli())
+			setDateTimestamp(thisDate, newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setUTCHours", vm.NewNativeFunction(4, false, "setUTCHours", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			hour := int(args[0].ToFloat())
+			
+			// Use existing values if additional parameters not provided
+			minute := t.Minute()
+			if len(args) >= 2 {
+				minute = int(args[1].ToFloat())
+			}
+			
+			second := t.Second()
+			if len(args) >= 3 {
+				second = int(args[2].ToFloat())
+			}
+			
+			nanosecond := t.Nanosecond()
+			if len(args) >= 4 {
+				millisecond := int(args[3].ToFloat())
+				nanosecond = millisecond * 1000000
+			}
+			
+			newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanosecond, time.UTC)
+			newTimestamp := float64(newTime.UnixMilli())
+			setDateTimestamp(thisDate, newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setUTCMinutes", vm.NewNativeFunction(3, false, "setUTCMinutes", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			minute := int(args[0].ToFloat())
+			
+			// Use existing values if additional parameters not provided
+			second := t.Second()
+			if len(args) >= 2 {
+				second = int(args[1].ToFloat())
+			}
+			
+			nanosecond := t.Nanosecond()
+			if len(args) >= 3 {
+				millisecond := int(args[2].ToFloat())
+				nanosecond = millisecond * 1000000
+			}
+			
+			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, second, nanosecond, time.UTC)
+			newTimestamp := float64(newTime.UnixMilli())
+			setDateTimestamp(thisDate, newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setUTCSeconds", vm.NewNativeFunction(2, false, "setUTCSeconds", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			second := int(args[0].ToFloat())
+			
+			// Use existing value if additional parameter not provided
+			nanosecond := t.Nanosecond()
+			if len(args) >= 2 {
+				millisecond := int(args[1].ToFloat())
+				nanosecond = millisecond * 1000000
+			}
+			
+			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, nanosecond, time.UTC)
+			newTimestamp := float64(newTime.UnixMilli())
+			setDateTimestamp(thisDate, newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setUTCMilliseconds", vm.NewNativeFunction(1, false, "setUTCMilliseconds", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if len(args) < 1 {
+			return vm.NaN, nil
+		}
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			millisecond := int(args[0].ToFloat()) * 1000000 // Convert ms to ns
+			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), millisecond, time.UTC)
+			newTimestamp := float64(newTime.UnixMilli())
+			setDateTimestamp(thisDate, newTimestamp)
+			return vm.NumberValue(newTimestamp), nil
+		}
+		return vm.NaN, nil
+	}))
+
 	// Create Date constructor
 	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Date", func(args []vm.Value) (vm.Value, error) {
 		var timestamp float64
@@ -347,7 +721,8 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 					} else if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
 						timestamp = float64(parsedTime.UnixMilli())
 					} else {
-						timestamp = float64(time.Now().UnixMilli()) // fallback
+						// Invalid date string - use NaN to indicate invalid date
+						timestamp = float64(0x7FF8000000000000) // NaN value
 					}
 				}
 			} else {
@@ -358,7 +733,8 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 				} else if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
 					timestamp = float64(parsedTime.UnixMilli())
 				} else {
-					timestamp = float64(time.Now().UnixMilli()) // fallback
+					// Invalid date string - use NaN to indicate invalid date
+					timestamp = math.NaN()
 				}
 			}
 		} else {
@@ -369,6 +745,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			hour := 0
 			minute := 0
 			second := 0
+			nanosecond := 0
 
 			if len(args) >= 3 {
 				day = int(args[2].ToFloat())
@@ -382,8 +759,12 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if len(args) >= 6 {
 				second = int(args[5].ToFloat())
 			}
+			if len(args) >= 7 {
+				millisecond := int(args[6].ToFloat())
+				nanosecond = millisecond * 1000000
+			}
 
-			t := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.Local)
+			t := time.Date(year, time.Month(month), day, hour, minute, second, nanosecond, time.Local)
 			timestamp = float64(t.UnixMilli())
 		}
 
@@ -437,6 +818,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		hour := 0
 		minute := 0
 		second := 0
+		nanosecond := 0
 
 		if len(args) >= 3 {
 			day = int(args[2].ToFloat())
@@ -450,8 +832,12 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) >= 6 {
 			second = int(args[5].ToFloat())
 		}
+		if len(args) >= 7 {
+			millisecond := int(args[6].ToFloat())
+			nanosecond = millisecond * 1000000
+		}
 
-		t := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
+		t := time.Date(year, time.Month(month), day, hour, minute, second, nanosecond, time.UTC)
 		return vm.NumberValue(float64(t.UnixMilli())), nil
 	}))
 
