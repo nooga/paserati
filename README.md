@@ -78,9 +78,7 @@ The engine's warmed up and running decent up until the first bend! I've got the 
 **Big Missing Pieces:**
 
 - **No async/await** - Don't have an event loop yet, so no async/await
-- **No generators** - No `function*` or `yield`
 - **No iterators** - No `Symbol.iterator` or `for...of` protocol
-- **No BigInt** - Useless for now
 
 **Also Missing:**
 

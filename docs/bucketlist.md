@@ -213,7 +213,19 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] **Comprehensive type checking** - Validates spread arguments are appropriate types
   - [x] **Integration with destructuring** - Works seamlessly with rest/spread patterns
   - [x] **19+ comprehensive tests** covering all scenarios, edge cases, and error handling
-- [ ] `yield` / `yield*` (Generators)
+- [x] `yield` (Generators) - **Complete Implementation!**
+  - [x] Generator function syntax (`function*`)
+  - [x] Yield expressions with proper precedence handling
+  - [x] Generator object creation with iterator protocol
+  - [x] `.next()`, `.return()`, `.throw()` methods
+  - [x] Parameter passing via `.next(value)`
+  - [x] Return value support in generators
+  - [x] TypeScript-compatible `Generator<T, TReturn, TNext>` types
+  - [x] Yield type inference from expressions
+  - [x] Two-register OpYield bytecode design
+  - [x] State preservation and resumption
+  - [x] 8/8 generator tests passing
+- [ ] `yield*` (Delegating Generators) - Not yet implemented
 - [ ] `await` (Async/Await) - **Blocked by event loop implementation**
 - [x] **Symbols** (`Symbol.iterator`, `Symbol.for`, etc.)
 - [ ] **Iterators** (`Symbol.iterator` protocol, `next()` method)
