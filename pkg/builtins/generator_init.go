@@ -140,17 +140,26 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
 		}
 
-		// TODO: Implement exception throwing into generator execution
-		// For now, mark as completed and throw
-		thisGen.State = vm.GeneratorCompleted
-		thisGen.Done = true
-		thisGen.Frame = nil
-
+		// Get the exception value (argument to .throw())
 		exception := vm.Undefined
 		if len(args) > 0 {
 			exception = args[0]
 		}
-		return vm.Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
+
+		// Execute the generator with exception injection
+		return vmInstance.ExecuteGeneratorWithException(thisGen, exception)
+	}))
+
+	// Add Symbol.iterator implementation for generators
+	// Generators are iterable - they return themselves since they already have next() method
+	symbolIteratorKey := "@@symbol:" + SymbolIterator.AsSymbol()
+	generatorProto.SetOwn(symbolIteratorKey, vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+		thisValue := vmInstance.GetThis()
+		if !thisValue.IsGenerator() {
+			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype[Symbol.iterator] called on incompatible receiver")
+		}
+		// Generators are self-iterable - return the generator itself
+		return thisValue, nil
 	}))
 
 	// Set Generator prototype in VM

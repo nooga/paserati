@@ -35,7 +35,7 @@ func (s *SymbolInitializer) Name() string {
 }
 
 func (s *SymbolInitializer) Priority() int {
-	return 5 // After Object, Function, Array but before other primitives
+	return 1 // After Object (0) but before Array (2) - symbols needed for iterator protocol
 }
 
 func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {

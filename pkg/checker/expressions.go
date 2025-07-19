@@ -846,17 +846,20 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		switch base := leftType.(type) {
 		case *types.ArrayType:
 			// Base is ArrayType
-			// 4. Check index type (must be number for array)
-			if !types.IsAssignable(indexType, types.Number) {
-				c.addError(node.Index, fmt.Sprintf("array index must be of type number, got %s", indexType.String()))
-				// Proceed with Any as result type
-			} else {
-				// Index type is valid, result type is the array's element type
+			// 4. Check index type (number for array elements, string/symbol for properties)
+			if types.IsAssignable(indexType, types.Number) {
+				// Numeric index - accessing array elements
 				if base.ElementType != nil {
 					resultType = base.ElementType
 				} else {
 					resultType = types.Unknown
 				}
+			} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+				// String or Symbol index - accessing array properties (like Symbol.iterator)
+				resultType = types.Any // Arrays can have arbitrary properties
+			} else {
+				c.addError(node.Index, fmt.Sprintf("array index must be of type number, string, or symbol, got %s", indexType.String()))
+				resultType = types.Any
 			}
 
 		case *types.ObjectType: // <<< NEW CASE
@@ -930,8 +933,17 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						break
 					}
 				case *types.Primitive:
-					if member == types.String && types.IsAssignable(indexType, types.Number) {
-						possibleTypes = append(possibleTypes, types.String)
+					if member == types.String {
+						if types.IsAssignable(indexType, types.Number) {
+							// Numeric index - string character access
+							possibleTypes = append(possibleTypes, types.String)
+						} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+							// String/Symbol index - string property access
+							possibleTypes = append(possibleTypes, types.Any)
+						} else {
+							allMembersSupported = false
+							break
+						}
 					} else {
 						allMembersSupported = false
 						break
@@ -954,15 +966,17 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		case *types.Primitive:
 			// Allow indexing on strings?
 			if base == types.String {
-				// 4. Check index type (must be number for string)
-				if !types.IsAssignable(indexType, types.Number) {
-					c.addError(node.Index, fmt.Sprintf("string index must be of type number, got %s", indexType.String()))
+				// 4. Check index type (number for string characters, string/symbol for properties)
+				if types.IsAssignable(indexType, types.Number) {
+					// Numeric index - accessing string characters
+					resultType = types.String
+				} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+					// String or Symbol index - accessing string properties (like Symbol.iterator)
+					resultType = types.Any // String properties can have arbitrary types
+				} else {
+					c.addError(node.Index, fmt.Sprintf("string index must be of type number, string, or symbol, got %s", indexType.String()))
+					resultType = types.Any
 				}
-				// Result of indexing a string is always a string (or potentially undefined)
-				// Let's use string | undefined? Or just string?
-				// For simplicity now, let's say string.
-				// A more precise type might be: types.NewUnionType(types.String, types.Undefined)
-				resultType = types.String
 			} else {
 				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 			}
@@ -982,6 +996,38 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			} else {
 				// For other index types, this is an error
 				c.addError(node.Index, fmt.Sprintf("enum %s can only be indexed with number or string, got %s", base.Name, indexType.String()))
+			}
+
+		case *types.InstantiatedType:
+			// Handle instantiated generic types (like Generator<T, TReturn, TNext>)
+			if base.Generic != nil && base.Generic.Body != nil {
+				if baseObjectType, ok := base.Generic.Body.(*types.ObjectType); ok {
+					// Check if this is a Generator type by looking for the next() method
+					if _, hasNext := baseObjectType.Properties["next"]; hasNext {
+						// This is likely a Generator or Iterator - allow Symbol indexing for Symbol.iterator
+						if types.IsAssignable(indexType, types.Symbol) {
+							resultType = types.Any // Symbol.iterator returns the iterator itself
+						} else if types.IsAssignable(indexType, types.String) {
+							resultType = types.Any // String properties allowed
+						} else {
+							c.addError(node.Index, fmt.Sprintf("generator/iterator index must be of type string or symbol, got %s", indexType.String()))
+							resultType = types.Any
+						}
+					} else {
+						// Generic object type - use general object indexing rules
+						widenedIndexType := types.GetWidenedType(indexType)
+						if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
+							resultType = types.Any
+						} else {
+							c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', 'symbol', or 'any', got '%s'", indexType.String()))
+							resultType = types.Any
+						}
+					}
+				} else {
+					c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+				}
+			} else {
+				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 			}
 
 		default:

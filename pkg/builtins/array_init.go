@@ -703,6 +703,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewArrayWithArgs(args), nil
 	}))
 
+	// Add Symbol.iterator implementation for arrays
+	// Use the global SymbolIterator (Symbol initializes before Array now)
+	symbolIteratorKey := "@@symbol:" + SymbolIterator.AsSymbol()
+	arrayProto.SetOwn(symbolIteratorKey, vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil {
+			return vm.Undefined, nil
+		}
+		
+		// Create an array iterator object
+		return createArrayIterator(vmInstance, thisArray), nil
+	}))
+
 	arrayCtor := ctorWithProps
 
 	// Set Array prototype in VM
@@ -710,6 +723,36 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Register Array constructor as global
 	return ctx.DefineGlobal("Array", arrayCtor)
+}
+
+// createArrayIterator creates an iterator object for array iteration
+func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
+	// Create iterator object inheriting from Object.prototype
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	
+	// Iterator state: current index
+	currentIndex := 0
+	
+	// Add next() method to iterator
+	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		// Create iterator result object {value, done}
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+		
+		if currentIndex >= array.Length() {
+			// Iterator is exhausted
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+		} else {
+			// Return current element and advance
+			result.SetOwn("value", array.Get(currentIndex))
+			result.SetOwn("done", vm.BooleanValue(false))
+			currentIndex++
+		}
+		
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+	
+	return vm.NewValueFromPlainObject(iterator)
 }
 
 // Helper methods for creating generic array method types

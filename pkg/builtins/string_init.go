@@ -539,9 +539,50 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	stringProto.SetOwn("constructor", stringCtor)
 
+	// Add Symbol.iterator implementation for strings
+	// Use the global SymbolIterator (Symbol initializes before String now)
+	symbolIteratorKey := "@@symbol:" + SymbolIterator.AsSymbol()
+	stringProto.SetOwn(symbolIteratorKey, vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+		thisStr := vmInstance.GetThis().ToString()
+		
+		// Create a string iterator object
+		return createStringIterator(vmInstance, thisStr), nil
+	}))
+
 	// Set String prototype in VM
 	vmInstance.StringPrototype = vm.NewValueFromPlainObject(stringProto)
 
 	// Register String constructor as global
 	return ctx.DefineGlobal("String", stringCtor)
+}
+
+// createStringIterator creates an iterator object for string iteration
+func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
+	// Create iterator object inheriting from Object.prototype
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	
+	// Iterator state: current index
+	currentIndex := 0
+	
+	// Add next() method to iterator
+	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		// Create iterator result object {value, done}
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+		
+		if currentIndex >= len(str) {
+			// Iterator is exhausted
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+		} else {
+			// Return current character and advance
+			char := string(str[currentIndex])
+			result.SetOwn("value", vm.NewString(char))
+			result.SetOwn("done", vm.BooleanValue(false))
+			currentIndex++
+		}
+		
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+	
+	return vm.NewValueFromPlainObject(iterator)
 }

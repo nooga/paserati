@@ -372,3 +372,8 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 func (vm *VM) ExecuteGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
 	return vm.executeGenerator(genObj, sentValue)
 }
+
+// ExecuteGeneratorWithException is the public interface for generator execution with exception injection
+func (vm *VM) ExecuteGeneratorWithException(genObj *GeneratorObject, exception Value) (Value, error) {
+	return vm.executeGeneratorWithException(genObj, exception)
+}

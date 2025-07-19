@@ -5425,7 +5425,7 @@ func (p *Parser) parsePropertyName() *Identifier {
 	case lexer.IDENT:
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
-		lexer.RETURN, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
+		lexer.RETURN, lexer.THROW, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
 		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, lexer.SATISFIES,
 		lexer.IN, lexer.INSTANCEOF:
 		// Allow keywords as property names

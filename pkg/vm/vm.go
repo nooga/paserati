@@ -1282,17 +1282,34 @@ startExecution:
 			// --- MODIFIED: Handle Array, Arguments, Object, String ---
 			switch baseVal.Type() {
 			case TypeArray:
-				if !IsNumber(indexVal) {
-					frame.ip = ip
-					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type())
-					return status, Undefined
-				}
 				arr := AsArray(baseVal)
-				idx := int(AsNumber(indexVal))
-				if idx < 0 || idx >= len(arr.elements) {
-					registers[destReg] = Undefined // Out of bounds -> undefined
+				if IsNumber(indexVal) {
+					// Numeric index - access array elements
+					idx := int(AsNumber(indexVal))
+					if idx < 0 || idx >= len(arr.elements) {
+						registers[destReg] = Undefined // Out of bounds -> undefined
+					} else {
+						registers[destReg] = arr.elements[idx]
+					}
 				} else {
-					registers[destReg] = arr.elements[idx]
+					// String/Symbol index - access array properties via prototype chain
+					var key string
+					switch indexVal.Type() {
+					case TypeString:
+						key = AsString(indexVal)
+					case TypeSymbol:
+						// Use the symbol's string representation with prefix
+						key = "@@symbol:" + indexVal.AsSymbol()
+					default:
+						frame.ip = ip
+						status := vm.runtimeError("Array index must be a number, string, or symbol, got '%v'", indexVal.Type())
+						return status, Undefined
+					}
+					
+					// Use opGetProp to access array properties (handles prototype chain)
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
 				}
 
 			case TypeArguments:
@@ -1342,19 +1359,36 @@ startExecution:
 					registers[destReg] = propValue
 				}
 
-			case TypeString: // <<< NEW (or ensure existing logic is here)
-				if !IsNumber(indexVal) {
-					frame.ip = ip
-					status := vm.runtimeError("String index must be a number, got '%v'", indexVal.Type())
-					return status, Undefined
-				}
+			case TypeString:
 				str := AsString(baseVal)
-				idx := int(AsNumber(indexVal))
-				runes := []rune(str)
-				if idx < 0 || idx >= len(runes) {
-					registers[destReg] = Undefined // Out of bounds -> undefined
+				if IsNumber(indexVal) {
+					// Numeric index - access string characters
+					idx := int(AsNumber(indexVal))
+					runes := []rune(str)
+					if idx < 0 || idx >= len(runes) {
+						registers[destReg] = Undefined // Out of bounds -> undefined
+					} else {
+						registers[destReg] = String(string(runes[idx])) // Return char as string
+					}
 				} else {
-					registers[destReg] = String(string(runes[idx])) // Return char as string
+					// String/Symbol index - access string properties via prototype chain
+					var key string
+					switch indexVal.Type() {
+					case TypeString:
+						key = AsString(indexVal)
+					case TypeSymbol:
+						// Use the symbol's string representation with prefix
+						key = "@@symbol:" + indexVal.AsSymbol()
+					default:
+						frame.ip = ip
+						status := vm.runtimeError("String index must be a number, string, or symbol, got '%v'", indexVal.Type())
+						return status, Undefined
+					}
+					
+					// Use opGetProp to access string properties (handles prototype chain)
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
 				}
 
 			case TypeTypedArray:
@@ -1367,9 +1401,29 @@ startExecution:
 				idx := int(AsNumber(indexVal))
 				registers[destReg] = ta.GetElement(idx)
 
+			case TypeGenerator:
+				// Generators support property access via prototype chain (like Symbol.iterator)
+				var key string
+				switch indexVal.Type() {
+				case TypeString:
+					key = AsString(indexVal)
+				case TypeSymbol:
+					// Use the symbol's string representation with prefix
+					key = "@@symbol:" + indexVal.AsSymbol()
+				default:
+					frame.ip = ip
+					status := vm.runtimeError("Generator index must be a string or symbol, got '%v'", indexVal.Type())
+					return status, Undefined
+				}
+				
+				// Use opGetProp to access generator properties (handles prototype chain)
+				if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+					return status, value
+				}
+
 			default:
 				frame.ip = ip
-				status := vm.runtimeError("Cannot index non-array/object/string/typedarray type '%v' at IP %d", baseVal.Type(), ip)
+				status := vm.runtimeError("Cannot index non-array/object/string/typedarray/generator type '%v' at IP %d", baseVal.Type(), ip)
 				return status, Undefined
 			}
 			// --- END MODIFICATION ---
@@ -3233,6 +3287,23 @@ func (vm *VM) executeGenerator(genObj *GeneratorObject, sentValue Value) (Value,
 	return NewValueFromPlainObject(result), nil
 }
 
+func (vm *VM) executeGeneratorWithException(genObj *GeneratorObject, exception Value) (Value, error) {
+	if genObj.State == GeneratorSuspendedStart {
+		// Cannot throw into a generator that hasn't started yet
+		// This should throw the exception immediately
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		genObj.Frame = nil
+		return Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
+	} else if genObj.State == GeneratorSuspendedYield {
+		// Resume from yield point and throw exception at that point
+		return vm.resumeGeneratorWithException(genObj, exception)
+	}
+
+	// Generator is completed - throw the exception
+	return Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
+}
+
 // startGenerator begins execution of a generator function using sentinel frame isolation
 func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
 	// Get the generator function
@@ -3383,6 +3454,99 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	status, result := vm.run()
 	if status == InterpretRuntimeError {
 		return Undefined, fmt.Errorf("runtime error during generator resumption")
+	}
+
+	return result, nil
+}
+
+// resumeGeneratorWithException resumes execution from a yield point and throws an exception at that point
+func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Value) (Value, error) {
+	// Check if generator has saved state
+	if genObj.Frame == nil {
+		// Generator has no saved frame - it must be completed
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		return Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
+	}
+
+	// Get the generator function
+	funcVal := genObj.Function
+
+	var funcObj *FunctionObject
+	var closureObj *ClosureObject
+
+	// Extract function object from Value
+	if funcVal.Type() == TypeFunction {
+		funcObj = funcVal.AsFunction()
+	} else if funcVal.Type() == TypeClosure {
+		closureObj = funcVal.AsClosure()
+		funcObj = closureObj.Fn
+	} else {
+		return Undefined, fmt.Errorf("Invalid generator function type")
+	}
+
+	// Set up caller context for sentinel frame approach
+	callerRegisters := make([]Value, 1)
+	destReg := byte(0)
+
+	// Add a sentinel frame that will cause vm.run() to return when generator yields/returns
+	sentinelFrame := &vm.frames[vm.frameCount]
+	sentinelFrame.isSentinelFrame = true
+	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.targetRegister = destReg    // Target register in caller
+	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.frameCount++
+
+	// Check if we have space for the generator frame
+	if vm.frameCount >= MaxFrames {
+		vm.frameCount-- // Remove sentinel frame
+		return Undefined, fmt.Errorf("Stack overflow")
+	}
+
+	// Allocate registers for the generator function
+	regSize := funcObj.RegisterSize
+	if vm.nextRegSlot+regSize > len(vm.registerStack) {
+		vm.frameCount-- // Remove sentinel frame
+		return Undefined, fmt.Errorf("Out of registers")
+	}
+
+	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
+	frame := &vm.frames[vm.frameCount]
+	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.ip = genObj.Frame.pc                                               // Resume from saved PC
+	frame.targetRegister = destReg                                           // Target in sentinel frame
+	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
+	frame.isConstructorCall = false
+	frame.isDirectCall = true // Mark as direct call for proper return handling
+	frame.argCount = 0
+	frame.generatorObj = genObj // Link frame to generator object
+
+	if closureObj != nil {
+		frame.closure = closureObj
+	} else {
+		// Create a temporary closure for the function
+		closureVal := NewClosure(funcObj, nil)
+		frame.closure = closureVal.AsClosure()
+	}
+
+	// Restore register state from saved frame
+	copy(frame.registers, genObj.Frame.registers)
+
+	// Update VM state
+	vm.frameCount++
+	vm.nextRegSlot += regSize
+
+	// Update generator state
+	genObj.State = GeneratorExecuting
+
+	// Instead of sending a value, throw an exception at the yield point
+	// This will be handled by the VM's exception handling system
+	vm.throwException(exception)
+
+	// Execute the VM run loop - it will return when the exception is handled or propagates
+	status, result := vm.run()
+	if status == InterpretRuntimeError {
+		return Undefined, fmt.Errorf("runtime error during generator exception handling")
 	}
 
 	return result, nil
