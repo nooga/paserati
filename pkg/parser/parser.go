@@ -5722,30 +5722,79 @@ func (p *Parser) isLikelyFunctionSignature() bool {
 	return isSignature
 }
 
-// parseOptionalChainingExpression handles optional chaining property access (e.g., obj?.prop)
+// parseOptionalChainingExpression handles optional chaining expressions (obj?.prop, obj?.[expr], func?.())
 func (p *Parser) parseOptionalChainingExpression(left Expression) Expression {
 	// Current token should be OPTIONAL_CHAINING (?.)
-	exp := &OptionalChainingExpression{
-		Token:  p.curToken, // The '?.' token
+	optToken := p.curToken // The '?.' token
+
+	// Move to the next token to see what follows the ?.
+	p.nextToken()
+
+	switch p.curToken.Type {
+	case lexer.LBRACKET:
+		// Optional computed access: obj?.[expr]
+		return p.parseOptionalIndexExpression(left, optToken)
+		
+	case lexer.LPAREN:
+		// Optional call: func?.()
+		return p.parseOptionalCallExpression(left, optToken)
+		
+	default:
+		// Optional property access: obj?.prop (current behavior)
+		exp := &OptionalChainingExpression{
+			Token:  optToken,
+			Object: left,
+		}
+
+		// Parse property name (allowing keywords as property names)
+		propIdent := p.parsePropertyName()
+		if propIdent == nil {
+			// If the token after '?.' is not a valid property name, it's a syntax error.
+			msg := fmt.Sprintf("expected identifier after '?.', got %s", p.curToken.Type)
+			p.addError(p.curToken, msg)
+			return nil
+		}
+
+		exp.Property = propIdent
+		return exp
+	}
+}
+
+// parseOptionalIndexExpression handles optional computed access (obj?.[expr])
+func (p *Parser) parseOptionalIndexExpression(left Expression, optToken lexer.Token) Expression {
+	exp := &OptionalIndexExpression{
+		Token:  optToken, // The '?.' token
 		Object: left,
 	}
 
-	// Move to the next token (which should be the property name)
+	// Current token is already '[', move past it to the index expression
 	p.nextToken()
-
-	// Parse property name (allowing keywords as property names)
-	propIdent := p.parsePropertyName()
-	if propIdent == nil {
-		// If the token after '?.' is not a valid property name, it's a syntax error.
-		msg := fmt.Sprintf("expected identifier after '?.', got %s", p.curToken.Type)
-		p.addError(p.curToken, msg)
+	exp.Index = p.parseExpression(LOWEST)
+	if exp.Index == nil {
 		return nil
 	}
 
-	exp.Property = propIdent
+	// Expect closing bracket
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil
+	}
 
-	// We don't call parseExpression here because the right side MUST be an identifier.
-	// The precedence check in the main parseExpression loop handles chaining, e.g., a?.b?.c
+	return exp
+}
+
+// parseOptionalCallExpression handles optional function calls (func?.())
+func (p *Parser) parseOptionalCallExpression(left Expression, optToken lexer.Token) Expression {
+	exp := &OptionalCallExpression{
+		Token:    optToken, // The '?.' token
+		Function: left,
+	}
+
+	// Current token is '(', parse the arguments
+	exp.Arguments = p.parseExpressionList(lexer.RPAREN)
+	if exp.Arguments == nil {
+		return nil
+	}
+
 	return exp
 }
 

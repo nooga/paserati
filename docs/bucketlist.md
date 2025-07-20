@@ -216,7 +216,15 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 - [x] `void` Operator
 - [x] Grouping Operator (`()`)
 - [x] Nullish Coalescing Operator (`??`)
-- [x] Optional Chaining (`?.`)
+- [x] Optional Chaining (`?.`) - **Complete Implementation!**
+  - [x] Basic property access (`obj?.prop`)
+  - [x] Optional computed property access (`obj?.[expr]`) - **New!**
+  - [x] Optional function calls (`func?.()`) - **New!**
+  - [x] Chaining multiple optional operations (`obj?.prop?.method?.()`)
+  - [x] Null/undefined short-circuiting with proper undefined return
+  - [x] TypeScript-compliant type checking with union types (Result | undefined)
+  - [x] VM optimization with OpIsNullish for efficient null checks
+  - [x] Complete parser, compiler, and runtime support
 - [x] Type Assertions (`as` operator) - **New!**
   - [x] Basic type assertions (`value as Type`)
   - [x] Compile-time validation with TypeScript-compliant error checking

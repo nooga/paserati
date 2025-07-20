@@ -2300,6 +2300,12 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.OptionalChainingExpression:
 		c.checkOptionalChainingExpression(node)
 
+	case *parser.OptionalIndexExpression:
+		c.checkOptionalIndexExpression(node)
+
+	case *parser.OptionalCallExpression:
+		c.checkOptionalCallExpression(node)
+
 	// --- Loop Statements (Control flow, check condition/body) ---
 	case *parser.WhileStatement:
 		c.visit(node.Condition)

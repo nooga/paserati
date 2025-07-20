@@ -1261,6 +1261,119 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	debugPrintf("// [Checker OptionalChaining] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
 }
 
+// checkOptionalIndexExpression handles optional computed property access (e.g., obj?.[expr])
+func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpression) {
+	// 1. Visit the object part
+	c.visit(node.Object)
+	objectType := node.Object.GetComputedType()
+	if objectType == nil {
+		objectType = types.Any
+	}
+
+	// 2. Visit the index expression
+	c.visit(node.Index)
+	indexType := node.Index.GetComputedType()
+	if indexType == nil {
+		indexType = types.Any
+	}
+
+	// 3. Check that index type is valid (string, number, or symbol)
+	widenedIndexType := types.GetWidenedType(indexType)
+	if widenedIndexType != types.Any && widenedIndexType != types.String && widenedIndexType != types.Number && widenedIndexType != types.Symbol {
+		c.addError(node.Index, "Index signature parameter type must be 'string', 'number', 'symbol' or a template literal pattern")
+	}
+
+	// 4. Determine result type (similar to IndexExpression but with optional chaining)
+	widenedObjectType := types.GetWidenedType(objectType)
+	var baseResultType types.Type = types.Any
+
+	if widenedObjectType == types.Any {
+		baseResultType = types.Any
+	} else if widenedObjectType == types.Null || widenedObjectType == types.Undefined {
+		baseResultType = types.Undefined
+	} else if arrayType, ok := widenedObjectType.(*types.ArrayType); ok {
+		// Array access - check if index is numeric
+		if widenedIndexType == types.Number || widenedIndexType == types.Any {
+			baseResultType = arrayType.ElementType
+		} else {
+			baseResultType = types.Undefined
+		}
+	} else {
+		// Object access - for optional chaining, be permissive
+		baseResultType = types.Any
+	}
+
+	// 5. For optional chaining, always union with undefined
+	var resultType types.Type
+	if baseResultType == types.Undefined {
+		resultType = types.Undefined
+	} else {
+		resultType = &types.UnionType{
+			Types: []types.Type{baseResultType, types.Undefined},
+		}
+	}
+
+	node.SetComputedType(resultType)
+	debugPrintf("// [Checker OptionalIndex] ObjectType: %s, IndexType: %s, ResultType: %s\n", objectType.String(), indexType.String(), resultType.String())
+}
+
+// checkOptionalCallExpression handles optional function calls (e.g., func?.())
+func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpression) {
+	// 1. Visit the function part
+	c.visit(node.Function)
+	functionType := node.Function.GetComputedType()
+	if functionType == nil {
+		functionType = types.Any
+	}
+
+	// 2. Visit arguments
+	var argumentTypes []types.Type
+	for _, arg := range node.Arguments {
+		c.visit(arg)
+		argType := arg.GetComputedType()
+		if argType == nil {
+			argType = types.Any
+		}
+		argumentTypes = append(argumentTypes, argType)
+	}
+
+	// 3. Determine result type
+	widenedFunctionType := types.GetWidenedType(functionType)
+	var baseResultType types.Type = types.Any
+
+	if widenedFunctionType == types.Any {
+		baseResultType = types.Any
+	} else if widenedFunctionType == types.Null || widenedFunctionType == types.Undefined {
+		baseResultType = types.Undefined
+	} else {
+		// For optional call, we're more permissive - just try to get return type
+		if objType, ok := widenedFunctionType.(*types.ObjectType); ok {
+			// Check if it has a call signature
+			if len(objType.CallSignatures) > 0 {
+				baseResultType = objType.CallSignatures[0].ReturnType
+			} else {
+				baseResultType = types.Any
+			}
+		} else {
+			// Assume it might be callable and return Any
+			baseResultType = types.Any
+		}
+	}
+
+	// 4. For optional chaining, always union with undefined
+	var resultType types.Type
+	if baseResultType == types.Undefined {
+		resultType = types.Undefined
+	} else {
+		resultType = &types.UnionType{
+			Types: []types.Type{baseResultType, types.Undefined},
+		}
+	}
+
+	node.SetComputedType(resultType)
+	debugPrintf("// [Checker OptionalCall] FunctionType: %s, ResultType: %s\n", functionType.String(), resultType.String())
+}
+
 func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	debugPrintf("// [Checker NewExpression] Checking new expression with %d type arguments\n", len(node.TypeArguments))
 

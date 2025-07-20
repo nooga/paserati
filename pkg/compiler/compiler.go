@@ -879,6 +879,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// --- Optional Chaining Expression ---
 	case *parser.OptionalChainingExpression:
 		return c.compileOptionalChainingExpression(node, hint) // TODO: Fix this
+	
+	case *parser.OptionalIndexExpression:
+		return c.compileOptionalIndexExpression(node, hint)
+	
+	case *parser.OptionalCallExpression:
+		return c.compileOptionalCallExpression(node, hint)
 		// --- END Optional Chaining Expression ---
 
 	case *parser.NewExpression:

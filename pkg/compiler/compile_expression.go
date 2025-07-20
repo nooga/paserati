@@ -1649,3 +1649,128 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 
 	return hint, nil
 }
+
+// compileOptionalIndexExpression compiles optional computed property access (e.g., obj?.[expr])
+func (c *Compiler) compileOptionalIndexExpression(node *parser.OptionalIndexExpression, hint Register) (Register, errors.PaseratiError) {
+	// Manage temporary registers with automatic cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
+	// 1. Compile the object part
+	objectReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, objectReg)
+	_, err := c.compileNode(node.Object, objectReg)
+	if err != nil {
+		return BadRegister, NewCompileError(node.Object, "error compiling object part of optional index expression").CausedBy(err)
+	}
+
+	// 2. Check if the object is null or undefined
+	// If so, return undefined immediately
+
+	// Use efficient nullish check opcode
+	isNullishReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, isNullishReg)
+	c.emitIsNullish(isNullishReg, objectReg, node.Token.Line)
+
+	// If object is NOT nullish, jump to normal property access
+	jumpToPropertyAccessPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, node.Token.Line)
+
+	// Object IS nullish - return undefined using hint register
+	c.emitLoadUndefined(hint, node.Token.Line)
+	endJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+	// Object is not null/undefined - do normal computed property access
+	c.patchJump(jumpToPropertyAccessPos)
+
+	// 3. Compile the index expression
+	indexReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, indexReg)
+	_, err = c.compileNode(node.Index, indexReg)
+	if err != nil {
+		return BadRegister, NewCompileError(node.Index, "error compiling index part of optional index expression").CausedBy(err)
+	}
+
+	// 4. Emit OpGetIndex for computed property access
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+	c.emitByte(byte(hint))      // Destination register
+	c.emitByte(byte(objectReg)) // Object register
+	c.emitByte(byte(indexReg))  // Index register
+
+	// 5. Patch the end jump
+	c.patchJump(endJumpPos)
+
+	return hint, nil
+}
+
+// compileOptionalCallExpression compiles optional function calls (e.g., func?.())
+func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpression, hint Register) (Register, errors.PaseratiError) {
+	// Manage temporary registers with automatic cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
+	// 1. Compile the function part
+	functionReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, functionReg)
+	_, err := c.compileNode(node.Function, functionReg)
+	if err != nil {
+		return BadRegister, NewCompileError(node.Function, "error compiling function part of optional call expression").CausedBy(err)
+	}
+
+	// 2. Check if the function is null or undefined
+	// If so, return undefined immediately
+
+	// Use efficient nullish check opcode
+	isNullishReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, isNullishReg)
+	c.emitIsNullish(isNullishReg, functionReg, node.Token.Line)
+
+	// If function is NOT nullish, jump to normal function call
+	jumpToCallPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, node.Token.Line)
+
+	// Function IS nullish - return undefined using hint register
+	c.emitLoadUndefined(hint, node.Token.Line)
+	endJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+	// Function is not null/undefined - do normal function call
+	c.patchJump(jumpToCallPos)
+
+	// 3. Calculate total argument count (including optional parameters)
+	// For simplicity, assume no optional parameters for now
+	totalArgCount := len(node.Arguments)
+
+	// 4. Allocate contiguous block for function + all arguments
+	blockSize := 1 + totalArgCount // funcReg + arguments
+	funcCallReg := c.regAlloc.AllocContiguous(blockSize)
+	// Mark the entire block for cleanup
+	for i := 0; i < blockSize; i++ {
+		tempRegs = append(tempRegs, funcCallReg+Register(i))
+	}
+
+	// 5. Move the function to the first register of the call block
+	c.emitMove(funcCallReg, functionReg, node.Token.Line)
+
+	// 6. Compile arguments directly into their target positions
+	for i, arg := range node.Arguments {
+		argReg := funcCallReg + Register(1+i)
+		_, err := c.compileNode(arg, argReg)
+		if err != nil {
+			return BadRegister, NewCompileError(arg, "error compiling argument in optional call expression").CausedBy(err)
+		}
+	}
+
+	// 7. Emit regular function call
+	c.emitCall(hint, funcCallReg, byte(totalArgCount), node.Token.Line)
+
+	// 8. Patch the end jump
+	c.patchJump(endJumpPos)
+
+	return hint, nil
+}

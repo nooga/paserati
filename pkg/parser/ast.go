@@ -1601,6 +1601,55 @@ func (oce *OptionalChainingExpression) String() string {
 	return out.String()
 }
 
+// OptionalIndexExpression represents optional computed property access (e.g., object?.[expression]).
+type OptionalIndexExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The '?.' token
+	Object         Expression  // The expression on the left (e.g., identifier, call result)
+	Index          Expression  // The index expression (e.g., string, number, variable)
+}
+
+func (oie *OptionalIndexExpression) expressionNode()      {}
+func (oie *OptionalIndexExpression) TokenLiteral() string { return oie.Token.Literal }
+func (oie *OptionalIndexExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(oie.Object.String())
+	out.WriteString("?.[")
+	out.WriteString(oie.Index.String())
+	out.WriteString("])")
+	if oie.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", oie.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// OptionalCallExpression represents optional function call (e.g., func?.()).
+type OptionalCallExpression struct {
+	BaseExpression               // Embed base for ComputedType
+	Token          lexer.Token   // The '?.' token
+	Function       Expression    // The function expression on the left
+	Arguments      []Expression  // The function arguments
+}
+
+func (oce *OptionalCallExpression) expressionNode()      {}
+func (oce *OptionalCallExpression) TokenLiteral() string { return oce.Token.Literal }
+func (oce *OptionalCallExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString(oce.Function.String())
+	out.WriteString("?.(")
+	var args []string
+	for _, a := range oce.Arguments {
+		args = append(args, a.String())
+	}
+	out.WriteString(strings.Join(args, ", "))
+	out.WriteString(")")
+	if oce.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", oce.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // --- NEW: Switch Statement Nodes ---
 
 // SwitchCase represents a single case or default clause within a switch statement.
