@@ -337,11 +337,16 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 // --- Loop Compilation (Updated) ---
 
 func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Register) (Register, errors.PaseratiError) {
+	return c.compileWhileStatementLabeled(node, "", hint)
+}
+
+func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, label string, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
 	// --- Setup Loop Context ---
 	loopStartPos := len(c.chunk.Code) // Position before condition evaluation
 	loopContext := &LoopContext{
+		Label:                      label,
 		LoopStartPos:               loopStartPos,
 		ContinueTargetPos:          loopStartPos, // Continue goes back to condition in while
 		BreakPlaceholderPosList:    make([]int, 0),
@@ -404,6 +409,10 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Regis
 }
 
 func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register) (Register, errors.PaseratiError) {
+	return c.compileForStatementLabeled(node, "", hint)
+}
+
+func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label string, hint Register) (Register, errors.PaseratiError) {
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {
@@ -424,6 +433,7 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 	// --- Loop Start & Context Setup ---
 	loopStartPos := len(c.chunk.Code) // Position before condition check
 	loopContext := &LoopContext{
+		Label:                      label,
 		LoopStartPos:               loopStartPos,
 		BreakPlaceholderPosList:    make([]int, 0),
 		ContinuePlaceholderPosList: make([]int, 0),
@@ -511,14 +521,31 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 		return BadRegister, NewCompileError(node, "break statement not within a loop")
 	}
 
-	// Get current loop context (top of stack)
-	currentLoopContext := c.loopContextStack[len(c.loopContextStack)-1]
+	var targetContext *LoopContext
+
+	if node.Label != nil {
+		// Find the labeled context
+		found := false
+		for i := len(c.loopContextStack) - 1; i >= 0; i-- {
+			if c.loopContextStack[i].Label == node.Label.Value {
+				targetContext = c.loopContextStack[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			return BadRegister, NewCompileError(node, fmt.Sprintf("label '%s' not found", node.Label.Value))
+		}
+	} else {
+		// Get current loop context (top of stack)
+		targetContext = c.loopContextStack[len(c.loopContextStack)-1]
+	}
 
 	// Emit placeholder jump (OpJump) - Pass 0 for srcReg as it's ignored
 	placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 
-	// Add placeholder position to the context's list for later patching
-	currentLoopContext.BreakPlaceholderPosList = append(currentLoopContext.BreakPlaceholderPosList, placeholderPos)
+	// Add placeholder position to the target context's list for later patching
+	targetContext.BreakPlaceholderPosList = append(targetContext.BreakPlaceholderPosList, placeholderPos)
 
 	return BadRegister, nil
 }
@@ -528,19 +555,89 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 		return BadRegister, NewCompileError(node, "continue statement not within a loop")
 	}
 
-	// Get current loop context (top of stack)
-	currentLoopContext := c.loopContextStack[len(c.loopContextStack)-1]
+	var targetContext *LoopContext
+
+	if node.Label != nil {
+		// Find the labeled context
+		found := false
+		for i := len(c.loopContextStack) - 1; i >= 0; i-- {
+			if c.loopContextStack[i].Label == node.Label.Value {
+				targetContext = c.loopContextStack[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			return BadRegister, NewCompileError(node, fmt.Sprintf("label '%s' not found", node.Label.Value))
+		}
+		
+		// Check that the target is actually a loop (continue only works with loops)
+		if targetContext.ContinueTargetPos == -1 {
+			return BadRegister, NewCompileError(node, fmt.Sprintf("continue statement cannot target non-loop label '%s'", node.Label.Value))
+		}
+	} else {
+		// Get current loop context (top of stack)
+		targetContext = c.loopContextStack[len(c.loopContextStack)-1]
+	}
 
 	// Emit placeholder jump (OpJump) - Pass 0 for srcReg as it's ignored
 	placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 
-	// Add placeholder position to the context's list for later patching
-	currentLoopContext.ContinuePlaceholderPosList = append(currentLoopContext.ContinuePlaceholderPosList, placeholderPos)
+	// Add placeholder position to the target context's list for later patching
+	targetContext.ContinuePlaceholderPosList = append(targetContext.ContinuePlaceholderPosList, placeholderPos)
 
 	return BadRegister, nil
 }
 
+// --- New: Labeled Statement Compilation ---
+
+func (c *Compiler) compileLabeledStatement(node *parser.LabeledStatement, hint Register) (Register, errors.PaseratiError) {
+	// Compile the labeled statement
+	// If it's a loop-like statement (while, for, do-while), we need to set the label in the LoopContext
+	
+	// For loop statements, we need to temporarily add a label context
+	// and then call the normal compilation functions
+	switch stmt := node.Statement.(type) {
+	case *parser.WhileStatement:
+		return c.compileWhileStatementLabeled(stmt, node.Label.Value, hint)
+	case *parser.ForStatement:
+		return c.compileForStatementLabeled(stmt, node.Label.Value, hint)
+	case *parser.DoWhileStatement:
+		return c.compileDoWhileStatementLabeled(stmt, node.Label.Value, hint)
+	case *parser.ForOfStatement:
+		return c.compileForOfStatementLabeled(stmt, node.Label.Value, hint)
+	case *parser.ForInStatement:
+		return c.compileForInStatementLabeled(stmt, node.Label.Value, hint)
+	default:
+		// For non-loop statements, we need to create a label context anyway
+		// in case there are break statements that refer to this label
+		labelContext := &LoopContext{
+			Label:                      node.Label.Value,
+			LoopStartPos:               -1, // Not applicable for non-loops
+			ContinueTargetPos:          -1, // Not applicable for non-loops
+			BreakPlaceholderPosList:    make([]int, 0),
+			ContinuePlaceholderPosList: make([]int, 0),
+		}
+		c.loopContextStack = append(c.loopContextStack, labelContext)
+		
+		// Compile the statement
+		result, err := c.compileNode(node.Statement, hint)
+		
+		// Pop the label context and patch any break statements
+		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
+		for _, placeholderPos := range labelContext.BreakPlaceholderPosList {
+			c.patchJump(placeholderPos)
+		}
+		
+		return result, err
+	}
+}
+
 func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint Register) (Register, errors.PaseratiError) {
+	return c.compileDoWhileStatementLabeled(node, "", hint)
+}
+
+func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement, label string, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
 	// Track temporary registers for cleanup
@@ -556,6 +653,7 @@ func (c *Compiler) compileDoWhileStatement(node *parser.DoWhileStatement, hint R
 
 	// 2. Setup Loop Context
 	loopContext := &LoopContext{
+		Label:                      label,
 		LoopStartPos:               loopStartPos, // Continue jumps here
 		BreakPlaceholderPosList:    make([]int, 0),
 		ContinuePlaceholderPosList: make([]int, 0),
@@ -778,6 +876,10 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 }
 
 func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Register) (Register, errors.PaseratiError) {
+	return c.compileForOfStatementLabeled(node, "", hint)
+}
+
+func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, label string, hint Register) (Register, errors.PaseratiError) {
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {
@@ -840,6 +942,7 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 	// --- Loop Start & Context Setup ---
 	loopStartPos := len(c.chunk.Code)
 	loopContext := &LoopContext{
+		Label:                      label,
 		LoopStartPos:               loopStartPos,
 		BreakPlaceholderPosList:    make([]int, 0),
 		ContinuePlaceholderPosList: make([]int, 0),
@@ -1041,6 +1144,10 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 }
 
 func (c *Compiler) compileForInStatement(node *parser.ForInStatement, hint Register) (Register, errors.PaseratiError) {
+	return c.compileForInStatementLabeled(node, "", hint)
+}
+
+func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, label string, hint Register) (Register, errors.PaseratiError) {
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {
@@ -1086,6 +1193,7 @@ func (c *Compiler) compileForInStatement(node *parser.ForInStatement, hint Regis
 	// --- Loop Start & Context Setup ---
 	loopStartPos := len(c.chunk.Code)
 	loopContext := &LoopContext{
+		Label:                      label,
 		LoopStartPos:               loopStartPos,
 		BreakPlaceholderPosList:    make([]int, 0),
 		ContinuePlaceholderPosList: make([]int, 0),

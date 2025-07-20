@@ -2569,6 +2569,11 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.EnumDeclaration:
 		c.checkEnumDeclaration(node)
 
+	// --- Labeled Statements ---
+	case *parser.LabeledStatement:
+		// Type check the labeled statement - labels themselves don't have types
+		c.visit(node.Statement)
+
 	// --- Exception Handling Statements ---
 	case *parser.TryStatement:
 		c.checkTryStatement(node)

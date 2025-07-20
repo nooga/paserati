@@ -898,23 +898,60 @@ func (fis *ForInStatement) String() string {
 	return out.String()
 }
 
+// --- New: Labeled Statement ---
+type LabeledStatement struct {
+	Token     lexer.Token // The label identifier token
+	Label     *Identifier // The label name
+	Statement Statement   // The statement being labeled
+}
+
+func (ls *LabeledStatement) statementNode()       {}
+func (ls *LabeledStatement) TokenLiteral() string { return ls.Token.Literal }
+func (ls *LabeledStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(ls.Label.String())
+	out.WriteString(": ")
+	out.WriteString(ls.Statement.String())
+	return out.String()
+}
+
 // --- New: Break Statement ---
 type BreakStatement struct {
 	Token lexer.Token // The 'break' token
+	Label *Identifier // Optional label to break to
 }
 
 func (bs *BreakStatement) statementNode()       {}
 func (bs *BreakStatement) TokenLiteral() string { return bs.Token.Literal }
-func (bs *BreakStatement) String() string       { return bs.Token.Literal + ";" }
+func (bs *BreakStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(bs.Token.Literal)
+	if bs.Label != nil {
+		out.WriteString(" ")
+		out.WriteString(bs.Label.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
 
 // --- New: Continue Statement ---
 type ContinueStatement struct {
 	Token lexer.Token // The 'continue' token
+	Label *Identifier // Optional label to continue to
 }
 
 func (cs *ContinueStatement) statementNode()       {}
 func (cs *ContinueStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *ContinueStatement) String() string       { return cs.Token.Literal + ";" }
+func (cs *ContinueStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(cs.Token.Literal)
+	if cs.Label != nil {
+		out.WriteString(" ")
+		out.WriteString(cs.Label.String())
+	}
+	out.WriteString(";")
+	return out.String()
+}
 
 // --- New: DoWhileStatement ---
 

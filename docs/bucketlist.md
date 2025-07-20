@@ -4,6 +4,15 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 **Recent Major Updates:**
 
+- **🏷️ LABELED STATEMENTS** - **COMPLETE!** Full labeled statement support for enhanced control flow
+  - **Labeled Loops**: All loop types support labels (`while`, `for`, `do-while`, `for-of`, `for-in`)
+  - **Labeled Break**: Break to any labeled statement, including non-loop blocks (`break labelName`)
+  - **Labeled Continue**: Continue to labeled loops with validation (`continue labelName`)
+  - **Nested Labels**: Support for deeply nested labeled statements with proper scope resolution
+  - **Block Labels**: Labels on block statements for breaking out of complex structures
+  - **Compile-Time Validation**: Proper error checking for non-existent labels and invalid continue targets
+  - **TypeScript Integration**: Full type checker support with AST node handling
+  - **Comprehensive Testing**: All combinations tested including edge cases
 - **⚡ PERFORMANCE API** - **COMPLETE!** High-precision timing and performance measurement
   - **High-Resolution Timing**: `performance.now()` with sub-millisecond precision using Go's time.Since()
   - **Performance Marks**: `performance.mark()` for creating named timestamps
@@ -322,7 +331,14 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Element type inference from iterator yield types
 - [x] `break` Statement
 - [x] `continue` Statement
-- [ ] Labeled Statements
+- [x] **Labeled Statements** - **Complete Implementation!**
+  - [x] Labels on all loop types (`while`, `for`, `do-while`, `for-of`, `for-in`)
+  - [x] Labels on block statements for breaking out of complex structures
+  - [x] Labeled break statements (`break labelName`) for jumping to any labeled statement
+  - [x] Labeled continue statements (`continue labelName`) with proper loop validation
+  - [x] Nested label support with scope resolution
+  - [x] Compile-time error checking for non-existent labels and invalid targets
+  - [x] Full type checker integration and comprehensive testing
 - [x] `try`/`catch`/`finally` Blocks - **Complete Implementation!**
   - [x] Basic try/catch with exception handling
   - [x] Error object constructor and proper prototype chain

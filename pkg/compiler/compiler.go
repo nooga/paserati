@@ -19,6 +19,8 @@ const nilRegister Register = 255 // Or another value guaranteed not to be used
 
 // --- New: Loop Context for Break/Continue ---
 type LoopContext struct {
+	// Optional label for this loop/statement
+	Label string
 	// Start of the loop condition check (target for continue in while)
 	LoopStartPos int
 	// Start of the update expression (target for continue in for)
@@ -614,6 +616,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ContinueStatement:
 		return c.compileContinueStatement(node, hint) // TODO: Fix this
+
+	case *parser.LabeledStatement:
+		return c.compileLabeledStatement(node, hint)
 
 	case *parser.DoWhileStatement:
 		return c.compileDoWhileStatement(node, hint) // TODO: Fix this

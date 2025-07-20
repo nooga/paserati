@@ -472,6 +472,12 @@ func (p *Parser) parseStatement() Statement {
 			return p.parseExpressionStatement()
 		}
 		return p.parseBlockStatement()
+	case lexer.IDENT:
+		// Check if this is a labeled statement (identifier followed by colon)
+		if p.peekTokenIs(lexer.COLON) {
+			return p.parseLabeledStatement()
+		}
+		return p.parseExpressionStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -4181,6 +4187,15 @@ func (p *Parser) parseForStatement() Statement {
 func (p *Parser) parseBreakStatement() *BreakStatement {
 	stmt := &BreakStatement{Token: p.curToken} // Current token is 'break'
 
+	// Check for optional label
+	if p.peekTokenIs(lexer.IDENT) {
+		p.nextToken()
+		stmt.Label = &Identifier{
+			Token: p.curToken,
+			Value: p.curToken.Literal,
+		}
+	}
+
 	// Consume optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
@@ -4192,11 +4207,43 @@ func (p *Parser) parseBreakStatement() *BreakStatement {
 func (p *Parser) parseContinueStatement() *ContinueStatement {
 	stmt := &ContinueStatement{Token: p.curToken} // Current token is 'continue'
 
+	// Check for optional label
+	if p.peekTokenIs(lexer.IDENT) {
+		p.nextToken()
+		stmt.Label = &Identifier{
+			Token: p.curToken,
+			Value: p.curToken.Literal,
+		}
+	}
+
 	// Consume optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
 
+	return stmt
+}
+
+// --- New: Labeled Statement Parsing ---
+
+func (p *Parser) parseLabeledStatement() *LabeledStatement {
+	stmt := &LabeledStatement{Token: p.curToken}
+	
+	// Create the label identifier
+	stmt.Label = &Identifier{
+		Token: p.curToken,
+		Value: p.curToken.Literal,
+	}
+	
+	// Expect and consume the colon
+	if !p.expectPeek(lexer.COLON) {
+		return nil
+	}
+	
+	// Parse the labeled statement
+	p.nextToken()
+	stmt.Statement = p.parseStatement()
+	
 	return stmt
 }
 
