@@ -22,6 +22,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		rhsType = types.Any
 	} // Handle nil from error
 
+
 	// Widen types for operator checks
 	widenedLhsType := types.GetWidenedType(lhsType) // Needed for operator checks AND assignability target
 	widenedRhsType := types.GetWidenedType(rhsType)

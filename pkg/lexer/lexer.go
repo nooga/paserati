@@ -45,6 +45,7 @@ const (
 
 	// Identifiers + Literals
 	IDENT         TokenType = "IDENT"         // functionName, variableName
+	PRIVATE_IDENT TokenType = "PRIVATE_IDENT" // #privateName
 	NUMBER        TokenType = "NUMBER"        // 123, 45.67
 	BIGINT        TokenType = "BIGINT"        // 123n
 	STRING        TokenType = "STRING"        // "hello world"
@@ -960,6 +961,17 @@ func (l *Lexer) NextToken() Token {
 				tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
 			//return tok // Return early, readNumber already called readChar()
+		} else if l.ch == '#' && isLetter(l.peekChar()) {
+			// Private identifier: #identifier
+			l.readChar() // Consume '#'
+			if isLetter(l.ch) {
+				literal := "#" + l.readIdentifier() // Include '#' in the literal
+				tok = Token{Type: PRIVATE_IDENT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else {
+				// Just '#' without following letter - treat as illegal
+				literal := string('#')
+				tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
 		} else {
 			// Illegal character
 			literal := string(l.ch)

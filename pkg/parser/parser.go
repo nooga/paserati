@@ -5524,6 +5524,9 @@ func (p *Parser) parsePropertyName() *Identifier {
 	switch p.curToken.Type {
 	case lexer.IDENT:
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	case lexer.PRIVATE_IDENT:
+		// Support private field access: obj.#field
+		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
 		lexer.RETURN, lexer.THROW, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
 		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, lexer.SATISFIES,

@@ -172,6 +172,10 @@ type Checker struct {
 	// --- NEW: Context for access control checking ---
 	// Current class context for access modifier validation
 	currentClassContext *types.AccessContext
+	
+	// --- NEW: Current class instance type being built ---
+	// Used to set proper 'this' context in class methods
+	currentClassInstanceType *types.ObjectType
 
 	// --- NEW: Abstract classes tracking ---
 	// Track abstract class names to prevent instantiation
@@ -217,13 +221,87 @@ func (c *Checker) GetEnvironment() *Environment {
 // setClassContext sets the current class context for access control checking
 func (c *Checker) setClassContext(className string, contextType types.AccessContextType) {
 	c.currentClassContext = types.NewAccessContext(className, contextType)
-	// TODO: Set inheritance checking function when inheritance is implemented
-	// c.currentClassContext.IsSubclassOfFunc = c.isSubclassOf
+	// Set inheritance checking function
+	c.currentClassContext.IsSubclassOfFunc = c.isSubclassOf
 }
 
 // clearClassContext clears the current class context
 func (c *Checker) clearClassContext() {
 	c.currentClassContext = nil
+}
+
+// isSubclassOf checks if currentClass is a subclass of targetClass
+func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
+	if currentClass == targetClass {
+		return false // Same class is not a subclass of itself
+	}
+	
+	// Look up the current class type - try type alias first
+	currentType, exists := c.env.ResolveType(currentClass)
+	if !exists {
+		// Fall back to variable lookup
+		currentType, _, exists = c.env.Resolve(currentClass)
+		if !exists {
+			return false
+		}
+	}
+	
+	// Get the class metadata
+	var currentClassType *types.ObjectType
+	
+	// Handle both direct class types and constructor types
+	if forwardRef, ok := currentType.(*types.ForwardReferenceType); ok {
+		// For forward references, use the current class instance type context
+		if c.currentClassInstanceType != nil && c.currentClassInstanceType.GetClassName() == forwardRef.ClassName {
+			currentClassType = c.currentClassInstanceType
+		}
+	} else if objectType, ok := currentType.(*types.ObjectType); ok {
+		// If it's a constructor (has construct signatures), get the instance type
+		if len(objectType.ConstructSignatures) > 0 && objectType.ConstructSignatures[0].ReturnType != nil {
+			if instanceType, ok := objectType.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+				currentClassType = instanceType
+			}
+		} else if objectType.IsClassInstance() {
+			// If it's already an instance type
+			currentClassType = objectType
+		}
+	} else if genericType, ok := currentType.(*types.GenericType); ok {
+		if constructorType, ok := genericType.Body.(*types.ObjectType); ok {
+			if len(constructorType.ConstructSignatures) > 0 && constructorType.ConstructSignatures[0].ReturnType != nil {
+				if instanceType, ok := constructorType.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+					currentClassType = instanceType
+				}
+			}
+		}
+	}
+	
+	if currentClassType == nil || !currentClassType.IsClassInstance() {
+		return false
+	}
+	
+	// Check inheritance chain
+	return c.checkInheritanceChain(currentClassType, targetClass)
+}
+
+// checkInheritanceChain recursively checks if a class inherits from targetClass
+func (c *Checker) checkInheritanceChain(classType *types.ObjectType, targetClass string) bool {
+	// Check direct parent
+	if classType.BaseTypes != nil {
+		for _, baseType := range classType.BaseTypes {
+			if baseObj, ok := baseType.(*types.ObjectType); ok {
+				baseClassName := baseObj.GetClassName()
+				// Check if this base class matches target
+				if baseClassName == targetClass {
+					return true
+				}
+				// Recursively check base class inheritance
+				if c.checkInheritanceChain(baseObj, targetClass) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // validateMemberAccess checks if a member access is allowed given the current context

@@ -376,9 +376,13 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	}
 	
 	if !hasExplicitThisParam {
-		// No explicit 'this' parameter - set to 'any' for function literals (like prototype methods)
-		c.currentThisType = types.Any
-		debugPrintf("// [Checker Function Body] No explicit this parameter, setting this to any for function literal\n")
+		// No explicit 'this' parameter - only set to 'any' if not already set by calling context
+		if c.currentThisType == nil {
+			c.currentThisType = types.Any
+			debugPrintf("// [Checker Function Body] No explicit this parameter and no context, setting this to any for function literal\n")
+		} else {
+			debugPrintf("// [Checker Function Body] No explicit this parameter, but context already set this to: %s\n", c.currentThisType.String())
+		}
 	}
 	
 	var finalReturnType types.Type

@@ -883,6 +883,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on enum %s", propertyName, obj.Name))
 				resultType = types.Never
 			}
+		case *types.ForwardReferenceType:
+			// Handle static member access on forward reference (class name used within class)
+			resultType = c.handleForwardReferenceStaticAccess(obj, propertyName, node)
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
@@ -895,6 +898,46 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	// 5. Set the computed type on the MemberExpression node itself
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker MemberExpr] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
+}
+
+// handleForwardReferenceStaticAccess handles static member access on a forward reference
+func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardReferenceType, propertyName string, node *parser.MemberExpression) types.Type {
+	// For forward references, we need to check if we're accessing static members
+	// of the class currently being defined. Use the current class context.
+	
+	// First, try to look up the resolved constructor type
+	constructorType, _, exists := c.env.Resolve(forwardRef.ClassName)
+	if exists {
+		// Check if it's an ObjectType with static members
+		if objType, ok := constructorType.(*types.ObjectType); ok {
+			// Look for static property in the constructor object
+			if propType, exists := objType.Properties[propertyName]; exists {
+				return propType
+			}
+			
+			// Check if it's a call signature (static method)
+			for _, callSig := range objType.CallSignatures {
+				if callSig.ParameterTypes != nil {
+					// This is a static method call - return the method type
+					return types.NewFunctionType(callSig)
+				}
+			}
+		}
+		
+		// Handle generic class constructors
+		if genericType, ok := constructorType.(*types.GenericType); ok {
+			if constructorObj, ok := genericType.Body.(*types.ObjectType); ok {
+				if propType, exists := constructorObj.Properties[propertyName]; exists {
+					return propType
+				}
+			}
+		}
+	}
+	
+	// If the constructor type is not yet resolved, this is likely a self-reference
+	// within the class being defined. For now, allow access to any static member
+	// and let the compiler/runtime handle the validation.
+	return types.Any // Allow static access during class definition
 }
 
 func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {

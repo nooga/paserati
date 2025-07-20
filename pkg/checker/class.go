@@ -67,6 +67,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// 2. Handle inheritance relationships and create instance type from methods and properties
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
+
 	// 3. Register the class name as a type alias pointing to the instance type EARLY
 	// This allows static methods to use the class name in type annotations
 	if !c.env.DefineTypeAlias(node.Name.Value, instanceType) {
@@ -193,6 +194,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	// 5. Create the instance type body with TypeParameterType references
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
+
 	// 6. Create constructor signature from constructor method
 	constructorSig := c.createConstructorSignature(node.Body, instanceType)
 
@@ -245,6 +247,11 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 func (c *Checker) createInstanceType(className string, body *parser.ClassBody, superClass parser.Expression, implements []*parser.Identifier) *types.ObjectType {
 	// Create class instance type with metadata
 	instanceType := types.NewClassInstanceType(className)
+	
+	// Set current instance type for use in method type inference
+	prevInstanceType := c.currentClassInstanceType
+	c.currentClassInstanceType = instanceType
+	defer func() { c.currentClassInstanceType = prevInstanceType }()
 
 	// Handle inheritance relationships
 	if superClass != nil {
@@ -443,7 +450,63 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		debugPrintf("// [Checker Class] Added index signature for computed properties: [key: string]: %s\n", indexValueType.String())
 	}
 
+	// FINAL PASS: Check method bodies now that all properties and methods are in the instance type
+	c.checkMethodBodiesInInstance(className, body, instanceType)
+
 	return instanceType
+}
+
+// checkMethodBodiesInInstance performs a final pass to check all method bodies
+// after the complete instance type (with all properties) has been built
+func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.ClassBody, instanceType *types.ObjectType) {
+	// Set up context for method body checking
+	prevInstanceType := c.currentClassInstanceType
+	c.currentClassInstanceType = instanceType
+	defer func() { c.currentClassInstanceType = prevInstanceType }()
+
+	// Set current this type to the instance type
+	prevThisType := c.currentThisType
+	c.currentThisType = instanceType
+	defer func() { c.currentThisType = prevThisType }()
+
+	debugPrintf("// [Checker Class] Final pass: checking method bodies for class '%s'\n", className)
+
+	// Check all method bodies (excluding constructor, static methods, and generic methods)
+	for _, method := range body.Methods {
+		if method.Kind != "constructor" && !method.IsStatic && method.Value != nil {
+			// Skip generic methods - they should be checked when instantiated
+			if len(method.Value.TypeParameters) > 0 {
+				continue
+			}
+			
+			methodName := c.extractPropertyName(method.Key)
+			debugPrintf("// [Checker Class] Checking method body for '%s'\n", methodName)
+			
+			// Set method context for access control checking
+			c.setClassContext(className, types.AccessContextInstanceMethod)
+			
+			// Check the method body - but preserve the context established here
+			c.checkMethodBodyWithContext(method.Value)
+		}
+	}
+}
+
+// checkMethodBodyWithContext checks a method body while preserving class context
+func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
+	// Save current context
+	savedClassContext := c.currentClassContext
+	savedThisType := c.currentThisType
+	savedInstanceType := c.currentClassInstanceType
+	
+	defer func() {
+		// Restore context after checking
+		c.currentClassContext = savedClassContext
+		c.currentThisType = savedThisType
+		c.currentClassInstanceType = savedInstanceType
+	}()
+	
+	// Check the function literal
+	c.checkFunctionLiteral(fn)
 }
 
 // validateOverrideMethod validates the usage of the override keyword
@@ -552,6 +615,8 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 		// Fallback if checking failed
 		return types.Any
 	}
+
+	// NOTE: Non-generic method body checking deferred to second pass after properties are added to instance type
 
 	// Extract parameter types and return type from the function
 	paramTypes := c.extractParameterTypes(method.Value)

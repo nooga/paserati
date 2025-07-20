@@ -242,6 +242,20 @@ func (p *Parser) parseClassBody() *ClassBody {
 					}
 				}
 			}
+		} else if p.curTokenIs(lexer.PRIVATE_IDENT) {
+			// Private field: #fieldName
+			// Private fields are always properties and implicitly private
+			// They cannot have explicit access modifiers
+			if isPublic || isPrivate || isProtected {
+				p.addError(p.curToken, "private fields (#field) cannot have explicit access modifiers")
+				p.nextToken()
+				continue
+			}
+			
+			property := p.parsePrivateProperty(isStatic, isReadonly)
+			if property != nil {
+				properties = append(properties, property)
+			}
 		} else if p.curTokenIs(lexer.LBRACKET) {
 			// Computed property or method: [expr]: type or [expr]() {}
 			result := p.parseComputedClassMember(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride)
@@ -520,6 +534,63 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		IsPublic:       isPublic,
 		IsPrivate:      isPrivate,
 		IsProtected:    isProtected,
+	}
+}
+
+// parsePrivateProperty parses a private field declaration (#fieldName)
+// Private fields are implicitly private and cannot have explicit access modifiers
+func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefinition {
+	propertyToken := p.curToken
+	// Create identifier from PRIVATE_IDENT token (includes the '#')
+	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	
+	p.nextToken() // move past private field name
+	
+	// Check for optional marker '?' first
+	var isOptional bool
+	if p.curTokenIs(lexer.QUESTION) {
+		isOptional = true
+		p.nextToken() // Consume '?'
+	}
+	
+	// Parse optional type annotation
+	var typeAnnotation Expression
+	if p.curTokenIs(lexer.COLON) {
+		// Already at ':' token, move to type expression
+		p.nextToken() // Move to the start of the type expression
+		
+		// Parse type
+		typeAnnotation = p.parseTypeExpression()
+		if typeAnnotation == nil {
+			return nil
+		}
+		
+		// After parsing type, advance to next token
+		p.nextToken()
+	}
+	
+	var initializer Expression
+	if p.curTokenIs(lexer.ASSIGN) {
+		p.nextToken() // move past '='
+		initializer = p.parseExpression(LOWEST)
+	}
+	
+	// Expect semicolon or end of class body
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	
+	return &PropertyDefinition{
+		Token:          propertyToken,
+		Key:            propertyName,
+		TypeAnnotation: typeAnnotation,
+		Value:          initializer,
+		IsStatic:       isStatic,
+		Optional:       isOptional,
+		Readonly:       isReadonly,
+		IsPublic:       false, // Private fields are never public
+		IsPrivate:      true,  // Private fields are always private
+		IsProtected:    false, // Private fields are never protected
 	}
 }
 

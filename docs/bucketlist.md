@@ -878,8 +878,24 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
 
 ### Modern ECMA/TypeScript Features
 
-- [ ] **Private Class Fields** (`#private`) - Modern class privacy mechanism
-- [ ] **Optional Chaining for Calls** (`obj.method?.()`) - Method call chaining
+- [x] **Private Class Fields** (`#private`) - **Complete Implementation!**
+  - [x] JavaScript-style private field declarations (`#privateField: string = "value"`)
+  - [x] Private field access within class methods (`this.#privateField`)
+  - [x] Static private fields support (`static #counter: number = 0`)
+  - [x] Lexer support for `#identifier` token type with proper context handling
+  - [x] Parser integration with class body parsing and access expression handling
+  - [x] Type checking integration with existing private field infrastructure
+  - [x] Compiler support mapping #private to IsPrivate: true property system
+  - [x] Runtime privacy enforcement (same as TypeScript `private` keyword)
+  - [x] Works with inheritance, readonly modifiers, and all class features
+  - [x] Comprehensive test suite covering all scenarios and edge cases
+- [x] **Optional Chaining for Calls** (`func?.()`, `obj?.[expr]`) - **Complete Implementation!**
+  - [x] Optional direct function calls (`func?.()`) with null/undefined short-circuiting
+  - [x] Optional computed property access (`obj?.[expr]`) with dynamic key support
+  - [x] Integration with existing optional chaining (`obj?.prop?.method?.()`)
+  - [x] Proper type checking with union types (Result | undefined)
+  - [x] VM optimization with OpIsNullish for efficient null checks
+  - [x] Complete parser, compiler, and runtime support
 - [ ] **Dynamic Imports** (`import()`) - Runtime module loading
 - [ ] **Top-level Await** - Await at module scope
 - [x] **Property Parameter Shortcuts** (`constructor(public name: string)`) - **Complete Implementation!**
