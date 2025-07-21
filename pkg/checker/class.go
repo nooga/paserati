@@ -12,6 +12,11 @@ func (c *Checker) extractPropertyName(key parser.Expression) string {
 	case *parser.Identifier:
 		return k.Value
 	case *parser.ComputedPropertyName:
+		// Try to extract constant property name first
+		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {
+			return constantName
+		}
+		
 		// For computed properties, try to evaluate the expression at compile time if possible
 		// For now, use a placeholder name
 		if ident, ok := k.Expr.(*parser.Identifier); ok {
@@ -25,6 +30,30 @@ func (c *Checker) extractPropertyName(key parser.Expression) string {
 		}
 	default:
 		return fmt.Sprintf("__unknown_%p", key)
+	}
+}
+
+// tryExtractConstantComputedPropertyName attempts to extract a constant property name
+// from a computed property expression, returning the name and whether it's constant
+func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression) (string, bool) {
+	switch e := expr.(type) {
+	case *parser.StringLiteral:
+		return e.Value, true
+	case *parser.NumberLiteral:
+		return fmt.Sprintf("%v", e.Value), true
+	case *parser.MemberExpression:
+		// Check for Symbol.iterator
+		if obj, ok := e.Object.(*parser.Identifier); ok && obj.Value == "Symbol" {
+			if prop, ok := e.Property.(*parser.Identifier); ok && prop.Value == "iterator" {
+				debugPrintf("// [Checker Class] Detected Symbol.iterator constant computed property\n")
+				return "@@symbol:Symbol.iterator", true
+			}
+		}
+		debugPrintf("// [Checker Class] MemberExpression not Symbol.iterator: %T.%T\n", e.Object, e.Property)
+		return "", false
+	default:
+		debugPrintf("// [Checker Class] Non-constant computed property expression: %T\n", expr)
+		return "", false
 	}
 }
 
@@ -338,7 +367,23 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		}
 
 		if propType != nil {
-			instanceType.WithClassMember(propName, propType, accessLevel, false, false)
+			// Add the property to the type
+			instanceType.Properties[propName] = propType
+			
+			// Add specific getter/setter metadata
+			if instanceType.ClassMeta != nil {
+				if getter != nil && setter != nil {
+					// Both getter and setter - for now, mark as getter (could be enhanced later)
+					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)
+				} else if getter != nil {
+					// Only getter
+					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)
+				} else if setter != nil {
+					// Only setter
+					instanceType.ClassMeta.AddSetterMember(propName, accessLevel, false)
+				}
+			}
+			
 			debugPrintf("// [Checker Class] Added getter/setter property '%s' to instance type: %s (%s)\n",
 				propName, propType.String(), accessLevel.String())
 		}
@@ -365,11 +410,19 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			accessLevel := c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)
 
 			// Check if this is a computed property
-			if _, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
-				// For computed methods, add to index signature instead of individual property
-				hasComputedProperties = true
-				computedValueTypes = append(computedValueTypes, methodType)
-				debugPrintf("// [Checker Class] Found computed method, adding to index signature: %s\n", methodType.String())
+			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+				// Try to extract constant property name
+				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
+					// This is a constant computed property like [Symbol.iterator] - add as specific method
+					instanceType.WithClassMember(constantName, methodType, accessLevel, false, false)
+					debugPrintf("// [Checker Class] Added constant computed method '%s' to instance type: %s (%s)\n",
+						constantName, methodType.String(), accessLevel.String())
+				} else {
+					// This is a dynamic computed property - add to index signature
+					hasComputedProperties = true
+					computedValueTypes = append(computedValueTypes, methodType)
+					debugPrintf("// [Checker Class] Found dynamic computed method, adding to index signature: %s\n", methodType.String())
+				}
 			} else {
 				// Add method with access control metadata
 				methodName := c.extractPropertyName(method.Key)
@@ -420,11 +473,19 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			accessLevel := c.getAccessLevel(prop.IsPublic, prop.IsPrivate, prop.IsProtected)
 
 			// Check if this is a computed property
-			if _, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
-				// For computed properties, add to index signature instead of individual property
-				hasComputedProperties = true
-				computedValueTypes = append(computedValueTypes, propType)
-				debugPrintf("// [Checker Class] Found computed property, adding to index signature: %s\n", propType.String())
+			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
+				// Try to extract constant property name
+				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
+					// This is a constant computed property like [Symbol.iterator] - add as specific property
+					instanceType.WithClassMember(constantName, propType, accessLevel, false, false)
+					debugPrintf("// [Checker Class] Added constant computed property '%s' to instance type: %s (%s)\n",
+						constantName, propType.String(), accessLevel.String())
+				} else {
+					// This is a dynamic computed property - add to index signature
+					hasComputedProperties = true
+					computedValueTypes = append(computedValueTypes, propType)
+					debugPrintf("// [Checker Class] Found dynamic computed property, adding to index signature: %s\n", propType.String())
+				}
 			} else {
 				// Add property with access control metadata
 				propName := c.extractPropertyName(prop.Key)

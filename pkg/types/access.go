@@ -28,6 +28,8 @@ type MemberAccessInfo struct {
 	AccessLevel AccessModifier
 	IsStatic    bool
 	IsReadonly  bool
+	IsGetter    bool  // This property is defined with 'get' keyword
+	IsSetter    bool  // This property is defined with 'set' keyword
 }
 
 // ClassMetadata contains class-specific type information for access control
@@ -72,6 +74,30 @@ func (cm *ClassMetadata) AddMember(memberName string, accessLevel AccessModifier
 		AccessLevel: accessLevel,
 		IsStatic:    isStatic,
 		IsReadonly:  isReadonly,
+		IsGetter:    false,
+		IsSetter:    false,
+	}
+}
+
+// AddGetterMember adds a getter method with access control information
+func (cm *ClassMetadata) AddGetterMember(memberName string, accessLevel AccessModifier, isStatic bool) {
+	cm.MemberAccess[memberName] = &MemberAccessInfo{
+		AccessLevel: accessLevel,
+		IsStatic:    isStatic,
+		IsReadonly:  false, // Getters are not readonly in the traditional sense
+		IsGetter:    true,
+		IsSetter:    false,
+	}
+}
+
+// AddSetterMember adds a setter method with access control information
+func (cm *ClassMetadata) AddSetterMember(memberName string, accessLevel AccessModifier, isStatic bool) {
+	cm.MemberAccess[memberName] = &MemberAccessInfo{
+		AccessLevel: accessLevel,
+		IsStatic:    isStatic,
+		IsReadonly:  false,
+		IsGetter:    false,
+		IsSetter:    true,
 	}
 }
 

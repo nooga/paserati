@@ -6,7 +6,6 @@ import (
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
-	"strings"
 )
 
 // Helper functions for detecting null and undefined literals
@@ -169,17 +168,10 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		widenedType := types.GetWidenedType(objectStaticType)
 		debugPrintf("// DEBUG compileMemberExpression: widenedType for '%s': %v\n", propertyName, widenedType)
 		if objType, ok := widenedType.(*types.ObjectType); ok && objType.IsClassInstance() {
-			debugPrintf("// DEBUG compileMemberExpression: Found class instance type for '%s'\n", propertyName)
-			// Only try getter calls for public properties (not starting with underscore)
-			// Private properties (starting with _) are typically regular fields, not getters
-			if !strings.HasPrefix(propertyName, "_") {
-				// For now, use a simple heuristic: if the property exists in the type,
-				// try a getter call but let the VM handle the fallback if it doesn't exist
-				if _, hasProperty := objType.Properties[propertyName]; hasProperty {
-					// For class instances, optimistically try getter method call
-					// The VM will fall back to normal property access if the getter doesn't exist
+			// Check if this property has a getter defined
+			if objType.ClassMeta != nil {
+				if memberInfo := objType.ClassMeta.GetMemberAccess(propertyName); memberInfo != nil && memberInfo.IsGetter {
 					getterMethodName := "__get__" + propertyName
-					debugPrintf("// DEBUG compileMemberExpression: Optimistically trying getter '%s' for property '%s'\n", getterMethodName, propertyName)
 					getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
 					methodReg := c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, methodReg)
@@ -187,7 +179,6 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 
 					// Check if the getter exists before calling it
 					c.emitOptimisticGetterCall(hint, methodReg, objectReg, propertyName, node.Token.Line)
-					debugPrintf("// DEBUG compileMemberExpression: Emitted optimistic getter call for '%s'\n", propertyName)
 					return hint, nil
 				}
 			}
@@ -1049,7 +1040,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return c.compileSuperConstructorCall(node, hint, &tempRegs)
 	}
 
-	// Check if this is a method call (function is a member expression like obj.method())
+	// Check if this is a method call (function is a member expression like obj.method() or obj[key]())
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Method call: obj.method(args...)
 		// 1. Compile the object part (this value)
@@ -1071,11 +1062,25 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			tempRegs = append(tempRegs, funcReg+Register(i))
 		}
 
-		// 3. OPTIMIZATION: Reuse thisReg for getting the property instead of compiling the object again
-		propertyName := c.extractPropertyName(memberExpr.Property)
-		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-		// fmt.Printf("// [COMPILE DEBUG] Method call: emitGetProp(funcReg=R%d, thisReg=R%d, property='%s')\n", funcReg, thisReg, propertyName)
-		c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
+		// 3. Get the method property - handle computed vs regular properties
+		if computedKey, isComputed := memberExpr.Property.(*parser.ComputedPropertyName); isComputed {
+			// Computed property: obj[expr]()
+			propertyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, propertyReg)
+			_, err := c.compileNode(computedKey.Expr, propertyReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			c.emitOpCode(vm.OpGetIndex, memberExpr.Token.Line)
+			c.emitByte(byte(funcReg))    // Destination register
+			c.emitByte(byte(thisReg))    // Object register
+			c.emitByte(byte(propertyReg)) // Key register
+		} else {
+			// Regular property: obj.prop()
+			propertyName := c.extractPropertyName(memberExpr.Property)
+			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+			c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
+		}
 
 		// 4. Compile arguments directly into their target positions (funcReg+1, funcReg+2, ...)
 		_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
@@ -1085,6 +1090,49 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 		// 5. Emit OpCallMethod using hint as result register
 		// fmt.Printf("// [COMPILE DEBUG] Method call: emitCallMethod(hint=R%d, funcReg=R%d, thisReg=R%d, argCount=%d)\n", hint, funcReg, thisReg, actualArgCount)
+		c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+
+		return hint, nil
+	}
+
+	// Check if this is an index expression method call (obj[key]())
+	if indexExpr, isIndexCall := node.Function.(*parser.IndexExpression); isIndexCall {
+		// Method call: obj[key](args...)
+		// 1. Compile the object part (this value)
+		thisReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, thisReg)
+		_, err := c.compileNode(indexExpr.Left, thisReg)
+		if err != nil {
+			return BadRegister, err
+		}
+
+		// 2. Allocate contiguous block for function + all arguments
+		totalArgCount := c.determineTotalArgCount(node)
+		blockSize := 1 + totalArgCount // funcReg + arguments
+		funcReg := c.regAlloc.AllocContiguous(blockSize)
+		for i := 0; i < blockSize; i++ {
+			tempRegs = append(tempRegs, funcReg+Register(i))
+		}
+
+		// 3. Get the method property using index access
+		propertyReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, propertyReg)
+		_, err = c.compileNode(indexExpr.Index, propertyReg)
+		if err != nil {
+			return BadRegister, err
+		}
+		c.emitOpCode(vm.OpGetIndex, indexExpr.Token.Line)
+		c.emitByte(byte(funcReg))     // Destination register
+		c.emitByte(byte(thisReg))     // Object register
+		c.emitByte(byte(propertyReg)) // Key register
+
+		// 4. Compile arguments
+		_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+		if err != nil {
+			return BadRegister, err
+		}
+
+		// 5. Emit OpCallMethod to preserve 'this' binding
 		c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
 
 		return hint, nil

@@ -14,6 +14,11 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 	case *parser.Identifier:
 		return k.Value
 	case *parser.ComputedPropertyName:
+		// Try to extract constant property name first
+		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {
+			return constantName
+		}
+		
 		// For computed properties, try to evaluate the expression at compile time if possible
 		// For now, use a placeholder name
 		if ident, ok := k.Expr.(*parser.Identifier); ok {
@@ -27,6 +32,27 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 		}
 	default:
 		return fmt.Sprintf("__unknown_%p", key)
+	}
+}
+
+// tryExtractConstantComputedPropertyName attempts to extract a constant property name
+// from a computed property expression, returning the name and whether it's constant
+func (c *Compiler) tryExtractConstantComputedPropertyName(expr parser.Expression) (string, bool) {
+	switch e := expr.(type) {
+	case *parser.StringLiteral:
+		return e.Value, true
+	case *parser.NumberLiteral:
+		return fmt.Sprintf("%v", e.Value), true
+	case *parser.MemberExpression:
+		// Check for Symbol.iterator
+		if obj, ok := e.Object.(*parser.Identifier); ok && obj.Value == "Symbol" {
+			if prop, ok := e.Property.(*parser.Identifier); ok && prop.Value == "iterator" {
+				return "@@symbol:Symbol.iterator", true
+			}
+		}
+		return "", false
+	default:
+		return "", false
 	}
 }
 

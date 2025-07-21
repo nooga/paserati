@@ -1039,10 +1039,10 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	tempRegs = append(tempRegs, iteratorMethodReg)
 	c.emitGetProp(iteratorMethodReg, iterableReg, symbolIteratorIdx, node.Token.Line)
 	
-	// Call the iterator method to get iterator
+	// Call the iterator method to get iterator (use method call to preserve 'this' binding)
 	iteratorObjReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorObjReg)
-	c.emitCall(iteratorObjReg, iteratorMethodReg, 0, node.Token.Line)
+	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, node.Token.Line)
 	
 	// Iterator loop setup - reuse loop context but update positions
 	iteratorLoopStart := len(c.chunk.Code)
@@ -1054,10 +1054,10 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
 	c.emitGetProp(nextMethodReg, iteratorObjReg, nextConstIdx, node.Token.Line)
 	
-	// Call next() to get {value, done}
+	// Call next() to get {value, done} (use method call to preserve 'this' binding)
 	resultReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, resultReg)
-	c.emitCall(resultReg, nextMethodReg, 0, node.Token.Line)
+	c.emitCallMethod(resultReg, nextMethodReg, iteratorObjReg, 0, node.Token.Line)
 	
 	// Get result.done
 	doneReg := c.regAlloc.Alloc()

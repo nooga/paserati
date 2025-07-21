@@ -31,17 +31,14 @@ class MyIterator {
 const data = [10, 20, 30, 40, 50];
 const iterator = new MyIterator(data);
 
-// Test the iterator manually since type checker doesn't recognize it as iterable yet
-let current = iterator.next();
-while (!current.done) {
-  console.log(current.value);
+// Test with for...of loop to see if iterator protocol works
+for (const value of iterator) {
+  console.log(value);
 
-  if (current.value === 30) {
-    console.log("Called return method");
+  if (value === 30) {
+    console.log("Breaking from for...of loop");
     break;
   }
-
-  current = iterator.next();
 }
 
 // Return the first value as expected
