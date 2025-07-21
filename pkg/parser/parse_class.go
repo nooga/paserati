@@ -5,6 +5,28 @@ import (
 	"paserati/pkg/lexer"
 )
 
+// isValidMethodName checks if the current token can be used as a method name
+// In JavaScript/TypeScript, keywords can be used as method names
+func (p *Parser) isValidMethodName() bool {
+	switch p.curToken.Type {
+	case lexer.IDENT:
+		return true
+	// Allow keywords as method names
+	case lexer.RETURN, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
+		 lexer.LET, lexer.CONST, lexer.VAR, lexer.CLASS, lexer.INTERFACE, lexer.TYPE,
+		 lexer.IMPORT, lexer.EXPORT, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.ABSTRACT,
+		 lexer.STATIC, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.READONLY,
+		 lexer.YIELD, lexer.TRY, lexer.CATCH, lexer.FINALLY, lexer.THROW, lexer.BREAK, 
+		 lexer.CONTINUE, lexer.SWITCH, lexer.CASE, lexer.DEFAULT, lexer.NEW, lexer.DELETE, 
+		 lexer.TYPEOF, lexer.INSTANCEOF, lexer.IN, lexer.OF, lexer.THIS, lexer.SUPER,
+		 lexer.AS, lexer.SATISFIES, lexer.GET, lexer.SET, lexer.ENUM, lexer.DO, lexer.VOID,
+		 lexer.KEYOF, lexer.INFER, lexer.IS, lexer.FROM, lexer.TRUE, lexer.FALSE:
+		return true
+	default:
+		return false
+	}
+}
+
 // parseClassDeclaration parses a class declaration statement
 // Syntax: class ClassName [extends SuperClass] { classBody }
 func (p *Parser) parseClassDeclaration() Statement {
@@ -206,7 +228,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			if method != nil {
 				methods = append(methods, method)
 			}
-		} else if p.curTokenIs(lexer.IDENT) {
+		} else if p.isValidMethodName() {
 			if p.curToken.Literal == "constructor" {
 				// Parse constructor - let it decide if it's signature or implementation
 				result := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)

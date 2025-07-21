@@ -1642,8 +1642,10 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		}
 
-		// Add to inferred types
-		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, actualReturnType)
+		// Add to inferred types - widen literal types for better inference
+		// This is especially important for generators where the return type becomes TReturn parameter
+		widenedReturnType := types.GetWidenedType(actualReturnType)
+		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, widenedReturnType)
 
 	case *parser.BlockStatement:
 		// --- UPDATED: Handle Block Scope & Hoisting ---

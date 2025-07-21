@@ -222,12 +222,70 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 	return allOk
 }
 
+// checkSuperCallExpression handles super() constructor calls
+func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExpr *parser.SuperExpression) {
+	debugPrintf("// [Checker CallExpr] Handling super() call\n")
+	
+	// Super calls are only valid in constructors
+	if c.currentClassContext == nil || c.currentClassContext.ContextType != types.AccessContextConstructor {
+		c.addError(node, "super() calls are only allowed in constructors")
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Get the current class instance type from the checker state
+	classInstanceType := c.currentClassInstanceType
+	if classInstanceType == nil || classInstanceType.ClassMeta == nil {
+		c.addError(node, "super() can only be used within a class context")
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Check if the current class has a superclass
+	superClassName := classInstanceType.ClassMeta.SuperClassName
+	if superClassName == "" {
+		c.addError(node, fmt.Sprintf("class '%s' does not extend any class", classInstanceType.GetClassName()))
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// Get the superclass constructor
+	superConstructor, _, exists := c.env.Resolve(superClassName)
+	if !exists {
+		c.addError(node, fmt.Sprintf("could not resolve superclass constructor '%s'", superClassName))
+		node.SetComputedType(types.Any)
+		return
+	}
+	
+	// The super constructor should be an ObjectType with construct signatures
+	if objType, ok := superConstructor.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+		// Visit and type-check arguments
+		for _, arg := range node.Arguments {
+			c.visit(arg)
+		}
+		
+		// TODO: Validate argument types against constructor signature
+		
+		// The result type is void (constructors don't return values in the normal sense)
+		node.SetComputedType(types.Void)
+	} else {
+		c.addError(node, fmt.Sprintf("superclass '%s' does not have a constructor", superClassName))
+		node.SetComputedType(types.Any)
+	}
+}
+
 func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// --- UPDATED: Handle CallExpression with Overload Support ---
 	// 1. Check the expression being called
 	debugPrintf("// [Checker CallExpr] Checking call at line %d\n", node.Token.Line)
 	
 	
+	// Special handling for super() calls
+	if superExpr, isSuper := node.Function.(*parser.SuperExpression); isSuper {
+		c.checkSuperCallExpression(node, superExpr)
+		return
+	}
+
 	c.visit(node.Function)
 	funcNodeType := node.Function.GetComputedType()
 	debugPrintf("// [Checker CallExpr] Function type resolved to: %T (%v)\n", funcNodeType, funcNodeType)

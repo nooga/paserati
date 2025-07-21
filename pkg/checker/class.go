@@ -381,10 +381,10 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		}
 	}
 
-	// Process method signatures (overloads) - for now, we'll validate they exist but not add them separately
-	// In a full implementation, we'd create overloaded function types
+	// Process method signatures (overloads and abstract methods)
 	for _, methodSig := range body.MethodSigs {
 		if !methodSig.IsStatic {
+			methodName := c.extractPropertyName(methodSig.Key)
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 
 			// Validate override keyword usage for method signature
@@ -395,7 +395,16 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			// Validate the signature types
 			c.validateMethodSignature(methodSig)
 
-			debugPrintf("// [Checker Class] Validated method signature '%s'\n", c.extractPropertyName(methodSig.Key))
+			// For abstract methods, add them to the instance type
+			if methodSig.IsAbstract {
+				methodType := c.inferMethodTypeFromSignature(methodSig)
+				accessLevel := c.getAccessLevel(methodSig.IsPublic, methodSig.IsPrivate, methodSig.IsProtected)
+				
+				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
+				debugPrintf("// [Checker Class] Added abstract method '%s' to instance type: %s\n", methodName, methodType.String())
+			}
+
+			debugPrintf("// [Checker Class] Processed method signature '%s'\n", methodName)
 		}
 	}
 
@@ -471,9 +480,9 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 
 	debugPrintf("// [Checker Class] Final pass: checking method bodies for class '%s'\n", className)
 
-	// Check all method bodies (excluding constructor, static methods, and generic methods)
+	// Check all method bodies (including constructors, but excluding static and generic methods)
 	for _, method := range body.Methods {
-		if method.Kind != "constructor" && !method.IsStatic && method.Value != nil {
+		if !method.IsStatic && method.Value != nil {
 			// Skip generic methods - they should be checked when instantiated
 			if len(method.Value.TypeParameters) > 0 {
 				continue
@@ -482,8 +491,12 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 			methodName := c.extractPropertyName(method.Key)
 			debugPrintf("// [Checker Class] Checking method body for '%s'\n", methodName)
 			
-			// Set method context for access control checking
-			c.setClassContext(className, types.AccessContextInstanceMethod)
+			// Set appropriate context based on method kind
+			if method.Kind == "constructor" {
+				c.setClassContext(className, types.AccessContextConstructor)
+			} else {
+				c.setClassContext(className, types.AccessContextInstanceMethod)
+			}
 			
 			// Check the method body - but preserve the context established here
 			c.checkMethodBodyWithContext(method.Value)
@@ -497,9 +510,36 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 	savedClassContext := c.currentClassContext
 	savedThisType := c.currentThisType
 	savedInstanceType := c.currentClassInstanceType
+	savedEnv := c.env
+	
+	// Create a new environment scope for the method body
+	c.env = NewEnclosedEnvironment(c.env)
+	
+	// Restore class context (it should already be set from the calling context)
+	c.currentClassContext = savedClassContext
+	c.currentThisType = savedThisType
+	c.currentClassInstanceType = savedInstanceType
+	
+	// Set up 'super' in the environment if the class has a parent
+	if savedInstanceType != nil && savedInstanceType.ClassMeta != nil && savedInstanceType.ClassMeta.SuperClassName != "" {
+		// For constructor context, super should be the parent constructor
+		// For method context, super should be the parent instance
+		if savedClassContext != nil && savedClassContext.ContextType == types.AccessContextConstructor {
+			// Get the parent constructor
+			if superConstructor, _, exists := c.env.Resolve(savedInstanceType.ClassMeta.SuperClassName); exists {
+				c.env.Define("super", superConstructor, true)
+			}
+		} else {
+			// Get the parent instance type
+			if superInstanceType := c.getClassInstanceType(savedInstanceType.ClassMeta.SuperClassName); superInstanceType != nil {
+				c.env.Define("super", superInstanceType, true)
+			}
+		}
+	}
 	
 	defer func() {
-		// Restore context after checking
+		// Restore environment and context after checking
+		c.env = savedEnv
 		c.currentClassContext = savedClassContext
 		c.currentThisType = savedThisType
 		c.currentClassInstanceType = savedInstanceType
@@ -526,6 +566,60 @@ func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superC
 
 	debugPrintf("// [Checker Class] Override validation for method '%s' in class '%s' (inheritance not yet implemented)\n",
 		methodName, className)
+}
+
+// inferMethodTypeFromSignature creates a function type from a method signature (for abstract methods)
+func (c *Checker) inferMethodTypeFromSignature(methodSig *parser.MethodSignature) types.Type {
+	// Extract parameter types
+	var paramTypes []types.Type
+	for _, param := range methodSig.Parameters {
+		if param.TypeAnnotation != nil {
+			paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
+			if paramType != nil {
+				paramTypes = append(paramTypes, paramType)
+			} else {
+				paramTypes = append(paramTypes, types.Any)
+			}
+		} else {
+			paramTypes = append(paramTypes, types.Any)
+		}
+	}
+
+	// Extract return type
+	var returnType types.Type = types.Void
+	if methodSig.ReturnTypeAnnotation != nil {
+		resolvedReturnType := c.resolveTypeAnnotation(methodSig.ReturnTypeAnnotation)
+		if resolvedReturnType != nil {
+			returnType = resolvedReturnType
+		}
+	}
+
+	// Extract optional parameters
+	optionalParams := make([]bool, len(methodSig.Parameters))
+	for i, param := range methodSig.Parameters {
+		optionalParams[i] = param.Optional
+	}
+
+	// Extract rest parameter type
+	var restParameterType types.Type
+	if methodSig.RestParameter != nil && methodSig.RestParameter.TypeAnnotation != nil {
+		restType := c.resolveTypeAnnotation(methodSig.RestParameter.TypeAnnotation)
+		if restType != nil {
+			restParameterType = restType
+		} else {
+			restParameterType = &types.ArrayType{ElementType: types.Any}
+		}
+	}
+
+	signature := &types.Signature{
+		ParameterTypes:    paramTypes,
+		ReturnType:        returnType,
+		OptionalParams:    optionalParams,
+		IsVariadic:        methodSig.RestParameter != nil,
+		RestParameterType: restParameterType,
+	}
+
+	return types.NewFunctionType(signature)
 }
 
 // validateOverrideMethodSignature validates the usage of the override keyword for method signatures
@@ -595,8 +689,17 @@ func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceTyp
 	}
 }
 
+// isEmptyFunctionBody checks if a function body is empty (abstract methods)
+func (c *Checker) isEmptyFunctionBody(body parser.Node) bool {
+	if blockStmt, ok := body.(*parser.BlockStatement); ok {
+		return len(blockStmt.Statements) == 0
+	}
+	return false
+}
+
 // inferMethodType determines the type of a class method
 func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
+	
 	if method.Value == nil {
 		methodName := c.extractPropertyName(method.Key)
 		debugPrintf("// [Checker Class] Method '%s' has no function value, using Any\n", methodName)
@@ -1043,9 +1146,9 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 		return
 	}
 
-	// Get the current class metadata
-	currentClass := c.currentClassContext.CurrentClassName
-	classInstanceType := c.getClassInstanceType(currentClass)
+	// Get the current class metadata - use currentClassInstanceType from the context
+	// instead of looking it up by name to avoid timing issues
+	classInstanceType := c.currentClassInstanceType
 	if classInstanceType == nil || classInstanceType.ClassMeta == nil {
 		c.addError(node, "super expression can only be used within a class context")
 		node.SetComputedType(types.Any)
@@ -1055,7 +1158,7 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	// Check if the current class has a superclass
 	superClassName := classInstanceType.ClassMeta.SuperClassName
 	if superClassName == "" {
-		c.addError(node, fmt.Sprintf("class '%s' does not extend any class", currentClass))
+		c.addError(node, fmt.Sprintf("class '%s' does not extend any class", classInstanceType.GetClassName()))
 		node.SetComputedType(types.Any)
 		return
 	}

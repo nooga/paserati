@@ -1347,20 +1347,20 @@ startExecution:
 					return status, Undefined
 				}
 
-				var propValue Value
-				var ok bool
 				if baseVal.Type() == TypeDictObject {
+					// DictObject only has own properties, no prototype chain
 					dict := AsDictObject(baseVal)
-					propValue, ok = dict.GetOwn(key)
+					propValue, ok := dict.GetOwn(key)
+					if !ok {
+						registers[destReg] = Undefined // Property not found -> undefined
+					} else {
+						registers[destReg] = propValue
+					}
 				} else {
-					obj := AsPlainObject(baseVal)
-					propValue, ok = obj.GetOwn(key)
-				}
-
-				if !ok {
-					registers[destReg] = Undefined // Property not found -> undefined
-				} else {
-					registers[destReg] = propValue
+					// PlainObject: Use opGetProp to handle prototype chain
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
 				}
 
 			case TypeString:

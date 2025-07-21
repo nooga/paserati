@@ -16,11 +16,25 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 			elemType = types.Any
 		} // Handle error
 
-		// --- Use deeplyWidenType on each element ---
-		generalizedType := types.DeeplyWidenType(elemType)
-		// --- End Deep Widen ---
-
-		generalizedElementTypes = append(generalizedElementTypes, generalizedType)
+		// Handle spread elements specially
+		if _, isSpread := elemNode.(*parser.SpreadElement); isSpread {
+			// For spread elements, extract the element type from the array
+			if arrayType, isArray := elemType.(*types.ArrayType); isArray {
+				// Use the element type of the spread array
+				generalizedType := types.DeeplyWidenType(arrayType.ElementType)
+				generalizedElementTypes = append(generalizedElementTypes, generalizedType)
+			} else if elemType == types.Any {
+				// Spread of 'any' contributes 'any' element type
+				generalizedElementTypes = append(generalizedElementTypes, types.Any)
+			} else {
+				// Error case - spread of non-array (should be caught earlier)
+				generalizedElementTypes = append(generalizedElementTypes, types.Any)
+			}
+		} else {
+			// Regular element
+			generalizedType := types.DeeplyWidenType(elemType)
+			generalizedElementTypes = append(generalizedElementTypes, generalizedType)
+		}
 	}
 
 	// Determine the element type for the array using the GENERALIZED types.
@@ -138,20 +152,43 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 
 		// Check each element against the expected element type
 		for _, elemNode := range node.Elements {
-			c.visitWithContext(elemNode, &ContextualType{
-				ExpectedType: arrayType.ElementType,
-				IsContextual: true,
-			})
+			// Handle spread elements specially
+			if _, isSpread := elemNode.(*parser.SpreadElement); isSpread {
+				// For spread elements, visit without context first to get the spread type
+				c.visit(elemNode)
+				spreadType := elemNode.GetComputedType()
+				if spreadType == nil {
+					spreadType = types.Any
+				}
 
-			// Validate that the element is assignable to the expected element type
-			actualElemType := elemNode.GetComputedType()
-			if actualElemType == nil {
-				actualElemType = types.Any
-			}
+				// Validate that the spread array's element type is assignable to expected element type
+				if spreadArrayType, isArray := spreadType.(*types.ArrayType); isArray {
+					if !types.IsAssignable(spreadArrayType.ElementType, arrayType.ElementType) {
+						c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
+							spreadArrayType.ElementType.String(), arrayType.ElementType.String()))
+					}
+				} else if spreadType != types.Any {
+					// Spread of non-array type (error should be caught elsewhere)
+					c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
+						spreadType.String(), arrayType.ElementType.String()))
+				}
+			} else {
+				// Regular element
+				c.visitWithContext(elemNode, &ContextualType{
+					ExpectedType: arrayType.ElementType,
+					IsContextual: true,
+				})
 
-			if !types.IsAssignable(actualElemType, arrayType.ElementType) {
-				c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
-					actualElemType.String(), arrayType.ElementType.String()))
+				// Validate that the element is assignable to the expected element type
+				actualElemType := elemNode.GetComputedType()
+				if actualElemType == nil {
+					actualElemType = types.Any
+				}
+
+				if !types.IsAssignable(actualElemType, arrayType.ElementType) {
+					c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
+						actualElemType.String(), arrayType.ElementType.String()))
+				}
 			}
 		}
 
@@ -886,6 +923,43 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		case *types.ForwardReferenceType:
 			// Handle static member access on forward reference (class name used within class)
 			resultType = c.handleForwardReferenceStaticAccess(obj, propertyName, node)
+		case *types.ParameterizedForwardReferenceType:
+			// Handle property access on parameterized generic types like LinkedNode<T>
+			// Try to resolve the base type through type alias first, then constructor
+			var baseType types.Type
+			var found bool
+			
+			if baseType, found = c.env.ResolveType(obj.ClassName); !found {
+				// Try to resolve as constructor and get its instance type
+				if constructorType, _, exists := c.env.Resolve(obj.ClassName); exists {
+					if ctorObj, ok := constructorType.(*types.ObjectType); ok && len(ctorObj.ConstructSignatures) > 0 {
+						baseType = ctorObj.ConstructSignatures[0].ReturnType
+						found = true
+					}
+				}
+			}
+			
+			if found {
+				if objType, ok := baseType.(*types.ObjectType); ok {
+					// Check if the property exists on the base type
+					if propType, exists := objType.Properties[propertyName]; exists {
+						// For generic types, we might need to substitute type parameters
+						// For now, return the property type as-is
+						resultType = propType
+						debugPrintf("// [Checker MemberExpr] Found property '%s' on parameterized type %s: %s\n", 
+							propertyName, obj.String(), propType.String())
+					} else {
+						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+						resultType = types.Never
+					}
+				} else {
+					c.addError(node.Object, fmt.Sprintf("base type %s is not an object type", obj.ClassName))
+					resultType = types.Never
+				}
+			} else {
+				c.addError(node.Object, fmt.Sprintf("could not resolve base type %s", obj.ClassName))
+				resultType = types.Never
+			}
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
@@ -1000,8 +1074,10 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 							resultType = propType
 						}
 					} else {
-						c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, base.String()))
-						// resultType remains Error
+						// In TypeScript, obj["unknownProp"] should return 'any' if no index signature exists
+						// This is different from obj.unknownProp which should error
+						// TODO: Check for index signatures first, for now default to 'any'
+						resultType = types.Any
 					}
 				} else {
 					// Index is a general string/number/any - cannot determine specific property type.

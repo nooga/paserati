@@ -15,8 +15,14 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		lhsType = types.Any
 	} // Handle nil from error
 
-	// Visit RHS value
-	c.visit(node.Value)
+	// Visit RHS value with contextual typing if applicable
+	if arrayLit, isArrayLit := node.Value.(*parser.ArrayLiteral); isArrayLit {
+		// For array literals, provide contextual typing from the LHS
+		contextualType := &ContextualType{ExpectedType: lhsType}
+		c.checkArrayLiteralWithContext(arrayLit, contextualType)
+	} else {
+		c.visit(node.Value)
+	}
 	rhsType := node.Value.GetComputedType()
 	if rhsType == nil {
 		rhsType = types.Any
@@ -158,10 +164,25 @@ func (c *Checker) checkReadonlyPropertyAssignment(memberExpr *parser.MemberExpre
 	if objType, ok := objectType.(*types.ObjectType); ok {
 		if propType, exists := objType.Properties[propertyName]; exists {
 			if types.IsReadonlyType(propType) {
+				// In TypeScript, readonly properties can be assigned in constructors
+				// Check if we're in a constructor context and assigning to 'this'
+				if c.currentClassContext != nil && 
+				   c.currentClassContext.ContextType == types.AccessContextConstructor &&
+				   c.isThisExpression(memberExpr.Object) {
+					// Allow readonly assignment in constructor when assigning to 'this'
+					return
+				}
+				
 				c.addError(memberExpr, fmt.Sprintf("cannot assign to readonly property '%s'", propertyName))
 			}
 		}
 	}
+}
+
+// isThisExpression checks if an expression is a 'this' expression
+func (c *Checker) isThisExpression(expr parser.Expression) bool {
+	_, isThis := expr.(*parser.ThisExpression)
+	return isThis
 }
 
 // checkArrayDestructuringAssignment handles array destructuring assignments like [a, b, c] = expr
