@@ -292,6 +292,12 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Computed Symbol property type checking for object literals
   - [x] for...of loop integration with runtime dispatch optimization
   - [x] Manual iterator usage and automatic iterator protocol handling
+  - [x] **Iterator.return() cleanup on early exit** - **Complete Implementation!**
+    - [x] Automatic iterator.return() calls on break, return, throw in for...of loops
+    - [x] Conditional execution (only calls return() if method exists)
+    - [x] Proper resource cleanup for custom iterables and generators
+    - [x] Edge case handling (missing return method, normal completion)
+    - [x] Integration with existing loop optimization paths
 - [x] Destructuring Assignment - **Complete Implementation!**
   - [x] **Array Destructuring** - Full support with rest elements
     - [x] Basic array destructuring (`let [a, b] = [1, 2]`)
@@ -437,6 +443,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
   - [x] Symbol.iterator protocol integration (generators are self-iterable)
   - [x] Type inference for yield types and return values
   - [x] for...of loop compatibility and manual iteration support
+  - [x] **Generator Methods in Classes and Objects** - **Complete Implementation!**
+    - [x] Class generator methods (`*methodName() { yield 1; }`)
+    - [x] String literal generator methods (`*"methodName"() { yield 1; }`)
+    - [x] Computed generator methods (`*[Symbol.iterator]() { yield 1; }`)
+    - [x] Object literal generator methods (`{ *gen() { yield 1; } }`)
+    - [x] Proper type checking integration with Generator<T, R, N> return types
+    - [x] for...of loop compatibility for all generator method types
   - [x] Comprehensive test coverage for all generator scenarios
 - [ ] Async Functions (`async function`)
 

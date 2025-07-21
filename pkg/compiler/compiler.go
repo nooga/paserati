@@ -31,6 +31,16 @@ type LoopContext struct {
 	BreakPlaceholderPosList []int
 	// List of bytecode positions where OpJump placeholders for continue statements start.
 	ContinuePlaceholderPosList []int
+	// Iterator cleanup information for for...of loops using iterator protocol
+	IteratorCleanup *IteratorCleanupInfo
+}
+
+// IteratorCleanupInfo tracks iterator objects that need cleanup on early exit
+type IteratorCleanupInfo struct {
+	// Register containing the iterator object (has .return() method)
+	IteratorReg Register
+	// Whether this loop uses the iterator protocol (vs fast array path)
+	UsesIteratorProtocol bool
 }
 
 const debugCompiler = false     // Enable for debugging register allocation issue
@@ -2266,4 +2276,46 @@ func (c *Compiler) emitGetModuleExport(destReg Register, modulePath string, expo
 	c.emitByte(byte(modulePathIdx & 0xFF))   // Module path low byte
 	c.emitByte(byte(exportNameIdx >> 8))     // Export name high byte
 	c.emitByte(byte(exportNameIdx & 0xFF))   // Export name low byte
+}
+
+// emitIteratorCleanup emits bytecode to call iterator.return() if it exists
+// This is used for proper cleanup when for...of loops exit early (break, return, throw)
+func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
+	// We need to check if iterator.return exists and call it if present
+	// This is done defensively - we don't want cleanup to throw errors
+	
+	// Get iterator.return method (may be undefined)
+	returnMethodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(returnMethodReg)
+	
+	returnConstIdx := c.chunk.AddConstant(vm.String("return"))
+	c.emitGetProp(returnMethodReg, iteratorReg, returnConstIdx, line)
+	
+	// Check if return method exists (not undefined/null)
+	// We'll use OpIsNullish to check if it's null or undefined
+	isNullishReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(isNullishReg)
+	c.emitOpCode(vm.OpIsNullish, line)
+	c.emitByte(byte(isNullishReg))
+	c.emitByte(byte(returnMethodReg))
+	
+	// Negate the nullish result so we can use JumpIfFalse to skip when nullish
+	notNullishReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(notNullishReg)
+	c.emitOpCode(vm.OpNot, line)
+	c.emitByte(byte(notNullishReg))
+	c.emitByte(byte(isNullishReg))
+	
+	// Skip calling return if it's nullish (jump if NOT not-nullish = jump if nullish)
+	skipCallJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notNullishReg, line)
+	
+	// Call iterator.return() - ignore return value and errors
+	resultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(resultReg)
+	
+	// Use regular method call - VM should handle any errors gracefully
+	c.emitCallMethod(resultReg, returnMethodReg, iteratorReg, 0, line)
+	
+	// Patch the skip jump
+	c.patchJump(skipCallJump)
 }

@@ -541,6 +541,11 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 		targetContext = c.loopContextStack[len(c.loopContextStack)-1]
 	}
 
+	// Check if we need to emit iterator cleanup code before breaking
+	if targetContext.IteratorCleanup != nil && targetContext.IteratorCleanup.UsesIteratorProtocol {
+		c.emitIteratorCleanup(targetContext.IteratorCleanup.IteratorReg, node.Token.Line)
+	}
+
 	// Emit placeholder jump (OpJump) - Pass 0 for srcReg as it's ignored
 	placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 
@@ -946,6 +951,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		LoopStartPos:               loopStartPos,
 		BreakPlaceholderPosList:    make([]int, 0),
 		ContinuePlaceholderPosList: make([]int, 0),
+		IteratorCleanup:            nil, // No cleanup needed for array fast path
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
@@ -1044,9 +1050,13 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	tempRegs = append(tempRegs, iteratorObjReg)
 	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, node.Token.Line)
 	
-	// Iterator loop setup - reuse loop context but update positions
+	// Iterator loop setup - reuse loop context but update positions and set iterator cleanup
 	iteratorLoopStart := len(c.chunk.Code)
 	loopContext.LoopStartPos = iteratorLoopStart
+	loopContext.IteratorCleanup = &IteratorCleanupInfo{
+		IteratorReg:          iteratorObjReg,
+		UsesIteratorProtocol: true,
+	}
 	
 	// Call iterator.next()
 	nextMethodReg := c.regAlloc.Alloc()
