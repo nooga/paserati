@@ -4773,8 +4773,92 @@ func (p *Parser) parseObjectLiteral() Expression {
 				})
 			}
 		} else {
-			// --- NEW: Check for string literal shorthand method syntax ("methodName" followed by '(') ---
-			if p.curTokenIs(lexer.STRING) && p.peekTokenIs(lexer.LPAREN) {
+			// --- NEW: Check for generator methods (*foo() or *"foo"() or *[expr]()) ---
+			if p.curTokenIs(lexer.ASTERISK) {
+				// This is a generator method
+				asteriskToken := p.curToken
+				p.nextToken() // Consume '*' to get to the name
+
+				var key Expression
+				var funcLit *FunctionLiteral
+
+				// Handle different name types for generator methods
+				if p.curTokenIs(lexer.IDENT) {
+					// *foo() { ... }
+					key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+					funcLit = &FunctionLiteral{
+						Token:       asteriskToken,
+						IsGenerator: true,
+					}
+				} else if p.curTokenIs(lexer.STRING) {
+					// *"foo"() { ... }
+					key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+					funcLit = &FunctionLiteral{
+						Token:       asteriskToken,
+						IsGenerator: true,
+					}
+				} else if p.curTokenIs(lexer.LBRACKET) {
+					// *[Symbol.iterator]() { ... }
+					p.nextToken() // Consume '['
+					keyExpr := p.parseExpression(LOWEST)
+					if keyExpr == nil {
+						return nil // Error parsing expression inside []
+					}
+					if !p.expectPeek(lexer.RBRACKET) {
+						return nil // Missing closing ']'
+					}
+
+					// Wrap in ComputedPropertyName node
+					key = &ComputedPropertyName{
+						Expr: keyExpr,
+					}
+					funcLit = &FunctionLiteral{
+						Token:       asteriskToken,
+						IsGenerator: true,
+					}
+				} else {
+					p.addError(p.curToken, "expected identifier, string literal, or computed property name after '*' in generator method")
+					return nil
+				}
+
+				// Expect '(' for parameters
+				if !p.expectPeek(lexer.LPAREN) {
+					return nil
+				}
+
+				// Parse parameters
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+					return nil // Error parsing parameters
+				}
+
+				// Check for optional return type annotation
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ')'
+					p.nextToken() // Consume ':'
+					funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+					if funcLit.ReturnTypeAnnotation == nil {
+						return nil // Error parsing return type
+					}
+				}
+
+				// Expect '{' for method body
+				if !p.expectPeek(lexer.LBRACE) {
+					return nil
+				}
+
+				// Parse method body
+				funcLit.Body = p.parseBlockStatement()
+				if funcLit.Body == nil {
+					return nil // Error parsing method body
+				}
+
+				// Add the generator method
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{
+					Key:   key,
+					Value: funcLit,
+				})
+			} else if p.curTokenIs(lexer.STRING) && p.peekTokenIs(lexer.LPAREN) {
 				// This is a string literal shorthand method like "methodName"() { ... }
 				stringKey := &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 				

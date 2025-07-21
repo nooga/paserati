@@ -551,6 +551,9 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 			elementType = types.String
 		} else if iterableType == types.Any {
 			elementType = types.Any
+		} else if c.isGeneratorType(iterableType) {
+			// Special handling for Generator types - they are iterable
+			elementType = types.Any // Safe fallback for generator elements
 		} else {
 			// Special case: if the iterable comes from a generator function call, assume it's iterable
 			// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking

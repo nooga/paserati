@@ -217,7 +217,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		}
 		
-		// Parse constructor, method, getter, or setter
+		// Parse constructor, method, getter, setter, or generator
 		if p.curTokenIs(lexer.GET) {
 			// Parse getter method
 			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
@@ -227,6 +227,12 @@ func (p *Parser) parseClassBody() *ClassBody {
 		} else if p.curTokenIs(lexer.SET) {
 			// Parse setter method
 			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
+			if method != nil {
+				methods = append(methods, method)
+			}
+		} else if p.curTokenIs(lexer.ASTERISK) {
+			// Parse generator method: *methodName() { ... }
+			method := p.parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 			if method != nil {
 				methods = append(methods, method)
 			}
@@ -962,3 +968,113 @@ func (p *Parser) parseComputedProperty(bracketToken lexer.Token, keyExpr Express
 	}
 }
 
+// parseGeneratorMethod parses a generator method in a class
+// Syntax: [static] *methodName() { body }
+func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) *MethodDefinition {
+	asteriskToken := p.curToken // '*' token
+	
+	// Move past '*' to get method name
+	p.nextToken() // Consume '*'
+	
+	// Check that we have a valid method name token
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.STRING) && !p.curTokenIs(lexer.LBRACKET) {
+		p.addError(p.curToken, "expected method name after '*' in generator method")
+		return nil
+	}
+	
+	var methodName Expression
+	var methodToken lexer.Token
+	
+	if p.curTokenIs(lexer.LBRACKET) {
+		// Computed generator method: *[expr]() { ... }
+		methodToken = p.curToken
+		p.nextToken() // Consume '['
+		keyExpr := p.parseExpression(LOWEST)
+		if keyExpr == nil {
+			return nil
+		}
+		if !p.expectPeek(lexer.RBRACKET) {
+			return nil
+		}
+		methodName = &ComputedPropertyName{Expr: keyExpr}
+	} else if p.curTokenIs(lexer.STRING) {
+		// String literal generator method: *"methodName"() { ... }
+		methodToken = p.curToken
+		methodName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
+		// Regular identifier generator method: *methodName() { ... }
+		methodToken = p.curToken
+		methodName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
+	
+	// Try to parse type parameters: *methodName<T, U>()
+	typeParameters := p.tryParseTypeParameters()
+	
+	// Expect '(' for parameters
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+	
+	// Parse parameters
+	var parameters []*Parameter
+	var restParameter *RestParameter
+	var err error
+	parameters, restParameter, err = p.parseFunctionParameters(false) // No parameter properties in generator methods
+	if err != nil {
+		p.addError(p.curToken, fmt.Sprintf("failed to parse generator method parameters: %s", err.Error()))
+		return nil
+	}
+	
+	// Parse return type annotation if present
+	var returnTypeAnnotation Expression
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // consume ':' 
+		p.nextToken() // move to start of type expression
+		
+		// Parse the return type using existing type parsing logic
+		returnTypeAnnotation = p.parseTypeExpression()
+		if returnTypeAnnotation == nil {
+			return nil
+		}
+	}
+	
+	// Abstract generator methods cannot have implementations
+	if isAbstract {
+		p.addError(p.curToken, "abstract generator methods cannot have implementations")
+		return nil
+	}
+	
+	// Expect '{' for method body
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+	
+	body := p.parseBlockStatement()
+	
+	// parseBlockStatement leaves us at '}', advance past it
+	p.nextToken()
+	
+	// Create function literal for the implementation with IsGenerator = true
+	functionLiteral := &FunctionLiteral{
+		Token:                asteriskToken, // Use the '*' token
+		Name:                 nil,           // Methods don't have names in the traditional function sense
+		IsGenerator:          true,          // This is a generator function
+		TypeParameters:       typeParameters,
+		Parameters:           parameters,
+		RestParameter:        restParameter,
+		ReturnTypeAnnotation: returnTypeAnnotation,
+		Body:                 body,
+	}
+	
+	return &MethodDefinition{
+		Token:       methodToken,
+		Key:         methodName,
+		Value:       functionLiteral,
+		Kind:        "method",
+		IsStatic:    isStatic,
+		IsPublic:    isPublic,
+		IsPrivate:   isPrivate,
+		IsProtected: isProtected,
+		IsOverride:  isOverride,
+	}
+}

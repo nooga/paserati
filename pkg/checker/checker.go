@@ -3793,3 +3793,13 @@ func (c *Checker) isEnumType(t types.Type) bool {
 	// Also check for specific enum member literal types
 	return types.IsEnumMemberType(t)
 }
+
+// isGeneratorType checks if a type is a Generator type
+func (c *Checker) isGeneratorType(t types.Type) bool {
+	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
+		if instantiatedType.Generic != nil {
+			return instantiatedType.Generic.Name == "Generator"
+		}
+	}
+	return false
+}
