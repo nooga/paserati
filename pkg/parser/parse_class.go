@@ -6,10 +6,12 @@ import (
 )
 
 // isValidMethodName checks if the current token can be used as a method name
-// In JavaScript/TypeScript, keywords can be used as method names
+// In JavaScript/TypeScript, keywords and string literals can be used as method names
 func (p *Parser) isValidMethodName() bool {
 	switch p.curToken.Type {
 	case lexer.IDENT:
+		return true
+	case lexer.STRING:
 		return true
 	// Allow keywords as method names
 	case lexer.RETURN, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
@@ -405,7 +407,14 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 // Returns either *MethodSignature or *MethodDefinition based on whether it ends with ';' or '{'
 func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) interface{} {
 	methodToken := p.curToken
-	methodName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	var methodName Expression
+	if p.curToken.Type == lexer.STRING {
+		// String literal method name: "methodName"()
+		methodName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
+		// Identifier method name
+		methodName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
 	
 	// Try to parse type parameters: methodName<T, U>()
 	typeParameters := p.tryParseTypeParameters()
@@ -507,7 +516,14 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 // parseProperty parses a property declaration
 func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
 	propertyToken := p.curToken
-	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	var propertyName Expression
+	if p.curToken.Type == lexer.STRING {
+		// String literal property name: "propertyName"
+		propertyName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
+		// Identifier property name
+		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
 	
 	p.nextToken() // move past property name
 	
@@ -621,11 +637,21 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	getToken := p.curToken // 'get' token
 	
-	if !p.expectPeek(lexer.IDENT) {
+	// Check if next token is an identifier or string literal
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) {
+		p.addError(p.peekToken, "expected identifier or string literal after 'get'")
 		return nil
 	}
+	p.nextToken() // Move to property name token
 	
-	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	var propertyName Expression
+	if p.curToken.Type == lexer.STRING {
+		// String literal property name: get "propertyName"()
+		propertyName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
+		// Identifier property name
+		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
 	
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
@@ -691,11 +717,21 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	setToken := p.curToken // 'set' token
 	
-	if !p.expectPeek(lexer.IDENT) {
+	// Check if next token is an identifier or string literal
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) {
+		p.addError(p.peekToken, "expected identifier or string literal after 'set'")
 		return nil
 	}
+	p.nextToken() // Move to property name token
 	
-	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	var propertyName Expression
+	if p.curToken.Type == lexer.STRING {
+		// String literal property name: set "propertyName"()
+		propertyName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
+		// Identifier property name
+		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
 	
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil

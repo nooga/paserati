@@ -4773,9 +4773,54 @@ func (p *Parser) parseObjectLiteral() Expression {
 				})
 			}
 		} else {
-			// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
-			propName := p.parsePropertyName()
-			if propName != nil && p.peekTokenIs(lexer.LPAREN) {
+			// --- NEW: Check for string literal shorthand method syntax ("methodName" followed by '(') ---
+			if p.curTokenIs(lexer.STRING) && p.peekTokenIs(lexer.LPAREN) {
+				// This is a string literal shorthand method like "methodName"() { ... }
+				stringKey := &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+				
+				// Create a function literal for the method implementation
+				funcLit := &FunctionLiteral{
+					Token: p.curToken, // The string literal token
+				}
+				
+				// Expect '(' for parameters
+				if !p.expectPeek(lexer.LPAREN) {
+					return nil
+				}
+				
+				// Parse parameters
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+					return nil // Error parsing parameters
+				}
+				
+				// Check for optional return type annotation
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ')'
+					p.nextToken() // Consume ':'
+					funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+					if funcLit.ReturnTypeAnnotation == nil {
+						return nil // Error parsing return type
+					}
+				}
+				
+				// Expect '{' for method body
+				if !p.expectPeek(lexer.LBRACE) {
+					return nil
+				}
+				
+				// Parse method body
+				funcLit.Body = p.parseBlockStatement()
+				if funcLit.Body == nil {
+					return nil // Error parsing method body
+				}
+
+				// Create an ObjectProperty with the string literal as key and the function literal as value
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: stringKey, Value: funcLit})
+			} else {
+				// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
+				propName := p.parsePropertyName()
+				if propName != nil && p.peekTokenIs(lexer.LPAREN) {
 				// This is a shorthand method like methodName() { ... }
 				shorthandMethod := p.parseShorthandMethod()
 				if shorthandMethod == nil {
@@ -4834,6 +4879,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 				// Append the property
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
+			}
 			}
 		}
 
@@ -5022,15 +5068,24 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		return p.parseInterfaceBracketProperty()
 	}
 
-	// Check for shorthand method syntax first (identifier or keyword as property name)
+	// Check for shorthand method syntax first (identifier, keyword, or string literal as property name)
 	propName := p.parsePropertyName()
-	if propName == nil {
-		p.addError(p.curToken, "expected property name (identifier) or call signature '(' in interface")
+	var prop *InterfaceProperty
+	
+	if propName != nil {
+		prop = &InterfaceProperty{
+			Name: propName,
+		}
+	} else if p.curTokenIs(lexer.STRING) {
+		// Handle string literal property names
+		stringLit := &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+		prop = &InterfaceProperty{
+			ComputedName:       stringLit,
+			IsComputedProperty: true,
+		}
+	} else {
+		p.addError(p.curToken, "expected property name (identifier or string literal) or call signature '(' in interface")
 		return nil
-	}
-
-	prop := &InterfaceProperty{
-		Name: propName,
 	}
 
 	// Check for optional marker '?' first
@@ -5447,15 +5502,25 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 
 			objType.Properties = append(objType.Properties, prop)
 		} else {
-			// Regular property or method signature - try to parse property name (allowing keywords)
+			// Regular property or method signature - try to parse property name (allowing keywords and string literals)
 			propName := p.parsePropertyName()
-			if propName == nil {
-				p.addError(p.curToken, "expected property name (identifier), call signature '(', or index signature '[' in object type")
+			var prop *ObjectTypeProperty
+			
+			if propName != nil {
+				prop = &ObjectTypeProperty{
+					Name: propName,
+				}
+			} else if p.curTokenIs(lexer.STRING) {
+				// Handle string literal property names by creating an identifier with the string value
+				stringLit := &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+				// Create an identifier from the string literal for compatibility
+				identFromString := &Identifier{Token: p.curToken, Value: stringLit.Value}
+				prop = &ObjectTypeProperty{
+					Name: identFromString,
+				}
+			} else {
+				p.addError(p.curToken, "expected property name (identifier or string literal), call signature '(', or index signature '[' in object type")
 				return nil
-			}
-
-			prop := &ObjectTypeProperty{
-				Name: propName,
 			}
 
 			// Check for optional marker '?' first

@@ -13,6 +13,8 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 	switch k := key.(type) {
 	case *parser.Identifier:
 		return k.Value
+	case *parser.StringLiteral:
+		return k.Value
 	case *parser.ComputedPropertyName:
 		// Try to extract constant property name first
 		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {
