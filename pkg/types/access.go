@@ -52,6 +52,7 @@ type ClassMetadata struct {
 	
 	// Inheritance relationships
 	SuperClassName string     // The class this class extends (if any)
+	SuperConstructorType Type // The resolved constructor type of the superclass (if any)
 	ImplementedInterfaces []string // The interfaces this class implements
 }
 
@@ -64,6 +65,7 @@ func NewClassMetadata(className string, isInstance bool) *ClassMetadata {
 		IsClassConstructor:    !isInstance,
 		SourceClassName:       className,
 		SuperClassName:        "", // No inheritance by default
+		SuperConstructorType:  nil, // No inheritance by default
 		ImplementedInterfaces: []string{}, // No interfaces by default
 	}
 }
@@ -115,6 +117,12 @@ func (cm *ClassMetadata) HasMember(memberName string) bool {
 // SetSuperClass sets the superclass for this class
 func (cm *ClassMetadata) SetSuperClass(superClassName string) {
 	cm.SuperClassName = superClassName
+}
+
+// SetSuperClassWithConstructor sets both the superclass name and its resolved constructor type
+func (cm *ClassMetadata) SetSuperClassWithConstructor(superClassName string, constructorType Type) {
+	cm.SuperClassName = superClassName
+	cm.SuperConstructorType = constructorType
 }
 
 // AddImplementedInterface adds an interface that this class implements

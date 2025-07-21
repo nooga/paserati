@@ -1068,9 +1068,23 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		}
 		debugPrintf("// [Checker Class] Found generic base constructor '%s': %T\n", genRef.Name.Value, baseConstructor)
 		
-		// TODO: Properly instantiate the generic constructor with type arguments
-		// For now, use the base constructor (this is a simplification)
-		constructorType = baseConstructor
+		// Properly instantiate the generic constructor with type arguments
+		if len(genRef.TypeArguments) > 0 {
+			debugPrintf("// [Checker Class] Instantiating generic base constructor with %d type args\n", len(genRef.TypeArguments))
+			
+			// Resolve type arguments to types
+			resolvedTypeArgs := make([]types.Type, len(genRef.TypeArguments))
+			for i, typeArg := range genRef.TypeArguments {
+				resolvedTypeArgs[i] = c.resolveTypeAnnotation(typeArg)
+				debugPrintf("// [Checker Class] Resolved type arg %d: %s\n", i, resolvedTypeArgs[i].String())
+			}
+			
+			instantiatedConstructor := c.instantiateGenericType(baseConstructor.(*types.GenericType), resolvedTypeArgs, nil)
+			constructorType = instantiatedConstructor
+		} else {
+			// No type arguments provided, use base constructor as-is
+			constructorType = baseConstructor
+		}
 		exists = true
 		debugPrintf("// [Checker Class] Set constructorType and exists=true for GenericTypeRef\n")
 	} else {
@@ -1150,7 +1164,8 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		if ident, ok := superClassExpr.(*parser.Identifier); ok {
 			superClassName = ident.Value
 		}
-		instanceType.ClassMeta.SetSuperClass(superClassName)
+		// Store both the name and the resolved constructor type for efficient super call resolution
+		instanceType.ClassMeta.SetSuperClassWithConstructor(superClassName, constructorType)
 	}
 
 	// Add superclass to BaseTypes for structural inheritance

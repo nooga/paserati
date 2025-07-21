@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -249,29 +250,83 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 		return
 	}
 	
-	// Get the superclass constructor
-	superConstructor, _, exists := c.env.Resolve(superClassName)
-	if !exists {
-		c.addError(node, fmt.Sprintf("could not resolve superclass constructor '%s'", superClassName))
+	// Get the superclass constructor - handle parameterized types properly
+	var superConstructor types.Type
+	var exists bool
+	
+	// Check if superclass name contains type parameters (e.g., "Comparable<T[]>")
+	if strings.Contains(superClassName, "<") {
+		debugPrintf("// [Checker CallExpr] Detected parameterized superclass: %s\n", superClassName)
+		// Extract base class name (everything before '<')
+		baseClassName := strings.Split(superClassName, "<")[0]
+		debugPrintf("// [Checker CallExpr] Extracting base class: %s\n", baseClassName)
+		
+		// Resolve the base class constructor
+		superConstructor, _, exists = c.env.Resolve(baseClassName)
+		if !exists {
+			c.addError(node, fmt.Sprintf("could not resolve base superclass constructor '%s'", baseClassName))
+			node.SetComputedType(types.Any)
+			return
+		}
+		
+		// For generic constructors, we need the instantiated constructor from the current class's superclass type
+		// Look it up in the BaseTypes of the current class instance
+		if len(classInstanceType.BaseTypes) > 0 {
+			// The first base type should be the superclass instance type
+			if _, ok := classInstanceType.BaseTypes[0].(*types.ObjectType); ok {
+				// Find the constructor type that matches this instance type
+				debugPrintf("// [Checker CallExpr] Found superclass instance type, will use its constructor\n")
+				// For now, use a simplified approach - the generic case is handled during inheritance setup
+				// The BaseTypes[0] should already be the correctly instantiated superclass type
+			}
+		}
+	} else {
+		// Simple case - resolve the constructor directly
+		superConstructor, _, exists = c.env.Resolve(superClassName)
+		if !exists {
+			c.addError(node, fmt.Sprintf("could not resolve superclass constructor '%s'", superClassName))
+			node.SetComputedType(types.Any)
+			return
+		}
+	}
+	
+	// Handle different types of superclass constructors
+	var finalConstructor *types.ObjectType
+	
+	if objType, ok := superConstructor.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+		finalConstructor = objType
+	} else if _, ok := superConstructor.(*types.GenericType); ok {
+		debugPrintf("// [Checker CallExpr] Superclass constructor is generic, need to instantiate it\n")
+		// For parameterized superclasses, we need to use the already instantiated constructor
+		// that was resolved during inheritance setup. It should be stored in SuperConstructorType.
+		if classInstanceType.ClassMeta.SuperConstructorType != nil {
+			if objType, ok := classInstanceType.ClassMeta.SuperConstructorType.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+				finalConstructor = objType
+				debugPrintf("// [Checker CallExpr] Using pre-instantiated superclass constructor\n")
+			}
+		}
+		
+		if finalConstructor == nil {
+			// Fallback: this shouldn't happen if inheritance was set up correctly
+			c.addError(node, fmt.Sprintf("could not instantiate generic superclass constructor '%s'", superClassName))
+			node.SetComputedType(types.Any)
+			return
+		}
+	} else {
+		c.addError(node, fmt.Sprintf("superclass '%s' does not have a constructor", superClassName))
 		node.SetComputedType(types.Any)
 		return
 	}
 	
-	// The super constructor should be an ObjectType with construct signatures
-	if objType, ok := superConstructor.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
-		// Visit and type-check arguments
-		for _, arg := range node.Arguments {
-			c.visit(arg)
-		}
-		
-		// TODO: Validate argument types against constructor signature
-		
-		// The result type is void (constructors don't return values in the normal sense)
-		node.SetComputedType(types.Void)
-	} else {
-		c.addError(node, fmt.Sprintf("superclass '%s' does not have a constructor", superClassName))
-		node.SetComputedType(types.Any)
+	// Visit and type-check arguments
+	for _, arg := range node.Arguments {
+		c.visit(arg)
 	}
+	
+	// TODO: Validate argument types against constructor signature
+	
+	// The result type is void (constructors don't return values in the normal sense)
+	node.SetComputedType(types.Void)
 }
 
 func (c *Checker) checkCallExpression(node *parser.CallExpression) {
