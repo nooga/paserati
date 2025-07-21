@@ -114,6 +114,32 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 func (c *Checker) resolveParameterizedForwardReference(paramRef *types.ParameterizedForwardReferenceType) types.Type {
 	debugPrintf("// [Checker ResolveParamRef] Attempting to resolve %s\n", paramRef.String())
 
+	// For generic classes, during method body checking, we can access the current forward reference 
+	// to get the instance type directly without going through the constructor
+	if c.currentForwardRef != nil && c.currentForwardRef.ClassName == paramRef.ClassName {
+		debugPrintf("// [Checker ResolveParamRef] Using current forward reference for %s\n", paramRef.ClassName)
+		
+		// If we're inside the same generic class, we need to create an instantiated version
+		// of the current class's instance type with the type arguments from the paramRef
+		if c.currentClassInstanceType != nil {
+			debugPrintf("// [Checker ResolveParamRef] Found current class instance type: %s\n", c.currentClassInstanceType.String())
+			
+			// Create a substitution map from type parameters to the provided type arguments
+			if len(paramRef.TypeArguments) == len(c.currentForwardRef.TypeParameters) {
+				substitution := make(map[string]types.Type)
+				for i, typeParam := range c.currentForwardRef.TypeParameters {
+					substitution[typeParam.Name] = paramRef.TypeArguments[i]
+					debugPrintf("// [Checker ResolveParamRef] Mapping %s -> %s\n", typeParam.Name, paramRef.TypeArguments[i].String())
+				}
+				
+				// Substitute the type parameters in the instance type
+				resolvedType := c.substituteTypes(c.currentClassInstanceType, substitution)
+				debugPrintf("// [Checker ResolveParamRef] Substituted instance type: %s\n", resolvedType.String())
+				return resolvedType
+			}
+		}
+	}
+
 	// Look up the generic type by class name
 	if typ, _, found := c.env.Resolve(paramRef.ClassName); found {
 		debugPrintf("// [Checker ResolveParamRef] Found type for %s: %T\n", paramRef.ClassName, typ)

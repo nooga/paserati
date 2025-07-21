@@ -925,39 +925,28 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			resultType = c.handleForwardReferenceStaticAccess(obj, propertyName, node)
 		case *types.ParameterizedForwardReferenceType:
 			// Handle property access on parameterized generic types like LinkedNode<T>
-			// Try to resolve the base type through type alias first, then constructor
-			var baseType types.Type
-			var found bool
+			debugPrintf("// [Checker MemberExpr] ParameterizedForwardReferenceType: %s, property: %s\n", obj.String(), propertyName)
 			
-			if baseType, found = c.env.ResolveType(obj.ClassName); !found {
-				// Try to resolve as constructor and get its instance type
-				if constructorType, _, exists := c.env.Resolve(obj.ClassName); exists {
-					if ctorObj, ok := constructorType.(*types.ObjectType); ok && len(ctorObj.ConstructSignatures) > 0 {
-						baseType = ctorObj.ConstructSignatures[0].ReturnType
-						found = true
-					}
-				}
-			}
-			
-			if found {
-				if objType, ok := baseType.(*types.ObjectType); ok {
-					// Check if the property exists on the base type
+			// The issue is that during method body checking, the generic class might not be fully resolved yet
+			// Instead of trying to resolve the constructor, resolve the ParameterizedForwardReferenceType directly
+			resolvedType := c.resolveParameterizedForwardReference(obj)
+			if resolvedType != nil {
+				debugPrintf("// [Checker MemberExpr] Resolved ParameterizedForwardReferenceType to: %T = %s\n", resolvedType, resolvedType.String())
+				if objType, ok := resolvedType.(*types.ObjectType); ok {
+					// Check if the property exists on the resolved type
 					if propType, exists := objType.Properties[propertyName]; exists {
-						// For generic types, we might need to substitute type parameters
-						// For now, return the property type as-is
 						resultType = propType
-						debugPrintf("// [Checker MemberExpr] Found property '%s' on parameterized type %s: %s\n", 
-							propertyName, obj.String(), propType.String())
+						debugPrintf("// [Checker MemberExpr] Found property '%s' on resolved type: %s\n", propertyName, propType.String())
 					} else {
-						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, resolvedType.String()))
 						resultType = types.Never
 					}
 				} else {
-					c.addError(node.Object, fmt.Sprintf("base type %s is not an object type", obj.ClassName))
+					c.addError(node.Object, fmt.Sprintf("resolved type %s is not an object type", resolvedType.String()))
 					resultType = types.Never
 				}
 			} else {
-				c.addError(node.Object, fmt.Sprintf("could not resolve base type %s", obj.ClassName))
+				c.addError(node.Object, fmt.Sprintf("could not resolve parameterized forward reference %s", obj.String()))
 				resultType = types.Never
 			}
 		// Add cases for other struct-based types here if needed

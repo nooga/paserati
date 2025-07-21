@@ -167,6 +167,12 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	// 2. Create a new environment with type parameters available as TypeParameterType
 	genericEnv := NewEnclosedEnvironment(c.env)
 	for _, typeParam := range typeParams {
+		// Define the type parameter properly in the environment
+		if !genericEnv.DefineTypeParameter(typeParam.Name, typeParam) {
+			c.addError(node.TypeParameters[0].Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+		}
+		
+		// Also make it available as a type alias for resolution
 		paramType := &types.TypeParameterType{
 			Parameter: typeParam,
 		}
