@@ -3,16 +3,18 @@ package modules
 import (
 	"context"
 	"fmt"
+	"io"
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/source"
+	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"sort"
 	"sync"
 	"time"
 )
 
-const moduleLoaderDebug = false
+const moduleLoaderDebug = true
 
 func debugPrintf(format string, args ...interface{}) {
 	if moduleLoaderDebug {
@@ -34,6 +36,9 @@ type moduleLoader struct {
 	// Type checking and compilation
 	checkerFactory func() TypeChecker
 	compilerFactory func() Compiler
+	
+	// VM instance for native module initialization
+	vmInstance *vm.VM
 	
 	// State
 	mutex        sync.RWMutex
@@ -164,10 +169,15 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		
 		// Extract exported types
 		if moduleChecker.IsModuleMode() {
-			record.Exports = moduleChecker.GetModuleExports()
-			debugPrintf("// [ModuleLoader] Extracted %d exports from module %s\n", len(record.Exports), record.ResolvedPath)
-			for name, typ := range record.Exports {
-				debugPrintf("// [ModuleLoader]   Export '%s': %s\n", name, typ.String())
+			// Skip type extraction for native modules - they already have their exports set
+			if !record.isNative {
+				record.Exports = moduleChecker.GetModuleExports()
+				debugPrintf("// [ModuleLoader] Extracted %d exports from module %s\n", len(record.Exports), record.ResolvedPath)
+				for name, typ := range record.Exports {
+					debugPrintf("// [ModuleLoader]   Export '%s': %s\n", name, typ.String())
+				}
+			} else {
+				debugPrintf("// [ModuleLoader] Skipping export extraction for native module %s (already has %d exports)\n", record.ResolvedPath, len(record.Exports))
 			}
 		}
 		
@@ -219,6 +229,14 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 // parseModuleSequential parses a single module synchronously
 func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *ResolvedModule) error {
 	debugPrintf("// [ModuleLoader] parseModuleSequential: %s\n", record.ResolvedPath)
+	
+	// Check if this is a native module - need to import the driver package functions
+	// This is a temporary approach until we can restructure the imports
+	if nativeModule := ml.checkForNativeModule(resolved.Source); nativeModule != nil {
+		debugPrintf("// [ModuleLoader] Detected native module: %s\n", record.ResolvedPath)
+		return ml.handleNativeModuleSource(record, nativeModule)
+	}
+	
 	// Read the source content
 	defer resolved.Source.Close()
 	
@@ -503,6 +521,14 @@ func (ml *moduleLoader) SetCompilerFactory(factory func() Compiler) {
 	ml.compilerFactory = factory
 }
 
+// SetVMInstance sets the VM instance for native module initialization
+func (ml *moduleLoader) SetVMInstance(vm *vm.VM) {
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+	
+	ml.vmInstance = vm
+}
+
 // AddResolver adds a module resolver to the chain
 func (ml *moduleLoader) AddResolver(resolver ModuleResolver) {
 	ml.mutex.Lock()
@@ -608,7 +634,10 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 		
 		// Extract exported types from the checked module
 		if moduleChecker.IsModuleMode() {
-			record.Exports = moduleChecker.GetModuleExports()
+			// Skip type extraction for native modules - they already have their exports set
+			if !record.isNative {
+				record.Exports = moduleChecker.GetModuleExports()
+			}
 		}
 		
 		// Phase 5: Compile the module to bytecode
@@ -656,6 +685,84 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 	return ml.registry.Get(entryPoint), nil
 }
 
+
+// NativeModuleSource interface to detect native modules without circular imports
+type NativeModuleSource interface {
+	io.ReadCloser
+	IsNativeModule() bool
+	GetNativeModule() interface{}
+}
+
+// NativeModuleInterface provides access to native module functionality without importing driver
+type NativeModuleInterface interface {
+	GetName() string
+	InitializeExports(vmInstance *vm.VM) map[string]vm.Value
+	GetTypeExports() map[string]types.Type // Get type information for exports
+}
+
+// checkForNativeModule checks if the source is a native module
+func (ml *moduleLoader) checkForNativeModule(source io.ReadCloser) NativeModuleInterface {
+	fmt.Printf("// [ModuleLoader] checkForNativeModule: Checking source type: %T\n", source)
+	if nativeSource, ok := source.(NativeModuleSource); ok {
+		fmt.Printf("// [ModuleLoader] checkForNativeModule: Source is NativeModuleSource, IsNativeModule=%v\n", nativeSource.IsNativeModule())
+		if nativeSource.IsNativeModule() {
+			nativeModuleInterface := nativeSource.GetNativeModule()
+			fmt.Printf("// [ModuleLoader] checkForNativeModule: Found native module: %T\n", nativeModuleInterface)
+			if nativeModule, ok := nativeModuleInterface.(NativeModuleInterface); ok {
+				return nativeModule
+			} else {
+				fmt.Printf("// [ModuleLoader] checkForNativeModule: Native module doesn't implement NativeModuleInterface\n")
+			}
+		}
+	} else {
+		fmt.Printf("// [ModuleLoader] checkForNativeModule: Source is NOT NativeModuleSource\n")
+	}
+	return nil
+}
+
+// handleNativeModuleSource processes a native module and populates the module record
+func (ml *moduleLoader) handleNativeModuleSource(record *ModuleRecord, nativeModule NativeModuleInterface) error {
+	debugPrintf("// [ModuleLoader] Processing native module: %s\n", nativeModule.GetName())
+	
+	// Use the VM instance if available, otherwise create a temporary one
+	vmInstance := ml.vmInstance
+	if vmInstance == nil {
+		debugPrintf("// [ModuleLoader] Warning: No VM instance set, creating temporary VM for native module\n")
+		vmInstance = vm.NewVM()
+	}
+	
+	// Initialize the native module to get runtime values and type information
+	runtimeValues := nativeModule.InitializeExports(vmInstance)
+	debugPrintf("// [ModuleLoader] Native module exported %d runtime values\n", len(runtimeValues))
+	
+	// Get type information from the native module
+	typeExports := nativeModule.GetTypeExports()
+	debugPrintf("// [ModuleLoader] Native module has %d type exports\n", len(typeExports))
+	
+	// Directly populate both type and runtime exports
+	record.Exports = typeExports        // Type information for type checker
+	record.ExportValues = runtimeValues  // Runtime values for VM
+	record.nativeModule = nativeModule   // Store native module reference
+	record.isNative = true               // Mark as native module
+	
+	record.State = ModuleCompiled // Mark as compiled since no compilation needed
+	
+	// Create a simple AST to satisfy the module system requirements
+	// This is just a placeholder since we don't need real parsing for native modules
+	record.AST = &parser.Program{
+		Statements: []parser.Statement{}, // Empty program is fine
+	}
+	
+	// Create a synthetic source file for debugging purposes
+	record.Source = &source.SourceFile{
+		Name:    record.ResolvedPath,
+		Path:    record.ResolvedPath,
+		Content: fmt.Sprintf("// Native module: %s", nativeModule.GetName()),
+	}
+	
+	debugPrintf("// [ModuleLoader] Native module processing complete\n")
+	return nil
+}
 
 // Helper function for max
 func max(a, b int) int {

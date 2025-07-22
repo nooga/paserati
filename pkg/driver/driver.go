@@ -16,6 +16,7 @@ import (
 	"paserati/pkg/vm"
 )
 
+
 const debugDriver = false
 
 func debugPrintf(format string, args ...interface{}) {
@@ -48,11 +49,12 @@ func (ca *compilerAdapter) SetChecker(tc modules.TypeChecker) {
 // allowing variables and functions defined in one evaluation
 // to be used in subsequent ones.
 type Paserati struct {
-	vmInstance   *vm.VM
-	checker      *checker.Checker
-	compiler     *compiler.Compiler
-	moduleLoader modules.ModuleLoader
-	heapAlloc    *compiler.HeapAlloc // Unified global heap allocator
+	vmInstance      *vm.VM
+	checker         *checker.Checker
+	compiler        *compiler.Compiler
+	moduleLoader    modules.ModuleLoader
+	heapAlloc       *compiler.HeapAlloc // Unified global heap allocator
+	nativeResolver  interface{}         // *NativeModuleResolver - defined in native_module.go to avoid import cycles
 }
 
 // NewPaserati creates a new Paserati session with a fresh VM and Checker.
@@ -95,6 +97,9 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	
 	// Wire the module loader into the VM
 	vmInstance.SetModuleLoader(moduleLoader)
+	
+	// Set the VM instance in the module loader for native module initialization
+	moduleLoader.SetVMInstance(vmInstance)
 	
 	// Initialize builtins using new initializer system FIRST
 	if err := initializeBuiltins(paserati); err != nil {
@@ -172,6 +177,11 @@ func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiE
 			Msg:      fmt.Sprintf("Module error: %s", moduleRecord.Error.Error()),
 		}
 		return nil, []errors.PaseratiError{compileErr}
+	}
+	
+	// Register native module exports with HeapAlloc before compilation
+	if moduleRecord.IsNativeModule() {
+		p.registerNativeModuleExports(moduleRecord)
 	}
 	
 	// Enable module mode in the checker and compiler for this specific module
@@ -533,6 +543,11 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
 	}
 	
+	// Register native module exports with HeapAlloc before any processing
+	if moduleRecord.IsNativeModule() {
+		p.registerNativeModuleExports(moduleRecord)
+	}
+	
 	// Check if module already has a compiled chunk from the loader
 	var chunk *vm.Chunk
 	if moduleRecord.CompiledChunk != nil {
@@ -577,6 +592,78 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 	}
 	
 	return finalValue, []errors.PaseratiError{}, runtimeErrs
+}
+
+// RunStringWithModules runs TypeScript code that may contain import statements.
+// If imports are detected, it automatically enables module mode.
+// If no imports are found, it falls back to script mode like RunString.
+func (p *Paserati) RunStringWithModules(sourceCode string) (vm.Value, []errors.PaseratiError) {
+	// First, parse to detect if there are any import statements
+	sourceFile := source.NewEvalSource(sourceCode)
+	l := lexer.NewLexerWithSource(sourceFile)
+	parseInstance := parser.NewParser(l)
+	program, parseErrs := parseInstance.ParseProgram()
+	if len(parseErrs) > 0 {
+		return vm.Undefined, parseErrs
+	}
+
+	// Check if the program contains import statements
+	hasImports := containsImports(program)
+	
+	if hasImports {
+		// Use module mode - create a temporary module and run it
+		return p.runAsTemporaryModule(sourceCode, program)
+	} else {
+		// Use script mode like normal RunString
+		return p.RunString(sourceCode)
+	}
+}
+
+// containsImports checks if a program contains any import statements
+func containsImports(program *parser.Program) bool {
+	for _, stmt := range program.Statements {
+		if _, isImport := stmt.(*parser.ImportDeclaration); isImport {
+			return true
+		}
+	}
+	return false
+}
+
+// runAsTemporaryModule runs code with imports as a temporary module
+func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Program) (vm.Value, []errors.PaseratiError) {
+	// Create a temporary module name
+	tempModuleName := "__temp_module__"
+	
+	// Preload all native modules that might be imported
+	// This ensures their exports are registered with HeapAlloc before compilation
+	if err := p.preloadNativeModules(program); err != nil {
+		return vm.Undefined, []errors.PaseratiError{err}
+	}
+	
+	// Enable module mode in checker and compiler
+	p.checker.EnableModuleMode(tempModuleName, p.moduleLoader)
+	p.compiler.EnableModuleMode(tempModuleName, p.moduleLoader)
+	
+	// Dump AST if enabled
+	parser.DumpAST(program, "RunStringWithModules")
+
+	// Compile with module mode enabled
+	chunk, compileAndTypeErrs := p.compiler.Compile(program)
+	if len(compileAndTypeErrs) > 0 {
+		return vm.Undefined, compileAndTypeErrs
+	}
+	if chunk == nil {
+		internalErr := &errors.RuntimeError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+		}
+		return vm.Undefined, []errors.PaseratiError{internalErr}
+	}
+
+	// Execute the chunk
+	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
+	
+	return finalValue, runtimeErrs
 }
 
 // EmitJavaScript parses TypeScript source and emits equivalent JavaScript code
@@ -791,6 +878,37 @@ func (p *Paserati) collectExportedValues() map[string]vm.Value {
 	return exports
 }
 
+// registerNativeModuleExports registers native module exports with the HeapAlloc system
+// This ensures that when other modules import from native modules, the compiler can
+// find the correct global indices for the imported names
+func (p *Paserati) registerNativeModuleExports(moduleRecord *modules.ModuleRecord) {
+	if !moduleRecord.IsNativeModule() {
+		return
+	}
+	
+	exportValues := moduleRecord.GetExportValues()
+	debugPrintf("// [Driver] Registering %d native module exports with HeapAlloc\n", len(exportValues))
+	
+	// Get the HeapAlloc instance from the compiler
+	heapAlloc := p.compiler.GetHeapAlloc()
+	if heapAlloc == nil {
+		debugPrintf("// [Driver] Warning: No HeapAlloc available, cannot register native module exports\n")
+		return
+	}
+	
+	// Register each export with the HeapAlloc and set the value in the VM heap
+	for exportName, exportValue := range exportValues {
+		// Get or assign a global index for this export name
+		globalIndex := heapAlloc.GetOrAssignIndex(exportName)
+		debugPrintf("// [Driver] Registered native export '%s' at global index %d\n", exportName, globalIndex)
+		
+		// Set the value directly in the VM's heap
+		if err := p.vmInstance.GetHeap().Set(globalIndex, exportValue); err != nil {
+			debugPrintf("// [Driver] Warning: Failed to set native export '%s' in VM heap: %v\n", exportName, err)
+		}
+	}
+}
+
 // tryGetExportValue attempts to get the runtime value of an exported variable
 // This looks up the variable in the VM's global space or symbol table
 func (p *Paserati) tryGetExportValue(exportName string) (vm.Value, bool) {
@@ -828,4 +946,41 @@ func (p *Paserati) coordinateModuleCompilerGlobals(moduleCompiler *compiler.Comp
 			debugPrintf("// [Driver] coordinateModuleCompilerGlobals: Set '%s' to index %d\n", name, globalIdx)
 		}
 	}
+}
+
+// preloadNativeModules scans the AST for import statements and preloads any native modules
+// This ensures their exports are registered with HeapAlloc before the importing code is compiled
+func (p *Paserati) preloadNativeModules(program *parser.Program) errors.PaseratiError {
+	// Scan the AST for import declarations
+	for _, stmt := range program.Statements {
+		if importDecl, ok := stmt.(*parser.ImportDeclaration); ok {
+			if importDecl.Source != nil {
+				modulePath := importDecl.Source.Value
+				
+				// Check if this is a native module
+				if p.nativeResolver != nil {
+					resolver := p.nativeResolver.(*NativeModuleResolver)
+					if resolver.CanResolve(modulePath) {
+						debugPrintf("// [Driver] Preloading native module: %s\n", modulePath)
+						
+						// Load the native module through the module loader
+						moduleRecord, err := p.moduleLoader.LoadModule(modulePath, ".")
+						if err != nil {
+							return &errors.CompileError{
+								Position: errors.Position{Line: 0, Column: 0},
+								Msg:      fmt.Sprintf("Failed to preload native module '%s': %v", modulePath, err),
+							}
+						}
+						
+						// Register its exports with HeapAlloc
+						if concreteRecord, ok := moduleRecord.(*modules.ModuleRecord); ok {
+							p.registerNativeModuleExports(concreteRecord)
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return nil
 }

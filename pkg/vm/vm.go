@@ -255,6 +255,11 @@ func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]in
 	return vm.heap.SetBuiltinGlobals(globals, indexMap)
 }
 
+// GetHeap returns the VM's global heap for direct access
+func (vm *VM) GetHeap() *Heap {
+	return vm.heap
+}
+
 func (vm *VM) Reset() {
 	vm.frameCount = 0
 	vm.nextRegSlot = 0
@@ -2729,7 +2734,7 @@ startExecution:
 			}
 
 			modulePath := modulePathValue.AsString()
-			// fmt.Printf("// [VM] OpEvalModule: Executing module '%s' (current context: '%s')\n", modulePath, vm.currentModulePath)
+			fmt.Printf("// [VM] OpEvalModule: Executing module '%s' (current context: '%s')\n", modulePath, vm.currentModulePath)
 			status, result := vm.executeModule(modulePath)
 			if status != InterpretOK {
 				// fmt.Printf("// [VM] OpEvalModule: Module '%s' execution failed with status %d\n", modulePath, status)
@@ -3899,7 +3904,10 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 				for exportName, exportValue := range exportValues {
 					moduleCtx.exports[exportName] = exportValue
 				}
-				// fmt.Printf("// [VM DEBUG] collectModuleExports: Collected %d export values for module '%s'\n", len(exportValues), modulePath)
+				fmt.Printf("// [VM DEBUG] collectModuleExports: Collected %d export values for module '%s'\n", len(exportValues), modulePath)
+				for name, value := range exportValues {
+					fmt.Printf("// [VM DEBUG] collectModuleExports: Export '%s' = %s (type %d)\n", name, value.ToString(), int(value.Type()))
+				}
 			}
 		}
 	}

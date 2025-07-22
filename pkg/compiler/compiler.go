@@ -129,6 +129,11 @@ func (c *Compiler) SetHeapAlloc(heapAlloc *HeapAlloc) {
 	c.heapAlloc = heapAlloc
 }
 
+// GetHeapAlloc returns the compiler's heap allocator
+func (c *Compiler) GetHeapAlloc() *HeapAlloc {
+	return c.heapAlloc
+}
+
 // EnableModuleMode enables module-aware compilation with binding resolution
 // Parallels the checker's EnableModuleMode method
 func (c *Compiler) EnableModuleMode(modulePath string, loader modules.ModuleLoader) {

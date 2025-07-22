@@ -82,6 +82,10 @@ type ModuleRecord struct {
 	Dependencies []string // Direct dependencies (module paths)
 	Dependents   []string // Modules that depend on this one
 	
+	// Native module support
+	nativeModule NativeModuleInterface // Native module interface for lazy initialization
+	isNative     bool                   // Flag to indicate this is a native module
+	
 	// Error handling
 	Error        error     // Loading/parsing/checking error
 	
@@ -256,6 +260,16 @@ func (mr *ModuleRecord) GetExportValues() map[string]vm.Value {
 		return make(map[string]vm.Value)
 	}
 	return mr.ExportValues
+}
+
+// IsNativeModule returns true if this is a native module
+func (mr *ModuleRecord) IsNativeModule() bool {
+	return mr.nativeModule != nil
+}
+
+// GetNativeModule returns the native module interface if this is a native module
+func (mr *ModuleRecord) GetNativeModule() NativeModuleInterface {
+	return mr.nativeModule
 }
 
 // GetCompiledChunk returns the compiled bytecode chunk for this module
