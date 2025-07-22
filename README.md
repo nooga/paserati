@@ -78,12 +78,11 @@ The engine's warmed up and running decent up until the first bend! I've got the 
 **Big Missing Pieces:**
 
 - **No async/await** - Don't have an event loop yet, so no async/await
-- **No iterators** - No `Symbol.iterator` or `for...of` protocol
 
 **Also Missing:**
 
 - WeakMap/WeakSet
-- Typed Arrays, Decorators
+- Decorators
 - Namespaces
 
 I'm not targeting any specific TypeScript or ECMAScript version - I'm just vibing in the workshop, implementing whatever seems fun or necessary. Sometimes that means skipping the hard stuff and sometimes it means going deep on random features that caught my interest.
