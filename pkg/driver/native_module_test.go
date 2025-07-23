@@ -12,39 +12,33 @@ import (
 func TestNativeModuleBasic(t *testing.T) {
 	// Create a new Paserati instance
 	p := NewPaserati()
-	
+
 	// Declare a simple math utilities module
-	fmt.Println("DEBUG: Declaring math-utils module...")
 	p.DeclareModule("math-utils", func(m *ModuleBuilder) {
-		fmt.Println("DEBUG: Inside module builder...")
-		
+
 		// Add some constants
-		m.Const("PI_SQUARED", math.Pi * math.Pi)
+		m.Const("PI_SQUARED", math.Pi*math.Pi)
 		m.Const("EULER", math.E)
-		
+
 		// Add simple functions
 		m.Function("square", func(x float64) float64 {
-			fmt.Printf("DEBUG: square(%f) called\n", x)
 			return x * x
 		})
-		
+
 		m.Function("add", func(a, b float64) float64 {
-			fmt.Printf("DEBUG: add(%f, %f) called\n", a, b)
 			return a + b
 		})
-		
+
 		// Add a function that returns multiple values (should return tuple or object)
 		m.Function("divmod", func(a, b float64) map[string]float64 {
-			fmt.Printf("DEBUG: divmod(%f, %f) called\n", a, b)
 			return map[string]float64{
-				"quotient": math.Floor(a / b),
+				"quotient":  math.Floor(a / b),
 				"remainder": math.Mod(a, b),
 			}
 		})
 	})
-	
-	fmt.Println("DEBUG: Module declared, now running TypeScript code...")
-	
+
+
 	// NOTE: TypeScript code for later integration test
 	_ = `
 		// Import from our native module
@@ -72,26 +66,19 @@ func TestNativeModuleBasic(t *testing.T) {
 		// Return success indicator
 		"native_module_test_passed";
 	`
-	
-	fmt.Println("DEBUG: About to evaluate TypeScript code...")
-	
+
+
 	// Test that the native module can be resolved
-	fmt.Println("DEBUG: Checking if module is registered with loader...")
 	moduleRecord := p.moduleLoader.GetModule("math-utils")
-	fmt.Printf("DEBUG: moduleRecord from loader: %v\n", moduleRecord != nil)
 	if moduleRecord == nil {
 		// Let's try resolving it directly
-		fmt.Println("DEBUG: Module not found in loader, checking native resolver...")
 		if p.nativeResolver != nil {
-			nativeResolver := p.nativeResolver.(*NativeModuleResolver)
+			nativeResolver := p.nativeResolver
 			canResolve := nativeResolver.CanResolve("math-utils")
-			fmt.Printf("DEBUG: Native resolver can resolve: %v\n", canResolve)
-			
+
 			if canResolve {
 				// Try to manually load the module to see what happens
-				fmt.Println("DEBUG: Attempting to load module through module system...")
 				loadedModule, err := p.moduleLoader.LoadModule("math-utils", ".")
-				fmt.Printf("DEBUG: LoadModule result: %v, error: %v\n", loadedModule != nil, err)
 				if err == nil && loadedModule != nil {
 					if concreteRecord, ok := loadedModule.(*modules.ModuleRecord); ok {
 						moduleRecord = concreteRecord
@@ -99,34 +86,30 @@ func TestNativeModuleBasic(t *testing.T) {
 				}
 			}
 		}
-		
+
 		if moduleRecord == nil {
 			t.Fatalf("Native module 'math-utils' was not registered with module loader")
 		}
 	}
-	
-	fmt.Printf("DEBUG: Found module record: %v\n", moduleRecord != nil)
-	
+
+
 	// For now, let's just test that the native module is properly registered
 	// and that we can access the native resolver
-	nativeResolver := p.nativeResolver.(*NativeModuleResolver)
+	nativeResolver := p.nativeResolver
 	if !nativeResolver.CanResolve("math-utils") {
 		t.Fatalf("Native resolver cannot resolve 'math-utils'")
 	}
-	
-	fmt.Println("DEBUG: Native resolver can resolve math-utils")
-	
+
+
 	// Test resolving the module
 	resolved, err := nativeResolver.Resolve("math-utils", ".")
 	if err != nil {
 		t.Fatalf("Failed to resolve native module: %v", err)
 	}
-	
-	fmt.Printf("DEBUG: Resolved module: %s\n", resolved.ResolvedPath)
-	
+
+
 	// Test actual TypeScript execution with imports
-	fmt.Println("DEBUG: About to test TypeScript execution with imports...")
-	
+
 	tsCode := `
 		import { square, add, divmod, PI_SQUARED, EULER } from "math-utils";
 		
@@ -152,12 +135,12 @@ func TestNativeModuleBasic(t *testing.T) {
 		// Return success indicator
 		"native_module_test_passed";
 	`
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to evaluate native module test: %v", errs[0])
 	}
-	
+
 	// Check that we got the expected result
 	if result.ToString() != "native_module_test_passed" {
 		t.Errorf("Expected 'native_module_test_passed', got: %v", result.ToString())
@@ -167,9 +150,8 @@ func TestNativeModuleBasic(t *testing.T) {
 // TestNativeModuleNamespace tests namespace functionality
 func TestNativeModuleNamespace(t *testing.T) {
 	p := NewPaserati()
-	
-	fmt.Println("DEBUG: Declaring module with namespace...")
-	
+
+
 	// Declare a module with namespaces
 	p.DeclareModule("collections", func(m *ModuleBuilder) {
 		// Math namespace
@@ -178,7 +160,7 @@ func TestNativeModuleNamespace(t *testing.T) {
 			ns.Function("sqrt", math.Sqrt)
 			ns.Const("PI", math.Pi)
 		})
-		
+
 		// String utilities namespace
 		m.Namespace("strings", func(ns *NamespaceBuilder) {
 			ns.Function("upper", func(s string) string {
@@ -189,7 +171,7 @@ func TestNativeModuleNamespace(t *testing.T) {
 			})
 		})
 	})
-	
+
 	tsCode := `
 		import { math, strings } from "collections";
 		
@@ -206,12 +188,12 @@ func TestNativeModuleNamespace(t *testing.T) {
 		
 		"namespace_test_passed";
 	`
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to evaluate namespace test: %v", errs[0])
 	}
-	
+
 	if result.ToString() != "namespace_test_passed" {
 		t.Errorf("Expected 'namespace_test_passed', got: %v", result.ToString())
 	}
@@ -219,12 +201,12 @@ func TestNativeModuleNamespace(t *testing.T) {
 
 // Simple Point struct for testing with JSON tags
 type Point struct {
-	X float64 `json:"x"`                    // Mapped to "x"
-	Y float64 `json:"y"`                    // Mapped to "y"
-	Z float64 `json:"z,omitempty"`          // Mapped to "z" with omitempty (not used yet)
-	Name string `json:"name"`               // Mapped to "name"
-	ID int    `json:"id"`                   // Mapped to "id"
-	Public float64                          // No tag, uses field name "Public"
+	X      float64 `json:"x"`           // Mapped to "x"
+	Y      float64 `json:"y"`           // Mapped to "y"
+	Z      float64 `json:"z,omitempty"` // Mapped to "z" with omitempty (not used yet)
+	Name   string  `json:"name"`        // Mapped to "name"
+	ID     int     `json:"id"`          // Mapped to "id"
+	Public float64 // No tag, uses field name "Public"
 	// Hidden field that won't be exposed to TypeScript
 	internal string `json:"-"`
 }
@@ -241,13 +223,11 @@ func (p *Point) String() string {
 // TestNativeModuleClass tests class/struct functionality
 func TestNativeModuleClass(t *testing.T) {
 	p := NewPaserati()
-	
-	fmt.Println("DEBUG: Declaring module with class...")
-	
+
+
 	p.DeclareModule("geometry", func(m *ModuleBuilder) {
 		// Export Point class with constructor
 		m.Class("Point", (*Point)(nil), func(x, y float64) *Point {
-			fmt.Printf("DEBUG: Creating Point(%f, %f)\n", x, y)
 			return &Point{
 				X: x, Y: y, Z: 0,
 				Name: "TestPoint", ID: 42, Public: 99.5,
@@ -255,7 +235,7 @@ func TestNativeModuleClass(t *testing.T) {
 			}
 		})
 	})
-	
+
 	tsCode := `
 		import { Point } from "geometry";
 		
@@ -280,12 +260,12 @@ func TestNativeModuleClass(t *testing.T) {
 		
 		"class_test_passed";
 	`
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to evaluate class test: %v", errs[0])
 	}
-	
+
 	if result.ToString() != "class_test_passed" {
 		t.Errorf("Expected 'class_test_passed', got: %v", result.ToString())
 	}

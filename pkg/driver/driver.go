@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"strings"
 	"paserati/pkg/builtins"
 	"paserati/pkg/checker"
 	"paserati/pkg/compiler"
@@ -14,8 +13,8 @@ import (
 	"paserati/pkg/parser"
 	"paserati/pkg/source"
 	"paserati/pkg/vm"
+	"strings"
 )
-
 
 const debugDriver = false
 
@@ -49,12 +48,12 @@ func (ca *compilerAdapter) SetChecker(tc modules.TypeChecker) {
 // allowing variables and functions defined in one evaluation
 // to be used in subsequent ones.
 type Paserati struct {
-	vmInstance      *vm.VM
-	checker         *checker.Checker
-	compiler        *compiler.Compiler
-	moduleLoader    modules.ModuleLoader
-	heapAlloc       *compiler.HeapAlloc // Unified global heap allocator
-	nativeResolver  interface{}         // *NativeModuleResolver - defined in native_module.go to avoid import cycles
+	vmInstance     *vm.VM
+	checker        *checker.Checker
+	compiler       *compiler.Compiler
+	moduleLoader   modules.ModuleLoader
+	heapAlloc      *compiler.HeapAlloc   // Unified global heap allocator
+	nativeResolver *NativeModuleResolver // *NativeModuleResolver - defined in native_module.go to avoid import cycles
 }
 
 // NewPaserati creates a new Paserati session with a fresh VM and Checker.
@@ -69,16 +68,16 @@ func NewPaserati() *Paserati {
 func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	// Create module loader first
 	config := modules.DefaultLoaderConfig()
-	
+
 	// Create file system resolver for the specified base directory
 	fsResolver := modules.NewFileSystemResolver(os.DirFS(baseDir), baseDir)
-	
+
 	// Create module loader with file system resolver
 	moduleLoader := modules.NewModuleLoader(config, fsResolver)
-	
+
 	// Create unified heap allocator for coordinating global indices
 	heapAlloc := compiler.NewHeapAlloc()
-	
+
 	// Create checker and compiler
 	typeChecker := checker.NewChecker()
 	comp := compiler.NewCompiler()
@@ -94,13 +93,13 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 		moduleLoader: moduleLoader,
 		heapAlloc:    heapAlloc,
 	}
-	
+
 	// Wire the module loader into the VM
 	vmInstance.SetModuleLoader(moduleLoader)
-	
+
 	// Set the VM instance in the module loader for native module initialization
 	moduleLoader.SetVMInstance(vmInstance)
-	
+
 	// Initialize builtins using new initializer system FIRST
 	if err := initializeBuiltins(paserati); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
@@ -116,23 +115,26 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 		debugPrintf("// [Driver] Created new checker for module: %p\n", newChecker)
 		return newChecker
 	})
-	
+
 	// Set up the compiler factory for the module loader AFTER builtins are initialized
 	// This allows the module loader to create compilers without circular imports
 	moduleLoader.SetCompilerFactory(func() modules.Compiler {
 		// Create a new compiler instance for module compilation
 		newCompiler := compiler.NewCompiler()
-		
+
 		// CRITICAL: Give module compiler the SAME heap allocator instance
 		// This ensures all compilers coordinate on the exact same global indices
 		newCompiler.SetHeapAlloc(paserati.heapAlloc)
-		
+
 		// Return a wrapper that adapts the return type to interface{}
 		return &compilerAdapter{newCompiler}
 	})
-	
+
 	// Enable module mode for the main checker by default for consistent type checking
 	typeChecker.EnableModuleMode("", moduleLoader)
+
+	// Install built-in Paserati modules
+	installBuiltinModules(paserati)
 
 	return paserati
 }
@@ -160,7 +162,7 @@ func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiE
 		}
 		return nil, []errors.PaseratiError{loadErr}
 	}
-	
+
 	// Extract the module record
 	moduleRecord, ok := moduleRecordInterface.(*modules.ModuleRecord)
 	if !ok {
@@ -170,7 +172,7 @@ func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiE
 		}
 		return nil, []errors.PaseratiError{typeErr}
 	}
-	
+
 	if moduleRecord.Error != nil {
 		compileErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
@@ -178,22 +180,22 @@ func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiE
 		}
 		return nil, []errors.PaseratiError{compileErr}
 	}
-	
+
 	// Register native module exports with HeapAlloc before compilation
 	if moduleRecord.IsNativeModule() {
 		p.registerNativeModuleExports(moduleRecord)
 	}
-	
+
 	// Enable module mode in the checker and compiler for this specific module
 	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
-	
+
 	// Compile the module (type checking is already done by LoadModule)
 	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
 	if len(compileErrs) > 0 {
 		return nil, compileErrs
 	}
-	
+
 	return chunk, nil
 }
 
@@ -257,7 +259,6 @@ func (p *Paserati) DisplayResult(sourceCode string, value vm.Value, errs []error
 	}
 	return true
 }
-
 
 // CompileString takes Paserati source code as a string, compiles it,
 // and returns the resulting VM chunk or an aggregated list of Paserati errors.
@@ -348,21 +349,21 @@ func RunStringWithOptions(source string, options RunOptions) bool {
 func RunFile(filename string) bool {
 	// Create a new Paserati session
 	paserati := NewPaserati()
-	
+
 	// Convert file path to module specifier
 	// Check if file exists first
 	if _, err := os.Stat(filename); err != nil {
 		fmt.Fprintf(os.Stderr, "File not found: %s\n", filename)
 		return false
 	}
-	
+
 	// Convert to module specifier
 	// If it doesn't start with ./ or ../ or /, add ./ prefix
 	moduleSpecifier := filename
 	if !strings.HasPrefix(filename, "./") && !strings.HasPrefix(filename, "../") && !strings.HasPrefix(filename, "/") {
 		moduleSpecifier = "./" + filename
 	}
-	
+
 	// Always use module mode - it gracefully handles both module and non-module files
 	return paserati.RunModule(moduleSpecifier)
 }
@@ -376,7 +377,7 @@ func (p *Paserati) LoadModule(specifier string, fromPath string) (vm.ModuleRecor
 // RunModule loads and executes a module file with full module system support.
 // Unlike RunFile, this enables import/export statements and cross-module type checking.
 func (p *Paserati) RunModule(filename string) bool {
-	// Load the module using the module system 
+	// Load the module using the module system
 	// Use sequential loading for now until parallel processing is fully debugged
 	moduleRecordInterface, err := p.moduleLoader.LoadModule(filename, ".")
 	if err != nil {
@@ -387,7 +388,7 @@ func (p *Paserati) RunModule(filename string) bool {
 		fmt.Fprintf(os.Stderr, "%s Error: %s\n", loadErr.Kind(), loadErr.Message())
 		return false
 	}
-	
+
 	// Check if module loaded successfully
 	if moduleRecordInterface == nil {
 		moduleErr := &errors.CompileError{
@@ -397,7 +398,7 @@ func (p *Paserati) RunModule(filename string) bool {
 		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
 		return false
 	}
-	
+
 	// Type assert to get access to the concrete ModuleRecord fields
 	moduleRecord, ok := moduleRecordInterface.(*modules.ModuleRecord)
 	if !ok {
@@ -408,7 +409,7 @@ func (p *Paserati) RunModule(filename string) bool {
 		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
 		return false
 	}
-	
+
 	if moduleRecord.Error != nil {
 		moduleErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
@@ -417,7 +418,7 @@ func (p *Paserati) RunModule(filename string) bool {
 		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
 		return false
 	}
-	
+
 	// Check if AST is available
 	if moduleRecord.AST == nil {
 		moduleErr := &errors.CompileError{
@@ -427,7 +428,7 @@ func (p *Paserati) RunModule(filename string) bool {
 		fmt.Fprintf(os.Stderr, "%s Error: %s\n", moduleErr.Kind(), moduleErr.Message())
 		return false
 	}
-	
+
 	// Check if module already has a compiled chunk from the loader
 	var chunk *vm.Chunk
 	if moduleRecord.CompiledChunk != nil {
@@ -437,11 +438,11 @@ func (p *Paserati) RunModule(filename string) bool {
 	} else {
 		// Module needs compilation (shouldn't happen with current loader, but handle it)
 		debugPrintf("// [Driver] Module '%s' needs compilation\n", filename)
-		
+
 		// Enable module mode in the checker and compiler
 		p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 		p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
-		
+
 		// Compile the module
 		var compileErrs []errors.PaseratiError
 		chunk, compileErrs = p.compiler.Compile(moduleRecord.AST)
@@ -453,7 +454,7 @@ func (p *Paserati) RunModule(filename string) bool {
 			}
 			return p.DisplayResult(sourceCode, vm.Undefined, compileErrs)
 		}
-		
+
 		if chunk == nil {
 			internalErr := &errors.RuntimeError{
 				Position: errors.Position{Line: 0, Column: 0},
@@ -461,11 +462,11 @@ func (p *Paserati) RunModule(filename string) bool {
 			}
 			return p.DisplayResult("", vm.Undefined, []errors.PaseratiError{internalErr})
 		}
-		
+
 		// Store the compiled chunk in the module record for VM access
 		moduleRecord.CompiledChunk = chunk
 	}
-	
+
 	// Execute the module
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 	if len(runtimeErrs) > 0 {
@@ -476,20 +477,20 @@ func (p *Paserati) RunModule(filename string) bool {
 		}
 		return p.DisplayResult(sourceCode, finalValue, runtimeErrs)
 	}
-	
+
 	// After successful execution, collect exported values from the compiler
 	if p.compiler.IsModuleMode() {
 		exportedValues := p.collectExportedValues()
 		moduleRecord.ExportValues = exportedValues
 		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 	}
-	
+
 	// Get source code for error display
 	sourceCode := ""
 	if moduleRecord.Source != nil {
 		sourceCode = moduleRecord.Source.Content
 	}
-	
+
 	return p.DisplayResult(sourceCode, finalValue, runtimeErrs)
 }
 
@@ -497,7 +498,7 @@ func (p *Paserati) RunModule(filename string) bool {
 // and returns the final value along with any errors. This combines the functionality
 // of RunModule with the value return capability of RunCode.
 func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.PaseratiError, []errors.PaseratiError) {
-	// Load the module using the module system 
+	// Load the module using the module system
 	moduleRecordInterface, err := p.moduleLoader.LoadModule(filename, ".")
 	if err != nil {
 		loadErr := &errors.CompileError{
@@ -506,7 +507,7 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		}
 		return vm.Undefined, []errors.PaseratiError{loadErr}, nil
 	}
-	
+
 	// Check if module loaded successfully
 	if moduleRecordInterface == nil {
 		moduleErr := &errors.CompileError{
@@ -515,7 +516,7 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		}
 		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
 	}
-	
+
 	// Type assert to get access to the concrete ModuleRecord fields
 	moduleRecord, ok := moduleRecordInterface.(*modules.ModuleRecord)
 	if !ok {
@@ -525,7 +526,7 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		}
 		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
 	}
-	
+
 	if moduleRecord.Error != nil {
 		moduleErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
@@ -533,7 +534,7 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		}
 		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
 	}
-	
+
 	// Check if AST is available
 	if moduleRecord.AST == nil {
 		moduleErr := &errors.CompileError{
@@ -542,12 +543,12 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		}
 		return vm.Undefined, []errors.PaseratiError{moduleErr}, nil
 	}
-	
+
 	// Register native module exports with HeapAlloc before any processing
 	if moduleRecord.IsNativeModule() {
 		p.registerNativeModuleExports(moduleRecord)
 	}
-	
+
 	// Check if module already has a compiled chunk from the loader
 	var chunk *vm.Chunk
 	if moduleRecord.CompiledChunk != nil {
@@ -557,18 +558,18 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 	} else {
 		// Module needs compilation (shouldn't happen with current loader, but handle it)
 		debugPrintf("// [Driver] Module '%s' needs compilation\n", filename)
-		
+
 		// Enable module mode in the checker and compiler
 		p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 		p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
-		
+
 		// Compile the module
 		var compileErrs []errors.PaseratiError
 		chunk, compileErrs = p.compiler.Compile(moduleRecord.AST)
 		if len(compileErrs) > 0 {
 			return vm.Undefined, compileErrs, nil
 		}
-		
+
 		if chunk == nil {
 			internalErr := &errors.RuntimeError{
 				Position: errors.Position{Line: 0, Column: 0},
@@ -576,21 +577,21 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 			}
 			return vm.Undefined, []errors.PaseratiError{internalErr}, nil
 		}
-		
+
 		// Store the compiled chunk in the module record for VM access
 		moduleRecord.CompiledChunk = chunk
 	}
-	
+
 	// Execute the module and return the final value
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
-	
+
 	// After successful execution, collect exported values from the compiler
 	if p.compiler.IsModuleMode() {
 		exportedValues := p.collectExportedValues()
 		moduleRecord.ExportValues = exportedValues
 		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 	}
-	
+
 	return finalValue, []errors.PaseratiError{}, runtimeErrs
 }
 
@@ -609,7 +610,7 @@ func (p *Paserati) RunStringWithModules(sourceCode string) (vm.Value, []errors.P
 
 	// Check if the program contains import statements
 	hasImports := containsImports(program)
-	
+
 	if hasImports {
 		// Use module mode - create a temporary module and run it
 		return p.runAsTemporaryModule(sourceCode, program)
@@ -633,17 +634,17 @@ func containsImports(program *parser.Program) bool {
 func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Program) (vm.Value, []errors.PaseratiError) {
 	// Create a temporary module name
 	tempModuleName := "__temp_module__"
-	
+
 	// Preload all native modules that might be imported
 	// This ensures their exports are registered with HeapAlloc before compilation
 	if err := p.preloadNativeModules(program); err != nil {
 		return vm.Undefined, []errors.PaseratiError{err}
 	}
-	
+
 	// Enable module mode in checker and compiler
 	p.checker.EnableModuleMode(tempModuleName, p.moduleLoader)
 	p.compiler.EnableModuleMode(tempModuleName, p.moduleLoader)
-	
+
 	// Dump AST if enabled
 	parser.DumpAST(program, "RunStringWithModules")
 
@@ -662,7 +663,7 @@ func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Progr
 
 	// Execute the chunk
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
-	
+
 	return finalValue, runtimeErrs
 }
 
@@ -841,7 +842,7 @@ func initializeBuiltins(paserati *Paserati) error {
 		globalNames = append(globalNames, name)
 	}
 	heapAlloc.PreallocateBuiltins(globalNames)
-	
+
 	// Set the heap allocator in the main compiler
 	comp.SetHeapAlloc(heapAlloc)
 
@@ -854,16 +855,16 @@ func initializeBuiltins(paserati *Paserati) error {
 // This is called after successful module execution to populate the ModuleRecord.ExportValues
 func (p *Paserati) collectExportedValues() map[string]vm.Value {
 	exports := make(map[string]vm.Value)
-	
+
 	fmt.Printf("// [Driver DEBUG] collectExportedValues called, IsModuleMode=%v\n", p.compiler.IsModuleMode())
 	if !p.compiler.IsModuleMode() {
 		return exports
 	}
-	
+
 	// Get the export name to global index mapping from the compiler
 	exportIndices := p.compiler.GetExportGlobalIndices()
 	fmt.Printf("// [Driver DEBUG] collectExportedValues: Got %d export indices: %v\n", len(exportIndices), exportIndices)
-	
+
 	// For each export, get the value directly from the VM's global table using the index
 	for exportName, globalIdx := range exportIndices {
 		if value, exists := p.vmInstance.GetGlobalByIndex(globalIdx); exists {
@@ -885,23 +886,23 @@ func (p *Paserati) registerNativeModuleExports(moduleRecord *modules.ModuleRecor
 	if !moduleRecord.IsNativeModule() {
 		return
 	}
-	
+
 	exportValues := moduleRecord.GetExportValues()
 	debugPrintf("// [Driver] Registering %d native module exports with HeapAlloc\n", len(exportValues))
-	
+
 	// Get the HeapAlloc instance from the compiler
 	heapAlloc := p.compiler.GetHeapAlloc()
 	if heapAlloc == nil {
 		debugPrintf("// [Driver] Warning: No HeapAlloc available, cannot register native module exports\n")
 		return
 	}
-	
+
 	// Register each export with the HeapAlloc and set the value in the VM heap
 	for exportName, exportValue := range exportValues {
 		// Get or assign a global index for this export name
 		globalIndex := heapAlloc.GetOrAssignIndex(exportName)
 		debugPrintf("// [Driver] Registered native export '%s' at global index %d\n", exportName, globalIndex)
-		
+
 		// Set the value directly in the VM's heap
 		if err := p.vmInstance.GetHeap().Set(globalIndex, exportValue); err != nil {
 			debugPrintf("// [Driver] Warning: Failed to set native export '%s' in VM heap: %v\n", exportName, err)
@@ -917,15 +918,15 @@ func (p *Paserati) tryGetExportValue(exportName string) (vm.Value, bool) {
 		debugPrintf("// [Driver] tryGetExportValue: Found global value for '%s'\n", exportName)
 		return globalValue, true
 	}
-	
+
 	// If not found in globals, try getting from the compiler's symbol table
 	// This is where local variables would be stored
 	debugPrintf("// [Driver] tryGetExportValue: '%s' not found in globals, checking symbol table\n", exportName)
-	
+
 	// TODO: For local variables, we need a different approach
 	// Local variables are stored in registers during execution and may not be
 	// accessible after the function/module completes
-	
+
 	return vm.Undefined, false
 }
 
@@ -934,9 +935,9 @@ func (p *Paserati) tryGetExportValue(exportName string) (vm.Value, bool) {
 func (p *Paserati) coordinateModuleCompilerGlobals(moduleCompiler *compiler.Compiler) {
 	// Get all global variables that have been initialized in the main compiler
 	globalNames := p.compiler.GetGlobalNames()
-	
+
 	debugPrintf("// [Driver] coordinateModuleCompilerGlobals: Pre-populating %d builtin globals\n", len(globalNames))
-	
+
 	// Pre-assign the same global indices in the module compiler to maintain consistency
 	for _, name := range globalNames {
 		globalIdx := p.compiler.GetGlobalIndex(name)
@@ -956,13 +957,12 @@ func (p *Paserati) preloadNativeModules(program *parser.Program) errors.Paserati
 		if importDecl, ok := stmt.(*parser.ImportDeclaration); ok {
 			if importDecl.Source != nil {
 				modulePath := importDecl.Source.Value
-				
+
 				// Check if this is a native module
 				if p.nativeResolver != nil {
-					resolver := p.nativeResolver.(*NativeModuleResolver)
-					if resolver.CanResolve(modulePath) {
+					if p.nativeResolver.CanResolve(modulePath) {
 						debugPrintf("// [Driver] Preloading native module: %s\n", modulePath)
-						
+
 						// Load the native module through the module loader
 						moduleRecord, err := p.moduleLoader.LoadModule(modulePath, ".")
 						if err != nil {
@@ -971,7 +971,7 @@ func (p *Paserati) preloadNativeModules(program *parser.Program) errors.Paserati
 								Msg:      fmt.Sprintf("Failed to preload native module '%s': %v", modulePath, err),
 							}
 						}
-						
+
 						// Register its exports with HeapAlloc
 						if concreteRecord, ok := moduleRecord.(*modules.ModuleRecord); ok {
 							p.registerNativeModuleExports(concreteRecord)
@@ -981,6 +981,16 @@ func (p *Paserati) preloadNativeModules(program *parser.Program) errors.Paserati
 			}
 		}
 	}
-	
+
 	return nil
+}
+
+// installBuiltinModules installs all built-in Paserati modules
+func installBuiltinModules(p *Paserati) {
+	// HTTP module
+	p.DeclareModule("paserati/http", httpModule)
+	
+	// Add more modules here as we create them
+	// p.DeclareModule("paserati/fs", fsModule)
+	// p.DeclareModule("paserati/crypto", cryptoModule)
 }

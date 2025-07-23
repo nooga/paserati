@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const moduleLoaderDebug = true
+const moduleLoaderDebug = false
 
 func debugPrintf(format string, args ...interface{}) {
 	if moduleLoaderDebug {
@@ -702,20 +702,20 @@ type NativeModuleInterface interface {
 
 // checkForNativeModule checks if the source is a native module
 func (ml *moduleLoader) checkForNativeModule(source io.ReadCloser) NativeModuleInterface {
-	fmt.Printf("// [ModuleLoader] checkForNativeModule: Checking source type: %T\n", source)
+	debugPrintf("// [ModuleLoader] checkForNativeModule: Checking source type: %T\n", source)
 	if nativeSource, ok := source.(NativeModuleSource); ok {
-		fmt.Printf("// [ModuleLoader] checkForNativeModule: Source is NativeModuleSource, IsNativeModule=%v\n", nativeSource.IsNativeModule())
+		debugPrintf("// [ModuleLoader] checkForNativeModule: Source is NativeModuleSource, IsNativeModule=%v\n", nativeSource.IsNativeModule())
 		if nativeSource.IsNativeModule() {
 			nativeModuleInterface := nativeSource.GetNativeModule()
-			fmt.Printf("// [ModuleLoader] checkForNativeModule: Found native module: %T\n", nativeModuleInterface)
+			debugPrintf("// [ModuleLoader] checkForNativeModule: Found native module: %T\n", nativeModuleInterface)
 			if nativeModule, ok := nativeModuleInterface.(NativeModuleInterface); ok {
 				return nativeModule
 			} else {
-				fmt.Printf("// [ModuleLoader] checkForNativeModule: Native module doesn't implement NativeModuleInterface\n")
+				debugPrintf("// [ModuleLoader] checkForNativeModule: Native module doesn't implement NativeModuleInterface\n")
 			}
 		}
 	} else {
-		fmt.Printf("// [ModuleLoader] checkForNativeModule: Source is NOT NativeModuleSource\n")
+		debugPrintf("// [ModuleLoader] checkForNativeModule: Source is NOT NativeModuleSource\n")
 	}
 	return nil
 }

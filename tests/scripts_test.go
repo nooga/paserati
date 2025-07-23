@@ -97,8 +97,11 @@ func TestScripts(t *testing.T) {
 				return
 			}
 
-			// 2. Compile and initialize VM with coordinated globals
-			chunk, vmInstance, compileErrs := compileAndInitializeVM(scriptPath)
+			// 2. Compile and initialize VM with coordinated globals (with module support)
+			testResult := compileAndInitializeVMNew(scriptPath)
+			chunk := testResult.Chunk
+			vmInstance := testResult.VM 
+			compileErrs := testResult.Errors
 
 			// 3. Check Compile Errors
 			if len(compileErrs) > 0 {
@@ -129,18 +132,28 @@ func TestScripts(t *testing.T) {
 				t.Fatalf("Expected compile error containing %q, but compilation succeeded.", expectation.Value)
 			}
 
-			// Should not happen if compileErrs is checked, but safeguard
-			if chunk == nil {
-				t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
-			}
+			// 4. Handle execution based on whether this was a module or regular script
+			var finalValue vm.Value
+			var runtimeErrs []errors.PaseratiError
 
-			if scriptsDebug {
-				t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
-					file.Name(), chunk.DisassembleChunk(file.Name()))
-			}
+			if testResult.ModuleResult != nil {
+				// Module execution already completed in RunStringWithModules
+				finalValue = *testResult.ModuleResult
+				runtimeErrs = nil  // Module errors would have been caught in compile phase
+			} else {
+				// Regular script execution
+				if chunk == nil {
+					t.Fatalf("Compilation succeeded but returned a nil chunk unexpectedly.")
+				}
 
-			// 4. Run VM (already initialized with coordinated globals)
-			finalValue, runtimeErrs := vmInstance.Interpret(chunk)
+				if scriptsDebug {
+					t.Logf("--- Disassembly [%s] ---\n%s-------------------------\n",
+						file.Name(), chunk.DisassembleChunk(file.Name()))
+				}
+
+				// Run VM (already initialized with coordinated globals)
+				finalValue, runtimeErrs = vmInstance.Interpret(chunk)
+			}
 
 			// 5. Check Runtime Results
 			switch expectation.ResultType {
@@ -215,24 +228,33 @@ func initializeVMBuiltins(vmInstance *vm.VM) error {
 	return vmInstance.SetBuiltinGlobals(globalVariables, indexMap)
 }
 
+// TestResult holds the result of script execution (for both regular and module execution)
+type TestResult struct {
+	Chunk       *vm.Chunk
+	VM          *vm.VM 
+	ModuleResult *vm.Value  // nil for regular scripts, set for module scripts
+	Errors      []errors.PaseratiError
+}
+
 // compileAndInitializeVM compiles a file using the unified Paserati initialization approach
+// This function has been updated to support module imports
 func compileAndInitializeVM(scriptPath string) (*vm.Chunk, *vm.VM, []errors.PaseratiError) {
-	// Read and parse the file
+	result := compileAndInitializeVMNew(scriptPath)
+	return result.Chunk, result.VM, result.Errors
+}
+
+// compileAndInitializeVMNew is the new version that properly handles modules
+func compileAndInitializeVMNew(scriptPath string) *TestResult {
+	// Read the file
 	sourceBytes, err := ioutil.ReadFile(scriptPath)
 	if err != nil {
 		readErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
 			Msg:      fmt.Sprintf("Failed to read file '%s': %s", scriptPath, err.Error()),
 		}
-		return nil, nil, []errors.PaseratiError{readErr}
-	}
-	
-	// Parse the source
-	l := lexer.NewLexer(string(sourceBytes))
-	p := parser.NewParser(l)
-	program, parseErrs := p.ParseProgram()
-	if len(parseErrs) > 0 {
-		return nil, nil, parseErrs
+		return &TestResult{
+			Errors: []errors.PaseratiError{readErr},
+		}
 	}
 	
 	// Use the unified Paserati initialization approach from the driver
@@ -245,13 +267,51 @@ func compileAndInitializeVM(scriptPath string) (*vm.Chunk, *vm.VM, []errors.Pase
 		setupManualTypeImports(paserati)
 	}
 	
-	// Compile using the properly initialized Paserati session
-	chunk, compileAndTypeErrs := paserati.CompileProgram(program)
-	if len(compileAndTypeErrs) > 0 {
-		return nil, paserati.GetVM(), compileAndTypeErrs
+	// Check if the script contains import statements - if so, use module system
+	sourceCode := string(sourceBytes)
+	if strings.Contains(sourceCode, "import ") {
+		// Use module-aware compilation and execution
+		result, compileAndRunErrs := paserati.RunStringWithModules(sourceCode)
+		if len(compileAndRunErrs) > 0 {
+			return &TestResult{
+				VM:     paserati.GetVM(),
+				Errors: compileAndRunErrs,
+			}
+		}
+		
+		// For module-based scripts, return the result directly
+		return &TestResult{
+			Chunk:        nil, // No chunk needed, already executed
+			VM:          paserati.GetVM(),
+			ModuleResult: &result,
+			Errors:      nil,
+		}
+	} else {
+		// Use traditional compilation for scripts without imports
+		l := lexer.NewLexer(sourceCode)
+		p := parser.NewParser(l)
+		program, parseErrs := p.ParseProgram()
+		if len(parseErrs) > 0 {
+			return &TestResult{
+				Errors: parseErrs,
+			}
+		}
+		
+		// Compile using the properly initialized Paserati session
+		chunk, compileAndTypeErrs := paserati.CompileProgram(program)
+		if len(compileAndTypeErrs) > 0 {
+			return &TestResult{
+				VM:     paserati.GetVM(),
+				Errors: compileAndTypeErrs,
+			}
+		}
+		
+		return &TestResult{
+			Chunk:  chunk,
+			VM:     paserati.GetVM(),
+			Errors: nil,
+		}
 	}
-	
-	return chunk, paserati.GetVM(), nil
 }
 
 // setupManualTypeImports manually sets up type imports to simulate the import system
