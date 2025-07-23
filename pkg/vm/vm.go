@@ -2734,7 +2734,7 @@ startExecution:
 			}
 
 			modulePath := modulePathValue.AsString()
-			fmt.Printf("// [VM] OpEvalModule: Executing module '%s' (current context: '%s')\n", modulePath, vm.currentModulePath)
+			// fmt.Printf("// [VM] OpEvalModule: Executing module '%s' (current context: '%s')\n", modulePath, vm.currentModulePath)
 			status, result := vm.executeModule(modulePath)
 			if status != InterpretOK {
 				// fmt.Printf("// [VM] OpEvalModule: Module '%s' execution failed with status %d\n", modulePath, status)
@@ -3904,10 +3904,10 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 				for exportName, exportValue := range exportValues {
 					moduleCtx.exports[exportName] = exportValue
 				}
-				fmt.Printf("// [VM DEBUG] collectModuleExports: Collected %d export values for module '%s'\n", len(exportValues), modulePath)
-				for name, value := range exportValues {
-					fmt.Printf("// [VM DEBUG] collectModuleExports: Export '%s' = %s (type %d)\n", name, value.ToString(), int(value.Type()))
-				}
+				// fmt.Printf("// [VM DEBUG] collectModuleExports: Collected %d export values for module '%s'\n", len(exportValues), modulePath)
+				// for name, value := range exportValues {
+				//	fmt.Printf("// [VM DEBUG] collectModuleExports: Export '%s' = %s (type %d)\n", name, value.ToString(), int(value.Type()))
+				// }
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"paserati/pkg/driver"
 	"paserati/pkg/parser"
 	// \"paserati/pkg/vm\" // Remove: VM no longer directly used here
@@ -130,9 +131,24 @@ func runRepl(showCacheStats bool, showBytecode bool) {
 			continue
 		}
 
-		// Run the input in the persistent session with options
-		options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
-		value, errs := paserati.RunCode(line, options)
-		_ = paserati.DisplayResult(line, value, errs) // Ignore the bool return in REPL
+		// Check if the input contains import statements - if so, use module mode
+		if containsImportsInString(line) {
+			// Use module mode for imports - RunStringWithModules doesn't support options yet,
+			// so we lose debug output for import statements but gain module functionality
+			value, errs := paserati.RunStringWithModules(line)
+			_ = paserati.DisplayResult(line, value, errs) // Ignore the bool return in REPL
+		} else {
+			// Use script mode for regular statements with full options support
+			options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
+			value, errs := paserati.RunCode(line, options)
+			_ = paserati.DisplayResult(line, value, errs) // Ignore the bool return in REPL
+		}
 	}
+}
+
+// containsImportsInString is a simple heuristic to detect import statements in REPL input
+// This avoids the need to fully parse the input just to detect imports
+func containsImportsInString(input string) bool {
+	trimmed := strings.TrimSpace(input)
+	return strings.HasPrefix(trimmed, "import ") || strings.Contains(trimmed, "\nimport ")
 }
