@@ -1014,6 +1014,18 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 	var resultType types.Type = types.Any // Default result type on error
 
+	// Defensive check: if leftType is nil, default to Any
+	if leftType == nil {
+		debugPrintf("// [Checker IndexExpr] Warning: left expression has nil type, defaulting to Any\n")
+		leftType = types.Any
+	}
+	
+	// Defensive check: if indexType is nil, default to Any
+	if indexType == nil {
+		debugPrintf("// [Checker IndexExpr] Warning: index expression has nil type, defaulting to Any\n")
+		indexType = types.Any
+	}
+
 	// 3. Check base type (allow Array for now)
 	// First handle the special case of 'any'
 	if leftType == types.Any {

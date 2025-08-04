@@ -472,6 +472,13 @@ This list tracks the implemented and planned features for the Paserati TypeScrip
     - [x] Proper type signatures for all methods with TypeScript compatibility
     - [x] Support for callback functions in functional methods (limited type checking)
     - [x] Advanced methods (`.reduce`, `.sort`, `.splice`)
+  - [ ] **Sparse Arrays** - **Future Enhancement**
+    - [ ] ECMAScript-compliant sparse array implementation for large indices
+    - [ ] Proper handling of `arr[2^32-1]` as object property (not array element)
+    - [ ] Memory-efficient storage for arrays with gaps (e.g., `arr[0] = 1; arr[1000000] = 2`)
+    - [ ] **Context**: Current implementation prevents memory exhaustion from large indices (test262 edge cases)
+    - [ ] **Current workaround**: Array index limit of 16MB elements to prevent 245GB+ memory allocations
+    - [ ] **Target**: Full JavaScript array semantics with sparse storage backend
 - [x] Objects - **Enhanced with Modern Methods!**
   - [x] Creation (`{}`)
   - [x] Property Access (`.`, `[]`)

@@ -37,3 +37,5 @@ timing.py
 timing.json
 .tally.py
 scratch/
+# Test262 test suite (cloned by setup-test262.sh)
+test262/

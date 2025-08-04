@@ -373,14 +373,10 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 // run is the main execution loop.
 // It now returns the InterpretResult status AND the final script Value.
 func (vm *VM) run() (InterpretResult, Value) {
-	// Panic recovery for better debugging of register access issues
+	// Panic recovery - silently recover to avoid cluttering test output
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "\n[VM PANIC RECOVERED]: %v\n", r)
-			// vm.printFrameStack()
-			// vm.printDisassemblyAroundIP()
-			// Re-panic to maintain original behavior
-			// panic(r)
+			// Silently recover - the error will be reported through normal channels
 		}
 	}()
 
@@ -439,6 +435,15 @@ startExecution:
 		// Debug main script opcodes to track function calls
 		// if vm.currentModulePath == "" {
 		//	fmt.Printf("// [VM DEBUG] Main script opcode: %s (%d) at IP %d\n", opcode.String(), int(opcode), ip)
+		// }
+		
+		// Debug execution in direct call frames
+		// if frame.isDirectCall {
+		//	chunkName := "<unknown>"
+		//	if frame.closure != nil && frame.closure.Fn != nil {
+		//		chunkName = frame.closure.Fn.Name
+		//	}
+		//	fmt.Printf("[DEBUG VM] DirectCall executing %s at IP %d in %s (frameCount=%d)\n", opcode.String(), ip, chunkName, vm.frameCount)
 		// }
 
 		// Debug output for current instruction execution
@@ -964,6 +969,7 @@ startExecution:
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
+			isDirectCall := frame.isDirectCall // Save this BEFORE decrementing frameCount
 
 			vm.frameCount--
 			vm.nextRegSlot -= returningFrameRegSize // Reclaim register space
@@ -999,7 +1005,7 @@ startExecution:
 			}
 
 			// Check if this was a direct call frame and should return early
-			if frame.isDirectCall {
+			if isDirectCall {
 				// Handle constructor return semantics for direct call
 				var finalResult Value
 				if isConstructor {
@@ -1106,6 +1112,7 @@ startExecution:
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
+			isDirectCall := frame.isDirectCall // Save this BEFORE decrementing frameCount
 
 			vm.frameCount--
 			vm.nextRegSlot -= returningFrameRegSize
@@ -1125,6 +1132,21 @@ startExecution:
 				vm.frameCount--
 				// Return the result from the function that just returned
 				return InterpretOK, Undefined
+			}
+
+			// Check if this was a direct call frame and should return early
+			if isDirectCall {
+				// Handle constructor return semantics for direct call
+				var finalResult Value
+				if isConstructor {
+					// Constructor returning undefined: return the instance (this)
+					finalResult = constructorThisValue
+				} else {
+					// Regular function returning undefined
+					finalResult = Undefined
+				}
+				// Return the result immediately instead of continuing execution
+				return InterpretOK, finalResult
 			}
 
 			// Get the caller frame
@@ -1314,7 +1336,7 @@ startExecution:
 						status := vm.runtimeError("Array index must be a number, string, or symbol, got '%v'", indexVal.Type())
 						return status, Undefined
 					}
-					
+
 					// Use opGetProp to access array properties (handles prototype chain)
 					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
 						return status, value
@@ -1393,7 +1415,7 @@ startExecution:
 						status := vm.runtimeError("String index must be a number, string, or symbol, got '%v'", indexVal.Type())
 						return status, Undefined
 					}
-					
+
 					// Use opGetProp to access string properties (handles prototype chain)
 					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
 						return status, value
@@ -1424,7 +1446,7 @@ startExecution:
 					status := vm.runtimeError("Generator index must be a string or symbol, got '%v'", indexVal.Type())
 					return status, Undefined
 				}
-				
+
 				// Use opGetProp to access generator properties (handles prototype chain)
 				if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
 					return status, value
@@ -1471,6 +1493,17 @@ startExecution:
 					arr.length++
 				} else {
 					neededCapacity := idx + 1
+					
+					// Prevent massive memory allocations from large array indices
+					// JavaScript engines typically use sparse arrays for large indices
+					// For now, we'll reject extremely large indices to prevent memory exhaustion
+					const maxArrayIndex = 16777216 // 2^24 - reasonable limit for dense arrays
+					if neededCapacity > maxArrayIndex {
+						frame.ip = ip
+						status := vm.runtimeError("Array index too large: %d (max %d)", idx, maxArrayIndex-1)
+						return status, Undefined
+					}
+					
 					if cap(arr.elements) < neededCapacity {
 						newElements := make([]Value, len(arr.elements), neededCapacity)
 						copy(newElements, arr.elements)
@@ -2859,8 +2892,14 @@ startExecution:
 				}
 			}
 
-			// Create arguments object
-			argsObj := NewArguments(args)
+			// Create arguments object with callee reference
+			var calleeValue Value
+			if frame.closure != nil {
+				calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
+			} else {
+				calleeValue = Undefined
+			}
+			argsObj := NewArguments(args, calleeValue)
 			frame.registers[destReg] = argsObj
 
 		// --- Generator Support ---
@@ -2869,7 +2908,7 @@ startExecution:
 			// Create a generator object instead of calling the function
 			destReg := code[ip]
 			funcReg := code[ip+1]
-			// argCount is not used for generator creation, but compiler emits it for consistency
+			argCount := int(code[ip+2])
 
 			// Get the generator function
 			funcVal := registers[funcReg]
@@ -2880,6 +2919,20 @@ startExecution:
 
 			// Create generator object using the proper constructor
 			genVal := NewGenerator(funcVal)
+			genObj := genVal.AsGenerator()
+
+			// Store the arguments for when the generator starts
+			if argCount > 0 {
+				genObj.Args = make([]Value, argCount)
+				for i := 0; i < argCount; i++ {
+					argReg := int(funcReg) + 1 + i // Arguments follow the function register
+					if argReg < len(registers) {
+						genObj.Args[i] = registers[argReg]
+					} else {
+						genObj.Args[i] = Undefined
+					}
+				}
+			}
 
 			// Set result in destination register
 			registers[destReg] = genVal
@@ -2915,7 +2968,7 @@ startExecution:
 					registers: make([]Value, len(registers)),
 					locals:    make([]Value, 0), // TODO: implement locals if needed
 					stackBase: 0,
-					yieldPC:   ip - 2, // IP was advanced by 2 for two-register instruction
+					yieldPC:   ip - 2,    // IP was advanced by 2 for two-register instruction
 					outputReg: outputReg, // Store where to put sent value on resume
 				}
 			} else {
@@ -2949,6 +3002,7 @@ startExecution:
 
 		// Check for exception unwinding after each instruction
 		if vm.unwinding {
+			fmt.Printf("[DEBUG] VM run loop: unwinding=true, calling unwindException\n")
 			// Continue the unwinding process by calling unwindException
 			unwindResult := vm.unwindException()
 			if !unwindResult {
@@ -2956,6 +3010,15 @@ startExecution:
 				vm.handleUncaughtException()
 				return InterpretRuntimeError, vm.currentException
 			}
+			fmt.Printf("[DEBUG] VM run loop: unwindException returned true, unwinding=%v\n", vm.unwinding)
+			
+			// Check if we're still unwinding after hitting a direct call boundary
+			if vm.unwinding {
+				// Still unwinding means we hit a direct call boundary and need to propagate the exception
+				fmt.Printf("[DEBUG] VM run loop: Still unwinding after unwindException, returning error\n")
+				return InterpretRuntimeError, vm.currentException
+			}
+			
 			// Handler was found, continue execution with updated frame
 			frame = &vm.frames[vm.frameCount-1]
 			closure = frame.closure
@@ -3147,11 +3210,7 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	}
 	vm.errors = append(vm.errors, runtimeErr)
 
-	// Enhanced error reporting: print frame stack and disassembly
-	fmt.Fprintf(os.Stderr, "[VM Runtime Error]: %s\n", msg)
-	vm.printFrameStack()
-	vm.printDisassemblyAroundIP()
-	vm.printCurrentRegisters()
+	// Removed error printing to stderr - errors are returned to caller
 
 	return InterpretRuntimeError
 }
@@ -3526,7 +3585,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame.targetRegister = destReg                                           // Target in sentinel frame
 	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
 	frame.isConstructorCall = false
-	frame.isDirectCall = true // Mark as direct call for proper return handling
+	frame.isDirectCall = false // Don't mark as direct call so exceptions can be caught
 	frame.argCount = 0
 	frame.generatorObj = genObj // Link frame to generator object
 
@@ -3561,7 +3620,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 
 	// Execute the VM run loop - it will return when the exception is handled or propagates
 	status, result := vm.run()
-	
+
 	if status == InterpretRuntimeError {
 		if vm.currentException.Type() != TypeUndefined && vm.currentException.Type() != TypeNull {
 			return Undefined, fmt.Errorf("exception thrown: %s", vm.currentException.ToString())

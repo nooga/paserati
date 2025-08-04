@@ -18,7 +18,8 @@ func (a *ArgumentsInitializer) InitTypes(ctx *TypeContext) error {
 	// Create IArguments interface type - array-like object with length and indexed access
 	// In TypeScript, the arguments object implements IArguments interface
 	iArgumentsType := types.NewObjectType().
-		WithProperty("length", types.Number)
+		WithProperty("length", types.Number).
+		WithProperty("callee", types.NewSimpleFunction([]types.Type{}, types.Any))
 
 	// Add index signature for numeric access: [index: number]: any
 	indexSig := &types.IndexSignature{

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"paserati/pkg/builtins"
 	"paserati/pkg/errors" // Added import
 	"paserati/pkg/modules" // Added for real ModuleLoader integration
 	"paserati/pkg/source" // Added import for source context
@@ -219,13 +220,22 @@ type Checker struct {
 	// --- NEW: Recursive type alias tracking ---
 	// Track type aliases being resolved to prevent infinite recursion
 	resolvingTypeAliases map[string]bool
+	
+	// --- NEW: Anonymous class tracking ---
+	// Counter for generating unique anonymous class names
+	anonymousClassCounter int
 }
 
-// NewChecker creates a new type checker.
+// NewChecker creates a new type checker with standard built-in types.
 func NewChecker() *Checker {
+	return NewCheckerWithInitializers(builtins.GetStandardInitializers())
+}
+
+// NewCheckerWithInitializers creates a new type checker with custom built-in initializers.
+func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Checker {
 	return &Checker{
-		env:    NewGlobalEnvironment(),   // Create persistent global environment
-		errors: []errors.PaseratiError{}, // Initialize with correct type
+		env:    NewGlobalEnvironment(initializers), // Create persistent global environment with custom initializers
+		errors: []errors.PaseratiError{},           // Initialize with correct type
 		// Initialize function context fields to nil/empty
 		currentExpectedReturnType:  nil,
 		currentInferredReturnTypes: nil,
@@ -399,8 +409,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			nodesProcessedPass1[classStmt] = true
 			nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
 		} else if importStmt, ok := stmt.(*parser.ImportDeclaration); ok {
-			debugPrintf("// [Checker Pass 1] Processing Import: %s\n", importStmt.Source.Value)
-			c.checkImportDeclaration(importStmt)
+			// Add defensive check for nil Source
+			if importStmt.Source != nil {
+				debugPrintf("// [Checker Pass 1] Processing Import: %s\n", importStmt.Source.Value)
+				c.checkImportDeclaration(importStmt)
+			} else {
+				debugPrintf("// [Checker Pass 1] Skipping Import with nil Source\n")
+			}
 			nodesProcessedPass1[importStmt] = true
 			nodesProcessedPass2[importStmt] = true // Also mark for Pass 2 skip  
 		} else if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok {
@@ -1803,6 +1818,20 @@ func (c *Checker) visit(node parser.Node) {
 		// Super expression handling - must be in a class context with inheritance
 		c.checkSuperExpression(node)
 
+	case *parser.NewTargetExpression:
+		// new.target is only valid in functions that can be called as constructors
+		// For now, we'll type it as undefined in all contexts
+		// TODO: Properly track constructor context and return the constructor function type
+		node.SetComputedType(types.Undefined)
+		debugPrintf("// [Checker NewTargetExpr] Typed as undefined (TODO: implement proper constructor context)\n")
+
+	case *parser.ImportMetaExpression:
+		// import.meta is an object containing module metadata
+		// For now, we'll type it as any
+		// TODO: Create proper ImportMeta type with url property etc.
+		node.SetComputedType(types.Any)
+		debugPrintf("// [Checker ImportMetaExpr] Typed as any (TODO: implement proper ImportMeta type)\n")
+
 	// --- Other Expressions ---
 	case *parser.Identifier:
 		// --- Check concrete pointer AFTER type switch ---
@@ -2654,15 +2683,22 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.ClassExpression:
 		// Convert ClassExpression to ClassDeclaration for checking
 		// The type checker treats them the same way
+		var className *parser.Identifier
 		if node.Name == nil {
-			// Anonymous classes not yet supported
-			c.addError(node, "anonymous classes are not yet supported")
-			node.SetComputedType(types.Any)
-			return
+			// Generate a unique name for anonymous classes
+			// This follows the same pattern as the compiler
+			anonymousName := fmt.Sprintf("__AnonymousClass_%d", c.getNextAnonymousId())
+			className = &parser.Identifier{
+				Token: node.Token,
+				Value: anonymousName,
+			}
+		} else {
+			className = node.Name
 		}
+		
 		classDecl := &parser.ClassDeclaration{
 			Token:          node.Token,
-			Name:           node.Name,
+			Name:           className,
 			TypeParameters: node.TypeParameters,
 			SuperClass:     node.SuperClass,
 			Body:           node.Body,
@@ -2671,7 +2707,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkClassDeclaration(classDecl)
 		// Set the computed type on the expression node as well
 		// Class expressions evaluate to their constructor function
-		if ctorType, _, exists := c.env.Resolve(node.Name.Value); exists {
+		if ctorType, _, exists := c.env.Resolve(className.Value); exists {
 			node.SetComputedType(ctorType)
 		} else {
 			node.SetComputedType(types.Any)
@@ -3802,4 +3838,10 @@ func (c *Checker) isGeneratorType(t types.Type) bool {
 		}
 	}
 	return false
+}
+
+// getNextAnonymousId generates a unique ID for anonymous classes
+func (c *Checker) getNextAnonymousId() int {
+	c.anonymousClassCounter++
+	return c.anonymousClassCounter
 }

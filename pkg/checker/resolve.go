@@ -635,6 +635,32 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			// Add to our collected index signatures
 			indexSignatures = append(indexSignatures, indexSig)
 
+		} else if prop.IsComputedProperty {
+			// This is a computed property: [expr]: Type
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				propType = types.Any
+			}
+
+			// Try to extract a constant property name from the computed expression
+			computedName := c.extractConstantPropertyName(prop.ComputedName)
+			if computedName != "" {
+				// We can resolve this to a concrete property name
+				properties[computedName] = propType
+				if prop.Optional {
+					optionalProperties[computedName] = true
+				}
+				debugPrintf("// [Checker ObjectType] Computed property '%s': %s\n", 
+					computedName, propType.String())
+			} else {
+				// Dynamic computed property - treat as index signature for now
+				debugPrintf("// [Checker ObjectType] Dynamic computed property, treating as index signature\n")
+				indexSignature := &types.IndexSignature{
+					KeyType:   types.String, // Assume string keys for now
+					ValueType: propType,
+				}
+				indexSignatures = append(indexSignatures, indexSignature)
+			}
 		} else if prop.Name != nil {
 			// Regular property or method
 			propType := c.resolveTypeAnnotation(prop.Type)

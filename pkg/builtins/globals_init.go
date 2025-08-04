@@ -73,7 +73,18 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Add isNaN function
 	isNaNFunctionType := types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)
-	return ctx.DefineGlobal("isNaN", isNaNFunctionType)
+	if err := ctx.DefineGlobal("isNaN", isNaNFunctionType); err != nil {
+		return err
+	}
+
+	// Add eval function
+	evalFunctionType := types.NewSimpleFunction([]types.Type{types.String}, types.Any)
+	if err := ctx.DefineGlobal("eval", evalFunctionType); err != nil {
+		return err
+	}
+
+	// Add globalThis (refers to the global object)
+	return ctx.DefineGlobal("globalThis", types.Any)
 }
 
 func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -140,5 +151,23 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(math.IsNaN(numVal)), nil
 	})
 
-	return ctx.DefineGlobal("isNaN", isNaNFunc)
+	if err := ctx.DefineGlobal("isNaN", isNaNFunc); err != nil {
+		return err
+	}
+
+	// Add eval function implementation (simplified - just returns undefined for now)
+	evalFunc := vm.NewNativeFunction(1, false, "eval", func(args []vm.Value) (vm.Value, error) {
+		// TODO: Implement proper eval functionality
+		// For now, return undefined to avoid undefined variable errors
+		return vm.Undefined, nil
+	})
+
+	if err := ctx.DefineGlobal("eval", evalFunc); err != nil {
+		return err
+	}
+
+	// Add globalThis as a reference to the global object
+	// For now, create an empty object - in a real implementation this would be the global scope
+	globalThisObj := vm.NewObject(vm.Null)
+	return ctx.DefineGlobal("globalThis", vm.NewValueFromPlainObject(globalThisObj.AsPlainObject()))
 }

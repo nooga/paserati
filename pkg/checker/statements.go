@@ -220,6 +220,34 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 			properties["new"] = constructorType
 			// Constructor signatures are always required (not optional)
+		} else if prop.IsComputedProperty {
+			// This is a computed property: [expr]: Type
+			propType := c.resolveTypeAnnotation(prop.Type)
+			if propType == nil {
+				debugPrintf("// [Checker Interface P1] Failed to resolve computed property type in interface '%s'. Using Any.\n", node.Name.Value)
+				propType = types.Any
+			}
+
+			// Try to extract a constant property name from the computed expression
+			computedName := c.extractConstantPropertyName(prop.ComputedName)
+			if computedName != "" {
+				// We can resolve this to a concrete property name
+				properties[computedName] = propType
+				if prop.Optional {
+					optionalProperties[computedName] = true
+				}
+				debugPrintf("// [Checker Interface P1] Interface '%s' has computed property '%s': %s\n", 
+					node.Name.Value, computedName, propType.String())
+			} else {
+				// Dynamic computed property - treat as index signature for now
+				// TODO: Better handling of dynamic computed properties
+				debugPrintf("// [Checker Interface P1] Interface '%s' has dynamic computed property, treating as index signature\n", node.Name.Value)
+				indexSignature := &types.IndexSignature{
+					KeyType:   types.String, // Assume string keys for now
+					ValueType: propType,
+				}
+				indexSignatures = append(indexSignatures, indexSignature)
+			}
 		} else if prop.Name == nil {
 			// This is a call signature: (): T
 			propType := c.resolveTypeAnnotation(prop.Type)
@@ -722,4 +750,20 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	// Restore the outer environment
 	c.env = originalEnv
 	debugPrintf("// [Checker ForInStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
+}
+
+// extractConstantPropertyName tries to extract a constant property name from a computed property expression
+func (c *Checker) extractConstantPropertyName(expr parser.Expression) string {
+	switch e := expr.(type) {
+	case *parser.StringLiteral:
+		return e.Value
+	case *parser.NumberLiteral:
+		return fmt.Sprintf("%v", e.Value)
+	case *parser.Identifier:
+		// For now, we can't resolve identifiers to their constant values during interface checking
+		// TODO: Add constant folding support
+		return ""
+	default:
+		return ""
+	}
 }

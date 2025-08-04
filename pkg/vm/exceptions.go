@@ -69,7 +69,17 @@ func (vm *VM) unwindException() bool {
 	for vm.frameCount > 0 {
 		frame := &vm.frames[vm.frameCount-1]
 
-		// fmt.Printf("[DEBUG] unwindException: Checking frame %d at IP %d\n", vm.frameCount-1, frame.ip)
+		// fmt.Printf("[DEBUG] unwindException: Checking frame %d at IP %d, isDirectCall=%v\n", vm.frameCount-1, frame.ip, frame.isDirectCall)
+
+		// Check if this is a direct call frame (native function boundary)
+		// If so, we should stop unwinding and let the native caller handle the exception
+		if frame.isDirectCall {
+			// fmt.Printf("[DEBUG] unwindException: Hit direct call boundary, stopping unwind\n")
+			// For direct call frames, only return true if we don't have handlers,
+			// which means the exception should propagate to the native caller
+			// The unwinding state should remain true so vm.run() returns InterpretRuntimeError
+			return true // Let the vm.run() return InterpretRuntimeError to the native caller
+		}
 
 		// Look for handlers covering the current IP
 		handlers := vm.findAllExceptionHandlers(frame.ip)

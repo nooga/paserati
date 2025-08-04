@@ -64,7 +64,7 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 
 // NewGlobalEnvironment creates a new top-level global environment.
 // It populates the environment with built-in types using the new initializer system.
-func NewGlobalEnvironment() *Environment {
+func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environment {
 	env := &Environment{
 		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases:         make(map[string]types.Type), // Initialize
@@ -100,8 +100,7 @@ func NewGlobalEnvironment() *Environment {
 		},
 	}
 
-	// Initialize all builtins using the new system
-	initializers := builtins.GetStandardInitializers()
+	// Initialize all builtins using the provided initializers
 	for _, init := range initializers {
 		if err := init.InitTypes(typeCtx); err != nil {
 			fmt.Printf("Warning: failed to initialize %s types: %v\n", init.Name(), err)
@@ -113,6 +112,12 @@ func NewGlobalEnvironment() *Environment {
 	globalEnvironment = env
 
 	return env
+}
+
+// NewStandardGlobalEnvironment creates a new global environment with standard built-in types.
+// This is a convenience function that uses the default set of initializers.
+func NewStandardGlobalEnvironment() *Environment {
+	return NewGlobalEnvironment(builtins.GetStandardInitializers())
 }
 
 // GetPrimitivePrototypeMethodType returns the type of a method on a primitive prototype

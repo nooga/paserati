@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unsafe"
@@ -56,6 +57,15 @@ func NewRegExp(pattern, flags string) (Value, error) {
 
 // translateJSFlagsToGo converts JavaScript regex flags to Go inline flag syntax
 func translateJSFlagsToGo(pattern, flags string) (string, error) {
+	// Check for JavaScript features that Go's regexp doesn't support
+	// Go's regexp library doesn't support numbered backreferences like \1, \2, etc.
+	for i := 1; i <= 9; i++ {
+		backref := fmt.Sprintf(`\%d`, i)
+		if strings.Contains(pattern, backref) {
+			return "", fmt.Errorf("numbered backreferences like %s are not supported (Go regexp limitation)", backref)
+		}
+	}
+	
 	goPattern := pattern
 
 	// Apply flags as Go inline flags (prepended to pattern)

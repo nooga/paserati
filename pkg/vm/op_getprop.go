@@ -1,9 +1,11 @@
 package vm
 
+// import "fmt"
+
 func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
 	// Debug logging for property access
-	// fmt.Printf("// [VM DEBUG] opGetProp: Getting property '%s' from object type %v (%s), value: %s\n",
-	//	propName, objVal.Type(), objVal.TypeName(), objVal.Inspect())
+	// fmt.Printf("[DEBUG opGetProp] Getting property '%s' from object type %v, frameCount=%d\n",
+	//	propName, objVal.Type(), vm.frameCount)
 
 	// Generate cache key
 	propNameHash := 0

@@ -502,6 +502,26 @@ func (se *SuperExpression) expressionNode()      {}
 func (se *SuperExpression) TokenLiteral() string { return se.Token.Literal }
 func (se *SuperExpression) String() string       { return "super" }
 
+// NewTargetExpression represents the new.target meta-property
+type NewTargetExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.NEW token
+}
+
+func (nte *NewTargetExpression) expressionNode()      {}
+func (nte *NewTargetExpression) TokenLiteral() string { return nte.Token.Literal }
+func (nte *NewTargetExpression) String() string       { return "new.target" }
+
+// ImportMetaExpression represents the import.meta meta-property
+type ImportMetaExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.IMPORT token
+}
+
+func (ime *ImportMetaExpression) expressionNode()      {}
+func (ime *ImportMetaExpression) TokenLiteral() string { return ime.Token.Literal }
+func (ime *ImportMetaExpression) String() string       { return "import.meta" }
+
 // FunctionLiteral represents a function definition.
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
@@ -2472,6 +2492,10 @@ type ObjectTypeProperty struct {
 	KeyName          *Identifier // The key parameter name (e.g., "key" in [key: string]: Type)
 	KeyType          Expression  // The key type (e.g., "string" in [key: string]: Type)
 	ValueType        Expression  // The value type (e.g., "Type" in [key: string]: Type)
+	
+	// Computed property fields
+	IsComputedProperty bool       // Whether this is a computed property [expr]: Type
+	ComputedName       Expression // The computed property expression
 }
 
 func (otp *ObjectTypeProperty) String() string {

@@ -58,10 +58,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		} else {
 			// Allow fewer arguments for functions with optional parameters
 			// The compiler handles padding with undefined for missing optional parameters
-			if argCount > calleeFunc.Arity {
-				currentFrame.ip = callerIP
-				return false, fmt.Errorf("Expected at most %d arguments but got %d", calleeFunc.Arity, argCount)
-			}
+			// Allow extra arguments (JavaScript behavior) - they are ignored or available via arguments object
 		}
 
 		// Check frame limit
@@ -162,10 +159,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			} else {
 				// For non-variadic functions, allow fewer arguments if they might have optional parameters
 				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
-				if argCount > nativeFunc.Arity {
-					currentFrame.ip = callerIP
-					return false, fmt.Errorf("Native function expected %d arguments but got %d", nativeFunc.Arity, argCount)
-				}
+				// Allow extra arguments (JavaScript behavior) - they are ignored by the native function
 				// Allow fewer arguments - the native function implementation should handle undefined parameters
 			}
 		}
@@ -207,10 +201,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			} else {
 				// For non-variadic functions, allow fewer arguments if they might have optional parameters
 				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
-				if argCount > nativeFuncWithProps.Arity {
-					currentFrame.ip = callerIP
-					return false, fmt.Errorf("Native function expected %d arguments but got %d", nativeFuncWithProps.Arity, argCount)
-				}
+				// Allow extra arguments (JavaScript behavior) - they are ignored by the native function
 				// Allow fewer arguments - the native function implementation should handle undefined parameters
 			}
 		}
@@ -248,10 +239,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			} else {
 				// For non-variadic functions, allow fewer arguments if they might have optional parameters
 				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
-				if argCount > asyncNativeFunc.Arity {
-					currentFrame.ip = callerIP
-					return false, fmt.Errorf("Async native function expected %d arguments but got %d", asyncNativeFunc.Arity, argCount)
-				}
+				// Allow extra arguments (JavaScript behavior) - they are ignored by the native function
 				// Allow fewer arguments - the native function implementation should handle undefined parameters
 			}
 		}
@@ -280,10 +268,6 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 
 	default:
 		currentFrame.ip = callerIP
-		fmt.Printf("DEBUG: Trying to call non-function value:\n")
-		fmt.Printf("  Type: %v\n", calleeVal.Type())
-		fmt.Printf("  Value: %s\n", calleeVal.Inspect())
-		fmt.Printf("  Raw: %+v\n", calleeVal)
 		return false, fmt.Errorf("Cannot call non-function value of type %v", calleeVal.Type())
 	}
 }

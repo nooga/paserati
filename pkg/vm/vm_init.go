@@ -229,6 +229,7 @@ func (vm *VM) CallFunctionFromBuiltin(fn Value, thisValue Value, args []Value) (
 // CallFunctionDirectly executes a user-defined function directly without re-entrant execution
 // This is specifically designed for Function.prototype.call to avoid infinite recursion
 func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Value, error) {
+	// fmt.Printf("[DEBUG CallFunctionDirectly] Called with fn type=%d, args=%d\n", fn.Type(), len(args))
 	// Only handle user-defined functions and closures
 	if !fn.IsFunction() && !fn.IsClosure() {
 		return Undefined, fmt.Errorf("CallFunctionDirectly: not a user-defined function")
@@ -273,9 +274,38 @@ func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Val
 
 	// We have a new frame for bytecode execution with isDirectCall = true
 	// Execute the VM run loop - it will return immediately when the frame returns
+	// fmt.Printf("[DEBUG CallFunctionDirectly] About to execute bytecode, frameCount=%d\n", vm.frameCount)
 	status, result := vm.run()
+	// fmt.Printf("[DEBUG CallFunctionDirectly] Bytecode execution finished, status=%d, result=%v\n", status, result.Inspect())
 
 	if status == InterpretRuntimeError {
+		// Extract the actual exception and convert it to a Go error
+		if vm.unwinding && vm.currentException != Null {
+			// Convert VM exception to Go error
+			exceptionMsg := vm.currentException.ToString()
+			
+			// Try to get more detailed error information if it's an Error object
+			if vm.currentException.IsObject() && vm.currentException.Type() == TypeObject {
+				obj := vm.currentException.AsPlainObject()
+				if nameVal, hasName := obj.GetOwn("name"); hasName {
+					if messageVal, hasMessage := obj.GetOwn("message"); hasMessage {
+						name := nameVal.ToString()
+						message := messageVal.ToString()
+						if message != "" {
+							exceptionMsg = name + ": " + message
+						} else {
+							exceptionMsg = name
+						}
+					}
+				}
+			}
+			
+			// Clear exception state since we're converting it to a Go error
+			vm.currentException = Null
+			vm.unwinding = false
+			
+			return Undefined, fmt.Errorf("%s", exceptionMsg)
+		}
 		return Undefined, fmt.Errorf("runtime error during direct function execution")
 	}
 

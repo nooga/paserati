@@ -144,6 +144,13 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 			return Number(float64(utf8.RuneCountInString(str))), true
 		}
 	}
+	if propName == "callee" {
+		switch objVal.Type() {
+		case TypeArguments:
+			args := AsArguments(objVal)
+			return args.callee, true
+		}
+	}
 
 	if propName == "size" {
 		switch objVal.Type() {

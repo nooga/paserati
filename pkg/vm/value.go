@@ -66,6 +66,7 @@ type ArgumentsObject struct {
 	Object
 	length int
 	args   []Value
+	callee Value // The function that created this arguments object
 }
 
 // GeneratorState represents the execution state of a generator
@@ -165,10 +166,11 @@ func NewArray() Value {
 	return Value{typ: TypeArray, obj: unsafe.Pointer(&ArrayObject{})}
 }
 
-func NewArguments(args []Value) Value {
+func NewArguments(args []Value, callee Value) Value {
 	argObj := &ArgumentsObject{
 		length: len(args),
 		args:   make([]Value, len(args)),
+		callee: callee,
 	}
 	copy(argObj.args, args)
 	return Value{typ: TypeArguments, obj: unsafe.Pointer(argObj)}

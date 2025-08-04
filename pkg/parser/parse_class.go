@@ -13,6 +13,8 @@ func (p *Parser) isValidMethodName() bool {
 		return true
 	case lexer.STRING:
 		return true
+	case lexer.NUMBER:  // Allow numeric method names like 42()
+		return true
 	// Allow keywords as method names
 	case lexer.RETURN, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
 		 lexer.LET, lexer.CONST, lexer.VAR, lexer.CLASS, lexer.INTERFACE, lexer.TYPE,
@@ -417,6 +419,9 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 	if p.curToken.Type == lexer.STRING {
 		// String literal method name: "methodName"()
 		methodName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curToken.Type == lexer.NUMBER {
+		// Numeric literal method name: 42()
+		methodName = p.parseNumberLiteral()
 	} else {
 		// Identifier method name
 		methodName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -639,13 +644,15 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 }
 
 // parseGetter parses a getter method in a class
-// Syntax: [static] get propertyName(): returnType { body }
+// Syntax: [static] get propertyName(): returnType { body } or [static] get [computed](): returnType { body }
 func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	getToken := p.curToken // 'get' token
 	
-	// Check if next token is an identifier or string literal
-	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) {
-		p.addError(p.peekToken, "expected identifier or string literal after 'get'")
+	// Check if next token is an identifier, string literal, number, or computed property
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.LBRACKET) {
+		p.addError(p.peekToken, "expected identifier, string literal, number, or computed property after 'get'")
+		// Advance past the problematic token to avoid infinite loop
+		p.nextToken()
 		return nil
 	}
 	p.nextToken() // Move to property name token
@@ -654,6 +661,23 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	if p.curToken.Type == lexer.STRING {
 		// String literal property name: get "propertyName"()
 		propertyName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curToken.Type == lexer.NUMBER {
+		// Numeric literal property name: get 0x10() or get 42()
+		// Use the existing number parsing logic from parseNumberLiteral
+		numLit := p.parseNumberLiteral().(*NumberLiteral)
+		propertyName = numLit
+	} else if p.curToken.Type == lexer.LBRACKET {
+		// Computed property name: get [expr]()
+		p.nextToken() // move past '['
+		keyExpr := p.parseExpression(LOWEST)
+		if keyExpr == nil {
+			p.addError(p.curToken, "expected expression inside computed property brackets")
+			return nil
+		}
+		if !p.expectPeek(lexer.RBRACKET) {
+			return nil // Missing closing ']'
+		}
+		propertyName = &ComputedPropertyName{Expr: keyExpr}
 	} else {
 		// Identifier property name
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -719,13 +743,15 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 }
 
 // parseSetter parses a setter method in a class
-// Syntax: [static] set propertyName(value: type) { body }
+// Syntax: [static] set propertyName(value: type) { body } or [static] set [computed](value: type) { body }
 func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	setToken := p.curToken // 'set' token
 	
-	// Check if next token is an identifier or string literal
-	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) {
-		p.addError(p.peekToken, "expected identifier or string literal after 'set'")
+	// Check if next token is an identifier, string literal, number, or computed property
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.LBRACKET) {
+		p.addError(p.peekToken, "expected identifier, string literal, number, or computed property after 'set'")
+		// Advance past the problematic token to avoid infinite loop
+		p.nextToken()
 		return nil
 	}
 	p.nextToken() // Move to property name token
@@ -734,6 +760,23 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	if p.curToken.Type == lexer.STRING {
 		// String literal property name: set "propertyName"()
 		propertyName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curToken.Type == lexer.NUMBER {
+		// Numeric literal property name: set 0x10() or set 42()
+		// Use the existing number parsing logic from parseNumberLiteral
+		numLit := p.parseNumberLiteral().(*NumberLiteral)
+		propertyName = numLit
+	} else if p.curToken.Type == lexer.LBRACKET {
+		// Computed property name: set [expr]()
+		p.nextToken() // move past '['
+		keyExpr := p.parseExpression(LOWEST)
+		if keyExpr == nil {
+			p.addError(p.curToken, "expected expression inside computed property brackets")
+			return nil
+		}
+		if !p.expectPeek(lexer.RBRACKET) {
+			return nil // Missing closing ']'
+		}
+		propertyName = &ComputedPropertyName{Expr: keyExpr}
 	} else {
 		// Identifier property name
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -977,7 +1020,7 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 	p.nextToken() // Consume '*'
 	
 	// Check that we have a valid method name token
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.STRING) && !p.curTokenIs(lexer.LBRACKET) {
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.STRING) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.PRIVATE_IDENT) {
 		p.addError(p.curToken, "expected method name after '*' in generator method")
 		return nil
 	}
@@ -1001,6 +1044,10 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		// String literal generator method: *"methodName"() { ... }
 		methodToken = p.curToken
 		methodName = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curTokenIs(lexer.PRIVATE_IDENT) {
+		// Private generator method: *#methodName() { ... }
+		methodToken = p.curToken
+		methodName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
 		// Regular identifier generator method: *methodName() { ... }
 		methodToken = p.curToken

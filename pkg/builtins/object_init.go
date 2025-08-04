@@ -40,6 +40,8 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("fromEntries", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("getPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("setPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
+		WithProperty("defineProperty", types.NewSimpleFunction([]types.Type{types.Any, types.String, types.Any}, types.Any)).
+		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, types.String}, types.Any)).
 		WithProperty("prototype", objectProtoType)
 
 	// Define the constructor globally
@@ -185,6 +187,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
 		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOfImpl))
 		ctorPropsObj.Properties.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", objectSetPrototypeOfImpl))
+		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", objectDefinePropertyImpl))
+		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", objectGetOwnPropertyDescriptorImpl))
 
 		objectCtor = ctorWithProps
 	}
@@ -536,4 +540,98 @@ func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
 	// TODO: Support other iterables when iterator protocol is implemented
 
 	return result, nil
+}
+
+func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) < 3 {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined, nil
+	}
+
+	obj := args[0]
+	propName := args[1].ToString()
+	descriptor := args[2]
+
+	// First argument must be an object
+	if !obj.IsObject() {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined, nil
+	}
+
+	// For now, implement basic property definition
+	// In a full implementation, we'd parse the descriptor object for
+	// value, writable, enumerable, configurable, get, set properties
+	
+	// Simple implementation: if descriptor has a 'value' property, use it
+	var value vm.Value = vm.Undefined
+	if descObj := descriptor.AsPlainObject(); descObj != nil {
+		if val, exists := descObj.GetOwn("value"); exists {
+			value = val
+		}
+	} else if descObj := descriptor.AsDictObject(); descObj != nil {
+		if val, exists := descObj.GetOwn("value"); exists {
+			value = val
+		}
+	} else {
+		// If descriptor is not an object, treat it as the value
+		value = descriptor
+	}
+
+	// Set the property on the object
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		plainObj.SetOwn(propName, value)
+	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+		dictObj.SetOwn(propName, value)
+	}
+
+	// Return the object
+	return obj, nil
+}
+
+func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) < 2 {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined, nil
+	}
+
+	obj := args[0]
+	propName := args[1].ToString()
+
+	// First argument must be an object
+	if !obj.IsObject() {
+		// TODO: Throw TypeError when error objects are implemented
+		return vm.Undefined, nil
+	}
+
+	// Check if the property exists
+	var value vm.Value
+	var exists bool
+
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		value, exists = plainObj.GetOwn(propName)
+	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+		value, exists = dictObj.GetOwn(propName)
+	} else if arrObj := obj.AsArray(); arrObj != nil {
+		// For arrays, check if it's a valid index or 'length'
+		if propName == "length" {
+			value = vm.NumberValue(float64(arrObj.Length()))
+			exists = true
+		} else if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < arrObj.Length() {
+			value = arrObj.Get(index)
+			exists = true
+		}
+	}
+
+	if !exists {
+		return vm.Undefined, nil
+	}
+
+	// Create a descriptor object
+	descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+	descriptor.SetOwn("value", value)
+	descriptor.SetOwn("writable", vm.BooleanValue(true))     // Default to writable
+	descriptor.SetOwn("enumerable", vm.BooleanValue(true))   // Default to enumerable
+	descriptor.SetOwn("configurable", vm.BooleanValue(true)) // Default to configurable
+
+	return vm.NewValueFromPlainObject(descriptor), nil
 }

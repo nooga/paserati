@@ -15,6 +15,8 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 		return k.Value
 	case *parser.StringLiteral:
 		return k.Value
+	case *parser.NumberLiteral:
+		return fmt.Sprintf("%v", k.Value)
 	case *parser.ComputedPropertyName:
 		// Try to extract constant property name first
 		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {

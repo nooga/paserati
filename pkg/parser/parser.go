@@ -201,6 +201,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.UNDEFINED, p.parseUndefinedLiteral) // Keep for value context
 	p.registerPrefix(lexer.THIS, p.parseThisExpression)        // Added for this keyword
 	p.registerPrefix(lexer.NEW, p.parseNewExpression)          // Added for new keyword
+	p.registerPrefix(lexer.IMPORT, p.parseImportMetaExpression) // Added for import.meta
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
@@ -462,6 +463,11 @@ func (p *Parser) parseStatement() Statement {
 	case lexer.THROW:
 		return p.parseThrowStatement()
 	case lexer.IMPORT:
+		// Check if this is import.meta (meta-property) or import declaration
+		if p.peekTokenIs(lexer.DOT) {
+			// This is import.meta, parse as expression statement
+			return p.parseExpressionStatement()
+		}
 		return p.parseImportDeclaration()
 	case lexer.EXPORT:
 		return p.parseExportDeclaration()
@@ -478,6 +484,11 @@ func (p *Parser) parseStatement() Statement {
 			return p.parseLabeledStatement()
 		}
 		return p.parseExpressionStatement()
+	case lexer.ILLEGAL:
+		// Handle ILLEGAL tokens by adding error and advancing
+		p.addError(p.curToken, fmt.Sprintf("illegal token: %s", p.curToken.Literal))
+		p.nextToken() // Advance past the ILLEGAL token to avoid infinite loop
+		return nil
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -527,31 +538,9 @@ func (p *Parser) parseFunctionDeclarationStatement() *ExpressionStatement {
 }
 
 // --- Class Declaration Statement Parsing ---
-func (p *Parser) parseClassDeclarationStatement() *ExpressionStatement {
-	// Parse the class as an expression (ClassExpression)
-	// This is similar to how function declarations work
-	classExpr := p.parseClassExpression()
-	if classExpr == nil {
-		// If class parsing failed, return an empty expression statement
-		// to avoid nil statement that would cause panic
-		return &ExpressionStatement{
-			Token:      p.curToken,
-			Expression: nil,
-		}
-	}
-
-	// Wrap it in an ExpressionStatement
-	stmt := &ExpressionStatement{
-		Token:      p.curToken,
-		Expression: classExpr,
-	}
-
-	// Optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
-
-	return stmt
+func (p *Parser) parseClassDeclarationStatement() Statement {
+	// Parse the class as a proper declaration statement
+	return p.parseClassDeclaration()
 }
 
 func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
@@ -1530,11 +1519,13 @@ func (p *Parser) parseStringLiteral() Expression {
 // Expects current token to be TEMPLATE_START (`), processes tokens in sequence,
 // ends with TEMPLATE_END (`). Always maintains string/expression alternation.
 func (p *Parser) parseTemplateLiteral() Expression {
+	debugPrint("parseTemplateLiteral: START - cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 	lit := &TemplateLiteral{Token: p.curToken} // TEMPLATE_START token
 	lit.Parts = []Node{}
 
 	// Consume the opening backtick
 	p.nextToken()
+	debugPrint("parseTemplateLiteral: after consuming TEMPLATE_START - cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 
 	// Always start with a string part (can be empty)
 	expectingString := true
@@ -1652,7 +1643,23 @@ func (p *Parser) parseSuperExpression() Expression {
 }
 
 func (p *Parser) parseNewExpression() Expression {
-	ne := &NewExpression{Token: p.curToken} // 'new' token
+	newToken := p.curToken // Save the 'new' token
+	
+	// Check if this is new.target
+	if p.peekTokenIs(lexer.DOT) {
+		p.nextToken() // Move to '.'
+		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "target" {
+			p.nextToken() // Move to 'target'
+			return &NewTargetExpression{Token: newToken}
+		} else {
+			// Error: new. followed by something other than 'target'
+			p.addError(p.peekToken, "expected 'target' after 'new.'")
+			return nil
+		}
+	}
+	
+	// Regular new expression
+	ne := &NewExpression{Token: newToken}
 
 	// Move to the next token (constructor identifier/expression)
 	p.nextToken()
@@ -1673,6 +1680,27 @@ func (p *Parser) parseNewExpression() Expression {
 	}
 
 	return ne
+}
+
+func (p *Parser) parseImportMetaExpression() Expression {
+	importToken := p.curToken // Save the 'import' token
+	
+	// Check if this is import.meta
+	if p.peekTokenIs(lexer.DOT) {
+		p.nextToken() // Move to '.'
+		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "meta" {
+			p.nextToken() // Move to 'meta'
+			return &ImportMetaExpression{Token: importToken}
+		} else {
+			// Error: import. followed by something other than 'meta'
+			p.addError(p.peekToken, "expected 'meta' after 'import.'")
+			return nil
+		}
+	}
+	
+	// If not import.meta, this should not have been called as a prefix expression
+	p.addError(p.curToken, "unexpected 'import' in expression context (expected import.meta)")
+	return nil
 }
 
 func (p *Parser) parseFunctionLiteral() Expression {
@@ -2754,7 +2782,7 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 
 			// --- Hoisting Check ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
-			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt {
+			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
 				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
 					if _, exists := block.HoistedDeclarations[funcLit.Name.Value]; exists {
 						// Function with this name already hoisted in this block
@@ -2839,14 +2867,14 @@ func (p *Parser) peekTokenIs2(t lexer.TokenType) bool {
 
 // lookAhead returns the token at position 'pos' ahead of peekToken
 // pos=0 returns peekToken, pos=1 returns the token after peekToken, etc.
-// Uses lexer position save/restore to avoid corrupting parser state
+// Uses lexer state save/restore to avoid corrupting parser state
 func (p *Parser) lookAhead(pos int) lexer.Token {
 	if pos == 0 {
 		return p.peekToken
 	}
 	
-	// Save current lexer state
-	savedPosition := p.l.CurrentPosition()
+	// Save complete lexer state
+	savedState := p.l.SaveState()
 	savedCur := p.curToken
 	savedPeek := p.peekToken
 	
@@ -2857,8 +2885,8 @@ func (p *Parser) lookAhead(pos int) lexer.Token {
 		token = p.l.NextToken()
 	}
 	
-	// Restore lexer state
-	p.l.SetPosition(savedPosition)
+	// Restore complete lexer state
+	p.l.RestoreState(savedState)
 	p.curToken = savedCur
 	p.peekToken = savedPeek
 	
@@ -3006,11 +3034,12 @@ func (p *Parser) parseSatisfiesExpression(left Expression) Expression {
 
 // parseGroupedExpression handles expressions like (expr) OR arrow functions like () => expr or (a, b) => expr
 func (p *Parser) parseGroupedExpression() Expression {
-	startPos := p.l.CurrentPosition()
+	// Save complete lexer state for proper backtracking
+	startState := p.l.SaveState()
 	startCur := p.curToken
 	startPeek := p.peekToken
 	startErrors := len(p.errors)
-	debugPrint("parseGroupedExpression: Starting at pos %d, cur='%s', peek='%s'", startPos, startCur.Literal, startPeek.Literal)
+	debugPrint("parseGroupedExpression: Starting at pos %d, cur='%s', peek='%s'", startState.Position, startCur.Literal, startPeek.Literal)
 
 	// --- Attempt to parse as Arrow Function Parameters ---
 	if p.curTokenIs(lexer.LPAREN) {
@@ -3061,10 +3090,10 @@ func (p *Parser) parseGroupedExpression() Expression {
 		} else {
 			// Not an arrow function (or parseParameterList failed), backtrack.
 			debugPrint("parseGroupedExpression: Failed arrow param parse (params=%v, cur='%s', peek='%s') or no '=>' or ':', backtracking...", params, p.curToken.Literal, p.peekToken.Type)
-			// --- PRECISE BACKTRACK ---
-			p.l.SetPosition(startPos) // Reset lexer position
-			p.curToken = startCur     // Restore original curToken
-			p.peekToken = startPeek   // Restore original peekToken
+			// --- PRECISE BACKTRACK WITH STATE RESTORATION ---
+			p.l.RestoreState(startState) // Restore complete lexer state (including template literal state)
+			p.curToken = startCur        // Restore original curToken
+			p.peekToken = startPeek      // Restore original peekToken
 			p.errors = p.errors[:startErrors]
 			debugPrint("parseGroupedExpression: Precise Backtrack complete. cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
 			// Fall through to parse as regular grouped expression
@@ -4171,9 +4200,9 @@ func (p *Parser) parseForStatement() Statement {
 	if !p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken() // Move past '('
 
-		// Try to detect for...of pattern
-		if p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.CONST) || p.curTokenIs(lexer.IDENT) {
-			// Check if this could be for...of by looking for pattern: variable of expression
+		// Try to detect for...of/for...in pattern
+		if p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.CONST) || p.curTokenIs(lexer.VAR) || p.curTokenIs(lexer.IDENT) {
+			// Check if this could be for...of/for...in by looking for pattern: variable of/in expression
 			return p.parseForStatementOrForOf(forToken)
 		}
 	}
@@ -4422,7 +4451,28 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 }
 
 // addError creates a SyntaxError and appends it to the parser's error list.
+// Limits the number of errors to prevent memory exhaustion from infinite parsing loops.
 func (p *Parser) addError(tok lexer.Token, msg string) {
+	// Prevent memory exhaustion from infinite error generation
+	const maxErrors = 1000
+	if len(p.errors) >= maxErrors {
+		if len(p.errors) == maxErrors {
+			// Add one final error indicating we hit the limit
+			syntaxErr := &errors.SyntaxError{
+				Position: errors.Position{
+					Line:     tok.Line,
+					Column:   tok.Column,
+					StartPos: tok.StartPos,
+					EndPos:   tok.EndPos,
+					Source:   p.source,
+				},
+				Msg: fmt.Sprintf("too many parse errors (limit: %d), stopping parser", maxErrors),
+			}
+			p.errors = append(p.errors, syntaxErr)
+		}
+		return // Stop adding more errors
+	}
+
 	syntaxErr := &errors.SyntaxError{
 		Position: errors.Position{
 			Line:     tok.Line,
@@ -5543,47 +5593,11 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 
 			objType.Properties = append(objType.Properties, prop)
 		} else if p.curTokenIs(lexer.LBRACKET) {
-			// Check if this is an index signature starting with '['
-			// Index signature: [key: string]: Type
-			prop := &ObjectTypeProperty{
-				IsIndexSignature: true,
-			}
-
-			// Expect identifier for key name
-			if !p.expectPeek(lexer.IDENT) {
+			// Handle both index signatures and computed properties
+			prop := p.parseObjectTypeBracketProperty()
+			if prop == nil {
 				return nil
 			}
-			prop.KeyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-			// Expect ':'
-			if !p.expectPeek(lexer.COLON) {
-				return nil
-			}
-
-			// Parse key type
-			p.nextToken() // Move to the start of the key type expression
-			prop.KeyType = p.parseTypeExpression()
-			if prop.KeyType == nil {
-				return nil
-			}
-
-			// Expect ']'
-			if !p.expectPeek(lexer.RBRACKET) {
-				return nil
-			}
-
-			// Expect ':'
-			if !p.expectPeek(lexer.COLON) {
-				return nil
-			}
-
-			// Parse value type
-			p.nextToken() // Move to the start of the value type expression
-			prop.ValueType = p.parseTypeExpression()
-			if prop.ValueType == nil {
-				return nil
-			}
-
 			objType.Properties = append(objType.Properties, prop)
 		} else {
 			// Regular property or method signature - try to parse property name (allowing keywords and string literals)
@@ -5679,7 +5693,7 @@ func (p *Parser) parsePropertyName() *Identifier {
 	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
 		lexer.RETURN, lexer.THROW, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
 		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, lexer.SATISFIES,
-		lexer.IN, lexer.INSTANCEOF:
+		lexer.IN, lexer.INSTANCEOF, lexer.DO, lexer.ENUM, lexer.FROM:
 		// Allow keywords as property names
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	default:
@@ -6084,6 +6098,14 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 		}
 		constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		varStmt = constStmt
+		varName = p.curToken.Literal
+	} else if p.curTokenIs(lexer.VAR) {
+		varDeclaration := &VarStatement{Token: p.curToken}
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+		varDeclaration.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		varStmt = varDeclaration
 		varName = p.curToken.Literal
 	} else if p.curTokenIs(lexer.IDENT) {
 		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -7194,8 +7216,8 @@ func (p *Parser) isMappedTypePattern() bool {
 	// Simple logic: if we see '[' followed eventually by 'in', it's a mapped type
 	// We'll create a temporary lexer instance to check without affecting our state
 	
-	// Save current position
-	savedPos := p.l.CurrentPosition()
+	// Save complete lexer state
+	savedState := p.l.SaveState()
 	
 	// Skip optional modifiers and look for [ IDENT in pattern
 	found := false
@@ -7230,8 +7252,8 @@ func (p *Parser) isMappedTypePattern() bool {
 		}
 	}
 	
-	// Restore lexer position
-	p.l.SetPosition(savedPos)
+	// Restore complete lexer state
+	p.l.RestoreState(savedState)
 	
 	debugPrint("isMappedTypePattern: result=%t", found)
 	return found
@@ -7847,4 +7869,99 @@ func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 
 	debugPrint("parseEnumMemberTypeExpression: created %s.%s", enumName.Value, memberName.Value)
 	return memberExpr
+}
+
+// parseObjectTypeBracketProperty parses both index signatures and computed property names in object types
+func (p *Parser) parseObjectTypeBracketProperty() *ObjectTypeProperty {
+	// We're currently at '[', move to the content
+	p.nextToken()
+	
+	// Parse the expression inside the brackets
+	expr := p.parseExpression(LOWEST)
+	if expr == nil {
+		return nil
+	}
+	
+	// Look ahead to see if this is an index signature [key: type]: valueType
+	// or a computed property [expr]: type
+	if p.peekTokenIs(lexer.COLON) {
+		// This is an index signature: [key: type]: valueType
+		// The expression should be an identifier
+		ident, ok := expr.(*Identifier)
+		if !ok {
+			p.addError(p.curToken, "index signature key must be an identifier")
+			return nil
+		}
+		
+		// Continue parsing as index signature
+		prop := &ObjectTypeProperty{
+			IsIndexSignature: true,
+			KeyName:          ident,
+		}
+		
+		// Expect ':'
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		}
+		
+		// Parse key type
+		p.nextToken() // Move to the start of the key type expression
+		prop.KeyType = p.parseTypeExpression()
+		if prop.KeyType == nil {
+			return nil
+		}
+		
+		// Expect ']'
+		if !p.expectPeek(lexer.RBRACKET) {
+			return nil
+		}
+		
+		// Expect ':'
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		}
+		
+		// Parse value type
+		p.nextToken() // Move to the start of the value type expression
+		prop.ValueType = p.parseTypeExpression()
+		if prop.ValueType == nil {
+			return nil
+		}
+		
+		return prop
+	} else if p.peekTokenIs(lexer.RBRACKET) {
+		// This is a computed property: [expr]: type
+		prop := &ObjectTypeProperty{
+			IsComputedProperty: true,
+			ComputedName:       expr,
+		}
+		
+		// Expect ']'
+		if !p.expectPeek(lexer.RBRACKET) {
+			return nil
+		}
+		
+		// Check for optional marker '?' 
+		if p.peekTokenIs(lexer.QUESTION) {
+			p.nextToken() // Consume '?'
+			prop.Optional = true
+		}
+		
+		// Expect ':'
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		}
+		
+		// Parse property type
+		p.nextToken() // Move to the start of the type expression
+		prop.Type = p.parseTypeExpression()
+		if prop.Type == nil {
+			return nil
+		}
+		
+		return prop
+	} else {
+		p.addError(p.curToken, "expected ':' or ']' after bracket expression in object type")
+		return nil
+	}
 }

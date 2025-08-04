@@ -1,0 +1,1 @@
+test262/test/built-ins/Array/from/iter-set-elem-prop-err.js

@@ -54,12 +54,117 @@ type Paserati struct {
 	moduleLoader   modules.ModuleLoader
 	heapAlloc      *compiler.HeapAlloc   // Unified global heap allocator
 	nativeResolver *NativeModuleResolver // *NativeModuleResolver - defined in native_module.go to avoid import cycles
+	ignoreTypeErrors bool                // When true, type checking errors are ignored and compilation continues
+}
+
+// SetIgnoreTypeErrors sets whether type checking errors should be ignored
+func (p *Paserati) SetIgnoreTypeErrors(ignore bool) {
+	p.ignoreTypeErrors = ignore
+}
+
+// Cleanup breaks circular references to allow garbage collection
+func (p *Paserati) Cleanup() {
+	// Break circular references between VM and module loader
+	if p.vmInstance != nil {
+		p.vmInstance.SetModuleLoader(nil)
+	}
+	if p.moduleLoader != nil {
+		p.moduleLoader.SetVMInstance(nil)
+	}
+	
+	// Clear references
+	p.vmInstance = nil
+	p.checker = nil
+	p.compiler = nil
+	p.moduleLoader = nil
+	p.heapAlloc = nil
+	p.nativeResolver = nil
 }
 
 // NewPaserati creates a new Paserati session with a fresh VM and Checker.
 // Uses the current working directory as the base for module resolution.
 func NewPaserati() *Paserati {
 	return NewPaseratiWithBaseDir(".")
+}
+
+// NewPaseratiWithInitializers creates a new Paserati session with custom builtin initializers
+func NewPaseratiWithInitializers(initializers []builtins.BuiltinInitializer) *Paserati {
+	return NewPaseratiWithInitializersAndBaseDir(initializers, ".")
+}
+
+// NewPaseratiWithInitializersAndBaseDir creates a new Paserati session with custom builtin initializers and base directory
+func NewPaseratiWithInitializersAndBaseDir(customInitializers []builtins.BuiltinInitializer, baseDir string) *Paserati {
+	// Create module loader first
+	config := modules.DefaultLoaderConfig()
+
+	// Create file system resolver for the specified base directory
+	fsResolver := modules.NewFileSystemResolver(os.DirFS(baseDir), baseDir)
+
+	// Create module loader with file system resolver
+	moduleLoader := modules.NewModuleLoader(config, fsResolver)
+
+	// Create unified heap allocator for coordinating global indices
+	heapAlloc := compiler.NewHeapAlloc()
+
+	// Create checker and compiler with custom initializers
+	typeChecker := checker.NewCheckerWithInitializers(customInitializers)
+	comp := compiler.NewCompiler()
+	comp.SetChecker(typeChecker)
+
+	// Create VM and initialize builtin system
+	vmInstance := vm.NewVM()
+
+	paserati := &Paserati{
+		vmInstance:   vmInstance,
+		checker:      typeChecker,
+		compiler:     comp,
+		moduleLoader: moduleLoader,
+		heapAlloc:    heapAlloc,
+	}
+
+	// Wire the module loader into the VM
+	vmInstance.SetModuleLoader(moduleLoader)
+
+	// Set the VM instance in the module loader for native module initialization
+	moduleLoader.SetVMInstance(vmInstance)
+
+	// Initialize builtins using custom initializers
+	if err := initializeBuiltinsWithCustom(paserati, customInitializers); err != nil{
+		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
+	}
+
+	// Set up the checker factory for the module loader
+	// This allows the module loader to create type checkers without circular imports
+	moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
+		// Create a new checker instance for module type checking with custom initializers
+		newChecker := checker.NewCheckerWithInitializers(customInitializers)
+		// Enable module mode so the checker can resolve imports
+		newChecker.EnableModuleMode("", moduleLoader)
+		debugPrintf("// [Driver] Created new checker for module: %p\n", newChecker)
+		return newChecker
+	})
+
+	// Set up the compiler factory for the module loader AFTER builtins are initialized
+	// This allows the module loader to create compilers without circular imports
+	moduleLoader.SetCompilerFactory(func() modules.Compiler {
+		// Create a new compiler instance for module compilation
+		newCompiler := compiler.NewCompiler()
+
+		// CRITICAL: Give module compiler the SAME heap allocator instance
+		// This ensures all compilers coordinate on the exact same global indices
+		newCompiler.SetHeapAlloc(paserati.heapAlloc)
+
+		// Return a wrapper that adapts the return type to interface{}
+		return &compilerAdapter{newCompiler}
+	})
+
+	// Enable module mode for the main checker by default for consistent type checking
+	typeChecker.EnableModuleMode("", moduleLoader)
+
+	// Install built-in Paserati modules
+	installBuiltinModules(paserati)
+
+	return paserati
 }
 
 // NewPaseratiWithBaseDir creates a new Paserati session with a custom base directory
@@ -108,7 +213,7 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	// Set up the checker factory for the module loader
 	// This allows the module loader to create type checkers without circular imports
 	moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
-		// Create a new checker instance for module type checking
+		// Create a new checker instance for module type checking with standard initializers
 		newChecker := checker.NewChecker()
 		// Enable module mode so the checker can resolve imports
 		newChecker.EnableModuleMode("", moduleLoader)
@@ -225,9 +330,12 @@ func (p *Paserati) RunString(sourceCode string) (vm.Value, []errors.PaseratiErro
 	// No need to call p.checker.Check(program) here directly.
 
 	// --- Compilation Step ---
+	// Set the compiler's ignore type errors flag based on our setting
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
-		return vm.Undefined, compileAndTypeErrs // Errors could be type or compile errors
+		return vm.Undefined, compileAndTypeErrs
 	}
 	if chunk == nil {
 		// Handle internal compiler error where no chunk is returned despite no errors
@@ -564,6 +672,9 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 
 		// Compile the module
+		// Set the compiler's ignore type errors flag based on our setting
+		p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+		
 		var compileErrs []errors.PaseratiError
 		chunk, compileErrs = p.compiler.Compile(moduleRecord.AST)
 		if len(compileErrs) > 0 {
@@ -649,6 +760,9 @@ func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Progr
 	parser.DumpAST(program, "RunStringWithModules")
 
 	// Compile with module mode enabled
+	// Set the compiler's ignore type errors flag based on our setting
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
 		return vm.Undefined, compileAndTypeErrs
@@ -766,6 +880,9 @@ func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []e
 	parser.DumpAST(program, "RunCode")
 
 	// --- Compilation Step ---
+	// Set the compiler's ignore type errors flag based on our setting
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
 		return vm.Undefined, compileAndTypeErrs
@@ -811,12 +928,14 @@ func (p *Paserati) InterpretChunk(chunk *vm.Chunk) (vm.Value, []errors.PaseratiE
 // initializeBuiltins sets up all builtin global variables in both the compiler and VM
 // ensuring they use the same global index ordering via the unified heap allocator
 func initializeBuiltins(paserati *Paserati) error {
+	return initializeBuiltinsWithCustom(paserati, builtins.GetStandardInitializers())
+}
+
+// initializeBuiltinsWithCustom sets up builtin global variables using custom initializers
+func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.BuiltinInitializer) error {
 	vmInstance := paserati.vmInstance
 	comp := paserati.compiler
 	heapAlloc := paserati.heapAlloc
-
-	// Get all standard initializers
-	initializers := builtins.GetStandardInitializers()
 
 	// Create runtime context for VM initialization
 	globalVariables := make(map[string]vm.Value)

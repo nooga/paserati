@@ -11,6 +11,7 @@ import (
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"strings"
 )
 
 // Define a placeholder register value for 'undefined' case
@@ -43,7 +44,7 @@ type IteratorCleanupInfo struct {
 	UsesIteratorProtocol bool
 }
 
-const debugCompiler = false     // Enable for debugging register allocation issue
+const debugCompiler = false    // Enable for debugging register allocation issue
 const debugCompilerStats = false // <<< CHANGED back to false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
@@ -80,6 +81,8 @@ type Compiler struct {
 	heapAlloc *HeapAlloc
 	// line tracking
 	line int
+	// Anonymous class counter for generating unique names
+	anonymousClassCounter int
 
 	// --- NEW: Constant Register Cache for Performance ---
 	// Maps constant index to register that currently holds it
@@ -95,6 +98,9 @@ type Compiler struct {
 	
 	// --- Module Import Deduplication ---
 	processedModules map[string]bool     // Track modules already processed to avoid duplicate OpEvalModule
+	
+	// --- Type Error Handling ---
+	ignoreTypeErrors bool // When true, compilation continues despite type errors
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -122,6 +128,11 @@ func NewCompiler() *Compiler {
 // This is used by the driver for REPL sessions.
 func (c *Compiler) SetChecker(checker *checker.Checker) {
 	c.typeChecker = checker
+}
+
+// SetIgnoreTypeErrors sets whether to continue compilation despite type errors
+func (c *Compiler) SetIgnoreTypeErrors(ignore bool) {
+	c.ignoreTypeErrors = ignore
 }
 
 // SetHeapAlloc sets the heap allocator for coordinating global indices
@@ -264,8 +275,8 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		// Program hasn't been checked yet, perform type checking
 		// The checker modifies its own environment state.
 		typeErrors := c.typeChecker.Check(program)
-		if len(typeErrors) > 0 {
-			// Found type errors. Return them immediately.
+		if len(typeErrors) > 0 && !c.ignoreTypeErrors {
+			// Found type errors and not ignoring them. Return them immediately.
 			// Type errors are already []errors.PaseratiError from the checker.
 			return nil, typeErrors
 		}
@@ -581,20 +592,31 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.ClassExpression:
 		// Convert ClassExpression to ClassDeclaration for compilation
 		// The compiler treats them the same way
+		var className *parser.Identifier
 		if node.Name == nil {
-			// Anonymous classes not yet supported
-			return BadRegister, NewCompileError(node, "anonymous classes are not yet supported")
+			// Generate a unique name for anonymous classes
+			// This follows the pattern used for anonymous functions
+			anonymousName := fmt.Sprintf("__AnonymousClass_%d", c.getNextAnonymousId())
+			className = &parser.Identifier{
+				Token: node.Token,
+				Value: anonymousName,
+			}
+		} else {
+			className = node.Name
 		}
+		
 		classDecl := &parser.ClassDeclaration{
 			Token:          node.Token,
-			Name:           node.Name,
+			Name:           className,
 			TypeParameters: node.TypeParameters,
 			SuperClass:     node.SuperClass,
 			Implements:     node.Implements,
 			Body:           node.Body,
 			IsAbstract:     node.IsAbstract,
 		}
-		return c.compileClassDeclaration(classDecl, hint)
+		// For class expressions, we need to return the constructor function
+		// instead of just defining it in the environment like class declarations
+		return c.compileClassExpression(classDecl, hint)
 
 	case *parser.LetStatement:
 		return c.compileLetStatement(node, hint) // TODO: Fix this
@@ -719,6 +741,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// Load 'super' value - for now, this is the same as 'this' since we use prototype-based inheritance
 		// TODO: Implement proper super method binding when needed
 		c.emitLoadThis(hint, node.Token.Line)
+		return hint, nil
+
+	case *parser.NewTargetExpression:
+		// Load new.target value - for now, just load undefined
+		// TODO: Implement proper new.target support by tracking constructor context
+		c.emitLoadUndefined(hint, node.Token.Line)
+		return hint, nil
+
+	case *parser.ImportMetaExpression:
+		// Load import.meta value - for now, just load an empty object
+		// TODO: Implement proper import.meta support with module metadata
+		c.emitLoadUndefined(hint, node.Token.Line) // For now, use undefined
 		return hint, nil
 
 	case *parser.Identifier:
@@ -2323,4 +2357,63 @@ func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
 	
 	// Patch the skip jump
 	c.patchJump(skipCallJump)
+}
+
+// getNextAnonymousId generates a unique ID for anonymous classes
+func (c *Compiler) getNextAnonymousId() int {
+	c.anonymousClassCounter++
+	return c.anonymousClassCounter
+}
+
+// compileClassExpression compiles a class expression and returns the constructor function
+// For named classes, it also stores them in the environment like class declarations
+func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
+	debugPrintf("// DEBUG compileClassExpression: Starting compilation for class '%s'\n", node.Name.Value)
+
+	// 1. Create constructor function
+	constructorReg, err := c.compileConstructor(node)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. Set up prototype object with methods
+	err = c.setupClassPrototype(node, constructorReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 3. Set up static members on the constructor
+	err = c.setupStaticMembers(node, constructorReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 4. For named classes (including class declarations parsed as expressions), 
+	// store them in the environment like compileClassDeclaration does
+	// For anonymous classes, skip this step
+	if !strings.HasPrefix(node.Name.Value, "__AnonymousClass_") {
+		if c.enclosing == nil {
+			// Top-level class - define as global
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+			c.emitSetGlobal(globalIdx, constructorReg, node.Token.Line)
+			debugPrintf("// DEBUG compileClassExpression: Defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
+		} else {
+			// Local class - define in local scope
+			c.currentSymbolTable.Define(node.Name.Value, constructorReg)
+			debugPrintf("// DEBUG compileClassExpression: Defined local class '%s' in R%d\n", node.Name.Value, constructorReg)
+		}
+	}
+
+	// 5. Always return the constructor register for expressions
+	// If a hint register was provided and it's different from constructorReg, move the value
+	if hint != BadRegister && hint != constructorReg {
+		c.emitMove(hint, constructorReg, node.Token.Line)
+		c.regAlloc.Free(constructorReg)
+		debugPrintf("// DEBUG compileClassExpression: Moved constructor from R%d to hint R%d\n", constructorReg, hint)
+		return hint, nil
+	}
+	
+	debugPrintf("// DEBUG compileClassExpression: Returning constructor in R%d\n", constructorReg)
+	return constructorReg, nil
 }

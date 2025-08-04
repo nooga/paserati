@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"fmt"
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -62,7 +63,10 @@ func (d *DateInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("toLocaleTimeString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toJSON", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number)).
-		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
+		WithProperty("constructor", types.Any). // Avoid circular reference, use Any for constructor property
+		// Annex B methods
+		WithProperty("getYear", types.NewSimpleFunction([]types.Type{}, types.Number)).
+		WithProperty("setYear", types.NewSimpleFunction([]types.Type{types.Number}, types.Number))
 
 	// Create Date constructor type
 	dateCtorType := types.NewObjectType().
@@ -522,6 +526,66 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		// For invalid dates, toJSON returns null
 		return vm.Null, nil
+	}))
+
+	// Annex B methods
+	dateProto.SetOwn("getYear", vm.NewNativeFunction(0, false, "getYear", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			t := time.UnixMilli(int64(timestamp))
+			// getYear returns year - 1900
+			return vm.NumberValue(float64(t.Year() - 1900)), nil
+		}
+		return vm.NaN, nil
+	}))
+
+	dateProto.SetOwn("setYear", vm.NewNativeFunction(1, false, "setYear", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		dateObj := thisDate.AsPlainObject()
+		if dateObj == nil {
+			return vm.Undefined, fmt.Errorf("setYear called on non-Date object")
+		}
+
+		// Check if it's a Date object by verifying it has __timestamp__ property
+		if _, exists := dateObj.GetOwn("__timestamp__"); !exists {
+			return vm.Undefined, fmt.Errorf("setYear called on non-Date object")
+		}
+
+		if len(args) == 0 {
+			// Set to NaN if no arguments
+			dateObj.SetOwn("__timestamp__", vm.NaN)
+			return vm.NaN, nil
+		}
+
+		yearArg := args[0].ToFloat()
+		if math.IsNaN(yearArg) {
+			dateObj.SetOwn("__timestamp__", vm.NaN)
+			return vm.NaN, nil
+		}
+
+		// Get current timestamp
+		currentTimestamp, _ := getDateTimestamp(thisDate)
+		if math.IsNaN(currentTimestamp) {
+			// If date is invalid, initialize to January 1, 1900
+			t := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+			currentTimestamp = float64(t.UnixMilli())
+		}
+
+		t := time.UnixMilli(int64(currentTimestamp))
+		
+		// Year interpretation: 0-99 means 1900-1999
+		year := int(yearArg)
+		if year >= 0 && year <= 99 {
+			year += 1900
+		}
+
+		// Create new time with updated year
+		newTime := time.Date(year, t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+
+		// Update the date object
+		dateObj.SetOwn("__timestamp__", vm.NumberValue(newTimestamp))
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	// UTC setter methods
