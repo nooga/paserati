@@ -124,3 +124,20 @@ func (c *Checker) createGeneratorType(returnType types.Type, yieldTypes []types.
 	generatorObj.WithProperty("throw", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
 	return generatorObj
 }
+
+func (c *Checker) checkMethodDefinition(node *parser.MethodDefinition) {
+	// Method definitions are essentially function literals with different kinds
+	// Visit the underlying function literal first
+	if node.Value != nil {
+		c.visit(node.Value)
+		// Copy the computed type from the function literal to the method definition
+		if funcType := node.Value.GetComputedType(); funcType != nil {
+			node.SetComputedType(funcType)
+		} else {
+			node.SetComputedType(types.Any)
+		}
+	} else {
+		// No function value (shouldn't happen in practice)
+		node.SetComputedType(types.Any)
+	}
+}

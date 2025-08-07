@@ -406,6 +406,11 @@ func (vm *VM) run() (InterpretResult, Value) {
 
 startExecution:
 	for {
+		// Debug: Show current instruction
+		// if ip < len(code) {
+		//	fmt.Printf("// [VM DEBUG] Executing instruction at IP %d: %s\n", ip, OpCode(code[ip]).String())
+		// }
+		
 		if ip >= len(code) {
 			// Save IP before erroring
 			frame.ip = ip
@@ -892,7 +897,7 @@ startExecution:
 			ip += 3
 
 			callerRegisters := registers
-			callerIP := ip
+			callerIP := ip  // Pass the IP after the call instruction
 
 			calleeVal := callerRegisters[funcReg]
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
@@ -1745,6 +1750,8 @@ startExecution:
 			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
 			// Calculate cache key based on instruction pointer (before advancing ip)
 			ip += 4
+			
+			// fmt.Printf("// [VM DEBUG] OpGetProp: R%d = R%d[%d] (ip=%d)\n", destReg, objReg, nameConstIdx, ip-4)
 
 			// Get property name from constants
 			if int(nameConstIdx) >= len(constants) {
@@ -1868,7 +1875,7 @@ startExecution:
 			ip += 4
 
 			callerRegisters := registers
-			callerIP := ip
+			callerIP := ip  // Pass the IP after the call instruction
 
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
@@ -1904,7 +1911,7 @@ startExecution:
 
 			// Capture caller context before potential frame switch
 			callerRegisters := registers
-			callerIP := ip
+			callerIP := ip  // Pass the IP after the call instruction
 
 			constructorVal := callerRegisters[constructorReg]
 
@@ -2252,7 +2259,7 @@ startExecution:
 			ip += 3
 
 			callerRegisters := registers
-			callerIP := ip
+			callerIP := ip  // Pass the IP after the call instruction
 
 			calleeVal := callerRegisters[funcReg]
 			spreadArrayVal := callerRegisters[spreadArgReg]
@@ -2302,7 +2309,7 @@ startExecution:
 			ip += 4
 
 			callerRegisters := registers
-			callerIP := ip
+			callerIP := ip  // Pass the IP after the call instruction
 
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
@@ -3083,15 +3090,15 @@ startExecution:
 	// 1. Ongoing unwinding (vm.unwinding == true) - continue unwinding in parent frame
 	// 2. Completed exception handling (vm.unwinding == false) - resume execution at handler
 
-	// CAUTION: this is commmented out because apparently it's unreachable according to Go compiler
-	if vm.frameCount == 0 {
-		// No frames left - either uncaught exception or completed execution
-		if vm.unwinding {
-			return InterpretRuntimeError, vm.currentException
-		} else {
-			return InterpretOK, Undefined
-		}
-	}
+	// CAUTION: this is commented out because apparently it's unreachable according to Go compiler
+	// if vm.frameCount == 0 {
+	// 	// No frames left - either uncaught exception or completed execution
+	// 	if vm.unwinding {
+	// 		return InterpretRuntimeError, vm.currentException
+	// 	} else {
+	// 		return InterpretOK, Undefined
+	// 	}
+	// }
 
 	// Update cached variables for the current frame and continue execution
 	frame = &vm.frames[vm.frameCount-1]
@@ -3191,9 +3198,24 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	// ip points to the *next* instruction, error occurred at ip-1
 	instructionPos := frame.ip - 1
 	line := 0
+	
 	// Safety check for chunk and bounds before calling GetLine
 	if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.Chunk != nil {
-		line = frame.closure.Fn.Chunk.GetLine(instructionPos)
+		chunk := frame.closure.Fn.Chunk
+		// Ensure instructionPos is valid (non-negative and within bounds)
+		if instructionPos >= 0 && instructionPos < len(chunk.Lines) {
+			line = chunk.GetLine(instructionPos)
+		} else if frame.ip >= 0 && frame.ip < len(chunk.Lines) {
+			// If ip-1 is invalid, try using ip itself
+			line = chunk.GetLine(frame.ip)
+		} else if len(chunk.Lines) > 0 {
+			// Fallback: use the first line if available
+			line = chunk.Lines[0]
+		}
+		// If line is still 0 and we have code, default to line 1
+		if line == 0 && len(chunk.Code) > 0 {
+			line = 1
+		}
 	}
 
 	msg := fmt.Sprintf(format, args...)

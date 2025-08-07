@@ -15,6 +15,8 @@ func (p *Parser) isValidMethodName() bool {
 		return true
 	case lexer.NUMBER:  // Allow numeric method names like 42()
 		return true
+	case lexer.PRIVATE_IDENT:  // Allow private identifiers like #privateName()
+		return true
 	// Allow keywords as method names
 	case lexer.RETURN, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
 		 lexer.LET, lexer.CONST, lexer.VAR, lexer.CLASS, lexer.INTERFACE, lexer.TYPE,
@@ -219,7 +221,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		}
 		
-		// Parse constructor, method, getter, setter, or generator
+		// Parse constructor, method, getter, setter, generator, or computed member
 		if p.curTokenIs(lexer.GET) {
 			// Parse getter method
 			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
@@ -237,6 +239,18 @@ func (p *Parser) parseClassBody() *ClassBody {
 			method := p.parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 			if method != nil {
 				methods = append(methods, method)
+			}
+		} else if p.curTokenIs(lexer.LBRACKET) {
+			// Computed property or method: [expr]: type or [expr]() {} or [expr] = value
+			result := p.parseComputedClassMember(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+			if result != nil {
+				if sig, ok := result.(*MethodSignature); ok {
+					methodSigs = append(methodSigs, sig)
+				} else if method, ok := result.(*MethodDefinition); ok {
+					methods = append(methods, method)
+				} else if property, ok := result.(*PropertyDefinition); ok {
+					properties = append(properties, property)
+				}
 			}
 		} else if p.isValidMethodName() {
 			if p.curToken.Literal == "constructor" {
@@ -275,28 +289,26 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 			}
 		} else if p.curTokenIs(lexer.PRIVATE_IDENT) {
-			// Private field: #fieldName
-			// Private fields are always properties and implicitly private
+			// Private field or method: #fieldName or #methodName()
+			// Private fields/methods are always implicitly private
 			// They cannot have explicit access modifiers
 			if isPublic || isPrivate || isProtected {
-				p.addError(p.curToken, "private fields (#field) cannot have explicit access modifiers")
+				p.addError(p.curToken, "private fields/methods (#name) cannot have explicit access modifiers")
 				p.nextToken()
 				continue
 			}
 			
-			property := p.parsePrivateProperty(isStatic, isReadonly)
-			if property != nil {
-				properties = append(properties, property)
-			}
-		} else if p.curTokenIs(lexer.LBRACKET) {
-			// Computed property or method: [expr]: type or [expr]() {}
-			result := p.parseComputedClassMember(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride)
-			if result != nil {
-				if sig, ok := result.(*MethodSignature); ok {
-					methodSigs = append(methodSigs, sig)
-				} else if method, ok := result.(*MethodDefinition); ok {
+			// Check if this is a private method (followed by '(') or private field
+			if p.peekTokenIs(lexer.LPAREN) {
+				// Private method: #methodName()
+				method := p.parsePrivateMethod(isStatic)
+				if method != nil {
 					methods = append(methods, method)
-				} else if property, ok := result.(*PropertyDefinition); ok {
+				}
+			} else {
+				// Private field: #fieldName
+				property := p.parsePrivateProperty(isStatic, isReadonly)
+				if property != nil {
 					properties = append(properties, property)
 				}
 			}
@@ -564,7 +576,7 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
-		initializer = p.parseExpression(LOWEST)
+		initializer = p.parseExpression(COMMA)
 	}
 	
 	// Expect semicolon or end of class body
@@ -621,7 +633,7 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
-		initializer = p.parseExpression(LOWEST)
+		initializer = p.parseExpression(COMMA)
 	}
 	
 	// Expect semicolon or end of class body
@@ -648,9 +660,9 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	getToken := p.curToken // 'get' token
 	
-	// Check if next token is an identifier, string literal, number, or computed property
-	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.LBRACKET) {
-		p.addError(p.peekToken, "expected identifier, string literal, number, or computed property after 'get'")
+	// Check if next token is an identifier, string literal, number, private identifier, or computed property
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.PRIVATE_IDENT) && !p.peekTokenIs(lexer.LBRACKET) {
+		p.addError(p.peekToken, "expected identifier, string literal, number, private identifier, or computed property after 'get'")
 		// Advance past the problematic token to avoid infinite loop
 		p.nextToken()
 		return nil
@@ -669,7 +681,7 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	} else if p.curToken.Type == lexer.LBRACKET {
 		// Computed property name: get [expr]()
 		p.nextToken() // move past '['
-		keyExpr := p.parseExpression(LOWEST)
+		keyExpr := p.parseExpression(COMMA)
 		if keyExpr == nil {
 			p.addError(p.curToken, "expected expression inside computed property brackets")
 			return nil
@@ -678,8 +690,11 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 			return nil // Missing closing ']'
 		}
 		propertyName = &ComputedPropertyName{Expr: keyExpr}
+	} else if p.curToken.Type == lexer.PRIVATE_IDENT {
+		// Private identifier property name: get #privateName()
+		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
-		// Identifier property name
+		// Regular identifier property name
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 	
@@ -747,9 +762,9 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	setToken := p.curToken // 'set' token
 	
-	// Check if next token is an identifier, string literal, number, or computed property
-	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.LBRACKET) {
-		p.addError(p.peekToken, "expected identifier, string literal, number, or computed property after 'set'")
+	// Check if next token is an identifier, string literal, number, private identifier, or computed property
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.PRIVATE_IDENT) && !p.peekTokenIs(lexer.LBRACKET) {
+		p.addError(p.peekToken, "expected identifier, string literal, number, private identifier, or computed property after 'set'")
 		// Advance past the problematic token to avoid infinite loop
 		p.nextToken()
 		return nil
@@ -768,7 +783,7 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	} else if p.curToken.Type == lexer.LBRACKET {
 		// Computed property name: set [expr]()
 		p.nextToken() // move past '['
-		keyExpr := p.parseExpression(LOWEST)
+		keyExpr := p.parseExpression(COMMA)
 		if keyExpr == nil {
 			p.addError(p.curToken, "expected expression inside computed property brackets")
 			return nil
@@ -777,8 +792,11 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 			return nil // Missing closing ']'
 		}
 		propertyName = &ComputedPropertyName{Expr: keyExpr}
+	} else if p.curToken.Type == lexer.PRIVATE_IDENT {
+		// Private identifier property name: set #privateName()
+		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
-		// Identifier property name
+		// Regular identifier property name
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 	
@@ -842,7 +860,7 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 	
 	// Parse the computed key expression
 	p.nextToken() // move past '['
-	keyExpr := p.parseExpression(LOWEST)
+	keyExpr := p.parseExpression(COMMA)
 	if keyExpr == nil {
 		p.addError(p.curToken, "expected expression inside computed property brackets")
 		return nil
@@ -857,7 +875,7 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 		// It's a computed method: [expr]() {} or [expr]<T>() {}
 		return p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 	} else {
-		// It's a computed property: [expr]: type = value
+		// It's a computed property: [expr]: type = value or [expr] = value
 		return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected)
 	}
 }
@@ -981,15 +999,13 @@ func (p *Parser) parseComputedProperty(bracketToken lexer.Token, keyExpr Express
 		if typeAnnotation == nil {
 			return nil
 		}
-		
-		// After parsing type, advance to next token
-		p.nextToken()
 	}
 	
 	var initializer Expression
-	if p.curTokenIs(lexer.ASSIGN) {
-		p.nextToken() // move past '='
-		initializer = p.parseExpression(LOWEST)
+	if p.peekTokenIs(lexer.ASSIGN) {
+		p.nextToken() // Move to '='
+		p.nextToken() // Move past '=' to the initializer expression
+		initializer = p.parseExpression(COMMA)
 	}
 	
 	// Expect semicolon or end of class body
@@ -1032,7 +1048,7 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		// Computed generator method: *[expr]() { ... }
 		methodToken = p.curToken
 		p.nextToken() // Consume '['
-		keyExpr := p.parseExpression(LOWEST)
+		keyExpr := p.parseExpression(COMMA)
 		if keyExpr == nil {
 			return nil
 		}

@@ -107,7 +107,7 @@ func (p *Parser) parseEnumMember() *EnumMember {
 		p.nextToken() // consume '='
 		p.nextToken() // move to value expression
 		
-		value = p.parseExpression(LOWEST)
+		value = p.parseExpression(COMMA)
 		if value == nil {
 			p.addError(p.curToken, "expected enum member value after '='")
 			return nil

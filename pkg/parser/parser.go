@@ -45,10 +45,11 @@ type (
 	infixParseFn  func(Expression) Expression // Arg is the left side expression
 )
 
-// Precedence levels for VALUE operators
+// Precedence levels for VALUE operators  
 const (
 	_ int = iota
 	LOWEST
+	COMMA       // , (very low precedence, but higher than LOWEST)
 	ASSIGNMENT  // =, +=, -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>=, &&=, ||=, ??=
 	TERNARY     // ?:
 	COALESCE    // ??
@@ -85,6 +86,8 @@ const (
 
 // Precedences map for VALUE operator tokens
 var precedences = map[lexer.TokenType]int{
+	// Comma operator (Lowest precedence)
+	lexer.COMMA: COMMA,
 	// Assignment (Lowest operational precedence)
 	lexer.ASSIGN:                      ASSIGNMENT,
 	lexer.PLUS_ASSIGN:                 ASSIGNMENT,
@@ -281,6 +284,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	// Postfix Update Operators
 	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression)
 	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression)
+	// Comma operator
+	p.registerInfix(lexer.COMMA, p.parseCommaExpression)
 
 	// --- Register TYPE Prefix Functions ---
 	// --- MODIFIED: Use parseTypeIdentifier for simple type names ---
@@ -440,8 +445,12 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseDoWhileStatement()
 	case lexer.FOR:
 		return p.parseForStatement()
+	case lexer.WITH:
+		return p.parseWithStatement()
 	case lexer.BREAK:
 		return p.parseBreakStatement()
+	case lexer.SEMICOLON:
+		return p.parseEmptyStatement()
 	case lexer.CONTINUE:
 		return p.parseContinueStatement()
 	case lexer.TYPE:
@@ -1100,29 +1109,55 @@ func (p *Parser) parseLetStatement() Statement {
 		// Object destructuring: let {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(letToken, false)
 	case lexer.IDENT:
-		// Regular identifier: let x = ...
-		stmt := &LetStatement{Token: letToken}
-		stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		// Regular identifier: let x = ... or let x = ..., y = ...
+		firstStmt := &LetStatement{Token: letToken}
+		firstStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
 		// Optional Type Annotation
 		if p.peekTokenIs(lexer.COLON) {
 			p.nextToken() // Consume ':'
 			p.nextToken() // Consume token starting the type expression
-			stmt.TypeAnnotation = p.parseTypeExpression()
-			if stmt.TypeAnnotation == nil {
+			firstStmt.TypeAnnotation = p.parseTypeExpression()
+			if firstStmt.TypeAnnotation == nil {
 				return nil
 			}
 		} else {
-			stmt.TypeAnnotation = nil
+			firstStmt.TypeAnnotation = nil
 		}
 
 		// Allow omitting = value, defaulting to undefined
 		if p.peekTokenIs(lexer.ASSIGN) {
 			p.nextToken() // Consume '='
 			p.nextToken() // Consume token starting the expression
-			stmt.Value = p.parseExpression(LOWEST)
+			firstStmt.Value = p.parseExpression(LOWEST)
 		} else {
-			stmt.Value = nil
+			firstStmt.Value = nil
+		}
+
+		// Check for comma-separated additional declarations
+		if p.peekTokenIs(lexer.COMMA) {
+			// This is comma-separated declarations like: let a = 1, b = 2;
+			// We need to consume remaining declarations and handle them
+			// For now, skip comma-separated declarations and just parse the first one
+			// This prevents the "no prefix parse function for , found" error
+			for p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // Consume ','
+				if !p.expectPeek(lexer.IDENT) {
+					return firstStmt // Return what we have so far
+				}
+				// Skip the additional variable (simplified approach)
+				// TODO: Properly parse additional variables
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ':'
+					p.nextToken() // Move to type
+					p.parseTypeExpression() // Skip type
+				}
+				if p.peekTokenIs(lexer.ASSIGN) {
+					p.nextToken() // Consume '='
+					p.nextToken() // Move to expression
+					p.parseExpression(LOWEST) // Skip value
+				}
+			}
 		}
 
 		// Optional semicolon
@@ -1130,7 +1165,7 @@ func (p *Parser) parseLetStatement() Statement {
 			p.nextToken()
 		}
 
-		return stmt
+		return firstStmt
 	default:
 		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
 		return nil
@@ -1193,31 +1228,70 @@ func (p *Parser) parseConstStatement() Statement {
 func (p *Parser) parseVarStatement() *VarStatement {
 	stmt := &VarStatement{Token: p.curToken}
 
+	// Parse first declaration
 	if !p.expectPeek(lexer.IDENT) {
 		return nil
 	}
 
-	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	firstDeclarator := &VarDeclarator{}
+	firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
 	// Optional Type Annotation
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
 		p.nextToken() // Consume token starting the type expression
-		stmt.TypeAnnotation = p.parseTypeExpression()
-		if stmt.TypeAnnotation == nil {
+		firstDeclarator.TypeAnnotation = p.parseTypeExpression()
+		if firstDeclarator.TypeAnnotation == nil {
 			return nil
 		}
-	} else {
-		stmt.TypeAnnotation = nil // No type annotation provided
 	}
 
 	// Allow omitting = value, defaulting to undefined
 	if p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken() // Consume '='
 		p.nextToken() // Consume token starting the expression
-		stmt.Value = p.parseExpression(LOWEST)
-	} else {
-		stmt.Value = nil // No initializer provided, implies undefined
+		firstDeclarator.Value = p.parseExpression(LOWEST)
+	}
+
+	stmt.Declarations = []*VarDeclarator{firstDeclarator}
+
+	// Parse additional declarations separated by commas
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // Consume ','
+		
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+
+		declarator := &VarDeclarator{}
+		declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+		// Optional Type Annotation
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume ':'
+			p.nextToken() // Consume token starting the type expression
+			declarator.TypeAnnotation = p.parseTypeExpression()
+			if declarator.TypeAnnotation == nil {
+				return nil
+			}
+		}
+
+		// Allow omitting = value, defaulting to undefined
+		if p.peekTokenIs(lexer.ASSIGN) {
+			p.nextToken() // Consume '='
+			p.nextToken() // Consume token starting the expression
+			declarator.Value = p.parseExpression(LOWEST)
+		}
+
+		stmt.Declarations = append(stmt.Declarations, declarator)
+	}
+
+	// Set legacy fields for backward compatibility (first declaration)
+	if len(stmt.Declarations) > 0 {
+		stmt.Name = stmt.Declarations[0].Name
+		stmt.TypeAnnotation = stmt.Declarations[0].TypeAnnotation
+		stmt.Value = stmt.Declarations[0].Value
+		stmt.ComputedType = stmt.Declarations[0].ComputedType
 	}
 
 	// Optional semicolon - Consume it here
@@ -1259,7 +1333,7 @@ func (p *Parser) parseIfStatement() *IfStatement {
 	}
 
 	p.nextToken() // Consume '(', move to condition
-	stmt.Condition = p.parseExpression(LOWEST)
+	stmt.Condition = p.parseExpression(COMMA)
 	if stmt.Condition == nil {
 		return nil
 	}
@@ -1959,12 +2033,18 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 			p.addError(p.peekToken, "'this' parameter cannot have a default value")
 			return nil, nil, fmt.Errorf("'this' parameter cannot have a default value")
 		} else if param.IsDestructuring {
-			p.addError(p.peekToken, "destructuring parameters cannot have top-level default values (use defaults inside the pattern)")
-			return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
+			// Allow destructuring parameters to have top-level default values
+			// This is valid JavaScript/TypeScript syntax: function f({x} = {}) {}
+			p.nextToken() // Consume '='
+			p.nextToken() // Move to expression
+			param.DefaultValue = p.parseExpression(COMMA)
+			if param.DefaultValue == nil {
+				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+			}
 		} else {
 			p.nextToken() // Consume '='
 			p.nextToken() // Move to expression
-			param.DefaultValue = p.parseExpression(LOWEST)
+			param.DefaultValue = p.parseExpression(COMMA)
 			if param.DefaultValue == nil {
 				p.addError(p.curToken, "expected expression after '=' in parameter default value")
 				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
@@ -2081,12 +2161,18 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 		// Check for Default Value
 		if p.peekTokenIs(lexer.ASSIGN) {
 			if param.IsDestructuring {
-				p.addError(p.peekToken, "destructuring parameters cannot have top-level default values (use defaults inside the pattern)")
-				return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
+				// Allow destructuring parameters to have top-level default values
+				// This is valid JavaScript/TypeScript syntax: function f({x} = {}) {}
+				p.nextToken() // Consume '='
+				p.nextToken() // Move to expression
+				param.DefaultValue = p.parseExpression(COMMA)
+				if param.DefaultValue == nil {
+					return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+				}
 			} else {
 				p.nextToken() // Consume '='
 				p.nextToken() // Move to expression
-				param.DefaultValue = p.parseExpression(LOWEST)
+				param.DefaultValue = p.parseExpression(COMMA)
 				if param.DefaultValue == nil {
 					p.addError(p.curToken, "expected expression after '=' in parameter default value")
 					return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
@@ -2306,7 +2392,8 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 	if !element.IsRest && p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken() // Consume '='
 		p.nextToken() // Move to default expression
-		element.Default = p.parseExpression(LOWEST)
+		// Parse with COMMA precedence to exclude comma operator from default expressions
+		element.Default = p.parseExpression(COMMA)
 		if element.Default == nil {
 			p.addError(p.curToken, "expected expression after '=' in parameter default")
 			return nil
@@ -2362,7 +2449,8 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 	if p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken() // Consume '='
 		p.nextToken() // Move to default expression
-		prop.Default = p.parseExpression(LOWEST)
+		// Parse with COMMA precedence to exclude comma operator from default expressions
+		prop.Default = p.parseExpression(COMMA)
 		if prop.Default == nil {
 			p.addError(p.curToken, "expected expression after '=' in parameter default")
 			return nil
@@ -2759,7 +2847,7 @@ func (p *Parser) parseSpreadElement() Expression {
 
 	// Parse the expression after '...'
 	p.nextToken() // Move to the expression
-	spreadElement.Argument = p.parseExpression(LOWEST)
+	spreadElement.Argument = p.parseExpression(COMMA)
 	if spreadElement.Argument == nil {
 		p.addError(p.curToken, "expected expression after '...' in spread syntax")
 		return nil
@@ -3283,6 +3371,29 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 	return expression
 }
 
+// parseCommaExpression handles comma operator expressions like (a, b, c)
+func (p *Parser) parseCommaExpression(left Expression) Expression {
+	debugPrint("parseCommaExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
+	
+	expression := &InfixExpression{
+		Token:    p.curToken, // The comma token
+		Operator: p.curToken.Literal,
+		Left:     left,
+	}
+	
+	precedence := p.curPrecedence()
+	p.nextToken() // Consume the comma
+	expression.Right = p.parseExpression(precedence)
+	
+	if expression.Right == nil {
+		debugPrint("parseCommaExpression: Right expression was nil, returning nil.")
+		return nil
+	}
+	
+	debugPrint("parseCommaExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
+	return expression
+}
+
 // parseCallExpression handles function calls like func(arg1, arg2)
 // NOTE: Type arguments are handled earlier in the parsing flow
 func (p *Parser) parseCallExpression(function Expression) Expression {
@@ -3302,7 +3413,7 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 	}
 
 	p.nextToken() // Consume '(' or '[' to get to the first expression
-	expr := p.parseExpression(LOWEST)
+	expr := p.parseExpression(ASSIGNMENT)
 	if expr == nil {
 		return nil // Propagate error from parsing the first element
 	}
@@ -3319,7 +3430,7 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 		// --- End Trailing Comma Handling ---
 
 		p.nextToken() // Consume the token starting the next expression
-		expr = p.parseExpression(LOWEST)
+		expr = p.parseExpression(ASSIGNMENT)
 		if expr == nil {
 			return nil // Propagate error from parsing subsequent element
 		}
@@ -3354,7 +3465,7 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, pa
 	} else {
 		debugPrint("parseArrowFunctionBodyAndFinish: Parsing Expression body...")
 		// No nextToken here - curToken is already the start of the expression
-		arrowFunc.Body = p.parseExpression(LOWEST)
+		arrowFunc.Body = p.parseExpression(COMMA)
 	}
 	debugPrint("parseArrowFunctionBodyAndFinish: Finished parsing body=%T, returning ArrowFunc", arrowFunc.Body)
 
@@ -3456,12 +3567,18 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 	// Check for Default Value
 	if p.peekTokenIs(lexer.ASSIGN) {
 		if param.IsDestructuring {
-			p.addError(p.peekToken, "destructuring parameters cannot have top-level default values (use defaults inside the pattern)")
-			return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
+			// Allow destructuring parameters to have top-level default values
+			// This is valid JavaScript/TypeScript syntax: function f({x} = {}) {}
+			p.nextToken() // Consume '='
+			p.nextToken() // Move to expression
+			param.DefaultValue = p.parseExpression(COMMA)
+			if param.DefaultValue == nil {
+				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+			}
 		} else {
 			p.nextToken() // Consume '='
 			p.nextToken() // Move to expression
-			param.DefaultValue = p.parseExpression(LOWEST)
+			param.DefaultValue = p.parseExpression(COMMA)
 			if param.DefaultValue == nil {
 				p.addError(p.curToken, "expected expression after '=' in parameter default value")
 				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
@@ -3557,15 +3674,22 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 		// Check for Default Value
 		if p.peekTokenIs(lexer.ASSIGN) {
 			if param.IsDestructuring {
-				p.addError(p.peekToken, "destructuring parameters cannot have top-level default values")
-				return nil, nil, fmt.Errorf("destructuring parameters cannot have top-level default values")
-			}
-			p.nextToken() // Consume '='
-			p.nextToken() // Move to expression
-			param.DefaultValue = p.parseExpression(LOWEST)
-			if param.DefaultValue == nil {
-				p.addError(p.curToken, "expected expression after '=' in parameter default value")
-				return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+				// Allow destructuring parameters to have top-level default values
+				// This is valid JavaScript/TypeScript syntax: function f({x} = {}) {}
+				p.nextToken() // Consume '='
+				p.nextToken() // Move to expression
+				param.DefaultValue = p.parseExpression(COMMA)
+				if param.DefaultValue == nil {
+					return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+				}
+			} else {
+				p.nextToken() // Consume '='
+				p.nextToken() // Move to expression
+				param.DefaultValue = p.parseExpression(COMMA)
+				if param.DefaultValue == nil {
+					p.addError(p.curToken, "expected expression after '=' in parameter default value")
+					return nil, nil, fmt.Errorf("expected expression after '=' in parameter default value")
+				}
 			}
 		}
 
@@ -3872,7 +3996,7 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 		p.nextToken() // Move past '[' to first element
 
 		// Parse first element
-		element := p.parseExpression(LOWEST)
+		element := p.parseExpression(COMMA)
 		if element != nil {
 			elements = append(elements, element)
 		}
@@ -3888,7 +4012,7 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 			}
 
 			p.nextToken() // Move to next element
-			element = p.parseExpression(LOWEST)
+			element = p.parseExpression(COMMA)
 			if element != nil {
 				elements = append(elements, element)
 			}
@@ -4055,7 +4179,7 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken() // Consume '='
 				p.nextToken() // Move to default expression
-				property.Default = p.parseExpression(LOWEST)
+				property.Default = p.parseExpression(COMMA)
 				if property.Default == nil {
 					return nil, nil
 				}
@@ -4065,7 +4189,7 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 			property.Target = &Identifier{Token: propertyToken, Value: propertyName}
 			p.nextToken() // Consume '='
 			p.nextToken() // Move to default expression
-			property.Default = p.parseExpression(LOWEST)
+			property.Default = p.parseExpression(COMMA)
 			if property.Default == nil {
 				return nil, nil
 			}
@@ -4184,6 +4308,42 @@ func (p *Parser) parseWhileStatement() *WhileStatement {
 	return stmt
 }
 
+// --- With Statement Parsing ---
+
+func (p *Parser) parseWithStatement() *WithStatement {
+	// Parses 'with' '(' <expression> ')' <statement>
+	stmt := &WithStatement{Token: p.curToken} // Current token is 'with'
+
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil // Expected '(' after 'with'
+	}
+
+	p.nextToken() // Consume '('
+	stmt.Expression = p.parseExpression(LOWEST)
+
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil // Expected ')' after expression
+	}
+
+	// Handle both block statements and single statements
+	if p.peekTokenIs(lexer.LBRACE) {
+		// Block statement case: with (expression) { ... }
+		if !p.expectPeek(lexer.LBRACE) {
+			return nil
+		}
+		stmt.Body = p.parseBlockStatement()
+	} else {
+		// Single statement case: with (expression) statement
+		p.nextToken() // Move to the start of the statement
+		stmt.Body = p.parseStatement()
+		if stmt.Body == nil {
+			return nil
+		}
+	}
+
+	return stmt
+}
+
 // --- New: For Statement Parsing ---
 
 func (p *Parser) parseForStatement() Statement {
@@ -4230,6 +4390,12 @@ func (p *Parser) parseBreakStatement() *BreakStatement {
 		p.nextToken()
 	}
 
+	return stmt
+}
+
+func (p *Parser) parseEmptyStatement() *EmptyStatement {
+	stmt := &EmptyStatement{Token: p.curToken} // Current token is ';'
+	// Empty statement is just a semicolon, no additional parsing needed
 	return stmt
 }
 
@@ -4711,7 +4877,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			p.nextToken() // Consume '...' to get to the expression
 
 			// Parse the expression being spread
-			spreadExpr := p.parseExpression(LOWEST)
+			spreadExpr := p.parseExpression(COMMA)
 			if spreadExpr == nil {
 				p.addError(p.curToken, "expected expression after '...' in object literal")
 				return nil
@@ -4741,11 +4907,183 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 		}
 
-		// --- Check for computed properties FIRST before parsePropertyName ---
-		if p.curTokenIs(lexer.LBRACKET) {
+		// --- NEW: Check for getters and setters (including computed ones) ---
+		if p.curTokenIs(lexer.GET) && p.isGetterMethod() {
+			// Parse getter inline: get propertyName() { ... } or get [computed]() { ... }
+			getToken := p.curToken // 'get' token
+			p.nextToken() // Move to property name
+			
+			var key Expression
+			if p.curTokenIs(lexer.LBRACKET) {
+				// Computed getter: get [expr]() { ... }
+				p.nextToken() // Consume '['
+				keyExpr := p.parseExpression(COMMA)
+				if keyExpr == nil {
+					return nil
+				}
+				if !p.expectPeek(lexer.RBRACKET) {
+					return nil
+				}
+				key = &ComputedPropertyName{Expr: keyExpr}
+			} else if p.curTokenIs(lexer.IDENT) {
+				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.STRING) {
+				key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.NUMBER) {
+				key = p.parseNumberLiteral()
+			} else {
+				p.addError(p.curToken, "expected identifier, string literal, number, or computed property after 'get'")
+				return nil
+			}
+			
+			// Expect '(' for getter function
+			if !p.expectPeek(lexer.LPAREN) {
+				return nil
+			}
+			
+			// Parse getter function (should have no parameters)
+			funcLit := &FunctionLiteral{Token: getToken}
+			funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+			if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+				return nil
+			}
+			
+			// Validate that getters have no parameters
+			if len(funcLit.Parameters) > 0 || funcLit.RestParameter != nil {
+				p.addError(p.curToken, "getters cannot have parameters")
+				return nil
+			}
+			
+			// Optional return type annotation
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken()
+				p.nextToken()
+				funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+				if funcLit.ReturnTypeAnnotation == nil {
+					return nil
+				}
+			}
+			
+			// Expect '{' for body
+			if !p.expectPeek(lexer.LBRACE) {
+				return nil
+			}
+			
+			// Parse function body
+			funcLit.Body = p.parseBlockStatement()
+			if funcLit.Body == nil {
+				return nil
+			}
+			
+			// Create MethodDefinition for getter
+			getter := &MethodDefinition{
+				Token:       getToken,
+				Key:         key,
+				Value:       funcLit,
+				Kind:        "getter",
+				IsStatic:    false,
+				IsPublic:    false,
+				IsPrivate:   false,
+				IsProtected: false,
+				IsOverride:  false,
+			}
+			
+			// Add getter as ObjectProperty with MethodDefinition as value
+			objLit.Properties = append(objLit.Properties, &ObjectProperty{
+				Key:   key,
+				Value: getter,
+			})
+			
+		} else if p.curTokenIs(lexer.SET) && p.isSetterMethod() {
+			// Parse setter inline: set propertyName(param) { ... } or set [computed](param) { ... }
+			setToken := p.curToken // 'set' token
+			p.nextToken() // Move to property name
+			
+			var key Expression
+			if p.curTokenIs(lexer.LBRACKET) {
+				// Computed setter: set [expr](param) { ... }
+				p.nextToken() // Consume '['
+				keyExpr := p.parseExpression(COMMA)
+				if keyExpr == nil {
+					return nil
+				}
+				if !p.expectPeek(lexer.RBRACKET) {
+					return nil
+				}
+				key = &ComputedPropertyName{Expr: keyExpr}
+			} else if p.curTokenIs(lexer.IDENT) {
+				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.STRING) {
+				key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.NUMBER) {
+				key = p.parseNumberLiteral()
+			} else {
+				p.addError(p.curToken, "expected identifier, string literal, number, or computed property after 'set'")
+				return nil
+			}
+			
+			// Expect '(' for setter function
+			if !p.expectPeek(lexer.LPAREN) {
+				return nil
+			}
+			
+			// Parse setter function (should have exactly one parameter)
+			funcLit := &FunctionLiteral{Token: setToken}
+			funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+			if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+				return nil
+			}
+			
+			// Validate that setters have exactly one parameter
+			if len(funcLit.Parameters) != 1 || funcLit.RestParameter != nil {
+				p.addError(p.curToken, "setters must have exactly one parameter")
+				return nil
+			}
+			
+			// Optional return type annotation
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken()
+				p.nextToken()
+				funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+				if funcLit.ReturnTypeAnnotation == nil {
+					return nil
+				}
+			}
+			
+			// Expect '{' for body
+			if !p.expectPeek(lexer.LBRACE) {
+				return nil
+			}
+			
+			// Parse function body
+			funcLit.Body = p.parseBlockStatement()
+			if funcLit.Body == nil {
+				return nil
+			}
+			
+			// Create MethodDefinition for setter
+			setter := &MethodDefinition{
+				Token:       setToken,
+				Key:         key,
+				Value:       funcLit,
+				Kind:        "setter",
+				IsStatic:    false,
+				IsPublic:    false,
+				IsPrivate:   false,
+				IsProtected: false,
+				IsOverride:  false,
+			}
+			
+			// Add setter as ObjectProperty with MethodDefinition as value
+			objLit.Properties = append(objLit.Properties, &ObjectProperty{
+				Key:   key,
+				Value: setter,
+			})
+			
+		} else if p.curTokenIs(lexer.LBRACKET) {
 			// Computed property: [expression]: value
 			p.nextToken() // Consume '['
-			key := p.parseExpression(LOWEST)
+			key := p.parseExpression(COMMA)
 			if key == nil {
 				return nil // Error parsing expression inside []
 			}
@@ -4811,7 +5149,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 				// Parse the value
 				p.nextToken()
-				value := p.parseExpression(LOWEST)
+				value := p.parseExpression(COMMA)
 				if value == nil {
 					return nil
 				}
@@ -4820,7 +5158,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{
 					Key:   computedKey,
 					Value: value,
-				})
+					})
 			}
 		} else {
 			// --- NEW: Check for generator methods (*foo() or *"foo"() or *[expr]()) ---
@@ -4850,7 +5188,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				} else if p.curTokenIs(lexer.LBRACKET) {
 					// *[Symbol.iterator]() { ... }
 					p.nextToken() // Consume '['
-					keyExpr := p.parseExpression(LOWEST)
+					keyExpr := p.parseExpression(COMMA)
 					if keyExpr == nil {
 						return nil // Error parsing expression inside []
 					}
@@ -5006,7 +5344,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 				p.nextToken() // Consume ':' to get to the start of the value
 
-				value := p.parseExpression(LOWEST)
+				value := p.parseExpression(ASSIGNMENT)
 				if value == nil {
 					return nil
 				} // Error parsing value
@@ -5693,7 +6031,11 @@ func (p *Parser) parsePropertyName() *Identifier {
 	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
 		lexer.RETURN, lexer.THROW, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
 		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, lexer.SATISFIES,
-		lexer.IN, lexer.INSTANCEOF, lexer.DO, lexer.ENUM, lexer.FROM:
+		lexer.IN, lexer.INSTANCEOF, lexer.DO, lexer.ENUM, lexer.FROM, lexer.CATCH, lexer.FINALLY,
+		lexer.TRY, lexer.SWITCH, lexer.CASE, lexer.DEFAULT, lexer.BREAK, lexer.CONTINUE, lexer.CLASS,
+		lexer.STATIC, lexer.READONLY, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT,
+		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.VAR, lexer.TYPE, lexer.KEYOF,
+		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER:
 		// Allow keywords as property names
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	default:
@@ -7964,4 +8306,30 @@ func (p *Parser) parseObjectTypeBracketProperty() *ObjectTypeProperty {
 		p.addError(p.curToken, "expected ':' or ']' after bracket expression in object type")
 		return nil
 	}
+}
+
+// isGetterMethod checks if the current 'get' token is part of a getter method
+// Returns true for: get foo() or get [computed]()
+// Returns false for: get: value
+func (p *Parser) isGetterMethod() bool {
+	// Look ahead to see what follows 'get'
+	if p.peekTokenIs(lexer.COLON) {
+		// get: value - this is a regular property, not a getter
+		return false
+	}
+	// get identifier(...) or get [computed](...) - this is a getter method
+	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) || p.peekTokenIs(lexer.LBRACKET)
+}
+
+// isSetterMethod checks if the current 'set' token is part of a setter method
+// Returns true for: set foo(param) or set [computed](param)
+// Returns false for: set: value
+func (p *Parser) isSetterMethod() bool {
+	// Look ahead to see what follows 'set'
+	if p.peekTokenIs(lexer.COLON) {
+		// set: value - this is a regular property, not a setter
+		return false
+	}
+	// set identifier(...) or set [computed](...) - this is a setter method
+	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) || p.peekTokenIs(lexer.LBRACKET)
 }

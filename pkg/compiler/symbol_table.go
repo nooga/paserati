@@ -14,25 +14,36 @@ type Symbol struct {
 	// Add Index for things like builtins or free vars if needed later
 }
 
+// WithObjectInfo tracks information about a with object in the compiler
+type WithObjectInfo struct {
+	ObjectRegister Register           // Register containing the with object
+	Properties     map[string]bool    // Set of known properties (true if property exists)
+}
+
 // SymbolTable manages symbols for a single scope.
 type SymbolTable struct {
 	Outer *SymbolTable      // Pointer to the symbol table of the enclosing scope
 	store map[string]Symbol // Stores symbols defined in *this* scope
+	
+	// --- With statement support ---
+	withObjects []WithObjectInfo // Stack of with objects in this scope
 }
 
 // NewSymbolTable creates a new, top-level symbol table (global scope).
 func NewSymbolTable() *SymbolTable {
 	return &SymbolTable{
-		Outer: nil, // No outer scope for the global table
-		store: make(map[string]Symbol),
+		Outer:       nil, // No outer scope for the global table
+		store:       make(map[string]Symbol),
+		withObjects: []WithObjectInfo{}, // Initialize empty with objects stack
 	}
 }
 
 // NewEnclosedSymbolTable creates a new symbol table enclosed by an outer scope.
 func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
 	return &SymbolTable{
-		Outer: outer, // Link to the enclosing scope
-		store: make(map[string]Symbol),
+		Outer:       outer, // Link to the enclosing scope
+		store:       make(map[string]Symbol),
+		withObjects: []WithObjectInfo{}, // Initialize empty with objects stack
 	}
 }
 
@@ -84,4 +95,62 @@ func (st *SymbolTable) UpdateRegister(name string, newRegister Register) {
 	}
 	symbol.Register = newRegister
 	st.store[name] = symbol // Reassign the modified struct back to the map
+}
+
+// --- With statement support methods ---
+
+// PushWithObject adds a new with object to the current scope's stack
+func (st *SymbolTable) PushWithObject(objectReg Register, properties map[string]bool) {
+	withInfo := WithObjectInfo{
+		ObjectRegister: objectReg,
+		Properties:     properties,
+	}
+	st.withObjects = append(st.withObjects, withInfo)
+}
+
+// PopWithObject removes the most recent with object from the stack
+func (st *SymbolTable) PopWithObject() {
+	if len(st.withObjects) > 0 {
+		st.withObjects = st.withObjects[:len(st.withObjects)-1]
+	}
+}
+
+// HasActiveWithObjects returns true if there are any with objects in the current scope chain
+func (st *SymbolTable) HasActiveWithObjects() bool {
+	// Check current scope
+	if len(st.withObjects) > 0 {
+		return true
+	}
+	
+	// Check outer scopes
+	if st.Outer != nil {
+		return st.Outer.HasActiveWithObjects()
+	}
+	
+	return false
+}
+
+// ResolveWithProperty tries to find a property in the with objects stack
+// Returns the register containing the object and true if found
+func (st *SymbolTable) ResolveWithProperty(name string) (Register, bool) {
+	// Check with objects from innermost to outermost
+	for i := len(st.withObjects) - 1; i >= 0; i-- {
+		withInfo := st.withObjects[i]
+		// If we have specific property information, check it
+		if len(withInfo.Properties) > 0 {
+			if withInfo.Properties[name] {
+				return withInfo.ObjectRegister, true
+			}
+		} else {
+			// If no specific properties (e.g., 'any' type), assume it might have the property
+			return withInfo.ObjectRegister, true
+		}
+	}
+	
+	// If not found in current scope, check outer scope
+	if st.Outer != nil {
+		return st.Outer.ResolveWithProperty(name)
+	}
+	
+	return 0, false
 }

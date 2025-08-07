@@ -12,6 +12,31 @@ import (
 
 const debugAssignment = false // Enable debug output for assignment compilation
 
+// shouldUseWithProperty checks if an identifier should be treated as a with property
+// This is an unobtrusive predicate that can be used throughout the compiler
+func (c *Compiler) shouldUseWithProperty(ident *parser.Identifier) (Register, bool) {
+	// Only check for with properties if we're actually inside a with statement
+	// This prevents unnecessary constant pool corruption when no with statements are active
+	if !c.currentSymbolTable.HasActiveWithObjects() {
+		return BadRegister, false
+	}
+	
+	debugPrintf("// DEBUG shouldUseWithProperty: Has active with objects, checking '%s'\n", ident.Value)
+	
+	// Check if this identifier is flagged as coming from a with object (by type checker)
+	if ident.IsFromWith {
+		debugPrintf("// DEBUG shouldUseWithProperty: '%s' is flagged as from with, checking resolution\n", ident.Value)
+		if objReg, withFound := c.currentSymbolTable.ResolveWithProperty(ident.Value); withFound {
+			debugPrintf("// DEBUG shouldUseWithProperty: '%s' found in with object, returning true\n", ident.Value)
+			return objReg, true
+		}
+		debugPrintf("// DEBUG shouldUseWithProperty: '%s' not found in with object resolution\n", ident.Value)
+	} else {
+		debugPrintf("// DEBUG shouldUseWithProperty: '%s' not flagged as from with\n", ident.Value)
+	}
+	return BadRegister, false
+}
+
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
 func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
@@ -56,21 +81,39 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	switch lhsNode := node.Left.(type) {
 	case *parser.Identifier:
 		lhsType = lhsIsIdentifier
-		// Resolve the identifier
-		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(lhsNode.Value)
-		if !found {
-			// Variable not found in any scope, treat as global assignment
-			identInfo.isGlobal = true
-			identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
-			// For compound assignments, we need the current value
+		
+		// First check if this is a with property (highest priority)
+		if objReg, isWithProperty := c.shouldUseWithProperty(lhsNode); isWithProperty {
+			// This is a with property assignment - treat as member assignment
+			lhsType = lhsIsMemberExpr
+			memberInfo.objectReg = objReg
+			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
+			memberInfo.isComputed = false
+			
+			// For compound assignments, we need the current property value
 			if node.Operator != "=" {
 				currentValueReg = c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, currentValueReg)
-				c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
+				c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
 			} else {
 				currentValueReg = nilRegister // Not needed for simple assignment
 			}
 		} else {
+			// Regular identifier - resolve the identifier
+			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(lhsNode.Value)
+			if !found {
+				// Variable not found in any scope, treat as global assignment
+				identInfo.isGlobal = true
+				identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
+				// For compound assignments, we need the current value
+				if node.Operator != "=" {
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
+				} else {
+					currentValueReg = nilRegister // Not needed for simple assignment
+				}
+			} else {
 			// Determine target register/upvalue index and load current value
 			if symbolRef.IsGlobal {
 				// Global variable
@@ -101,6 +144,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitByte(byte(currentValueReg))  // Destination register
 				c.emitByte(identInfo.upvalueIndex) // Upvalue index
 			}
+		}
 		}
 
 	case *parser.IndexExpression:
@@ -445,42 +489,92 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			c.emitByte(byte(indexInfo.indexReg))
 			c.emitByte(byte(hint))
 		case lhsIsMemberExpr:
-			// Check if this is a setter property
+			// Check if this is a setter property using type information
 			setterDetected := false
-			if memberExpr, ok := node.Left.(*parser.MemberExpression); ok {
+			if memberExpr, ok := node.Left.(*parser.MemberExpression); ok && !memberInfo.isComputed {
+				propName := c.extractPropertyName(memberExpr.Property)
+				setterMethodName := "__set__" + propName
+				
+				// Check type information for setter detection
 				objectStaticType := memberExpr.Object.GetComputedType()
 				if objectStaticType != nil {
 					if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
-						propName := c.extractPropertyName(memberExpr.Property)
-						setterMethodName := "__set__" + propName
-						if c.hasMethodInType(objType, setterMethodName) {
-							// Use setter method call for assignment
-							debugPrintf("// DEBUG Assign Store Member: Detected setter for '%s', emitting method call\n", propName)
-							
-							// Allocate contiguous registers for the setter call: [method, arg1]
-							totalRegs := 1 + 1 // method + 1 argument
-							setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
-							for i := 0; i < totalRegs; i++ {
-								tempRegs = append(tempRegs, setterMethodReg+Register(i))
+						// Check for class instance setters
+						if objType.IsClassInstance() && objType.ClassMeta != nil {
+							if classMemberInfo := objType.ClassMeta.GetMemberAccess(propName); classMemberInfo != nil && classMemberInfo.IsSetter {
+								// Direct setter call - we know it exists
+								debugPrintf("// DEBUG Assign Store Member: Detected class setter for '%s', emitting direct call\n", propName)
+								
+								totalRegs := 1 + 1 // method + 1 argument
+								setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
+								for i := 0; i < totalRegs; i++ {
+									tempRegs = append(tempRegs, setterMethodReg+Register(i))
+								}
+								
+								setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
+								c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
+								
+								argReg := setterMethodReg + 1
+								if hint != argReg {
+									c.emitMove(argReg, hint, line)
+								}
+								
+								dummyResultReg := c.regAlloc.Alloc()
+								tempRegs = append(tempRegs, dummyResultReg)
+								c.emitCallMethod(dummyResultReg, setterMethodReg, memberInfo.objectReg, 1, line)
+								setterDetected = true
 							}
-							
-							// Get the setter method
-							setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
-							c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
-							
-							// Move the value to the argument register
-							argReg := setterMethodReg + 1
-							if hint != argReg {
-								c.emitMove(argReg, hint, line)
+						}
+						
+						// Check for object literal setters
+						if !setterDetected && objType.Properties != nil {
+							setterPropertyName := "__set__" + propName
+							if _, hasSetter := objType.Properties[setterPropertyName]; hasSetter {
+								// Direct setter call - we know it exists from type info
+								debugPrintf("// DEBUG Assign Store Member: Detected object literal setter for '%s', emitting direct call\n", propName)
+								
+								totalRegs := 1 + 1 // method + 1 argument
+								setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
+								for i := 0; i < totalRegs; i++ {
+									tempRegs = append(tempRegs, setterMethodReg+Register(i))
+								}
+								
+								setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
+								c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
+								
+								argReg := setterMethodReg + 1
+								if hint != argReg {
+									c.emitMove(argReg, hint, line)
+								}
+								
+								dummyResultReg := c.regAlloc.Alloc()
+								tempRegs = append(tempRegs, dummyResultReg)
+								c.emitCallMethod(dummyResultReg, setterMethodReg, memberInfo.objectReg, 1, line)
+								setterDetected = true
 							}
-							
-							// Call the setter: setterMethod.call(this=object, value)
-							dummyResultReg := c.regAlloc.Alloc()
-							tempRegs = append(tempRegs, dummyResultReg)
-							c.emitCallMethod(dummyResultReg, setterMethodReg, memberInfo.objectReg, 1, line)
-							setterDetected = true
 						}
 					}
+				} else {
+					// Fallback: No type information available - use optimistic approach
+					debugPrintf("// DEBUG Assign Store Member: No type info for '%s', using optimistic setter\n", propName)
+					
+					totalRegs := 1 + 1 // method + 1 argument
+					setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
+					for i := 0; i < totalRegs; i++ {
+						tempRegs = append(tempRegs, setterMethodReg+Register(i))
+					}
+					
+					setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
+					c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
+					
+					argReg := setterMethodReg + 1
+					if hint != argReg {
+						c.emitMove(argReg, hint, line)
+					}
+					
+					// Optimistic setter call that falls back to regular property assignment
+					c.emitOptimisticSetterCall(setterMethodReg, memberInfo.objectReg, argReg, memberInfo.nameConstIdx, line)
+					setterDetected = true
 				}
 			}
 			
@@ -649,6 +743,16 @@ func (c *Compiler) compileRecursiveAssignment(target parser.Expression, valueReg
 
 // compileIdentifierAssignment handles simple variable assignment
 func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, valueReg Register, line int) errors.PaseratiError {
+	// First check if this is from a with object (flagged by type checker)
+	if identTarget.IsFromWith {
+		if objReg, withFound := c.currentSymbolTable.ResolveWithProperty(identTarget.Value); withFound {
+			// Emit property assignment bytecode: objReg[identTarget.Value] = valueReg
+			propName := c.chunk.AddConstant(vm.String(identTarget.Value))
+			c.emitSetProp(objReg, valueReg, propName, line)
+			return nil
+		}
+	}
+
 	// Resolve the identifier to determine how to store it
 	symbol, _, found := c.currentSymbolTable.Resolve(identTarget.Value)
 	if !found {

@@ -17,6 +17,12 @@ type SymbolInfo struct {
 	IsConst bool
 }
 
+// WithObject represents an object in a with statement
+type WithObject struct {
+	ExprType   types.Type            // Type of the with expression
+	Properties map[string]types.Type // Known properties and their types
+}
+
 // Environment manages type information within scopes.
 type Environment struct {
 	symbols     map[string]SymbolInfo // UPDATED: Stores SymbolInfo (type + const status)
@@ -34,6 +40,9 @@ type Environment struct {
 
 	// --- Primitive prototype registry (only for global environment) ---
 	primitivePrototypes map[string]*types.ObjectType // Stores prototype types for primitives
+
+	// --- With statement support ---
+	withObjects []WithObject // Stack of objects from enclosing with statements
 }
 
 // NewEnvironment creates a new top-level type environment.
@@ -46,6 +55,7 @@ func NewEnvironment() *Environment {
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Only initialized for global environment
+		withObjects:         []WithObject{}, // Initialize empty with objects stack
 	}
 }
 
@@ -59,6 +69,7 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Nested environments don't need primitive prototypes
+		withObjects:         []WithObject{}, // Initialize empty with objects stack
 	}
 }
 
@@ -73,6 +84,7 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: make(map[string]*types.ObjectType), // Initialize for global environment
+		withObjects:         []WithObject{}, // Initialize empty with objects stack
 	}
 
 	// Create type context for builtin initialization
@@ -481,4 +493,48 @@ func (e *Environment) ClearTypeParameters() {
 	if e.typeParameters != nil {
 		e.typeParameters = make(map[string]*types.TypeParameter)
 	}
+}
+
+// --- With statement support methods ---
+
+// PushWithObject adds a new with object to the current environment's stack
+func (e *Environment) PushWithObject(withObj WithObject) {
+	e.withObjects = append(e.withObjects, withObj)
+}
+
+// PopWithObject removes the most recent with object from the stack
+func (e *Environment) PopWithObject() {
+	if len(e.withObjects) > 0 {
+		e.withObjects = e.withObjects[:len(e.withObjects)-1]
+	}
+}
+
+// ResolveWithFallback tries to resolve an identifier, checking with objects if not found as a variable
+// Returns: (type, isFromWith, found)
+func (e *Environment) ResolveWithFallback(name string) (types.Type, bool, bool) {
+	debugPrintf("// [Env ResolveWithFallback] Looking for '%s', withObjects count: %d\n", name, len(e.withObjects))
+	
+	// First try normal variable resolution
+	if info, found := e.symbols[name]; found {
+		debugPrintf("// [Env ResolveWithFallback] Found '%s' as regular variable\n", name)
+		return info.Type, false, true
+	}
+
+	// If not found in current scope, check with objects
+	for i := len(e.withObjects) - 1; i >= 0; i-- {
+		withObj := e.withObjects[i]
+		debugPrintf("// [Env ResolveWithFallback] Checking with object %d for '%s', properties: %d\n", i, name, len(withObj.Properties))
+		if propType, exists := withObj.Properties[name]; exists {
+			debugPrintf("// [Env ResolveWithFallback] Found '%s' in with object as property type: %s\n", name, propType.String())
+			return propType, true, true
+		}
+	}
+
+	// If not found in current scope's with objects, check outer scope
+	if e.outer != nil {
+		return e.outer.ResolveWithFallback(name)
+	}
+
+	debugPrintf("// [Env ResolveWithFallback] '%s' not found anywhere\n", name)
+	return nil, false, false
 }

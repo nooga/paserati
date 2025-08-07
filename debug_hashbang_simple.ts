@@ -1,2 +1,0 @@
-#!test
-console.log("simple");

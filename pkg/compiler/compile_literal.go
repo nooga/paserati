@@ -405,25 +405,79 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			}
 		}
 
-		// Compile Value into a temporary register
-		valueReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, valueReg)
-		_, err := c.compileNode(prop.Value, valueReg)
-		if err != nil {
-			return BadRegister, err
-		}
-		debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
-
-		// Set the property based on whether it's computed or static
-		if isComputedKey {
-			// Use OpSetIndex for computed keys: obj[keyReg] = valueReg
-			c.emitOpCode(vm.OpSetIndex, line)
-			c.emitByte(byte(hint))    // Object register
-			c.emitByte(byte(keyReg))  // Key register (computed at runtime)
-			c.emitByte(byte(valueReg)) // Value register
+		// Handle MethodDefinition (getters/setters) specially
+		if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
+			// Compile the function value
+			valueReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, valueReg)
+			_, err := c.compileNode(methodDef.Value, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			
+			// Get the property name for the getter/setter
+			var propName string
+			if isComputedKey {
+				// For computed getters/setters, we can't determine the name at compile time
+				// This is a limitation - we'll treat them as regular properties for now
+				// TODO: Support computed getter/setter names at runtime
+				debugPrintf("Warning: Computed getter/setter names not fully supported yet\n")
+				if methodDef.Kind == "getter" || methodDef.Kind == "setter" {
+					c.emitOpCode(vm.OpSetIndex, line)
+					c.emitByte(byte(hint))    // Object register
+					c.emitByte(byte(keyReg))  // Key register (computed at runtime)
+					c.emitByte(byte(valueReg)) // Value register
+				}
+				continue
+			}
+			
+			// Extract property name from static key
+			switch keyNode := prop.Key.(type) {
+			case *parser.Identifier:
+				propName = keyNode.Value
+			case *parser.StringLiteral:
+				propName = keyNode.Value
+			case *parser.NumberLiteral:
+				propName = keyNode.TokenLiteral()
+			default:
+				return BadRegister, NewCompileError(prop.Key, "unsupported key type for getter/setter")
+			}
+			
+			// Store with appropriate prefix
+			var storeName string
+			if methodDef.Kind == "getter" {
+				storeName = "__get__" + propName
+			} else if methodDef.Kind == "setter" {
+				storeName = "__set__" + propName
+			} else {
+				// Regular method
+				storeName = propName
+			}
+			
+			storeNameIdx := c.chunk.AddConstant(vm.String(storeName))
+			c.emitSetProp(hint, valueReg, storeNameIdx, line)
+			debugPrintf("--- OL MethodDefinition: Stored %s as '%s'\n", methodDef.Kind, storeName)
 		} else {
-			// Use OpSetProp for static keys: obj[keyConstIdx] = valueReg
-			c.emitSetProp(hint, valueReg, keyConstIdx, line)
+			// Regular property value
+			valueReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, valueReg)
+			_, err := c.compileNode(prop.Value, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
+
+			// Set the property based on whether it's computed or static
+			if isComputedKey {
+				// Use OpSetIndex for computed keys: obj[keyReg] = valueReg
+				c.emitOpCode(vm.OpSetIndex, line)
+				c.emitByte(byte(hint))    // Object register
+				c.emitByte(byte(keyReg))  // Key register (computed at runtime)
+				c.emitByte(byte(valueReg)) // Value register
+			} else {
+				// Use OpSetProp for static keys: obj[keyConstIdx] = valueReg
+				c.emitSetProp(hint, valueReg, keyConstIdx, line)
+			}
 		}
 	}
 

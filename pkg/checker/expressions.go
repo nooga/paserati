@@ -302,28 +302,46 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		}
 
 		// Check for duplicate keys (but skip for computed keys since they can be dynamic)
+		// Allow getters/setters to share the same key by checking if the value is a MethodDefinition
 		if keyName != "__COMPUTED_PROPERTY__" && keyName != "__UNKNOWN_KEY__" {
-			if seenKeys[keyName] {
-				c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
-				// Continue checking value type anyway? Yes, to catch more errors.
+			// Check if this is a getter/setter MethodDefinition
+			if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
+				if methodDef.Kind == "getter" || methodDef.Kind == "setter" {
+					// Getters and setters can share the same key name - don't mark as duplicate
+					// But do track them to prevent multiple getters or multiple setters for same key
+					// For now, be lenient and allow it - JavaScript allows redefining getters/setters
+				} else {
+					// Regular method - check for conflicts
+					if seenKeys[keyName] {
+						c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+					}
+					seenKeys[keyName] = true
+				}
+			} else {
+				// Regular property - check for conflicts
+				if seenKeys[keyName] {
+					c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+				}
+				seenKeys[keyName] = true
 			}
-			seenKeys[keyName] = true
 		}
 
 		// For non-function properties, visit and store the type immediately
 		if _, isFunctionLiteral := prop.Value.(*parser.FunctionLiteral); !isFunctionLiteral {
 			if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); !isArrowFunction {
 				if _, isShorthandMethod := prop.Value.(*parser.ShorthandMethod); !isShorthandMethod {
-					// Visit the value to determine its type
-					c.visit(prop.Value)
-					valueType := prop.Value.GetComputedType()
-					if valueType == nil {
-						// If visiting the value failed, checker should have added error.
-						// Default to Any to prevent cascading nil errors.
-						valueType = types.Any
+					if _, isMethodDef := prop.Value.(*parser.MethodDefinition); !isMethodDef {
+						// Visit the value to determine its type
+						c.visit(prop.Value)
+						valueType := prop.Value.GetComputedType()
+						if valueType == nil {
+							// If visiting the value failed, checker should have added error.
+							// Default to Any to prevent cascading nil errors.
+							valueType = types.Any
+						}
+						fields[keyName] = valueType
+						preliminaryObjType.Properties[keyName] = valueType
 					}
-					fields[keyName] = valueType
-					preliminaryObjType.Properties[keyName] = valueType
 				}
 			}
 		}
@@ -435,6 +453,40 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				ReturnType:     returnType,
 			}
 			preliminaryObjType.Properties[keyName] = types.NewFunctionType(preliminaryFuncSig)
+		} else if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
+			// Create preliminary function signature for method definitions (getters/setters)
+			if methodDef.Value != nil {
+				funcLit := methodDef.Value // Already a *parser.FunctionLiteral
+				preliminaryFuncSig := c.resolveFunctionLiteralSignature(funcLit, c.env)
+				if preliminaryFuncSig == nil {
+					preliminaryFuncSig = &types.Signature{
+						ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
+						ReturnType:     types.Any,
+					}
+					for i := range preliminaryFuncSig.ParameterTypes {
+						preliminaryFuncSig.ParameterTypes[i] = types.Any
+					}
+				}
+				
+				// Store with appropriate prefix for the second pass too
+				if methodDef.Kind == "getter" {
+					getterName := "__get__" + keyName
+					preliminaryObjType.Properties[getterName] = types.NewFunctionType(preliminaryFuncSig)
+					// Also store the property type for type checking
+					preliminaryObjType.Properties[keyName] = preliminaryFuncSig.ReturnType
+				} else if methodDef.Kind == "setter" {
+					setterName := "__set__" + keyName
+					preliminaryObjType.Properties[setterName] = types.NewFunctionType(preliminaryFuncSig)
+					// Also store the property type for type checking
+					if len(preliminaryFuncSig.ParameterTypes) > 0 {
+						preliminaryObjType.Properties[keyName] = preliminaryFuncSig.ParameterTypes[0]
+					} else {
+						preliminaryObjType.Properties[keyName] = types.Any
+					}
+				} else {
+					preliminaryObjType.Properties[keyName] = types.NewFunctionType(preliminaryFuncSig)
+				}
+			}
 		}
 	}
 
@@ -527,6 +579,45 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				valueType = types.Any
 			}
 			fields[keyName] = valueType
+		} else if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
+			// Handle getter/setter methods
+			debugPrintf("// [Checker ObjectLit] Visiting method definition '%s' (kind: %s) with this context\n", keyName, methodDef.Kind)
+			c.visit(prop.Value)
+			valueType := prop.Value.GetComputedType()
+			if valueType == nil {
+				valueType = types.Any
+			}
+			
+			// Store getter/setter with appropriate prefix to match compiler expectations
+			if methodDef.Kind == "getter" {
+				// For getters, store both the implementation and the property type
+				getterName := "__get__" + keyName
+				fields[getterName] = valueType // Implementation for compiler
+				
+				// Also store the property with its return type for type checking
+				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
+					fields[keyName] = objType.CallSignatures[0].ReturnType // Property type for type checker
+				} else {
+					fields[keyName] = types.Any
+				}
+				debugPrintf("// [Checker ObjectLit] Stored getter as '%s' and property as '%s'\n", getterName, keyName)
+			} else if methodDef.Kind == "setter" {
+				// For setters, store both the implementation and make the property writable
+				setterName := "__set__" + keyName
+				fields[setterName] = valueType // Implementation for compiler
+				
+				// Also store the property with its parameter type for type checking
+				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 && len(objType.CallSignatures[0].ParameterTypes) > 0 {
+					fields[keyName] = objType.CallSignatures[0].ParameterTypes[0] // Property type for type checker
+				} else {
+					fields[keyName] = types.Any
+				}
+				debugPrintf("// [Checker ObjectLit] Stored setter as '%s' and property as '%s'\n", setterName, keyName)
+			} else {
+				// Regular method
+				fields[keyName] = valueType
+				debugPrintf("// [Checker ObjectLit] Stored method definition as '%s'\n", keyName)
+			}
 		}
 	}
 

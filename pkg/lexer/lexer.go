@@ -10,7 +10,7 @@ import (
 )
 
 // Debug flags
-const debugLexer = false
+const debugLexer = true
 
 // templateState represents the state of a template literal context
 type templateState struct {
@@ -163,6 +163,7 @@ const (
 	WHILE    TokenType = "WHILE"
 	DO       TokenType = "DO" // Added for do...while
 	FOR      TokenType = "FOR"
+	WITH     TokenType = "WITH" // Added for with statements
 	BREAK    TokenType = "BREAK"    // Added
 	CONTINUE TokenType = "CONTINUE" // Added
 	TYPE     TokenType = "TYPE"     // Added for type aliases
@@ -260,6 +261,7 @@ var keywords = map[string]TokenType{
 	"while":      WHILE,
 	"do":         DO, // Added for do...while
 	"for":        FOR,
+	"with":       WITH,       // Added for with statements
 	"break":      BREAK,      // Added
 	"continue":   CONTINUE,   // Added
 	"type":       TYPE,       // Added
@@ -1082,22 +1084,28 @@ func (l *Lexer) NextToken() Token {
 				l.skipHashbangComment()
 				l.skipWhitespace() // Skip any whitespace after the hashbang comment
 				return l.NextToken() // Get the next token after the comment
-			} else if isLetter(l.peekChar()) {
-				// Private identifier: #identifier
+			} else {
+				// Try to read a private identifier: #identifier (including Unicode escapes)
 				l.readChar() // Consume '#'
-				if isLetter(l.ch) {
-					literal := "#" + l.readIdentifier() // Include '#' in the literal
+				
+				// Save position in case we need to backtrack
+				savedPosition := l.position
+				savedCh := l.ch
+				
+				// Try to read an identifier (including Unicode escapes)
+				identifierPart := l.readIdentifierWithUnicode()
+				
+				if identifierPart != "" {
+					// Successfully read an identifier part
+					literal := "#" + identifierPart
 					tok = Token{Type: PRIVATE_IDENT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				} else {
-					// Just '#' without following letter - treat as illegal
+					// No valid identifier after '#' - restore position and treat as illegal
+					l.position = savedPosition
+					l.ch = savedCh
 					literal := string('#')
 					tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				}
-			} else {
-				// Just '#' without following letter or ! - treat as illegal
-				literal := string('#')
-				l.readChar() // Consume the illegal character
-				tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
 		} else {
 			// Illegal character
@@ -1768,6 +1776,8 @@ func isUnicodeIDContinue(r rune) bool {
 	case 0x0387: // · GREEK ANO TELEIA
 	case 0x1369, 0x136A, 0x136B, 0x136C, 0x136D, 0x136E, 0x136F, 0x1370, 0x1371: // Ethiopian digits
 	case 0x19DA: // ᧚ NEW TAI LUE THAM DIGIT ONE
+	case 0x200C: // ZWNJ - Zero Width Non-Joiner
+	case 0x200D: // ZWJ - Zero Width Joiner  
 		return true
 	}
 	
@@ -1811,7 +1821,7 @@ func canBeRegexStart(prevTokenType TokenType) bool {
 	case LPAREN, LBRACKET, LBRACE, COMMA, SEMICOLON, COLON:
 		return true
 	// After keywords
-	case RETURN, THROW, NEW, DELETE, TYPEOF, VOID, IF, ELSE, WHILE, DO, FOR:
+	case RETURN, THROW, NEW, DELETE, TYPEOF, VOID, IF, ELSE, WHILE, DO, FOR, WITH:
 		return true
 	// After arrows
 	case ARROW:

@@ -293,9 +293,11 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		c.handleClassInheritance(instanceType, superClass)
 	}
 
-	// Handle interface implementations
+	// Handle interface implementations (registration only, validation deferred)
+	var interfaceNames []string
 	for _, iface := range implements {
-		c.handleInterfaceImplementation(instanceType, iface.Value)
+		interfaceNames = append(interfaceNames, iface.Value)
+		c.registerInterfaceImplementation(instanceType, iface.Value)
 	}
 
 	// Collect getters and setters to handle them specially
@@ -528,6 +530,11 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 
 	// FINAL PASS: Check method bodies now that all properties and methods are in the instance type
 	c.checkMethodBodiesInInstance(className, body, instanceType)
+
+	// VALIDATE INTERFACES: Now that all properties and methods are added, validate interface implementations
+	for _, interfaceName := range interfaceNames {
+		c.validateInterfaceImplementationDeferred(instanceType, interfaceName)
+	}
 
 	return instanceType
 }
@@ -1174,12 +1181,12 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	debugPrintf("// [Checker Class] Successfully set up inheritance: %s extends %s\n", instanceType.GetClassName(), superClassExpr.String())
 }
 
-// handleInterfaceImplementation processes interface implementation (implements clause)
-func (c *Checker) handleInterfaceImplementation(instanceType *types.ObjectType, interfaceName string) {
-	debugPrintf("// [Checker Class] Handling interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+// registerInterfaceImplementation registers that a class implements an interface (without validation)
+func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType, interfaceName string) {
+	debugPrintf("// [Checker Class] Registering interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
 
 	// Check if interface exists
-	interfaceType, _, exists := c.env.Resolve(interfaceName)
+	interfaceType, exists := c.env.ResolveType(interfaceName)
 	if !exists {
 		c.addError(nil, fmt.Sprintf("interface '%s' is not defined", interfaceName))
 		return
@@ -1200,10 +1207,31 @@ func (c *Checker) handleInterfaceImplementation(instanceType *types.ObjectType, 
 	// Add interface to BaseTypes for structural inheritance
 	instanceType.BaseTypes = append(instanceType.BaseTypes, interfaceObjType)
 
-	// Validate that the class actually implements the interface
+	debugPrintf("// [Checker Class] Successfully registered interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+}
+
+// validateInterfaceImplementationDeferred validates interface implementation after class is fully built
+func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.ObjectType, interfaceName string) {
+	debugPrintf("// [Checker Class] Validating deferred interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+
+	// Check if interface exists (should exist since we registered it earlier)
+	interfaceType, exists := c.env.ResolveType(interfaceName)
+	if !exists {
+		c.addError(nil, fmt.Sprintf("interface '%s' is not defined", interfaceName))
+		return
+	}
+
+	// Verify interfaceType is an interface
+	interfaceObjType, ok := interfaceType.(*types.ObjectType)
+	if !ok {
+		c.addError(nil, fmt.Sprintf("'%s' is not an interface and cannot be implemented", interfaceName))
+		return
+	}
+
+	// Now validate that the class actually implements the interface
 	c.validateInterfaceImplementation(instanceType, interfaceObjType, interfaceName)
 
-	debugPrintf("// [Checker Class] Successfully set up interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
+	debugPrintf("// [Checker Class] Successfully validated interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
 }
 
 // getClassInstanceType retrieves the instance type for a given class name

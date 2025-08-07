@@ -767,3 +767,77 @@ func (c *Checker) extractConstantPropertyName(expr parser.Expression) string {
 		return ""
 	}
 }
+
+// checkWithStatement performs type checking for 'with' statements
+func (c *Checker) checkWithStatement(node *parser.WithStatement) {
+	if node == nil {
+		c.addError(nil, "nil WithStatement node")
+		return
+	}
+
+	// Check the expression (object to extend scope with)
+	var withObj WithObject
+	if node.Expression != nil {
+		c.visit(node.Expression)
+		
+		// The expression should be an object type for proper 'with' semantics
+		exprType := node.Expression.GetComputedType()
+		if exprType == nil {
+			exprType = types.Any
+		}
+		
+		// Create with object and extract known properties
+		properties := c.extractPropertiesFromType(exprType)
+		withObj = WithObject{
+			ExprType:   exprType,
+			Properties: properties,
+		}
+		
+		debugPrintf("// [Checker WithStmt] Expression type: %s, extracted %d properties\n", exprType.String(), len(properties))
+		for propName, propType := range properties {
+			debugPrintf("// [Checker WithStmt] Property '%s': %s\n", propName, propType.String())
+		}
+		
+		// Push the with object onto the environment stack
+		c.env.PushWithObject(withObj)
+	}
+
+	// Check the body with the with object in scope
+	if node.Body != nil {
+		c.visit(node.Body)
+	}
+	
+	// Pop the with object when done
+	if node.Expression != nil {
+		c.env.PopWithObject()
+	}
+}
+
+// extractPropertiesFromType extracts known properties from a type for with statement scope resolution
+func (c *Checker) extractPropertiesFromType(typ types.Type) map[string]types.Type {
+	properties := make(map[string]types.Type)
+	
+	if typ == nil {
+		return properties
+	}
+	
+	switch t := typ.(type) {
+	case *types.ObjectType:
+		// Copy all properties from the object type
+		for propName, propType := range t.Properties {
+			properties[propName] = propType
+		}
+	case *types.Primitive:
+		// For 'any' type, we can't know properties at compile time
+		if t == types.Any {
+			// The compiler will need to emit property access for all unresolved identifiers
+			// Return empty map - properties will be resolved at runtime
+		}
+	default:
+		// For other types (primitives, etc.), no known properties
+		// In JavaScript, you can use 'with' on any object, but primitives
+		// don't have enumerable own properties
+	}
+	
+	return properties
+}

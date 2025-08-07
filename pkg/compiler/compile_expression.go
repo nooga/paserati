@@ -75,6 +75,37 @@ func (c *Compiler) emitOptimisticGetterCall(hint Register, methodReg Register, o
 	c.patchJump(jumpOverGetterPos)
 }
 
+// emitOptimisticSetterCall emits bytecode that tries to call a setter, but falls back to regular property assignment
+func (c *Compiler) emitOptimisticSetterCall(methodReg Register, objectReg Register, valueReg Register, propertyConstIdx uint16, line int) {
+	// Check if the method (setter) is undefined
+	undefinedReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(undefinedReg)
+	c.emitLoadUndefined(undefinedReg, line)
+
+	// Compare setter method with undefined
+	compareReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(compareReg)
+	c.emitStrictEqual(compareReg, methodReg, undefinedReg, line)
+
+	// Jump to fallback if setter is undefined (comparison is true)
+	jumpToFallbackPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, line)
+
+	// Fallback: regular property assignment (setter is undefined)
+	c.emitSetProp(objectReg, valueReg, propertyConstIdx, line)
+
+	// Jump over setter call
+	jumpOverSetterPos := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+	// Setter exists - call it
+	c.patchJump(jumpToFallbackPos)
+	dummyResultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(dummyResultReg)
+	c.emitCallMethod(dummyResultReg, methodReg, objectReg, 1, line)
+
+	// Patch the jump over setter call
+	c.patchJump(jumpOverSetterPos)
+}
+
 func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Register) (Register, errors.PaseratiError) {
 	// Manage temporary registers with automatic cleanup
 	var tempRegs []Register
@@ -167,9 +198,9 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		// Check if accessing a getter property
 		widenedType := types.GetWidenedType(objectStaticType)
 		debugPrintf("// DEBUG compileMemberExpression: widenedType for '%s': %v\n", propertyName, widenedType)
-		if objType, ok := widenedType.(*types.ObjectType); ok && objType.IsClassInstance() {
-			// Check if this property has a getter defined
-			if objType.ClassMeta != nil {
+		if objType, ok := widenedType.(*types.ObjectType); ok {
+			// Check for class instance getters
+			if objType.IsClassInstance() && objType.ClassMeta != nil {
 				if memberInfo := objType.ClassMeta.GetMemberAccess(propertyName); memberInfo != nil && memberInfo.IsGetter {
 					getterMethodName := "__get__" + propertyName
 					getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
@@ -177,24 +208,39 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 					tempRegs = append(tempRegs, methodReg)
 					c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
 
-					// Check if the getter exists before calling it
-					c.emitOptimisticGetterCall(hint, methodReg, objectReg, propertyName, node.Token.Line)
+					// Direct getter call - we know it exists
+					c.emitCallMethod(hint, methodReg, objectReg, 0, node.Token.Line)
+					return hint, nil
+				}
+			}
+			
+			// Check for object literal getters by looking at object properties
+			if objType.Properties != nil {
+				getterPropertyName := "__get__" + propertyName
+				if _, hasGetter := objType.Properties[getterPropertyName]; hasGetter {
+					getterMethodName := "__get__" + propertyName
+					getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
+					methodReg := c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, methodReg)
+					c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
+
+					// Direct getter call - we know it exists from type info
+					c.emitCallMethod(hint, methodReg, objectReg, 0, node.Token.Line)
 					return hint, nil
 				}
 			}
 		}
 	}
-
-	// 4. <<< NEW: Special case for .length >>>
-	// Skip .length optimization for computed properties
+	
+	// 4. Special case for .length (moved before optimistic getter to fix try/finally blocks)
 	if !isComputedProperty && propertyName == "length" {
 		// Check the static type provided by the checker
+		objectStaticType := node.Object.GetComputedType()
 		if objectStaticType == nil {
 			// This can happen in finally blocks where type information may not be fully tracked
-			// Fall through to generic OpGetProp instead of erroring
-			debugPrintf("// DEBUG CompileMember: .length requested but object type is nil. Falling through to OpGetProp.\n")
+			// Use OpGetProp with the actual property name "length" instead of optimistic getter
+			debugPrintf("// DEBUG CompileMember: .length requested but object type is nil. Using OpGetProp for length.\n")
 		} else {
-
 			// Widen the type to handle cases like `string | null` having `.length`
 			widenedObjectType := types.GetWidenedType(objectStaticType)
 
@@ -210,10 +256,29 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			debugPrintf("// DEBUG CompileMember: .length requested on non-array/string type %s (widened from %s). Falling through to OpGetProp.\n",
 				widenedObjectType.String(), objectStaticType.String())
 		}
+		
+		// For .length property access without type info, always use OpGetProp with "length"
+		// This ensures string.length works even in try/finally blocks where objectStaticType is nil
+		propertyIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitGetProp(hint, objectReg, propertyIdx, node.Token.Line)
+		return hint, nil
 	}
-	// --- END Special case for .length ---
 
-	// 5. Emit appropriate property access instruction
+	// 5. Fallback: Optimistic getter call when type information is unavailable  
+	if !isComputedProperty && objectStaticType == nil {
+		// No type information available - use optimistic approach as fallback
+		getterMethodName := "__get__" + propertyName
+		getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
+		methodReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, methodReg)
+		c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
+
+		// Optimistic call that falls back to regular property access
+		c.emitOptimisticGetterCall(hint, methodReg, objectReg, propertyName, node.Token.Line)
+		return hint, nil
+	}
+
+	// 6. Emit appropriate property access instruction
 	if isComputedProperty {
 		// Use OpGetIndex for computed properties: hint = objectReg[propertyReg]
 		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
@@ -685,6 +750,12 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			c.emitUnsignedShiftRight(hint, leftReg, rightReg, line)
 		// --- END NEW ---
 
+		case ",":
+			// Comma operator: evaluate both expressions, return the right one
+			// Left expression is already compiled (for side effects)
+			// Right expression is already compiled - just return it
+			// The comma operator returns the value of the right operand
+			c.emitMove(hint, rightReg, line)
 		default:
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unknown standard infix operator '%s'", node.Operator))
 		}

@@ -1,11 +1,6 @@
 package vm
 
-// import "fmt"
-
 func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
-	// Debug logging for property access
-	// fmt.Printf("[DEBUG opGetProp] Getting property '%s' from object type %v, frameCount=%d\n",
-	//	propName, objVal.Type(), vm.frameCount)
 
 	// Generate cache key
 	propNameHash := 0
@@ -50,7 +45,22 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		}
 	}
 
-	// 5. General object property lookup
+	// 5. Arguments object property lookup (delegate to Object.prototype)
+	if objVal.Type() == TypeArguments {
+		// Arguments objects should inherit from Object.prototype
+		if vm.ObjectPrototype.Type() == TypeObject {
+			objProto := vm.ObjectPrototype.AsPlainObject()
+			if method, exists := objProto.GetOwn(propName); exists {
+				*dest = method
+				return true, InterpretOK, *dest
+			}
+		}
+		// Property not found on Object.prototype
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// 6. General object property lookup
 	if !objVal.IsObject() {
 		// Check for null/undefined specifically for a better error message
 		switch objVal.Type() {

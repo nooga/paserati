@@ -109,15 +109,25 @@ func (ls *LetStatement) String() string {
 	return out.String()
 }
 
-// VarStatement represents a `var` variable declaration.
-// var <Name> : <TypeAnnotation> = <Value>;
-// Structurally identical to LetStatement, but semantically different (hoisting).
-type VarStatement struct {
-	Token          lexer.Token // The lexer.VAR token
+// VarDeclarator represents a single variable declaration within a var statement
+type VarDeclarator struct {
 	Name           *Identifier // The variable name
 	TypeAnnotation Expression  // Parsed type node (e.g., *Identifier)
 	Value          Expression  // The expression being assigned
 	ComputedType   types.Type  // Stores the resolved type from TypeAnnotation or Value
+}
+
+// VarStatement represents a `var` variable declaration.
+// var <Name> : <TypeAnnotation> = <Value>;
+// Supports multiple declarations: var x, y = 1, z: string = "hello";
+type VarStatement struct {
+	Token        lexer.Token      // The lexer.VAR token
+	Declarations []*VarDeclarator // List of variable declarations
+	// Legacy fields for backward compatibility
+	Name           *Identifier // The variable name (first declaration)
+	TypeAnnotation Expression  // Parsed type node (first declaration)
+	Value          Expression  // The expression being assigned (first declaration)
+	ComputedType   types.Type  // Stores the resolved type (first declaration)
 }
 
 func (vs *VarStatement) statementNode()       {}
@@ -225,6 +235,7 @@ type Identifier struct {
 	Token          lexer.Token
 	Value          string // The name of the identifier
 	IsConstant     bool   // Populated by Type Checker
+	IsFromWith     bool   // True if this identifier comes from a with object (populated by Type Checker)
 }
 
 func (i *Identifier) expressionNode()      {}
@@ -954,6 +965,15 @@ func (bs *BreakStatement) String() string {
 	return out.String()
 }
 
+// --- New: Empty Statement ---
+type EmptyStatement struct {
+	Token lexer.Token // The ';' token
+}
+
+func (es *EmptyStatement) statementNode()       {}
+func (es *EmptyStatement) TokenLiteral() string { return es.Token.Literal }
+func (es *EmptyStatement) String() string       { return ";" }
+
 // --- New: Continue Statement ---
 type ContinueStatement struct {
 	Token lexer.Token // The 'continue' token
@@ -991,6 +1011,30 @@ func (dws *DoWhileStatement) String() string {
 	out.WriteString(" while (")
 	out.WriteString(dws.Condition.String())
 	out.WriteString(");")
+	return out.String()
+}
+
+// --- With Statement ---
+
+// WithStatement represents a 'with (expression) statement' statement.
+type WithStatement struct {
+	Token      lexer.Token // The 'with' token
+	Expression Expression  // The object expression to extend the scope with
+	Body       Statement   // The statement to execute with the extended scope
+}
+
+func (ws *WithStatement) statementNode()       {}
+func (ws *WithStatement) TokenLiteral() string { return ws.Token.Literal }
+func (ws *WithStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("with (")
+	if ws.Expression != nil {
+		out.WriteString(ws.Expression.String())
+	}
+	out.WriteString(") ")
+	if ws.Body != nil {
+		out.WriteString(ws.Body.String())
+	}
 	return out.String()
 }
 

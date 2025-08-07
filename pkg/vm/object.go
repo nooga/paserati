@@ -2,6 +2,7 @@ package vm
 
 import (
 	"sort"
+	"sync"
 	"unsafe"
 )
 
@@ -17,6 +18,7 @@ type Shape struct {
 	parent      *Shape
 	fields      []Field
 	transitions map[string]*Shape
+	mu          sync.RWMutex // Protects transitions map
 }
 
 type Object struct {
@@ -60,8 +62,11 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 	// new property: shape transition or creation
 	//fmt.Printf("DEBUG PlainObject.SetOwn: Adding new property %q\n", name)
 	cur := o.shape
-	// reuse transition if exists
+	// reuse transition if exists (with read lock)
+	cur.mu.RLock()
 	next, ok := cur.transitions[name]
+	cur.mu.RUnlock()
+	
 	if !ok {
 		// create new shape by extending fields
 		off := len(cur.fields)
@@ -74,8 +79,16 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 		newTrans := make(map[string]*Shape)
 		// assign new shape
 		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
-		// cache transition
-		cur.transitions[name] = next
+		
+		// cache transition (with write lock and double-check)
+		cur.mu.Lock()
+		if existing, exists := cur.transitions[name]; exists {
+			// Another goroutine created the transition while we were working
+			next = existing
+		} else {
+			cur.transitions[name] = next
+		}
+		cur.mu.Unlock()
 	}
 	// adopt new shape
 	//fmt.Printf("DEBUG PlainObject.SetOwn: Shape transition: %p -> %p\n", o.shape, next)

@@ -44,8 +44,8 @@ type IteratorCleanupInfo struct {
 	UsesIteratorProtocol bool
 }
 
-const debugCompiler = false    // Enable for debugging register allocation issue
-const debugCompilerStats = false // <<< CHANGED back to false
+const debugCompiler = false   // Enable for debugging register allocation issue  
+const debugCompilerStats = false 
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
 
@@ -651,6 +651,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.BreakStatement:
 		return c.compileBreakStatement(node, hint) // TODO: Fix this
 
+	case *parser.EmptyStatement:
+		return c.compileEmptyStatement(node, hint)
 	case *parser.ContinueStatement:
 		return c.compileContinueStatement(node, hint) // TODO: Fix this
 
@@ -669,6 +671,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ThrowStatement:
 		return c.compileThrowStatement(node, hint)
+
+	case *parser.WithStatement:
+		return c.compileWithStatement(node, hint)
 
 	// --- Module Statements ---
 	case *parser.ImportDeclaration:
@@ -776,7 +781,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		debugPrintf("// DEBUG Identifier '%s': Looking up in %s scope\n", node.Value, scopeName) // <<< ADDED
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
 		if !found {
-			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, treating as GLOBAL\n", node.Value) // <<< ADDED
+			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, checking with objects\n", node.Value) // <<< ADDED
+			
+			// Check if it's from a with object (flagged by type checker)
+			if objReg, isWithProperty := c.shouldUseWithProperty(node); isWithProperty {
+				debugPrintf("// DEBUG Identifier '%s': Found in with object, emitting property access\n", node.Value)
+				// Emit property access bytecode: hint = objReg[node.Value]
+				propName := c.chunk.AddConstant(vm.String(node.Value))
+				c.emitGetProp(hint, objReg, propName, node.Token.Line)
+				return hint, nil
+			}
+			
+			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table or with objects, treating as GLOBAL\n", node.Value) // <<< ADDED
 			
 			// Check if this is an imported identifier that needs module evaluation first
 			isModuleMode := c.IsModuleMode()

@@ -1,1 +1,4 @@
-console.log("simple test");
+function test(active: boolean = true) {
+  return active;
+}
+test();

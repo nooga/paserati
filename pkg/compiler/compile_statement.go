@@ -105,95 +105,103 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 }
 
 func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register) (Register, errors.PaseratiError) {
-	debugPrintf("// DEBUG compileVarStatement: Defining '%s' (is top-level: %v)\n", node.Name.Value, c.enclosing == nil)
-	var valueReg Register = nilRegister
-	var err errors.PaseratiError
-	isValueFunc := false // Flag to track if value is a function literal
+	// Process all variable declarations in the statement
+	for i, declarator := range node.Declarations {
+		// Set current declarator in legacy fields for backward compatibility
+		node.Name = declarator.Name
+		node.Value = declarator.Value
+		node.ComputedType = declarator.ComputedType
 
-	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-		isValueFunc = true
-		// --- Handle var f = function g() {} or var f = function() {} ---
-		// 1. Define the *variable name (f)* temporarily for potential recursion
-		//    within the function body (e.g., recursive anonymous function).
-		debugPrintf("// DEBUG compileVarStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value)
-		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+		debugPrintf("// DEBUG compileVarStatement: Defining '%s' (is top-level: %v, declaration %d)\n", declarator.Name.Value, c.enclosing == nil, i)
+		var valueReg Register = nilRegister
+		var err errors.PaseratiError
+		isValueFunc := false // Flag to track if value is a function literal
 
-		// 2. Compile the function literal body.
-		//    Pass the variable name (f) as the hint for the function object's name
-		//    if the function literal itself is anonymous.
-		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
-		if err != nil {
-			// Error already added to c.errors by compileFunctionLiteral
-			return BadRegister, nil // Return nil error here, main error is tracked
-		}
-		// 3. Create the closure object
-		closureReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(closureReg)
-		debugPrintf("// DEBUG compileVarStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols))
-		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
+		if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
+			isValueFunc = true
+			// --- Handle var f = function g() {} or var f = function() {} ---
+			// 1. Define the *variable name (f)* temporarily for potential recursion
+			//    within the function body (e.g., recursive anonymous function).
+			debugPrintf("// DEBUG compileVarStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value)
+			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
-		// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-		debugPrintf("// DEBUG compileVarStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg)
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+			// 2. Compile the function literal body.
+			//    Pass the variable name (f) as the hint for the function object's name
+			//    if the function literal itself is anonymous.
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
+			if err != nil {
+				// Error already added to c.errors by compileFunctionLiteral
+				return BadRegister, nil // Return nil error here, main error is tracked
+			}
+			// 3. Create the closure object
+			closureReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(closureReg)
+			debugPrintf("// DEBUG compileVarStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols))
+			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
-		// The variable's value (the closure) is now set.
-		// We don't need to assign to valueReg anymore for this path.
+			// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
+			debugPrintf("// DEBUG compileVarStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg)
+			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
-	} else if node.Value != nil {
-		// Compile other value types normally
-		valueReg = c.regAlloc.Alloc()
-		defer c.regAlloc.Free(valueReg)
-		_, err = c.compileNode(node.Value, valueReg)
-		if err != nil {
-			return BadRegister, err
-		}
-	} // else: node.Value is nil (implicit undefined handled below)
+			// The variable's value (the closure) is now set.
+			// We don't need to assign to valueReg anymore for this path.
 
-	// Handle implicit undefined (`var x;`)
-	if valueReg == nilRegister && !isValueFunc {
-		undefReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(undefReg)
-		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
-		valueReg = undefReg
-		// Define symbol for the `var x;` case
-		debugPrintf("// DEBUG compileVarStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg)
-		if c.enclosing == nil {
-			// Top-level: use global variable
+		} else if node.Value != nil {
+			// Compile other value types normally
+			valueReg = c.regAlloc.Alloc()
+			defer c.regAlloc.Free(valueReg)
+			_, err = c.compileNode(node.Value, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
+		} // else: node.Value is nil (implicit undefined handled below)
+
+		// Handle implicit undefined (`var x;`)
+		if valueReg == nilRegister && !isValueFunc {
+			undefReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(undefReg)
+			c.emitLoadUndefined(undefReg, node.Name.Token.Line)
+			valueReg = undefReg
+			// Define symbol for the `var x;` case
+			debugPrintf("// DEBUG compileVarStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg)
+			if c.enclosing == nil {
+				// Top-level: use global variable
+				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+			} else {
+				// Function scope: use local symbol table
+				c.currentSymbolTable.Define(node.Name.Value, valueReg)
+				// Pin the register since local variables can be captured by upvalues
+				c.regAlloc.Pin(valueReg)
+			}
+		} else if !isValueFunc {
+			// Define symbol ONLY for non-function values.
+			// Function assignments were handled above by UpdateRegister.
+			debugPrintf("// DEBUG compileVarStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg)
+			if c.enclosing == nil {
+				// Top-level: use global variable
+				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+			} else {
+				// Function scope: use local symbol table
+				c.currentSymbolTable.Define(node.Name.Value, valueReg)
+				// Pin the register since local variables can be captured by upvalues
+				c.regAlloc.Pin(valueReg)
+			}
+		} else if c.enclosing == nil {
+			// Top-level function: also set as global
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		} else {
-			// Function scope: use local symbol table
-			c.currentSymbolTable.Define(node.Name.Value, valueReg)
-			// Pin the register since local variables can be captured by upvalues
-			c.regAlloc.Pin(valueReg)
-		}
-	} else if !isValueFunc {
-		// Define symbol ONLY for non-function values.
-		// Function assignments were handled above by UpdateRegister.
-		debugPrintf("// DEBUG compileVarStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg)
-		if c.enclosing == nil {
-			// Top-level: use global variable
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		} else {
-			// Function scope: use local symbol table
-			c.currentSymbolTable.Define(node.Name.Value, valueReg)
-			// Pin the register since local variables can be captured by upvalues
-			c.regAlloc.Pin(valueReg)
-		}
-	} else if c.enclosing == nil {
-		// Top-level function: also set as global
-		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-		// Get the closure register from the symbol table
-		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
-		if found && symbolRef.Register != nilRegister {
-			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
-			// Update the symbol to be global
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-			// Pin the register since function closures can be captured by upvalues
-			c.regAlloc.Pin(symbolRef.Register)
+			// Get the closure register from the symbol table
+			symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+			if found && symbolRef.Register != nilRegister {
+				c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+				// Update the symbol to be global
+				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				// Pin the register since function closures can be captured by upvalues
+				c.regAlloc.Pin(symbolRef.Register)
+			}
 		}
 	}
 
@@ -555,6 +563,12 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 	return BadRegister, nil
 }
 
+func (c *Compiler) compileEmptyStatement(node *parser.EmptyStatement, hint Register) (Register, errors.PaseratiError) {
+	// Empty statements are no-ops - they generate no bytecode
+	// This is perfectly valid: if (condition) ; else doSomething();
+	return hint, nil
+}
+
 func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint Register) (Register, errors.PaseratiError) {
 	if len(c.loopContextStack) == 0 {
 		return BadRegister, NewCompileError(node, "continue statement not within a loop")
@@ -575,7 +589,7 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 		if !found {
 			return BadRegister, NewCompileError(node, fmt.Sprintf("label '%s' not found", node.Label.Value))
 		}
-		
+
 		// Check that the target is actually a loop (continue only works with loops)
 		if targetContext.ContinueTargetPos == -1 {
 			return BadRegister, NewCompileError(node, fmt.Sprintf("continue statement cannot target non-loop label '%s'", node.Label.Value))
@@ -599,7 +613,7 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 func (c *Compiler) compileLabeledStatement(node *parser.LabeledStatement, hint Register) (Register, errors.PaseratiError) {
 	// Compile the labeled statement
 	// If it's a loop-like statement (while, for, do-while), we need to set the label in the LoopContext
-	
+
 	// For loop statements, we need to temporarily add a label context
 	// and then call the normal compilation functions
 	switch stmt := node.Statement.(type) {
@@ -624,16 +638,16 @@ func (c *Compiler) compileLabeledStatement(node *parser.LabeledStatement, hint R
 			ContinuePlaceholderPosList: make([]int, 0),
 		}
 		c.loopContextStack = append(c.loopContextStack, labelContext)
-		
+
 		// Compile the statement
 		result, err := c.compileNode(node.Statement, hint)
-		
+
 		// Pop the label context and patch any break statements
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		for _, placeholderPos := range labelContext.BreakPlaceholderPosList {
 			c.patchJump(placeholderPos)
 		}
-		
+
 		return result, err
 	}
 }
@@ -903,29 +917,29 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 	// 2. Runtime dispatch: check type and choose iteration strategy
 	// We'll generate code that checks the object type and branches to the appropriate path
-	
+
 	// Check if iterable is an array (fast path)
 	typeCheckReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, typeCheckReg)
 	c.emitOpCode(vm.OpTypeof, node.Token.Line)
 	c.emitByte(byte(typeCheckReg))
 	c.emitByte(byte(iterableReg))
-	
+
 	// Compare with "array" type
 	arrayTypeReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, arrayTypeReg)
 	c.emitLoadNewConstant(arrayTypeReg, vm.String("array"), node.Token.Line)
-	
+
 	isArrayReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, isArrayReg)
 	c.emitOpCode(vm.OpStrictEqual, node.Token.Line)
 	c.emitByte(byte(isArrayReg))
 	c.emitByte(byte(typeCheckReg))
 	c.emitByte(byte(arrayTypeReg))
-	
+
 	// Jump to iterator protocol if not array
 	iteratorPathJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, isArrayReg, node.Token.Line)
-	
+
 	// === FAST PATH: Array iteration ===
 	indexReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, indexReg)
@@ -1035,21 +1049,21 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 	// Jump to end after array iteration is complete
 	skipIteratorPathJump := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
-	
+
 	// === ITERATOR PROTOCOL PATH: For generators, user-defined iterables ===
 	c.patchJump(iteratorPathJump) // Patch to land here
-	
+
 	// Get Symbol.iterator method
 	symbolIteratorIdx := c.chunk.AddConstant(vm.String("@@symbol:Symbol.iterator"))
 	iteratorMethodReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorMethodReg)
 	c.emitGetProp(iteratorMethodReg, iterableReg, symbolIteratorIdx, node.Token.Line)
-	
+
 	// Call the iterator method to get iterator (use method call to preserve 'this' binding)
 	iteratorObjReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorObjReg)
 	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, node.Token.Line)
-	
+
 	// Iterator loop setup - reuse loop context but update positions and set iterator cleanup
 	iteratorLoopStart := len(c.chunk.Code)
 	loopContext.LoopStartPos = iteratorLoopStart
@@ -1057,39 +1071,39 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		IteratorReg:          iteratorObjReg,
 		UsesIteratorProtocol: true,
 	}
-	
+
 	// Call iterator.next()
 	nextMethodReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, nextMethodReg)
 	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
 	c.emitGetProp(nextMethodReg, iteratorObjReg, nextConstIdx, node.Token.Line)
-	
+
 	// Call next() to get {value, done} (use method call to preserve 'this' binding)
 	resultReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, resultReg)
 	c.emitCallMethod(resultReg, nextMethodReg, iteratorObjReg, 0, node.Token.Line)
-	
+
 	// Get result.done
 	doneReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, doneReg)
 	doneConstIdx := c.chunk.AddConstant(vm.String("done"))
 	c.emitGetProp(doneReg, resultReg, doneConstIdx, node.Token.Line)
-	
+
 	// Exit loop if done is true (using same logic as yield*)
 	notDoneReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, notDoneReg)
 	c.emitOpCode(vm.OpNot, node.Token.Line)
 	c.emitByte(byte(notDoneReg))
 	c.emitByte(byte(doneReg))
-	
+
 	iteratorExitJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
-	
+
 	// Get result.value for loop variable
 	valueReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, valueReg)
 	valueConstIdx := c.chunk.AddConstant(vm.String("value"))
 	c.emitGetProp(valueReg, resultReg, valueConstIdx, node.Token.Line)
-	
+
 	// Assign value to loop variable (reuse the assignment logic from array path)
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
 		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
@@ -1112,7 +1126,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			}
 		}
 	}
-	
+
 	// Compile loop body for iterator path
 	iteratorBodyReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorBodyReg)
@@ -1120,21 +1134,21 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, err
 	}
-	
+
 	// Patch continue jumps for iterator loop
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
 	}
-	
+
 	// Jump back to iterator loop start
 	iteratorJumpBackPos := len(c.chunk.Code) + 1 + 2
 	iteratorBackOffset := iteratorLoopStart - iteratorJumpBackPos
 	c.emitOpCode(vm.OpJump, node.Body.Token.Line)
 	c.emitUint16(uint16(int16(iteratorBackOffset)))
-	
+
 	// Patch iterator exit jump
 	c.patchJump(iteratorExitJump)
-	
+
 	// Patch skip iterator path jump (from array completion)
 	c.patchJump(skipIteratorPathJump)
 
