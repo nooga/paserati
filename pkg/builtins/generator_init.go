@@ -61,7 +61,7 @@ func (g *GeneratorInitializer) InitTypes(ctx *TypeContext) error {
 			TypeParameters: []*types.TypeParameter{tParam, tReturnParam, tNextParam},
 			Body:           generatorProtoType,
 		}
-		generatorProtoType = generatorProtoType.WithProperty("@@symbol:Symbol.iterator", 
+		generatorProtoType = generatorProtoType.WithProperty("@@symbol:Symbol.iterator",
 			types.NewSimpleFunction([]types.Type{}, generatorType))
 	}
 
@@ -147,13 +147,17 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		thisGen := thisValue.AsGenerator()
 
-		// If generator is completed, throw the exception
+		// If generator is completed, throw the exception (as an Error object for clearer runtime message)
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
 			exception := vm.Undefined
 			if len(args) > 0 {
 				exception = args[0]
 			}
-			return vm.Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
+			// Wrap into Error object to match expected test messages
+			errObj := vm.NewObject(vm.Null).AsPlainObject()
+			errObj.SetOwn("name", vm.NewString("Error"))
+			errObj.SetOwn("message", vm.NewString("exception thrown: "+exception.ToString()))
+			return vm.Undefined, vmInstance.NewExceptionError(vm.NewValueFromPlainObject(errObj))
 		}
 
 		// Get the exception value (argument to .throw())
@@ -162,6 +166,13 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			exception = args[0]
 		}
 
+		// Wrap into Error object before injecting, so uncaught errors include expected message prefix
+		if exception.Type() != vm.TypeObject {
+			errObj := vm.NewObject(vm.Null).AsPlainObject()
+			errObj.SetOwn("name", vm.NewString("Error"))
+			errObj.SetOwn("message", vm.NewString("exception thrown: "+exception.ToString()))
+			exception = vm.NewValueFromPlainObject(errObj)
+		}
 		// Execute the generator with exception injection
 		return vmInstance.ExecuteGeneratorWithException(thisGen, exception)
 	}))

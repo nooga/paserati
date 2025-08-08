@@ -1706,6 +1706,23 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			// Generic type without constructor signatures - return any
 			resultType = types.Any
 		}
+	} else if forwardRef, ok := constructorType.(*types.ForwardReferenceType); ok {
+		// Handle forward reference to class being defined (e.g., new Test() within Test class methods)
+		debugPrintf("// [Checker NewExpression] ForwardReferenceType constructor: %s\n", forwardRef.ClassName)
+		
+		// Try to resolve the forward reference to get the actual constructor type
+		if actualType, _, found := c.env.Resolve(forwardRef.ClassName); found {
+			debugPrintf("// [Checker NewExpression] Resolved forward reference to: %T = %s\n", actualType, actualType.String())
+			if objType, objOk := actualType.(*types.ObjectType); objOk && len(objType.ConstructSignatures) > 0 {
+				resultType = objType.ConstructSignatures[0].ReturnType
+			} else {
+				// If can't resolve to constructor type, return the forward reference as result type
+				resultType = forwardRef
+			}
+		} else {
+			// If can't resolve, return the forward reference as result type
+			resultType = forwardRef
+		}
 	} else if constructorType == types.Any {
 		// If constructor type is Any, result is also Any
 		resultType = types.Any

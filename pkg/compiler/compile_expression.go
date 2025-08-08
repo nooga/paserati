@@ -194,6 +194,20 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	// Skip getter optimization for computed properties since we can't know the property name at compile time
 	objectStaticType := node.Object.GetComputedType()
 	debugPrintf("// DEBUG compileMemberExpression: objectType for '%s': %v\n", propertyName, objectStaticType)
+	if objectStaticType == nil {
+		debugPrintf("// DEBUG compileMemberExpression: Object node type: %T, Object computed type is NIL for property '%s'\n", node.Object, propertyName)
+		
+		// REGRESSION FIX: Handle Symbol.iterator when type checking didn't set computed type
+		// This is a workaround for the with statement regression
+		if identNode, ok := node.Object.(*parser.Identifier); ok && identNode.Value == "Symbol" {
+			debugPrintf("// DEBUG compileMemberExpression: Applying Symbol workaround for property '%s'\n", propertyName)
+			// Skip getter optimization and use direct property access
+			// The objectReg was already compiled above at line 167
+			propertyIdx := c.chunk.AddConstant(vm.String(propertyName))
+			c.emitGetProp(hint, objectReg, propertyIdx, node.Token.Line)
+			return hint, nil
+		}
+	}
 	if !isComputedProperty && objectStaticType != nil {
 		// Check if accessing a getter property
 		widenedType := types.GetWidenedType(objectStaticType)

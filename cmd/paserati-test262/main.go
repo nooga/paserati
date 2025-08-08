@@ -28,6 +28,7 @@ func main() {
 		memprofile = flag.String("memprofile", "", "Write memory profile to file")
 		cpuprofile = flag.String("cpuprofile", "", "Write CPU profile to file")
 		gcstats    = flag.Bool("gcstats", false, "Print garbage collection statistics")
+		treeMode   = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
 	)
 	
 	flag.Parse()
@@ -81,10 +82,14 @@ func main() {
 	fmt.Printf("Found %d test files\n", len(testFiles))
 	
 	// Run tests
-	stats := runTests(testFiles, *verbose, *timeout)
+	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *treeMode)
 	
-	// Print summary
-	printSummary(&stats)
+	// Print summary or tree
+	if *treeMode {
+		printTreeSummary(fileResults, testDir)
+	} else {
+		printSummary(&stats)
+	}
 	
 	// Memory profiling and GC stats
 	if *memprofile != "" {
@@ -118,6 +123,25 @@ type TestStats struct {
 	Timeouts int
 	Skipped  int
 	Duration time.Duration
+}
+
+// TestResult represents the result of a single test
+type TestResult struct {
+	Path     string
+	Passed   bool
+	Failed   bool
+	TimedOut bool
+	Skipped  bool
+	Duration time.Duration
+}
+
+// TreeNode represents a directory in the test tree with aggregated stats
+type TreeNode struct {
+	Name     string
+	Path     string
+	IsDir    bool
+	Children map[string]*TreeNode
+	Stats    TestStats
 }
 
 // findTestFiles discovers test files matching the pattern
@@ -156,33 +180,140 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 }
 
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration) TestStats {
+func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, treeMode bool) (TestStats, []TestResult) {
 	var stats TestStats
+	var fileResults []TestResult
 	stats.Total = len(testFiles)
 	
 	startTime := time.Now()
 	
+	// For tree mode, build initial tree structure and setup display
+	var tree *TreeNode
+	var lastDir string
+	var dirFileCount = make(map[string]int)
+	var dirProcessedCount = make(map[string]int)
+	
+	if treeMode {
+		tree = &TreeNode{
+			Name:     "test",
+			Path:     testDir,
+			IsDir:    true,
+			Children: make(map[string]*TreeNode),
+		}
+		// Pre-build directory structure from file list and count files per directory
+		for _, testFile := range testFiles {
+			relPath, err := filepath.Rel(testDir, testFile)
+			if err != nil {
+				continue
+			}
+			parts := strings.Split(relPath, string(filepath.Separator))
+			
+			// Count files in the immediate parent directory
+			if len(parts) > 1 {
+				dirPath := strings.Join(parts[:len(parts)-1], string(filepath.Separator))
+				dirFileCount[dirPath]++
+			} else {
+				dirFileCount["."]++
+			}
+			
+			current := tree
+			for _, part := range parts[:len(parts)-1] { // Skip the file itself
+				if _, exists := current.Children[part]; !exists {
+					current.Children[part] = &TreeNode{
+						Name:     part,
+						Path:     filepath.Join(current.Path, part),
+						IsDir:    true,
+						Children: make(map[string]*TreeNode),
+					}
+				}
+				current = current.Children[part]
+			}
+		}
+		// Initial display
+		fmt.Print("\033[2J\033[H") // Clear screen
+		fmt.Println("\n=== Test262 Progress ===")
+		fmt.Printf("Starting %d tests...\n", len(testFiles))
+		fmt.Printf("\n%-60s %8s %40s\n", "Directory", "% Passed", "Total/Pass/Fail/Skip/Timeout")
+		fmt.Println(strings.Repeat("-", 110))
+		printColoredTreeNode(tree, "", true, false)
+	}
+	
 	for i, testFile := range testFiles {
+		testStart := time.Now()
 		passed, err := runSingleTest(testFile, verbose, timeout)
+		testDuration := time.Since(testStart)
+		
+		result := TestResult{
+			Path:     testFile,
+			Duration: testDuration,
+		}
 		
 		if err != nil {
 			// Check if it's a timeout
 			if strings.Contains(err.Error(), "timed out") {
 				stats.Timeouts++
-				fmt.Printf("TIMEOUT %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
+				result.TimedOut = true
+				if !treeMode {
+					fmt.Printf("TIMEOUT %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
+				}
 			} else {
 				stats.Failed++
-				fmt.Printf("FAIL %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
+				result.Failed = true
+				if !treeMode {
+					fmt.Printf("FAIL %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
+				}
 			}
 		} else if passed {
 			stats.Passed++
+			result.Passed = true
 			// Never print passes - only show failures and timeouts
 		} else {
 			stats.Skipped++
+			result.Skipped = true
 			// Don't print skips unless verbose
-			if verbose {
+			if verbose && !treeMode {
 				fmt.Printf("SKIP %d/%d %s\n", i+1, stats.Total, testFile)
 			}
+		}
+		
+		fileResults = append(fileResults, result)
+		
+		// Update tree display in tree mode
+		if treeMode {
+			relPath, _ := filepath.Rel(testDir, testFile)
+			updateNodeStats(tree, relPath, result)
+			
+			// Determine current directory
+			parts := strings.Split(relPath, string(filepath.Separator))
+			var currentDir string
+			if len(parts) > 1 {
+				currentDir = strings.Join(parts[:len(parts)-1], string(filepath.Separator))
+			} else {
+				currentDir = "."
+			}
+			
+			// Track processed files in directory
+			dirProcessedCount[currentDir]++
+			
+			// Check if we've finished a directory or it's the last test
+			dirComplete := dirProcessedCount[currentDir] == dirFileCount[currentDir]
+			isLastTest := i == len(testFiles)-1
+			
+			// Update display when directory changes, completes, or on last test
+			if (currentDir != lastDir && lastDir != "") || dirComplete || isLastTest {
+				// Clear screen and redraw tree
+				fmt.Print("\033[2J\033[H") // Clear screen and move cursor to top
+				fmt.Println("\n=== Test262 Progress ===")
+				fmt.Printf("Progress: %d/%d tests\n", i+1, len(testFiles))
+				if !isLastTest {
+					fmt.Printf("Current directory: %s\n", currentDir)
+				}
+				fmt.Printf("\n%-60s %8s %40s\n", "Directory", "% Passed", "Total/Pass/Fail/Skip/Timeout")
+				fmt.Println(strings.Repeat("-", 110))
+				printColoredTreeNode(tree, "", true, false)
+			}
+			
+			lastDir = currentDir
 		}
 		
 		// Force GC more frequently to help with memory management
@@ -194,16 +325,18 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration) TestStats
 	
 	stats.Duration = time.Since(startTime)
 	
-	// Print final memory stats
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-	memUsageMB := float64(memStats.Alloc) / 1024 / 1024
-	heapMB := float64(memStats.HeapAlloc) / 1024 / 1024
-	numGoroutines := runtime.NumGoroutine()
-	fmt.Printf("\nFinal stats: [Mem: %.1fMB Heap: %.1fMB Goroutines: %d]\n", 
-		memUsageMB, heapMB, numGoroutines)
+	// Print final memory stats only if not in tree mode
+	if !treeMode {
+		var memStats runtime.MemStats
+		runtime.ReadMemStats(&memStats)
+		memUsageMB := float64(memStats.Alloc) / 1024 / 1024
+		heapMB := float64(memStats.HeapAlloc) / 1024 / 1024
+		numGoroutines := runtime.NumGoroutine()
+		fmt.Printf("\nFinal stats: [Mem: %.1fMB Heap: %.1fMB Goroutines: %d]\n", 
+			memUsageMB, heapMB, numGoroutines)
+	}
 	
-	return stats
+	return stats, fileResults
 }
 
 // runSingleTest runs a single test file with timeout
@@ -340,4 +473,177 @@ func printGCStats() {
 		fmt.Printf("AvgPause:            %.2f ms\n", avgPause)
 	}
 	fmt.Printf("========================\n")
+}
+
+// buildTree constructs a tree from test results
+func buildTree(results []TestResult, testDir string) *TreeNode {
+	root := &TreeNode{
+		Name:     "test",
+		Path:     testDir,
+		IsDir:    true,
+		Children: make(map[string]*TreeNode),
+	}
+	
+	for _, result := range results {
+		// Get relative path from test directory
+		relPath, err := filepath.Rel(testDir, result.Path)
+		if err != nil {
+			continue
+		}
+		
+		// Split path into components
+		parts := strings.Split(relPath, string(filepath.Separator))
+		
+		// Navigate/create tree structure
+		current := root
+		for i, part := range parts {
+			isLastPart := i == len(parts)-1
+			
+			if !isLastPart {
+				// Directory node
+				if _, exists := current.Children[part]; !exists {
+					current.Children[part] = &TreeNode{
+						Name:     part,
+						Path:     filepath.Join(current.Path, part),
+						IsDir:    true,
+						Children: make(map[string]*TreeNode),
+					}
+				}
+				current = current.Children[part]
+			}
+		}
+		
+		// Update stats for this node and all parents
+		updateNodeStats(root, relPath, result)
+	}
+	
+	return root
+}
+
+// updateNodeStats updates statistics for a node and all its parents
+func updateNodeStats(root *TreeNode, relPath string, result TestResult) {
+	parts := strings.Split(relPath, string(filepath.Separator))
+	current := root
+	
+	// Update all nodes in the path
+	for i := 0; i <= len(parts); i++ {
+		current.Stats.Total++
+		if result.Passed {
+			current.Stats.Passed++
+		} else if result.Failed {
+			current.Stats.Failed++
+		} else if result.TimedOut {
+			current.Stats.Timeouts++
+		} else if result.Skipped {
+			current.Stats.Skipped++
+		}
+		current.Stats.Duration += result.Duration
+		
+		if i < len(parts)-1 {
+			if child, exists := current.Children[parts[i]]; exists {
+				current = child
+			} else {
+				break
+			}
+		}
+	}
+}
+
+// printTreeSummary prints the test results as a directory tree
+func printTreeSummary(results []TestResult, testDir string) {
+	tree := buildTree(results, testDir)
+	
+	// Final display - clear screen first
+	fmt.Print("\033[2J\033[H") // Clear screen and move cursor to top
+	fmt.Println("\n=== Test262 Final Results ===")
+	fmt.Printf("\n%-60s %8s %40s\n", "Directory", "% Passed", "Total/Pass/Fail/Skip/Timeout")
+	fmt.Println(strings.Repeat("-", 110))
+	
+	printColoredTreeNode(tree, "", true, true)
+	
+	fmt.Println("\n" + strings.Repeat("=", 110))
+	fmt.Printf("TOTAL: %d tests | Passed: %d (%.1f%%) | Failed: %d (%.1f%%) | Timeouts: %d (%.1f%%) | Skipped: %d (%.1f%%)\n",
+		tree.Stats.Total,
+		tree.Stats.Passed, float64(tree.Stats.Passed)/float64(tree.Stats.Total)*100,
+		tree.Stats.Failed, float64(tree.Stats.Failed)/float64(tree.Stats.Total)*100,
+		tree.Stats.Timeouts, float64(tree.Stats.Timeouts)/float64(tree.Stats.Total)*100,
+		tree.Stats.Skipped, float64(tree.Stats.Skipped)/float64(tree.Stats.Total)*100)
+	fmt.Printf("Duration: %v\n", tree.Stats.Duration)
+}
+
+// ANSI color codes
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorGray   = "\033[90m"
+)
+
+// getNodeColor returns the color code based on pass rate
+func getNodeColor(node *TreeNode) string {
+	if node.Stats.Total == 0 {
+		return colorGray
+	}
+	
+	passRate := float64(node.Stats.Passed) / float64(node.Stats.Total)
+	if passRate == 1.0 {
+		return colorGreen
+	} else if passRate > 0 {
+		return colorYellow
+	} else {
+		return colorRed
+	}
+}
+
+// printColoredTreeNode recursively prints a tree node with colors
+func printColoredTreeNode(node *TreeNode, indent string, isLast bool, showDuration bool) {
+	if node == nil {
+		return
+	}
+	
+	// Calculate pass percentage
+	var passPercent string
+	if node.Stats.Total > 0 {
+		percent := float64(node.Stats.Passed) / float64(node.Stats.Total) * 100
+		passPercent = fmt.Sprintf("%.1f%%", percent)
+	} else {
+		passPercent = "N/A"
+	}
+	
+	// Format the stats
+	stats := fmt.Sprintf("%d/%d/%d/%d/%d",
+		node.Stats.Total,
+		node.Stats.Passed,
+		node.Stats.Failed,
+		node.Stats.Skipped,
+		node.Stats.Timeouts)
+	
+	if showDuration {
+		stats += fmt.Sprintf(" [%v]", node.Stats.Duration.Round(time.Millisecond))
+	}
+	
+	// Get color based on pass rate
+	color := getNodeColor(node)
+	
+	// Print the node with proper formatting
+	dirName := fmt.Sprintf("%s%s", indent, node.Name)
+	fmt.Printf("%s%-60s%s %s%8s%s %40s\n", 
+		color, dirName, colorReset,
+		color, passPercent, colorReset,
+		stats)
+	
+	// Get sorted child names for consistent output
+	var childNames []string
+	for name := range node.Children {
+		childNames = append(childNames, name)
+	}
+	sort.Strings(childNames)
+	
+	// Print children
+	for _, name := range childNames {
+		child := node.Children[name]
+		newIndent := indent + "  "
+		printColoredTreeNode(child, newIndent, false, showDuration)
+	}
 }

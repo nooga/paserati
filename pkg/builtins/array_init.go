@@ -82,7 +82,7 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 				TypeArguments: []types.Type{tType},
 			}
 			// Add [Symbol.iterator](): Iterator<T> method
-			arrayProtoType = arrayProtoType.WithProperty("@@symbol:Symbol.iterator", 
+			arrayProtoType = arrayProtoType.WithProperty("@@symbol:Symbol.iterator",
 				a.createGenericMethod("[Symbol.iterator]", tParam,
 					types.NewSimpleFunction([]types.Type{}, iteratorOfT.Substitute())))
 		}
@@ -507,9 +507,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		result := vm.NewArray()
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			mappedValue, err := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			mappedValue, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
-				return vm.NewArray(), err
+				// Propagate error; VM will convert to exception at the call site
+				return vm.Undefined, err
 			}
 			result.AsArray().Append(mappedValue)
 		}
@@ -727,7 +728,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisArray == nil {
 			return vm.Undefined, nil
 		}
-		
+
 		// Create an array iterator object
 		return createArrayIterator(vmInstance, thisArray), nil
 	}))
@@ -745,15 +746,15 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 	// Create iterator object inheriting from Object.prototype
 	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-	
+
 	// Iterator state: current index
 	currentIndex := 0
-	
+
 	// Add next() method to iterator
 	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		// Create iterator result object {value, done}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		
+
 		if currentIndex >= array.Length() {
 			// Iterator is exhausted
 			result.SetOwn("value", vm.Undefined)
@@ -764,10 +765,10 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 			result.SetOwn("done", vm.BooleanValue(false))
 			currentIndex++
 		}
-		
+
 		return vm.NewValueFromPlainObject(result), nil
 	}))
-	
+
 	return vm.NewValueFromPlainObject(iterator)
 }
 
@@ -793,10 +794,10 @@ func (a *ArrayInitializer) createGenericMapMethod(tParam *types.TypeParameter) t
 
 	// map<U>((value: T, index?: number, array?: T[]) => U): U[]
 	callbackType := types.NewOptionalFunction(
-		[]types.Type{tType, types.Number, tArrayType}, 
-		uType, 
+		[]types.Type{tType, types.Number, tArrayType},
+		uType,
 		[]bool{false, true, true})
-	
+
 	methodType := types.NewSimpleFunction([]types.Type{callbackType}, uArrayType)
 
 	return &types.GenericType{

@@ -13,6 +13,11 @@ import (
 const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
+// Debug flags - set these to control debug output
+const debugVM = false         // VM execution tracing
+const debugCalls = false      // Function call tracing
+const debugExceptions = false // Exception handling tracing
+
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
 	LoadModule(specifier string, fromPath string) (ModuleRecord, error)
@@ -121,6 +126,10 @@ type VM struct {
 	GeneratorPrototype Value
 	ErrorPrototype     Value
 	SymbolPrototype    Value
+
+	// Exception/call boundary diagnostics
+	lastThrownException       Value // remembers the last thrown exception value
+	escapedDirectCallBoundary bool  // true if unwinding skipped a direct-call frame to reach outer handler
 
 	// TypedArray prototypes
 	Uint8ArrayPrototype   Value
@@ -366,7 +375,11 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		// Execution finished without runtime error (InterpretOK)
 		// Return the final value returned by run() and empty errors slice (errors were cleared)
 		// fmt.Printf("// [VM] Interpret: Returning success with final value: %s, errors: %d\n", finalValue.Inspect(), len(vm.errors))
-		return finalValue, vm.errors // vm.errors should be empty here if InterpretOK
+		// If we escaped a direct-call boundary to a catch and main frame has returned
+		// but vm.currentException was cleared, ensure we return the script's intended result.
+		// The top-level script writes result into R1 then OpReturn R1. Respect that value.
+		// Nothing to adjust here, but keep this branch explicit for clarity.
+		return finalValue, vm.errors
 	}
 }
 
@@ -410,7 +423,7 @@ startExecution:
 		// if ip < len(code) {
 		//	fmt.Printf("// [VM DEBUG] Executing instruction at IP %d: %s\n", ip, OpCode(code[ip]).String())
 		// }
-		
+
 		if ip >= len(code) {
 			// Save IP before erroring
 			frame.ip = ip
@@ -436,12 +449,20 @@ startExecution:
 		}
 
 		opcode := OpCode(code[ip]) // Use local OpCode
+		if debugVM {
+			fmt.Printf("[VM FLOW] frameCount=%d topIsDirect=%v ip=%d opcode=%s unwinding=%v currentException=%s\n",
+				vm.frameCount, frame.isDirectCall, ip, opcode.String(), vm.unwinding, vm.currentException.Inspect())
+		}
 
-		// Debug main script opcodes to track function calls
-		// if vm.currentModulePath == "" {
-		//	fmt.Printf("// [VM DEBUG] Main script opcode: %s (%d) at IP %d\n", opcode.String(), int(opcode), ip)
-		// }
-		
+		// Debug when interpreting each opcode - show key instructions
+		if opcode == OpCallMethod || opcode == OpCall || opcode == OpGetGlobal || opcode == OpGetProp ||
+			opcode == OpLoadConst || opcode == OpSetGlobal || opcode == OpReturn || opcode == OpJump ||
+			ip >= 15 { // Show catch block area
+			if debugVM {
+				fmt.Printf("[DEBUG vm.go] EXECUTING IP=%d opcode=%s frameCount=%d\n", ip, opcode.String(), vm.frameCount)
+			}
+		}
+
 		// Debug execution in direct call frames
 		// if frame.isDirectCall {
 		//	chunkName := "<unknown>"
@@ -456,8 +477,10 @@ startExecution:
 		// if frame.closure != nil && frame.closure.Fn != nil {
 		//	chunkName = frame.closure.Fn.Name
 		// }
-		// fmt.Printf("// [VM DEBUG] IP %d: %s (chunk: %s, module: %s)\n",
-		//	ip, opcode.String(), chunkName, vm.currentModulePath)
+		// if vm.frameCount == 0 {
+		//	fmt.Printf("// [VM DEBUG] IP %d: %s (chunk: %s, module: %s)\n",
+		//		ip, opcode.String(), chunkName, vm.currentModulePath)
+		// }
 
 		ip++ // Advance IP past the opcode itself
 
@@ -897,18 +920,90 @@ startExecution:
 			ip += 3
 
 			callerRegisters := registers
-			callerIP := ip  // Pass the IP after the call instruction
+			callerIP := ip // Pass the IP after the call instruction
+
+			// DEBUG: Record the IP where the call was made for proper exception handling
+			callSiteIP := ip - 4 // IP where OpCall instruction started (OpCall is 4 bytes)
+			if debugCalls {
+				fmt.Printf("[DEBUG vm.go] OpCall: callSiteIP=%d, callerIP=%d, frame.ip=%d\n", callSiteIP, callerIP, frame.ip)
+			}
+
+			// Set frame IP to call site for exception handling
+			frame.ip = callSiteIP // Set to call site for potential exception handling
+
+			// Check if we're in an unwinding state before the call
+			wasUnwinding := vm.unwinding
 
 			calleeVal := callerRegisters[funcReg]
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
 			shouldSwitch, err := vm.prepareCall(calleeVal, Undefined, args, destReg, callerRegisters, callerIP)
-			if err != nil {
-				status := vm.runtimeError("%s", err.Error())
-				return status, Undefined
+
+			if debugCalls {
+				fmt.Printf("[DEBUG vm.go] OpCall: prepareCall returned shouldSwitch=%v, err=%v, wasUnwinding=%v, nowUnwinding=%v\n",
+					shouldSwitch, err != nil, wasUnwinding, vm.unwinding)
 			}
 
+			// DISABLED: This logic was incorrectly detecting exception handling
+			// The VM main loop should handle exception continuation, not OpCall
+			/*
+				if !shouldSwitch && !wasUnwinding && !vm.unwinding && vm.currentException == Null {
+					fmt.Printf("[DEBUG vm.go] OpCall: Native function call, checking for exception handling\n")
+					// If the frame IP was changed to a handler location, we should continue execution there
+					if frame.ip != originalFrameIP {
+						fmt.Printf("[DEBUG vm.go] OpCall: Frame IP changed to %d (was %d), exception was handled\n",
+							frame.ip, originalFrameIP)
+						// Update VM execution state to continue at the exception handler
+						ip = frame.ip
+						continue
+					}
+				}
+			*/
+
+			// Update caller frame IP only if it still points at the call site.
+			// If an exception was thrown and a handler redirected execution, handleCatchBlock
+			// will have set frame.ip to the handler PC. In that case, do NOT overwrite it.
+			if frame.ip == callSiteIP {
+				frame.ip = callerIP
+			}
+			// If unwinding is true, leave frame IP at call site for exception handling
+
+			if err != nil {
+				// Convert ANY native error into a VM exception value and throw it
+				var excVal Value
+				if exceptionErr, ok := err.(ExceptionError); ok {
+					excVal = exceptionErr.GetExceptionValue()
+				} else {
+					// Generic Error object {name: "Error", message}
+					errObj := NewObject(Null).AsPlainObject()
+					errObj.SetOwn("name", NewString("Error"))
+					errObj.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(errObj)
+				}
+				vm.throwException(excVal)
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// Pending exception handling is now done in prepareCall directly
+
 			if shouldSwitch {
+				if debugCalls {
+					fmt.Printf("[DEBUG vm.go] OpCall: Switching to new frame for bytecode function\n")
+				}
+				// NOTE: We don't modify caller frame IP here for normal calls
+				// The caller frame IP should remain at the next instruction (callerIP)
+				// We only modify it during exception handling when needed for handler lookup
+
 				// Switch to new frame
 				frame = &vm.frames[vm.frameCount-1]
 				closure = frame.closure
@@ -917,6 +1012,20 @@ startExecution:
 				constants = function.Chunk.Constants
 				registers = frame.registers
 				ip = frame.ip
+			} else {
+				if vm.escapedDirectCallBoundary {
+					// We just handled an exception by jumping into an outer catch from a nested direct-call frame.
+					// The native that initiated this call should terminate without writing any further results.
+					if debugCalls {
+						fmt.Printf("[DEBUG vm.go] OpCall: Escaped direct-call boundary; resuming at handler IP=%d\n", frame.ip)
+					}
+					vm.escapedDirectCallBoundary = false
+					ip = frame.ip
+					continue
+				}
+				if debugCalls {
+					fmt.Printf("[DEBUG vm.go] OpCall: Native function completed normally, continuing\n")
+				}
 			}
 			continue
 
@@ -925,6 +1034,21 @@ startExecution:
 			ip++
 			result := registers[srcReg]
 			frame.ip = ip // Save final IP of this frame
+
+			// If returning from the top-level script frame, terminate immediately
+			if function != nil && function.Name == "<script>" {
+				// If currently unwinding, this is an uncaught exception at top level
+				if vm.unwinding {
+					vm.handleUncaughtException()
+					return InterpretRuntimeError, vm.currentException
+				}
+				// Respect any pending exception propagation
+				if vm.pendingAction == ActionThrow {
+					vm.currentException = vm.pendingValue
+					return InterpretRuntimeError, vm.pendingValue
+				}
+				return InterpretOK, result
+			}
 			// fmt.Printf("// [VM DEBUG] OpReturn: Hit in module '%s', frameCount=%d, result=%s\n", vm.currentModulePath, vm.frameCount, result.ToString())
 
 			// Check if there are finally handlers that should execute
@@ -981,7 +1105,11 @@ startExecution:
 
 			if vm.frameCount == 0 {
 				// Returned from the top-level script frame.
-				// fmt.Printf("// [VM DEBUG] OpReturn: Top-level frame return, frameCount=0, module='%s', result=%s\n", vm.currentModulePath, result.ToString())
+				// If currently unwinding, convert to uncaught runtime error
+				if vm.unwinding {
+					vm.handleUncaughtException()
+					return InterpretRuntimeError, vm.currentException
+				}
 				// Check if there's a pending exception that should be propagated
 				if vm.pendingAction == ActionThrow {
 					// Propagate the uncaught exception
@@ -989,7 +1117,6 @@ startExecution:
 					return InterpretRuntimeError, vm.pendingValue
 				}
 				// Return the result directly.
-				// fmt.Printf("// [VM DEBUG] OpReturn: Exiting execution loop for module '%s'\n", vm.currentModulePath)
 				return InterpretOK, result
 			}
 
@@ -1073,6 +1200,15 @@ startExecution:
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
 
+			// If returning from the top-level script frame, terminate immediately
+			if function != nil && function.Name == "<script>" {
+				if vm.unwinding {
+					vm.handleUncaughtException()
+					return InterpretRuntimeError, vm.currentException
+				}
+				return InterpretOK, Undefined
+			}
+
 			// Check if this is a generator function completion
 			if frame.generatorObj != nil {
 				genObj := frame.generatorObj
@@ -1124,6 +1260,10 @@ startExecution:
 
 			if vm.frameCount == 0 {
 				// Returned undefined from top-level
+				if vm.unwinding {
+					vm.handleUncaughtException()
+					return InterpretRuntimeError, vm.currentException
+				}
 				return InterpretOK, Undefined
 			}
 
@@ -1498,7 +1638,7 @@ startExecution:
 					arr.length++
 				} else {
 					neededCapacity := idx + 1
-					
+
 					// Prevent massive memory allocations from large array indices
 					// JavaScript engines typically use sparse arrays for large indices
 					// For now, we'll reject extremely large indices to prevent memory exhaustion
@@ -1508,7 +1648,7 @@ startExecution:
 						status := vm.runtimeError("Array index too large: %d (max %d)", idx, maxArrayIndex-1)
 						return status, Undefined
 					}
-					
+
 					if cap(arr.elements) < neededCapacity {
 						newElements := make([]Value, len(arr.elements), neededCapacity)
 						copy(newElements, arr.elements)
@@ -1750,7 +1890,7 @@ startExecution:
 			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
 			// Calculate cache key based on instruction pointer (before advancing ip)
 			ip += 4
-			
+
 			// fmt.Printf("// [VM DEBUG] OpGetProp: R%d = R%d[%d] (ip=%d)\n", destReg, objReg, nameConstIdx, ip-4)
 
 			// Get property name from constants
@@ -1875,7 +2015,17 @@ startExecution:
 			ip += 4
 
 			callerRegisters := registers
-			callerIP := ip  // Pass the IP after the call instruction
+			callerIP := ip // Pass the IP after the call instruction
+
+			// DEBUG: Record the IP where the call was made for proper exception handling
+			// OpCallMethod is 1 (opcode) + 4 (operands) bytes long
+			callSiteIP := ip - 5 // IP where OpCallMethod instruction started
+			if debugCalls {
+				fmt.Printf("[DEBUG vm.go] OpCallMethod: callSiteIP=%d, callerIP=%d, frame.ip=%d\n", callSiteIP, callerIP, frame.ip)
+			}
+
+			// Set frame IP to call site for exception handling
+			frame.ip = callSiteIP // Set to call site for potential exception handling
 
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
@@ -1885,14 +2035,38 @@ startExecution:
 			// fmt.Printf("// [VM DEBUG] OpCallMethod at IP %d: Calling function in R%d (type: %v, value: %s) with this=R%d (type: %v, value: %s), args=%d [module: %s]\n",
 			//	ip-4, funcReg, calleeVal.Type(), calleeVal.Inspect(), thisReg, thisVal.Type(), thisVal.Inspect(), argCount, vm.currentModulePath)
 
+			// Check if we're in an unwinding state before the call
+			wasUnwinding := vm.unwinding
+
 			shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, args, destReg, callerRegisters, callerIP)
-			if err != nil {
-				status := vm.runtimeError("%s", err.Error())
-				return status, Undefined
+
+			if debugCalls {
+				fmt.Printf("[DEBUG vm.go] OpCallMethod: prepareMethodCall returned shouldSwitch=%v, err=%v, wasUnwinding=%v, nowUnwinding=%v\n",
+					shouldSwitch, err != nil, wasUnwinding, vm.unwinding)
 			}
 
-			if shouldSwitch {
-				// Switch to new frame
+			// Do not attempt to detect/handle exceptions here; the main run loop handles unwinding
+
+			// Update caller frame IP only if it still points at the call site.
+			if frame.ip == callSiteIP {
+				frame.ip = callerIP
+			}
+			// If unwinding is true, leave frame IP at call site for exception handling
+
+			if err != nil {
+				var excVal Value
+				if exceptionErr, ok := err.(ExceptionError); ok {
+					excVal = exceptionErr.GetExceptionValue()
+				} else {
+					errObj := NewObject(Null).AsPlainObject()
+					errObj.SetOwn("name", NewString("Error"))
+					errObj.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(errObj)
+				}
+				vm.throwException(excVal)
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
 				frame = &vm.frames[vm.frameCount-1]
 				closure = frame.closure
 				function = closure.Fn
@@ -1900,6 +2074,33 @@ startExecution:
 				constants = function.Chunk.Constants
 				registers = frame.registers
 				ip = frame.ip
+				continue
+			}
+
+			if shouldSwitch {
+				if debugCalls {
+					fmt.Printf("[DEBUG vm.go] OpCallMethod: Switching to new frame for bytecode function\n")
+				}
+				// Switch to new frame (do NOT modify caller frame IP here; it should remain at callerIP)
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+			} else {
+				if vm.escapedDirectCallBoundary {
+					if debugCalls {
+						fmt.Printf("[DEBUG vm.go] OpCallMethod: Escaped direct-call boundary; resuming at handler IP=%d\n", frame.ip)
+					}
+					vm.escapedDirectCallBoundary = false
+					ip = frame.ip
+					continue
+				}
+				if debugCalls {
+					fmt.Printf("[DEBUG vm.go] OpCallMethod: Native function completed normally, continuing\n")
+				}
 			}
 			continue
 
@@ -1911,7 +2112,7 @@ startExecution:
 
 			// Capture caller context before potential frame switch
 			callerRegisters := registers
-			callerIP := ip  // Pass the IP after the call instruction
+			callerIP := ip // Pass the IP after the call instruction
 
 			constructorVal := callerRegisters[constructorReg]
 
@@ -2081,9 +2282,13 @@ startExecution:
 				// For builtins, we let them handle instance creation
 				result, err := builtin.Fn(args)
 				if err != nil {
-					frame.ip = callerIP
-					status := vm.runtimeError("Runtime Error: %s", err.Error())
-					return status, Undefined
+					// Throw as exception instead of runtime error
+					errObj := NewObject(Null).AsPlainObject()
+					errObj.SetOwn("name", NewString("Error"))
+					errObj.SetOwn("message", NewString(err.Error()))
+					errValue := NewValueFromPlainObject(errObj)
+					vm.throwException(errValue)
+					continue // Let exception handling take over
 				}
 
 				// Store result in caller's target register
@@ -2123,9 +2328,13 @@ startExecution:
 				// For builtins, we let them handle instance creation
 				result, err := builtinWithProps.Fn(args)
 				if err != nil {
-					frame.ip = callerIP
-					status := vm.runtimeError("Runtime Error: %s", err.Error())
-					return status, Undefined
+					// Throw as exception instead of runtime error
+					errObj := NewObject(Null).AsPlainObject()
+					errObj.SetOwn("name", NewString("Error"))
+					errObj.SetOwn("message", NewString(err.Error()))
+					errValue := NewValueFromPlainObject(errObj)
+					vm.throwException(errValue)
+					continue // Let exception handling take over
 				}
 
 				// Store result in caller's target register
@@ -2259,7 +2468,7 @@ startExecution:
 			ip += 3
 
 			callerRegisters := registers
-			callerIP := ip  // Pass the IP after the call instruction
+			callerIP := ip // Pass the IP after the call instruction
 
 			calleeVal := callerRegisters[funcReg]
 			spreadArrayVal := callerRegisters[spreadArgReg]
@@ -2309,7 +2518,7 @@ startExecution:
 			ip += 4
 
 			callerRegisters := registers
-			callerIP := ip  // Pass the IP after the call instruction
+			callerIP := ip // Pass the IP after the call instruction
 
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
@@ -3009,32 +3218,46 @@ startExecution:
 
 		// Check for exception unwinding after each instruction
 		if vm.unwinding {
-			fmt.Printf("[DEBUG] VM run loop: unwinding=true, calling unwindException\n")
+			if debugExceptions {
+				fmt.Printf("[DEBUG vm.go] VM run loop: unwinding=true at IP=%d, calling unwindException\n", ip)
+			}
 			// Continue the unwinding process by calling unwindException
 			unwindResult := vm.unwindException()
+			if debugExceptions {
+				fmt.Printf("[DEBUG vm.go] VM run loop: unwindException returned %v, unwinding=%v\n", unwindResult, vm.unwinding)
+			}
 			if !unwindResult {
 				// No handler found, uncaught exception
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] VM run loop: No handler found, returning InterpretRuntimeError\n")
+				}
 				vm.handleUncaughtException()
 				return InterpretRuntimeError, vm.currentException
 			}
-			fmt.Printf("[DEBUG] VM run loop: unwindException returned true, unwinding=%v\n", vm.unwinding)
-			
+
 			// Check if we're still unwinding after hitting a direct call boundary
 			if vm.unwinding {
 				// Still unwinding means we hit a direct call boundary and need to propagate the exception
-				fmt.Printf("[DEBUG] VM run loop: Still unwinding after unwindException, returning error\n")
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] VM run loop: Still unwinding after unwindException, returning error\n")
+				}
 				return InterpretRuntimeError, vm.currentException
 			}
-			
+
 			// Handler was found, continue execution with updated frame
 			frame = &vm.frames[vm.frameCount-1]
 			closure = frame.closure
+			if debugExceptions {
+				fmt.Printf("[DEBUG vm.go] Continuing execution after exception handler, frame.ip=%d, updating VM state\n", frame.ip)
+			}
 			function = closure.Fn
 			code = function.Chunk.Code
 			constants = function.Chunk.Constants
 			registers = frame.registers
-			ip = frame.ip
-			continue
+			ip = frame.ip // CRITICAL: Update VM's IP to the handler location
+			if debugExceptions {
+				fmt.Printf("[DEBUG vm.go] VM state updated: ip=%d, continuing main loop, next opcode will be %s\n", ip, OpCode(code[ip]).String())
+			}
 		}
 
 		// Check if we've exited finally blocks and handle pending actions
@@ -3198,7 +3421,7 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	// ip points to the *next* instruction, error occurred at ip-1
 	instructionPos := frame.ip - 1
 	line := 0
-	
+
 	// Safety check for chunk and bounds before calling GetLine
 	if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.Chunk != nil {
 		chunk := frame.closure.Fn.Chunk
@@ -3384,14 +3607,15 @@ func (vm *VM) executeGeneratorWithException(genObj *GeneratorObject, exception V
 		genObj.State = GeneratorCompleted
 		genObj.Done = true
 		genObj.Frame = nil
-		return Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
+		// Surface as ExceptionError to integrate with new call/exception flow
+		return Undefined, exceptionError{exception: exception}
 	} else if genObj.State == GeneratorSuspendedYield {
 		// Resume from yield point and throw exception at that point
 		return vm.resumeGeneratorWithException(genObj, exception)
 	}
 
 	// Generator is completed - throw the exception
-	return Undefined, fmt.Errorf("exception thrown: %s", exception.ToString())
+	return Undefined, exceptionError{exception: exception}
 }
 
 // startGenerator begins execution of a generator function using sentinel frame isolation
@@ -3445,6 +3669,9 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
+		if vm.unwinding && vm.currentException != Null {
+			return Undefined, exceptionError{exception: vm.currentException}
+		}
 		return Undefined, fmt.Errorf("runtime error during generator execution")
 	}
 
@@ -3543,6 +3770,9 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Execute the VM run loop - it will return when the generator yields or the sentinel frame is hit
 	status, result := vm.run()
 	if status == InterpretRuntimeError {
+		if vm.unwinding && vm.currentException != Null {
+			return Undefined, exceptionError{exception: vm.currentException}
+		}
 		return Undefined, fmt.Errorf("runtime error during generator resumption")
 	}
 
@@ -3635,17 +3865,16 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 
 	// Check if the exception unwound all frames (uncaught exception)
 	if vm.frameCount == 0 && vm.unwinding {
-		// Exception propagated through all frames - return the exception
-		exceptionMsg := vm.currentException.ToString()
-		return Undefined, fmt.Errorf("exception thrown: %s", exceptionMsg)
+		// Exception propagated through all frames - surface as ExceptionError
+		return Undefined, exceptionError{exception: vm.currentException}
 	}
 
 	// Execute the VM run loop - it will return when the exception is handled or propagates
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
-		if vm.currentException.Type() != TypeUndefined && vm.currentException.Type() != TypeNull {
-			return Undefined, fmt.Errorf("exception thrown: %s", vm.currentException.ToString())
+		if vm.currentException != Null {
+			return Undefined, exceptionError{exception: vm.currentException}
 		}
 		return Undefined, fmt.Errorf("runtime error during generator exception handling")
 	}

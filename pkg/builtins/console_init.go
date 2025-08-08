@@ -2,9 +2,9 @@ package builtins
 
 import (
 	"fmt"
-	"time"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"time"
 )
 
 type ConsoleInitializer struct{}
@@ -51,7 +51,7 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return ""
 		}
-		
+
 		result := args[0].Inspect()
 		for i := 1; i < len(args); i++ {
 			result += " " + args[i].Inspect()

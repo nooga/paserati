@@ -5,6 +5,26 @@ import (
 	"unsafe"
 )
 
+// ExceptionError is an interface for errors that should be thrown as VM exceptions
+type ExceptionError interface {
+	error
+	GetExceptionValue() Value
+}
+
+// exceptionError is a concrete implementation used to propagate VM exceptions
+// across native boundaries as Go errors while preserving the original Value.
+type exceptionError struct {
+	exception Value
+}
+
+func (e exceptionError) Error() string {
+	return "VM exception"
+}
+
+func (e exceptionError) GetExceptionValue() Value {
+	return e.exception
+}
+
 // prepareCall sets up a function call and returns whether the interpreter should switch to the new frame.
 // For native functions, it executes immediately and returns false.
 // For closures/functions, it sets up the frame and returns true to switch context.
@@ -39,12 +59,12 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// Create a generator object instead of calling the function
 			genVal := NewGenerator(calleeVal)
 			genObj := genVal.AsGenerator()
-			
+
 			// Store the arguments for when the generator starts
 			// We'll need to pass these when ExecuteGenerator is called
 			genObj.Args = make([]Value, len(args))
 			copy(genObj.Args, args)
-			
+
 			callerRegisters[destReg] = genVal
 			return false, nil // Don't switch frames
 		}
@@ -165,12 +185,20 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		}
 
 		//fmt.Printf("DEBUG prepareCall: args=%v\n", args)
+		if debugCalls {
+			fmt.Printf("[DEBUG call.go] Calling native function %s, frameCount=%d\n", nativeFunc.Name, vm.frameCount)
+		}
 		// Set the current 'this' value for native function access
 		vm.currentThis = thisValue
 		// Native functions execute immediately in caller's context
 		result, err := nativeFunc.Fn(args)
+		if debugCalls {
+			fmt.Printf("[DEBUG call.go] Native function %s returned, err=%v, frameCount=%d, unwinding=%v\n",
+				nativeFunc.Name, err != nil, vm.frameCount, vm.unwinding)
+		}
+
 		if err != nil {
-			// Return error to be handled by the VM
+			// Always return the error to the caller; VM will handle conversion at the call site
 			return false, err
 		}
 

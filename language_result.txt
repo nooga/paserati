@@ -749,7 +749,7 @@ FAIL 1237/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-p
 FAIL 1238/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-cover.js - test failed: Runtime Error at 56:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 11
 FAIL 1239/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-fn.js - test failed: Runtime Error at 56:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 11
 FAIL 1240/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-gen.js - test failed: Runtime Error at 57:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 11
-FAIL 1241/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-hole.js - test failed: Syntax Error at 50:9: expected next token to be ], got = instead
+FAIL 1241/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-hole.js - test failed: Syntax Error at 50:18: no prefix parse function for , found
 FAIL 1242/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-skipped.js - test failed: Runtime Error at 56:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 11
 FAIL 1243/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-throws.js - test failed: Runtime Error at 50:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 11
 FAIL 1244/23634 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-undef.js - test failed: Runtime Error at 55:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 11
@@ -867,7 +867,7 @@ FAIL 1422/23634 test262/test/language/expressions/arrow-function/prototype-rules
 FAIL 1425/23634 test262/test/language/expressions/arrow-function/scope-body-lex-distinct.js - test failed: Runtime Error at 46:0: Test262Error: Expected function to throw, but it didn't
 FAIL 1426/23634 test262/test/language/expressions/arrow-function/scope-param-elem-var-close.js - test failed: Runtime Error at 18:0: Test262Error: Values are not the same. Expected: inside, Actual: outside
 FAIL 1427/23634 test262/test/language/expressions/arrow-function/scope-param-elem-var-open.js - test failed: Runtime Error at 18:0: Test262Error: Values are not the same. Expected: inside, Actual: outside
-FAIL 1428/23634 test262/test/language/expressions/arrow-function/scope-param-rest-elem-var-close.js - test failed: Syntax Error at 22:11: expected next token to be ], got = instead
+FAIL 1428/23634 test262/test/language/expressions/arrow-function/scope-param-rest-elem-var-close.js - test failed: Syntax Error at 23:5: expected next token to be ), got => instead
 FAIL 1429/23634 test262/test/language/expressions/arrow-function/scope-param-rest-elem-var-open.js - test failed: Syntax Error at 22:16: invalid left-hand side in assignment: (_ = probe1)
 FAIL 1436/23634 test262/test/language/expressions/arrow-function/strict.js - test failed: Runtime Error at 14:0: Test262Error: Expected function to throw, but it didn't
 FAIL 1437/23634 test262/test/language/expressions/arrow-function/syntax/arrowparameters-bindingidentifier-arguments.js - test failed: Runtime Error at 14:0: Test262Error: Values are not the same. Expected: 1, Actual: [object Arguments]
@@ -905,7 +905,8 @@ FAIL 1514/23634 test262/test/language/expressions/assignment/S8.12.4_A1.js - tes
 FAIL 1517/23634 test262/test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval--1.js - test failed: Runtime Error at 31:0: Cannot read property 'x' of undefined
 FAIL 1518/23634 test262/test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval-.js - test failed: Runtime Error at 27:0: Cannot set property 'x' on non-object type 'number'
 FAIL 1519/23634 test262/test/language/expressions/assignment/destructuring/default-expr-throws-iterator-return-get-throws.js - test failed: Syntax Error at 46:7: expected next token to be :, got RETURN instead
-FAIL 1520/23634 test262/test/language/expressions/assignment/destructuring/default-expr-throws-iterator-return-is-not-callable.js - test failed: Syntax Error at 52:9: expected next token to be ], got = instead
+[DEBUG] VM run loop: unwinding=true, calling unwindException
+FAIL 1520/23634 test262/test/language/expressions/assignment/destructuring/default-expr-throws-iterator-return-is-not-callable.js - test failed: Runtime Error at 1:1: Uncaught exception: [object Object]
 FAIL 1521/23634 test262/test/language/expressions/assignment/destructuring/iterator-destructuring-property-reference-target-evaluation-order.js - test failed: Syntax Error at 73:2: invalid destructuring target: (target()[targetKey()]) (expected identifier, array pattern, or object pattern)
 FAIL 1522/23634 test262/test/language/expressions/assignment/destructuring/keyed-destructuring-property-reference-target-evaluation-order-with-bindings.js - test failed: Syntax Error at 75:4: invalid destructuring property key: [sourceKey] (only simple identifiers supported)
 FAIL 1523/23634 test262/test/language/expressions/assignment/destructuring/keyed-destructuring-property-reference-target-evaluation-order.js - test failed: Syntax Error at 69:2: invalid destructuring property key: [sourceKey()] (only simple identifiers supported)
@@ -913,17 +914,29 @@ FAIL 1524/23634 test262/test/language/expressions/assignment/destructuring/obj-p
 FAIL 1525/23634 test262/test/language/expressions/assignment/destructuring/target-assign-throws-iterator-return-get-throws.js - test failed: Syntax Error at 48:7: expected next token to be :, got RETURN instead
 FAIL 1526/23634 test262/test/language/expressions/assignment/destructuring/target-assign-throws-iterator-return-is-not-callable.js - test failed: Syntax Error at 53:6: invalid destructuring target: (target.a) (expected identifier, array pattern, or object pattern)
 FAIL 1527/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-assignment.js - test failed: Syntax Error at 21:22: no prefix parse function for , found
-FAIL 1528/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-evaluation.js - test failed: Syntax Error at 24:14: expected next token to be ], got = instead
-FAIL 1529/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-arrow.js - test failed: Syntax Error at 34:18: expected next token to be ], got = instead
-FAIL 1530/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-class.js - test failed: Syntax Error at 34:17: expected next token to be ], got = instead
-FAIL 1531/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-cover.js - test failed: Syntax Error at 34:19: expected next token to be ], got = instead
-FAIL 1532/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-fn.js - test failed: Syntax Error at 34:16: expected next token to be ], got = instead
-FAIL 1533/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-gen.js - test failed: Syntax Error at 34:17: expected next token to be ], got = instead
-FAIL 1534/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-in.js - test failed: Syntax Error at 23:14: expected next token to be ], got = instead
-FAIL 1535/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-let.js - test failed: Syntax Error at 21:10: expected next token to be ], got = instead
-FAIL 1536/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-order.js - test failed: Syntax Error at 24:14: expected next token to be ], got = instead
-FAIL 1537/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-simple-no-strict.js - test failed: Syntax Error at 23:21: expected next token to be ], got = instead
-FAIL 1538/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-yield-expr.js - test failed: Syntax Error at 25:14: expected next token to be ], got = instead
+FAIL 1528/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-evaluation.js - test failed: Syntax Error at 24:22: invalid left-hand side in assignment: (_ = flag1)
+FAIL 1529/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-arrow.js - test failed: Syntax Error at 34:31: invalid left-hand side in assignment: (result = [(arrow = () => {
+})])
+FAIL 1530/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-class.js - test failed: Syntax Error at 34:84: invalid left-hand side in assignment: (result = [(xCls = class x {
+}), (cls = class {
+}), (xCls2 = class {
+  static name() {
+}
+})])
+FAIL 1531/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-cover.js - test failed: Syntax Error at 34:67: invalid left-hand side in assignment: (result = [(xCover = (0 , function() {
+})), (cover = function() {
+})])
+FAIL 1532/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-fn.js - test failed: Syntax Error at 34:56: invalid left-hand side in assignment: (result = [(xFn = function x() {
+}), (fn = function() {
+})])
+FAIL 1533/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-fn-name-gen.js - test failed: Syntax Error at 34:60: invalid left-hand side in assignment: (result = [(xGen = function x() {
+}), (gen = function() {
+})])
+FAIL 1534/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-in.js - test failed: Syntax Error at 23:28: invalid left-hand side in assignment: (result = [(x = (x in {}))])
+FAIL 1535/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-let.js - test failed: Runtime Error at 18:0: Test262Error: Expected function to throw, but it didn't
+FAIL 1536/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-order.js - test failed: Syntax Error at 24:18: invalid left-hand side in assignment: (a = x)
+FAIL 1537/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-simple-no-strict.js - test failed: Syntax Error at 23:36: invalid left-hand side in assignment: (result = [(arguments = 4), (eval = 5)])
+FAIL 1538/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-yield-expr.js - test failed: Syntax Error at 25:22: no prefix parse function for ] found
 FAIL 1540/23634 test262/test/language/expressions/assignment/dstr/array-elem-init-yield-ident-valid.js - test failed: Syntax Error at 18:5: expected next token to be IDENT, got YIELD instead
 FAIL 1541/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-get-err.js - test failed: Runtime Error at 24:0: Test262Error: Expected function to throw, but it didn't
 FAIL 1542/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-nrml-close-err.js - test failed: Runtime Error at 24:0: Test262Error: Expected function to throw, but it didn't
@@ -931,8 +944,8 @@ FAIL 1543/23634 test262/test/language/expressions/assignment/dstr/array-elem-ite
 FAIL 1544/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-nrml-close-skip.js - test failed: Syntax Error at 46:16: invalid left-hand side in assignment: (result = [_])
 FAIL 1545/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-nrml-close.js - test failed: Syntax Error at 59:16: invalid left-hand side in assignment: (result = [_])
 FAIL 1546/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close-err.js - test failed: Syntax Error at 52:22: no prefix parse function for ] found
-FAIL 1547/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close-null.js - test failed: Syntax Error at 57:15: expected next token to be ], got = instead
-FAIL 1548/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close.js - test failed: Syntax Error at 60:15: expected next token to be ], got = instead
+FAIL 1547/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close-null.js - test failed: Syntax Error at 57:23: no prefix parse function for ] found
+FAIL 1548/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close.js - test failed: Syntax Error at 60:23: no prefix parse function for ] found
 FAIL 1549/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-thrw-close-err.js - test failed: Syntax Error at 50:6: invalid destructuring target: ({}[thrower()]) (expected identifier, array pattern, or object pattern)
 FAIL 1550/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-thrw-close-skip.js - test failed: Runtime Error at 26:0: Test262Error: Expected function to throw, but it didn't
 FAIL 1551/23634 test262/test/language/expressions/assignment/dstr/array-elem-iter-thrw-close.js - test failed: Syntax Error at 56:6: invalid destructuring target: ({}[thrower()]) (expected identifier, array pattern, or object pattern)
@@ -952,8 +965,16 @@ FAIL 1569/23634 test262/test/language/expressions/assignment/dstr/array-elem-nes
 FAIL 1570/23634 test262/test/language/expressions/assignment/dstr/array-elem-nested-obj.js - test failed: Syntax Error at 23:18: invalid left-hand side in assignment: (result = [{x: x}])
 FAIL 1571/23634 test262/test/language/expressions/assignment/dstr/array-elem-put-const.js - test failed: Runtime Error at 18:0: Test262Error: Expected function to throw, but it didn't
 FAIL 1572/23634 test262/test/language/expressions/assignment/dstr/array-elem-put-let.js - test failed: Runtime Error at 19:0: Test262Error: Expected function to throw, but it didn't
-FAIL 1574/23634 test262/test/language/expressions/assignment/dstr/array-elem-put-obj-literal-prop-ref-init-active.js - test failed: Syntax Error at 63:5: expected next token to be ], got = instead
-FAIL 1575/23634 test262/test/language/expressions/assignment/dstr/array-elem-put-obj-literal-prop-ref-init.js - test failed: Syntax Error at 63:5: expected next token to be ], got = instead
+FAIL 1574/23634 test262/test/language/expressions/assignment/dstr/array-elem-put-obj-literal-prop-ref-init-active.js - test failed: Syntax Error at 63:11: invalid left-hand side in assignment: (result = [(({y: get y() {
+	throw new Test262Error(The property should not be accessed.);
+}, y: set y(val) {
+	(setValue = val)
+}}.y) = 42)])
+FAIL 1575/23634 test262/test/language/expressions/assignment/dstr/array-elem-put-obj-literal-prop-ref-init.js - test failed: Syntax Error at 63:11: invalid left-hand side in assignment: (result = [(({y: get y() {
+	throw new Test262Error(The property should not be accessed.);
+}, y: set y(val) {
+	(setValue = val)
+}}.y) = 42)])
 FAIL 1576/23634 test262/test/language/expressions/assignment/dstr/array-elem-put-obj-literal-prop-ref.js - test failed: Syntax Error at 63:6: invalid left-hand side in assignment: (result = [({y: get y() {
 	throw new Test262Error(The property should not be accessed.);
 }, y: set y(val) {
@@ -978,9 +999,9 @@ FAIL 1594/23634 test262/test/language/expressions/assignment/dstr/array-elem-trl
 FAIL 1595/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-nrml-close-null.js - test failed: Runtime Error at 41:0: Test262Error: Expected function to throw, but it didn't
 FAIL 1596/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-nrml-close-skip.js - test failed: Syntax Error at 55:18: invalid left-hand side in assignment: (result = [x])
 FAIL 1597/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-nrml-close.js - test failed: Syntax Error at 65:18: invalid left-hand side in assignment: (result = [x])
-FAIL 1598/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close-err.js - test failed: Syntax Error at 62:15: expected next token to be ], got = instead
-FAIL 1599/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close-null.js - test failed: Syntax Error at 63:15: expected next token to be ], got = instead
-FAIL 1600/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close.js - test failed: Syntax Error at 68:15: expected next token to be ], got = instead
+FAIL 1598/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close-err.js - test failed: Syntax Error at 62:23: no prefix parse function for , found
+FAIL 1599/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close-null.js - test failed: Syntax Error at 63:23: no prefix parse function for , found
+FAIL 1600/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close.js - test failed: Syntax Error at 68:23: no prefix parse function for , found
 FAIL 1601/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-thrw-close-err.js - test failed: Syntax Error at 61:6: invalid destructuring target: ({}[thrower()]) (expected identifier, array pattern, or object pattern)
 FAIL 1602/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-thrw-close-skip.js - test failed: Runtime Error at 32:0: Test262Error: Expected function to throw, but it didn't
 FAIL 1603/23634 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-thrw-close.js - test failed: Syntax Error at 62:6: invalid destructuring target: ({}[thrower()]) (expected identifier, array pattern, or object pattern)
@@ -1126,7 +1147,7 @@ FAIL 1799/23634 test262/test/language/expressions/assignment/dstr/obj-prop-name-
 FAIL 1801/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-array-null.js - test failed: Runtime Error at 21:0: Cannot index non-array/object/string/typedarray/generator type '0' at IP 26
 FAIL 1802/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-array-undefined-own.js - test failed: Runtime Error at 21:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 26
 FAIL 1803/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-array-undefined.js - test failed: Runtime Error at 21:0: Cannot index non-array/object/string/typedarray/generator type '1' at IP 19
-FAIL 1804/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-array-yield-expr.js - test failed: Syntax Error at 25:18: expected next token to be ], got = instead
+FAIL 1804/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-array-yield-expr.js - test failed: Syntax Error at 25:25: no prefix parse function for ] found
 FAIL 1806/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-array-yield-ident-valid.js - test failed: Syntax Error at 18:5: expected next token to be IDENT, got YIELD instead
 FAIL 1807/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-array.js - test failed: Syntax Error at 23:21: invalid left-hand side in assignment: (result = {x: [y]})
 FAIL 1809/23634 test262/test/language/expressions/assignment/dstr/obj-prop-nested-obj-null.js - test failed: Runtime Error at 21:0: Cannot read property 'x' of null
@@ -1185,15 +1206,15 @@ FAIL 1969/23634 test262/test/language/expressions/assignment/white-space.js - te
 FAIL 2289/23634 test262/test/language/expressions/assignmenttargettype/simple-basic-identifierreference-yield.js - test failed: Syntax Error at 10:7: no prefix parse function for = found
 FAIL 2295/23634 test262/test/language/expressions/async-arrow-function/arrow-returns-promise.js - test failed: Syntax Error at 12:19: expected next token to be ), got => instead
 FAIL 2296/23634 test262/test/language/expressions/async-arrow-function/async-lineterminator-identifier-throws.js - test failed: Runtime Error at 16:0: Test262Error: Expected function to throw, but it didn't
-FAIL 2307/23634 test262/test/language/expressions/async-arrow-function/dflt-params-abrupt.js - test failed: Syntax Error at 46:14: expected next token to be ), got = instead
-FAIL 2308/23634 test262/test/language/expressions/async-arrow-function/dflt-params-arg-val-not-undefined.js - test failed: Syntax Error at 58:25: expected next token to be ), got = instead
-FAIL 2309/23634 test262/test/language/expressions/async-arrow-function/dflt-params-arg-val-undefined.js - test failed: Syntax Error at 51:30: expected next token to be ), got = instead
-FAIL 2311/23634 test262/test/language/expressions/async-arrow-function/dflt-params-ref-later.js - test failed: Syntax Error at 47:14: expected next token to be ), got = instead
-FAIL 2312/23634 test262/test/language/expressions/async-arrow-function/dflt-params-ref-prior.js - test failed: Syntax Error at 48:23: expected next token to be ), got = instead
-FAIL 2313/23634 test262/test/language/expressions/async-arrow-function/dflt-params-ref-self.js - test failed: Syntax Error at 47:14: expected next token to be ), got = instead
-FAIL 2315/23634 test262/test/language/expressions/async-arrow-function/dflt-params-trailing-comma.js - test failed: Syntax Error at 42:23: expected next token to be ), got = instead
+FAIL 2307/23634 test262/test/language/expressions/async-arrow-function/dflt-params-abrupt.js - test failed: Syntax Error at 46:62: no prefix parse function for => found
+FAIL 2308/23634 test262/test/language/expressions/async-arrow-function/dflt-params-arg-val-not-undefined.js - test failed: Syntax Error at 58:38: invalid left-hand side in assignment: (aFalse = falseCount)
+FAIL 2309/23634 test262/test/language/expressions/async-arrow-function/dflt-params-arg-val-undefined.js - test failed: Syntax Error at 51:66: no prefix parse function for => found
+FAIL 2311/23634 test262/test/language/expressions/async-arrow-function/dflt-params-ref-later.js - test failed: Syntax Error at 47:22: no prefix parse function for => found
+FAIL 2312/23634 test262/test/language/expressions/async-arrow-function/dflt-params-ref-prior.js - test failed: Syntax Error at 48:35: no prefix parse function for => found
+FAIL 2313/23634 test262/test/language/expressions/async-arrow-function/dflt-params-ref-self.js - test failed: Syntax Error at 47:19: no prefix parse function for => found
+FAIL 2315/23634 test262/test/language/expressions/async-arrow-function/dflt-params-trailing-comma.js - test failed: Syntax Error at 42:30: no prefix parse function for => found
 FAIL 2328/23634 test262/test/language/expressions/async-arrow-function/escaped-async-line-terminator.js - test failed: Runtime Error at 26:0: Test262Error: Expected function to throw, but it didn't
-FAIL 2330/23634 test262/test/language/expressions/async-arrow-function/eval-var-scope-syntax-err.js - test failed: Syntax Error at 42:14: expected next token to be ), got = instead
+FAIL 2330/23634 test262/test/language/expressions/async-arrow-function/eval-var-scope-syntax-err.js - test failed: Syntax Error at 42:36: no prefix parse function for => found
 FAIL 2331/23634 test262/test/language/expressions/async-arrow-function/forbidden-ext/b1/async-arrow-function-forbidden-ext-direct-access-prop-arguments.js - test failed: Syntax Error at 34:14: no prefix parse function for => found
 FAIL 2332/23634 test262/test/language/expressions/async-arrow-function/forbidden-ext/b1/async-arrow-function-forbidden-ext-direct-access-prop-caller.js - test failed: Syntax Error at 34:14: no prefix parse function for => found
 FAIL 2333/23634 test262/test/language/expressions/async-arrow-function/forbidden-ext/b2/async-arrow-function-forbidden-ext-indirect-access-own-prop-caller-get.js - test failed: Syntax Error at 35:14: no prefix parse function for => found
@@ -1219,7 +1240,7 @@ FAIL 2372/23634 test262/test/language/expressions/async-function/forbidden-ext/b
 FAIL 2373/23634 test262/test/language/expressions/async-function/forbidden-ext/b1/async-func-expr-named-forbidden-ext-direct-access-prop-caller.js - test failed: Runtime Error at 29:0: Cannot call non-function value of type 1
 FAIL 2374/23634 test262/test/language/expressions/async-function/forbidden-ext/b1/async-func-expr-nameless-forbidden-ext-direct-access-prop-arguments.js - test failed: Runtime Error at 28:0: Cannot call non-function value of type 1
 FAIL 2375/23634 test262/test/language/expressions/async-function/forbidden-ext/b1/async-func-expr-nameless-forbidden-ext-direct-access-prop-caller.js - test failed: Runtime Error at 28:0: Cannot call non-function value of type 1
-FAIL 2376/23634 test262/test/language/expressions/async-function/forbidden-ext/b2/async-func-expr-named-forbidden-ext-indirect-access-own-prop-caller-get.js - test failed: Runtime Error at 21:0: Cannot call non-function value of type 1
+FAIL 2376/23634 test262/test/language/expressions/async-function/forbidden-ext/b2/async-func-expr-named-forbidden-ext-indirect-access-own-prop-caller-get.js - test failed: Runtime Error at 31:0: Cannot call non-function value of type 1
 FAIL 2377/23634 test262/test/language/expressions/async-function/forbidden-ext/b2/async-func-expr-named-forbidden-ext-indirect-access-own-prop-caller-value.js - test failed: Runtime Error at 21:0: Cannot call non-function value of type 1
 FAIL 2378/23634 test262/test/language/expressions/async-function/forbidden-ext/b2/async-func-expr-named-forbidden-ext-indirect-access-prop-caller.js - test failed: Runtime Error at 21:0: Cannot call non-function value of type 1
 FAIL 2379/23634 test262/test/language/expressions/async-function/forbidden-ext/b2/async-func-expr-nameless-forbidden-ext-indirect-access-own-prop-caller-get.js - test failed: Runtime Error at 21:0: Cannot call non-function value of type 1
@@ -1805,7 +1826,7 @@ FAIL 3066/23634 test262/test/language/expressions/async-generator/yield-star-syn
 FAIL 3067/23634 test262/test/language/expressions/async-generator/yield-star-sync-throw.js - test failed: Syntax Error at 70:11: expected next token to be :, got THROW instead
 FAIL 3068/23634 test262/test/language/expressions/async-generator/yield-thenable-create-resolving-functions-reject.js - test failed: Syntax Error at 65:19: expected next token to be ), got FUNCTION instead
 FAIL 3069/23634 test262/test/language/expressions/async-generator/yield-thenable-create-resolving-functions-resolve.js - test failed: Syntax Error at 65:19: expected next token to be ), got FUNCTION instead
-FAIL 3070/23634 test262/test/language/expressions/await/async-await-interleaved.js - test failed: Runtime Error at 23:0: Cannot use 'undefined' as a constructor.
+FAIL 3070/23634 test262/test/language/expressions/await/async-await-interleaved.js - test failed: Runtime Error at 32:0: Cannot use 'undefined' as a constructor.
 FAIL 3071/23634 test262/test/language/expressions/await/async-generator-interleaved.js - test failed: Runtime Error at 19:0: Cannot use 'undefined' as a constructor.
 FAIL 3072/23634 test262/test/language/expressions/await/await-BindingIdentifier-in-global.js - test failed: Runtime Error at 11:0: Test262Error: Assertion failed
 FAIL 3074/23634 test262/test/language/expressions/await/await-awaits-thenable-not-callable.js - test failed: Runtime Error at 14:0: Cannot call non-function value of type 1
@@ -1813,7 +1834,7 @@ FAIL 3075/23634 test262/test/language/expressions/await/await-awaits-thenables-t
 FAIL 3076/23634 test262/test/language/expressions/await/await-awaits-thenables.js - test failed: Syntax Error at 19:26: expected next token to be ), got IDENT instead
 FAIL 3082/23634 test262/test/language/expressions/await/await-monkey-patched-promise.js - test failed: Syntax Error at 33:33: expected next token to be ), got IDENT instead
 FAIL 3083/23634 test262/test/language/expressions/await/await-non-promise-thenable.js - test failed: Syntax Error at 34:33: expected next token to be ), got IDENT instead
-FAIL 3084/23634 test262/test/language/expressions/await/await-non-promise.js - test failed: Runtime Error at 28:0: Cannot read property 'then' of undefined
+FAIL 3084/23634 test262/test/language/expressions/await/await-non-promise.js - test failed: Runtime Error at 24:0: Cannot read property 'then' of undefined
 FAIL 3085/23634 test262/test/language/expressions/await/await-throws-rejections.js - test failed: Runtime Error at 13:0: Cannot call non-function value of type 1
 FAIL 3087/23634 test262/test/language/expressions/await/for-await-of-interleaved.js - test failed: Syntax Error at 38:7: expected next token to be (, got IDENT instead
 FAIL 3089/23634 test262/test/language/expressions/await/syntax-await-has-UnaryExpression-with-MultiplicativeExpression.js - test failed: Runtime Error at 13:0: Cannot call non-function value of type 1
@@ -1833,7 +1854,7 @@ FAIL 3114/23634 test262/test/language/expressions/bitwise-and/S11.10.1_A3_T2.9.j
 FAIL 3115/23634 test262/test/language/expressions/bitwise-and/bigint-and-number.js - test failed: Runtime Error at 12:0: Test262Error: Expected function to throw, but it didn't
 FAIL 3116/23634 test262/test/language/expressions/bitwise-and/bigint-errors.js - test failed: Runtime Error at 8:0: Test262Error: Expected function to throw, but it didn't
 FAIL 3117/23634 test262/test/language/expressions/bitwise-and/bigint-non-primitive.js - test failed: Runtime Error at 33:0: Test262Error: The result of (Object(0b101n) & 0b011n) is 0b001n. Expected: 1n, Actual: 0
-FAIL 3118/23634 test262/test/language/expressions/bitwise-and/bigint-toprimitive.js - test failed: Runtime Error at 12:0: Test262Error: The result of (({[Symbol.toPrimitive]: function() {return 2n;}, valueOf: err, toString: err}) & 3n) is 2n. Expected: 2n, Actual: 0
+FAIL 3118/23634 test262/test/language/expressions/bitwise-and/bigint-toprimitive.js - test failed: Runtime Error at 8:0: Test262Error: The result of (({[Symbol.toPrimitive]: function() {return 2n;}, valueOf: err, toString: err}) & 3n) is 2n. Expected: 2n, Actual: 0
 FAIL 3119/23634 test262/test/language/expressions/bitwise-and/bigint-wrapped-values.js - test failed: Runtime Error at 8:0: Test262Error: The result of (Object(2n) & 3n) is 2n. Expected: 2n, Actual: 0
 FAIL 3120/23634 test262/test/language/expressions/bitwise-and/bigint.js - test failed: Syntax Error at 52:3: BigInt literal "0xbf2ed51ff75d380fd3be813ec6185780n" cannot contain decimal point or exponent
 [DEBUG] VM run loop: unwinding=true, calling unwindException
@@ -1906,9 +1927,7 @@ FAIL 3217/23634 test262/test/language/expressions/call/S11.2.3_A4_T5.js - test f
 FAIL 3219/23634 test262/test/language/expressions/call/S11.2.4_A1.1_T2.js - test failed: Runtime Error at 10:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 3220/23634 test262/test/language/expressions/call/S11.2.4_A1.2_T1.js - test failed: Runtime Error at 10:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 3221/23634 test262/test/language/expressions/call/S11.2.4_A1.2_T2.js - test failed: Runtime Error at 10:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
-FAIL 3223/23634 test262/test/language/expressions/call/S11.2.4_A1.4_T1.js - test failed: Syntax Error at 20:8: expected next token to be ), got = instead
-FAIL 3224/23634 test262/test/language/expressions/call/S11.2.4_A1.4_T2.js - test failed: Syntax Error at 20:12: expected next token to be ), got = instead
-FAIL 3225/23634 test262/test/language/expressions/call/S11.2.4_A1.4_T3.js - test failed: Syntax Error at 21:12: expected next token to be ), got = instead
+FAIL 3224/23634 test262/test/language/expressions/call/S11.2.4_A1.4_T2.js - test failed: Runtime Error at 15:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 3227/23634 test262/test/language/expressions/call/eval-err-args.js - test failed: Runtime Error at 21:0: Test262Error: Expected function to throw, but it didn't
 FAIL 3228/23634 test262/test/language/expressions/call/eval-first-arg.js - test failed: Runtime Error at 13:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 3230/23634 test262/test/language/expressions/call/eval-realm-indirect.js - test failed: Runtime Error at 21:0: Cannot read property 'createRealm' of undefined
@@ -2211,45 +2230,45 @@ FAIL 3595/23634 test262/test/language/expressions/class/async-method/returns-asy
 FAIL 3596/23634 test262/test/language/expressions/class/async-method/returns-async-function-returns-newtarget.js - test failed: Runtime Error at 22:0: Cannot read property 'then' of null
 FAIL 3597/23634 test262/test/language/expressions/class/async-method/returns-async-function.js - test failed: Runtime Error at 22:0: Cannot read property 'then' of null
 FAIL 3608/23634 test262/test/language/expressions/class/constructor-this-tdz-during-initializers.js - test failed: Runtime Error at 25:0: assert.throws: second argument must be a function
-FAIL 3609/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-additive-expression-add.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 3610/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-additive-expression-subtract.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 3611/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-arrow-function-expression.js - test failed: Syntax Error at 63:16: expected next token to be ), got = instead
-FAIL 3612/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 64:12: expected next token to be ), got = instead
-FAIL 3613/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 3614/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
-FAIL 3615/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
-FAIL 3616/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
+FAIL 3609/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3610/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 0, Actual: undefined
+FAIL 3611/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 88:0: Object index must be a string, number, or symbol, got '12'
+FAIL 3612/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 81:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3613/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 77:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3614/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 73:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3615/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 85:0: Object index must be a string, number, or symbol, got '0'
+FAIL 3616/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 73:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
 FAIL 3617/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:17: expected next token to be ], got => instead
 FAIL 3618/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:14: expected next token to be ], got NUMBER instead
-FAIL 3619/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-condition-expression-false.js - test failed: Syntax Error at 63:20: expected next token to be ), got = instead
-FAIL 3620/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-condition-expression-true.js - test failed: Syntax Error at 63:19: expected next token to be ), got = instead
-FAIL 3621/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-decimal-e-notational-literal.js - test failed: Syntax Error at 63:11: expected next token to be ), got = instead
-FAIL 3622/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-decimal-literal.js - test failed: Syntax Error at 63:10: expected next token to be ), got = instead
-FAIL 3623/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-exponetiation-expression.js - test failed: Syntax Error at 63:13: expected next token to be ), got = instead
-FAIL 3624/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-expression-coalesce.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 3625/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-expression-logical-and.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 3626/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-expression-logical-or.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 3627/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-function-declaration.js - test failed: Syntax Error at 64:10: expected next token to be ), got = instead
-FAIL 3628/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-function-expression.js - test failed: Syntax Error at 63:21: expected next token to be ), got = instead
-FAIL 3629/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-generator-function-declaration.js - test failed: Syntax Error at 64:10: expected next token to be ), got = instead
-FAIL 3630/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-identifier.js - test failed: Syntax Error at 65:8: expected next token to be ), got = instead
-FAIL 3631/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-integer-e-notational-literal.js - test failed: Syntax Error at 63:8: expected next token to be ), got = instead
-FAIL 3632/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-integer-separators.js - test failed: Syntax Error at 63:22: expected next token to be ), got = instead
-FAIL 3633/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-math.js - test failed: Syntax Error at 63:29: expected next token to be ), got = instead
-FAIL 3634/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-multiplicative-expression-div.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 3635/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-multiplicative-expression-mult.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 3636/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-null.js - test failed: Syntax Error at 63:11: expected next token to be ), got = instead
-FAIL 3637/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-numeric-literal.js - test failed: Syntax Error at 63:8: expected next token to be ), got = instead
-FAIL 3638/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-string-literal.js - test failed: Syntax Error at 63:10: expected next token to be ), got = instead
-FAIL 3639/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-yield-expression.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
+FAIL 3619/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 71:0: Test262Error: Values are not the same. Expected: 1, Actual: undefined
+FAIL 3620/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-condition-expression-true.js - test failed: Runtime Error at 71:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3621/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-decimal-e-notational-literal.js - test failed: Runtime Error at 79:0: Cannot access property 'e1' on non-object type 'number'
+FAIL 3622/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-decimal-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3623/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-exponetiation-expression.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 4, Actual: undefined
+FAIL 3624/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-expression-coalesce.js - test failed: Runtime Error at 72:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3625/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-expression-logical-and.js - test failed: Runtime Error at 77:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3626/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-expression-logical-or.js - test failed: Runtime Error at 77:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3627/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-function-declaration.js - test failed: Runtime Error at 1:0: Object index must be a string, number, or symbol, got '1'
+FAIL 3628/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-function-expression.js - test failed: Runtime Error at 90:0: Object index must be a string, number, or symbol, got '8'
+FAIL 3629/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-generator-function-declaration.js - test failed: Runtime Error at 1:0: Object index must be a string, number, or symbol, got '18'
+FAIL 3630/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-identifier.js - test failed: Runtime Error at 86:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3631/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-integer-e-notational-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3632/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-integer-separators.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 12345678, Actual: undefined
+FAIL 3633/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-math.js - test failed: Runtime Error at 68:0: Test262Error: Values are not the same. Expected: 2.999232, Actual: undefined
+FAIL 3634/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-multiplicative-expression-div.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 1, Actual: undefined
+FAIL 3635/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-multiplicative-expression-mult.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 1, Actual: undefined
+FAIL 3636/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-null.js - test failed: Runtime Error at 89:0: Object index must be a string, number, or symbol, got '0'
+FAIL 3637/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-numeric-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3638/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-string-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 3639/23634 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-yield-expression.js - test failed: Runtime Error at 87:0: Object index must be a string, number, or symbol, got '1'
 FAIL 3640/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 136
 FAIL 3641/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 136
 FAIL 3642/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 50:0: Object index must be a string, number, or symbol, got '12'
-FAIL 3643/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 59:14: expected next token to be ), got = instead
-FAIL 3644/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 59:14: expected next token to be ), got |= instead
-FAIL 3645/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 59:14: expected next token to be ), got ??= instead
-FAIL 3646/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 59:14: expected next token to be ), got &&= instead
-FAIL 3647/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 59:14: expected next token to be ), got ||= instead
+FAIL 3643/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 141
+FAIL 3644/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 156
+FAIL 3645/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 181
+FAIL 3646/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 55:0: Object index must be a string, number, or symbol, got '0'
+FAIL 3647/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 183
 FAIL 3648/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:13: expected next token to be ], got => instead
 FAIL 3649/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:10: expected next token to be ], got NUMBER instead
 FAIL 3650/23634 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 151
@@ -2276,11 +2295,11 @@ FAIL 3670/23634 test262/test/language/expressions/class/cpn-class-expr-computed-
 FAIL 3671/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 111
 FAIL 3672/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 111
 FAIL 3673/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 39:0: Object index must be a string, number, or symbol, got '12'
-FAIL 3674/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 56:14: expected next token to be ), got = instead
-FAIL 3675/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 56:14: expected next token to be ), got |= instead
-FAIL 3676/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 56:14: expected next token to be ), got ??= instead
-FAIL 3677/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 56:14: expected next token to be ), got &&= instead
-FAIL 3678/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 56:14: expected next token to be ), got ||= instead
+FAIL 3674/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 117
+FAIL 3675/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 127
+FAIL 3676/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
+FAIL 3677/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '0'
+FAIL 3678/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
 FAIL 3679/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:13: expected next token to be ], got => instead
 FAIL 3680/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:10: expected next token to be ], got NUMBER instead
 FAIL 3681/23634 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 121
@@ -2307,11 +2326,11 @@ FAIL 3701/23634 test262/test/language/expressions/class/cpn-class-expr-fields-co
 FAIL 3702/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 117
 FAIL 3703/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 117
 FAIL 3704/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 39:0: Object index must be a string, number, or symbol, got '12'
-FAIL 3705/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 60:14: expected next token to be ), got = instead
-FAIL 3706/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 60:14: expected next token to be ), got |= instead
-FAIL 3707/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 60:14: expected next token to be ), got ??= instead
-FAIL 3708/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 60:14: expected next token to be ), got &&= instead
-FAIL 3709/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 60:14: expected next token to be ), got ||= instead
+FAIL 3705/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 123
+FAIL 3706/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 133
+FAIL 3707/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
+FAIL 3708/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '0'
+FAIL 3709/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
 FAIL 3710/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:13: expected next token to be ], got => instead
 FAIL 3711/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:10: expected next token to be ], got NUMBER instead
 FAIL 3712/23634 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 127
@@ -5598,8 +5617,8 @@ FAIL 7715/23634 test262/test/language/expressions/compound-assignment/S11.13.2_A
 FAIL 7716/23634 test262/test/language/expressions/compound-assignment/S11.13.2_A7.9_T2.js - test failed: Runtime Error at 16:0: Cannot call non-function value of type 1
 FAIL 7717/23634 test262/test/language/expressions/compound-assignment/S11.13.2_A7.9_T3.js - test failed: Runtime Error at 16:0: Object index must be a string, number, or symbol, got '14'
 FAIL 7718/23634 test262/test/language/expressions/compound-assignment/S11.13.2_A7.9_T4.js - test failed: Runtime Error at 13:0: Object index must be a string, number, or symbol, got '14'
-FAIL 7722/23634 test262/test/language/expressions/compound-assignment/add-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got += instead
-FAIL 7725/23634 test262/test/language/expressions/compound-assignment/and-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got &= instead
+FAIL 7722/23634 test262/test/language/expressions/compound-assignment/add-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7725/23634 test262/test/language/expressions/compound-assignment/and-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
 FAIL 7729/23634 test262/test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--1.js - test failed: Runtime Error at 30:0: Test262Error: Expected function to throw, but it didn't
 FAIL 7730/23634 test262/test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--10.js - test failed: Runtime Error at 32:0: Cannot access property 'x' on non-object type 'number'
 FAIL 7731/23634 test262/test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--11.js - test failed: Runtime Error at 31:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
@@ -5622,7 +5641,7 @@ FAIL 7747/23634 test262/test/language/expressions/compound-assignment/compound-a
 FAIL 7748/23634 test262/test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--8.js - test failed: Runtime Error at 31:0: Cannot access property 'x' on non-object type 'number'
 FAIL 7749/23634 test262/test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--9.js - test failed: Runtime Error at 31:0: Operands must be two numbers or two BigInts for %.
 FAIL 7750/23634 test262/test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v-.js - test failed: Runtime Error at 31:0: Cannot access property 'x' on non-object type 'number'
-FAIL 7754/23634 test262/test/language/expressions/compound-assignment/div-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got /= instead
+FAIL 7754/23634 test262/test/language/expressions/compound-assignment/div-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
 FAIL 7755/23634 test262/test/language/expressions/compound-assignment/left-hand-side-private-reference-accessor-property-add.js - test failed: Runtime Error at 51:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 7756/23634 test262/test/language/expressions/compound-assignment/left-hand-side-private-reference-accessor-property-bitand.js - test failed: Runtime Error at 42:0: Test262Error: PutValue should call the setter with the result. Expected: 0, Actual: undefined
 FAIL 7757/23634 test262/test/language/expressions/compound-assignment/left-hand-side-private-reference-accessor-property-bitor.js - test failed: Runtime Error at 42:0: Test262Error: The expression should evaluate to the result. Expected: 15, Actual: 10
@@ -5659,14 +5678,14 @@ FAIL 7799/23634 test262/test/language/expressions/compound-assignment/left-hand-
 FAIL 7800/23634 test262/test/language/expressions/compound-assignment/left-hand-side-private-reference-readonly-accessor-property-rshift.js - test failed: Runtime Error at 40:0: Test262Error: Expected function to throw, but it didn't
 FAIL 7801/23634 test262/test/language/expressions/compound-assignment/left-hand-side-private-reference-readonly-accessor-property-srshift.js - test failed: Runtime Error at 40:0: Test262Error: Expected function to throw, but it didn't
 FAIL 7802/23634 test262/test/language/expressions/compound-assignment/left-hand-side-private-reference-readonly-accessor-property-sub.js - test failed: Runtime Error at 45:0: Operands must be two numbers or two BigInts for Subtract.
-FAIL 7806/23634 test262/test/language/expressions/compound-assignment/lshift-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got <<= instead
-FAIL 7810/23634 test262/test/language/expressions/compound-assignment/mod-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got %= instead
-FAIL 7814/23634 test262/test/language/expressions/compound-assignment/mult-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got *= instead
-FAIL 7817/23634 test262/test/language/expressions/compound-assignment/or-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got |= instead
-FAIL 7821/23634 test262/test/language/expressions/compound-assignment/srshift-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got >>= instead
-FAIL 7824/23634 test262/test/language/expressions/compound-assignment/sub-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got -= instead
-FAIL 7829/23634 test262/test/language/expressions/compound-assignment/urshift-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got >>>= instead
-FAIL 7832/23634 test262/test/language/expressions/compound-assignment/xor-whitespace.js - test failed: Syntax Error at 16:20: expected next token to be ), got ^= instead
+FAIL 7806/23634 test262/test/language/expressions/compound-assignment/lshift-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7810/23634 test262/test/language/expressions/compound-assignment/mod-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7814/23634 test262/test/language/expressions/compound-assignment/mult-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7817/23634 test262/test/language/expressions/compound-assignment/or-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7821/23634 test262/test/language/expressions/compound-assignment/srshift-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7824/23634 test262/test/language/expressions/compound-assignment/sub-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7829/23634 test262/test/language/expressions/compound-assignment/urshift-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
+FAIL 7832/23634 test262/test/language/expressions/compound-assignment/xor-whitespace.js - test failed: Syntax Error at 20:19: expected next token to be ), got ILLEGAL instead
 FAIL 7833/23634 test262/test/language/expressions/concatenation/S9.8_A1_T2.js - test failed: Runtime Error at 14:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 7834/23634 test262/test/language/expressions/concatenation/S9.8_A2_T2.js - test failed: Runtime Error at 12:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 7837/23634 test262/test/language/expressions/concatenation/S9.8_A5_T2.js - test failed: Runtime Error at 14:0: Built-in constructor 'Number' expected 1 arguments but got 0.
@@ -6729,7 +6748,6 @@ FAIL 9080/23634 test262/test/language/expressions/exponentiation/bigint-negative
 FAIL 9081/23634 test262/test/language/expressions/exponentiation/bigint-toprimitive.js - test failed: Runtime Error at 48:0: Operands must be two numbers or two BigInts for **.
 FAIL 9082/23634 test262/test/language/expressions/exponentiation/bigint-wrapped-values.js - test failed: Runtime Error at 15:0: Operands must be two numbers or two BigInts for **.
 FAIL 9083/23634 test262/test/language/expressions/exponentiation/bigint-zero-base-zero-exponent.js - test failed: Runtime Error at 20:0: Test262Error: The result of (0n ** 0n) is 1n. Expected: 1n, Actual: 1n
-FAIL 9084/23634 test262/test/language/expressions/exponentiation/exp-assignment-operator.js - test failed: Syntax Error at 25:23: expected next token to be ), got **= instead
 FAIL 9085/23634 test262/test/language/expressions/exponentiation/exp-operator-evaluation-order.js - test failed: Runtime Error at 22:0: Operands must be two numbers or two BigInts for **.
 FAIL 9086/23634 test262/test/language/expressions/exponentiation/exp-operator-precedence-unary-expression-semantics.js - test failed: Runtime Error at 25:0: Operands must be two numbers or two BigInts for **.
 [DEBUG] VM run loop: unwinding=true, calling unwindException
@@ -7298,7 +7316,7 @@ FAIL 9889/23634 test262/test/language/expressions/left-shift/S9.5_A3.1_T1.js - t
 FAIL 9893/23634 test262/test/language/expressions/left-shift/bigint-and-number.js - test failed: Runtime Error at 12:0: Test262Error: Expected function to throw, but it didn't
 FAIL 9894/23634 test262/test/language/expressions/left-shift/bigint-errors.js - test failed: Runtime Error at 8:0: Test262Error: Expected function to throw, but it didn't
 FAIL 9895/23634 test262/test/language/expressions/left-shift/bigint-non-primitive.js - test failed: Runtime Error at 29:0: Test262Error: The result of (Object(0b101n) << 1n) is 0b1010n. Expected: 10n, Actual: 0
-FAIL 9896/23634 test262/test/language/expressions/left-shift/bigint-toprimitive.js - test failed: Runtime Error at 8:0: Test262Error: The result of (({[Symbol.toPrimitive]: function() {return 2n;}, valueOf: err, toString: err}) << 1n) is 4n. Expected: 4n, Actual: 0
+FAIL 9896/23634 test262/test/language/expressions/left-shift/bigint-toprimitive.js - test failed: Runtime Error at 12:0: Test262Error: The result of (({[Symbol.toPrimitive]: function() {return 2n;}, valueOf: err, toString: err}) << 1n) is 4n. Expected: 4n, Actual: 0
 FAIL 9897/23634 test262/test/language/expressions/left-shift/bigint-wrapped-values.js - test failed: Runtime Error at 8:0: Test262Error: The result of (Object(2n) << 1n) is 4n. Expected: 4n, Actual: 0
 FAIL 9898/23634 test262/test/language/expressions/left-shift/bigint.js - test failed: Syntax Error at 36:3: BigInt literal "0x123456789abcdef0fedcba9876543212345678n" cannot contain decimal point or exponent
 [DEBUG] VM run loop: unwinding=true, calling unwindException
@@ -7394,51 +7412,51 @@ FAIL 10027/23634 test262/test/language/expressions/logical-assignment/left-hand-
 FAIL 10028/23634 test262/test/language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-and.js - test failed: Runtime Error at 41:0: Test262Error: The expression should evaluate to the short-circuit value. Expected: false, Actual: null
 FAIL 10029/23634 test262/test/language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-nullish.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: The right-hand side should not be evaluated
 FAIL 10030/23634 test262/test/language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-or.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: The right-hand side should not be evaluated
-FAIL 10032/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-bigint.js - test failed: Syntax Error at 24:24: expected next token to be ), got &&= instead
-FAIL 10033/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-lhs-before-rhs.js - test failed: Syntax Error at 46:30: expected next token to be ), got &&= instead
+FAIL 10032/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-bigint.js - test failed: Runtime Error at 23:0: Test262Error: (value &&= 1n) === 0n; where value = 0n. Expected: 0n, Actual: null
+FAIL 10033/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-lhs-before-rhs.js - test failed: Runtime Error at 15:0: Cannot call non-function value of type 0
 FAIL 10034/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-arrow-function.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10035/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-class-expression.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10036/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-function.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10037/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-no-set-put.js - test failed: Runtime Error at 15:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10038/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-no-set.js - test failed: Syntax Error at 25:27: expected next token to be ), got &&= instead
+FAIL 10038/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-no-set.js - test failed: Runtime Error at 15:0: Test262Error: obj.prop. Expected: 0, Actual: <native function defineProperty>
 FAIL 10039/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-non-extensible.js - test failed: Runtime Error at 15:0: Cannot access property 'preventExtensions' on non-object type 'function'
 FAIL 10041/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-non-writeable-put.js - test failed: Runtime Error at 15:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10042/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-non-writeable.js - test failed: Syntax Error at 23:27: expected next token to be ), got &&= instead
+FAIL 10042/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-non-writeable.js - test failed: Runtime Error at 15:0: Test262Error: obj.prop. Expected: 0, Actual: <native function defineProperty>
 FAIL 10043/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-lhs.js - test failed: Runtime Error at 14:0: Test262Error: Expected function to throw, but it didn't
 FAIL 10044/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-rhs-put.js - test failed: Runtime Error at 14:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10045/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-rhs.js - test failed: Syntax Error at 16:24: expected next token to be ), got &&= instead
-FAIL 10046/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator.js - test failed: Syntax Error at 24:24: expected next token to be ), got &&= instead
-FAIL 10049/23634 test262/test/language/expressions/logical-assignment/lgcl-and-whitespace.js - test failed: Syntax Error at 15:20: expected next token to be ), got &&= instead
-FAIL 10051/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-bigint.js - test failed: Syntax Error at 23:24: expected next token to be ), got ??= instead
-FAIL 10052/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-lhs-before-rhs.js - test failed: Syntax Error at 46:30: expected next token to be ), got ??= instead
+FAIL 10045/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-rhs.js - test failed: Runtime Error at 14:0: Test262Error: value. Expected: 0, Actual: null
+FAIL 10046/23634 test262/test/language/expressions/logical-assignment/lgcl-and-assignment-operator.js - test failed: Runtime Error at 23:0: Test262Error: (value &&= 1) === undefined; where value = undefined. Expected: undefined, Actual: null
+FAIL 10049/23634 test262/test/language/expressions/logical-assignment/lgcl-and-whitespace.js - test failed: Syntax Error at 19:19: expected next token to be ), got ILLEGAL instead
+FAIL 10051/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-bigint.js - test failed: Runtime Error at 22:0: Test262Error: (value ??= 1n) === 0n; where value = 0n. Expected: 0n, Actual: null
+FAIL 10052/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-lhs-before-rhs.js - test failed: Runtime Error at 15:0: Cannot call non-function value of type 0
 FAIL 10053/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-arrow-function.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10054/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-class-expression.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10055/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-function.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10056/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-no-set-put.js - test failed: Runtime Error at 15:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10057/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-no-set.js - test failed: Syntax Error at 25:27: expected next token to be ), got ??= instead
+FAIL 10057/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-no-set.js - test failed: Runtime Error at 15:0: Test262Error: obj.prop. Expected: 0, Actual: 1
 FAIL 10058/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-extensible.js - test failed: Runtime Error at 15:0: Cannot access property 'preventExtensions' on non-object type 'function'
 FAIL 10060/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-writeable-put.js - test failed: Runtime Error at 15:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10061/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-writeable.js - test failed: Syntax Error at 23:27: expected next token to be ), got ??= instead
+FAIL 10061/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-writeable.js - test failed: Runtime Error at 15:0: Test262Error: obj.prop. Expected: 0, Actual: <native function defineProperty>
 FAIL 10062/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-lhs.js - test failed: Runtime Error at 14:0: Test262Error: Expected function to throw, but it didn't
 FAIL 10063/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-rhs-put.js - test failed: Runtime Error at 14:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10064/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-rhs.js - test failed: Syntax Error at 16:24: expected next token to be ), got ??= instead
-FAIL 10065/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator.js - test failed: Syntax Error at 23:24: expected next token to be ), got ??= instead
-FAIL 10068/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-whitespace.js - test failed: Syntax Error at 15:20: expected next token to be ), got ??= instead
-FAIL 10070/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-bigint.js - test failed: Syntax Error at 24:24: expected next token to be ), got ||= instead
-FAIL 10071/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-lhs-before-rhs.js - test failed: Syntax Error at 46:30: expected next token to be ), got ||= instead
+FAIL 10064/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-rhs.js - test failed: Runtime Error at 14:0: Test262Error: value. Expected: 0, Actual: null
+FAIL 10065/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-assignment-operator.js - test failed: Runtime Error at 22:0: Test262Error: (value ??= 1) === false; where value = false. Expected: false, Actual: null
+FAIL 10068/23634 test262/test/language/expressions/logical-assignment/lgcl-nullish-whitespace.js - test failed: Syntax Error at 19:19: expected next token to be ), got ILLEGAL instead
+FAIL 10070/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-bigint.js - test failed: Runtime Error at 23:0: Test262Error: (value ||= 1n) === 2n; where value = 2n. Expected: 2n, Actual: <native function sameValue>
+FAIL 10071/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-lhs-before-rhs.js - test failed: Runtime Error at 15:0: Cannot call non-function value of type 0
 FAIL 10072/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-arrow-function.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10073/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-class-expression.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10074/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-function.js - test failed: Runtime Error at 17:0: Test262Error: value. Expected: value, Actual: undefined
 FAIL 10075/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-no-set-put.js - test failed: Runtime Error at 15:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10076/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-no-set.js - test failed: Syntax Error at 25:27: expected next token to be ), got ||= instead
+FAIL 10076/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-no-set.js - test failed: Runtime Error at 15:0: Test262Error: obj.prop. Expected: 2, Actual: 1
 FAIL 10077/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-non-extensible.js - test failed: Runtime Error at 15:0: Cannot access property 'preventExtensions' on non-object type 'function'
 FAIL 10079/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-non-writeable-put.js - test failed: Runtime Error at 15:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10080/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-non-writeable.js - test failed: Syntax Error at 23:27: expected next token to be ), got ||= instead
+FAIL 10080/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-non-writeable.js - test failed: Runtime Error at 15:0: Test262Error: obj.prop. Expected: 2, Actual: <native function defineProperty>
 FAIL 10081/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-lhs.js - test failed: Runtime Error at 14:0: Test262Error: Expected function to throw, but it didn't
 FAIL 10082/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-rhs-put.js - test failed: Runtime Error at 14:0: Test262Error: Expected function to throw, but it didn't
-FAIL 10083/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-rhs.js - test failed: Syntax Error at 16:24: expected next token to be ), got ||= instead
-FAIL 10084/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator.js - test failed: Syntax Error at 24:24: expected next token to be ), got ||= instead
-FAIL 10087/23634 test262/test/language/expressions/logical-assignment/lgcl-or-whitespace.js - test failed: Syntax Error at 15:20: expected next token to be ), got ||= instead
+FAIL 10083/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-rhs.js - test failed: Runtime Error at 14:0: Test262Error: value. Expected: 2, Actual: null
+FAIL 10084/23634 test262/test/language/expressions/logical-assignment/lgcl-or-assignment-operator.js - test failed: Runtime Error at 23:0: Test262Error: (value ||= 1) === true; where value = true. Expected: true, Actual: 1
+FAIL 10087/23634 test262/test/language/expressions/logical-assignment/lgcl-or-whitespace.js - test failed: Syntax Error at 19:19: expected next token to be ), got ILLEGAL instead
 FAIL 10088/23634 test262/test/language/expressions/logical-not/S11.4.9_A1.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #true: !\u0009true === false
 FAIL 10090/23634 test262/test/language/expressions/logical-not/S11.4.9_A2.1_T2.js - test failed: Runtime Error at 12:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 10092/23634 test262/test/language/expressions/logical-not/S11.4.9_A3_T1.js - test failed: Runtime Error at 11:0: Cannot use 'undefined' as a constructor.
@@ -7538,10 +7556,10 @@ FAIL 10229/23634 test262/test/language/expressions/new/S11.2.2_A4_T2.js - test f
 FAIL 10230/23634 test262/test/language/expressions/new/S11.2.2_A4_T3.js - test failed: Runtime Error at 19:0: Cannot use 'string' as a constructor.
 FAIL 10231/23634 test262/test/language/expressions/new/S11.2.2_A4_T4.js - test failed: Runtime Error at 15:0: Cannot use 'undefined' as a constructor.
 FAIL 10232/23634 test262/test/language/expressions/new/S11.2.2_A4_T5.js - test failed: Runtime Error at 18:0: Cannot use 'object' as a constructor.
-FAIL 10233/23634 test262/test/language/expressions/new/ctorExpr-fn-ref-before-args-eval-fn-wrapup.js - test failed: Syntax Error at 31:24: expected next token to be ), got = instead
-FAIL 10234/23634 test262/test/language/expressions/new/ctorExpr-fn-ref-before-args-eval.js - test failed: Syntax Error at 29:22: expected next token to be ), got = instead
-FAIL 10235/23634 test262/test/language/expressions/new/ctorExpr-isCtor-after-args-eval-fn-wrapup.js - test failed: Syntax Error at 32:11: expected next token to be ), got = instead
-FAIL 10236/23634 test262/test/language/expressions/new/ctorExpr-isCtor-after-args-eval.js - test failed: Syntax Error at 27:11: expected next token to be ), got = instead
+FAIL 10233/23634 test262/test/language/expressions/new/ctorExpr-fn-ref-before-args-eval-fn-wrapup.js - test failed: Runtime Error at 27:0: Constructor expected at most 0 arguments but got 1.
+FAIL 10234/23634 test262/test/language/expressions/new/ctorExpr-fn-ref-before-args-eval.js - test failed: Runtime Error at 25:0: Constructor expected at most 0 arguments but got 1.
+FAIL 10235/23634 test262/test/language/expressions/new/ctorExpr-isCtor-after-args-eval-fn-wrapup.js - test failed: Runtime Error at 30:0: Cannot use 'number' as a constructor.
+FAIL 10236/23634 test262/test/language/expressions/new/ctorExpr-isCtor-after-args-eval.js - test failed: Runtime Error at 27:0: Cannot use 'object' as a constructor.
 FAIL 10237/23634 test262/test/language/expressions/new/non-ctor-err-realm.js - test failed: Runtime Error at 22:0: Cannot read property 'createRealm' of undefined
 FAIL 10238/23634 test262/test/language/expressions/new/spread-err-mult-err-expr-throws.js - test failed: Runtime Error at 32:0: Test262Error: Expected function to throw, but it didn't
 FAIL 10239/23634 test262/test/language/expressions/new/spread-err-mult-err-iter-get-value.js - test failed: Runtime Error at 36:0: Test262Error: Expected function to throw, but it didn't
@@ -7597,7 +7615,7 @@ FAIL 10312/23634 test262/test/language/expressions/object/accessor-name-computed
 FAIL 10313/23634 test262/test/language/expressions/object/accessor-name-computed-in.js - test failed: Syntax Error at 23:14: expected next token to be ;, got GET instead
 FAIL 10314/23634 test262/test/language/expressions/object/accessor-name-computed-yield-expr.js - test failed: Syntax Error at 24:15: no prefix parse function for ] found
 FAIL 10315/23634 test262/test/language/expressions/object/accessor-name-computed-yield-id.js - test failed: Syntax Error at 21:5: expected next token to be IDENT, got YIELD instead
-FAIL 10316/23634 test262/test/language/expressions/object/accessor-name-computed.js - test failed: Syntax Error at 32:11: expected next token to be ], got = instead
+FAIL 10316/23634 test262/test/language/expressions/object/accessor-name-computed.js - test failed: Runtime Error at 27:0: Object index must be a string, number, or symbol, got '16'
 FAIL 10317/23634 test262/test/language/expressions/object/accessor-name-literal-numeric-binary.js - test failed: Runtime Error at 28:0: Test262Error: Values are not the same. Expected: get string, Actual: <function <anonymous>>
 FAIL 10318/23634 test262/test/language/expressions/object/accessor-name-literal-numeric-exponent.js - test failed: Runtime Error at 28:0: Test262Error: Values are not the same. Expected: get string, Actual: <function <anonymous>>
 FAIL 10319/23634 test262/test/language/expressions/object/accessor-name-literal-numeric-hex.js - test failed: Runtime Error at 28:0: Test262Error: Values are not the same. Expected: get string, Actual: <function <anonymous>>
@@ -7622,11 +7640,9 @@ SKIP 10353/23634 test262/test/language/expressions/object/covered-ident-name-pro
 SKIP 10362/23634 test262/test/language/expressions/object/covered-ident-name-prop-name-literal-import-escaped.js
 FAIL 10383/23634 test262/test/language/expressions/object/covered-ident-name-prop-name-literal-with-escaped.js - test failed: Syntax Error at 37:14: invalid object literal key: expected identifier, string, number, or '[', got WITH
 FAIL 10386/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 36:0: Object index must be a string, number, or symbol, got '12'
-FAIL 10387/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 37:14: expected next token to be ), got = instead
-FAIL 10388/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 37:14: expected next token to be ), got |= instead
-FAIL 10389/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 37:14: expected next token to be ), got ??= instead
-FAIL 10390/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 37:14: expected next token to be ), got &&= instead
-FAIL 10391/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 37:14: expected next token to be ), got ||= instead
+FAIL 10389/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 25:0: Object index must be a string, number, or symbol, got '0'
+FAIL 10390/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 41:0: Object index must be a string, number, or symbol, got '0'
+FAIL 10391/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 25:0: Object index must be a string, number, or symbol, got '0'
 FAIL 10392/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 28:13: expected next token to be ], got => instead
 FAIL 10393/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-await-expression.js - test failed: Syntax Error at 29:10: expected next token to be ], got NUMBER instead
 FAIL 10396/23634 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-decimal-e-notational-literal.js - test failed: Runtime Error at 27:0: Cannot access property 'e1' on non-object type 'number'
@@ -8356,7 +8372,7 @@ FAIL 11432/23634 test262/test/language/expressions/object/scope-meth-param-rest-
 FAIL 11435/23634 test262/test/language/expressions/object/scope-setter-body-lex-distinc.js - test failed: Runtime Error at 46:0: Test262Error: Expected function to throw, but it didn't
 FAIL 11440/23634 test262/test/language/expressions/object/setter-length-dflt.js - test failed: Syntax Error at 34:5: expected next token to be IDENT, got SET instead
 FAIL 11445/23634 test262/test/language/expressions/object/setter-prop-desc.js - test failed: Runtime Error at 29:0: Test262Error: Property 'm' not found
-FAIL 11446/23634 test262/test/language/expressions/object/setter-super-prop.js - test failed: Syntax Error at 23:27: expected next token to be ), got = instead
+FAIL 11446/23634 test262/test/language/expressions/object/setter-super-prop.js - test failed: Runtime Error at 8:0: Test262Error: The value of `object._x` is `1`, after executing `Object.setPrototypeOf(object, proto);`. Expected: 1, Actual: 0
 FAIL 11447/23634 test262/test/language/expressions/object/yield-non-strict-access.js - test failed: Syntax Error at 9:5: expected next token to be IDENT, got YIELD instead
 FAIL 11448/23634 test262/test/language/expressions/object/yield-non-strict-syntax.js - test failed: Syntax Error at 9:5: expected next token to be IDENT, got YIELD instead
 FAIL 11450/23634 test262/test/language/expressions/optional-chaining/call-expression.js - test failed: Syntax Error at 75:34: expected next token to be ), got TEMPLATE_START instead
@@ -8556,7 +8572,7 @@ FAIL 11789/23634 test262/test/language/expressions/super/call-construct-error.js
 FAIL 11790/23634 test262/test/language/expressions/super/call-construct-invocation.js - test failed: Runtime Error at 33:0: Cannot read property 'construct' of undefined
 FAIL 11791/23634 test262/test/language/expressions/super/call-expr-value.js - test failed: Runtime Error at 17:0: Test262Error: Values are not the same. Expected: [object Object], Actual: undefined
 FAIL 11792/23634 test262/test/language/expressions/super/call-poisoned-underscore-proto.js - test failed: Runtime Error at 15:0: Constructor expected at most 0 arguments but got 1.
-FAIL 11793/23634 test262/test/language/expressions/super/call-proto-not-ctor.js - test failed: Syntax Error at 22:26: expected next token to be ), got = instead
+FAIL 11793/23634 test262/test/language/expressions/super/call-proto-not-ctor.js - test failed: Runtime Error at 17:0: Test262Error: Values are not the same. Expected: object, Actual: undefined
 FAIL 11794/23634 test262/test/language/expressions/super/call-spread-err-mult-err-expr-throws.js - test failed: Runtime Error at 31:0: Test262Error: Expected function to throw, but it didn't
 FAIL 11795/23634 test262/test/language/expressions/super/call-spread-err-mult-err-iter-get-value.js - test failed: Runtime Error at 34:0: Test262Error: Expected function to throw, but it didn't
 FAIL 11796/23634 test262/test/language/expressions/super/call-spread-err-mult-err-itr-get-call.js - test failed: Runtime Error at 34:0: Test262Error: Expected function to throw, but it didn't
@@ -8654,7 +8670,7 @@ FAIL 11888/23634 test262/test/language/expressions/tagged-template/cache-identic
 FAIL 11889/23634 test262/test/language/expressions/tagged-template/cache-identical-source.js - test failed: Runtime Error at 11:0: Test262Error: Assertion failed
 FAIL 11890/23634 test262/test/language/expressions/tagged-template/cache-realm.js - test failed: Runtime Error at 33:0: Cannot read property 'createRealm' of undefined
 FAIL 11891/23634 test262/test/language/expressions/tagged-template/cache-same-site-top-level.js - test failed: Runtime Error at 14:0: Test262Error: Values are not the same. Expected: 2, Actual: 0
-FAIL 11892/23634 test262/test/language/expressions/tagged-template/cache-same-site.js - test failed: Runtime Error at 19:0: Test262Error: Assertion failed
+FAIL 11892/23634 test262/test/language/expressions/tagged-template/cache-same-site.js - test failed: Runtime Error at 11:0: Test262Error: Assertion failed
 FAIL 11893/23634 test262/test/language/expressions/tagged-template/call-expression-argument-list-evaluation.js - test failed: Runtime Error at 42:0: Test262Error: NoSubstitutionTemplate function invocation. Expected: 1, Actual: 0
 FAIL 11894/23634 test262/test/language/expressions/tagged-template/call-expression-context-no-strict.js - test failed: Runtime Error at 31:0: Test262Error: Values are not the same. Expected: undefined, Actual: null
 FAIL 11895/23634 test262/test/language/expressions/tagged-template/call-expression-context-strict.js - test failed: Runtime Error at 31:0: Test262Error: Values are not the same. Expected: undefined, Actual: null
@@ -8743,7 +8759,7 @@ FAIL 12054/23634 test262/test/language/expressions/unsigned-right-shift/S9.6_A3.
 FAIL 12056/23634 test262/test/language/expressions/unsigned-right-shift/bigint-and-number.js - test failed: Runtime Error at 12:0: Test262Error: Expected function to throw, but it didn't
 FAIL 12057/23634 test262/test/language/expressions/unsigned-right-shift/bigint-errors.js - test failed: Runtime Error at 9:0: Test262Error: Expected function to throw, but it didn't
 FAIL 12058/23634 test262/test/language/expressions/unsigned-right-shift/bigint-non-primitive.js - test failed: Runtime Error at 31:0: Test262Error: Expected function to throw, but it didn't
-FAIL 12059/23634 test262/test/language/expressions/unsigned-right-shift/bigint-toprimitive.js - test failed: Runtime Error at 16:0: Cannot access property '__get__toPrimitive' on non-object type 'function'
+FAIL 12059/23634 test262/test/language/expressions/unsigned-right-shift/bigint-toprimitive.js - test failed: Runtime Error at 9:0: Test262Error: Expected function to throw, but it didn't
 FAIL 12060/23634 test262/test/language/expressions/unsigned-right-shift/bigint-wrapped-values.js - test failed: Runtime Error at 9:0: Test262Error: Expected function to throw, but it didn't
 FAIL 12061/23634 test262/test/language/expressions/unsigned-right-shift/bigint.js - test failed: Runtime Error at 17:0: Test262Error: Expected function to throw, but it didn't
 [DEBUG] VM run loop: unwinding=true, calling unwindException
@@ -8811,7 +8827,7 @@ FAIL 12129/23634 test262/test/language/expressions/yield/star-rhs-iter-thrw-viol
 FAIL 12130/23634 test262/test/language/expressions/yield/star-rhs-unresolvable.js - test failed: Runtime Error at 18:0: Cannot read property '@@symbol:Symbol.iterator' of null
 FAIL 12132/23634 test262/test/language/expressions/yield/star-throw-is-null.js - test failed: Syntax Error at 46:7: expected next token to be :, got THROW instead
 FAIL 12134/23634 test262/test/language/expressions/yield/within-for.js - test failed: Runtime Error at 11:0: Operands must be numbers for comparison (Less).
-FAIL 12135/23634 test262/test/language/function-code/10.4.3-1-1-s.js - test failed: Runtime Error at 16:0: Test262Error: bar.call(1). Expected: object, Actual: number
+FAIL 12135/23634 test262/test/language/function-code/10.4.3-1-1-s.js - test failed: Runtime Error at 10:0: Test262Error: bar.call(1). Expected: object, Actual: number
 FAIL 12137/23634 test262/test/language/function-code/10.4.3-1-100-s.js - test failed: Runtime Error at 13:0: Test262Error: "ab".replace("b", f). Expected: aa, Actual: a<function f>
 FAIL 12138/23634 test262/test/language/function-code/10.4.3-1-100gs.js - test failed: Runtime Error at 1:1: Uncaught exception: 'this' had incorrect value!
 FAIL 12139/23634 test262/test/language/function-code/10.4.3-1-101-s.js - test failed: Runtime Error at 14:0: Test262Error: Values are not the same. Expected: aa, Actual: a<function f>
@@ -8828,7 +8844,7 @@ FAIL 12158/23634 test262/test/language/function-code/10.4.3-1-16-s.js - test fai
 FAIL 12159/23634 test262/test/language/function-code/10.4.3-1-16gs.js - test failed: Runtime Error at 1:1: Uncaught exception: 'this' had incorrect value!
 FAIL 12160/23634 test262/test/language/function-code/10.4.3-1-17-s.js - test failed: Runtime Error at 13:0: Test262Error: eval("typeof this"). Expected: undefined, Actual: undefined
 FAIL 12165/23634 test262/test/language/function-code/10.4.3-1-2-s.js - test failed: Runtime Error at 10:0: Test262Error: bar.call("1"). Expected: object, Actual: string
-FAIL 12186/23634 test262/test/language/function-code/10.4.3-1-3-s.js - test failed: Runtime Error at 16:0: Test262Error: bar.call(). Expected: object, Actual: undefined
+FAIL 12186/23634 test262/test/language/function-code/10.4.3-1-3-s.js - test failed: Runtime Error at 10:0: Test262Error: bar.call(). Expected: object, Actual: undefined
 FAIL 12195/23634 test262/test/language/function-code/10.4.3-1-34-s.js - test failed: Runtime Error at 13:0: Native function expected at least 1 arguments but got 0
 FAIL 12207/23634 test262/test/language/function-code/10.4.3-1-4-s.js - test failed: Runtime Error at 10:0: Test262Error: bar.call(true). Expected: object, Actual: boolean
 FAIL 12214/23634 test262/test/language/function-code/10.4.3-1-43-s.js - test failed: Runtime Error at 13:0: Native function expected at least 1 arguments but got 0
@@ -9794,7 +9810,7 @@ FAIL 14183/23634 test262/test/language/reserved-words/ident-name-reserved-word-l
 FAIL 14196/23634 test262/test/language/reserved-words/unreserved-words.js - test failed: Syntax Error at 13:5: expected next token to be IDENT, got AS instead
 FAIL 14197/23634 test262/test/language/rest-parameters/array-pattern.js - test failed: Syntax Error at 15:19: expected next token to be IDENT, got [ instead
 FAIL 14198/23634 test262/test/language/rest-parameters/arrow-function.js - test failed: Runtime Error at 9:0: Cannot access property 'compareArray' on non-object type 'function'
-FAIL 14199/23634 test262/test/language/rest-parameters/expected-argument-count.js - test failed: Runtime Error at 10:0: Test262Error: The value of `af.length` is `0`. Expected: 0, Actual: undefined
+FAIL 14199/23634 test262/test/language/rest-parameters/expected-argument-count.js - test failed: Runtime Error at 11:0: Test262Error: The value of `af.length` is `0`. Expected: 0, Actual: undefined
 FAIL 14200/23634 test262/test/language/rest-parameters/no-alias-arguments.js - test failed: Runtime Error at 13:0: Cannot set index on non-array/object/typedarray type '17'
 FAIL 14201/23634 test262/test/language/rest-parameters/object-pattern.js - test failed: Syntax Error at 15:19: expected next token to be IDENT, got { instead
 FAIL 14204/23634 test262/test/language/rest-parameters/rest-parameters-apply.js - test failed: Syntax Error at 15:37: no prefix parse function for , found
@@ -9915,7 +9931,7 @@ FAIL 14396/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-
 FAIL 14397/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-fn-name-fn.js - test failed: Runtime Error at 36:0: Test262Error: Values are not the same. Expected: fn, Actual: undefined
 FAIL 14398/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-fn-name-gen.js - test failed: Runtime Error at 37:0: Test262Error: Values are not the same. Expected: gen, Actual: undefined
 FAIL 14399/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-hole.js - test failed: Syntax Error at 35:4: no prefix parse function for , found
-FAIL 14400/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-skipped.js - test failed: Runtime Error at 36:0: Cannot read property 'next' of undefined
+FAIL 14400/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-skipped.js - test failed: Runtime Error at 30:0: Cannot read property 'next' of undefined
 FAIL 14401/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-throws.js - test failed: Runtime Error at 30:0: Built-in constructor 'Test262Error' expected 1 arguments but got 0.
 FAIL 14402/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-undef.js - test failed: Runtime Error at 34:0: Cannot read property 'next' of undefined
 FAIL 14403/23634 test262/test/language/statements/async-generator/dstr/ary-ptrn-elem-id-init-unresolvable.js - test failed: Runtime Error at 37:0: Test262Error: Expected function to throw, but it didn't
@@ -10075,7 +10091,7 @@ FAIL 14570/23634 test262/test/language/statements/async-generator/forbidden-ext/
 FAIL 14571/23634 test262/test/language/statements/async-generator/forbidden-ext/b2/async-gen-func-decl-forbidden-ext-indirect-access-prop-caller.js - test failed: Runtime Error at 23:0: Cannot call non-function value of type 1
 FAIL 14574/23634 test262/test/language/statements/async-generator/params-trailing-comma-multiple.js - test failed: Runtime Error at 30:0: Cannot call non-function value of type 1
 FAIL 14575/23634 test262/test/language/statements/async-generator/params-trailing-comma-single.js - test failed: Runtime Error at 30:0: Cannot call non-function value of type 1
-FAIL 14578/23634 test262/test/language/statements/async-generator/return-undefined-implicit-and-explicit.js - test failed: Runtime Error at 42:0: Cannot read property 'resolve' of undefined
+FAIL 14578/23634 test262/test/language/statements/async-generator/return-undefined-implicit-and-explicit.js - test failed: Runtime Error at 37:0: Cannot read property 'resolve' of undefined
 FAIL 14579/23634 test262/test/language/statements/async-generator/unscopables-with-in-nested-fn.js - test failed: Syntax Error at 46:8: expected next token to be :, got ++ instead
 FAIL 14580/23634 test262/test/language/statements/async-generator/unscopables-with.js - test failed: Syntax Error at 46:8: expected next token to be :, got ++ instead
 FAIL 14587/23634 test262/test/language/statements/async-generator/yield-identifier-non-strict.js - test failed: Syntax Error at 24:11: expected next token to be IDENT, got YIELD instead
@@ -10415,45 +10431,45 @@ FAIL 15013/23634 test262/test/language/statements/class/async-method/returns-asy
 FAIL 15014/23634 test262/test/language/statements/class/async-method/returns-async-function-returns-newtarget.js - test failed: Runtime Error at 22:0: Cannot read property 'then' of null
 FAIL 15015/23634 test262/test/language/statements/class/async-method/returns-async-function.js - test failed: Runtime Error at 22:0: Cannot read property 'then' of null
 FAIL 15026/23634 test262/test/language/statements/class/classelementname-abrupt-completion.js - test failed: Syntax Error at 40:9: expected identifier, 'get', 'set', or '[' in class body
-FAIL 15027/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-additive-expression-add.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 15028/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-additive-expression-subtract.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 15029/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-arrow-function-expression.js - test failed: Syntax Error at 63:16: expected next token to be ), got = instead
-FAIL 15030/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 64:12: expected next token to be ), got = instead
-FAIL 15031/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 15032/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
-FAIL 15033/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
-FAIL 15034/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
+FAIL 15027/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15028/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 0, Actual: undefined
+FAIL 15029/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 89:0: Object index must be a string, number, or symbol, got '12'
+FAIL 15030/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15031/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 77:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15032/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 73:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15033/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 86:0: Object index must be a string, number, or symbol, got '0'
+FAIL 15034/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 73:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
 FAIL 15035/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:17: expected next token to be ], got => instead
 FAIL 15036/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:14: expected next token to be ], got NUMBER instead
-FAIL 15037/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-condition-expression-false.js - test failed: Syntax Error at 63:20: expected next token to be ), got = instead
-FAIL 15038/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-condition-expression-true.js - test failed: Syntax Error at 63:19: expected next token to be ), got = instead
-FAIL 15039/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-decimal-e-notational-literal.js - test failed: Syntax Error at 63:11: expected next token to be ), got = instead
-FAIL 15040/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-decimal-literal.js - test failed: Syntax Error at 63:10: expected next token to be ), got = instead
-FAIL 15041/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-exponetiation-expression.js - test failed: Syntax Error at 63:13: expected next token to be ), got = instead
-FAIL 15042/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-expression-coalesce.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 15043/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-expression-logical-and.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 15044/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-expression-logical-or.js - test failed: Syntax Error at 64:13: expected next token to be ), got = instead
-FAIL 15045/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-function-declaration.js - test failed: Syntax Error at 64:10: expected next token to be ), got = instead
-FAIL 15046/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-function-expression.js - test failed: Syntax Error at 63:21: expected next token to be ), got = instead
-FAIL 15047/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-generator-function-declaration.js - test failed: Syntax Error at 64:10: expected next token to be ), got = instead
-FAIL 15048/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-identifier.js - test failed: Syntax Error at 65:8: expected next token to be ), got = instead
-FAIL 15049/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-integer-e-notational-literal.js - test failed: Syntax Error at 63:8: expected next token to be ), got = instead
-FAIL 15050/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-integer-separators.js - test failed: Syntax Error at 63:22: expected next token to be ), got = instead
-FAIL 15051/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-math.js - test failed: Syntax Error at 63:29: expected next token to be ), got = instead
-FAIL 15052/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-multiplicative-expression-div.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 15053/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-multiplicative-expression-mult.js - test failed: Syntax Error at 63:12: expected next token to be ), got = instead
-FAIL 15054/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-null.js - test failed: Syntax Error at 63:11: expected next token to be ), got = instead
-FAIL 15055/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-numeric-literal.js - test failed: Syntax Error at 63:8: expected next token to be ), got = instead
-FAIL 15056/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-string-literal.js - test failed: Syntax Error at 63:10: expected next token to be ), got = instead
-FAIL 15057/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-yield-expression.js - test failed: Syntax Error at 64:14: expected next token to be ), got = instead
+FAIL 15037/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 72:0: Test262Error: Values are not the same. Expected: 1, Actual: undefined
+FAIL 15038/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-condition-expression-true.js - test failed: Runtime Error at 72:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15039/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-decimal-e-notational-literal.js - test failed: Runtime Error at 75:0: Cannot access property 'e1' on non-object type 'number'
+FAIL 15040/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-decimal-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15041/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-exponetiation-expression.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 4, Actual: undefined
+FAIL 15042/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-expression-coalesce.js - test failed: Runtime Error at 73:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15043/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-expression-logical-and.js - test failed: Runtime Error at 77:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15044/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-expression-logical-or.js - test failed: Runtime Error at 77:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15045/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-function-declaration.js - test failed: Runtime Error at 91:0: Object index must be a string, number, or symbol, got '1'
+FAIL 15046/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-function-expression.js - test failed: Runtime Error at 89:0: Object index must be a string, number, or symbol, got '8'
+FAIL 15047/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-generator-function-declaration.js - test failed: Runtime Error at 91:0: Object index must be a string, number, or symbol, got '18'
+FAIL 15048/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-identifier.js - test failed: Runtime Error at 83:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15049/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-integer-e-notational-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15050/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-integer-separators.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 12345678, Actual: undefined
+FAIL 15051/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-math.js - test failed: Runtime Error at 68:0: Test262Error: Values are not the same. Expected: 2.999232, Actual: undefined
+FAIL 15052/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-multiplicative-expression-div.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 1, Actual: undefined
+FAIL 15053/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-multiplicative-expression-mult.js - test failed: Runtime Error at 76:0: Test262Error: Values are not the same. Expected: 1, Actual: undefined
+FAIL 15054/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-null.js - test failed: Runtime Error at 89:0: Object index must be a string, number, or symbol, got '0'
+FAIL 15055/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-numeric-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15056/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-string-literal.js - test failed: Runtime Error at 80:0: Test262Error: Values are not the same. Expected: 2, Actual: undefined
+FAIL 15057/23634 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-yield-expression.js - test failed: Runtime Error at 86:0: Object index must be a string, number, or symbol, got '1'
 FAIL 15058/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 133
 FAIL 15059/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 133
 FAIL 15060/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 50:0: Object index must be a string, number, or symbol, got '12'
-FAIL 15061/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 59:14: expected next token to be ), got = instead
-FAIL 15062/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 59:14: expected next token to be ), got |= instead
-FAIL 15063/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 59:14: expected next token to be ), got ??= instead
-FAIL 15064/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 59:14: expected next token to be ), got &&= instead
-FAIL 15065/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 59:14: expected next token to be ), got ||= instead
+FAIL 15061/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 138
+FAIL 15062/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 153
+FAIL 15063/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 36:0: Object index must be a string, number, or symbol, got '0'
+FAIL 15064/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 55:0: Object index must be a string, number, or symbol, got '0'
+FAIL 15065/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 36:0: Object index must be a string, number, or symbol, got '0'
 FAIL 15066/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:13: expected next token to be ], got => instead
 FAIL 15067/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:10: expected next token to be ], got NUMBER instead
 FAIL 15068/23634 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 148
@@ -10480,11 +10496,11 @@ FAIL 15088/23634 test262/test/language/statements/class/cpn-class-decl-computed-
 FAIL 15089/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 111
 FAIL 15090/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 111
 FAIL 15091/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 39:0: Object index must be a string, number, or symbol, got '12'
-FAIL 15092/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 56:14: expected next token to be ), got = instead
-FAIL 15093/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 56:14: expected next token to be ), got |= instead
-FAIL 15094/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 56:14: expected next token to be ), got ??= instead
-FAIL 15095/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 56:14: expected next token to be ), got &&= instead
-FAIL 15096/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 56:14: expected next token to be ), got ||= instead
+FAIL 15092/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 117
+FAIL 15093/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 127
+FAIL 15094/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
+FAIL 15095/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '0'
+FAIL 15096/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
 FAIL 15097/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:13: expected next token to be ], got => instead
 FAIL 15098/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:10: expected next token to be ], got NUMBER instead
 FAIL 15099/23634 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 121
@@ -10511,11 +10527,11 @@ FAIL 15119/23634 test262/test/language/statements/class/cpn-class-decl-fields-co
 FAIL 15120/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-additive-expression-add.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 117
 FAIL 15121/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-additive-expression-subtract.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 117
 FAIL 15122/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-arrow-function-expression.js - test failed: Runtime Error at 39:0: Object index must be a string, number, or symbol, got '12'
-FAIL 15123/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-assignment.js - test failed: Syntax Error at 60:14: expected next token to be ), got = instead
-FAIL 15124/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Syntax Error at 60:14: expected next token to be ), got |= instead
-FAIL 15125/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-coalesce.js - test failed: Syntax Error at 60:14: expected next token to be ), got ??= instead
-FAIL 15126/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-logical-and.js - test failed: Syntax Error at 60:14: expected next token to be ), got &&= instead
-FAIL 15127/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-logical-or.js - test failed: Syntax Error at 60:14: expected next token to be ), got ||= instead
+FAIL 15123/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-assignment.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 123
+FAIL 15124/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-bitwise-or.js - test failed: Runtime Error at 36:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 133
+FAIL 15125/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-coalesce.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
+FAIL 15126/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-logical-and.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '0'
+FAIL 15127/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-assignment-expression-logical-or.js - test failed: Runtime Error at 40:0: Object index must be a string, number, or symbol, got '14'
 FAIL 15128/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-async-arrow-function-expression.js - test failed: Syntax Error at 39:13: expected next token to be ], got => instead
 FAIL 15129/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-await-expression.js - test failed: Syntax Error at 40:10: expected next token to be ], got NUMBER instead
 FAIL 15130/23634 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-condition-expression-false.js - test failed: Runtime Error at 38:0: Cannot index non-array/object/string/typedarray/generator type '8' at IP 127
@@ -10584,7 +10600,7 @@ FAIL 15218/23634 test262/test/language/statements/class/definition/prototype-pro
 FAIL 15219/23634 test262/test/language/statements/class/definition/prototype-setter.js - test failed: Runtime Error at 15:0: Cannot use '<unknown type: 13>' as a constructor.
 FAIL 15220/23634 test262/test/language/statements/class/definition/prototype-wiring.js - test failed: Runtime Error at 38:0: Test262Error: The value of `s.foobar` is `1`. Expected: 1, Actual: 
 FAIL 15221/23634 test262/test/language/statements/class/definition/setters-non-configurable-err.js - test failed: Runtime Error at 15:0: Test262Error: Expected function to throw, but it didn't
-FAIL 15222/23634 test262/test/language/statements/class/definition/setters-prop-desc.js - test failed: Syntax Error at 29:28: expected next token to be ), got = instead
+FAIL 15222/23634 test262/test/language/statements/class/definition/setters-prop-desc.js - test failed: Runtime Error at 10:0: Test262Error: The value of `staticX` is `2`. Expected: 2, Actual: undefined
 FAIL 15223/23634 test262/test/language/statements/class/definition/setters-restricted-ids.js - test failed: Runtime Error at 8:0: Test262Error: The value of `x` is `3`. Expected: 3, Actual: 2
 FAIL 15224/23634 test262/test/language/statements/class/definition/side-effects-in-extends.js - test failed: Syntax Error at 10:23: expected next token to be ), got ++ instead
 FAIL 15226/23634 test262/test/language/statements/class/definition/this-access-restriction-2.js - test failed: Runtime Error at 18:0: Test262Error: The result of `exn instanceof ReferenceError` is `true`. Expected: true, Actual: false
@@ -10818,7 +10834,7 @@ FAIL 15466/23634 test262/test/language/statements/class/dstr/async-gen-meth-stat
 FAIL 15471/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-not-final-id.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 15473/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-obj-id.js - test failed: Syntax Error at 59:28: expected next token to be IDENT, got { instead
 FAIL 15474/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-obj-prop-id.js - test failed: Syntax Error at 60:28: expected next token to be IDENT, got { instead
-FAIL 15475/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-init-iter-close.js - test panicked: runtime error: invalid memory address or nil pointer dereference
+TIMEOUT 15475/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-init-iter-close.js - test timed out after 100ms
 FAIL 15477/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-init-iter-get-err.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 15478/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-init-iter-no-close.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 15479/23634 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-name-iter-val.js - test panicked: runtime error: invalid memory address or nil pointer dereference
@@ -12804,7 +12820,7 @@ FAIL 17616/23634 test262/test/language/statements/class/elements/derived-cls-ind
 FAIL 17617/23634 test262/test/language/statements/class/elements/derived-cls-indirect-eval-err-contains-supercall.js - test failed: Runtime Error at 26:0: Test262Error: Expected function to throw, but it didn't
 FAIL 17618/23634 test262/test/language/statements/class/elements/direct-eval-err-contains-arguments.js - test failed: Runtime Error at 27:0: Test262Error: Expected function to throw, but it didn't
 FAIL 17619/23634 test262/test/language/statements/class/elements/direct-eval-err-contains-newtarget.js - test failed: Runtime Error at 26:0: Test262Error: Values are not the same. Expected: true, Actual: false
-FAIL 17622/23634 test262/test/language/statements/class/elements/evaluation-error/computed-name-referenceerror.js - test failed: Runtime Error at 44:0: Test262Error: Expected function to throw, but it didn't
+FAIL 17622/23634 test262/test/language/statements/class/elements/evaluation-error/computed-name-referenceerror.js - test failed: Runtime Error at 50:0: Test262Error: Expected function to throw, but it didn't
 FAIL 17623/23634 test262/test/language/statements/class/elements/evaluation-error/computed-name-toprimitive-err.js - test failed: Syntax Error at 54:9: expected identifier, 'get', 'set', or '[' in class body
 FAIL 17624/23634 test262/test/language/statements/class/elements/evaluation-error/computed-name-toprimitive-returns-noncallable.js - test failed: Runtime Error at 50:0: Test262Error: Expected function to throw, but it didn't
 FAIL 17625/23634 test262/test/language/statements/class/elements/evaluation-error/computed-name-toprimitive-returns-nonobject.js - test failed: Runtime Error at 50:0: Test262Error: Expected function to throw, but it didn't
@@ -13767,10 +13783,9 @@ FAIL 19047/23634 test262/test/language/statements/class/subclass/superclass-gene
 FAIL 19051/23634 test262/test/language/statements/class/super/in-constructor-superproperty-evaluation.js - test failed: Runtime Error at 10:0: Object index must be a string, number, or symbol, got '1'
 FAIL 19053/23634 test262/test/language/statements/class/super/in-getter.js - test failed: Runtime Error at 18:0: Test262Error: The value of `super.x` is `2`. Expected: 2, Actual: undefined
 FAIL 19054/23634 test262/test/language/statements/class/super/in-methods.js - test failed: Runtime Error at 18:0: Test262Error: The value of `super.x` is `2`. Expected: 2, Actual: undefined
-FAIL 19055/23634 test262/test/language/statements/class/super/in-setter.js - test failed: Syntax Error at 23:28: expected next token to be ), got = instead
+FAIL 19055/23634 test262/test/language/statements/class/super/in-setter.js - test failed: Runtime Error at 18:0: Test262Error: The value of `super.x` is `2`. Expected: 2, Actual: undefined
 FAIL 19056/23634 test262/test/language/statements/class/super/in-static-getter.js - test failed: Runtime Error at 8:0: Test262Error: The value of `C.x` is `1`. Expected: 1, Actual: <function x>
 FAIL 19057/23634 test262/test/language/statements/class/super/in-static-methods.js - test failed: Runtime Error at 18:0: Test262Error: The value of `super.x` is `2`. Expected: 2, Actual: undefined
-FAIL 19058/23634 test262/test/language/statements/class/super/in-static-setter.js - test failed: Syntax Error at 23:22: expected next token to be ), got = instead
 FAIL 19065/23634 test262/test/language/statements/class/syntax/class-expression-binding-identifier-opt-class-element-list.js - test failed: Runtime Error at 29:0: Test262Error: Values are not the same. Expected: undefined, Actual: function
 FAIL 19072/23634 test262/test/language/statements/const/block-local-closure-get-before-initialization.js - test failed: Runtime Error at 10:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 19073/23634 test262/test/language/statements/const/block-local-use-before-initialization-in-declaration-statement.js - test failed: Runtime Error at 11:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
@@ -13836,9 +13851,9 @@ FAIL 19147/23634 test262/test/language/statements/const/dstr/obj-ptrn-id-init-un
 FAIL 19149/23634 test262/test/language/statements/const/dstr/obj-ptrn-list-err.js - test failed: Runtime Error at 29:0: Built-in constructor 'Test262Error' expected 1 arguments but got 0.
 FAIL 19150/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-ary-init.js - test failed: Syntax Error at 30:12: expected identifier or '{' after ':' in destructuring pattern, got [
 FAIL 19151/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-ary-trailing-comma.js - test failed: Syntax Error at 27:12: expected identifier or '{' after ':' in destructuring pattern, got [
-FAIL 19152/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-ary-value-null.js - test failed: Syntax Error at 29:14: expected identifier or '{' after ':' in destructuring pattern, got [
+FAIL 19152/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-ary-value-null.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 19153/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-ary.js - test failed: Syntax Error at 28:12: expected identifier or '{' after ':' in destructuring pattern, got [
-FAIL 19154/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-eval-err.js - test failed: Syntax Error at 31:11: expected property name, got [
+FAIL 19154/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-eval-err.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 19155/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-id-get-value-err.js - test failed: Runtime Error at 26:0: Test262Error: Expected function to throw, but it didn't
 FAIL 19156/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-id-init-skipped.js - test failed: Runtime Error at 28:0: Test262Error: Expected function to throw, but it didn't
 FAIL 19157/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-id-init-throws.js - test failed: Runtime Error at 30:0: Built-in constructor 'Test262Error' expected 1 arguments but got 0.
@@ -13847,8 +13862,8 @@ FAIL 19159/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-id-in
 FAIL 19160/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-id-trailing-comma.js - test failed: Runtime Error at 27:0: Test262Error: Expected function to throw, but it didn't
 FAIL 19161/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-id.js - test failed: Runtime Error at 27:0: Test262Error: Expected function to throw, but it didn't
 FAIL 19162/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-obj-init.js - test failed: Syntax Error at 30:12: nested object destructuring patterns are not yet supported
-FAIL 19163/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-obj-value-null.js - test failed: Syntax Error at 29:14: nested object destructuring patterns are not yet supported
-FAIL 19164/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-obj-value-undef.js - test failed: Syntax Error at 29:14: nested object destructuring patterns are not yet supported
+FAIL 19163/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-obj-value-null.js - test panicked: runtime error: invalid memory address or nil pointer dereference
+FAIL 19164/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-obj-value-undef.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 19165/23634 test262/test/language/statements/const/dstr/obj-ptrn-prop-obj.js - test failed: Syntax Error at 28:12: nested object destructuring patterns are not yet supported
 FAIL 19166/23634 test262/test/language/statements/const/dstr/obj-ptrn-rest-getter.js - test failed: Runtime Error at 20:0: Test262Error: Values are not the same. Expected: 1, Actual: 0
 FAIL 19167/23634 test262/test/language/statements/const/dstr/obj-ptrn-rest-skip-non-enumerable.js - test failed: Runtime Error at 20:0: Test262Error: Values are not the same. Expected: undefined, Actual: 4
@@ -16587,9 +16602,9 @@ FAIL 22646/23634 test262/test/language/statements/let/dstr/obj-ptrn-id-init-unre
 FAIL 22648/23634 test262/test/language/statements/let/dstr/obj-ptrn-list-err.js - test failed: Runtime Error at 29:0: Built-in constructor 'Test262Error' expected 1 arguments but got 0.
 FAIL 22649/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-ary-init.js - test failed: Syntax Error at 30:10: expected identifier or '{' after ':' in destructuring pattern, got [
 FAIL 22650/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-ary-trailing-comma.js - test failed: Syntax Error at 27:10: expected identifier or '{' after ':' in destructuring pattern, got [
-FAIL 22651/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-ary-value-null.js - test failed: Syntax Error at 29:12: expected identifier or '{' after ':' in destructuring pattern, got [
+FAIL 22651/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-ary-value-null.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 22652/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-ary.js - test failed: Syntax Error at 28:10: expected identifier or '{' after ':' in destructuring pattern, got [
-FAIL 22653/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-eval-err.js - test failed: Syntax Error at 31:9: expected property name, got [
+FAIL 22653/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-eval-err.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 22654/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-id-get-value-err.js - test failed: Runtime Error at 26:0: Test262Error: Expected function to throw, but it didn't
 FAIL 22655/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-id-init-skipped.js - test failed: Runtime Error at 28:0: Test262Error: Expected function to throw, but it didn't
 FAIL 22656/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-id-init-throws.js - test failed: Runtime Error at 30:0: Built-in constructor 'Test262Error' expected 1 arguments but got 0.
@@ -16598,8 +16613,8 @@ FAIL 22658/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-id-init
 FAIL 22659/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-id-trailing-comma.js - test failed: Runtime Error at 27:0: Test262Error: Expected function to throw, but it didn't
 FAIL 22660/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-id.js - test failed: Runtime Error at 27:0: Test262Error: Expected function to throw, but it didn't
 FAIL 22661/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-obj-init.js - test failed: Syntax Error at 30:10: nested object destructuring patterns are not yet supported
-FAIL 22662/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-obj-value-null.js - test failed: Syntax Error at 29:12: nested object destructuring patterns are not yet supported
-FAIL 22663/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-obj-value-undef.js - test failed: Syntax Error at 29:12: nested object destructuring patterns are not yet supported
+FAIL 22662/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-obj-value-null.js - test panicked: runtime error: invalid memory address or nil pointer dereference
+FAIL 22663/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-obj-value-undef.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 22664/23634 test262/test/language/statements/let/dstr/obj-ptrn-prop-obj.js - test failed: Syntax Error at 28:10: nested object destructuring patterns are not yet supported
 FAIL 22665/23634 test262/test/language/statements/let/dstr/obj-ptrn-rest-getter.js - test failed: Runtime Error at 20:0: Test262Error: Values are not the same. Expected: 1, Actual: 0
 FAIL 22666/23634 test262/test/language/statements/let/dstr/obj-ptrn-rest-skip-non-enumerable.js - test failed: Runtime Error at 20:0: Test262Error: Values are not the same. Expected: undefined, Actual: 4
@@ -16656,7 +16671,7 @@ FAIL 22840/23634 test262/test/language/statements/switch/tco-case-body.js - test
 FAIL 22841/23634 test262/test/language/statements/switch/tco-dftl-body.js - test failed: Runtime Error at 13:0: Operands must be two numbers or two BigInts for Subtract.
 FAIL 22849/23634 test262/test/language/statements/throw/S12.13_A2_T7.js - test failed: Runtime Error at 1:1: Uncaught exception: Saab,Volvo,BMW
 FAIL 22853/23634 test262/test/language/statements/throw/S12.13_A3_T4.js - test failed: Runtime Error at 1:1: Uncaught exception: Saab,Volvo,BMW,Mercedes,Jeep,Suzuki
-FAIL 22855/23634 test262/test/language/statements/throw/S12.13_A3_T6.js - test failed: Runtime Error at 25:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
+FAIL 22855/23634 test262/test/language/statements/throw/S12.13_A3_T6.js - test failed: Runtime Error at 12:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 22859/23634 test262/test/language/statements/try/12.14-13.js - test failed: Runtime Error at 18:0: Cannot set property 'x_12_14_13' on non-object type 'undefined'
 FAIL 22860/23634 test262/test/language/statements/try/12.14-14.js - test failed: Runtime Error at 19:0: Cannot set property '_12_14_14_foo' on non-object type 'undefined'
 FAIL 22861/23634 test262/test/language/statements/try/12.14-15.js - test failed: Runtime Error at 19:0: Cannot set property '_12_14_15_foo' on non-object type 'undefined'
@@ -16673,10 +16688,10 @@ FAIL 22878/23634 test262/test/language/statements/try/S12.14_A11_T4.js - test fa
 FAIL 22880/23634 test262/test/language/statements/try/S12.14_A12_T2.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #1.1: "finally" block must be evaluated
 FAIL 22881/23634 test262/test/language/statements/try/S12.14_A12_T3.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #1.1: "finally" block must be evaluated
 FAIL 22882/23634 test262/test/language/statements/try/S12.14_A12_T4.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #1.1: "finally" block must be evaluated
-FAIL 22883/23634 test262/test/language/statements/try/S12.14_A13_T1.js - test failed: Runtime Error at 27:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
+FAIL 22883/23634 test262/test/language/statements/try/S12.14_A13_T1.js - test failed: Runtime Error at 11:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 [DEBUG] VM run loop: unwinding=true, calling unwindException
 [DEBUG] VM run loop: unwindException returned true, unwinding=false
-FAIL 22885/23634 test262/test/language/statements/try/S12.14_A13_T3.js - test failed: Runtime Error at 134:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
+FAIL 22885/23634 test262/test/language/statements/try/S12.14_A13_T3.js - test failed: Runtime Error at 166:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
 FAIL 22886/23634 test262/test/language/statements/try/S12.14_A14.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #3.3: "finally" block must be evaluated
 FAIL 22887/23634 test262/test/language/statements/try/S12.14_A15.js - test failed: Syntax Error at 54:5: no prefix parse function for CASE found
 FAIL 22902/23634 test262/test/language/statements/try/S12.14_A17.js - test failed: Runtime Error at 24:0: Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.
@@ -16897,25 +16912,25 @@ FAIL 23190/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init
 FAIL 23191/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init-fn-name-fn.js - test failed: Syntax Error at 32:5: expected next token to be IDENT, got { instead
 FAIL 23192/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init-fn-name-gen.js - test failed: Syntax Error at 33:5: expected next token to be IDENT, got { instead
 FAIL 23193/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init-skipped.js - test failed: Syntax Error at 32:5: expected next token to be IDENT, got { instead
-FAIL 23194/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init-throws.js - test failed: Syntax Error at 33:7: expected next token to be IDENT, got { instead
-FAIL 23195/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init-unresolvable.js - test failed: Syntax Error at 37:7: expected next token to be IDENT, got { instead
+FAIL 23194/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init-throws.js - test panicked: runtime error: invalid memory address or nil pointer dereference
+FAIL 23195/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-init-unresolvable.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 23196/23634 test262/test/language/statements/variable/dstr/obj-ptrn-id-trailing-comma.js - test failed: Syntax Error at 26:5: expected next token to be IDENT, got { instead
-FAIL 23197/23634 test262/test/language/statements/variable/dstr/obj-ptrn-list-err.js - test failed: Syntax Error at 32:7: expected next token to be IDENT, got { instead
+FAIL 23197/23634 test262/test/language/statements/variable/dstr/obj-ptrn-list-err.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 23198/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-ary-init.js - test failed: Syntax Error at 29:5: expected next token to be IDENT, got { instead
 FAIL 23199/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-ary-trailing-comma.js - test failed: Syntax Error at 26:5: expected next token to be IDENT, got { instead
-FAIL 23200/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-ary-value-null.js - test failed: Syntax Error at 28:7: expected next token to be IDENT, got { instead
+FAIL 23200/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-ary-value-null.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 23201/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-ary.js - test failed: Syntax Error at 27:5: expected next token to be IDENT, got { instead
 FAIL 23202/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-eval-err.js - test failed: Syntax Error at 30:7: expected next token to be IDENT, got { instead
-FAIL 23203/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-get-value-err.js - test failed: Syntax Error at 33:7: expected next token to be IDENT, got { instead
+FAIL 23203/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-get-value-err.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 23204/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-init-skipped.js - test failed: Syntax Error at 31:5: expected next token to be IDENT, got { instead
-FAIL 23205/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-init-throws.js - test failed: Syntax Error at 33:7: expected next token to be IDENT, got { instead
-FAIL 23206/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-init-unresolvable.js - test failed: Syntax Error at 37:7: expected next token to be IDENT, got { instead
+FAIL 23205/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-init-throws.js - test panicked: runtime error: invalid memory address or nil pointer dereference
+FAIL 23206/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-init-unresolvable.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 23207/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-init.js - test failed: Syntax Error at 26:5: expected next token to be IDENT, got { instead
 FAIL 23208/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id-trailing-comma.js - test failed: Syntax Error at 26:5: expected next token to be IDENT, got { instead
 FAIL 23209/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-id.js - test failed: Syntax Error at 26:5: expected next token to be IDENT, got { instead
 FAIL 23210/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-obj-init.js - test failed: Syntax Error at 29:5: expected next token to be IDENT, got { instead
-FAIL 23211/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-obj-value-null.js - test failed: Syntax Error at 28:7: expected next token to be IDENT, got { instead
-FAIL 23212/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-obj-value-undef.js - test failed: Syntax Error at 28:7: expected next token to be IDENT, got { instead
+FAIL 23211/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-obj-value-null.js - test panicked: runtime error: invalid memory address or nil pointer dereference
+FAIL 23212/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-obj-value-undef.js - test panicked: runtime error: invalid memory address or nil pointer dereference
 FAIL 23213/23634 test262/test/language/statements/variable/dstr/obj-ptrn-prop-obj.js - test failed: Syntax Error at 27:5: expected next token to be IDENT, got { instead
 FAIL 23214/23634 test262/test/language/statements/variable/dstr/obj-ptrn-rest-getter.js - test failed: Syntax Error at 21:5: expected next token to be IDENT, got { instead
 FAIL 23215/23634 test262/test/language/statements/variable/dstr/obj-ptrn-rest-skip-non-enumerable.js - test failed: Syntax Error at 22:5: expected next token to be IDENT, got { instead
@@ -17138,13 +17153,13 @@ FAIL 23632/23634 test262/test/language/white-space/string-nbsp.js - test failed:
 FAIL 23633/23634 test262/test/language/white-space/string-space.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #1: eval("'\u0020str\u0020ing\u0020'") === "\u0020str\u0020ing\u0020"
 FAIL 23634/23634 test262/test/language/white-space/string-vertical-tab.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #1: eval("'\u000Bstr\u000Bing\u000B'") === "\u000Bstr\u000Bing\u000B"
 
-Final stats: [Mem: 17.2MB Heap: 17.2MB Goroutines: 15]
+Final stats: [Mem: 18.0MB Heap: 18.0MB Goroutines: 15]
 
 === Test262 Summary ===
 Total:    23634
-Passed:   6576 (27.8%)
-Failed:   15944 (67.5%)
-Timeouts: 23 (0.1%)
+Passed:   6582 (27.8%)
+Failed:   15937 (67.4%)
+Timeouts: 24 (0.1%)
 Skipped:  1091 (4.6%)
-Duration: 21.322214875s
+Duration: 28.825837459s
 ======================

@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -39,12 +40,12 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Add parse method
 	jsonObj.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
-			// TODO: Throw SyntaxError  
-			return vm.Undefined, nil
+			// Throw SyntaxError for missing argument
+			return vm.Undefined, fmt.Errorf("SyntaxError: Unexpected end of JSON input")
 		}
 		
 		text := args[0].ToString()
-		return parseJSONToValue(text), nil
+		return parseJSONToValue(text)
 	}))
 
 	// Add stringify method (supports optional replacer and space parameters)
@@ -67,14 +68,14 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 }
 
 // parseJSONToValue converts a JSON string to a VM Value
-func parseJSONToValue(text string) vm.Value {
+func parseJSONToValue(text string) (vm.Value, error) {
 	var jsonValue interface{}
 	if err := json.Unmarshal([]byte(text), &jsonValue); err != nil {
-		// TODO: Throw SyntaxError
-		return vm.Undefined
+		// Return proper SyntaxError for invalid JSON
+		return vm.Undefined, err
 	}
 	
-	return convertJSONValue(jsonValue)
+	return convertJSONValue(jsonValue), nil
 }
 
 // convertJSONValue converts a Go interface{} from json.Unmarshal to a VM Value

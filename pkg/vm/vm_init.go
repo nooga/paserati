@@ -147,6 +147,10 @@ func (vm *VM) executeUserFunctionReentrant(fn Value, thisValue Value, args []Val
 	status, _ := vm.run()
 
 	if status == InterpretRuntimeError {
+		// If VM is unwinding and has a currentException, surface it as an ExceptionError
+		if vm.unwinding && vm.currentException != Null {
+			return Undefined, exceptionError{exception: vm.currentException}
+		}
 		return Undefined, fmt.Errorf("runtime error during re-entrant execution")
 	}
 
@@ -274,42 +278,48 @@ func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Val
 
 	// We have a new frame for bytecode execution with isDirectCall = true
 	// Execute the VM run loop - it will return immediately when the frame returns
-	// fmt.Printf("[DEBUG CallFunctionDirectly] About to execute bytecode, frameCount=%d\n", vm.frameCount)
+	if debugCalls {
+		fmt.Printf("[DEBUG CallFunctionDirectly] About to execute bytecode, frameCount=%d\n", vm.frameCount)
+	}
+	initialFrameCount := vm.frameCount
 	status, result := vm.run()
-	// fmt.Printf("[DEBUG CallFunctionDirectly] Bytecode execution finished, status=%d, result=%v\n", status, result.Inspect())
+	currentFrameCount := vm.frameCount
+	if debugCalls {
+		fmt.Printf("[DEBUG CallFunctionDirectly] Bytecode execution finished, status=%d, result=%s, frameCount=%d->%d\n", status, result.Inspect(), initialFrameCount, currentFrameCount)
+	}
 
 	if status == InterpretRuntimeError {
-		// Extract the actual exception and convert it to a Go error
+		// If VM is unwinding and has a currentException, surface it as an ExceptionError
 		if vm.unwinding && vm.currentException != Null {
-			// Convert VM exception to Go error
-			exceptionMsg := vm.currentException.ToString()
-			
-			// Try to get more detailed error information if it's an Error object
-			if vm.currentException.IsObject() && vm.currentException.Type() == TypeObject {
-				obj := vm.currentException.AsPlainObject()
-				if nameVal, hasName := obj.GetOwn("name"); hasName {
-					if messageVal, hasMessage := obj.GetOwn("message"); hasMessage {
-						name := nameVal.ToString()
-						message := messageVal.ToString()
-						if message != "" {
-							exceptionMsg = name + ": " + message
-						} else {
-							exceptionMsg = name
-						}
-					}
-				}
-			}
-			
-			// Clear exception state since we're converting it to a Go error
-			vm.currentException = Null
-			vm.unwinding = false
-			
-			return Undefined, fmt.Errorf("%s", exceptionMsg)
+			return Undefined, exceptionError{exception: vm.currentException}
 		}
 		return Undefined, fmt.Errorf("runtime error during direct function execution")
 	}
 
+	// Check if the frame count dropped to 0 - this indicates the entire script execution
+	// was completed due to an exception being caught by an outer handler
+	if currentFrameCount == 0 {
+		if debugCalls {
+			fmt.Printf("[DEBUG CallFunctionDirectly] Frame count dropped to 0 (from %d) - script execution completed\n", initialFrameCount)
+		}
+		// The script execution has completed. This means we're no longer in a callback context
+		// but the entire program has terminated. Signal this to the caller.
+		// IMPORTANT: Do not return the script's final result value here, as that can
+		// corrupt native method return paths. Return undefined with the special error signal.
+		return Undefined, fmt.Errorf("SCRIPT_COMPLETED_WITH_RESULT: %s", result.Inspect())
+	}
+
 	return result, nil
+}
+
+// IsUnwinding returns true if the VM is currently in an exception unwinding state
+func (vm *VM) IsUnwinding() bool {
+	return vm.unwinding
+}
+
+// GetFrameCount returns the current frame count for debugging
+func (vm *VM) GetFrameCount() int {
+	return vm.frameCount
 }
 
 // Call is a unified function calling interface that handles all function types properly
@@ -323,7 +333,7 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 		vm.currentThis = thisValue
 		defer func() { vm.currentThis = prevThis }()
 		return nativeFunc.Fn(args)
-		
+
 	case TypeNativeFunctionWithProps:
 		// Handle native function with properties
 		nativeFuncWithProps := fn.AsNativeFunctionWithProps()
@@ -331,12 +341,12 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 		vm.currentThis = thisValue
 		defer func() { vm.currentThis = prevThis }()
 		return nativeFuncWithProps.Fn(args)
-		
+
 	case TypeClosure, TypeFunction:
 		// For user-defined functions, always use the sentinel frame approach
 		// This ensures we don't have recursion issues with vm.run()
 		return vm.executeUserFunctionSafe(fn, thisValue, args)
-		
+
 	case TypeBoundFunction:
 		// Handle bound functions by delegating to the original function
 		boundFunc := fn.AsBoundFunction()
@@ -346,7 +356,7 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 		copy(finalArgs[len(boundFunc.PartialArgs):], args)
 		// Use the bound 'this' value
 		return vm.Call(boundFunc.OriginalFunction, boundFunc.BoundThis, finalArgs)
-		
+
 	default:
 		return Undefined, fmt.Errorf("cannot call non-function value of type %v", fn.Type())
 	}
@@ -359,15 +369,15 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	callerRegisters := make([]Value, 1)
 	destReg := byte(0)
 	callerIP := 0
-	
+
 	// Add a sentinel frame that will cause vm.run() to return when it hits this frame
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
-	sentinelFrame.closure = nil // Sentinel frames don't have closures
-	sentinelFrame.targetRegister = destReg // Target register in caller
+	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
-	
+
 	// Use prepareCall to set up the function call
 	shouldSwitch, err := vm.prepareCall(fn, thisValue, args, destReg, callerRegisters, callerIP)
 	if err != nil {
@@ -375,26 +385,26 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		vm.frameCount--
 		return Undefined, err
 	}
-	
+
 	if !shouldSwitch {
 		// Native function was executed directly
 		// Remove sentinel frame
 		vm.frameCount--
 		return callerRegisters[destReg], nil
 	}
-	
+
 	// We have a new frame set up, mark it as direct call
 	if vm.frameCount > 1 { // frameCount includes the sentinel frame
 		vm.frames[vm.frameCount-1].isDirectCall = true
 	}
-	
+
 	// Execute the VM run loop - it will return when it hits the sentinel frame
 	status, result := vm.run()
-	
+
 	if status == InterpretRuntimeError {
 		return Undefined, fmt.Errorf("runtime error during user function execution")
 	}
-	
+
 	return result, nil
 }
 
@@ -406,4 +416,9 @@ func (vm *VM) ExecuteGenerator(genObj *GeneratorObject, sentValue Value) (Value,
 // ExecuteGeneratorWithException is the public interface for generator execution with exception injection
 func (vm *VM) ExecuteGeneratorWithException(genObj *GeneratorObject, exception Value) (Value, error) {
 	return vm.executeGeneratorWithException(genObj, exception)
+}
+
+// NewExceptionError creates an ExceptionError from a VM Value for use in builtins.
+func (vm *VM) NewExceptionError(value Value) error {
+	return exceptionError{exception: value}
 }

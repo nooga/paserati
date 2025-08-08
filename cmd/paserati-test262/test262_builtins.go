@@ -8,6 +8,20 @@ import (
 	"strings"
 )
 
+// Test262Exception wraps a Test262Error object for proper exception handling
+type Test262Exception struct {
+	ErrorObject vm.Value
+	Message     string
+}
+
+func (e *Test262Exception) Error() string {
+	return e.Message
+}
+
+func (e *Test262Exception) GetExceptionValue() vm.Value {
+	return e.ErrorObject
+}
+
 // Test262Initializer provides Test262-specific globals
 type Test262Initializer struct{}
 
@@ -62,17 +76,20 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		return err
 	}
 
-	// Test262Error constructor
-	test262ErrorCtor := vm.NewNativeFunction(1, false, "Test262Error", func(args []vm.Value) (vm.Value, error) {
+	// We need to define Test262Error as a special constructor that creates proper error objects
+	// First create a placeholder that will be updated with self-reference
+	var test262ErrorCtor vm.Value
+	test262ErrorCtor = vm.NewNativeFunction(1, false, "Test262Error", func(args []vm.Value) (vm.Value, error) {
 		message := "Test262Error"
 		if len(args) > 0 {
 			message = args[0].ToString()
 		}
 
-		// Create error object
+		// Create error object with constructor property
 		errObj := vm.NewObject(vm.Null).AsPlainObject()
 		errObj.SetOwn("name", vm.NewString("Test262Error"))
 		errObj.SetOwn("message", vm.NewString(message))
+		errObj.SetOwn("constructor", test262ErrorCtor) // Set constructor to itself
 		errObj.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 			return vm.NewString(fmt.Sprintf("Test262Error: %s", message)), nil
 		}))
@@ -202,6 +219,9 @@ func (a *AssertInitializer) InitTypes(ctx *builtins.TypeContext) error {
 func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	//fmt.Printf("DEBUG: Initializing assert builtins\n")
 	vmInstance := ctx.VM
+	
+	// Store Test262Error constructor for later use
+	test262ErrorCtor, _ := vmInstance.GetGlobal("Test262Error")
 
 	// Create assert function with properties
 	assertFn := vm.NewNativeFunctionWithProps(1, true, "assert", func(args []vm.Value) (vm.Value, error) {
@@ -217,7 +237,20 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 
 		// Check if condition is truthy
 		if !condition.IsTruthy() {
-			return vm.Undefined, fmt.Errorf("Test262Error: %s", message)
+			// Create Test262Error object and throw it as an exception
+			errObj := vm.NewObject(vm.Null).AsPlainObject()
+			errObj.SetOwn("name", vm.NewString("Test262Error"))
+			errObj.SetOwn("message", vm.NewString(message))
+			errObj.SetOwn("constructor", test262ErrorCtor)
+			errObj.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+				return vm.NewString(fmt.Sprintf("Test262Error: %s", message)), nil
+			}))
+			errValue := vm.NewValueFromPlainObject(errObj)
+			// Return a Test262Exception that contains the error object
+			return vm.Undefined, &Test262Exception{
+				ErrorObject: errValue,
+				Message:     fmt.Sprintf("Test262Error: %s", message),
+			}
 		}
 
 		return vm.Undefined, nil
@@ -270,8 +303,20 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 
 		// Simple equality check using SameValue algorithm
 		if !sameValueSimple(actual, expected) {
-			return vm.Undefined, fmt.Errorf("Test262Error: %s. Expected: %s, Actual: %s",
-				message, expected.ToString(), actual.ToString())
+			fullMessage := fmt.Sprintf("%s. Expected: %s, Actual: %s", message, expected.ToString(), actual.ToString())
+			// Create Test262Error object and throw it
+			errObj := vm.NewObject(vm.Null).AsPlainObject()
+			errObj.SetOwn("name", vm.NewString("Test262Error"))
+			errObj.SetOwn("message", vm.NewString(fullMessage))
+			errObj.SetOwn("constructor", test262ErrorCtor)
+			errObj.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+				return vm.NewString(fmt.Sprintf("Test262Error: %s", fullMessage)), nil
+			}))
+			errValue := vm.NewValueFromPlainObject(errObj)
+			return vm.Undefined, &Test262Exception{
+				ErrorObject: errValue,
+				Message:     fmt.Sprintf("Test262Error: %s", fullMessage),
+			}
 		}
 
 		return vm.Undefined, nil
@@ -292,8 +337,20 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 
 		// Simple equality check using SameValue algorithm
 		if sameValueSimple(actual, expected) {
-			return vm.Undefined, fmt.Errorf("Test262Error: %s. Expected: %s, Actual: %s",
-				message, expected.ToString(), actual.ToString())
+			fullMessage := fmt.Sprintf("%s. Expected: %s, Actual: %s", message, expected.ToString(), actual.ToString())
+			// Create Test262Error object and throw it
+			errObj := vm.NewObject(vm.Null).AsPlainObject()
+			errObj.SetOwn("name", vm.NewString("Test262Error"))
+			errObj.SetOwn("message", vm.NewString(fullMessage))
+			errObj.SetOwn("constructor", test262ErrorCtor)
+			errObj.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+				return vm.NewString(fmt.Sprintf("Test262Error: %s", fullMessage)), nil
+			}))
+			errValue := vm.NewValueFromPlainObject(errObj)
+			return vm.Undefined, &Test262Exception{
+				ErrorObject: errValue,
+				Message:     fmt.Sprintf("Test262Error: %s", fullMessage),
+			}
 		}
 
 		return vm.Undefined, nil
@@ -360,9 +417,23 @@ func sameValueSimple(x, y vm.Value) bool {
 		xNum := x.ToFloat()
 		yNum := y.ToFloat()
 
-		// Handle NaN case
+		// Handle NaN case - NaN is the same as NaN in SameValue
 		if xNum != xNum && yNum != yNum {
 			return true // Both NaN
+		}
+		
+		// Handle NaN cases where only one is NaN
+		if xNum != xNum || yNum != yNum {
+			return false
+		}
+
+		// Handle -0 and +0 case
+		if xNum == 0 && yNum == 0 {
+			// Check if they have the same sign
+			// Using 1/x to distinguish -0 from +0
+			xSign := 1.0 / xNum
+			ySign := 1.0 / yNum
+			return (xSign > 0 && ySign > 0) || (xSign < 0 && ySign < 0)
 		}
 
 		return xNum == yNum
