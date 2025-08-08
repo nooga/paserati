@@ -3773,7 +3773,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 		if vm.unwinding && vm.currentException != Null {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
-		return Undefined, fmt.Errorf("runtime error during generator resumption")
+		return Undefined, exceptionError{exception: NewString("runtime error during generator resumption")}
 	}
 
 	return result, nil
@@ -3876,7 +3876,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 		if vm.currentException != Null {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
-		return Undefined, fmt.Errorf("runtime error during generator exception handling")
+		return Undefined, exceptionError{exception: NewString("runtime error during generator exception handling")}
 	}
 
 	return result, nil

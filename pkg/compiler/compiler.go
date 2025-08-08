@@ -44,8 +44,8 @@ type IteratorCleanupInfo struct {
 	UsesIteratorProtocol bool
 }
 
-const debugCompiler = false   // Enable for debugging register allocation issue  
-const debugCompilerStats = false 
+const debugCompiler = false // Enable for debugging register allocation issue
+const debugCompilerStats = false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
 
@@ -91,14 +91,14 @@ type Compiler struct {
 	// --- Phase 4a: Finally Context Tracking ---
 	inFinallyBlock  bool // Track if we're compiling inside finally block
 	tryFinallyDepth int  // Number of enclosing try-with-finally blocks
-	
+
 	// --- Phase 5: Module Bindings ---
-	moduleBindings  *ModuleBindings      // Module-aware binding resolver
-	moduleLoader    modules.ModuleLoader // Reference to module loader
-	
+	moduleBindings *ModuleBindings      // Module-aware binding resolver
+	moduleLoader   modules.ModuleLoader // Reference to module loader
+
 	// --- Module Import Deduplication ---
-	processedModules map[string]bool     // Track modules already processed to avoid duplicate OpEvalModule
-	
+	processedModules map[string]bool // Track modules already processed to avoid duplicate OpEvalModule
+
 	// --- Type Error Handling ---
 	ignoreTypeErrors bool // When true, compilation continues despite type errors
 }
@@ -150,7 +150,7 @@ func (c *Compiler) GetHeapAlloc() *HeapAlloc {
 func (c *Compiler) EnableModuleMode(modulePath string, loader modules.ModuleLoader) {
 	c.moduleBindings = NewModuleBindings(modulePath, loader)
 	c.moduleLoader = loader
-	
+
 	// If we have a type checker, synchronize import information from it
 	if c.typeChecker != nil && c.typeChecker.IsModuleMode() {
 		c.syncImportsFromTypeChecker()
@@ -165,24 +165,24 @@ func (c *Compiler) IsModuleMode() bool {
 // syncImportsFromTypeChecker synchronizes import information from the type checker
 // This ensures that imports processed during type checking are available during compilation
 func (c *Compiler) syncImportsFromTypeChecker() {
-	debugPrintf("// [Compiler] syncImportsFromTypeChecker called. typeChecker=%v, isModuleMode=%v, moduleBindings=%v\n", 
-		c.typeChecker != nil, 
-		c.typeChecker != nil && c.typeChecker.IsModuleMode(), 
+	debugPrintf("// [Compiler] syncImportsFromTypeChecker called. typeChecker=%v, isModuleMode=%v, moduleBindings=%v\n",
+		c.typeChecker != nil,
+		c.typeChecker != nil && c.typeChecker.IsModuleMode(),
 		c.moduleBindings != nil)
-	
+
 	if c.typeChecker == nil || !c.typeChecker.IsModuleMode() || c.moduleBindings == nil {
 		debugPrintf("// [Compiler] syncImportsFromTypeChecker early return\n")
 		return
 	}
-	
+
 	// Get import bindings from the type checker
 	importBindings := c.typeChecker.GetImportBindings()
 	if importBindings == nil {
 		return
 	}
-	
+
 	debugPrintf("// [Compiler] Syncing %d import bindings from type checker\n", len(importBindings))
-	
+
 	// Convert type checker's ImportBinding to compiler's ImportReference
 	for localName, binding := range importBindings {
 		// Convert ImportBindingType to ImportReferenceType
@@ -190,21 +190,21 @@ func (c *Compiler) syncImportsFromTypeChecker() {
 		switch binding.ImportType {
 		case 0: // ImportDefault from checker
 			importType = ImportDefaultRef
-		case 1: // ImportNamed from checker  
+		case 1: // ImportNamed from checker
 			importType = ImportNamedRef
 		case 2: // ImportNamespace from checker
 			importType = ImportNamespaceRef
 		default:
 			importType = ImportNamedRef // Default fallback
 		}
-		
+
 		// Get or assign global index for this import
 		globalIndex := c.GetOrAssignGlobalIndex(localName)
-		
+
 		// Add to module bindings
 		c.moduleBindings.DefineImport(localName, binding.SourceModule, binding.SourceName, importType, int(globalIndex))
-		
-		debugPrintf("// [Compiler] Synced import: %s from %s (global index: %d)\n", 
+
+		debugPrintf("// [Compiler] Synced import: %s from %s (global index: %d)\n",
 			localName, binding.SourceModule, globalIndex)
 	}
 }
@@ -231,7 +231,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		compilingFuncName:  "",
 		typeChecker:        enclosingCompiler.typeChecker, // Inherit checker from enclosing
 		stats:              enclosingCompiler.stats,
-		constantCache:      make(map[uint16]Register), // Each function has its own constant cache
+		constantCache:      make(map[uint16]Register),        // Each function has its own constant cache
 		moduleBindings:     enclosingCompiler.moduleBindings, // Inherit module bindings
 		moduleLoader:       enclosingCompiler.moduleLoader,   // Inherit module loader
 	}
@@ -268,7 +268,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	if c.typeChecker == nil {
 		c.typeChecker = checker.NewChecker()
 	}
-	
+
 	// Check if this program has already been type-checked by comparing the AST
 	// In module loading flow, the checker is already used to check the program
 	if c.typeChecker.GetProgram() != program {
@@ -303,7 +303,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		for _, stmt := range program.Statements {
 			if importDecl, ok := stmt.(*parser.ImportDeclaration); ok {
 				debugPrintf("[Compile] Pre-processing import from: %s (IsTypeOnly: %v)\n", importDecl.Source.Value, importDecl.IsTypeOnly)
-				
+
 				// Only process runtime imports here, skip type-only imports
 				// Type-only imports are already processed by the type checker
 				if !importDecl.IsTypeOnly {
@@ -448,6 +448,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				debugPrintf("// DEBUG Program: After compiling statement %d (%T). Result: R%d\n", i, stmt, tlReg)
 				// For top level, be conservative - don't free registers between statements
 				// The VM will handle cleanup when the program ends
+				// Track the most recent statement result to be the script's final result
+				if tlReg != BadRegister {
+					hint = tlReg
+				}
 			} else {
 				// Inside function body - be more aggressive about freeing registers
 				// But only free if we have more than a reasonable number allocated
@@ -604,7 +608,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		} else {
 			className = node.Name
 		}
-		
+
 		classDecl := &parser.ClassDeclaration{
 			Token:          node.Token,
 			Name:           className,
@@ -782,7 +786,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
 		if !found {
 			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, checking with objects\n", node.Value) // <<< ADDED
-			
+
 			// Check if it's from a with object (flagged by type checker)
 			if objReg, isWithProperty := c.shouldUseWithProperty(node); isWithProperty {
 				debugPrintf("// DEBUG Identifier '%s': Found in with object, emitting property access\n", node.Value)
@@ -791,21 +795,21 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				c.emitGetProp(hint, objReg, propName, node.Token.Line)
 				return hint, nil
 			}
-			
+
 			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table or with objects, treating as GLOBAL\n", node.Value) // <<< ADDED
-			
+
 			// Check if this is an imported identifier that needs module evaluation first
 			isModuleMode := c.IsModuleMode()
 			isImported := c.moduleBindings != nil && c.moduleBindings.IsImported(node.Value)
 			debugPrintf("// DEBUG Identifier '%s': IsModuleMode=%v, IsImported=%v (global path)\n", node.Value, isModuleMode, isImported)
-			
+
 			if isModuleMode && isImported {
 				debugPrintf("// DEBUG Identifier '%s': This is an imported name, generating runtime import resolution (global path)\n", node.Value)
 				// Generate code to resolve the import at runtime
 				c.emitImportResolve(hint, node.Value, node.Token.Line)
 				return hint, nil
 			}
-			
+
 			// Variable not found in any scope, treat as a global variable access
 			// This will return undefined at runtime if the global doesn't exist
 			globalIdx := c.GetOrAssignGlobalIndex(node.Value)
@@ -837,7 +841,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			isModuleMode := c.IsModuleMode()
 			isImported := c.moduleBindings != nil && c.moduleBindings.IsImported(node.Value)
 			debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, IsModuleMode=%v, IsImported=%v\n", node.Value, isModuleMode, isImported)
-			
+
 			if isModuleMode && isImported {
 				debugPrintf("// DEBUG Identifier '%s': This is an imported name, generating runtime import resolution (non-local path)\n", node.Value)
 				// Generate code to resolve the import at runtime
@@ -944,10 +948,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// --- Optional Chaining Expression ---
 	case *parser.OptionalChainingExpression:
 		return c.compileOptionalChainingExpression(node, hint) // TODO: Fix this
-	
+
 	case *parser.OptionalIndexExpression:
 		return c.compileOptionalIndexExpression(node, hint)
-	
+
 	case *parser.OptionalCallExpression:
 		return c.compileOptionalCallExpression(node, hint)
 		// --- END Optional Chaining Expression ---
@@ -1753,7 +1757,7 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 	}
 
 	exportIndices := make(map[string]int)
-	
+
 	// Get all exported names from module bindings
 	for exportName, exportRef := range c.moduleBindings.ExportedNames {
 		if exportRef.IsReExport {
@@ -1829,7 +1833,7 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 
 	sourceModulePath := node.Source.Value
 	debugPrintf("// [Compiler] Processing import from: %s\n", sourceModulePath)
-	
+
 	// Generate OpEvalModule to ensure the module is loaded and executed
 	// Only emit if this module hasn't been processed yet
 	if !c.processedModules[sourceModulePath] {
@@ -1839,7 +1843,7 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 	} else {
 		debugPrintf("// [Compiler] Module %s already processed, skipping OpEvalModule\n", sourceModulePath)
 	}
-	
+
 	// Handle bare imports (side-effect only)
 	if len(node.Specifiers) == 0 {
 		debugPrintf("// [Compiler] Bare import (side effects only): %s\n", sourceModulePath)
@@ -1847,7 +1851,7 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 		// No bindings are created in the local environment
 		return BadRegister, nil
 	}
-	
+
 	// Process import specifiers and create bindings
 	for _, spec := range node.Specifiers {
 		switch importSpec := spec.(type) {
@@ -1856,34 +1860,34 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 			if importSpec.Local == nil {
 				return BadRegister, NewCompileError(node, "import default specifier missing local name")
 			}
-			
+
 			localName := importSpec.Local.Value
 			c.processImportBinding(localName, sourceModulePath, "default", ImportDefaultRef)
-			
+
 		case *parser.ImportNamedSpecifier:
 			// Named import: import { name } or import { name as alias }
 			if importSpec.Local == nil || importSpec.Imported == nil {
 				return BadRegister, NewCompileError(node, "import named specifier missing names")
 			}
-			
+
 			localName := importSpec.Local.Value
 			importedName := importSpec.Imported.Value
 			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamedRef)
-			
+
 		case *parser.ImportNamespaceSpecifier:
 			// Namespace import: import * as name from "module"
 			if importSpec.Local == nil {
 				return BadRegister, NewCompileError(node, "import namespace specifier missing local name")
 			}
-			
+
 			localName := importSpec.Local.Value
 			c.processImportBinding(localName, sourceModulePath, "*", ImportNamespaceRef)
-			
+
 		default:
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unknown import specifier type: %T", spec))
 		}
 	}
-	
+
 	return BadRegister, nil
 }
 
@@ -1892,7 +1896,7 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 func (c *Compiler) processImportBinding(localName, sourceModule, sourceName string, importType ImportReferenceType) {
 	// If we're in module mode, use the module bindings for proper tracking
 	if c.IsModuleMode() {
-		// Since we're using a unified heap, the import should resolve to the same global index 
+		// Since we're using a unified heap, the import should resolve to the same global index
 		// as the export. The source name (what we're importing) should have a global index.
 		globalIdx := c.GetGlobalIndex(sourceName)
 		if globalIdx == -1 {
@@ -1900,7 +1904,7 @@ func (c *Compiler) processImportBinding(localName, sourceModule, sourceName stri
 			globalIdx = int(c.GetOrAssignGlobalIndex(sourceName))
 		}
 		c.moduleBindings.DefineImport(localName, sourceModule, sourceName, importType, globalIdx)
-		
+
 		// Try to resolve the actual value from the source module
 		resolvedValue := c.moduleBindings.ResolveImportedValue(localName)
 		if resolvedValue != vm.Undefined {
@@ -1908,7 +1912,7 @@ func (c *Compiler) processImportBinding(localName, sourceModule, sourceName stri
 		} else {
 			debugPrintf("// [Compiler] Imported %s: %s = undefined (unresolved)\n", localName, sourceName)
 		}
-		
+
 		// Define the imported name in the symbol table
 		// This allows the rest of the code to reference it normally
 		c.currentSymbolTable.Define(localName, nilRegister) // Will be resolved at runtime
@@ -1931,30 +1935,30 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 	if node.Declaration != nil {
 		// Direct export: export const x = 1; export function foo() {}
 		debugPrintf("// [Compiler] Processing direct export declaration\n")
-		
+
 		// Compile the declaration first
 		_, err := c.compileNode(node.Declaration, hint)
 		if err != nil {
 			return BadRegister, err
 		}
-		
+
 		// Extract and register exported names
 		c.processExportDeclaration(node.Declaration)
-		
+
 	} else if len(node.Specifiers) > 0 {
 		// Named exports: export { x, y } or export { x } from "module"
 		debugPrintf("// [Compiler] Processing named export specifiers\n")
-		
+
 		if node.Source != nil {
 			// Re-export: export { x } from "module"
 			sourceModule := node.Source.Value
 			debugPrintf("// [Compiler] Re-export from: %s\n", sourceModule)
-			
+
 			for _, spec := range node.Specifiers {
 				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
 					localName := exportSpec.Local.Value
 					exportName := exportSpec.Exported.Value
-					
+
 					if c.IsModuleMode() {
 						c.moduleBindings.DefineReExport(exportName, sourceModule, localName)
 						debugPrintf("// [Compiler] Re-exported: %s as %s from %s\n", localName, exportName, sourceModule)
@@ -1969,10 +1973,10 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 					if exportSpec.Local == nil {
 						return BadRegister, NewCompileError(node, "export specifier missing local name")
 					}
-					
+
 					localName := exportSpec.Local.Value
 					exportName := exportSpec.Exported.Value
-					
+
 					// Check if the local name exists in current symbol table
 					if _, _, exists := c.currentSymbolTable.Resolve(localName); exists {
 						// Register the export in module bindings
@@ -1994,7 +1998,7 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 			}
 		}
 	}
-	
+
 	return BadRegister, nil
 }
 
@@ -2004,15 +2008,15 @@ func (c *Compiler) compileExportDefaultDeclaration(node *parser.ExportDefaultDec
 	if node.Declaration == nil {
 		return BadRegister, NewCompileError(node, "export default statement missing declaration")
 	}
-	
+
 	debugPrintf("// [Compiler] Processing default export\n")
-	
+
 	// Compile the default export expression
 	resultReg, err := c.compileNode(node.Declaration, hint)
 	if err != nil {
 		return BadRegister, err
 	}
-	
+
 	// Register the default export
 	if c.IsModuleMode() {
 		// For now, we can't get the runtime value until execution
@@ -2024,7 +2028,7 @@ func (c *Compiler) compileExportDefaultDeclaration(node *parser.ExportDefaultDec
 	} else {
 		debugPrintf("// [Compiler] Default export processed (no module mode)\n")
 	}
-	
+
 	return resultReg, nil
 }
 
@@ -2034,33 +2038,33 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 	if node.Source == nil {
 		return BadRegister, NewCompileError(node, "export * statement missing source module")
 	}
-	
+
 	sourceModule := node.Source.Value
 	debugPrintf("// [Compiler] Processing export * from: %s\n", sourceModule)
-	
+
 	if !c.IsModuleMode() {
 		debugPrintf("// [Compiler] Not in module mode, skipping re-export\n")
 		return BadRegister, nil
 	}
-	
+
 	// Get the source module to find its exports
 	if c.moduleLoader == nil {
 		debugPrintf("// [Compiler] No module loader available for re-export\n")
 		return BadRegister, nil
 	}
-	
+
 	sourceModuleRecord, err := c.moduleLoader.LoadModule(sourceModule, ".")
 	if err != nil {
 		return BadRegister, NewCompileError(node, fmt.Sprintf("Failed to load source module '%s' for re-export: %v", sourceModule, err))
 	}
-	
+
 	// Get export names from the source module
 	// Try runtime values first, then fall back to export names
 	sourceExports := sourceModuleRecord.GetExportValues()
 	exportNames := sourceModuleRecord.GetExportNames()
-	
+
 	debugPrintf("// [Compiler] Source module '%s' has %d runtime exports and %d export names\n", sourceModule, len(sourceExports), len(exportNames))
-	
+
 	// If we have runtime exports, use those names (most reliable)
 	if len(sourceExports) > 0 {
 		exportNames = nil // Clear the names array
@@ -2073,9 +2077,9 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 	} else {
 		debugPrintf("// [Compiler] No exports found in source module\n")
 	}
-	
+
 	debugPrintf("// [Compiler] Will re-export %d names from '%s'\n", len(exportNames), sourceModule)
-	
+
 	// For each export in the source module, create an equivalent re-export
 	// This transforms "export * from './math'" into:
 	// 1. Generate import resolution for each export
@@ -2086,39 +2090,39 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 			debugPrintf("// [Compiler] Skipping default export '%s' in re-export all\n", exportName)
 			continue
 		}
-		
+
 		debugPrintf("// [Compiler] Re-exporting '%s' from '%s'\n", exportName, sourceModule)
-		
+
 		// Get/assign global index for this re-export
 		globalIdx := int(c.GetOrAssignGlobalIndex(exportName))
-		
+
 		// 1. Define the import binding (like processImportDeclaration does)
 		// Use -1 for GlobalIndex to force module export lookup instead of direct global access
 		c.moduleBindings.DefineImport(exportName, sourceModule, exportName, ImportNamedRef, -1)
-		
-		// 2. Define the export binding (like processExportDeclaration does)  
+
+		// 2. Define the export binding (like processExportDeclaration does)
 		c.moduleBindings.DefineExport(exportName, exportName, vm.Undefined, nil, globalIdx)
-		
+
 		// 3. Generate bytecode to import and re-export the value
 		// Allocate a temporary register for the imported value
 		tempReg := c.regAlloc.Alloc()
-		
+
 		// First ensure the source module is loaded
 		c.emitEvalModule(sourceModule, node.Token.Line)
-		
+
 		// Then get the specific export from the source module
 		c.emitGetModuleExport(tempReg, sourceModule, exportName, node.Token.Line)
-		
+
 		// Store the imported value as a global (like normal exports do)
 		globalIdxUint16 := c.GetOrAssignGlobalIndex(exportName)
 		c.emitSetGlobal(globalIdxUint16, tempReg, node.Token.Line)
-		
+
 		debugPrintf("// [Compiler] Stored re-exported '%s' as global at index %d\n", exportName, globalIdxUint16)
-		
+
 		// Free the temporary register
 		c.regAlloc.Free(tempReg)
 	}
-	
+
 	debugPrintf("// [Compiler] Completed re-export transformation for %d exports\n", len(exportNames))
 	return BadRegister, nil
 }
@@ -2127,11 +2131,11 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 // This is used when runtime export values are not yet available
 func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 	var exportNames []string
-	
+
 	if program == nil || program.Statements == nil {
 		return exportNames
 	}
-	
+
 	for _, stmt := range program.Statements {
 		switch node := stmt.(type) {
 		case *parser.ExportNamedDeclaration:
@@ -2178,7 +2182,7 @@ func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 			// The names come from the source module
 		}
 	}
-	
+
 	return exportNames
 }
 
@@ -2198,7 +2202,7 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 				debugPrintf("// [Compiler] Exported let: %s at global[%d]\n", d.Name.Value, globalIdx)
 			}
 		}
-		
+
 	case *parser.VarStatement:
 		if c.IsModuleMode() {
 			if d.Name != nil {
@@ -2211,7 +2215,7 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 				debugPrintf("// [Compiler] Exported var: %s at global[%d]\n", d.Name.Value, globalIdx)
 			}
 		}
-		
+
 	case *parser.ConstStatement:
 		if c.IsModuleMode() {
 			if d.Name != nil {
@@ -2224,7 +2228,7 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 				debugPrintf("// [Compiler] Exported const: %s at global[%d]\n", d.Name.Value, globalIdx)
 			}
 		}
-		
+
 	case *parser.ExpressionStatement:
 		// Handle function declarations in expression statements
 		if expr, ok := d.Expression.(*parser.FunctionLiteral); ok && expr.Name != nil {
@@ -2240,7 +2244,7 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 				debugPrintf("// [Compiler] Exported function: %s at global[%d]\n", expr.Name.Value, globalIdx)
 			}
 		}
-		
+
 	default:
 		debugPrintf("// [Compiler] Unhandled export declaration type: %T\n", decl)
 	}
@@ -2254,7 +2258,7 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 		c.emitLoadUndefined(destReg, line)
 		return
 	}
-	
+
 	// Get the import reference for this name
 	if importRef, exists := c.moduleBindings.ImportedNames[importName]; exists {
 		// Handle namespace imports specially
@@ -2269,7 +2273,7 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 			}
 		} else if importRef.GlobalIndex != -1 {
 			// Direct global access - imported values should already be loaded
-			debugPrintf("// [Compiler] emitImportResolve: Using direct global access for '%s' at index %d\n", 
+			debugPrintf("// [Compiler] emitImportResolve: Using direct global access for '%s' at index %d\n",
 				importName, importRef.GlobalIndex)
 			c.emitGetGlobal(destReg, uint16(importRef.GlobalIndex), line)
 		} else {
@@ -2288,9 +2292,9 @@ func (c *Compiler) emitEvalModule(modulePath string, line int) {
 	// Add module path as a string constant
 	modulePathValue := vm.String(modulePath)
 	constantIdx := c.chunk.AddConstant(modulePathValue)
-	
+
 	debugPrintf("// [Compiler] emitEvalModule: Emitting OpEvalModule for '%s' (constantIdx: %d)\n", modulePath, constantIdx)
-	
+
 	// Emit OpEvalModule with the constant index
 	c.emitOpCode(vm.OpEvalModule, line)
 	c.emitByte(byte(constantIdx >> 8))   // High byte
@@ -2302,9 +2306,9 @@ func (c *Compiler) emitCreateNamespace(destReg Register, modulePath string, line
 	// Add module path as a string constant
 	modulePathValue := vm.String(modulePath)
 	modulePathIdx := c.chunk.AddConstant(modulePathValue)
-	
+
 	debugPrintf("// [Compiler] emitCreateNamespace: R%d = createNamespace('%s')\n", destReg, modulePath)
-	
+
 	// Emit OpCreateNamespace with the destination register and module path constant
 	c.emitOpCode(vm.OpCreateNamespace, line)
 	c.emitByte(byte(destReg))
@@ -2317,20 +2321,20 @@ func (c *Compiler) emitGetModuleExport(destReg Register, modulePath string, expo
 	// Add module path as a string constant
 	modulePathValue := vm.String(modulePath)
 	modulePathIdx := c.chunk.AddConstant(modulePathValue)
-	
+
 	// Add export name as a string constant
 	exportNameValue := vm.String(exportName)
 	exportNameIdx := c.chunk.AddConstant(exportNameValue)
-	
+
 	debugPrintf("// [Compiler] emitGetModuleExport: R%d = module['%s']['%s']\n", destReg, modulePath, exportName)
-	
+
 	// Emit OpGetModuleExport with register and two constant indices
 	c.emitOpCode(vm.OpGetModuleExport, line)
 	c.emitByte(byte(destReg))
-	c.emitByte(byte(modulePathIdx >> 8))     // Module path high byte
-	c.emitByte(byte(modulePathIdx & 0xFF))   // Module path low byte
-	c.emitByte(byte(exportNameIdx >> 8))     // Export name high byte
-	c.emitByte(byte(exportNameIdx & 0xFF))   // Export name low byte
+	c.emitByte(byte(modulePathIdx >> 8))   // Module path high byte
+	c.emitByte(byte(modulePathIdx & 0xFF)) // Module path low byte
+	c.emitByte(byte(exportNameIdx >> 8))   // Export name high byte
+	c.emitByte(byte(exportNameIdx & 0xFF)) // Export name low byte
 }
 
 // emitIteratorCleanup emits bytecode to call iterator.return() if it exists
@@ -2338,14 +2342,14 @@ func (c *Compiler) emitGetModuleExport(destReg Register, modulePath string, expo
 func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
 	// We need to check if iterator.return exists and call it if present
 	// This is done defensively - we don't want cleanup to throw errors
-	
+
 	// Get iterator.return method (may be undefined)
 	returnMethodReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(returnMethodReg)
-	
+
 	returnConstIdx := c.chunk.AddConstant(vm.String("return"))
 	c.emitGetProp(returnMethodReg, iteratorReg, returnConstIdx, line)
-	
+
 	// Check if return method exists (not undefined/null)
 	// We'll use OpIsNullish to check if it's null or undefined
 	isNullishReg := c.regAlloc.Alloc()
@@ -2353,24 +2357,24 @@ func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
 	c.emitOpCode(vm.OpIsNullish, line)
 	c.emitByte(byte(isNullishReg))
 	c.emitByte(byte(returnMethodReg))
-	
+
 	// Negate the nullish result so we can use JumpIfFalse to skip when nullish
 	notNullishReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(notNullishReg)
 	c.emitOpCode(vm.OpNot, line)
 	c.emitByte(byte(notNullishReg))
 	c.emitByte(byte(isNullishReg))
-	
+
 	// Skip calling return if it's nullish (jump if NOT not-nullish = jump if nullish)
 	skipCallJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notNullishReg, line)
-	
+
 	// Call iterator.return() - ignore return value and errors
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)
-	
+
 	// Use regular method call - VM should handle any errors gracefully
 	c.emitCallMethod(resultReg, returnMethodReg, iteratorReg, 0, line)
-	
+
 	// Patch the skip jump
 	c.patchJump(skipCallJump)
 }
@@ -2404,7 +2408,7 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 		return BadRegister, err
 	}
 
-	// 4. For named classes (including class declarations parsed as expressions), 
+	// 4. For named classes (including class declarations parsed as expressions),
 	// store them in the environment like compileClassDeclaration does
 	// For anonymous classes, skip this step
 	if !strings.HasPrefix(node.Name.Value, "__AnonymousClass_") {
@@ -2429,7 +2433,7 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 		debugPrintf("// DEBUG compileClassExpression: Moved constructor from R%d to hint R%d\n", constructorReg, hint)
 		return hint, nil
 	}
-	
+
 	debugPrintf("// DEBUG compileClassExpression: Returning constructor in R%d\n", constructorReg)
 	return constructorReg, nil
 }

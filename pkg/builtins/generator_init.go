@@ -166,14 +166,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			exception = args[0]
 		}
 
-		// Wrap into Error object before injecting, so uncaught errors include expected message prefix
-		if exception.Type() != vm.TypeObject {
-			errObj := vm.NewObject(vm.Null).AsPlainObject()
-			errObj.SetOwn("name", vm.NewString("Error"))
-			errObj.SetOwn("message", vm.NewString("exception thrown: "+exception.ToString()))
-			exception = vm.NewValueFromPlainObject(errObj)
-		}
-		// Execute the generator with exception injection
+		// Inject the original exception value into the generator so user catch(e) sees the same value
 		return vmInstance.ExecuteGeneratorWithException(thisGen, exception)
 	}))
 

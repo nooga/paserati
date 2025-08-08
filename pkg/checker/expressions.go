@@ -17,7 +17,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 		} // Handle error
 
 		// Handle spread elements specially
-		if _, isSpread := elemNode.(*parser.SpreadElement); isSpread {
+		if spreadElem, isSpread := elemNode.(*parser.SpreadElement); isSpread {
 			// For spread elements, extract the element type from the array
 			if arrayType, isArray := elemType.(*types.ArrayType); isArray {
 				// Use the element type of the spread array
@@ -27,7 +27,8 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 				// Spread of 'any' contributes 'any' element type
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
 			} else {
-				// Error case - spread of non-array (should be caught earlier)
+				// Error case - spread of non-array: issue a clear compile error
+				c.addError(spreadElem, "spread syntax can only be applied to arrays")
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
 			}
 		} else {
@@ -467,7 +468,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 						preliminaryFuncSig.ParameterTypes[i] = types.Any
 					}
 				}
-				
+
 				// Store with appropriate prefix for the second pass too
 				if methodDef.Kind == "getter" {
 					getterName := "__get__" + keyName
@@ -587,13 +588,13 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if valueType == nil {
 				valueType = types.Any
 			}
-			
+
 			// Store getter/setter with appropriate prefix to match compiler expectations
 			if methodDef.Kind == "getter" {
 				// For getters, store both the implementation and the property type
 				getterName := "__get__" + keyName
 				fields[getterName] = valueType // Implementation for compiler
-				
+
 				// Also store the property with its return type for type checking
 				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
 					fields[keyName] = objType.CallSignatures[0].ReturnType // Property type for type checker
@@ -605,7 +606,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				// For setters, store both the implementation and make the property writable
 				setterName := "__set__" + keyName
 				fields[setterName] = valueType // Implementation for compiler
-				
+
 				// Also store the property with its parameter type for type checking
 				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 && len(objType.CallSignatures[0].ParameterTypes) > 0 {
 					fields[keyName] = objType.CallSignatures[0].ParameterTypes[0] // Property type for type checker
@@ -1017,7 +1018,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		case *types.ParameterizedForwardReferenceType:
 			// Handle property access on parameterized generic types like LinkedNode<T>
 			debugPrintf("// [Checker MemberExpr] ParameterizedForwardReferenceType: %s, property: %s\n", obj.String(), propertyName)
-			
+
 			// The issue is that during method body checking, the generic class might not be fully resolved yet
 			// Instead of trying to resolve the constructor, resolve the ParameterizedForwardReferenceType directly
 			resolvedType := c.resolveParameterizedForwardReference(obj)
@@ -1058,7 +1059,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardReferenceType, propertyName string, node *parser.MemberExpression) types.Type {
 	// For forward references, we need to check if we're accessing static members
 	// of the class currently being defined. Use the current class context.
-	
+
 	// First, try to look up the resolved constructor type
 	constructorType, _, exists := c.env.Resolve(forwardRef.ClassName)
 	if exists {
@@ -1068,7 +1069,7 @@ func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardRe
 			if propType, exists := objType.Properties[propertyName]; exists {
 				return propType
 			}
-			
+
 			// Check if it's a call signature (static method)
 			for _, callSig := range objType.CallSignatures {
 				if callSig.ParameterTypes != nil {
@@ -1077,7 +1078,7 @@ func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardRe
 				}
 			}
 		}
-		
+
 		// Handle generic class constructors
 		if genericType, ok := constructorType.(*types.GenericType); ok {
 			if constructorObj, ok := genericType.Body.(*types.ObjectType); ok {
@@ -1087,7 +1088,7 @@ func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardRe
 			}
 		}
 	}
-	
+
 	// If the constructor type is not yet resolved, this is likely a self-reference
 	// within the class being defined. For now, allow access to any static member
 	// and let the compiler/runtime handle the validation.
@@ -1110,7 +1111,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		debugPrintf("// [Checker IndexExpr] Warning: left expression has nil type, defaulting to Any\n")
 		leftType = types.Any
 	}
-	
+
 	// Defensive check: if indexType is nil, default to Any
 	if indexType == nil {
 		debugPrintf("// [Checker IndexExpr] Warning: index expression has nil type, defaulting to Any\n")
@@ -1709,7 +1710,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	} else if forwardRef, ok := constructorType.(*types.ForwardReferenceType); ok {
 		// Handle forward reference to class being defined (e.g., new Test() within Test class methods)
 		debugPrintf("// [Checker NewExpression] ForwardReferenceType constructor: %s\n", forwardRef.ClassName)
-		
+
 		// Try to resolve the forward reference to get the actual constructor type
 		if actualType, _, found := c.env.Resolve(forwardRef.ClassName); found {
 			debugPrintf("// [Checker NewExpression] Resolved forward reference to: %T = %s\n", actualType, actualType.String())
@@ -2015,7 +2016,7 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 			// Check if the value has Symbol.iterator method
 			// Check if the type has Symbol.iterator property
 			debugPrintf("// [Checker yield*] Checking if valueType %T (%s) is iterable\n", valueType, valueType.String())
-			
+
 			// Special case: if the value comes from a generator function call, assume it's iterable
 			// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking
 			if callExpr, ok := node.Value.(*parser.CallExpression); ok {
@@ -2029,11 +2030,17 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 					}
 				}
 			}
-			
+
 			iteratorMethodType := c.getPropertyTypeFromType(valueType, "@@symbol:Symbol.iterator", false)
-			debugPrintf("// [Checker yield*] Symbol.iterator method type: %T (%s)\n", iteratorMethodType, 
-				func() string { if iteratorMethodType != nil { return iteratorMethodType.String() } else { return "nil" } }())
-			
+			debugPrintf("// [Checker yield*] Symbol.iterator method type: %T (%s)\n", iteratorMethodType,
+				func() string {
+					if iteratorMethodType != nil {
+						return iteratorMethodType.String()
+					} else {
+						return "nil"
+					}
+				}())
+
 			if iteratorMethodType != nil && iteratorMethodType != types.Never {
 				// The value has Symbol.iterator - it's iterable
 				// Check if it's a function that returns an Iterator<T>
@@ -2048,12 +2055,12 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 						iteratorMethodType = instantiated.Substitute()
 					}
 				}
-				
+
 				if objType, ok := iteratorMethodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
 					// Extract the return type of Symbol.iterator method
 					signature := objType.CallSignatures[0]
 					returnType := signature.ReturnType
-					
+
 					// The return type should be Iterator<T>
 					// Try to extract T from the iterator
 					if instType, ok := returnType.(*types.InstantiatedType); ok {
@@ -2112,9 +2119,9 @@ setYieldedType:
 	if c.currentInferredYieldTypes != nil {
 		c.currentInferredYieldTypes = append(c.currentInferredYieldTypes, yieldedType)
 	}
-	
+
 	// Debug commented out
-	// fmt.Fprintf(os.Stderr, "// [Checker YieldExpression] %s type: %s\n", 
-	//   func() string { if node.Delegate { return "yield* delegation" } else { return "yield" } }(), 
+	// fmt.Fprintf(os.Stderr, "// [Checker YieldExpression] %s type: %s\n",
+	//   func() string { if node.Delegate { return "yield* delegation" } else { return "yield" } }(),
 	//   yieldedType.String())
 }

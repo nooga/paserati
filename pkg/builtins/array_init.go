@@ -439,7 +439,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -461,7 +461,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.NumberValue(-1), err
 			}
@@ -484,7 +484,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		result := vm.NewArray()
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			test, err := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			test, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.NewArray(), err
 			}
@@ -528,7 +528,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			_, err := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			_, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -547,7 +547,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.BooleanValue(false), err
 			}
@@ -569,7 +569,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.BooleanValue(false), err
 			}
@@ -607,7 +607,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		for i := startIndex; i < length; i++ {
 			element := thisArray.Get(i)
 			var err error
-			accumulator, err = vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -642,7 +642,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		for i := startIndex; i >= 0; i-- {
 			element := thisArray.Get(i)
 			var err error
-			accumulator, err = vmInstance.CallFunctionDirectly(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -699,7 +699,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Apply mapping function if provided
 				if len(args) >= 2 && args[1].IsCallable() {
 					mapFn := args[1]
-					mappedValue, err := vmInstance.CallFunctionDirectly(mapFn, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i))})
+					mappedValue, err := vmInstance.Call(mapFn, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i))})
 					if err != nil {
 						return vm.NewArray(), err
 					}
