@@ -35,6 +35,8 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.String})).
 		WithProperty("values", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: &types.TupleType{ElementTypes: []types.Type{types.String, types.Any}}})).
+		WithProperty("getOwnPropertyNames", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.String})).
+		WithProperty("getOwnPropertySymbols", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("assign", types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("hasOwn", types.NewSimpleFunction([]types.Type{types.Any, types.String}, types.Boolean)).
 		WithProperty("fromEntries", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
@@ -212,6 +214,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwn("keys", vm.NewNativeFunction(1, false, "keys", objectKeysImpl))
 		ctorPropsObj.Properties.SetOwn("values", vm.NewNativeFunction(1, false, "values", objectValuesImpl))
 		ctorPropsObj.Properties.SetOwn("entries", vm.NewNativeFunction(1, false, "entries", objectEntriesImpl))
+		ctorPropsObj.Properties.SetOwn("getOwnPropertyNames", vm.NewNativeFunction(1, false, "getOwnPropertyNames", objectGetOwnPropertyNamesImpl))
+		ctorPropsObj.Properties.SetOwn("getOwnPropertySymbols", vm.NewNativeFunction(1, false, "getOwnPropertySymbols", objectGetOwnPropertySymbolsImpl))
+		// Reflect-like ownKeys: strings first, then symbols
+		ctorPropsObj.Properties.SetOwn("__ownKeys", vm.NewNativeFunction(1, false, "__ownKeys", reflectOwnKeysImpl))
 		ctorPropsObj.Properties.SetOwn("assign", vm.NewNativeFunction(1, true, "assign", objectAssignImpl))
 		ctorPropsObj.Properties.SetOwn("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", objectHasOwnImpl))
 		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
@@ -562,6 +568,86 @@ func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
 	return entries, nil
 }
 
+func objectGetOwnPropertyNamesImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.NewArray(), nil
+	}
+	obj := args[0]
+	if !obj.IsObject() {
+		return vm.NewArray(), nil
+	}
+	arr := vm.NewArray()
+	arrObj := arr.AsArray()
+	if po := obj.AsPlainObject(); po != nil {
+		for _, k := range po.OwnKeys() {
+			arrObj.Append(vm.NewString(k))
+		}
+	} else if d := obj.AsDictObject(); d != nil {
+		for _, k := range d.OwnKeys() {
+			arrObj.Append(vm.NewString(k))
+		}
+	} else if a := obj.AsArray(); a != nil {
+		for i := 0; i < a.Length(); i++ {
+			arrObj.Append(vm.NewString(strconv.Itoa(i)))
+		}
+		arrObj.Append(vm.NewString("length"))
+	}
+	return arr, nil
+}
+
+func objectGetOwnPropertySymbolsImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.NewArray(), nil
+	}
+	obj := args[0]
+	if !obj.IsObject() {
+		return vm.NewArray(), nil
+	}
+	arr := vm.NewArray()
+	arrObj := arr.AsArray()
+	if po := obj.AsPlainObject(); po != nil {
+		for _, s := range po.OwnSymbolKeys() {
+			arrObj.Append(s)
+		}
+	}
+	// DictObject does not support symbols; returns empty array
+	return arr, nil
+}
+
+// reflectOwnKeysImpl returns own property keys: string names first (any enumerability), then symbols
+func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.NewArray(), nil
+	}
+	obj := args[0]
+	if !obj.IsObject() {
+		return vm.NewArray(), nil
+	}
+	out := vm.NewArray()
+	outArr := out.AsArray()
+	if po := obj.AsPlainObject(); po != nil {
+		// Strings first
+		for _, k := range po.OwnKeys() {
+			outArr.Append(vm.NewString(k))
+		}
+		// Then symbols
+		for _, s := range po.OwnSymbolKeys() {
+			outArr.Append(s)
+		}
+	} else if d := obj.AsDictObject(); d != nil {
+		for _, k := range d.OwnKeys() {
+			outArr.Append(vm.NewString(k))
+		}
+		// DictObject: no symbols yet
+	} else if a := obj.AsArray(); a != nil {
+		for i := 0; i < a.Length(); i++ {
+			outArr.Append(vm.NewString(strconv.Itoa(i)))
+		}
+		outArr.Append(vm.NewString("length"))
+	}
+	return out, nil
+}
+
 func objectAssignImpl(args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		// TODO: Throw TypeError when error objects are implemented
@@ -707,10 +793,13 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
-	// Property key: support symbols by using VM's internal symbol-key mangling
+	// Property key: support symbols natively
+	var keyIsSymbol bool
 	var propName string
+	var propSym vm.Value
 	if args[1].Type() == vm.TypeSymbol {
-		propName = "@@symbol:" + args[1].AsSymbol()
+		keyIsSymbol = true
+		propSym = args[1]
 	} else {
 		propName = args[1].ToString()
 	}
@@ -792,7 +881,14 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 	// Define the property with attributes (on plain objects only for now)
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		// Enforce non-configurable rules when updating existing property
-		if _, w0, e0, c0, ok := plainObj.GetOwnDescriptor(propName); ok && !c0 {
+		var exists bool
+		var w0, e0, c0 bool
+		if keyIsSymbol {
+			_, w0, e0, c0, exists = plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+		} else {
+			_, w0, e0, c0, exists = plainObj.GetOwnDescriptor(propName)
+		}
+		if exists && !c0 {
 			// Non-configurable: cannot change configurable or enumerable
 			if configurablePtr != nil && *configurablePtr != c0 {
 				return obj, nil
@@ -807,13 +903,23 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 		}
 		if hasGetter || hasSetter {
 			// Accessor path
-			plainObj.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+			if keyIsSymbol {
+				plainObj.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+			} else {
+				plainObj.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+			}
 		} else {
-			plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+			if keyIsSymbol {
+				plainObj.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+			} else {
+				plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+			}
 		}
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
-		// DictObject has no attributes; set value only
-		dictObj.SetOwn(propName, value)
+		// DictObject has no attributes; set value only for string keys; symbols unsupported
+		if !keyIsSymbol {
+			dictObj.SetOwn(propName, value)
+		}
 	}
 
 	return obj, nil
@@ -826,9 +932,12 @@ func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
+	var keyIsSymbol bool
 	var propName string
+	var propSym vm.Value
 	if args[1].Type() == vm.TypeSymbol {
-		propName = "@@symbol:" + args[1].AsSymbol()
+		keyIsSymbol = true
+		propSym = args[1]
 	} else {
 		propName = args[1].ToString()
 	}
@@ -842,7 +951,12 @@ func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
 	var value vm.Value
 
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		if g, s, e, c, ok := plainObj.GetOwnAccessor(propName); ok {
+		if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
+			if keyIsSymbol {
+				return plainObj.GetOwnAccessorByKey(vm.NewSymbolKey(propSym))
+			}
+			return plainObj.GetOwnAccessor(propName)
+		}(); ok {
 			// Accessor descriptor
 			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
 			if g.Type() != vm.TypeUndefined {
@@ -855,7 +969,12 @@ func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
 			descriptor.SetOwn("configurable", vm.BooleanValue(c))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
-		if v, w, e, c, ok := plainObj.GetOwnDescriptor(propName); ok {
+		if v, w, e, c, ok := func() (vm.Value, bool, bool, bool, bool) {
+			if keyIsSymbol {
+				return plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+			}
+			return plainObj.GetOwnDescriptor(propName)
+		}(); ok {
 			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
 			descriptor.SetOwn("value", v)
 			descriptor.SetOwn("writable", vm.BooleanValue(w))

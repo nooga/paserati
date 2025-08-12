@@ -48,13 +48,13 @@ func (ca *compilerAdapter) SetChecker(tc modules.TypeChecker) {
 // allowing variables and functions defined in one evaluation
 // to be used in subsequent ones.
 type Paserati struct {
-	vmInstance     *vm.VM
-	checker        *checker.Checker
-	compiler       *compiler.Compiler
-	moduleLoader   modules.ModuleLoader
-	heapAlloc      *compiler.HeapAlloc   // Unified global heap allocator
-	nativeResolver *NativeModuleResolver // *NativeModuleResolver - defined in native_module.go to avoid import cycles
-	ignoreTypeErrors bool                // When true, type checking errors are ignored and compilation continues
+	vmInstance       *vm.VM
+	checker          *checker.Checker
+	compiler         *compiler.Compiler
+	moduleLoader     modules.ModuleLoader
+	heapAlloc        *compiler.HeapAlloc   // Unified global heap allocator
+	nativeResolver   *NativeModuleResolver // *NativeModuleResolver - defined in native_module.go to avoid import cycles
+	ignoreTypeErrors bool                  // When true, type checking errors are ignored and compilation continues
 }
 
 // SetIgnoreTypeErrors sets whether type checking errors should be ignored
@@ -71,7 +71,7 @@ func (p *Paserati) Cleanup() {
 	if p.moduleLoader != nil {
 		p.moduleLoader.SetVMInstance(nil)
 	}
-	
+
 	// Clear references
 	p.vmInstance = nil
 	p.checker = nil
@@ -129,7 +129,7 @@ func NewPaseratiWithInitializersAndBaseDir(customInitializers []builtins.Builtin
 	moduleLoader.SetVMInstance(vmInstance)
 
 	// Initialize builtins using custom initializers
-	if err := initializeBuiltinsWithCustom(paserati, customInitializers); err != nil{
+	if err := initializeBuiltinsWithCustom(paserati, customInitializers); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
 	}
 
@@ -332,7 +332,7 @@ func (p *Paserati) RunString(sourceCode string) (vm.Value, []errors.PaseratiErro
 	// --- Compilation Step ---
 	// Set the compiler's ignore type errors flag based on our setting
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
-	
+
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
 		return vm.Undefined, compileAndTypeErrs
@@ -674,7 +674,7 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		// Compile the module
 		// Set the compiler's ignore type errors flag based on our setting
 		p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
-		
+
 		var compileErrs []errors.PaseratiError
 		chunk, compileErrs = p.compiler.Compile(moduleRecord.AST)
 		if len(compileErrs) > 0 {
@@ -762,7 +762,7 @@ func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Progr
 	// Compile with module mode enabled
 	// Set the compiler's ignore type errors flag based on our setting
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
-	
+
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
 		return vm.Undefined, compileAndTypeErrs
@@ -882,7 +882,7 @@ func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []e
 	// --- Compilation Step ---
 	// Set the compiler's ignore type errors flag based on our setting
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
-	
+
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
 		return vm.Undefined, compileAndTypeErrs
@@ -962,12 +962,34 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	}
 	heapAlloc.PreallocateBuiltins(globalNames)
 
+	// Debug: report the assigned index for 'Symbol' before installing globals
+	if idx, ok := heapAlloc.GetIndex("Symbol"); ok {
+		fmt.Printf("// [Driver DEBUG] PreallocateBuiltins: Symbol assigned index %d\n", idx)
+	} else {
+		fmt.Printf("// [Driver DEBUG] PreallocateBuiltins: Symbol not present in globalVariables before install\n")
+	}
+
 	// Set the heap allocator in the main compiler
 	comp.SetHeapAlloc(heapAlloc)
 
 	// Set up global variables in VM using the coordinated indices
 	indexMap := heapAlloc.GetNameToIndexMap()
-	return vmInstance.SetBuiltinGlobals(globalVariables, indexMap)
+	if err := vmInstance.SetBuiltinGlobals(globalVariables, indexMap); err != nil {
+		return err
+	}
+
+	// Debug: verify the runtime heap value at the 'Symbol' index right after install
+	if idx, ok := indexMap["Symbol"]; ok {
+		if val, exists := vmInstance.GetHeap().Get(idx); exists {
+			fmt.Printf("// [Driver DEBUG] Post-SetBuiltinGlobals: heap[%d] = %s (type=%s)\n", idx, val.Inspect(), val.TypeName())
+		} else {
+			fmt.Printf("// [Driver DEBUG] Post-SetBuiltinGlobals: heap[%d] missing\n", idx)
+		}
+	} else {
+		fmt.Printf("// [Driver DEBUG] Post-SetBuiltinGlobals: no index for 'Symbol' in indexMap\n")
+	}
+
+	return nil
 }
 
 // collectExportedValues collects the runtime values of exported variables from the VM
@@ -1108,7 +1130,7 @@ func (p *Paserati) preloadNativeModules(program *parser.Program) errors.Paserati
 func installBuiltinModules(p *Paserati) {
 	// HTTP module
 	p.DeclareModule("paserati/http", httpModule)
-	
+
 	// Add more modules here as we create them
 	// p.DeclareModule("paserati/fs", fsModule)
 	// p.DeclareModule("paserati/crypto", cryptoModule)

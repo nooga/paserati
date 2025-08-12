@@ -16,7 +16,7 @@ func (c *Checker) extractPropertyName(key parser.Expression) string {
 		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {
 			return constantName
 		}
-		
+
 		// For computed properties, try to evaluate the expression at compile time if possible
 		// For now, use a placeholder name
 		if ident, ok := k.Expr.(*parser.Identifier); ok {
@@ -46,7 +46,7 @@ func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression)
 		if obj, ok := e.Object.(*parser.Identifier); ok && obj.Value == "Symbol" {
 			if prop, ok := e.Property.(*parser.Identifier); ok && prop.Value == "iterator" {
 				debugPrintf("// [Checker Class] Detected Symbol.iterator constant computed property\n")
-				return "@@symbol:Symbol.iterator", true
+				return "__COMPUTED_PROPERTY__", true
 			}
 		}
 		debugPrintf("// [Checker Class] MemberExpression not Symbol.iterator: %T.%T\n", e.Object, e.Property)
@@ -95,7 +95,6 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 2. Handle inheritance relationships and create instance type from methods and properties
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
-
 
 	// 3. Register the class name as a type alias pointing to the instance type EARLY
 	// This allows static methods to use the class name in type annotations
@@ -153,7 +152,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 			defaultType := c.resolveTypeAnnotation(param.DefaultType)
 			if defaultType != nil {
 				typeParam.Default = defaultType
-				
+
 				// Validate that default type satisfies constraint if both are present
 				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
 					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
@@ -171,7 +170,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		if !genericEnv.DefineTypeParameter(typeParam.Name, typeParam) {
 			c.addError(node.TypeParameters[0].Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
 		}
-		
+
 		// Also make it available as a type alias for resolution
 		paramType := &types.TypeParameterType{
 			Parameter: typeParam,
@@ -229,7 +228,6 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	// 5. Create the instance type body with TypeParameterType references
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
-
 	// 6. Create constructor signature from constructor method
 	constructorSig := c.createConstructorSignature(node.Body, instanceType)
 
@@ -282,7 +280,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 func (c *Checker) createInstanceType(className string, body *parser.ClassBody, superClass parser.Expression, implements []*parser.Identifier) *types.ObjectType {
 	// Create class instance type with metadata
 	instanceType := types.NewClassInstanceType(className)
-	
+
 	// Set current instance type for use in method type inference
 	prevInstanceType := c.currentClassInstanceType
 	c.currentClassInstanceType = instanceType
@@ -377,7 +375,7 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 		if propType != nil {
 			// Add the property to the type
 			instanceType.Properties[propName] = propType
-			
+
 			// Add specific getter/setter metadata
 			if instanceType.ClassMeta != nil {
 				if getter != nil && setter != nil {
@@ -391,7 +389,7 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 					instanceType.ClassMeta.AddSetterMember(propName, accessLevel, false)
 				}
 			}
-			
+
 			debugPrintf("// [Checker Class] Added getter/setter property '%s' to instance type: %s (%s)\n",
 				propName, propType.String(), accessLevel.String())
 		}
@@ -460,7 +458,7 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 			if methodSig.IsAbstract {
 				methodType := c.inferMethodTypeFromSignature(methodSig)
 				accessLevel := c.getAccessLevel(methodSig.IsPublic, methodSig.IsPrivate, methodSig.IsProtected)
-				
+
 				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
 				debugPrintf("// [Checker Class] Added abstract method '%s' to instance type: %s\n", methodName, methodType.String())
 			}
@@ -471,7 +469,7 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 
 	// ADDED: Synthesize parameter properties from constructor before processing regular properties
 	c.synthesizeParameterProperties(body)
-	
+
 	// Add properties to instance type (excluding static properties)
 	for _, prop := range body.Properties {
 		if !prop.IsStatic {
@@ -561,17 +559,17 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 			if len(method.Value.TypeParameters) > 0 {
 				continue
 			}
-			
+
 			methodName := c.extractPropertyName(method.Key)
 			debugPrintf("// [Checker Class] Checking method body for '%s'\n", methodName)
-			
+
 			// Set appropriate context based on method kind
 			if method.Kind == "constructor" {
 				c.setClassContext(className, types.AccessContextConstructor)
 			} else {
 				c.setClassContext(className, types.AccessContextInstanceMethod)
 			}
-			
+
 			// Check the method body - but preserve the context established here
 			c.checkMethodBodyWithContext(method.Value)
 		}
@@ -585,15 +583,15 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 	savedThisType := c.currentThisType
 	savedInstanceType := c.currentClassInstanceType
 	savedEnv := c.env
-	
+
 	// Create a new environment scope for the method body
 	c.env = NewEnclosedEnvironment(c.env)
-	
+
 	// Restore class context (it should already be set from the calling context)
 	c.currentClassContext = savedClassContext
 	c.currentThisType = savedThisType
 	c.currentClassInstanceType = savedInstanceType
-	
+
 	// Set up 'super' in the environment if the class has a parent
 	if savedInstanceType != nil && savedInstanceType.ClassMeta != nil && savedInstanceType.ClassMeta.SuperClassName != "" {
 		// For constructor context, super should be the parent constructor
@@ -610,7 +608,7 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 			}
 		}
 	}
-	
+
 	defer func() {
 		// Restore environment and context after checking
 		c.env = savedEnv
@@ -618,7 +616,7 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 		c.currentThisType = savedThisType
 		c.currentClassInstanceType = savedInstanceType
 	}()
-	
+
 	// Check the function literal
 	c.checkFunctionLiteral(fn)
 }
@@ -773,7 +771,7 @@ func (c *Checker) isEmptyFunctionBody(body parser.Node) bool {
 
 // inferMethodType determines the type of a class method
 func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
-	
+
 	if method.Value == nil {
 		methodName := c.extractPropertyName(method.Key)
 		debugPrintf("// [Checker Class] Method '%s' has no function value, using Any\n", methodName)
@@ -784,7 +782,7 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	if len(method.Value.TypeParameters) > 0 {
 		// Check the method's function literal which will handle type parameters
 		c.checkFunctionLiteral(method.Value)
-		
+
 		// Get the computed type from the function literal
 		if computedType := method.Value.GetComputedType(); computedType != nil {
 			return computedType
@@ -916,7 +914,7 @@ func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type
 	originalEnv := c.env
 	if len(fn.TypeParameters) > 0 {
 		typeParamEnv := NewEnclosedEnvironment(c.env)
-		
+
 		// Define each type parameter in the environment
 		for i, typeParamNode := range fn.TypeParameters {
 			// Resolve default type if present
@@ -924,7 +922,7 @@ func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type
 			if typeParamNode.DefaultType != nil {
 				defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
 			}
-			
+
 			// Create the type parameter
 			typeParam := &types.TypeParameter{
 				Name:       typeParamNode.Name.Value,
@@ -932,16 +930,16 @@ func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type
 				Default:    defaultType,
 				Index:      i,
 			}
-			
+
 			// Create a type parameter type
 			typeParamType := &types.TypeParameterType{
 				Parameter: typeParam,
 			}
-			
+
 			// Define in the environment
 			typeParamEnv.DefineTypeAlias(typeParam.Name, typeParamType)
 		}
-		
+
 		// Use the type param environment for resolving parameter types
 		c.env = typeParamEnv
 	}
@@ -972,7 +970,7 @@ func (c *Checker) extractOptionalParams(fn *parser.FunctionLiteral) []bool {
 	optionalParams := make([]bool, len(fn.Parameters))
 
 	for i, param := range fn.Parameters {
-		// A parameter is optional if it's explicitly marked optional (y?: number) 
+		// A parameter is optional if it's explicitly marked optional (y?: number)
 		// or if it has a default value (y: number = 42)
 		optionalParams[i] = param.Optional || param.DefaultValue != nil
 	}
@@ -991,7 +989,7 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 		originalEnv := c.env
 		if len(fn.TypeParameters) > 0 {
 			typeParamEnv := NewEnclosedEnvironment(c.env)
-			
+
 			// Define each type parameter in the environment
 			for i, typeParamNode := range fn.TypeParameters {
 				// Resolve default type if present
@@ -999,7 +997,7 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 				if typeParamNode.DefaultType != nil {
 					defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
 				}
-				
+
 				// Create the type parameter
 				typeParam := &types.TypeParameter{
 					Name:       typeParamNode.Name.Value,
@@ -1007,26 +1005,26 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 					Default:    defaultType,
 					Index:      i,
 				}
-				
+
 				// Create a type parameter type
 				typeParamType := &types.TypeParameterType{
 					Parameter: typeParam,
 				}
-				
+
 				// Define in the environment
 				typeParamEnv.DefineTypeAlias(typeParam.Name, typeParamType)
 			}
-			
+
 			// Use the type param environment for resolving rest parameter type
 			c.env = typeParamEnv
 		}
 
 		// Use explicit type annotation
 		restType := c.resolveTypeAnnotation(fn.RestParameter.TypeAnnotation)
-		
+
 		// Restore original environment
 		c.env = originalEnv
-		
+
 		if restType != nil {
 			return restType
 		}
@@ -1050,9 +1048,9 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	// Handle different superclass types
 	var constructorType types.Type
 	var exists bool
-	
+
 	debugPrintf("// [Checker Class] Analyzing superclass expression type: %T\n", superClassExpr)
-	
+
 	// If it's a simple identifier, try to resolve it as a variable (class constructor)
 	if ident, ok := superClassExpr.(*parser.Identifier); ok {
 		debugPrintf("// [Checker Class] Superclass is simple identifier: %s\n", ident.Value)
@@ -1074,18 +1072,18 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 			return
 		}
 		debugPrintf("// [Checker Class] Found generic base constructor '%s': %T\n", genRef.Name.Value, baseConstructor)
-		
+
 		// Properly instantiate the generic constructor with type arguments
 		if len(genRef.TypeArguments) > 0 {
 			debugPrintf("// [Checker Class] Instantiating generic base constructor with %d type args\n", len(genRef.TypeArguments))
-			
+
 			// Resolve type arguments to types
 			resolvedTypeArgs := make([]types.Type, len(genRef.TypeArguments))
 			for i, typeArg := range genRef.TypeArguments {
 				resolvedTypeArgs[i] = c.resolveTypeAnnotation(typeArg)
 				debugPrintf("// [Checker Class] Resolved type arg %d: %s\n", i, resolvedTypeArgs[i].String())
 			}
-			
+
 			instantiatedConstructor := c.instantiateGenericType(baseConstructor.(*types.GenericType), resolvedTypeArgs, nil)
 			constructorType = instantiatedConstructor
 		} else {
@@ -1101,7 +1099,7 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		constructorType = superType
 		exists = true
 	}
-	
+
 	debugPrintf("// [Checker Class] About to check exists flag: exists=%t\n", exists)
 	if !exists {
 		debugPrintf("// [Checker Class] ERROR: exists = false after constructor resolution\n")
@@ -1113,7 +1111,7 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	// Verify constructorType is a constructor (class)
 	var superObjType *types.ObjectType
 	var ok bool
-	
+
 	// Handle both ObjectType (regular classes) and GenericType (generic classes)
 	switch ct := constructorType.(type) {
 	case *types.ObjectType:
@@ -1130,7 +1128,7 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	default:
 		ok = false
 	}
-	
+
 	if !ok {
 		c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassExpr.String()))
 		return
@@ -1325,7 +1323,7 @@ func (c *Checker) inferReturnType(fn *parser.FunctionLiteral) types.Type {
 		originalEnv := c.env
 		if len(fn.TypeParameters) > 0 {
 			typeParamEnv := NewEnclosedEnvironment(c.env)
-			
+
 			// Define each type parameter in the environment
 			for i, typeParamNode := range fn.TypeParameters {
 				// Resolve default type if present
@@ -1333,7 +1331,7 @@ func (c *Checker) inferReturnType(fn *parser.FunctionLiteral) types.Type {
 				if typeParamNode.DefaultType != nil {
 					defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
 				}
-				
+
 				// Create the type parameter
 				typeParam := &types.TypeParameter{
 					Name:       typeParamNode.Name.Value,
@@ -1341,26 +1339,26 @@ func (c *Checker) inferReturnType(fn *parser.FunctionLiteral) types.Type {
 					Default:    defaultType,
 					Index:      i,
 				}
-				
+
 				// Create a type parameter type
 				typeParamType := &types.TypeParameterType{
 					Parameter: typeParam,
 				}
-				
+
 				// Define in the environment
 				typeParamEnv.DefineTypeAlias(typeParam.Name, typeParamType)
 			}
-			
+
 			// Use the type param environment for resolving return type
 			c.env = typeParamEnv
 		}
 
 		// Use explicit return type annotation
 		returnType := c.resolveTypeAnnotation(fn.ReturnTypeAnnotation)
-		
+
 		// Restore original environment
 		c.env = originalEnv
-		
+
 		if returnType != nil {
 			return returnType
 		}
@@ -1463,33 +1461,33 @@ func (c *Checker) synthesizeParameterProperties(body *parser.ClassBody) {
 			break
 		}
 	}
-	
+
 	if constructor == nil || constructor.Value == nil {
 		return // No constructor or no function literal
 	}
-	
+
 	// Process constructor parameters
 	for _, param := range constructor.Value.Parameters {
 		// Check if this parameter has property modifiers
 		if param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly {
 			// Create a synthetic PropertyDefinition for this parameter property
 			propDef := &parser.PropertyDefinition{
-				Token:       param.Token,
-				Key:         param.Name, // Use parameter name as property key
-				Value:       nil,        // Parameter properties have no initializer
+				Token:          param.Token,
+				Key:            param.Name,           // Use parameter name as property key
+				Value:          nil,                  // Parameter properties have no initializer
 				TypeAnnotation: param.TypeAnnotation, // Use parameter's type annotation
-				Optional:    param.Optional, // Parameter properties inherit optional status
-				IsStatic:    false,      // Parameter properties are always instance properties
-				Readonly:    param.IsReadonly,
-				IsPublic:    param.IsPublic,
-				IsPrivate:   param.IsPrivate,
-				IsProtected: param.IsProtected,
+				Optional:       param.Optional,       // Parameter properties inherit optional status
+				IsStatic:       false,                // Parameter properties are always instance properties
+				Readonly:       param.IsReadonly,
+				IsPublic:       param.IsPublic,
+				IsPrivate:      param.IsPrivate,
+				IsProtected:    param.IsProtected,
 			}
-			
+
 			// Add this synthetic property to the class body
 			body.Properties = append(body.Properties, propDef)
-			
-			debugPrintf("// [Checker Class] Synthesized parameter property '%s' (public: %t, private: %t, protected: %t, readonly: %t)\n", 
+
+			debugPrintf("// [Checker Class] Synthesized parameter property '%s' (public: %t, private: %t, protected: %t, readonly: %t)\n",
 				param.Name.Value, param.IsPublic, param.IsPrivate, param.IsProtected, param.IsReadonly)
 		}
 	}

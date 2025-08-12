@@ -22,7 +22,7 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {
 			return constantName
 		}
-		
+
 		// For computed properties, try to evaluate the expression at compile time if possible
 		// For now, use a placeholder name
 		if ident, ok := k.Expr.(*parser.Identifier); ok {
@@ -48,10 +48,10 @@ func (c *Compiler) tryExtractConstantComputedPropertyName(expr parser.Expression
 	case *parser.NumberLiteral:
 		return fmt.Sprintf("%v", e.Value), true
 	case *parser.MemberExpression:
-		// Check for Symbol.iterator
+		// Check for Symbol.iterator but do not stringize; let runtime carry the singleton symbol
 		if obj, ok := e.Object.(*parser.Identifier); ok && obj.Value == "Symbol" {
 			if prop, ok := e.Property.(*parser.Identifier); ok && prop.Value == "iterator" {
-				return "@@symbol:Symbol.iterator", true
+				return "__COMPUTED_PROPERTY__", true
 			}
 		}
 		return "", false

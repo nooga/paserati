@@ -14,9 +14,9 @@ const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
 // Debug flags - set these to control debug output
-const debugVM = true         // VM execution tracing
-const debugCalls = true      // Function call tracing
-const debugExceptions = true // Exception handling tracing
+const debugVM = false         // VM execution tracing
+const debugCalls = false      // Function call tracing
+const debugExceptions = false // Exception handling tracing
 
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
@@ -1459,8 +1459,14 @@ startExecution:
 			indexReg := code[ip+2]
 			ip += 3
 
+			if debugVM {
+				fmt.Printf("[DBG OpGetIndex regs] dest=R%d base=R%d index=R%d\n", destReg, baseReg, indexReg)
+			}
 			baseVal := registers[baseReg]
 			indexVal := registers[indexReg]
+			if debugVM {
+				fmt.Printf("[DBG OpGetIndex vals] base=%s(%s) index=%s(%s)\n", baseVal.Inspect(), baseVal.TypeName(), indexVal.Inspect(), indexVal.TypeName())
+			}
 
 			// --- MODIFIED: Handle Array, Arguments, Object, String ---
 			switch baseVal.Type() {
@@ -1481,8 +1487,11 @@ startExecution:
 					case TypeString:
 						key = AsString(indexVal)
 					case TypeSymbol:
-						// Use the symbol's string representation with prefix
-						key = "@@symbol:" + indexVal.AsSymbol()
+						// Use symbol key path
+						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
+							return status, value
+						}
+						continue
 					default:
 						frame.ip = ip
 						status := vm.runtimeError("Array index must be a number, string, or symbol, got '%v'", indexVal.Type())
@@ -1518,12 +1527,16 @@ startExecution:
 					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
 					// Or: key = fmt.Sprintf("%v", AsNumber(indexVal))
 				case TypeSymbol:
-					// Use the symbol's string representation with a unique prefix to avoid conflicts
-					key = "@@symbol:" + indexVal.AsSymbol()
+					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						return status, value
+					}
+					continue
 				default:
-					frame.ip = ip
-					status := vm.runtimeError("Object index must be a string, number, or symbol, got '%v'", indexVal.Type())
-					return status, Undefined
+					// For arbitrary base objects, support computed property by routing through opGetProp/Boxing rules
+					if ok, status, value := vm.opGetProp(ip, &baseVal, indexVal.ToString(), &registers[destReg]); !ok {
+						return status, value
+					}
+					continue
 				}
 
 				if baseVal.Type() == TypeDictObject {
@@ -1560,8 +1573,10 @@ startExecution:
 					case TypeString:
 						key = AsString(indexVal)
 					case TypeSymbol:
-						// Use the symbol's string representation with prefix
-						key = "@@symbol:" + indexVal.AsSymbol()
+						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
+							return status, value
+						}
+						continue
 					default:
 						frame.ip = ip
 						status := vm.runtimeError("String index must be a number, string, or symbol, got '%v'", indexVal.Type())
@@ -1585,26 +1600,49 @@ startExecution:
 				registers[destReg] = ta.GetElement(idx)
 
 			case TypeGenerator:
-				// Generators support property access via prototype chain (like Symbol.iterator)
-				var key string
+				// Generators support property access via prototype chain (string or symbol keys)
 				switch indexVal.Type() {
 				case TypeString:
-					key = AsString(indexVal)
+					key := AsString(indexVal)
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
 				case TypeSymbol:
-					// Use the symbol's string representation with prefix
-					key = "@@symbol:" + indexVal.AsSymbol()
+					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						return status, value
+					}
 				default:
 					frame.ip = ip
 					status := vm.runtimeError("Generator index must be a string or symbol, got '%v'", indexVal.Type())
 					return status, Undefined
 				}
 
-				// Use opGetProp to access generator properties (handles prototype chain)
-				if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-					return status, value
+			case TypeFunction, TypeNativeFunction, TypeNativeFunctionWithProps, TypeClosure, TypeBoundFunction, TypeAsyncNativeFunction:
+				// Route computed access on callables through property paths
+				switch indexVal.Type() {
+				case TypeString:
+					key := AsString(indexVal)
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
+					return InterpretOK, registers[destReg]
+				case TypeSymbol:
+					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						return status, value
+					}
+					return InterpretOK, registers[destReg]
+				default:
+					frame.ip = ip
+					status := vm.runtimeError("Callable index must be a string or symbol, got '%v'", indexVal.Type())
+					return status, Undefined
 				}
 
 			default:
+				// Temporary debug to track invalid OpGetIndex bases in iterator paths
+				if debugVM {
+					fmt.Printf("[DBG OpGetIndex] invalid base type: %s value=%s index=%s type=%s ip=%d\n",
+						baseVal.TypeName(), baseVal.Inspect(), indexVal.Inspect(), indexVal.TypeName(), ip)
+				}
 				frame.ip = ip
 				status := vm.runtimeError("Cannot index non-array/object/string/typedarray/generator type '%v' at IP %d", baseVal.Type(), ip)
 				return status, Undefined
@@ -1676,8 +1714,14 @@ startExecution:
 				case TypeFloatNumber, TypeIntegerNumber:
 					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
 				case TypeSymbol:
-					// Use the symbol's string representation with a unique prefix to avoid conflicts
-					key = "@@symbol:" + indexVal.AsSymbol()
+					if baseVal.Type() == TypeDictObject {
+						// DictObject does not support symbol keys; no legacy stringization
+						// Skip setting silently (spec-incomplete structure)
+						continue
+					}
+					obj := AsPlainObject(baseVal)
+					obj.DefineOwnPropertyByKey(NewSymbolKey(indexVal), valueVal, nil, nil, nil)
+					continue
 				default:
 					frame.ip = ip
 					status := vm.runtimeError("Object index must be a string, number, or symbol, got '%v'", indexVal.Type())

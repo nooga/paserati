@@ -19,8 +19,10 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	}
 
 	// Debug trace for tricky harness props
-	if propName == "name" || propName == "constructor" {
-		fmt.Printf("[DBG opGetProp] '%s' on %s (%s)\n", propName, objVal.Inspect(), objVal.TypeName())
+	if debugVM {
+		if propName == "name" || propName == "constructor" {
+			fmt.Printf("[DBG opGetProp] '%s' on %s (%s)\n", propName, objVal.Inspect(), objVal.TypeName())
+		}
 	}
 
 	// 1. Special properties (.length, etc.)
@@ -39,8 +41,10 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	if objVal.Type() == TypeNativeFunctionWithProps {
 		nativeFnWithProps := objVal.AsNativeFunctionWithProps()
 		if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
-			if propName == "name" || propName == "constructor" {
-				fmt.Printf("[DBG opGetProp] '%s' hit own property on NativeFunctionWithProps: %s (%s)\n", propName, prop.Inspect(), prop.TypeName())
+			if debugVM {
+				if propName == "name" || propName == "constructor" {
+					fmt.Printf("[DBG opGetProp] '%s' hit own property on NativeFunctionWithProps: %s (%s)\n", propName, prop.Inspect(), prop.TypeName())
+				}
 			}
 			*dest = prop
 			return true, InterpretOK, *dest
@@ -50,8 +54,10 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	// 4. Functions, Closures, Native Functions, Native Functions with Props, Async Native Functions, and Bound Functions (unified handling)
 	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypeBoundFunction || objVal.Type() == TypeNativeFunction || objVal.Type() == TypeNativeFunctionWithProps || objVal.Type() == TypeAsyncNativeFunction {
 		if result, handled := vm.handleCallableProperty(*objVal, propName); handled {
-			if propName == "name" || propName == "constructor" {
-				fmt.Printf("[DBG opGetProp] '%s' via handleCallableProperty -> %s (%s)\n", propName, result.Inspect(), result.TypeName())
+			if debugVM {
+				if propName == "name" || propName == "constructor" {
+					fmt.Printf("[DBG opGetProp] '%s' via handleCallableProperty -> %s (%s)\n", propName, result.Inspect(), result.TypeName())
+				}
 			}
 			*dest = result
 			return true, InterpretOK, *dest
@@ -89,7 +95,7 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	}
 
 	// Additional debug: when asking for 'constructor' on an object, show prototype's name if present
-	if propName == "constructor" && objVal.Type() == TypeObject {
+	if debugVM && propName == "constructor" && objVal.Type() == TypeObject {
 		po := AsPlainObject(*objVal)
 		proto := po.GetPrototype()
 		protoName := "<no name>"
@@ -199,6 +205,80 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	}
 
 	// Shouldn't reach here, but handle as undefined
+	*dest = Undefined
+	return true, InterpretOK, *dest
+}
+
+// opGetPropSymbol handles property get where the key is a symbol Value.
+func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) (bool, InterpretResult, Value) {
+	// Resolve a prototype-backed view for primitives
+	base := *objVal
+	switch base.Type() {
+	case TypeString:
+		// Emulate boxing: access via String.prototype
+		proto := vm.StringPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk prototype chain from String.prototype
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		// Not found on String.prototype chain for symbol key
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// PlainObject: search by symbol identity
+	if base.Type() == TypeObject {
+		po := AsPlainObject(base)
+		if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+			*dest = v
+			return true, InterpretOK, *dest
+		}
+		// Walk prototype chain
+		current := po.GetPrototype()
+		for current.typ != TypeNull && current.typ != TypeUndefined {
+			if current.IsObject() {
+				if proto := current.AsPlainObject(); proto != nil {
+					if v, ok := proto.GetOwnByKey(NewSymbolKey(symKey)); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					current = proto.prototype
+				} else if dict := current.AsDictObject(); dict != nil {
+					current = dict.prototype
+				} else {
+					break
+				}
+			} else {
+				break
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// DictObject: no symbol identity support yet
 	*dest = Undefined
 	return true, InterpretOK, *dest
 }

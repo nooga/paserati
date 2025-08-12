@@ -1053,11 +1053,30 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	// === ITERATOR PROTOCOL PATH: For generators, user-defined iterables ===
 	c.patchJump(iteratorPathJump) // Patch to land here
 
-	// Get Symbol.iterator method
-	symbolIteratorIdx := c.chunk.AddConstant(vm.String("@@symbol:Symbol.iterator"))
+	// Get Symbol.iterator via computed index to preserve the singleton identity
 	iteratorMethodReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorMethodReg)
-	c.emitGetProp(iteratorMethodReg, iterableReg, symbolIteratorIdx, node.Token.Line)
+	// Load global Symbol via unified global index
+	symbolObjReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, symbolObjReg)
+	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	c.emitGetGlobal(symbolObjReg, symIdx, node.Token.Line)
+	// Prepare "iterator" name BEFORE get
+	propNameReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, propNameReg)
+	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), node.Token.Line)
+	// iteratorKey = Symbol["iterator"]
+	iteratorKeyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iteratorKeyReg)
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+	c.emitByte(byte(iteratorKeyReg)) // Dest
+	c.emitByte(byte(symbolObjReg))   // Base
+	c.emitByte(byte(propNameReg))    // Key
+	// method = iterable[iteratorKey]
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+	c.emitByte(byte(iteratorMethodReg)) // Dest
+	c.emitByte(byte(iterableReg))       // Base
+	c.emitByte(byte(iteratorKeyReg))    // Key
 
 	// Call the iterator method to get iterator (use method call to preserve 'this' binding)
 	iteratorObjReg := c.regAlloc.Alloc()

@@ -57,8 +57,8 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 				Generic:       iteratorGeneric,
 				TypeArguments: []types.Type{types.String},
 			}
-			// Add [Symbol.iterator](): Iterator<string> method
-			stringProtoType = stringProtoType.WithProperty("@@symbol:Symbol.iterator", 
+			// Add [Symbol.iterator](): Iterator<string> method (computed symbol key in types)
+			stringProtoType = stringProtoType.WithProperty("__COMPUTED_PROPERTY__",
 				types.NewSimpleFunction([]types.Type{}, iteratorOfString.Substitute()))
 		}
 	}
@@ -354,7 +354,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// No separator - return array with whole string
 			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)}), nil
 		}
-		
+
 		separatorArg := args[0]
 		limit := -1
 		if len(args) >= 2 {
@@ -365,12 +365,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.NewArray(), nil
 			}
 		}
-		
+
 		if separatorArg.IsRegExp() {
 			// RegExp separator
 			regex := separatorArg.AsRegExpObject()
 			compiledRegex := regex.GetCompiledRegex()
-			
+
 			parts := compiledRegex.Split(thisStr, -1)
 			if limit > 0 && len(parts) > limit {
 				parts = parts[:limit]
@@ -396,7 +396,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 				return vm.NewArrayWithArgs(elements), nil
 			}
-			
+
 			// Normal string split
 			parts := strings.Split(thisStr, separator)
 			if limit > 0 && len(parts) > limit {
@@ -415,15 +415,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 2 {
 			return vm.NewString(thisStr), nil
 		}
-		
+
 		searchArg := args[0]
 		replaceValue := args[1].ToString()
-		
+
 		if searchArg.IsRegExp() {
 			// RegExp argument
 			regex := searchArg.AsRegExpObject()
 			compiledRegex := regex.GetCompiledRegex()
-			
+
 			if regex.IsGlobal() {
 				// Global replace: replace all matches
 				result := compiledRegex.ReplaceAllString(thisStr, replaceValue)
@@ -450,13 +450,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.Null, nil
 		}
-		
+
 		arg := args[0]
 		if arg.IsRegExp() {
 			// RegExp argument
 			regex := arg.AsRegExpObject()
 			compiledRegex := regex.GetCompiledRegex()
-			
+
 			if regex.IsGlobal() {
 				// Global match: find all matches
 				matches := compiledRegex.FindAllString(thisStr, -1)
@@ -497,13 +497,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
 		}
-		
+
 		arg := args[0]
 		if arg.IsRegExp() {
 			// RegExp argument
 			regex := arg.AsRegExpObject()
 			compiledRegex := regex.GetCompiledRegex()
-			
+
 			loc := compiledRegex.FindStringIndex(thisStr)
 			if loc == nil {
 				return vm.NumberValue(-1), nil
@@ -554,15 +554,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	stringProto.SetOwn("constructor", stringCtor)
 
-	// Add Symbol.iterator implementation for strings
-	// Use the global SymbolIterator (Symbol initializes before String now)
-	symbolIteratorKey := "@@symbol:" + SymbolIterator.AsSymbol()
-	stringProto.SetOwn(symbolIteratorKey, vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+	// Add Symbol.iterator implementation for strings (native symbol key)
+	strIterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
-		
+
 		// Create a string iterator object
 		return createStringIterator(vmInstance, thisStr), nil
-	}))
+	})
+	stringProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), strIterFn, nil, nil, nil)
 
 	// Set String prototype in VM
 	vmInstance.StringPrototype = vm.NewValueFromPlainObject(stringProto)
@@ -575,15 +574,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
 	// Create iterator object inheriting from Object.prototype
 	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-	
+
 	// Iterator state: current index
 	currentIndex := 0
-	
+
 	// Add next() method to iterator
 	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		// Create iterator result object {value, done}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		
+
 		if currentIndex >= len(str) {
 			// Iterator is exhausted
 			result.SetOwn("value", vm.Undefined)
@@ -595,9 +594,9 @@ func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
 			result.SetOwn("done", vm.BooleanValue(false))
 			currentIndex++
 		}
-		
+
 		return vm.NewValueFromPlainObject(result), nil
 	}))
-	
+
 	return vm.NewValueFromPlainObject(iterator)
 }

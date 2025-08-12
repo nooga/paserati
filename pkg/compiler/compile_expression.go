@@ -184,6 +184,8 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			return BadRegister, NewCompileError(computedKey.Expr, "error compiling computed property key").CausedBy(err)
 		}
 		propertyName = "__computed__" // For debug purposes only
+		// Note: if the computed key evaluates to a well-known symbol (e.g., Symbol.iterator),
+		// the VM OpGetIndex will handle symbol identity efficiently. No extra emission needed here.
 	} else {
 		// Regular property access: obj.prop
 		isComputedProperty = false
@@ -196,7 +198,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	debugPrintf("// DEBUG compileMemberExpression: objectType for '%s': %v\n", propertyName, objectStaticType)
 	if objectStaticType == nil {
 		debugPrintf("// DEBUG compileMemberExpression: Object node type: %T, Object computed type is NIL for property '%s'\n", node.Object, propertyName)
-		
+
 		// REGRESSION FIX: Handle Symbol.iterator when type checking didn't set computed type
 		// This is a workaround for the with statement regression
 		if identNode, ok := node.Object.(*parser.Identifier); ok && identNode.Value == "Symbol" {
@@ -227,7 +229,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 					return hint, nil
 				}
 			}
-			
+
 			// Check for object literal getters by looking at object properties
 			if objType.Properties != nil {
 				getterPropertyName := "__get__" + propertyName
@@ -245,7 +247,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			}
 		}
 	}
-	
+
 	// 4. Special case for .length (moved before optimistic getter to fix try/finally blocks)
 	if !isComputedProperty && propertyName == "length" {
 		// Check the static type provided by the checker
@@ -270,7 +272,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			debugPrintf("// DEBUG CompileMember: .length requested on non-array/string type %s (widened from %s). Falling through to OpGetProp.\n",
 				widenedObjectType.String(), objectStaticType.String())
 		}
-		
+
 		// For .length property access without type info, always use OpGetProp with "length"
 		// This ensures string.length works even in try/finally blocks where objectStaticType is nil
 		propertyIdx := c.chunk.AddConstant(vm.String(propertyName))
@@ -278,7 +280,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		return hint, nil
 	}
 
-	// 5. Fallback: Optimistic getter call when type information is unavailable  
+	// 5. Fallback: Optimistic getter call when type information is unavailable
 	if !isComputedProperty && objectStaticType == nil {
 		// No type information available - use optimistic approach as fallback
 		getterMethodName := "__get__" + propertyName
@@ -1157,8 +1159,8 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 				return BadRegister, err
 			}
 			c.emitOpCode(vm.OpGetIndex, memberExpr.Token.Line)
-			c.emitByte(byte(funcReg))    // Destination register
-			c.emitByte(byte(thisReg))    // Object register
+			c.emitByte(byte(funcReg))     // Destination register
+			c.emitByte(byte(thisReg))     // Object register
 			c.emitByte(byte(propertyReg)) // Key register
 		} else {
 			// Regular property: obj.prop()
@@ -1706,11 +1708,31 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	}
 
 	// 2. Get the Symbol.iterator method
-	// Load Symbol.iterator constant
-	symbolIteratorIdx := c.chunk.AddConstant(vm.String("@@symbol:Symbol.iterator"))
+	// Load Symbol.iterator via computed index to preserve singleton identity.
 	iteratorMethodReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorMethodReg)
-	c.emitGetProp(iteratorMethodReg, iterableReg, symbolIteratorIdx, node.Token.Line)
+	// Compile computed key: (Symbol).iterator
+	symbolObjReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, symbolObjReg)
+	// Load global 'Symbol' identifier via unified global index
+	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	c.emitGetGlobal(symbolObjReg, symIdx, node.Token.Line)
+	// Prepare property name constant BEFORE emitting OpGetIndex
+	propNameReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, propNameReg)
+	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), node.Token.Line)
+	// iteratorKey = Symbol["iterator"]
+	iteratorKeyReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, iteratorKeyReg)
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+	c.emitByte(byte(iteratorKeyReg)) // Dest
+	c.emitByte(byte(symbolObjReg))   // Base: Symbol
+	c.emitByte(byte(propNameReg))    // Key: "iterator"
+	// Now get iterable[iteratorKey]
+	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+	c.emitByte(byte(iteratorMethodReg)) // Dest
+	c.emitByte(byte(iterableReg))       // Base: iterable
+	c.emitByte(byte(iteratorKeyReg))    // Key: Symbol.iterator
 
 	// 3. Call the iterator method to get the iterator
 	iteratorReg := c.regAlloc.Alloc()
@@ -1752,7 +1774,7 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	c.emitOpCode(vm.OpNot, node.Token.Line)
 	c.emitByte(byte(notDoneReg))
 	c.emitByte(byte(doneReg))
-	
+
 	// Now jump if notDone is false (i.e., done was true)
 	exitLoopJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
 

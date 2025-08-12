@@ -1185,15 +1185,21 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 							}
 						}
 					} else {
-						// Delete the property
-						delName := nameStr
+						// Delete the property using proper key kind
 						if key.Type() == vm.TypeSymbol {
-							delName = "@@symbol:" + key.AsSymbol()
-						}
-						if po := obj.AsPlainObject(); po != nil {
-							_ = po.DeleteOwn(delName)
-						} else if d := obj.AsDictObject(); d != nil {
-							_ = d.DeleteOwn(delName)
+							if po := obj.AsPlainObject(); po != nil {
+								_ = po.DeleteOwnByKey(vm.NewSymbolKey(key))
+							} else if d := obj.AsDictObject(); d != nil {
+								// DictObject does not support symbol keys; nothing to delete
+								_ = d.DeleteOwn("")
+							}
+						} else {
+							delName := nameStr
+							if po := obj.AsPlainObject(); po != nil {
+								_ = po.DeleteOwn(delName)
+							} else if d := obj.AsDictObject(); d != nil {
+								_ = d.DeleteOwn(delName)
+							}
 						}
 					}
 					return vm.Undefined, nil
@@ -1201,14 +1207,20 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 			}
 		}
 		// Default behavior: delete the property to leave object clean
-		delName := nameStr
 		if key.Type() == vm.TypeSymbol {
-			delName = "@@symbol:" + key.AsSymbol()
-		}
-		if po := obj.AsPlainObject(); po != nil {
-			_ = po.DeleteOwn(delName)
-		} else if d := obj.AsDictObject(); d != nil {
-			_ = d.DeleteOwn(delName)
+			if po := obj.AsPlainObject(); po != nil {
+				_ = po.DeleteOwnByKey(vm.NewSymbolKey(key))
+			} else if d := obj.AsDictObject(); d != nil {
+				// DictObject does not support symbols; nothing to delete
+				_ = d.DeleteOwn("")
+			}
+		} else {
+			delName := nameStr
+			if po := obj.AsPlainObject(); po != nil {
+				_ = po.DeleteOwn(delName)
+			} else if d := obj.AsDictObject(); d != nil {
+				_ = d.DeleteOwn(delName)
+			}
 		}
 
 		return vm.Undefined, nil

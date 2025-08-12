@@ -35,7 +35,7 @@ func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Iterator<T> interface
 	// interface Iterator<T> { next(): IteratorResult<T>; }
 	iteratorType := types.NewObjectType().
-		WithProperty("next", types.NewSimpleFunction([]types.Type{}, 
+		WithProperty("next", types.NewSimpleFunction([]types.Type{},
 			&types.InstantiatedType{
 				Generic:       iteratorResultGeneric,
 				TypeArguments: []types.Type{tType},
@@ -51,7 +51,7 @@ func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Iterable<T> interface
 	// interface Iterable<T> { [Symbol.iterator](): Iterator<T>; }
 	iterableType := types.NewObjectType().
-		WithProperty("@@symbol:Symbol.iterator", types.NewSimpleFunction([]types.Type{},
+		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction([]types.Type{},
 			&types.InstantiatedType{
 				Generic:       iteratorGeneric,
 				TypeArguments: []types.Type{tType},

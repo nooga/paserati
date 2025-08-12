@@ -274,8 +274,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					if objectIdent.Value == "Symbol" {
 						if propertyIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
 							if propertyIdent.Value == "iterator" {
-								// This is Symbol.iterator - use the internal representation
-								keyName = "@@symbol:Symbol.iterator"
+								// This is Symbol.iterator - treat as computed symbol key (no stringization)
+								keyName = "__COMPUTED_PROPERTY__"
 							} else {
 								// Other Symbol properties - use generic @@symbol: prefix
 								keyName = "@@symbol:" + propertyIdent.Value
@@ -373,8 +373,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					if objectIdent.Value == "Symbol" {
 						if propertyIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
 							if propertyIdent.Value == "iterator" {
-								// This is Symbol.iterator - use the internal representation
-								keyName = "@@symbol:Symbol.iterator"
+								// This is Symbol.iterator - treat as computed symbol key
+								keyName = "__COMPUTED_PROPERTY__"
 							} else {
 								// Other Symbol properties - use generic @@symbol: prefix
 								keyName = "@@symbol:" + propertyIdent.Value
@@ -520,8 +520,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					if objectIdent.Value == "Symbol" {
 						if propertyIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
 							if propertyIdent.Value == "iterator" {
-								// This is Symbol.iterator - use the internal representation
-								keyName = "@@symbol:Symbol.iterator"
+								// This is Symbol.iterator - treat as computed symbol key
+								keyName = "__COMPUTED_PROPERTY__"
 							} else {
 								// Other Symbol properties - use generic @@symbol: prefix
 								keyName = "@@symbol:" + propertyIdent.Value
@@ -635,6 +635,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		if key == "__COMPUTED_PROPERTY__" {
 			hasComputedProperties = true
 			computedValueTypes = append(computedValueTypes, valueType)
+			// Special-case: if the computed key expression was Symbol.iterator, record an explicit property marker
+			// so iterable detection can succeed.
+			finalFields["__COMPUTED_PROPERTY__"] = valueType
 		} else {
 			finalFields[key] = valueType
 		}
@@ -2031,7 +2034,8 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 				}
 			}
 
-			iteratorMethodType := c.getPropertyTypeFromType(valueType, "@@symbol:Symbol.iterator", false)
+			// Resolve Symbol.iterator via computed path; avoid stringizing here
+			iteratorMethodType := c.getPropertyTypeFromType(valueType, "__COMPUTED_PROPERTY__", false)
 			debugPrintf("// [Checker yield*] Symbol.iterator method type: %T (%s)\n", iteratorMethodType,
 				func() string {
 					if iteratorMethodType != nil {
@@ -2124,4 +2128,15 @@ setYieldedType:
 	// fmt.Fprintf(os.Stderr, "// [Checker YieldExpression] %s type: %s\n",
 	//   func() string { if node.Delegate { return "yield* delegation" } else { return "yield" } }(),
 	//   yieldedType.String())
+}
+
+// isIterableBySymbolIterator returns true if the type has a computed Symbol.iterator method.
+func (c *Checker) isIterableBySymbolIterator(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	// We treat presence of a computed Symbol.iterator property of any type as iterable.
+	// The runtime will validate calling it.
+	methodType := c.getPropertyTypeFromType(t, "__COMPUTED_PROPERTY__", false)
+	return methodType != nil && methodType != types.Never
 }

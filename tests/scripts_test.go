@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-const scriptsDebug = false
+const scriptsDebug = true
 
 // Expectation represents the expected outcome of a script.
 type Expectation struct {
@@ -100,7 +100,7 @@ func TestScripts(t *testing.T) {
 			// 2. Compile and initialize VM with coordinated globals (with module support)
 			testResult := compileAndInitializeVMNew(scriptPath)
 			chunk := testResult.Chunk
-			vmInstance := testResult.VM 
+			vmInstance := testResult.VM
 			compileErrs := testResult.Errors
 
 			// 3. Check Compile Errors
@@ -139,7 +139,7 @@ func TestScripts(t *testing.T) {
 			if testResult.ModuleResult != nil {
 				// Module execution already completed in RunStringWithModules
 				finalValue = *testResult.ModuleResult
-				runtimeErrs = nil  // Module errors would have been caught in compile phase
+				runtimeErrs = nil // Module errors would have been caught in compile phase
 			} else {
 				// Regular script execution
 				if chunk == nil {
@@ -199,15 +199,15 @@ func TestScripts(t *testing.T) {
 func initializeVMBuiltins(vmInstance *vm.VM) error {
 	// Get all standard initializers
 	initializers := builtins.GetStandardInitializers()
-	
+
 	// Sort by priority
 	sort.Slice(initializers, func(i, j int) bool {
 		return initializers[i].Priority() < initializers[j].Priority()
 	})
-	
+
 	// Create runtime context for VM initialization
 	globalVariables := make(map[string]vm.Value)
-	
+
 	runtimeCtx := &builtins.RuntimeContext{
 		VM: vmInstance,
 		DefineGlobal: func(name string, value vm.Value) error {
@@ -215,14 +215,14 @@ func initializeVMBuiltins(vmInstance *vm.VM) error {
 			return nil
 		},
 	}
-	
+
 	// Initialize all builtins runtime values
 	for _, init := range initializers {
 		if err := init.InitRuntime(runtimeCtx); err != nil {
 			return fmt.Errorf("failed to initialize %s runtime: %v", init.Name(), err)
 		}
 	}
-	
+
 	// Set up global variables in VM with empty index map (legacy test mode)
 	indexMap := make(map[string]int)
 	return vmInstance.SetBuiltinGlobals(globalVariables, indexMap)
@@ -230,10 +230,10 @@ func initializeVMBuiltins(vmInstance *vm.VM) error {
 
 // TestResult holds the result of script execution (for both regular and module execution)
 type TestResult struct {
-	Chunk       *vm.Chunk
-	VM          *vm.VM 
-	ModuleResult *vm.Value  // nil for regular scripts, set for module scripts
-	Errors      []errors.PaseratiError
+	Chunk        *vm.Chunk
+	VM           *vm.VM
+	ModuleResult *vm.Value // nil for regular scripts, set for module scripts
+	Errors       []errors.PaseratiError
 }
 
 // compileAndInitializeVM compiles a file using the unified Paserati initialization approach
@@ -256,17 +256,17 @@ func compileAndInitializeVMNew(scriptPath string) *TestResult {
 			Errors: []errors.PaseratiError{readErr},
 		}
 	}
-	
+
 	// Use the unified Paserati initialization approach from the driver
 	// Create a fresh instance for each test to avoid state pollution
 	scriptDir := filepath.Dir(scriptPath)
 	paserati := driver.NewPaseratiWithBaseDir(scriptDir)
-	
+
 	// Special handling for manual type import test
 	if filepath.Base(scriptPath) == "test_manual_type_import.ts" {
 		setupManualTypeImports(paserati)
 	}
-	
+
 	// Check if the script contains import statements - if so, use module system
 	sourceCode := string(sourceBytes)
 	if strings.Contains(sourceCode, "import ") {
@@ -278,13 +278,13 @@ func compileAndInitializeVMNew(scriptPath string) *TestResult {
 				Errors: compileAndRunErrs,
 			}
 		}
-		
+
 		// For module-based scripts, return the result directly
 		return &TestResult{
 			Chunk:        nil, // No chunk needed, already executed
-			VM:          paserati.GetVM(),
+			VM:           paserati.GetVM(),
 			ModuleResult: &result,
-			Errors:      nil,
+			Errors:       nil,
 		}
 	} else {
 		// Use traditional compilation for scripts without imports
@@ -296,7 +296,7 @@ func compileAndInitializeVMNew(scriptPath string) *TestResult {
 				Errors: parseErrs,
 			}
 		}
-		
+
 		// Compile using the properly initialized Paserati session
 		chunk, compileAndTypeErrs := paserati.CompileProgram(program)
 		if len(compileAndTypeErrs) > 0 {
@@ -305,7 +305,7 @@ func compileAndInitializeVMNew(scriptPath string) *TestResult {
 				Errors: compileAndTypeErrs,
 			}
 		}
-		
+
 		return &TestResult{
 			Chunk:  chunk,
 			VM:     paserati.GetVM(),
@@ -323,9 +323,8 @@ func setupManualTypeImports(paserati *driver.Paserati) {
 		"name": types.String,
 		"age":  types.Number,
 	}
-	
+
 	// Get access to the checker's environment
 	// We'll use reflection-like access since driver doesn't expose the checker directly
 	// For now, let's use a simpler approach and access via the driver's internal structures
 }
-

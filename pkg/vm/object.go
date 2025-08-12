@@ -1,14 +1,77 @@
 package vm
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"unsafe"
 )
 
+type KeyKind uint8
+
+const (
+	KeyKindString KeyKind = iota
+	KeyKindSymbol
+	KeyKindPrivate // reserved for future private fields
+)
+
+// PropertyKey represents a property key which can be a string, symbol, or private key
+type PropertyKey struct {
+	kind      KeyKind
+	name      string // for string keys
+	symbolVal Value  // for symbol keys (TypeSymbol)
+	// private identity reserved for future use
+}
+
+func keyFromString(name string) PropertyKey {
+	return PropertyKey{kind: KeyKindString, name: name}
+}
+
+func keyFromSymbol(sym Value) PropertyKey {
+	return PropertyKey{kind: KeyKindSymbol, symbolVal: sym}
+}
+
+// NewStringKey constructs an exported PropertyKey for string-named properties.
+func NewStringKey(name string) PropertyKey { return keyFromString(name) }
+
+// NewSymbolKey constructs an exported PropertyKey for symbol-named properties.
+func NewSymbolKey(sym Value) PropertyKey { return keyFromSymbol(sym) }
+
+func (k PropertyKey) isString() bool { return k.kind == KeyKindString }
+func (k PropertyKey) isSymbol() bool { return k.kind == KeyKindSymbol }
+
+func (k PropertyKey) debugName() string {
+	switch k.kind {
+	case KeyKindString:
+		return k.name
+	case KeyKindSymbol:
+		return fmt.Sprintf("Symbol(%s)", k.symbolVal.AsSymbol())
+	case KeyKindPrivate:
+		return "<private>"
+	default:
+		return "<unknown-key>"
+	}
+}
+
+func (k PropertyKey) hash() string {
+	switch k.kind {
+	case KeyKindString:
+		return "s:" + k.name
+	case KeyKindSymbol:
+		return fmt.Sprintf("y:%p", k.symbolVal.obj)
+	case KeyKindPrivate:
+		return "p:todo" // placeholder until private identities are implemented
+	default:
+		return "?"
+	}
+}
+
 type Field struct {
-	offset       int
+	offset int
+	// For string keys, name holds the property name; for symbols, it may be empty (debug-only)
 	name         string
+	keyKind      KeyKind
+	symbolVal    Value // valid when keyKind == KeyKindSymbol
 	writable     bool
 	enumerable   bool
 	configurable bool
@@ -18,8 +81,8 @@ type Field struct {
 type Shape struct {
 	parent      *Shape
 	fields      []Field
-	transitions map[string]*Shape
-	mu          sync.RWMutex // Protects transitions map
+	transitions map[string]*Shape // keyed by PropertyKey.hash()
+	mu          sync.RWMutex      // Protects transitions map
 }
 
 type Object struct {
@@ -30,20 +93,25 @@ type PlainObject struct {
 	shape      *Shape
 	prototype  Value
 	properties []Value
-	getters    map[string]Value
-	setters    map[string]Value
+	// Accessor storage keyed by PropertyKey.hash()
+	getters map[string]Value
+	setters map[string]Value
 }
 
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
 func (o *PlainObject) GetOwn(name string) (Value, bool) {
+	return o.GetOwnByKey(keyFromString(name))
+}
+
+// GetOwnByKey looks up a direct (own) property by key. Returns (value, true) if present.
+func (o *PlainObject) GetOwnByKey(key PropertyKey) (Value, bool) {
 	// Scan shape for the field
 	for _, f := range o.shape.fields {
-		if f.name == name {
-			// matching field, properties slice must have value at offset
+		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
+			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
 			if f.offset < len(o.properties) {
 				return o.properties[f.offset], true
 			}
-			// absent value
 			return Undefined, true
 		}
 	}
@@ -53,10 +121,15 @@ func (o *PlainObject) GetOwn(name string) (Value, bool) {
 // GetOwnDescriptor returns the value and attribute flags for an own property.
 // Returns (value, writable, enumerable, configurable, exists).
 func (o *PlainObject) GetOwnDescriptor(name string) (Value, bool, bool, bool, bool) {
+	return o.GetOwnDescriptorByKey(keyFromString(name))
+}
+
+// GetOwnDescriptorByKey returns descriptor flags for an own property keyed by PropertyKey.
+func (o *PlainObject) GetOwnDescriptorByKey(key PropertyKey) (Value, bool, bool, bool, bool) {
 	for _, f := range o.shape.fields {
-		if f.name == name {
+		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
+			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
 			if f.isAccessor {
-				// For accessor, return undefined value and writable=false
 				return Undefined, false, f.enumerable, f.configurable, true
 			}
 			var v Value = Undefined
@@ -72,16 +145,22 @@ func (o *PlainObject) GetOwnDescriptor(name string) (Value, bool, bool, bool, bo
 // GetOwnAccessor returns accessor pair for an own property if it is an accessor.
 // Returns (get, set, enumerable, configurable, exists)
 func (o *PlainObject) GetOwnAccessor(name string) (Value, Value, bool, bool, bool) {
+	return o.GetOwnAccessorByKey(keyFromString(name))
+}
+
+// GetOwnAccessorByKey returns accessor pair for an own property by key.
+func (o *PlainObject) GetOwnAccessorByKey(key PropertyKey) (Value, Value, bool, bool, bool) {
 	for _, f := range o.shape.fields {
-		if f.name == name && f.isAccessor {
+		if ((key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
+			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)) && f.isAccessor {
 			var g, s Value = Undefined, Undefined
 			if o.getters != nil {
-				if v, ok := o.getters[name]; ok {
+				if v, ok := o.getters[key.hash()]; ok {
 					g = v
 				}
 			}
 			if o.setters != nil {
-				if v, ok := o.setters[name]; ok {
+				if v, ok := o.setters[key.hash()]; ok {
 					s = v
 				}
 			}
@@ -94,11 +173,17 @@ func (o *PlainObject) GetOwnAccessor(name string) (Value, Value, bool, bool, boo
 // DeleteOwn removes an own property if present and configurable.
 // Returns true if the property was deleted.
 func (o *PlainObject) DeleteOwn(name string) bool {
+	return o.DeleteOwnByKey(keyFromString(name))
+}
+
+// DeleteOwnByKey removes an own property by key if present and configurable.
+func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 	// Find field index
 	idx := -1
 	var f Field
 	for i := range o.shape.fields {
-		if o.shape.fields[i].name == name {
+		if (key.isString() && o.shape.fields[i].keyKind == KeyKindString && o.shape.fields[i].name == key.name) ||
+			(key.isSymbol() && o.shape.fields[i].keyKind == KeyKindSymbol && o.shape.fields[i].symbolVal.obj == key.symbolVal.obj) {
 			idx = i
 			f = o.shape.fields[i]
 			break
@@ -142,10 +227,11 @@ func (o *PlainObject) DeleteOwn(name string) bool {
 // SetOwn sets or defines an own property. Creates a new shape on first definition.
 // If the property exists and is non-writable, this is a no-op.
 func (o *PlainObject) SetOwn(name string, v Value) {
+	// Backward-compat name path
 	//fmt.Printf("DEBUG PlainObject.SetOwn: name=%q, value=%v, shape=%p\n", name, v.Inspect(), o.shape)
 	// try to find existing field
 	for _, f := range o.shape.fields {
-		if f.name == name {
+		if f.keyKind == KeyKindString && f.name == name {
 			// existing property, overwrite value
 			// If not writable, ignore the set (non-strict mode semantics)
 			if f.writable {
@@ -159,14 +245,14 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 	cur := o.shape
 	// reuse transition if exists (with read lock)
 	cur.mu.RLock()
-	next, ok := cur.transitions[name]
+	next, ok := cur.transitions[keyFromString(name).hash()]
 	cur.mu.RUnlock()
 
 	if !ok {
 		// create new shape by extending fields
 		off := len(cur.fields)
 		// Default attributes for regular assignment are writable/enumerable/configurable = true
-		fld := Field{offset: off, name: name, writable: true, enumerable: true, configurable: true}
+		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: true, configurable: true}
 		// copy fields slice
 		newFields := make([]Field, len(cur.fields)+1)
 		copy(newFields, cur.fields)
@@ -178,11 +264,11 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 
 		// cache transition (with write lock and double-check)
 		cur.mu.Lock()
-		if existing, exists := cur.transitions[name]; exists {
+		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
 			// Another goroutine created the transition while we were working
 			next = existing
 		} else {
-			cur.transitions[name] = next
+			cur.transitions[keyFromString(name).hash()] = next
 		}
 		cur.mu.Unlock()
 	}
@@ -197,9 +283,10 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 // DefineOwnProperty defines or updates an own property with explicit attributes.
 // For existing properties, unspecified attributes (nil) will keep previous values.
 func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool, enumerable *bool, configurable *bool) {
+	// Name-based wrapper
 	// Try to find existing field
 	for i, f := range o.shape.fields {
-		if f.name == name {
+		if f.keyKind == KeyKindString && f.name == name {
 			// Existing property: update value and attributes respecting current flags
 			if f.isAccessor {
 				// Converting accessor to data property: replace field
@@ -231,12 +318,12 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 	// New property: create shape transition with specified attributes (defaults false if nil)
 	cur := o.shape
 	cur.mu.RLock()
-	next, ok := cur.transitions[name]
+	next, ok := cur.transitions[keyFromString(name).hash()]
 	cur.mu.RUnlock()
 	if !ok {
 		off := len(cur.fields)
 		// Defaults per defineProperty: false when creating via descriptor if not specified
-		fld := Field{offset: off, name: name, writable: false, enumerable: false, configurable: false, isAccessor: false}
+		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: false, enumerable: false, configurable: false, isAccessor: false}
 		if writable != nil {
 			fld.writable = *writable
 		}
@@ -252,10 +339,10 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 		newTrans := make(map[string]*Shape)
 		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
 		cur.mu.Lock()
-		if existing, exists := cur.transitions[name]; exists {
+		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
 			next = existing
 		} else {
-			cur.transitions[name] = next
+			cur.transitions[keyFromString(name).hash()] = next
 		}
 		cur.mu.Unlock()
 	}
@@ -265,9 +352,10 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 
 // DefineAccessorProperty defines or updates an accessor own property.
 func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	// Wrapper using string name
 	// Find existing field
 	for i, f := range o.shape.fields {
-		if f.name == name {
+		if f.keyKind == KeyKindString && f.name == name {
 			// Update to accessor kind
 			newF := f
 			newF.isAccessor = true
@@ -286,10 +374,10 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 				o.setters = make(map[string]Value)
 			}
 			if hasGetter {
-				o.getters[name] = getter
+				o.getters[keyFromString(name).hash()] = getter
 			}
 			if hasSetter {
-				o.setters[name] = setter
+				o.setters[keyFromString(name).hash()] = setter
 			}
 			return
 		}
@@ -297,11 +385,11 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 	// New field
 	cur := o.shape
 	cur.mu.RLock()
-	next, ok := cur.transitions[name]
+	next, ok := cur.transitions[keyFromString(name).hash()]
 	cur.mu.RUnlock()
 	if !ok {
 		off := len(cur.fields)
-		fld := Field{offset: off, name: name, writable: false, enumerable: false, configurable: false, isAccessor: true}
+		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: false, enumerable: false, configurable: false, isAccessor: true}
 		if enumerable != nil {
 			fld.enumerable = *enumerable
 		}
@@ -314,10 +402,10 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 		newTrans := make(map[string]*Shape)
 		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
 		cur.mu.Lock()
-		if existing, exists := cur.transitions[name]; exists {
+		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
 			next = existing
 		} else {
-			cur.transitions[name] = next
+			cur.transitions[keyFromString(name).hash()] = next
 		}
 		cur.mu.Unlock()
 	}
@@ -330,26 +418,169 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 		o.setters = make(map[string]Value)
 	}
 	if hasGetter {
-		o.getters[name] = getter
+		o.getters[keyFromString(name).hash()] = getter
 	}
 	if hasSetter {
-		o.setters[name] = setter
+		o.setters[keyFromString(name).hash()] = setter
 	}
 	// Keep properties slice length consistent
 	o.properties = append(o.properties, Undefined)
 }
 
+// DefineOwnPropertyByKey defines or updates an own property for arbitrary key kinds.
+func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writable *bool, enumerable *bool, configurable *bool) {
+	// Try to find existing field
+	for i, f := range o.shape.fields {
+		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
+			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
+		if match {
+			if f.isAccessor {
+				f.isAccessor = false
+				f.writable = false
+			}
+			if f.writable {
+				o.properties[f.offset] = value
+			}
+			newF := f
+			if writable != nil {
+				newF.writable = *writable
+			}
+			if enumerable != nil {
+				newF.enumerable = *enumerable
+			}
+			if configurable != nil {
+				newF.configurable = *configurable
+			}
+			o.shape.fields[i] = newF
+			return
+		}
+	}
+	// New field
+	cur := o.shape
+	cur.mu.RLock()
+	next, ok := cur.transitions[key.hash()]
+	cur.mu.RUnlock()
+	if !ok {
+		off := len(cur.fields)
+		fld := Field{offset: off, name: key.debugName(), keyKind: key.kind, writable: false, enumerable: false, configurable: false, isAccessor: false}
+		if key.isSymbol() {
+			fld.symbolVal = key.symbolVal
+		}
+		if writable != nil {
+			fld.writable = *writable
+		}
+		if enumerable != nil {
+			fld.enumerable = *enumerable
+		}
+		if configurable != nil {
+			fld.configurable = *configurable
+		}
+		newFields := make([]Field, len(cur.fields)+1)
+		copy(newFields, cur.fields)
+		newFields[len(cur.fields)] = fld
+		newTrans := make(map[string]*Shape)
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		cur.mu.Lock()
+		if existing, exists := cur.transitions[key.hash()]; exists {
+			next = existing
+		} else {
+			cur.transitions[key.hash()] = next
+		}
+		cur.mu.Unlock()
+	}
+	o.shape = next
+	o.properties = append(o.properties, value)
+}
+
+// DefineAccessorPropertyByKey defines or updates an accessor property for arbitrary key kinds.
+func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	// Find existing field
+	for i, f := range o.shape.fields {
+		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
+			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
+		if match {
+			newF := f
+			newF.isAccessor = true
+			if enumerable != nil {
+				newF.enumerable = *enumerable
+			}
+			if configurable != nil {
+				newF.configurable = *configurable
+			}
+			o.shape.fields[i] = newF
+			if o.getters == nil {
+				o.getters = make(map[string]Value)
+			}
+			if o.setters == nil {
+				o.setters = make(map[string]Value)
+			}
+			if hasGetter {
+				o.getters[key.hash()] = getter
+			}
+			if hasSetter {
+				o.setters[key.hash()] = setter
+			}
+			return
+		}
+	}
+	// New field
+	cur := o.shape
+	cur.mu.RLock()
+	next, ok := cur.transitions[key.hash()]
+	cur.mu.RUnlock()
+	if !ok {
+		off := len(cur.fields)
+		fld := Field{offset: off, name: key.debugName(), keyKind: key.kind, writable: false, enumerable: false, configurable: false, isAccessor: true}
+		if key.isSymbol() {
+			fld.symbolVal = key.symbolVal
+		}
+		if enumerable != nil {
+			fld.enumerable = *enumerable
+		}
+		if configurable != nil {
+			fld.configurable = *configurable
+		}
+		newFields := make([]Field, len(cur.fields)+1)
+		copy(newFields, cur.fields)
+		newFields[len(cur.fields)] = fld
+		newTrans := make(map[string]*Shape)
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		cur.mu.Lock()
+		if existing, exists := cur.transitions[key.hash()]; exists {
+			next = existing
+		} else {
+			cur.transitions[key.hash()] = next
+		}
+		cur.mu.Unlock()
+	}
+	o.shape = next
+	if o.getters == nil {
+		o.getters = make(map[string]Value)
+	}
+	if o.setters == nil {
+		o.setters = make(map[string]Value)
+	}
+	if hasGetter {
+		o.getters[key.hash()] = getter
+	}
+	if hasSetter {
+		o.setters[key.hash()] = setter
+	}
+	o.properties = append(o.properties, Undefined)
+}
+
 // HasOwn reports whether an own property with the given name exists.
 func (o *PlainObject) HasOwn(name string) bool {
-	//fmt.Printf("DEBUG PlainObject.HasOwn: name=%q, shape=%p, fields=%v\n", name, o.shape, o.shape.fields)
+	return o.HasOwnByKey(keyFromString(name))
+}
+
+func (o *PlainObject) HasOwnByKey(key PropertyKey) bool {
 	for _, f := range o.shape.fields {
-		//fmt.Printf("DEBUG PlainObject.HasOwn: field[%d]=%q\n", i, f.name)
-		if f.name == name {
-			//fmt.Printf("DEBUG PlainObject.HasOwn: found %q at index %d\n", name, i)
+		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
+			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
 			return true
 		}
 	}
-	//fmt.Printf("DEBUG PlainObject.HasOwn: %q not found\n", name)
 	return false
 }
 
@@ -358,11 +589,25 @@ func (o *PlainObject) HasOwn(name string) bool {
 
 // OwnKeys returns the list of own property names in insertion order.
 func (o *PlainObject) OwnKeys() []string {
-	keys := make([]string, len(o.shape.fields))
-	for i, f := range o.shape.fields {
-		keys[i] = f.name
+	// Return only string-named keys (symbols excluded) in insertion order
+	keys := make([]string, 0, len(o.shape.fields))
+	for _, f := range o.shape.fields {
+		if f.keyKind == KeyKindString {
+			keys = append(keys, f.name)
+		}
 	}
 	return keys
+}
+
+// OwnSymbolKeys returns the list of own symbol keys in insertion order.
+func (o *PlainObject) OwnSymbolKeys() []Value {
+	symbols := make([]Value, 0)
+	for _, f := range o.shape.fields {
+		if f.keyKind == KeyKindSymbol {
+			symbols = append(symbols, f.symbolVal)
+		}
+	}
+	return symbols
 }
 
 // Get looks up a property by name, walking the prototype chain if necessary.

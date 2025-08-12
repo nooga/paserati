@@ -61,7 +61,7 @@ func (g *GeneratorInitializer) InitTypes(ctx *TypeContext) error {
 			TypeParameters: []*types.TypeParameter{tParam, tReturnParam, tNextParam},
 			Body:           generatorProtoType,
 		}
-		generatorProtoType = generatorProtoType.WithProperty("@@symbol:Symbol.iterator",
+		generatorProtoType = generatorProtoType.WithProperty("__COMPUTED_PROPERTY__",
 			types.NewSimpleFunction([]types.Type{}, generatorType))
 	}
 
@@ -172,15 +172,16 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add Symbol.iterator implementation for generators
 	// Generators are iterable - they return themselves since they already have next() method
-	symbolIteratorKey := "@@symbol:" + SymbolIterator.AsSymbol()
-	generatorProto.SetOwn(symbolIteratorKey, vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+	// Register [Symbol.iterator] using native symbol key
+	genIterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
 			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype[Symbol.iterator] called on incompatible receiver")
 		}
 		// Generators are self-iterable - return the generator itself
 		return thisValue, nil
-	}))
+	})
+	generatorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), genIterFn, nil, nil, nil)
 
 	// Set Generator prototype in VM
 	vmInstance.GeneratorPrototype = vm.NewValueFromPlainObject(generatorProto)

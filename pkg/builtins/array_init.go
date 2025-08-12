@@ -81,8 +81,8 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 				Generic:       iteratorGeneric,
 				TypeArguments: []types.Type{tType},
 			}
-			// Add [Symbol.iterator](): Iterator<T> method
-			arrayProtoType = arrayProtoType.WithProperty("@@symbol:Symbol.iterator",
+			// Add [Symbol.iterator](): Iterator<T> method (computed symbol key in types)
+			arrayProtoType = arrayProtoType.WithProperty("__COMPUTED_PROPERTY__",
 				a.createGenericMethod("[Symbol.iterator]", tParam,
 					types.NewSimpleFunction([]types.Type{}, iteratorOfT.Substitute())))
 		}
@@ -722,8 +722,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add Symbol.iterator implementation for arrays
 	// Use the global SymbolIterator (Symbol initializes before Array now)
-	symbolIteratorKey := "@@symbol:" + SymbolIterator.AsSymbol()
-	arrayProto.SetOwn(symbolIteratorKey, vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+	// Register [Symbol.iterator] using native symbol key
+	iterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.Undefined, nil
@@ -731,7 +731,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create an array iterator object
 		return createArrayIterator(vmInstance, thisArray), nil
-	}))
+	})
+	// Native symbol key
+	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, nil, nil, nil)
 
 	arrayCtor := ctorWithProps
 

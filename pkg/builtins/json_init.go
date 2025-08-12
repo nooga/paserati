@@ -41,11 +41,27 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	jsonObj.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			// Throw SyntaxError for missing argument
+			// Create a real SyntaxError instance and return it as an exception
+			ctor, _ := ctx.VM.GetGlobal("SyntaxError")
+			if ctor != vm.Undefined {
+				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{vm.NewString("Unexpected end of JSON input")})
+				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
+			}
 			return vm.Undefined, fmt.Errorf("SyntaxError: Unexpected end of JSON input")
 		}
-		
+
 		text := args[0].ToString()
-		return parseJSONToValue(text)
+		val, err := parseJSONToValue(text)
+		if err != nil {
+			// Wrap parse error as SyntaxError exception
+			ctor, _ := ctx.VM.GetGlobal("SyntaxError")
+			if ctor != vm.Undefined {
+				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(err.Error())})
+				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
+			}
+			return vm.Undefined, err
+		}
+		return val, nil
 	}))
 
 	// Add stringify method (supports optional replacer and space parameters)
@@ -53,7 +69,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.Undefined, nil
 		}
-		
+
 		value := args[0]
 		// TODO: Handle replacer (args[1]) and space (args[2]) parameters
 		result := stringifyValueToJSON(value)
@@ -71,10 +87,10 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 func parseJSONToValue(text string) (vm.Value, error) {
 	var jsonValue interface{}
 	if err := json.Unmarshal([]byte(text), &jsonValue); err != nil {
-		// Return proper SyntaxError for invalid JSON
+		// Return error up so caller can wrap as SyntaxError
 		return vm.Undefined, err
 	}
-	
+
 	return convertJSONValue(jsonValue), nil
 }
 
@@ -152,14 +168,17 @@ func stringifyValueToJSON(value vm.Value) string {
 		// Handle objects
 		result := "{"
 		first := true
-		var obj interface{ OwnKeys() []string; GetOwn(string) (vm.Value, bool) }
-		
+		var obj interface {
+			OwnKeys() []string
+			GetOwn(string) (vm.Value, bool)
+		}
+
 		if value.Type() == vm.TypeObject {
 			obj = value.AsPlainObject()
 		} else {
 			obj = value.AsDictObject()
 		}
-		
+
 		for _, key := range obj.OwnKeys() {
 			if prop, ok := obj.GetOwn(key); ok {
 				propJSON := stringifyValueToJSON(prop)

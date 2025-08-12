@@ -52,7 +52,7 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 
 // checkGenericTypeAliasStatement handles generic type alias declarations
 func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement) {
-	debugPrintf("// [Checker TypeAlias P1] Processing generic type alias '%s' with %d type parameters\n", 
+	debugPrintf("// [Checker TypeAlias P1] Processing generic type alias '%s' with %d type parameters\n",
 		node.Name.Value, len(node.TypeParameters))
 
 	// Mark this type alias as being resolved to prevent infinite recursion
@@ -68,7 +68,7 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 		typeParam := &types.TypeParameter{
 			Name: param.Name.Value,
 		}
-		
+
 		// Handle constraint if present
 		if param.Constraint != nil {
 			constraintType := c.resolveTypeAnnotation(param.Constraint)
@@ -76,20 +76,20 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 				typeParam.Constraint = constraintType
 			}
 		}
-		
+
 		// Handle default type if present
 		if param.DefaultType != nil {
 			defaultType := c.resolveTypeAnnotation(param.DefaultType)
 			if defaultType != nil {
 				typeParam.Default = defaultType
-				
+
 				// Validate that default type satisfies constraint if both are present
 				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
 					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
 				}
 			}
 		}
-		
+
 		typeParams[i] = typeParam
 	}
 
@@ -102,11 +102,11 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 		}
 		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
 	}
-	
+
 	// Save current environment and switch to generic environment
 	savedEnv := c.env
 	c.env = genericEnv
-	
+
 	// Resolve the RHS type with TypeParameterType references
 	bodyType := c.resolveTypeAnnotation(node.Type)
 	if bodyType == nil {
@@ -195,20 +195,20 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				debugPrintf("// [Checker Interface P1] Failed to resolve key type for index signature in interface '%s'. Using string.\n", node.Name.Value)
 				keyType = types.String
 			}
-			
+
 			valueType := c.resolveTypeAnnotation(prop.ValueType)
 			if valueType == nil {
 				debugPrintf("// [Checker Interface P1] Failed to resolve value type for index signature in interface '%s'. Using Any.\n", node.Name.Value)
 				valueType = types.Any
 			}
-			
+
 			indexSignature := &types.IndexSignature{
 				KeyType:   keyType,
 				ValueType: valueType,
 			}
 			indexSignatures = append(indexSignatures, indexSignature)
-			
-			debugPrintf("// [Checker Interface P1] Interface '%s' has index signature [%s]: %s\n", 
+
+			debugPrintf("// [Checker Interface P1] Interface '%s' has index signature [%s]: %s\n",
 				node.Name.Value, keyType.String(), valueType.String())
 		} else if prop.IsConstructorSignature {
 			// For constructor signatures, add them as a special "new" property
@@ -236,7 +236,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				if prop.Optional {
 					optionalProperties[computedName] = true
 				}
-				debugPrintf("// [Checker Interface P1] Interface '%s' has computed property '%s': %s\n", 
+				debugPrintf("// [Checker Interface P1] Interface '%s' has computed property '%s': %s\n",
 					node.Name.Value, computedName, propType.String())
 			} else {
 				// Dynamic computed property - treat as index signature for now
@@ -315,7 +315,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 // checkGenericInterfaceDeclaration handles generic interface declarations
 func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclaration) {
-	debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n", 
+	debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n",
 		node.Name.Value, len(node.TypeParameters))
 
 	// 1. Validate type parameters
@@ -325,7 +325,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		typeParam := &types.TypeParameter{
 			Name: param.Name.Value,
 		}
-		
+
 		// Handle constraint if present
 		if param.Constraint != nil {
 			constraintType := c.resolveTypeAnnotation(param.Constraint)
@@ -333,26 +333,26 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 				typeParam.Constraint = constraintType
 			}
 		}
-		
+
 		// Handle default type if present
 		if param.DefaultType != nil {
 			defaultType := c.resolveTypeAnnotation(param.DefaultType)
 			if defaultType != nil {
 				typeParam.Default = defaultType
-				
+
 				// Validate that default type satisfies constraint if both are present
 				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
 					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
 				}
 			}
 		}
-		
+
 		typeParams[i] = typeParam
 	}
 
 	// 2. Create the body ObjectType with TypeParameterType references
 	// This is a template that will be instantiated with concrete types later
-	
+
 	// Create a new environment with type parameters available as TypeParameterType
 	genericEnv := NewEnclosedEnvironment(c.env)
 	for _, typeParam := range typeParams {
@@ -361,11 +361,11 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		}
 		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
 	}
-	
+
 	// Save current environment and switch to generic environment
 	savedEnv := c.env
 	c.env = genericEnv
-	
+
 	// Build the ObjectType body with TypeParameterType references
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
@@ -404,12 +404,12 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			if keyType == nil {
 				keyType = types.String
 			}
-			
+
 			valueType := c.resolveTypeAnnotation(prop.ValueType)
 			if valueType == nil {
 				valueType = types.Any
 			}
-			
+
 			indexSignature := &types.IndexSignature{
 				KeyType:   keyType,
 				ValueType: valueType,
@@ -582,6 +582,9 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		} else if c.isGeneratorType(iterableType) {
 			// Special handling for Generator types - they are iterable
 			elementType = types.Any // Safe fallback for generator elements
+		} else if c.isIterableBySymbolIterator(iterableType) {
+			// If it has a Symbol.iterator method (computed), treat as iterable
+			elementType = types.Any
 		} else {
 			// Special case: if the iterable comes from a generator function call, assume it's iterable
 			// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking
@@ -593,7 +596,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 					}
 				}
 			}
-			
+
 			// Check if the type is assignable to Iterable<any>
 			if iterableGeneric, found, _ := c.env.Resolve("Iterable"); found {
 				if genericType, ok := iterableGeneric.(*types.GenericType); ok {
@@ -602,7 +605,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 						Generic:       genericType,
 						TypeArguments: []types.Type{types.Any},
 					}
-					
+
 					if types.IsAssignable(iterableType, iterableAny) {
 						// It's iterable, but we can't easily extract the element type
 						// For now, use Any as a safe fallback
@@ -624,7 +627,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 			}
 		}
 
-handleVariable:
+	handleVariable:
 		// Handle the variable declaration/assignment
 		if node.Variable != nil {
 			if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
@@ -779,25 +782,25 @@ func (c *Checker) checkWithStatement(node *parser.WithStatement) {
 	var withObj WithObject
 	if node.Expression != nil {
 		c.visit(node.Expression)
-		
+
 		// The expression should be an object type for proper 'with' semantics
 		exprType := node.Expression.GetComputedType()
 		if exprType == nil {
 			exprType = types.Any
 		}
-		
+
 		// Create with object and extract known properties
 		properties := c.extractPropertiesFromType(exprType)
 		withObj = WithObject{
 			ExprType:   exprType,
 			Properties: properties,
 		}
-		
+
 		debugPrintf("// [Checker WithStmt] Expression type: %s, extracted %d properties\n", exprType.String(), len(properties))
 		for propName, propType := range properties {
 			debugPrintf("// [Checker WithStmt] Property '%s': %s\n", propName, propType.String())
 		}
-		
+
 		// Push the with object onto the environment stack
 		c.env.PushWithObject(withObj)
 	}
@@ -806,7 +809,7 @@ func (c *Checker) checkWithStatement(node *parser.WithStatement) {
 	if node.Body != nil {
 		c.visit(node.Body)
 	}
-	
+
 	// Pop the with object when done
 	if node.Expression != nil {
 		c.env.PopWithObject()
@@ -816,11 +819,11 @@ func (c *Checker) checkWithStatement(node *parser.WithStatement) {
 // extractPropertiesFromType extracts known properties from a type for with statement scope resolution
 func (c *Checker) extractPropertiesFromType(typ types.Type) map[string]types.Type {
 	properties := make(map[string]types.Type)
-	
+
 	if typ == nil {
 		return properties
 	}
-	
+
 	switch t := typ.(type) {
 	case *types.ObjectType:
 		// Copy all properties from the object type
@@ -838,6 +841,6 @@ func (c *Checker) extractPropertiesFromType(typ types.Type) map[string]types.Typ
 		// In JavaScript, you can use 'with' on any object, but primitives
 		// don't have enumerable own properties
 	}
-	
+
 	return properties
 }

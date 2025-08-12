@@ -44,7 +44,7 @@ type IteratorCleanupInfo struct {
 	UsesIteratorProtocol bool
 }
 
-const debugCompiler = false // Enable for debugging register allocation issue
+const debugCompiler = true // Enable for debugging register allocation issue
 const debugCompilerStats = false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
