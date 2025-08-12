@@ -16,9 +16,8 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	case TypeClosure:
 		closure := AsClosure(objVal)
 		fn = closure.Fn
-	case TypeBoundFunction, TypeNativeFunction:
-		// Bound functions and native functions inherit properties from Function.prototype but don't have their own function object
-		// Skip to prototype method checking
+	case TypeBoundFunction, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
+		// Bound/native/async functions inherit from Function.prototype but don't have FunctionObject
 		fn = nil
 	default:
 		return Undefined, false
@@ -34,6 +33,38 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		if prop, exists := fn.Properties.GetOwn(propName); exists {
 			return prop, true
 		}
+	}
+
+	// Expose intrinsic function properties like .name
+	if propName == "name" {
+		switch objVal.Type() {
+		case TypeFunction:
+			return NewString(objVal.AsFunction().Name), true
+		case TypeClosure:
+			return NewString(objVal.AsClosure().Fn.Name), true
+		case TypeNativeFunction:
+			return NewString(objVal.AsNativeFunction().Name), true
+		case TypeAsyncNativeFunction:
+			return NewString(objVal.AsAsyncNativeFunction().Name), true
+		case TypeNativeFunctionWithProps:
+			return NewString(objVal.AsNativeFunctionWithProps().Name), true
+		case TypeBoundFunction:
+			return NewString(objVal.AsBoundFunction().Name), true
+		}
+	}
+
+	// Expose .constructor on functions to return the Function constructor
+	if propName == "constructor" {
+		// In JS, Function.prototype.constructor === Function
+		// For callable values, return global Function constructor if available
+		if vm.FunctionPrototype.Type() == TypeObject {
+			// Lookup global 'Function' constructor via VM API
+			if ctorVal, ok := vm.GetGlobal("Function"); ok && ctorVal.IsCallable() {
+				return ctorVal, true
+			}
+		}
+		// Fallback: undefined
+		return Undefined, true
 	}
 
 	// Check function prototype methods using the VM's FunctionPrototype
@@ -108,7 +139,7 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 				if vm.Float32ArrayPrototype.Type() == TypeObject {
 					prototype = vm.Float32ArrayPrototype.AsPlainObject()
 				}
-			// Add more cases as we implement more TypedArray types
+				// Add more cases as we implement more TypedArray types
 			}
 		}
 	default:

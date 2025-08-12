@@ -926,7 +926,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if exists {
 						resultType = fieldType
 					} else {
-						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", obj.String()))
+						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", obj.String(), subst.String()))
 						// resultType remains types.Never
 					}
 				default:

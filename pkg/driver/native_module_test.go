@@ -38,7 +38,6 @@ func TestNativeModuleBasic(t *testing.T) {
 		})
 	})
 
-
 	// NOTE: TypeScript code for later integration test
 	_ = `
 		// Import from our native module
@@ -67,7 +66,6 @@ func TestNativeModuleBasic(t *testing.T) {
 		"native_module_test_passed";
 	`
 
-
 	// Test that the native module can be resolved
 	moduleRecord := p.moduleLoader.GetModule("math-utils")
 	if moduleRecord == nil {
@@ -92,7 +90,6 @@ func TestNativeModuleBasic(t *testing.T) {
 		}
 	}
 
-
 	// For now, let's just test that the native module is properly registered
 	// and that we can access the native resolver
 	nativeResolver := p.nativeResolver
@@ -100,13 +97,11 @@ func TestNativeModuleBasic(t *testing.T) {
 		t.Fatalf("Native resolver cannot resolve 'math-utils'")
 	}
 
-
 	// Test resolving the module
-	resolved, err := nativeResolver.Resolve("math-utils", ".")
+	_, err := nativeResolver.Resolve("math-utils", ".")
 	if err != nil {
 		t.Fatalf("Failed to resolve native module: %v", err)
 	}
-
 
 	// Test actual TypeScript execution with imports
 
@@ -150,7 +145,6 @@ func TestNativeModuleBasic(t *testing.T) {
 // TestNativeModuleNamespace tests namespace functionality
 func TestNativeModuleNamespace(t *testing.T) {
 	p := NewPaserati()
-
 
 	// Declare a module with namespaces
 	p.DeclareModule("collections", func(m *ModuleBuilder) {
@@ -223,7 +217,6 @@ func (p *Point) String() string {
 // TestNativeModuleClass tests class/struct functionality
 func TestNativeModuleClass(t *testing.T) {
 	p := NewPaserati()
-
 
 	p.DeclareModule("geometry", func(m *ModuleBuilder) {
 		// Export Point class with constructor

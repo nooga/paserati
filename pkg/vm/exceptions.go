@@ -99,118 +99,20 @@ func (vm *VM) unwindException() bool {
 		}
 
 		// Check if this is a direct call frame (native function boundary)
-		// Direct call frames are created by CallFunctionDirectly (used by native functions like Array.map)
+		// Direct call frames are created by CallFunctionDirectly or executeUserFunctionSafe
+		// When we hit this boundary, we must STOP unwinding and return control to the native caller
+		// so builtins (like assert.throws) can observe and handle the exception.
 		if frame.isDirectCall {
 			if debugExceptions {
-				fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d\n", vm.frameCount-1)
+				fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d; stopping and returning error to native caller\n", vm.frameCount-1)
 			}
-
-			// Check if there are any outer frames that might have exception handlers
-			// If so, we should continue unwinding to let those handlers catch the exception
-			if vm.frameCount > 1 {
-				// Peek at outer frames to see if any have handlers for the current exception
-				// We need to check this before deciding to stop unwinding
-				if debugExceptions {
-					fmt.Printf("[DEBUG unwindException] Checking if outer frames have handlers before stopping\n")
-				}
-
-				// Save the original frame count before temporarily modifying it
-				originalFrameCount := vm.frameCount
-				// Temporarily skip this frame and check outer frames
-				vm.frameCount--
-				hasOuterHandlers := false
-
-				// Check remaining frames for handlers
-				for i := vm.frameCount - 1; i >= 0 && !hasOuterHandlers; i-- {
-					outerFrame := &vm.frames[i]
-					if !outerFrame.isDirectCall && outerFrame.closure != nil {
-						// Check if this frame has exception handlers at the current IP
-						handlers := vm.findAllExceptionHandlers(outerFrame.ip)
-						if debugExceptions {
-							fmt.Printf("[DEBUG unwindException] Checking outer frame %d at IP %d, found %d handlers\n", i, outerFrame.ip, len(handlers))
-						}
-
-						// Also check if this frame has ANY exception handlers (not just at current IP)
-						// This is important because the IP might be wrong due to call boundaries
-						chunk := outerFrame.closure.Fn.Chunk
-						totalHandlers := len(chunk.ExceptionTable)
-						if debugExceptions {
-							fmt.Printf("[DEBUG unwindException] Frame %d has %d total exception handlers in chunk\n", i, totalHandlers)
-						}
-
-						// If there are exception handlers at current IP, check them
-						if len(handlers) > 0 {
-							for _, handler := range handlers {
-								if debugExceptions {
-									fmt.Printf("[DEBUG unwindException] Handler at frame %d: TryStart=%d, TryEnd=%d, IsCatch=%v\n",
-										i, handler.TryStart, handler.TryEnd, handler.IsCatch)
-								}
-								if handler.IsCatch {
-									hasOuterHandlers = true
-									if debugExceptions {
-										fmt.Printf("[DEBUG unwindException] Found catch handler in outer frame %d\n", i)
-									}
-									break
-								}
-							}
-						} else if totalHandlers > 0 {
-							// No handlers at current IP, but there are handlers in the chunk
-							// Check if any of them are catch handlers - this indicates the frame can handle exceptions
-							for j := range chunk.ExceptionTable {
-								handler := &chunk.ExceptionTable[j]
-								if debugExceptions {
-									fmt.Printf("[DEBUG unwindException] Total handler %d at frame %d: TryStart=%d, TryEnd=%d, IsCatch=%v\n",
-										j, i, handler.TryStart, handler.TryEnd, handler.IsCatch)
-								}
-								if handler.IsCatch {
-									hasOuterHandlers = true
-									if debugExceptions {
-										fmt.Printf("[DEBUG unwindException] Found catch handler in outer frame %d (not at current IP, but in chunk)\n", i)
-									}
-									break
-								}
-							}
-						}
-					}
-				}
-
-				if hasOuterHandlers {
-					// Continue unwinding past the direct call boundary
-					fmt.Printf("[DEBUG unwindException] Continuing unwind past direct call boundary to reach outer handlers\n")
-					vm.escapedDirectCallBoundary = true
-
-					// Restore the original frame count since we're continuing unwinding
-					vm.frameCount = originalFrameCount
-
-					// NOTE: Do not forcibly modify outer frame IP here.
-					// handleCatchBlock will set the correct handler PC when we find it below.
-
-					// Now properly unwind past the direct call boundary
-					// We need to skip the direct call frame and continue unwinding
-					vm.frameCount-- // Skip the direct call boundary frame
-					continue
-				} else {
-					// No outer handlers, stop at direct call boundary
-					// Instead of restoring frameCount, pop the direct-call frame so the caller
-					// can handle the exception without re-encountering this boundary.
-					// Note: Reclaim register space for the popped frame.
-					dcFrame := &vm.frames[vm.frameCount-1]
-					if dcFrame.closure != nil && dcFrame.closure.Fn != nil {
-						vm.nextRegSlot -= dcFrame.closure.Fn.RegisterSize
-					}
-					vm.frameCount--
-					if debugExceptions {
-						fmt.Printf("[DEBUG unwindException] Popped direct call frame; returning to caller with error (frameCount=%d)\n", vm.frameCount)
-					}
-					return true // Let the vm.run() return InterpretRuntimeError to the native caller
-				}
-			} else {
-				// No outer frames, stop unwinding
-				if debugExceptions {
-					fmt.Printf("[DEBUG unwindException] No outer frames, stopping at direct call boundary\n")
-				}
-				return true
+			// Pop the direct-call frame and reclaim its registers so the caller receives an error
+			dcFrame := &vm.frames[vm.frameCount-1]
+			if dcFrame.closure != nil && dcFrame.closure.Fn != nil {
+				vm.nextRegSlot -= dcFrame.closure.Fn.RegisterSize
 			}
+			vm.frameCount--
+			return true
 		}
 
 		// Look for handlers covering the current IP

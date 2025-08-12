@@ -130,8 +130,8 @@ func (vm *VM) executeUserFunctionReentrant(fn Value, thisValue Value, args []Val
 	dummyCallerIP := 0
 	dummyDestReg := byte(0)
 
-	// Use prepareCall to set up the function call
-	shouldSwitch, err := vm.prepareCall(fn, thisValue, args, dummyDestReg, dummyCallerRegisters, dummyCallerIP)
+	// Use prepareDirectCall so the created frame is marked as a direct-call boundary
+	shouldSwitch, err := vm.prepareDirectCall(fn, thisValue, args, dummyDestReg, dummyCallerRegisters, dummyCallerIP)
 	if err != nil {
 		return Undefined, fmt.Errorf("failed to prepare re-entrant call: %v", err)
 	}
@@ -158,11 +158,7 @@ func (vm *VM) executeUserFunctionReentrant(fn Value, thisValue Value, args []Val
 	return dummyCallerRegisters[dummyDestReg], nil
 }
 
-// ExecuteUserFunctionForBuiltin is an exported wrapper for executeUserFunctionReentrant
-// This allows builtins like bind to call user functions safely
-func (vm *VM) ExecuteUserFunctionForBuiltin(fn Value, thisValue Value, args []Value) (Value, error) {
-	return vm.executeUserFunctionReentrant(fn, thisValue, args)
-}
+// Deprecated: ExecuteUserFunctionForBuiltin has been removed. Use vm.Call instead.
 
 // RegisterInitCallback registers a callback for this specific VM instance
 // func (vm *VM) RegisterInitCallback(callback VMInitCallback) {
@@ -196,39 +192,7 @@ func (vm *VM) initializePrototypes() {
 	vm.SymbolPrototype = NewObject(vm.ObjectPrototype)
 }
 
-// CallFunctionFromBuiltin allows builtins to call functions through the VM
-// This is the safe way for builtins to invoke Function.prototype.call, etc.
-//
-// NOTE: Currently this only works for native functions. Calling user-defined functions
-// from builtins requires complex integration with the interpreter loop that is not yet implemented.
-func (vm *VM) CallFunctionFromBuiltin(fn Value, thisValue Value, args []Value) (Value, error) {
-	switch fn.Type() {
-	case TypeNativeFunction:
-		// For native functions, call directly
-		nativeFunc := AsNativeFunction(fn)
-		// For method calls on native functions, we could prepend 'this' to args here if needed
-		result, err := nativeFunc.Fn(args)
-		return result, err
-
-	case TypeNativeFunctionWithProps:
-		// Handle native function with properties
-		nativeFuncWithProps := fn.AsNativeFunctionWithProps()
-		result, err := nativeFuncWithProps.Fn(args)
-		return result, err
-
-	case TypeClosure, TypeFunction:
-		// For user-defined functions, we create a re-entrant execution context
-		// This follows the pattern used by modern JS engines like V8's call stubs
-		// Save and restore currentThis to avoid corruption when calling user functions from builtins
-		prevThis := vm.currentThis
-		result, err := vm.executeUserFunctionReentrant(fn, thisValue, args)
-		vm.currentThis = prevThis
-		return result, err
-
-	default:
-		return Undefined, fmt.Errorf("cannot call non-function value of type %v", fn.Type())
-	}
-}
+// Deprecated: CallFunctionFromBuiltin has been removed. Builtins should use vm.Call.
 
 // CallFunctionDirectly executes a user-defined function directly without re-entrant execution
 // This is specifically designed for Function.prototype.call to avoid infinite recursion
@@ -343,8 +307,9 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 		return nativeFuncWithProps.Fn(args)
 
 	case TypeClosure, TypeFunction:
-		// For user-defined functions, always use the sentinel frame approach
-		// This ensures we don't have recursion issues with vm.run()
+		// For user-defined functions, use the sentinel safe execution path which
+		// integrates correctly with the interpreter loop and ensures exceptions
+		// are surfaced as ExceptionError without corrupting VM state.
 		return vm.executeUserFunctionSafe(fn, thisValue, args)
 
 	case TypeBoundFunction:
@@ -402,6 +367,15 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
+		// If the VM is unwinding an exception, surface it as an ExceptionError
+		if vm.unwinding && vm.currentException != Null {
+			ex := vm.currentException
+			// Clear VM exception state before returning to native caller, since
+			// we are handing the exception over as a Go error for the native to handle.
+			vm.currentException = Null
+			vm.unwinding = false
+			return Undefined, exceptionError{exception: ex}
+		}
 		return Undefined, fmt.Errorf("runtime error during user function execution")
 	}
 

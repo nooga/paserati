@@ -91,6 +91,36 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(false), nil
 	}))
 
+	// propertyIsEnumerable
+	objectProto.SetOwn("propertyIsEnumerable", vm.NewNativeFunction(1, false, "propertyIsEnumerable", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 1 {
+			return vm.BooleanValue(false), nil
+		}
+		thisValue := vmInstance.GetThis()
+		propName := args[0].ToString()
+		if po := thisValue.AsPlainObject(); po != nil {
+			if _, _, en, _, ok := po.GetOwnDescriptor(propName); ok {
+				return vm.BooleanValue(en), nil
+			}
+			return vm.BooleanValue(false), nil
+		}
+		if dict := thisValue.AsDictObject(); dict != nil {
+			if _, _, en, _, ok := dict.GetOwnDescriptor(propName); ok {
+				return vm.BooleanValue(en), nil
+			}
+			return vm.BooleanValue(false), nil
+		}
+		if arr := thisValue.AsArray(); arr != nil {
+			if propName == "length" {
+				return vm.BooleanValue(false), nil
+			}
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < arr.Length() {
+				return vm.BooleanValue(true), nil
+			}
+		}
+		return vm.BooleanValue(false), nil
+	}))
+
 	objectProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 
@@ -187,7 +217,121 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
 		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOfImpl))
 		ctorPropsObj.Properties.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", objectSetPrototypeOfImpl))
-		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", objectDefinePropertyImpl))
+		// defineProperty with proper error semantics and attribute enforcement
+		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
+			if len(args) < 3 {
+				return vm.Undefined, nil
+			}
+			obj := args[0]
+			propName := args[1].ToString()
+			descriptor := args[2]
+
+			if !obj.IsObject() {
+				return vm.Undefined, nil
+			}
+
+			// Parse descriptor fields
+			var value vm.Value = vm.Undefined
+			var writablePtr, enumerablePtr, configurablePtr *bool
+			hasGetter := false
+			hasSetter := false
+			if po := descriptor.AsPlainObject(); po != nil {
+				if v, ok := po.GetOwn("value"); ok {
+					value = v
+				}
+				if v, ok := po.GetOwn("writable"); ok {
+					b := v.IsTruthy()
+					writablePtr = &b
+				}
+				if v, ok := po.GetOwn("enumerable"); ok {
+					b := v.IsTruthy()
+					enumerablePtr = &b
+				}
+				if v, ok := po.GetOwn("configurable"); ok {
+					b := v.IsTruthy()
+					configurablePtr = &b
+				}
+				if _, ok := po.GetOwn("get"); ok {
+					hasGetter = true
+				}
+				if _, ok := po.GetOwn("set"); ok {
+					hasSetter = true
+				}
+			} else if d := descriptor.AsDictObject(); d != nil {
+				if v, ok := d.GetOwn("value"); ok {
+					value = v
+				}
+				if v, ok := d.GetOwn("writable"); ok {
+					b := v.IsTruthy()
+					writablePtr = &b
+				}
+				if v, ok := d.GetOwn("enumerable"); ok {
+					b := v.IsTruthy()
+					enumerablePtr = &b
+				}
+				if v, ok := d.GetOwn("configurable"); ok {
+					b := v.IsTruthy()
+					configurablePtr = &b
+				}
+				if _, ok := d.GetOwn("get"); ok {
+					hasGetter = true
+				}
+				if _, ok := d.GetOwn("set"); ok {
+					hasSetter = true
+				}
+			} else {
+				value = descriptor
+			}
+
+			// Accessor descriptors are not supported yet; ignore get/set but forbid mixing
+			if hasGetter || hasSetter {
+				// Forbid mixing data and accessor fields minimally: if any of value/writable provided, throw TypeError
+				if value.Type() != vm.TypeUndefined || writablePtr != nil {
+					typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
+					errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")})
+					return vm.Undefined, vmInstance.NewExceptionError(errVal)
+				}
+				// Otherwise, silently ignore for now (accessors unimplemented)
+			}
+
+			if po := obj.AsPlainObject(); po != nil {
+				// Enforce non-configurable update rules
+				if curVal, curW, curE, curC, ok := po.GetOwnDescriptor(propName); ok {
+					if curC == false {
+						// Cannot make configurable true
+						if configurablePtr != nil && *configurablePtr != curC {
+							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
+							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot redefine property: " + propName)})
+							return vm.Undefined, vmInstance.NewExceptionError(errVal)
+						}
+						// Cannot change enumerable from false to true
+						if curE == false && enumerablePtr != nil && *enumerablePtr != curE {
+							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
+							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot redefine property: " + propName)})
+							return vm.Undefined, vmInstance.NewExceptionError(errVal)
+						}
+						// If current writable is false, cannot change writable to true
+						if curW == false && writablePtr != nil && *writablePtr {
+							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
+							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot redefine property: " + propName)})
+							return vm.Undefined, vmInstance.NewExceptionError(errVal)
+						}
+						// If current writable is false and new value provided and not SameValue, throw
+						if curW == false && value.Type() != vm.TypeUndefined && !curVal.Is(value) {
+							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
+							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot assign to read only property '" + propName + "'")})
+							return vm.Undefined, vmInstance.NewExceptionError(errVal)
+						}
+					}
+				}
+				po.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+			} else if d := obj.AsDictObject(); d != nil {
+				// DictObject: assign value only
+				d.SetOwn(propName, value)
+			}
+
+			return obj, nil
+		}))
 		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", objectGetOwnPropertyDescriptorImpl))
 
 		objectCtor = ctorWithProps
@@ -250,16 +394,26 @@ func objectKeysImpl(args []vm.Value) (vm.Value, error) {
 
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		for _, key := range plainObj.OwnKeys() {
-			keysArray.Append(vm.NewString(key))
+			if _, _, en, _, ok := plainObj.GetOwnDescriptor(key); ok && en {
+				keysArray.Append(vm.NewString(key))
+			}
 		}
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
 		for _, key := range dictObj.OwnKeys() {
+			// DictObject defaults to enumerable
 			keysArray.Append(vm.NewString(key))
+		}
+	} else if arrObj := obj.AsArray(); arrObj != nil {
+		// Arrays: own enumerable string keys are indices present
+		for i := 0; i < arrObj.Length(); i++ {
+			keysArray.Append(vm.NewString(strconv.Itoa(i)))
 		}
 	}
 
 	return keys, nil
 }
+
+// (Removed duplicate alternate implementations of objectValuesImpl and objectEntriesImpl)
 
 func objectGetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
@@ -342,8 +496,10 @@ func objectValuesImpl(args []vm.Value) (vm.Value, error) {
 
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		for _, key := range plainObj.OwnKeys() {
-			value, _ := plainObj.GetOwn(key)
-			valuesArray.Append(value)
+			if _, _, en, _, ok := plainObj.GetOwnDescriptor(key); ok && en {
+				value, _ := plainObj.GetOwn(key)
+				valuesArray.Append(value)
+			}
 		}
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
 		for _, key := range dictObj.OwnKeys() {
@@ -377,11 +533,13 @@ func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
 
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		for _, key := range plainObj.OwnKeys() {
-			value, _ := plainObj.GetOwn(key)
-			entry := vm.NewArray()
-			entry.AsArray().Append(vm.NewString(key))
-			entry.AsArray().Append(value)
-			entriesArray.Append(entry)
+			if _, _, en, _, ok := plainObj.GetOwnDescriptor(key); ok && en {
+				value, _ := plainObj.GetOwn(key)
+				entry := vm.NewArray()
+				entry.AsArray().Append(vm.NewString(key))
+				entry.AsArray().Append(value)
+				entriesArray.Append(entry)
+			}
 		}
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
 		for _, key := range dictObj.OwnKeys() {
@@ -412,7 +570,7 @@ func objectAssignImpl(args []vm.Value) (vm.Value, error) {
 
 	// First argument is the target
 	target := args[0]
-	
+
 	// Convert primitives to objects (except null/undefined)
 	if target.Type() == vm.TypeNull || target.Type() == vm.TypeUndefined {
 		// TODO: Throw TypeError when error objects are implemented
@@ -428,7 +586,7 @@ func objectAssignImpl(args []vm.Value) (vm.Value, error) {
 	// Copy properties from all source objects
 	for i := 1; i < len(args); i++ {
 		source := args[i]
-		
+
 		// Skip null and undefined sources
 		if source.Type() == vm.TypeNull || source.Type() == vm.TypeUndefined {
 			continue
@@ -507,7 +665,7 @@ func objectHasOwnImpl(args []vm.Value) (vm.Value, error) {
 			return vm.BooleanValue(index >= 0 && index < arrObj.Length()), nil
 		}
 	}
-	
+
 	return vm.BooleanValue(false), nil
 }
 
@@ -519,7 +677,7 @@ func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	iterable := args[0]
-	
+
 	// Create new object to populate (use undefined to get Object.prototype)
 	result := vm.NewObject(vm.Undefined)
 	resultObj := result.AsPlainObject()
@@ -528,7 +686,7 @@ func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
 	if arr := iterable.AsArray(); arr != nil {
 		for i := 0; i < arr.Length(); i++ {
 			entry := arr.Get(i)
-			
+
 			// Each entry should be an array-like with at least 2 elements
 			if entryArr := entry.AsArray(); entryArr != nil && entryArr.Length() >= 2 {
 				key := entryArr.Get(0).ToString()
@@ -549,7 +707,13 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
-	propName := args[1].ToString()
+	// Property key: support symbols by using VM's internal symbol-key mangling
+	var propName string
+	if args[1].Type() == vm.TypeSymbol {
+		propName = "@@symbol:" + args[1].AsSymbol()
+	} else {
+		propName = args[1].ToString()
+	}
 	descriptor := args[2]
 
 	// First argument must be an object
@@ -558,33 +722,100 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 		return vm.Undefined, nil
 	}
 
-	// For now, implement basic property definition
-	// In a full implementation, we'd parse the descriptor object for
-	// value, writable, enumerable, configurable, get, set properties
-	
-	// Simple implementation: if descriptor has a 'value' property, use it
+	// Parse descriptor object fields: value, writable, enumerable, configurable, get, set
 	var value vm.Value = vm.Undefined
+	var writablePtr, enumerablePtr, configurablePtr *bool
+	var getter vm.Value = vm.Undefined
+	var setter vm.Value = vm.Undefined
+	hasGetter := false
+	hasSetter := false
 	if descObj := descriptor.AsPlainObject(); descObj != nil {
 		if val, exists := descObj.GetOwn("value"); exists {
 			value = val
+		}
+		if w, exists := descObj.GetOwn("writable"); exists {
+			b := w.IsTruthy()
+			writablePtr = &b
+		}
+		if e, exists := descObj.GetOwn("enumerable"); exists {
+			b := e.IsTruthy()
+			enumerablePtr = &b
+		}
+		if c, exists := descObj.GetOwn("configurable"); exists {
+			b := c.IsTruthy()
+			configurablePtr = &b
+		}
+		if g, exists := descObj.GetOwn("get"); exists {
+			hasGetter = true
+			getter = g
+		}
+		if s, exists := descObj.GetOwn("set"); exists {
+			hasSetter = true
+			setter = s
 		}
 	} else if descObj := descriptor.AsDictObject(); descObj != nil {
 		if val, exists := descObj.GetOwn("value"); exists {
 			value = val
 		}
+		if w, exists := descObj.GetOwn("writable"); exists {
+			b := w.IsTruthy()
+			writablePtr = &b
+		}
+		if e, exists := descObj.GetOwn("enumerable"); exists {
+			b := e.IsTruthy()
+			enumerablePtr = &b
+		}
+		if c, exists := descObj.GetOwn("configurable"); exists {
+			b := c.IsTruthy()
+			configurablePtr = &b
+		}
+		if g, exists := descObj.GetOwn("get"); exists {
+			hasGetter = true
+			getter = g
+		}
+		if s, exists := descObj.GetOwn("set"); exists {
+			hasSetter = true
+			setter = s
+		}
 	} else {
-		// If descriptor is not an object, treat it as the value
+		// Non-object descriptor treated as { value: descriptor }
 		value = descriptor
 	}
 
-	// Set the property on the object
+	// If accessor fields present with data fields, throw TypeError
+	if (hasGetter || hasSetter) && (value.Type() != vm.TypeUndefined || writablePtr != nil) {
+		// In absence of a direct VM reference here, mimic failure by returning undefined;
+		// harness verifyProperty will report descriptor mismatch. We will revisit once we thread VM here.
+		return vm.Undefined, nil
+	}
+
+	// Define the property with attributes (on plain objects only for now)
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		plainObj.SetOwn(propName, value)
+		// Enforce non-configurable rules when updating existing property
+		if _, w0, e0, c0, ok := plainObj.GetOwnDescriptor(propName); ok && !c0 {
+			// Non-configurable: cannot change configurable or enumerable
+			if configurablePtr != nil && *configurablePtr != c0 {
+				return obj, nil
+			}
+			if enumerablePtr != nil && *enumerablePtr != e0 {
+				return obj, nil
+			}
+			// If current writable is false and descriptor tries to set writable true, reject
+			if !w0 && writablePtr != nil && *writablePtr {
+				return obj, nil
+			}
+		}
+		if hasGetter || hasSetter {
+			// Accessor path
+			plainObj.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+		} else {
+			plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+		}
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+		// DictObject has no attributes; set value only
 		dictObj.SetOwn(propName, value)
 	}
 
-	// Return the object
 	return obj, nil
 }
 
@@ -595,43 +826,80 @@ func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
-	propName := args[1].ToString()
+	var propName string
+	if args[1].Type() == vm.TypeSymbol {
+		propName = "@@symbol:" + args[1].AsSymbol()
+	} else {
+		propName = args[1].ToString()
+	}
 
-	// First argument must be an object
-	if !obj.IsObject() {
-		// TODO: Throw TypeError when error objects are implemented
+	// First argument must be object-like
+	if !(obj.IsObject() || obj.AsArray() != nil) {
 		return vm.Undefined, nil
 	}
 
 	// Check if the property exists
 	var value vm.Value
-	var exists bool
 
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		value, exists = plainObj.GetOwn(propName)
+		if g, s, e, c, ok := plainObj.GetOwnAccessor(propName); ok {
+			// Accessor descriptor
+			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			if g.Type() != vm.TypeUndefined {
+				descriptor.SetOwn("get", g)
+			}
+			if s.Type() != vm.TypeUndefined {
+				descriptor.SetOwn("set", s)
+			}
+			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+			descriptor.SetOwn("configurable", vm.BooleanValue(c))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if v, w, e, c, ok := plainObj.GetOwnDescriptor(propName); ok {
+			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor.SetOwn("value", v)
+			descriptor.SetOwn("writable", vm.BooleanValue(w))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+			descriptor.SetOwn("configurable", vm.BooleanValue(c))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// not found
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
-		value, exists = dictObj.GetOwn(propName)
+		if v, w, e, c, ok := dictObj.GetOwnDescriptor(propName); ok {
+			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor.SetOwn("value", v)
+			descriptor.SetOwn("writable", vm.BooleanValue(w))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+			descriptor.SetOwn("configurable", vm.BooleanValue(c))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// not found
 	} else if arrObj := obj.AsArray(); arrObj != nil {
 		// For arrays, check if it's a valid index or 'length'
 		if propName == "length" {
 			value = vm.NumberValue(float64(arrObj.Length()))
-			exists = true
+			// length is non-enumerable, non-configurable, writable per JS spec for Array.length
+			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor.SetOwn("value", value)
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(false))
+			return vm.NewValueFromPlainObject(descriptor), nil
 		} else if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < arrObj.Length() {
 			value = arrObj.Get(index)
-			exists = true
+			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor.SetOwn("value", value)
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 	}
 
-	if !exists {
-		return vm.Undefined, nil
-	}
+	return vm.Undefined, nil
+}
 
-	// Create a descriptor object
-	descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
-	descriptor.SetOwn("value", value)
-	descriptor.SetOwn("writable", vm.BooleanValue(true))     // Default to writable
-	descriptor.SetOwn("enumerable", vm.BooleanValue(true))   // Default to enumerable
-	descriptor.SetOwn("configurable", vm.BooleanValue(true)) // Default to configurable
-
-	return vm.NewValueFromPlainObject(descriptor), nil
+// ObjectGetOwnPropertyDescriptorForHarness exposes a minimal descriptor getter for the test262 harness
+func ObjectGetOwnPropertyDescriptorForHarness(obj vm.Value, name vm.Value) (vm.Value, error) {
+	return objectGetOwnPropertyDescriptorImpl([]vm.Value{obj, name})
 }

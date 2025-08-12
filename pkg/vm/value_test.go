@@ -466,7 +466,7 @@ func TestArrayValue(t *testing.T) {
 
 func TestFunctionValue(t *testing.T) {
 	dummyChunk := &Chunk{}
-	v := NewFunction(2, 0, 8, false, "testFn", dummyChunk) // Use constructor
+	v := NewFunction(2, 0, 8, false, "testFn", dummyChunk, false) // Use constructor
 
 	if v.Type() != TypeFunction {
 		t.Errorf("Type mismatch. Expected %v, got %v", TypeFunction, v.Type())
@@ -514,7 +514,7 @@ func TestFunctionValue(t *testing.T) {
 	if gotStr := v.ToString(); gotStr != expectedStr {
 		t.Errorf("ToString mismatch. Expected %q, got %q", expectedStr, gotStr)
 	}
-	vNoName := NewFunction(0, 0, 0, false, "", nil)
+	vNoName := NewFunction(0, 0, 0, false, "", nil, false)
 	expectedNoNameStr := "<function>"
 	if gotNoNameStr := vNoName.ToString(); gotNoNameStr != expectedNoNameStr {
 		t.Errorf("ToString (no name) mismatch. Expected %q, got %q", expectedNoNameStr, gotNoNameStr)
@@ -746,7 +746,7 @@ func TestTypeName(t *testing.T) {
 		{NewSymbol("s"), "symbol"},
 		{NewObject(DefaultObjectPrototype), "object"},
 		{NewArray(), "object"}, // typeof [] is 'object'
-		{NewFunction(0, 0, 0, false, "", nil), "function"},
+		{NewFunction(0, 0, 0, false, "", nil, false), "function"},
 		{closureObj, "function"},
 		{nativeFn, "function"},
 	}
@@ -777,7 +777,7 @@ func TestToStringConversion(t *testing.T) {
 		{"BigInt", NewBigInt(big.NewInt(1000)), "1000n"},
 		{"BooleanTrue", True, "true"},
 		{"BooleanFalse", False, "false"},
-		{"Function", NewFunction(0, 0, 0, false, "myFn", nil), "<function myFn>"},
+		{"Function", NewFunction(0, 0, 0, false, "myFn", nil, false), "<function myFn>"},
 		{"Closure", closureObj, "<closure myFn>"},
 		{"NativeFunction", nativeFn, "<native function myNative>"},
 		{"Object", NewObject(DefaultObjectPrototype), "[object Object]"},
@@ -815,7 +815,7 @@ func TestToFloatConversion(t *testing.T) {
 		{"Null", Null, 0, true},
 		{"Undefined", Undefined, 0, true},
 		{"Object", NewObject(DefaultObjectPrototype), 0, true},
-		{"Function", NewFunction(0, 0, 0, false, "", nil), 0, true},
+		{"Function", NewFunction(0, 0, 0, false, "", nil, false), 0, true},
 	}
 
 	for _, tc := range testCases {
@@ -864,7 +864,7 @@ func TestToIntegerConversion(t *testing.T) {
 		{"Null", Null, 0},
 		{"Undefined", Undefined, 0},
 		{"Object", NewObject(DefaultObjectPrototype), 0},
-		{"Function", NewFunction(0, 0, 0, false, "", nil), 0},
+		{"Function", NewFunction(0, 0, 0, false, "", nil, false), 0},
 	}
 
 	for _, tc := range testCases {
@@ -877,7 +877,7 @@ func TestToIntegerConversion(t *testing.T) {
 }
 
 func TestIsFunctions(t *testing.T) {
-	fn := NewFunction(0, 0, 0, false, "", nil)
+	fn := NewFunction(0, 0, 0, false, "", nil, false)
 	cl := NewClosure(createTestFunctionObject("", 0), nil)
 	na := NewNativeFunction(0, false, "", nil)
 	obj := NewObject(DefaultObjectPrototype)
@@ -1055,7 +1055,7 @@ func TestIsFalsey(t *testing.T) {
 		{"Symbol", NewSymbol("s"), false},
 		{"Object", NewObject(DefaultObjectPrototype), false},
 		{"Array", NewArray(), false},
-		{"Function", NewFunction(0, 0, 0, false, "", nil), false},
+		{"Function", NewFunction(0, 0, 0, false, "", nil, false), false},
 		{"Closure", NewClosure(createTestFunctionObject("", 0), nil), false},
 		{"NativeFunction", NewNativeFunction(0, false, "", nil), false},
 	}

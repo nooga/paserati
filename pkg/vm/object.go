@@ -12,6 +12,7 @@ type Field struct {
 	writable     bool
 	enumerable   bool
 	configurable bool
+	isAccessor   bool
 }
 
 type Shape struct {
@@ -29,6 +30,8 @@ type PlainObject struct {
 	shape      *Shape
 	prototype  Value
 	properties []Value
+	getters    map[string]Value
+	setters    map[string]Value
 }
 
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
@@ -47,15 +50,107 @@ func (o *PlainObject) GetOwn(name string) (Value, bool) {
 	return Undefined, false
 }
 
+// GetOwnDescriptor returns the value and attribute flags for an own property.
+// Returns (value, writable, enumerable, configurable, exists).
+func (o *PlainObject) GetOwnDescriptor(name string) (Value, bool, bool, bool, bool) {
+	for _, f := range o.shape.fields {
+		if f.name == name {
+			if f.isAccessor {
+				// For accessor, return undefined value and writable=false
+				return Undefined, false, f.enumerable, f.configurable, true
+			}
+			var v Value = Undefined
+			if f.offset < len(o.properties) {
+				v = o.properties[f.offset]
+			}
+			return v, f.writable, f.enumerable, f.configurable, true
+		}
+	}
+	return Undefined, false, false, false, false
+}
+
+// GetOwnAccessor returns accessor pair for an own property if it is an accessor.
+// Returns (get, set, enumerable, configurable, exists)
+func (o *PlainObject) GetOwnAccessor(name string) (Value, Value, bool, bool, bool) {
+	for _, f := range o.shape.fields {
+		if f.name == name && f.isAccessor {
+			var g, s Value = Undefined, Undefined
+			if o.getters != nil {
+				if v, ok := o.getters[name]; ok {
+					g = v
+				}
+			}
+			if o.setters != nil {
+				if v, ok := o.setters[name]; ok {
+					s = v
+				}
+			}
+			return g, s, f.enumerable, f.configurable, true
+		}
+	}
+	return Undefined, Undefined, false, false, false
+}
+
+// DeleteOwn removes an own property if present and configurable.
+// Returns true if the property was deleted.
+func (o *PlainObject) DeleteOwn(name string) bool {
+	// Find field index
+	idx := -1
+	var f Field
+	for i := range o.shape.fields {
+		if o.shape.fields[i].name == name {
+			idx = i
+			f = o.shape.fields[i]
+			break
+		}
+	}
+	if idx == -1 {
+		// Non-existent own property: delete returns true per spec
+		return true
+	}
+	// If not configurable, cannot delete
+	if !f.configurable {
+		return false
+	}
+	// Build new fields slice without idx
+	newFields := make([]Field, 0, len(o.shape.fields)-1)
+	for i, fld := range o.shape.fields {
+		if i == idx {
+			continue
+		}
+		// Adjust offsets and append
+		nf := fld
+		if fld.offset > f.offset {
+			nf.offset = fld.offset - 1
+		}
+		newFields = append(newFields, nf)
+	}
+	// Build new properties slice without f.offset
+	newProps := make([]Value, 0, len(o.properties)-1)
+	for i := range o.properties {
+		if i == f.offset {
+			continue
+		}
+		newProps = append(newProps, o.properties[i])
+	}
+	// Create new shape without transitions for simplicity
+	o.shape = &Shape{parent: o.shape.parent, fields: newFields, transitions: make(map[string]*Shape)}
+	o.properties = newProps
+	return true
+}
+
 // SetOwn sets or defines an own property. Creates a new shape on first definition.
+// If the property exists and is non-writable, this is a no-op.
 func (o *PlainObject) SetOwn(name string, v Value) {
 	//fmt.Printf("DEBUG PlainObject.SetOwn: name=%q, value=%v, shape=%p\n", name, v.Inspect(), o.shape)
 	// try to find existing field
 	for _, f := range o.shape.fields {
 		if f.name == name {
 			// existing property, overwrite value
-			//fmt.Printf("DEBUG PlainObject.SetOwn: Overwriting existing property %q\n", name)
-			o.properties[f.offset] = v
+			// If not writable, ignore the set (non-strict mode semantics)
+			if f.writable {
+				o.properties[f.offset] = v
+			}
 			return
 		}
 	}
@@ -66,10 +161,11 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 	cur.mu.RLock()
 	next, ok := cur.transitions[name]
 	cur.mu.RUnlock()
-	
+
 	if !ok {
 		// create new shape by extending fields
 		off := len(cur.fields)
+		// Default attributes for regular assignment are writable/enumerable/configurable = true
 		fld := Field{offset: off, name: name, writable: true, enumerable: true, configurable: true}
 		// copy fields slice
 		newFields := make([]Field, len(cur.fields)+1)
@@ -79,7 +175,7 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 		newTrans := make(map[string]*Shape)
 		// assign new shape
 		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
-		
+
 		// cache transition (with write lock and double-check)
 		cur.mu.Lock()
 		if existing, exists := cur.transitions[name]; exists {
@@ -98,6 +194,151 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 	//fmt.Printf("DEBUG PlainObject.SetOwn: Property %q added, new shape has %d fields\n", name, len(o.shape.fields))
 }
 
+// DefineOwnProperty defines or updates an own property with explicit attributes.
+// For existing properties, unspecified attributes (nil) will keep previous values.
+func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool, enumerable *bool, configurable *bool) {
+	// Try to find existing field
+	for i, f := range o.shape.fields {
+		if f.name == name {
+			// Existing property: update value and attributes respecting current flags
+			if f.isAccessor {
+				// Converting accessor to data property: replace field
+				f.isAccessor = false
+				f.writable = false
+			}
+			// If writable is specified and current is false while new is true/false, allow toggle only if configurable is true
+			// Minimal semantics: do not allow changing value when current writable is false
+			if f.writable {
+				o.properties[f.offset] = value
+			}
+			// Update flags if provided
+			newF := f
+			if writable != nil {
+				newF.writable = *writable
+			}
+			if enumerable != nil {
+				newF.enumerable = *enumerable
+			}
+			if configurable != nil {
+				newF.configurable = *configurable
+			}
+			// Write back updated field in shape (copy-on-write not implemented; mutate in place)
+			o.shape.fields[i] = newF
+			return
+		}
+	}
+
+	// New property: create shape transition with specified attributes (defaults false if nil)
+	cur := o.shape
+	cur.mu.RLock()
+	next, ok := cur.transitions[name]
+	cur.mu.RUnlock()
+	if !ok {
+		off := len(cur.fields)
+		// Defaults per defineProperty: false when creating via descriptor if not specified
+		fld := Field{offset: off, name: name, writable: false, enumerable: false, configurable: false, isAccessor: false}
+		if writable != nil {
+			fld.writable = *writable
+		}
+		if enumerable != nil {
+			fld.enumerable = *enumerable
+		}
+		if configurable != nil {
+			fld.configurable = *configurable
+		}
+		newFields := make([]Field, len(cur.fields)+1)
+		copy(newFields, cur.fields)
+		newFields[len(cur.fields)] = fld
+		newTrans := make(map[string]*Shape)
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		cur.mu.Lock()
+		if existing, exists := cur.transitions[name]; exists {
+			next = existing
+		} else {
+			cur.transitions[name] = next
+		}
+		cur.mu.Unlock()
+	}
+	o.shape = next
+	o.properties = append(o.properties, value)
+}
+
+// DefineAccessorProperty defines or updates an accessor own property.
+func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	// Find existing field
+	for i, f := range o.shape.fields {
+		if f.name == name {
+			// Update to accessor kind
+			newF := f
+			newF.isAccessor = true
+			// writable is meaningless for accessor
+			if enumerable != nil {
+				newF.enumerable = *enumerable
+			}
+			if configurable != nil {
+				newF.configurable = *configurable
+			}
+			o.shape.fields[i] = newF
+			if o.getters == nil {
+				o.getters = make(map[string]Value)
+			}
+			if o.setters == nil {
+				o.setters = make(map[string]Value)
+			}
+			if hasGetter {
+				o.getters[name] = getter
+			}
+			if hasSetter {
+				o.setters[name] = setter
+			}
+			return
+		}
+	}
+	// New field
+	cur := o.shape
+	cur.mu.RLock()
+	next, ok := cur.transitions[name]
+	cur.mu.RUnlock()
+	if !ok {
+		off := len(cur.fields)
+		fld := Field{offset: off, name: name, writable: false, enumerable: false, configurable: false, isAccessor: true}
+		if enumerable != nil {
+			fld.enumerable = *enumerable
+		}
+		if configurable != nil {
+			fld.configurable = *configurable
+		}
+		newFields := make([]Field, len(cur.fields)+1)
+		copy(newFields, cur.fields)
+		newFields[len(cur.fields)] = fld
+		newTrans := make(map[string]*Shape)
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		cur.mu.Lock()
+		if existing, exists := cur.transitions[name]; exists {
+			next = existing
+		} else {
+			cur.transitions[name] = next
+		}
+		cur.mu.Unlock()
+	}
+	o.shape = next
+	// Ensure maps
+	if o.getters == nil {
+		o.getters = make(map[string]Value)
+	}
+	if o.setters == nil {
+		o.setters = make(map[string]Value)
+	}
+	if hasGetter {
+		o.getters[name] = getter
+	}
+	if hasSetter {
+		o.setters[name] = setter
+	}
+	// Keep properties slice length consistent
+	o.properties = append(o.properties, Undefined)
+}
+
 // HasOwn reports whether an own property with the given name exists.
 func (o *PlainObject) HasOwn(name string) bool {
 	//fmt.Printf("DEBUG PlainObject.HasOwn: name=%q, shape=%p, fields=%v\n", name, o.shape, o.shape.fields)
@@ -113,10 +354,7 @@ func (o *PlainObject) HasOwn(name string) bool {
 }
 
 // DeleteOwn deletes an own property. Not supported for PlainObject; always returns false.
-func (o *PlainObject) DeleteOwn(name string) bool {
-	// deletion of hidden-class properties not supported in this phase
-	return false
-}
+// (removed old stub DeleteOwn; implemented above)
 
 // OwnKeys returns the list of own property names in insertion order.
 func (o *PlainObject) OwnKeys() []string {
@@ -189,6 +427,14 @@ func (d *DictObject) GetOwn(name string) (Value, bool) {
 		return Undefined, false
 	}
 	return v, true
+}
+
+// GetOwnDescriptor for DictObject returns default data property attributes (true, true, true) if present.
+func (d *DictObject) GetOwnDescriptor(name string) (Value, bool, bool, bool, bool) {
+	if v, ok := d.properties[name]; ok {
+		return v, true, true, true, true
+	}
+	return Undefined, false, false, false, false
 }
 
 // SetOwn sets or defines an own property.

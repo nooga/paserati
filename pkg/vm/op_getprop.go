@@ -1,5 +1,7 @@
 package vm
 
+import "fmt"
+
 func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
 
 	// Generate cache key
@@ -14,6 +16,11 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			state: CacheStateUninitialized,
 		}
 		vm.propCache[cacheKey] = cache
+	}
+
+	// Debug trace for tricky harness props
+	if propName == "name" || propName == "constructor" {
+		fmt.Printf("[DBG opGetProp] '%s' on %s (%s)\n", propName, objVal.Inspect(), objVal.TypeName())
 	}
 
 	// 1. Special properties (.length, etc.)
@@ -32,14 +39,20 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	if objVal.Type() == TypeNativeFunctionWithProps {
 		nativeFnWithProps := objVal.AsNativeFunctionWithProps()
 		if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
+			if propName == "name" || propName == "constructor" {
+				fmt.Printf("[DBG opGetProp] '%s' hit own property on NativeFunctionWithProps: %s (%s)\n", propName, prop.Inspect(), prop.TypeName())
+			}
 			*dest = prop
 			return true, InterpretOK, *dest
 		}
 	}
 
-	// 4. Functions, Closures, Native Functions, and Bound Functions (unified handling)
-	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypeBoundFunction || objVal.Type() == TypeNativeFunction {
+	// 4. Functions, Closures, Native Functions, Native Functions with Props, Async Native Functions, and Bound Functions (unified handling)
+	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypeBoundFunction || objVal.Type() == TypeNativeFunction || objVal.Type() == TypeNativeFunctionWithProps || objVal.Type() == TypeAsyncNativeFunction {
 		if result, handled := vm.handleCallableProperty(*objVal, propName); handled {
+			if propName == "name" || propName == "constructor" {
+				fmt.Printf("[DBG opGetProp] '%s' via handleCallableProperty -> %s (%s)\n", propName, result.Inspect(), result.TypeName())
+			}
 			*dest = result
 			return true, InterpretOK, *dest
 		}
@@ -69,9 +82,23 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			return false, status, Undefined
 		default:
 			// Generic error for other non-object types
+			fmt.Printf("[DBG opGetProp] ERROR: '%s' on non-object %s value=%s\n", propName, objVal.TypeName(), objVal.Inspect())
 			status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())
 			return false, status, Undefined
 		}
+	}
+
+	// Additional debug: when asking for 'constructor' on an object, show prototype's name if present
+	if propName == "constructor" && objVal.Type() == TypeObject {
+		po := AsPlainObject(*objVal)
+		proto := po.GetPrototype()
+		protoName := "<no name>"
+		if proto.IsObject() {
+			if n, ok := proto.AsPlainObject().GetOwn("name"); ok {
+				protoName = n.ToString()
+			}
+		}
+		fmt.Printf("[DBG opGetProp] object prototype name: %s\n", protoName)
 	}
 
 	// 6. PlainObject with inline cache

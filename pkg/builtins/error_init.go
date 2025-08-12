@@ -40,22 +40,22 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create Error.prototype object
 	errorPrototype := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-	
+
 	// Set Error.prototype.name = "Error"
 	errorPrototype.SetOwn("name", vm.NewString("Error"))
-	
+
 	// Set Error.prototype.message = ""
 	errorPrototype.SetOwn("message", vm.NewString(""))
-	
+
 	// Error.prototype.toString()
 	errorPrototype.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' context from VM
 		thisValue := vmInstance.GetThis()
-		
+
 		// Default values
 		name := "Error"
 		message := ""
-		
+
 		// If 'this' is an object, try to get name and message properties
 		if thisValue.IsObject() {
 			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
@@ -74,14 +74,14 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 			}
 		}
-		
+
 		// Return "name: message" format, or just "name" if no message
 		if message == "" {
 			return vm.NewString(name), nil
 		}
 		return vm.NewString(name + ": " + message), nil
 	}))
-	
+
 	// Error constructor function
 	errorConstructor := vm.NewNativeFunction(-1, true, "Error", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
@@ -89,19 +89,19 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
 		}
-		
+
 		// Create new Error instance
 		errorInstance := vm.NewObject(vm.NewValueFromPlainObject(errorPrototype))
 		errorInstancePtr := errorInstance.AsPlainObject()
-		
+
 		// Set properties
 		errorInstancePtr.SetOwn("name", vm.NewString("Error"))
 		errorInstancePtr.SetOwn("message", vm.NewString(message))
-		
+
 		// Capture stack trace at the time of Error creation
 		stackTrace := vmInstance.CaptureStackTrace()
 		errorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
-		
+
 		return errorInstance, nil
 	})
 
@@ -119,10 +119,11 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Set constructor property on prototype
 	errorPrototype.SetOwn("constructor", errorConstructor)
+	// DEBUG (optional): we could print or assert here if needed
 
 	// Store in VM
 	vmInstance.ErrorPrototype = vm.NewValueFromPlainObject(errorPrototype)
-	
+
 	// Define globally
 	return ctx.DefineGlobal("Error", errorConstructor)
 }

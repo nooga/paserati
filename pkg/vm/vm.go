@@ -14,9 +14,9 @@ const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
 // Debug flags - set these to control debug output
-const debugVM = false         // VM execution tracing
-const debugCalls = false      // Function call tracing
-const debugExceptions = false // Exception handling tracing
+const debugVM = true         // VM execution tracing
+const debugCalls = true      // Function call tracing
+const debugExceptions = true // Exception handling tracing
 
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
@@ -346,8 +346,15 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
-	frame.targetRegister = 0    // Result of script isn't stored in caller's reg
-	frame.thisValue = Undefined // Main script has no 'this' context
+	frame.targetRegister = 0 // Result of script isn't stored in caller's reg
+	// Align with JS semantics: top-level this is global object in non-strict script
+	// Use globalThis if available, otherwise undefined
+	globalThisVal, _ := vm.GetGlobal("globalThis")
+	if globalThisVal == Undefined {
+		frame.thisValue = Undefined
+	} else {
+		frame.thisValue = globalThisVal
+	}
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
@@ -1967,25 +1974,7 @@ startExecution:
 			var success bool
 			if obj.IsObject() {
 				if plainObj := obj.AsPlainObject(); plainObj != nil {
-					// ERSATZ SOLUTION: Set property to undefined on original object (for existing references)
-					plainObj.SetOwn(propName, Undefined)
-
-					// Also create a new DictObject and replace the register (for future operations)
-					dictValue := NewDictObject(plainObj.GetPrototype())
-					dict := dictValue.AsDictObject()
-
-					// Copy all properties from shape (except the one we're deleting)
-					for _, field := range plainObj.shape.fields {
-						if field.offset < len(plainObj.properties) && field.name != propName {
-							dict.SetOwn(field.name, plainObj.properties[field.offset])
-						}
-					}
-
-					// Delete operation always succeeds since we didn't copy the target property
-					success = true
-					// Replace the register with the dict object
-					registers[objReg] = dictValue
-
+					success = plainObj.DeleteOwn(propName)
 				} else if dictObj := obj.AsDictObject(); dictObj != nil {
 					// DictObject supports deletion directly
 					success = dictObj.DeleteOwn(propName)

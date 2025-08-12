@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"paserati/pkg/driver"
 	"paserati/pkg/parser"
+	"strings"
 	// \"paserati/pkg/vm\" // Remove: VM no longer directly used here
 )
 
@@ -20,9 +20,10 @@ func main() {
 	cacheStatsFlag := flag.Bool("cache-stats", false, "Show inline cache statistics after execution")
 	bytecodeFlag := flag.Bool("bytecode", false, "Show compiled bytecode before execution")
 	astDumpFlag := flag.Bool("ast", false, "Show AST dump before type checking")
+	noTypecheckFlag := flag.Bool("no-typecheck", false, "Ignore TypeScript type errors (like paserati-test262)")
 
 	flag.Parse() // Parses the command-line flags
-	
+
 	// Set global AST dump flag
 	parser.DumpASTEnabled = *astDumpFlag
 
@@ -44,7 +45,7 @@ func main() {
 	// Normal execution mode
 	if *exprFlag != "" {
 		// Run the expression provided via -e flag
-		runExpression(*exprFlag, *cacheStatsFlag, *bytecodeFlag)
+		runExpressionWithTypes(*exprFlag, *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag)
 		return
 	}
 
@@ -53,10 +54,10 @@ func main() {
 		os.Exit(64) // Exit code 64: command line usage error
 	} else if flag.NArg() == 1 {
 		// Execute the script file provided as an argument
-		runFile(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag)
+		runFileWithTypes(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag)
 	} else {
 		// No file provided, start the REPL
-		runRepl(*cacheStatsFlag, *bytecodeFlag)
+		runReplWithTypes(*cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag)
 	}
 }
 
@@ -78,6 +79,16 @@ func runExpression(expr string, showCacheStats bool, showBytecode bool) {
 	}
 }
 
+func runExpressionWithTypes(expr string, showCacheStats bool, showBytecode bool, ignoreTypes bool) {
+	paserati := driver.NewPaserati()
+	paserati.SetIgnoreTypeErrors(ignoreTypes)
+	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
+	value, errs := paserati.RunCode(expr, options)
+	ok := paserati.DisplayResult(expr, value, errs)
+	if !ok {
+		os.Exit(70)
+	}
+}
 
 // runFile uses the driver to compile and execute a Paserati script from a file.
 func runFile(filename string, showCacheStats bool, showBytecode bool) {
@@ -100,6 +111,23 @@ func runFile(filename string, showCacheStats bool, showBytecode bool) {
 		if !ok {
 			os.Exit(70)
 		}
+	}
+}
+
+func runFileWithTypes(filename string, showCacheStats bool, showBytecode bool, ignoreTypes bool) {
+	sourceBytes, err := os.ReadFile(filename)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to read file '%s': %s\n", filename, err.Error())
+		os.Exit(70)
+	}
+	source := string(sourceBytes)
+	paserati := driver.NewPaserati()
+	paserati.SetIgnoreTypeErrors(ignoreTypes)
+	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
+	value, errs := paserati.RunCode(source, options)
+	ok := paserati.DisplayResult(source, value, errs)
+	if !ok {
+		os.Exit(70)
 	}
 }
 
@@ -142,6 +170,39 @@ func runRepl(showCacheStats bool, showBytecode bool) {
 			options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
 			value, errs := paserati.RunCode(line, options)
 			_ = paserati.DisplayResult(line, value, errs) // Ignore the bool return in REPL
+		}
+	}
+}
+
+func runReplWithTypes(showCacheStats bool, showBytecode bool, ignoreTypes bool) {
+	reader := bufio.NewReader(os.Stdin)
+	paserati := driver.NewPaserati()
+	paserati.SetIgnoreTypeErrors(ignoreTypes)
+	fmt.Println("Paserati (Ctrl+C to exit)")
+	if showCacheStats {
+		fmt.Println("Cache statistics enabled")
+	}
+	for {
+		fmt.Print("> ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println("\nGoodbye!")
+				break
+			}
+			fmt.Fprintf(os.Stderr, "Error reading input: %s\n", err)
+			break
+		}
+		if line == "\n" {
+			continue
+		}
+		if containsImportsInString(line) {
+			value, errs := paserati.RunStringWithModules(line)
+			_ = paserati.DisplayResult(line, value, errs)
+		} else {
+			options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
+			value, errs := paserati.RunCode(line, options)
+			_ = paserati.DisplayResult(line, value, errs)
 		}
 	}
 }

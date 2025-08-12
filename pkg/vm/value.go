@@ -82,38 +82,38 @@ const (
 // GeneratorFrame stores the execution state of a suspended generator
 // This allows the generator to resume execution from where it left off
 type GeneratorFrame struct {
-	pc         int       // Program counter - next instruction to execute
-	registers  []Value   // Register state at suspension point
-	locals     []Value   // Local variable state
-	stackBase  int       // Base of this frame's stack
-	yieldPC    int       // PC of the yield instruction (for resumption)
-	outputReg  byte      // Register where sent value should be stored on resumption
+	pc        int     // Program counter - next instruction to execute
+	registers []Value // Register state at suspension point
+	locals    []Value // Local variable state
+	stackBase int     // Base of this frame's stack
+	yieldPC   int     // PC of the yield instruction (for resumption)
+	outputReg byte    // Register where sent value should be stored on resumption
 }
 
 // GeneratorObject represents a JavaScript generator instance
 // Based on the design from generators-implementation-plan.md
 type GeneratorObject struct {
 	Object
-	Function     Value              // The generator function
-	State        GeneratorState     // Current state (suspended/completed/executing)
-	Frame        *GeneratorFrame    // Execution frame (nil if completed)
-	YieldedValue Value              // Last yielded value
-	ReturnValue  Value              // Final return value (when completed)
-	Done         bool               // True when generator is exhausted
-	Args         []Value            // Arguments passed when the generator was created
+	Function     Value           // The generator function
+	State        GeneratorState  // Current state (suspended/completed/executing)
+	Frame        *GeneratorFrame // Execution frame (nil if completed)
+	YieldedValue Value           // Last yielded value
+	ReturnValue  Value           // Final return value (when completed)
+	Done         bool            // True when generator is exhausted
+	Args         []Value         // Arguments passed when the generator was created
 }
 
 type MapObject struct {
 	Object
 	size    int
-	entries map[string]Value      // key -> value
-	keys    map[string]Value      // key -> original key (for key iteration)
+	entries map[string]Value // key -> value
+	keys    map[string]Value // key -> original key (for key iteration)
 }
 
 type SetObject struct {
 	Object
 	size   int
-	values map[string]Value  // key -> original value (for value iteration)
+	values map[string]Value // key -> original value (for value iteration)
 }
 
 type BigIntObject struct {
@@ -125,6 +125,20 @@ type Value struct {
 	typ     ValueType
 	payload uint64
 	obj     unsafe.Pointer
+}
+
+// NewTypeError constructs a TypeError exception error for builtin helpers to return
+func (vm *VM) NewTypeError(message string) error {
+	ctor, _ := vm.GetGlobal("TypeError")
+	if ctor != Undefined {
+		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
+		return exceptionError{exception: errObj}
+	}
+	// Fallback generic error object
+	obj := NewObject(Null).AsPlainObject()
+	obj.SetOwn("name", NewString("TypeError"))
+	obj.SetOwn("message", NewString(message))
+	return exceptionError{exception: NewValueFromPlainObject(obj)}
 }
 
 var (
@@ -778,7 +792,7 @@ func (v Value) inspectWithContext(nested bool) string {
 	case TypeObject:
 		// Plain object literal inspect - check for toString() first
 		obj := v.AsPlainObject()
-		
+
 		// Fast path: Check for special built-in objects with known patterns
 		if toStringResult := tryBuiltinToString(obj); toStringResult != "" {
 			// In nested context, quote the toString result like a string
@@ -787,7 +801,7 @@ func (v Value) inspectWithContext(nested bool) string {
 			}
 			return toStringResult
 		}
-		
+
 		// General path: Look for toString method in prototype chain
 		if toStringMethod := findToStringMethod(obj); toStringMethod.Type() != TypeUndefined && toStringMethod.IsFunction() {
 			// For now, we'll handle specific cases rather than calling the method
@@ -800,7 +814,7 @@ func (v Value) inspectWithContext(nested bool) string {
 				return dateString
 			}
 		}
-		
+
 		// Default object literal representation
 		var b strings.Builder
 		b.WriteString("{")
@@ -1164,8 +1178,8 @@ func AsArray(v Value) *ArrayObject { return v.AsArray() }
 
 // AsArguments returns the ArgumentsObject pointer from an Arguments value.
 func AsArguments(v Value) *ArgumentsObject { return v.AsArguments() }
-func AsMap(v Value) *MapObject { return v.AsMap() }
-func AsSet(v Value) *SetObject { return v.AsSet() }
+func AsMap(v Value) *MapObject             { return v.AsMap() }
+func AsSet(v Value) *SetObject             { return v.AsSet() }
 
 // valuesEqual compares two values using ECMAScript SameValueZero (NaN===NaN, +0===-0).
 func valuesEqual(a, b Value) bool { return a.Is(b) }
@@ -1424,10 +1438,10 @@ func tryBuiltinToString(obj *PlainObject) string {
 	if timestampValue, exists := obj.GetOwn("__timestamp__"); exists && timestampValue.IsNumber() {
 		return formatDateTimestamp(timestampValue.ToFloat())
 	}
-	
+
 	// Add other built-in object patterns here as needed
 	// e.g., RegExp, Error objects, etc.
-	
+
 	return ""
 }
 
@@ -1437,18 +1451,18 @@ func findToStringMethod(obj *PlainObject) Value {
 	if toStringMethod, exists := obj.GetOwn("toString"); exists {
 		return toStringMethod
 	}
-	
+
 	// Walk the prototype chain
 	current := obj
 	depth := 0
-	
+
 	for current != nil && depth < 10 { // Prevent infinite loops
 		// Move up the prototype chain
 		protoVal := current.GetPrototype()
 		if !protoVal.IsObject() {
 			break
 		}
-		
+
 		current = protoVal.AsPlainObject()
 		if current != nil {
 			if toStringMethod, exists := current.GetOwn("toString"); exists {
@@ -1457,7 +1471,7 @@ func findToStringMethod(obj *PlainObject) Value {
 		}
 		depth++
 	}
-	
+
 	return Undefined
 }
 
