@@ -188,10 +188,12 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		if debugCalls {
 			fmt.Printf("[DEBUG call.go] Calling native function %s, frameCount=%d\n", nativeFunc.Name, vm.frameCount)
 		}
-		// Set the current 'this' value for native function access
+		// Set the current 'this' value for native function access and restore after call
+		oldThis := vm.currentThis
 		vm.currentThis = thisValue
 		// Native functions execute immediately in caller's context
 		result, err := nativeFunc.Fn(args)
+		vm.currentThis = oldThis
 		if debugCalls {
 			fmt.Printf("[DEBUG call.go] Native function %s returned, err=%v, frameCount=%d, unwinding=%v\n",
 				nativeFunc.Name, err != nil, vm.frameCount, vm.unwinding)
@@ -234,10 +236,12 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			}
 		}
 
-		// Set the current 'this' value for native function access
+		// Set the current 'this' value for native function access and restore after call
+		oldThis := vm.currentThis
 		vm.currentThis = thisValue
 		// Execute immediately
 		result, err := nativeFuncWithProps.Fn(args)
+		vm.currentThis = oldThis
 		if err != nil {
 			// Return error to be handled by the VM
 			return false, err

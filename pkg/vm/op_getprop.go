@@ -20,8 +20,10 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 
 	// Debug trace for tricky harness props
 	if debugVM {
-		if propName == "name" || propName == "constructor" {
-			fmt.Printf("[DBG opGetProp] '%s' on %s (%s)\n", propName, objVal.Inspect(), objVal.TypeName())
+		if propName == "name" || propName == "constructor" || propName == "value" || propName == "next" {
+			if debugVM {
+				fmt.Printf("[DBG opGetProp] '%s' on %s (%s)\n", propName, objVal.Inspect(), objVal.TypeName())
+			}
 		}
 	}
 
@@ -43,7 +45,9 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
 			if debugVM {
 				if propName == "name" || propName == "constructor" {
-					fmt.Printf("[DBG opGetProp] '%s' hit own property on NativeFunctionWithProps: %s (%s)\n", propName, prop.Inspect(), prop.TypeName())
+					if debugVM {
+						fmt.Printf("[DBG opGetProp] '%s' hit own property on NativeFunctionWithProps: %s (%s)\n", propName, prop.Inspect(), prop.TypeName())
+					}
 				}
 			}
 			*dest = prop
@@ -56,7 +60,9 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		if result, handled := vm.handleCallableProperty(*objVal, propName); handled {
 			if debugVM {
 				if propName == "name" || propName == "constructor" {
-					fmt.Printf("[DBG opGetProp] '%s' via handleCallableProperty -> %s (%s)\n", propName, result.Inspect(), result.TypeName())
+					if debugVM {
+						fmt.Printf("[DBG opGetProp] '%s' via handleCallableProperty -> %s (%s)\n", propName, result.Inspect(), result.TypeName())
+					}
 				}
 			}
 			*dest = result
@@ -88,7 +94,26 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			return false, status, Undefined
 		default:
 			// Generic error for other non-object types
-			fmt.Printf("[DBG opGetProp] ERROR: '%s' on non-object %s value=%s\n", propName, objVal.TypeName(), objVal.Inspect())
+			if debugVM && (propName == "value" || propName == "next") {
+				if debugVM {
+					fmt.Printf("[DBG opGetProp] Trap '%s' on non-object %s value=%s\n", propName, objVal.TypeName(), objVal.Inspect())
+				}
+				// Try to dump a small backtrace of registers around current frame if available
+				if vm.frameCount > 0 {
+					fr := &vm.frames[vm.frameCount-1]
+					topN := 0
+					if len(fr.registers) < topN {
+						topN = len(fr.registers)
+					}
+					for i := 0; i < topN; i++ {
+						fmt.Printf("    [R%d]=%s(%s)\n", i, fr.registers[i].Inspect(), fr.registers[i].TypeName())
+					}
+				}
+			} else {
+				if debugVM {
+					fmt.Printf("[DBG opGetProp] ERROR: '%s' on non-object %s value=%s\n", propName, objVal.TypeName(), objVal.Inspect())
+				}
+			}
 			status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())
 			return false, status, Undefined
 		}
@@ -104,7 +129,9 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 				protoName = n.ToString()
 			}
 		}
-		fmt.Printf("[DBG opGetProp] object prototype name: %s\n", protoName)
+		if debugVM {
+			fmt.Printf("[DBG opGetProp] object prototype name: %s\n", protoName)
+		}
 	}
 
 	// 6. PlainObject with inline cache
@@ -127,6 +154,11 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			if offset < len(po.properties) {
 				result := po.properties[offset]
 				*dest = result
+				if propName == "next" {
+					if debugVM {
+						fmt.Printf("[DBG opGetProp] resolved 'next' -> %s (%s)\n", result.Inspect(), result.TypeName())
+					}
+				}
 				return true, InterpretOK, *dest
 			}
 			// Cached offset is out of bounds - cache is stale, fall through to slow path
@@ -138,6 +170,11 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		// Use enhanced property resolution with prototype caching
 		if result, found := vm.resolvePropertyWithCache(*objVal, propName, cache, cacheKey); found {
 			*dest = result
+			if propName == "next" {
+				if debugVM {
+					fmt.Printf("[DBG opGetProp] resolved 'next' via proto/cache -> %s (%s)\n", result.Inspect(), result.TypeName())
+				}
+			}
 
 			// Update cache only if property was found on the object itself (not prototype)
 			if _, ownExists := po.GetOwn(propName); ownExists {
@@ -163,6 +200,11 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		// Use prototype-aware Get instead of GetOwn
 		if fv, ok := dict.Get(propName); ok {
 			*dest = fv
+			if propName == "next" {
+				if debugVM {
+					fmt.Printf("[DBG opGetProp] (dict) resolved 'next' -> %s (%s)\n", fv.Inspect(), fv.TypeName())
+				}
+			}
 		} else {
 			*dest = Undefined
 		}
@@ -211,6 +253,9 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 
 // opGetPropSymbol handles property get where the key is a symbol Value.
 func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) (bool, InterpretResult, Value) {
+	// Prepare a per-site cache key for symbol lookups (future use)
+	_ = generateSymbolCacheKey // reference to avoid unused warning if not used yet
+	// cacheKey := generateSymbolCacheKey(ip, symKey)
 	// Resolve a prototype-backed view for primitives
 	base := *objVal
 	switch base.Type() {
@@ -221,6 +266,9 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 			po := proto.AsPlainObject()
 			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
 				*dest = v
+				if debugVM {
+					fmt.Printf("[DBG opGetPropSymbol] String.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+				}
 				return true, InterpretOK, *dest
 			}
 			// Walk prototype chain from String.prototype
@@ -230,6 +278,9 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 					if proto2 := current.AsPlainObject(); proto2 != nil {
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
+							if debugVM {
+								fmt.Printf("[DBG opGetPropSymbol] String proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+							}
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
@@ -246,6 +297,78 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 		// Not found on String.prototype chain for symbol key
 		*dest = Undefined
 		return true, InterpretOK, *dest
+	case TypeArray:
+		// Arrays: consult Array.prototype chain for symbol properties
+		proto := vm.ArrayPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				if debugVM {
+					fmt.Printf("[DBG opGetPropSymbol] Array.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+				}
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							if debugVM {
+								fmt.Printf("[DBG opGetPropSymbol] Array proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+							}
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	case TypeGenerator:
+		// Generators: consult Generator.prototype chain for symbol properties
+		proto := vm.GeneratorPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				if debugVM {
+					fmt.Printf("[DBG opGetPropSymbol] Generator.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+				}
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							if debugVM {
+								fmt.Printf("[DBG opGetPropSymbol] Generator proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+							}
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
 	}
 
 	// PlainObject: search by symbol identity
@@ -253,6 +376,9 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 		po := AsPlainObject(base)
 		if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
 			*dest = v
+			if debugVM {
+				fmt.Printf("[DBG opGetPropSymbol] PlainObject own[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+			}
 			return true, InterpretOK, *dest
 		}
 		// Walk prototype chain
@@ -262,6 +388,9 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 				if proto := current.AsPlainObject(); proto != nil {
 					if v, ok := proto.GetOwnByKey(NewSymbolKey(symKey)); ok {
 						*dest = v
+						if debugVM {
+							fmt.Printf("[DBG opGetPropSymbol] PlainObject proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+						}
 						return true, InterpretOK, *dest
 					}
 					current = proto.prototype

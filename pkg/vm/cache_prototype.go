@@ -48,6 +48,14 @@ func generateCacheKey(ip int, propName string) int {
 	return (ip-5)*100000 + (propNameHash & 0xFFFF)
 }
 
+// generateSymbolCacheKey creates a unique key for a symbol-index access site.
+// It incorporates the call-site ip and the symbol identity (pointer address),
+// ensuring caches are distinct per symbol value.
+func generateSymbolCacheKey(ip int, sym Value) int {
+	symPtr := int(uintptr(sym.obj)) & 0xFFFF
+	return (ip-5)*100000 + symPtr
+}
+
 // PrototypeCacheEntry represents a cached prototype chain lookup
 type PrototypeCacheEntry struct {
 	objectShape    *Shape       // Shape of the object being accessed

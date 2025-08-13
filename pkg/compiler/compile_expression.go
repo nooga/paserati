@@ -1734,10 +1734,10 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	c.emitByte(byte(iterableReg))       // Base: iterable
 	c.emitByte(byte(iteratorKeyReg))    // Key: Symbol.iterator
 
-	// 3. Call the iterator method to get the iterator
+	// 3. Call the iterator method to get the iterator (preserve 'this' = iterable)
 	iteratorReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorReg)
-	c.emitCall(iteratorReg, iteratorMethodReg, 0, node.Token.Line) // 0 arguments
+	c.emitCallMethod(iteratorReg, iteratorMethodReg, iterableReg, 0, node.Token.Line)
 
 	// 4. Set up loop variables
 	sentValueReg := c.regAlloc.Alloc()
@@ -1753,13 +1753,11 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
 	c.emitGetProp(nextMethodReg, iteratorReg, nextConstIdx, node.Token.Line)
 
-	// Call iterator.next(sentValue)
+	// Call iterator.next() (preserve 'this' = iterator)
 	resultReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, resultReg)
-	// For now, we'll call next() without arguments since we don't have a way to pass
-	// arguments dynamically. This is a simplification - a full implementation would
-	// need to handle passing the sent value to next()
-	c.emitCall(resultReg, nextMethodReg, 0, node.Token.Line)
+	// For now, we do not pass the sent value yet.
+	c.emitCallMethod(resultReg, nextMethodReg, iteratorReg, 0, node.Token.Line)
 
 	// Get result.done
 	doneReg := c.regAlloc.Alloc()

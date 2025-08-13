@@ -199,6 +199,40 @@ const (
 	InterpretRuntimeError
 )
 
+// funcName returns a human-friendly name of the current function for debug prints.
+func funcName(fn *FunctionObject) string {
+	if fn == nil {
+		return "<nil>"
+	}
+	if fn.Name != "" {
+		return fn.Name
+	}
+	return "<anonymous>"
+}
+
+// dumpFrameStack prints a compact snapshot of the current VM frame stack for debugging.
+func dumpFrameStack(vm *VM, context string) {
+	if !debugVM {
+		return
+	}
+	fmt.Printf("[DBG Frames] %s: frameCount=%d nextRegSlot=%d\n", context, vm.frameCount, vm.nextRegSlot)
+	for i := 0; i < vm.frameCount; i++ {
+		fr := &vm.frames[i]
+		name := "<no-fn>"
+		regSize := 0
+		if fr.closure != nil && fr.closure.Fn != nil {
+			name = fr.closure.Fn.Name
+			regSize = fr.closure.Fn.RegisterSize
+		}
+		gen := false
+		if fr.closure != nil && fr.closure.Fn != nil {
+			gen = fr.closure.Fn.IsGenerator
+		}
+		fmt.Printf("  #%d name=%s ip=%d target=R%d regs=%d direct=%v ctor=%v gen=%v\n",
+			i, name, fr.ip, fr.targetRegister, regSize, fr.isDirectCall, fr.isConstructorCall, gen)
+	}
+}
+
 // NewVM creates a new VM instance.
 func NewVM() *VM {
 	vm := &VM{
@@ -442,6 +476,9 @@ startExecution:
 				// Running off end of main script - return the final expression result
 				// For scripts, the final expression result should be in register 0
 				if len(registers) > 0 {
+					if debugVM {
+						dumpFrameStack(vm, "fall-off-end")
+					}
 					return InterpretOK, registers[0]
 				} else {
 					return InterpretOK, Undefined
@@ -467,6 +504,9 @@ startExecution:
 			ip >= 15 { // Show catch block area
 			if debugVM {
 				fmt.Printf("[DEBUG vm.go] EXECUTING IP=%d opcode=%s frameCount=%d\n", ip, opcode.String(), vm.frameCount)
+				if opcode == OpReturn || opcode == OpReturnUndefined {
+					dumpFrameStack(vm, "pre-return")
+				}
 			}
 		}
 
@@ -503,7 +543,14 @@ startExecution:
 				status := vm.runtimeError("Invalid constant index %d", constIdx)
 				return status, Undefined
 			}
-			registers[reg] = constants[constIdx]
+			cval := constants[constIdx]
+			// Targeted tracing around constants and R0 behavior near script end
+			if cval.Type() == TypeString || cval.Type() == TypeSymbol {
+				if debugVM {
+					fmt.Printf("[DBG LoadConst] R%d = const[%d] -> %s (%s)\n", reg, constIdx, cval.Inspect(), cval.TypeName())
+				}
+			}
+			registers[reg] = cval
 
 		case OpLoadNull:
 			reg := code[ip]
@@ -1042,6 +1089,12 @@ startExecution:
 			result := registers[srcReg]
 			frame.ip = ip // Save final IP of this frame
 
+			// Trace returns with frame stack snapshot
+			if debugVM {
+				fmt.Printf("[DBG Return] from %s: %s (%s)\n", funcName(function), result.Inspect(), result.TypeName())
+				dumpFrameStack(vm, "on-return")
+			}
+
 			// If returning from the top-level script frame, terminate immediately
 			if function != nil && function.Name == "<script>" {
 				// If currently unwinding, this is an uncaught exception at top level
@@ -1206,6 +1259,8 @@ startExecution:
 
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
+
+			// Trace any function return of undefined (kept minimal)
 
 			// If returning from the top-level script frame, terminate immediately
 			if function != nil && function.Name == "<script>" {
@@ -1459,14 +1514,11 @@ startExecution:
 			indexReg := code[ip+2]
 			ip += 3
 
-			if debugVM {
-				fmt.Printf("[DBG OpGetIndex regs] dest=R%d base=R%d index=R%d\n", destReg, baseReg, indexReg)
-			}
+			// Minimal debug for iterator path only
 			baseVal := registers[baseReg]
 			indexVal := registers[indexReg]
-			if debugVM {
-				fmt.Printf("[DBG OpGetIndex vals] base=%s(%s) index=%s(%s)\n", baseVal.Inspect(), baseVal.TypeName(), indexVal.Inspect(), indexVal.TypeName())
-			}
+			_ = baseVal
+			_ = indexVal
 
 			// --- MODIFIED: Handle Array, Arguments, Object, String ---
 			switch baseVal.Type() {
@@ -1491,6 +1543,10 @@ startExecution:
 						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
 							return status, value
 						}
+						// Trace iterator symbol resolution in for-of
+						// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
+						fmt.Printf("[DBG OpGetIndex:Array] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
+						// }
 						continue
 					default:
 						frame.ip = ip
@@ -1530,6 +1586,9 @@ startExecution:
 					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
 						return status, value
 					}
+					// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
+					fmt.Printf("[DBG OpGetIndex:Object] [Symbol.iterator] -> %s (%s) base=%s\n", registers[destReg].Inspect(), registers[destReg].TypeName(), baseVal.Inspect())
+					// }
 					continue
 				default:
 					// For arbitrary base objects, support computed property by routing through opGetProp/Boxing rules
@@ -1576,6 +1635,7 @@ startExecution:
 						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
 							return status, value
 						}
+						// (debug-only tracing removed; keep runtime lean)
 						continue
 					default:
 						frame.ip = ip
@@ -1625,12 +1685,15 @@ startExecution:
 					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
 						return status, value
 					}
-					return InterpretOK, registers[destReg]
+					continue
 				case TypeSymbol:
 					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
 						return status, value
 					}
-					return InterpretOK, registers[destReg]
+					// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
+					fmt.Printf("[DBG OpGetIndex:Generator] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
+					// }
+					continue
 				default:
 					frame.ip = ip
 					status := vm.runtimeError("Callable index must be a string or symbol, got '%v'", indexVal.Type())
@@ -2062,6 +2125,32 @@ startExecution:
 
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
+			// Extra targeted tracing for iterator delegation debugging
+			if calleeVal.Type() == TypeNativeFunction {
+				nf := AsNativeFunction(calleeVal)
+				if nf.Name == "[Symbol.iterator]" || nf.Name == "next" {
+					fmt.Printf("[DBG OpCallMethod] regs func=R%d this=R%d dest=R%d | callee=%s(%s) this=%s(%s)\n",
+						funcReg, thisReg, destReg, calleeVal.Inspect(), calleeVal.TypeName(), thisVal.Inspect(), thisVal.TypeName())
+				}
+			} else if calleeVal.Type() == TypeNativeFunctionWithProps {
+				nfp := calleeVal.AsNativeFunctionWithProps()
+				if nfp.Name == "[Symbol.iterator]" || nfp.Name == "next" {
+					fmt.Printf("[DBG OpCallMethod] regs func=R%d this=R%d dest=R%d | callee=%s(%s) this=%s(%s)\n",
+						funcReg, thisReg, destReg, calleeVal.Inspect(), calleeVal.TypeName(), thisVal.Inspect(), thisVal.TypeName())
+				}
+			}
+			// Trace specific iterator-related calls to inspect 'this' binding
+			if calleeVal.Type() == TypeNativeFunction {
+				nf := AsNativeFunction(calleeVal)
+				if nf.Name == "[Symbol.iterator]" || nf.Name == "next" {
+					fmt.Printf("[DBG OpCallMethod] calling %s with this=%s (%s)\n", nf.Name, thisVal.Inspect(), thisVal.TypeName())
+				}
+			} else if calleeVal.Type() == TypeNativeFunctionWithProps {
+				nfp := calleeVal.AsNativeFunctionWithProps()
+				if nfp.Name == "[Symbol.iterator]" || nfp.Name == "next" {
+					fmt.Printf("[DBG OpCallMethod] calling %s with this=%s (%s)\n", nfp.Name, thisVal.Inspect(), thisVal.TypeName())
+				}
+			}
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
 			// Debug logging for method calls
@@ -2108,6 +2197,24 @@ startExecution:
 				registers = frame.registers
 				ip = frame.ip
 				continue
+			}
+
+			// Minimal targeted debug: observe results of [Symbol.iterator] and next()
+			if !shouldSwitch {
+				switch calleeVal.Type() {
+				case TypeNativeFunction:
+					nf := AsNativeFunction(calleeVal)
+					if nf.Name == "[Symbol.iterator]" || nf.Name == "next" {
+						res := callerRegisters[destReg]
+						fmt.Printf("[DBG OpCallMethod] %s returned %s (%s)\n", nf.Name, res.Inspect(), res.TypeName())
+					}
+				case TypeNativeFunctionWithProps:
+					nfp := calleeVal.AsNativeFunctionWithProps()
+					if nfp.Name == "[Symbol.iterator]" || nfp.Name == "next" {
+						res := callerRegisters[destReg]
+						fmt.Printf("[DBG OpCallMethod] %s returned %s (%s)\n", nfp.Name, res.Inspect(), res.TypeName())
+					}
+				}
 			}
 
 			if shouldSwitch {

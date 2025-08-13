@@ -763,7 +763,8 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 			result.SetOwn("done", vm.BooleanValue(true))
 		} else {
 			// Return current element and advance
-			result.SetOwn("value", array.Get(currentIndex))
+			val := array.Get(currentIndex)
+			result.SetOwn("value", val)
 			result.SetOwn("done", vm.BooleanValue(false))
 			currentIndex++
 		}
