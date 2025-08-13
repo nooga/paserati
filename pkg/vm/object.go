@@ -83,6 +83,7 @@ type Shape struct {
 	fields      []Field
 	transitions map[string]*Shape // keyed by PropertyKey.hash()
 	mu          sync.RWMutex      // Protects transitions map
+	version     uint32            // Bumped on any layout/flags change
 }
 
 type Object struct {
@@ -218,8 +219,8 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 		}
 		newProps = append(newProps, o.properties[i])
 	}
-	// Create new shape without transitions for simplicity
-	o.shape = &Shape{parent: o.shape.parent, fields: newFields, transitions: make(map[string]*Shape)}
+	// Create new shape without transitions for simplicity and bump version
+	o.shape = &Shape{parent: o.shape.parent, fields: newFields, transitions: make(map[string]*Shape), version: o.shape.version + 1}
 	o.properties = newProps
 	return true
 }
@@ -259,8 +260,8 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 		newFields[len(cur.fields)] = fld
 		// new transitions map
 		newTrans := make(map[string]*Shape)
-		// assign new shape
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		// assign new shape and bump version
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
 
 		// cache transition (with write lock and double-check)
 		cur.mu.Lock()
@@ -311,6 +312,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 			}
 			// Write back updated field in shape (copy-on-write not implemented; mutate in place)
 			o.shape.fields[i] = newF
+			o.shape.version++
 			return
 		}
 	}
@@ -337,7 +339,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 		copy(newFields, cur.fields)
 		newFields[len(cur.fields)] = fld
 		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
 		cur.mu.Lock()
 		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
 			next = existing
@@ -367,6 +369,7 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 				newF.configurable = *configurable
 			}
 			o.shape.fields[i] = newF
+			o.shape.version++
 			if o.getters == nil {
 				o.getters = make(map[string]Value)
 			}
@@ -400,7 +403,7 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 		copy(newFields, cur.fields)
 		newFields[len(cur.fields)] = fld
 		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
 		cur.mu.Lock()
 		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
 			next = existing
@@ -452,6 +455,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 				newF.configurable = *configurable
 			}
 			o.shape.fields[i] = newF
+			o.shape.version++
 			return
 		}
 	}
@@ -479,7 +483,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 		copy(newFields, cur.fields)
 		newFields[len(cur.fields)] = fld
 		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
 		cur.mu.Lock()
 		if existing, exists := cur.transitions[key.hash()]; exists {
 			next = existing
@@ -508,6 +512,7 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 				newF.configurable = *configurable
 			}
 			o.shape.fields[i] = newF
+			o.shape.version++
 			if o.getters == nil {
 				o.getters = make(map[string]Value)
 			}
@@ -544,7 +549,7 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 		copy(newFields, cur.fields)
 		newFields[len(cur.fields)] = fld
 		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans}
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
 		cur.mu.Lock()
 		if existing, exists := cur.transitions[key.hash()]; exists {
 			next = existing

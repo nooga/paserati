@@ -138,9 +138,8 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	if objVal.Type() == TypeObject {
 		po := AsPlainObject(*objVal)
 
-		// Try cache lookup first
-		if offset, hit := cache.lookupInCache(po.shape); hit {
-			// Cache hit! Use cached offset directly (fast path)
+		// Try cache lookup first (full entry): handle own and proto hits
+		if entry, hit := cache.lookupEntry(po.shape); hit {
 			vm.cacheStats.totalHits++
 			switch cache.state {
 			case CacheStateMonomorphic:
@@ -150,38 +149,104 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			case CacheStateMegamorphic:
 				vm.cacheStats.megamorphicHits++
 			}
-
-			if offset < len(po.properties) {
-				result := po.properties[offset]
-				*dest = result
-				if propName == "next" {
-					if debugVM {
-						fmt.Printf("[DBG opGetProp] resolved 'next' -> %s (%s)\n", result.Inspect(), result.TypeName())
+			if !entry.isProto {
+				if entry.isAccessor {
+					// Own accessor fast path: call getter with this=obj
+					if g, _, _, _, ok := po.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+						// Use unified Call to execute getter synchronously
+						res, err := vm.Call(g, *objVal, nil)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
+							}
+							status := vm.runtimeError("Getter call failed: %v", err)
+							return false, status, Undefined
+						}
+						*dest = res
+						return true, InterpretOK, *dest
+					}
+					// No getter defined: undefined per spec
+					*dest = Undefined
+					return true, InterpretOK, *dest
+				} else {
+					if entry.offset < len(po.properties) {
+						result := po.properties[entry.offset]
+						*dest = result
+						return true, InterpretOK, *dest
 					}
 				}
-				return true, InterpretOK, *dest
+			} else {
+				// Walk protoDepth and validate holder shape/version
+				current := po
+				for i := int8(0); i < entry.protoDepth && current != nil; i++ {
+					pv := current.GetPrototype()
+					if !pv.IsObject() {
+						current = nil
+						break
+					}
+					current = pv.AsPlainObject()
+				}
+				if current != nil && current.shape == entry.holderShape && current.shape.version == entry.holderVersion {
+					if entry.isAccessor {
+						if g, _, _, _, ok := current.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+							res, err := vm.Call(g, *objVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+									return false, InterpretRuntimeError, Undefined
+								}
+								status := vm.runtimeError("Getter call failed: %v", err)
+								return false, status, Undefined
+							}
+							*dest = res
+							return true, InterpretOK, *dest
+						}
+						*dest = Undefined
+						return true, InterpretOK, *dest
+					} else if entry.offset < len(current.properties) {
+						*dest = current.properties[entry.offset]
+						return true, InterpretOK, *dest
+					}
+				}
+				// else stale; fall through
 			}
-			// Cached offset is out of bounds - cache is stale, fall through to slow path
 		}
 
 		// Cache miss - do slow path lookup
 		vm.cacheStats.totalMisses++
 
-		// Use enhanced property resolution with prototype caching
-		if result, found := vm.resolvePropertyWithCache(*objVal, propName, cache, cacheKey); found {
-			*dest = result
+		// Use enhanced property resolution with prototype caching and metadata
+		if holder, offset, isAccessor, found := vm.resolvePropertyMeta(*objVal, propName, cache, cacheKey); found {
+			if isAccessor {
+				if g, _, _, _, ok := holder.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+					res, err := vm.Call(g, *objVal, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							return false, InterpretRuntimeError, Undefined
+						}
+						status := vm.runtimeError("Getter call failed: %v", err)
+						return false, status, Undefined
+					}
+					*dest = res
+				} else {
+					*dest = Undefined
+				}
+			} else {
+				*dest = holder.properties[offset]
+			}
 			if propName == "next" {
 				if debugVM {
-					fmt.Printf("[DBG opGetProp] resolved 'next' via proto/cache -> %s (%s)\n", result.Inspect(), result.TypeName())
+					fmt.Printf("[DBG opGetProp] resolved 'next' via proto/cache -> %s (%s)\n", dest.Inspect(), dest.TypeName())
 				}
 			}
 
-			// Update cache only if property was found on the object itself (not prototype)
-			if _, ownExists := po.GetOwn(propName); ownExists {
-				// Property exists on the object itself, cache it
+			// Update cache flags for direct own properties
+			if holder == po {
 				for _, field := range po.shape.fields {
 					if field.name == propName {
-						cache.updateCache(po.shape, field.offset)
+						cache.updateCache(po.shape, field.offset, field.isAccessor, field.writable)
 						break
 					}
 				}
@@ -374,8 +439,31 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 	// PlainObject: search by symbol identity
 	if base.Type() == TypeObject {
 		po := AsPlainObject(base)
+		// Inline cache for own symbol property on plain objects
+		cacheKey := generateSymbolCacheKey(ip, symKey)
+		cache, exists := vm.propCache[cacheKey]
+		if !exists {
+			cache = &PropInlineCache{state: CacheStateUninitialized}
+			vm.propCache[cacheKey] = cache
+		}
+		if offset, hit := cache.lookupInCache(po.shape); hit {
+			if offset < len(po.properties) {
+				*dest = po.properties[offset]
+				if debugVM {
+					fmt.Printf("[DBG opGetPropSymbol] IC hit own[%s] -> %s (%s)\n", symKey.AsSymbol(), dest.Inspect(), dest.TypeName())
+				}
+				return true, InterpretOK, *dest
+			}
+		}
 		if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
 			*dest = v
+			// Update IC with resolved offset
+			for _, f := range po.shape.fields {
+				if f.keyKind == KeyKindSymbol && f.symbolVal.obj == symKey.obj {
+					cache.updateCache(po.shape, f.offset, f.isAccessor, f.writable)
+					break
+				}
+			}
 			if debugVM {
 				fmt.Printf("[DBG opGetPropSymbol] PlainObject own[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
 			}

@@ -69,8 +69,8 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 	if objVal.Type() == TypeObject {
 		po := AsPlainObject(*objVal)
 
-		// Try cache lookup for existing property write
-		if offset, hit := cache.lookupInCache(po.shape); hit {
+		// Try cache lookup for existing property write (check accessor/writable flags)
+		if entry, hit := cache.lookupEntry(po.shape); hit {
 			// Cache hit! Check if this is an existing property update (fast path)
 			vm.cacheStats.totalHits++
 			switch cache.state {
@@ -82,15 +82,11 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				vm.cacheStats.megamorphicHits++
 			}
 
-			// Check if property exists in current shape
-			for _, field := range po.shape.fields {
-				if field.name == propName && field.offset == offset {
-					// Existing property - fast update path
-					if offset < len(po.properties) {
-						po.properties[offset] = *valueToSet
-						return true, InterpretOK, *valueToSet
-					}
-					break
+			// Accessor? Defer to slow path to call setter
+			if !entry.isAccessor && entry.writable {
+				if entry.offset < len(po.properties) {
+					po.properties[entry.offset] = *valueToSet
+					return true, InterpretOK, *valueToSet
 				}
 			}
 			// Cache was stale or property layout changed, fall through to slow path
@@ -98,16 +94,36 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 		// Cache miss or new property
 		vm.cacheStats.totalMisses++
-		
-		// Normal property setting
+
+		// Normal property setting with accessor awareness
 		originalShape := po.shape
+		// If accessor exists, call setter
+		if _, s, _, _, ok := po.GetOwnAccessor(propName); ok {
+			if s.Type() != TypeUndefined {
+				// Call setter with this=objVal and arg=valueToSet
+				_, err := vm.prepareMethodCall(s, *objVal, []Value{*valueToSet}, 0, vm.frames[vm.frameCount-1].registers, ip)
+				if err != nil {
+					// Propagate as VM exception
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+					return false, vm.runtimeError("Setter call failed: %v", err), Undefined
+				}
+				// If setter handled, return original value per JS semantics (assignment expr yields RHS)
+				return true, InterpretOK, *valueToSet
+			}
+			// No setter: ignore in non-strict
+			return true, InterpretOK, *valueToSet
+		}
+		// Data property path
 		po.SetOwn(propName, *valueToSet)
 
 		// Update cache if shape didn't change (existing property)
 		// or if shape changed (new property added)
 		for _, field := range po.shape.fields {
 			if field.name == propName {
-				cache.updateCache(po.shape, field.offset)
+				cache.updateCache(po.shape, field.offset, field.isAccessor, field.writable)
 				break
 			}
 		}
@@ -132,5 +148,108 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		po.SetOwn(propName, *valueToSet)
 	}
 
+	return true, InterpretOK, *valueToSet
+}
+
+// opSetPropSymbol handles setting a symbol-keyed property on an object with IC support.
+func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *Value) (bool, InterpretResult, Value) {
+	// Only PlainObject supports symbol keys for now
+	if objVal.Type() != TypeObject {
+		// DictObject or others: ignore symbol set (non-strict semantics)
+		return true, InterpretOK, *valueToSet
+	}
+
+	po := AsPlainObject(*objVal)
+
+	// Per-site cache keyed by symbol identity
+	cacheKey := generateSymbolCacheKey(ip, symKey)
+	cache, exists := vm.propCache[cacheKey]
+	if !exists {
+		cache = &PropInlineCache{state: CacheStateUninitialized}
+		vm.propCache[cacheKey] = cache
+	}
+
+	// Fast path: cache hit
+	if entry, hit := cache.lookupEntry(po.shape); hit {
+		vm.cacheStats.totalHits++
+		switch cache.state {
+		case CacheStateMonomorphic:
+			vm.cacheStats.monomorphicHits++
+		case CacheStatePolymorphic:
+			vm.cacheStats.polymorphicHits++
+		case CacheStateMegamorphic:
+			vm.cacheStats.megamorphicHits++
+		}
+
+		if entry.isAccessor {
+			// Accessor: call setter if present
+			if _, s, _, _, ok := po.GetOwnAccessorByKey(NewSymbolKey(symKey)); ok && s.Type() != TypeUndefined {
+				_, err := vm.Call(s, *objVal, []Value{*valueToSet})
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+					return false, vm.runtimeError("Setter call failed: %v", err), Undefined
+				}
+				return true, InterpretOK, *valueToSet
+			}
+			// No setter: ignore in non-strict
+			return true, InterpretOK, *valueToSet
+		}
+
+		if entry.writable && entry.offset < len(po.properties) {
+			po.properties[entry.offset] = *valueToSet
+			return true, InterpretOK, *valueToSet
+		}
+		// Not writable or stale: fall through to slow path
+	}
+
+	// Slow path miss
+	vm.cacheStats.totalMisses++
+
+	// Accessor own setter path
+	if _, s, _, _, ok := po.GetOwnAccessorByKey(NewSymbolKey(symKey)); ok {
+		if s.Type() != TypeUndefined {
+			_, err := vm.Call(s, *objVal, []Value{*valueToSet})
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+				return false, vm.runtimeError("Setter call failed: %v", err), Undefined
+			}
+			return true, InterpretOK, *valueToSet
+		}
+		// No setter: ignore
+		return true, InterpretOK, *valueToSet
+	}
+
+	// Try to find existing symbol field and update
+	updated := false
+	for _, f := range po.shape.fields {
+		if f.keyKind == KeyKindSymbol && f.symbolVal.obj == symKey.obj {
+			if f.writable && f.offset < len(po.properties) {
+				po.properties[f.offset] = *valueToSet
+			}
+			// Update cache with flags
+			cache.updateCache(po.shape, f.offset, f.isAccessor, f.writable)
+			updated = true
+			break
+		}
+	}
+	if updated {
+		return true, InterpretOK, *valueToSet
+	}
+
+	// Define new data property by symbol key (defaults false unless specified elsewhere)
+	po.DefineOwnPropertyByKey(NewSymbolKey(symKey), *valueToSet, nil, nil, nil)
+	// Find new field to cache
+	for _, f := range po.shape.fields {
+		if f.keyKind == KeyKindSymbol && f.symbolVal.obj == symKey.obj {
+			cache.updateCache(po.shape, f.offset, f.isAccessor, f.writable)
+			break
+		}
+	}
 	return true, InterpretOK, *valueToSet
 }

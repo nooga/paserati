@@ -298,6 +298,14 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 
 				// Property found in cached prototype
 				if entry.prototypeObj != nil && entry.offset < len(entry.prototypeObj.properties) {
+					// Also update inline cache with proto holder guard
+					if cache != nil {
+						isAcc := false
+						if entry.offset < len(entry.prototypeObj.shape.fields) {
+							isAcc = entry.prototypeObj.shape.fields[entry.offset].isAccessor
+						}
+						cache.updateCacheProto(po.shape, entry.prototypeObj.shape, entry.offset, int8(entry.prototypeDepth), isAcc)
+					}
 					return entry.prototypeObj.properties[entry.offset], true
 				}
 			}
@@ -328,6 +336,13 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 
 					if offset >= 0 {
 						protoCache.Update(po.shape, current, depth, offset, Undefined, false)
+						if cache != nil {
+							isAcc := false
+							if offset < len(current.shape.fields) {
+								isAcc = current.shape.fields[offset].isAccessor
+							}
+							cache.updateCacheProto(po.shape, current.shape, offset, int8(depth), isAcc)
+						}
 					}
 				}
 			}
@@ -345,4 +360,76 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 	}
 
 	return Undefined, false
+}
+
+// resolvePropertyMeta resolves a property and returns holder object, offset within holder, and accessor flag.
+// It also updates the inline cache (and prototype cache when enabled) similarly to resolvePropertyWithCache.
+func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInlineCache, cacheKey int) (*PlainObject, int, bool, bool) {
+	// Only meaningful for PlainObject
+	if objVal.Type() != TypeObject {
+		return nil, -1, false, false
+	}
+
+	po := AsPlainObject(objVal)
+
+	// 1) Own property fast detection via shape scan
+	for _, f := range po.shape.fields {
+		if f.keyKind == KeyKindString && f.name == propName {
+			// Inline cache update for own property happens at caller
+			return po, f.offset, f.isAccessor, true
+		}
+	}
+
+	// 2) Prototype cache lookup when enabled
+	var protoCache *PrototypeCache
+	if EnablePrototypeCache {
+		protoCache = GetOrCreatePrototypeCache(cacheKey)
+	}
+	if protoCache != nil {
+		if entry, hit := protoCache.Lookup(po.shape); hit {
+			UpdatePrototypeStats("proto_hit", entry.prototypeDepth)
+			if entry.prototypeObj != nil && entry.offset < len(entry.prototypeObj.properties) {
+				if cache != nil {
+					isAcc := false
+					if entry.offset < len(entry.prototypeObj.shape.fields) {
+						isAcc = entry.prototypeObj.shape.fields[entry.offset].isAccessor
+					}
+					cache.updateCacheProto(po.shape, entry.prototypeObj.shape, entry.offset, int8(entry.prototypeDepth), isAcc)
+				}
+				return entry.prototypeObj, entry.offset, entry.prototypeObj.shape.fields[entry.offset].isAccessor, true
+			}
+		}
+	}
+
+	// 3) Traverse prototype chain
+	depth := 0
+	current := po
+	for current != nil && depth < 10 {
+		// Already checked own properties of base; skip this iteration for depth 0
+		if depth > 0 {
+			for _, f := range current.shape.fields {
+				if f.keyKind == KeyKindString && f.name == propName {
+					// Update caches
+					if protoCache != nil {
+						protoCache.Update(po.shape, current, depth, f.offset, Undefined, false)
+					}
+					if cache != nil {
+						cache.updateCacheProto(po.shape, current.shape, f.offset, int8(depth), f.isAccessor)
+					}
+					return current, f.offset, f.isAccessor, true
+				}
+			}
+		}
+		pv := current.GetPrototype()
+		if !pv.IsObject() {
+			break
+		}
+		current = pv.AsPlainObject()
+		depth++
+	}
+
+	if EnableDetailedCacheStats {
+		UpdatePrototypeStats("proto_miss", 0)
+	}
+	return nil, -1, false, false
 }

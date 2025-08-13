@@ -1782,8 +1782,9 @@ startExecution:
 						// Skip setting silently (spec-incomplete structure)
 						continue
 					}
-					obj := AsPlainObject(baseVal)
-					obj.DefineOwnPropertyByKey(NewSymbolKey(indexVal), valueVal, nil, nil, nil)
+					if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+						return status, res
+					}
 					continue
 				default:
 					frame.ip = ip

@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-const scriptsDebug = true
+const scriptsDebug = false
 
 // Expectation represents the expected outcome of a script.
 type Expectation struct {
