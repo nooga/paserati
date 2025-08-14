@@ -17,45 +17,57 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		vm.propCache[cacheKey] = cache
 	}
 
-	// Handle property setting on functions
-	if objVal.Type() == TypeFunction {
+	// Handle property setting on function-like values
+	switch objVal.Type() {
+	case TypeFunction:
 		fn := AsFunction(*objVal)
-
-		// Ensure Properties object exists
 		if fn.Properties == nil {
 			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
-
-		// Special handling for "prototype" property - ensure it exists first
 		if propName == "prototype" {
-			// If setting prototype to a new value, just set it
 			fn.Properties.SetOwn("prototype", *valueToSet)
 		} else {
-			// For other properties, just set them
 			fn.Properties.SetOwn(propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
-	}
-
-	// Handle property setting on closures (delegate to underlying function)
-	if objVal.Type() == TypeClosure {
+	case TypeClosure:
 		closure := AsClosure(*objVal)
 		fn := closure.Fn
-
-		// Ensure Properties object exists
 		if fn.Properties == nil {
 			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
-
-		// Special handling for "prototype" property
 		if propName == "prototype" {
 			fn.Properties.SetOwn("prototype", *valueToSet)
 		} else {
-			// For other properties, just set them
 			fn.Properties.SetOwn(propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
+	case TypeNativeFunctionWithProps:
+		nfp := objVal.AsNativeFunctionWithProps()
+		if nfp != nil && nfp.Properties != nil {
+			nfp.Properties.SetOwn(propName, *valueToSet)
+			return true, InterpretOK, *valueToSet
+		}
+		// If somehow missing props container, create and retry
+		if nfp != nil && nfp.Properties == nil {
+			nfp.Properties = NewObject(Undefined).AsPlainObject()
+			nfp.Properties.SetOwn(propName, *valueToSet)
+			return true, InterpretOK, *valueToSet
+		}
+	case TypeNativeFunction:
+		// Promote plain native function to one that supports properties
+		nf := objVal.AsNativeFunction()
+		if nf != nil {
+			promoted := NewNativeFunctionWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
+			*objVal = promoted
+			if nfp := promoted.AsNativeFunctionWithProps(); nfp != nil {
+				nfp.Properties.SetOwn(propName, *valueToSet)
+				return true, InterpretOK, *valueToSet
+			}
+		}
 	}
+
+	// (Bound/async native functions currently do not support own props; extend if needed)
 
 	// Check if the base is actually an object
 	if !objVal.IsObject() {
@@ -101,33 +113,33 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		if _, s, _, _, ok := po.GetOwnAccessor(propName); ok {
 			if s.Type() != TypeUndefined {
 				// Call setter with this=objVal and arg=valueToSet
-                _, err := vm.prepareMethodCall(s, *objVal, []Value{*valueToSet}, 0, vm.frames[vm.frameCount-1].registers, ip)
-                if err != nil {
-                    // Propagate as VM exception
-                    if ee, ok := err.(ExceptionError); ok {
-                        vm.throwException(ee.GetExceptionValue())
-                        return false, InterpretRuntimeError, Undefined
-                    }
-                    // Wrap non-exception Go error into a proper JS Error instance and throw
-                    var excVal Value
-                    if errCtor, ok := vm.GetGlobal("Error"); ok {
-                        if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-                            excVal = res
-                        } else {
-                            eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-                            eo.SetOwn("name", NewString("Error"))
-                            eo.SetOwn("message", NewString(err.Error()))
-                            excVal = NewValueFromPlainObject(eo)
-                        }
-                    } else {
-                        eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-                        eo.SetOwn("name", NewString("Error"))
-                        eo.SetOwn("message", NewString(err.Error()))
-                        excVal = NewValueFromPlainObject(eo)
-                    }
-                    vm.throwException(excVal)
-                    return false, InterpretRuntimeError, Undefined
-                }
+				_, err := vm.prepareMethodCall(s, *objVal, []Value{*valueToSet}, 0, vm.frames[vm.frameCount-1].registers, ip)
+				if err != nil {
+					// Propagate as VM exception
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+					// Wrap non-exception Go error into a proper JS Error instance and throw
+					var excVal Value
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+					vm.throwException(excVal)
+					return false, InterpretRuntimeError, Undefined
+				}
 				// If setter handled, return original value per JS semantics (assignment expr yields RHS)
 				return true, InterpretOK, *valueToSet
 			}
@@ -202,31 +214,31 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		if entry.isAccessor {
 			// Accessor: call setter if present
 			if _, s, _, _, ok := po.GetOwnAccessorByKey(NewSymbolKey(symKey)); ok && s.Type() != TypeUndefined {
-                _, err := vm.Call(s, *objVal, []Value{*valueToSet})
-                if err != nil {
-                    if ee, ok := err.(ExceptionError); ok {
-                        vm.throwException(ee.GetExceptionValue())
-                        return false, InterpretRuntimeError, Undefined
-                    }
-                    var excVal Value
-                    if errCtor, ok := vm.GetGlobal("Error"); ok {
-                        if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-                            excVal = res
-                        } else {
-                            eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-                            eo.SetOwn("name", NewString("Error"))
-                            eo.SetOwn("message", NewString(err.Error()))
-                            excVal = NewValueFromPlainObject(eo)
-                        }
-                    } else {
-                        eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-                        eo.SetOwn("name", NewString("Error"))
-                        eo.SetOwn("message", NewString(err.Error()))
-                        excVal = NewValueFromPlainObject(eo)
-                    }
-                    vm.throwException(excVal)
-                    return false, InterpretRuntimeError, Undefined
-                }
+				_, err := vm.Call(s, *objVal, []Value{*valueToSet})
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+					var excVal Value
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+					vm.throwException(excVal)
+					return false, InterpretRuntimeError, Undefined
+				}
 				return true, InterpretOK, *valueToSet
 			}
 			// No setter: ignore in non-strict
@@ -246,31 +258,31 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	// Accessor own setter path
 	if _, s, _, _, ok := po.GetOwnAccessorByKey(NewSymbolKey(symKey)); ok {
 		if s.Type() != TypeUndefined {
-            _, err := vm.Call(s, *objVal, []Value{*valueToSet})
-            if err != nil {
-                if ee, ok := err.(ExceptionError); ok {
-                    vm.throwException(ee.GetExceptionValue())
-                    return false, InterpretRuntimeError, Undefined
-                }
-                var excVal Value
-                if errCtor, ok := vm.GetGlobal("Error"); ok {
-                    if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-                        excVal = res
-                    } else {
-                        eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-                        eo.SetOwn("name", NewString("Error"))
-                        eo.SetOwn("message", NewString(err.Error()))
-                        excVal = NewValueFromPlainObject(eo)
-                    }
-                } else {
-                    eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-                    eo.SetOwn("name", NewString("Error"))
-                    eo.SetOwn("message", NewString(err.Error()))
-                    excVal = NewValueFromPlainObject(eo)
-                }
-                vm.throwException(excVal)
-                return false, InterpretRuntimeError, Undefined
-            }
+			_, err := vm.Call(s, *objVal, []Value{*valueToSet})
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+				var excVal Value
+				if errCtor, ok := vm.GetGlobal("Error"); ok {
+					if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+						excVal = res
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+				} else {
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
+				}
+				vm.throwException(excVal)
+				return false, InterpretRuntimeError, Undefined
+			}
 			return true, InterpretOK, *valueToSet
 		}
 		// No setter: ignore

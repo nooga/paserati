@@ -292,7 +292,7 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 		c.emitByte(byte(hint))
 		c.emitByte(byte(firstTargetReg))
 		c.emitByte(byte(elementCount))
-		fmt.Printf("[Compiler] Emit OpMakeArray dest=R%d start=R%d count=%d\n", hint, firstTargetReg, elementCount)
+		// debug: removed noisy print
 		return hint, nil
 	}
 

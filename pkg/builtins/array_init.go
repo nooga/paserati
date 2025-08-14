@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"fmt"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
@@ -496,24 +497,55 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwn("map", vm.NewNativeFunction(1, false, "map", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
+		if len(args) < 1 {
 			return vm.NewArray(), nil
 		}
 		callback := args[0]
 		if !callback.IsCallable() {
 			return vm.NewArray(), nil
 		}
+
+		// Support both real arrays and array-like objects when borrowed via call/apply
+		thisVal := vmInstance.GetThis()
 		result := vm.NewArray()
-		for i := 0; i < thisArray.Length(); i++ {
-			element := thisArray.Get(i)
-			mappedValue, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
-			if err != nil {
-				// Propagate error; VM will convert to exception at the call site
-				return vm.Undefined, err
+
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < arr.Length(); i++ {
+				element := arr.Get(i)
+				mappedValue, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				result.AsArray().Append(mappedValue)
 			}
-			result.AsArray().Append(mappedValue)
+			return result, nil
 		}
+
+		// Array-like: { length: N, 0: ..., 1: ..., ... }
+		if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+			for i := 0; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				mappedValue, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				result.AsArray().Append(mappedValue)
+			}
+			return result, nil
+		}
+
+		// Non-array-like: return empty array
 		return result, nil
 	}))
 

@@ -32,6 +32,7 @@ func main() {
 		cpuprofile = flag.String("cpuprofile", "", "Write CPU profile to file")
 		gcstats    = flag.Bool("gcstats", false, "Print garbage collection statistics")
 		treeMode   = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
+		disasm     = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
 	)
 
 	flag.Parse()
@@ -87,7 +88,7 @@ func main() {
 	fmt.Printf("Found %d test files\n", len(testFiles))
 
 	// Run tests
-	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode)
+	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *disasm)
 
 	// Print summary or tree
 	if *treeMode {
@@ -185,7 +186,7 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 }
 
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool) (TestStats, []TestResult) {
+func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, disasm bool) (TestStats, []TestResult) {
 	var stats TestStats
 	var fileResults []TestResult
 	stats.Total = len(testFiles)
@@ -245,7 +246,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 
 	for i, testFile := range testFiles {
 		testStart := time.Now()
-		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot)
+		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm)
 		testDuration := time.Since(testStart)
 
 		result := TestResult{
@@ -266,37 +267,39 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 				result.Failed = true
 				if !treeMode {
 					fmt.Printf("FAIL %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
-					// Attempt to compile and dump bytecode for debugging Unknown opcode issues
-					pas := createTest262Paserati()
-					defer pas.Cleanup()
-					prog := parserFromFile(testFile, testRoot)
-					chunk, cerrs := pas.CompileProgram(prog)
-					if len(cerrs) > 0 {
-						fmt.Printf("[Disasm] compile errors: %d\n", len(cerrs))
-						// Print errors with includes-expanded source for clarity
-						if raw, rerr := os.ReadFile(testFile); rerr == nil {
-							src := string(raw)
-							if hdr := extractFrontmatterHeader(src); hdr != "" {
-								if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
-									var builder strings.Builder
-									for _, inc := range includeNames {
-										incPath := filepath.Join(testRoot, "harness", inc)
-										if incBytes, ierr := os.ReadFile(incPath); ierr == nil {
-											builder.Write(incBytes)
-											builder.WriteString("\n")
+					if disasm {
+						// Attempt to compile and dump bytecode for debugging when enabled
+						pas := createTest262Paserati()
+						defer pas.Cleanup()
+						prog := parserFromFile(testFile, testRoot)
+						chunk, cerrs := pas.CompileProgram(prog)
+						if len(cerrs) > 0 {
+							fmt.Printf("[Disasm] compile errors: %d\n", len(cerrs))
+							// Print errors with includes-expanded source for clarity
+							if raw, rerr := os.ReadFile(testFile); rerr == nil {
+								src := string(raw)
+								if hdr := extractFrontmatterHeader(src); hdr != "" {
+									if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
+										var builder strings.Builder
+										for _, inc := range includeNames {
+											incPath := filepath.Join(testRoot, "harness", inc)
+											if incBytes, ierr := os.ReadFile(incPath); ierr == nil {
+												builder.Write(incBytes)
+												builder.WriteString("\n")
+											}
 										}
+										builder.WriteString(src)
+										src = builder.String()
 									}
-									builder.WriteString(src)
-									src = builder.String()
 								}
+								errorsPkg.DisplayErrors(cerrs, src)
 							}
-							errorsPkg.DisplayErrors(cerrs, src)
+							// Do not disassemble or run when compile failed
+							continue
 						}
-						// Do not disassemble or run when compile failed
-						continue
-					}
-					if chunk != nil {
-						fmt.Println(chunk.DisassembleChunk(testFile))
+						if chunk != nil {
+							fmt.Println(chunk.DisassembleChunk(testFile))
+						}
 					}
 				}
 			}
@@ -377,7 +380,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 }
 
 // runSingleTest runs a single test file with timeout
-func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir string, testRoot string) (bool, error) {
+func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir string, testRoot string, disasm bool) (bool, error) {
 	// Read test file
 	content, err := os.ReadFile(testFile)
 	if err != nil {
@@ -485,8 +488,10 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 				resultChan <- testResult{passed: true, err: nil}
 				return
 			}
-			// Show disassembly of the exact chunk that ran to debug 0xFFFF issues
-			fmt.Println(chunk.DisassembleChunk(testFile))
+			// Optionally show disassembly of the exact chunk that ran
+			if disasm {
+				fmt.Println(chunk.DisassembleChunk(testFile))
+			}
 			errorsPkg.DisplayErrors(runtimeErrs, sourceWithIncludes)
 			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", runtimeErrs[0])}
 			return

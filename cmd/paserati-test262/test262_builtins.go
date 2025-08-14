@@ -155,7 +155,6 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	}))
 
 	test262ErrorCtor = vm.NewNativeFunction(1, true, "Test262Error", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("[DBG Test262Error] constructing, args=%d\n", len(args))
 		message := "Test262Error"
 		if len(args) > 0 {
 			message = args[0].ToString()
@@ -346,13 +345,11 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	// getWellKnownIntrinsicObject harness helper
 	// Map a subset of intrinsics used by tests. For inaccessible intrinsics, throw Test262Error.
 	getIntrinsic := vm.NewNativeFunction(1, false, "getWellKnownIntrinsicObject", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("[DBG getWellKnownIntrinsicObject] argc=%d\n", len(args))
 		if len(args) < 1 {
 			errVal, _ := ctx.VM.Call(sharedTest262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString("getWellKnownIntrinsicObject requires 1 argument")})
 			return vm.Undefined, test262ExceptionError{v: errVal}
 		}
 		name := args[0].ToString()
-		fmt.Printf("[DBG getWellKnownIntrinsicObject] name=%s\n", name)
 		// Accessible intrinsics
 		switch name {
 		case "%Array%":
@@ -811,7 +808,6 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 
 	// Add assert.throws method (align behavior with Test262 harness)
 	assertFn.AsNativeFunctionWithProps().Properties.SetOwn("throws", vm.NewNativeFunction(0, true, "throws", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("[DBG assert.throws] argc=%d\n", len(args))
 		// Optional message prefix as 3rd arg
 		var messagePrefix string
 		if len(args) >= 3 {
@@ -837,7 +833,6 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 
 		// Execute and expect throw
 		_, callErr := vmInstance.Call(fn, vm.Undefined, []vm.Value{})
-		fmt.Printf("[DBG assert.throws] callErrNil=%v\n", callErr == nil)
 		if callErr == nil {
 			// Mirror harness: accessing expectedErrorConstructor.name should throw if undefined/null
 			// If expectedCtor is undefined/null, throw TypeError("Cannot read property 'name' of <x>")
@@ -860,7 +855,6 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		var thrown vm.Value = vm.Undefined
 		if exc, ok := callErr.(vm.ExceptionError); ok {
 			thrown = exc.GetExceptionValue()
-			fmt.Printf("[DBG assert.throws] caught exception type=%s\n", thrown.TypeName())
 		} else {
 			// Normalize non-exception Go error into Error object
 			errObj := vm.NewObject(vm.Null).AsPlainObject()
@@ -1008,71 +1002,7 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	// Global compareArray: boolean-returning helper
-	// array-like helpers
-	getArrayLikeLength := func(v vm.Value) (int, bool) {
-		if arr := v.AsArray(); arr != nil {
-			return arr.Length(), true
-		}
-		if po := v.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				// Coerce to int via ToFloat then int
-				return int(lv.ToFloat()), true
-			}
-		} else if dict := v.AsDictObject(); dict != nil {
-			if lv, ok := dict.Get("length"); ok {
-				return int(lv.ToFloat()), true
-			}
-		}
-		return 0, false
-	}
-	getArrayLikeIndex := func(v vm.Value, i int) vm.Value {
-		if arr := v.AsArray(); arr != nil {
-			return arr.Get(i)
-		}
-		key := fmt.Sprintf("%d", i)
-		if po := v.AsPlainObject(); po != nil {
-			if val, ok := po.Get(key); ok {
-				return val
-			}
-			return vm.Undefined
-		}
-		if dict := v.AsDictObject(); dict != nil {
-			if val, ok := dict.Get(key); ok {
-				return val
-			}
-		}
-		return vm.Undefined
-	}
-
-	compareArrayBoolFn := vm.NewNativeFunction(0, false, "compareArray", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("[DBG compareArray(bool)] argc=%d\n", len(args))
-		if len(args) < 2 {
-			return vm.BooleanValue(false), nil
-		}
-		llen, lok := getArrayLikeLength(args[0])
-		rlen, rok := getArrayLikeLength(args[1])
-		fmt.Printf("[DBG compareArray(bool)] lens lok=%v rok=%v L=%d R=%d\n", lok, rok, llen, rlen)
-		if !lok || !rok {
-			return vm.BooleanValue(false), nil
-		}
-		if llen != rlen {
-			return vm.BooleanValue(false), nil
-		}
-		// Element-wise comparison using SameValue semantics (objects by identity)
-		for i := 0; i < llen; i++ {
-			v1 := getArrayLikeIndex(args[0], i)
-			v2 := getArrayLikeIndex(args[1], i)
-			fmt.Printf("[DBG compareArray(bool)] i=%d v1=%s v2=%s eq=%v\n", i, v1.Inspect(), v2.Inspect(), sameValueSimple(v1, v2))
-			if !sameValueSimple(v1, v2) {
-				return vm.BooleanValue(false), nil
-			}
-		}
-		return vm.BooleanValue(true), nil
-	})
-	if err := ctx.DefineGlobal("compareArray", compareArrayBoolFn); err != nil {
-		return err
-	}
+	// Note: Do not define compareArray; the harness includes provide it
 
 	// Proxy traps helper: allowProxyTraps(overrides?) → object of traps
 	allowProxyTrapsFn := vm.NewNativeFunction(0, false, "allowProxyTraps", func(args []vm.Value) (vm.Value, error) {
@@ -1108,107 +1038,7 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		return err
 	}
 
-	// assert.compareArray: throws Test262Error with harness messages and formatted arrays
-	assertCompareArrayFn := vm.NewNativeFunction(0, true, "compareArray", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("[DBG assert.compareArray] argc=%d\n", len(args))
-		// message is optional third arg; harness expects a trailing space even when message missing
-		extraMsg := " "
-		if len(args) >= 3 && args[2].Type() != vm.TypeUndefined {
-			extraMsg = " " + args[2].ToString()
-		}
-
-		if len(args) < 2 {
-			// With 0 args: complain about Actual (first arg)
-			if len(args) == 0 {
-				errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString("Actual argument shouldn't be nullish." + extraMsg)})
-				return vm.Undefined, test262ExceptionError{v: errVal}
-			}
-			// With 1 arg: expected is missing
-			errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString("Expected argument shouldn't be nullish." + extraMsg)})
-			return vm.Undefined, test262ExceptionError{v: errVal}
-		}
-
-		actual := args[0]
-		expected := args[1]
-
-		if actual.Type() == vm.TypeNull || actual.Type() == vm.TypeUndefined {
-			errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString("Actual argument shouldn't be nullish." + extraMsg)})
-			return vm.Undefined, test262ExceptionError{v: errVal}
-		}
-		if expected.Type() == vm.TypeNull || expected.Type() == vm.TypeUndefined {
-			errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString("Expected argument shouldn't be nullish." + extraMsg)})
-			return vm.Undefined, test262ExceptionError{v: errVal}
-		}
-
-		// Delegate to the boolean compareArray we just defined above
-		{
-			res, err := ctx.VM.Call(compareArrayBoolFn, vm.Undefined, []vm.Value{actual, expected})
-			if err != nil {
-				return vm.Undefined, err
-			}
-			fmt.Printf("[DBG assert.compareArray] bool result=%v\n", res.AsBoolean())
-			if !res.AsBoolean() {
-				// Format arrays similarly to harness
-				format := func(val vm.Value) string {
-					// Use ToString mapping like harness's compareArray.format
-					if arr := val.AsArray(); arr != nil {
-						parts := make([]string, arr.Length())
-						for i := 0; i < arr.Length(); i++ {
-							parts[i] = arr.Get(i).ToString()
-						}
-						return "[" + strings.Join(parts, ", ") + "]"
-					}
-					return val.ToString()
-				}
-				msg := "Actual " + format(actual) + " and expected " + format(expected) + " should have the same contents." + extraMsg
-				errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString(msg)})
-				return vm.Undefined, test262ExceptionError{v: errVal}
-			}
-			return vm.Undefined, nil
-		}
-
-		aLen, aOk := getArrayLikeLength(actual)
-		bLen, bOk := getArrayLikeLength(expected)
-		// Treat array-like mismatch as inequality
-		if !aOk || !bOk {
-			errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString("Actual [" + actual.ToString() + "] and expected [" + expected.ToString() + "] should have the same contents." + extraMsg)})
-			return vm.Undefined, test262ExceptionError{v: errVal}
-		}
-
-		if aLen != bLen {
-			// build formatted arrays
-			formatted := func(val vm.Value, length int) string {
-				parts := make([]string, length)
-				for i := 0; i < length; i++ {
-					parts[i] = getArrayLikeIndex(val, i).ToString()
-				}
-				return "[" + strings.Join(parts, ", ") + "]"
-			}
-			msg := "Actual " + formatted(actual, aLen) + " and expected " + formatted(expected, bLen) + " should have the same contents." + extraMsg
-			errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString(msg)})
-			return vm.Undefined, test262ExceptionError{v: errVal}
-		}
-
-		for i := 0; i < aLen; i++ {
-			av := getArrayLikeIndex(actual, i)
-			bv := getArrayLikeIndex(expected, i)
-			fmt.Printf("[DBG assert.compareArray] i=%d av=%s bv=%s eq=%v\n", i, av.Inspect(), bv.Inspect(), sameValueSimple(av, bv))
-			if !sameValueSimple(av, bv) {
-				formatted := func(val vm.Value, length int) string {
-					parts := make([]string, length)
-					for j := 0; j < length; j++ {
-						parts[j] = getArrayLikeIndex(val, j).ToString()
-					}
-					return "[" + strings.Join(parts, ", ") + "]"
-				}
-				msg := "Actual " + formatted(actual, aLen) + " and expected " + formatted(expected, bLen) + " should have the same contents." + extraMsg
-				errVal, _ := ctx.VM.Call(test262ErrorCtorVal, vm.Undefined, []vm.Value{vm.NewString(msg)})
-				return vm.Undefined, test262ExceptionError{v: errVal}
-			}
-		}
-		return vm.Undefined, nil
-	})
-	assertFn.AsNativeFunctionWithProps().Properties.SetOwn("compareArray", assertCompareArrayFn)
+	// Note: Do not attach assert.compareArray; the harness includes provide it
 
 	// Minimal deepEqual stub; attach to global and assert
 	deepEqualFn := vm.NewNativeFunction(2, false, "deepEqual", func(args []vm.Value) (vm.Value, error) {
