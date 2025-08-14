@@ -282,11 +282,13 @@ func (vm *VM) executeOpThrow(code []byte, ip *int) {
 		vm.runtimeError("Invalid register index %d for throw operation", exceptionReg)
 		return
 	}
-
 	exceptionValue := frame.registers[exceptionReg]
 
 	// fmt.Printf("[DEBUG] executeOpThrow: About to throw exception %s from register R%d\n", exceptionValue.ToString(), exceptionReg)
 
+	if debugExceptions {
+		fmt.Printf("[DEBUG executeOpThrow] Throwing exception from R%d value=%s (%s)\n", exceptionReg, exceptionValue.Inspect(), exceptionValue.TypeName())
+	}
 	// Throw the exception
 	vm.throwException(exceptionValue)
 }

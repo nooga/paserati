@@ -4555,14 +4555,48 @@ func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
 // --- NEW: Array Literal Parsing ---
 func (p *Parser) parseArrayLiteral() Expression {
 	array := &ArrayLiteral{Token: p.curToken} // '['
-
-	array.Elements = p.parseExpressionList(lexer.RBRACKET)
-	if array.Elements == nil {
-		// If parseExpressionList returned nil, it means it didn't find the RBRACKET.
-		// Error message was likely added by expectPeek within parseExpressionList.
+	debugPrint("parseArrayLiteral: start '['")
+	// Special-case sparse array literal of the form [,,] or with leading/trailing commas.
+	// parseExpressionList expects an element expression before commas; for sparse arrays,
+	// treat missing elements as undefined placeholders.
+	elements := []Expression{}
+	// Advance to first token after '['
+	p.nextToken()
+	for !p.curTokenIs(lexer.RBRACKET) && !p.curTokenIs(lexer.EOF) {
+		if p.curTokenIs(lexer.COMMA) {
+			// Elision: push an explicit undefined literal node
+			elements = append(elements, &UndefinedLiteral{Token: p.curToken})
+			// Consume comma and continue; multiple commas generate multiple holes
+			p.nextToken()
+			continue
+		}
+		// Parse a normal element with COMMA precedence so ',' acts as a separator, not an operator
+		elem := p.parseExpression(COMMA)
+		if elem == nil {
+			return nil
+		}
+		elements = append(elements, elem)
+		debugPrint("parseArrayLiteral: appended element=%T ('%s')", elem, elem.String())
+		// Optional comma between elements
+		if p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // move to comma
+			p.nextToken() // move past comma
+			debugPrint("parseArrayLiteral: consumed ',', cur='%s'", p.curToken.Literal)
+			continue
+		}
+		// Otherwise, expect ']' next
+		if !p.peekTokenIs(lexer.RBRACKET) {
+			p.addError(p.curToken, "expected ',' or ']' in array literal")
+			return nil
+		}
+		p.nextToken() // move to ']'
+	}
+	debugPrint("parseArrayLiteral: end ']' elements=%d", len(elements))
+	if !p.curTokenIs(lexer.RBRACKET) {
+		p.peekError(lexer.RBRACKET)
 		return nil
 	}
-
+	array.Elements = elements
 	return array
 }
 

@@ -35,6 +35,10 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &TypeErrorInitializer{})
 	initializers = append(initializers, &ReferenceErrorInitializer{})
 	initializers = append(initializers, &SyntaxErrorInitializer{})
+	// Minimal stubs for remaining native Error subclasses used by the harness
+	initializers = append(initializers, &EvalErrorInitializer{})
+	initializers = append(initializers, &RangeErrorInitializer{})
+	initializers = append(initializers, &URIErrorInitializer{})
 	initializers = append(initializers, &MathInitializer{})
 	initializers = append(initializers, &JSONInitializer{})
 	// Install Reflect after Object so it can delegate to Object.__ownKeys

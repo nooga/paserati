@@ -9,7 +9,7 @@ import (
 )
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register) (Register, errors.PaseratiError) {
-	debugPrintf("// DEBUG compileLetStatement: Defining '%s' (is top-level: %v)\n", node.Name.Value, c.enclosing == nil)
+	// debug disabled
 	var valueReg Register = nilRegister
 	var err errors.PaseratiError
 	isValueFunc := false // Flag to track if value is a function literal
@@ -19,7 +19,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		// --- Handle let f = function g() {} or let f = function() {} ---
 		// 1. Define the *variable name (f)* temporarily for potential recursion
 		//    within the function body (e.g., recursive anonymous function).
-		debugPrintf("// DEBUG compileLetStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value)
+		// debug disabled
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
 		// 2. Compile the function literal body.
@@ -33,11 +33,11 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		// 3. Create the closure object
 		closureReg := c.regAlloc.Alloc()
 		defer c.regAlloc.Free(closureReg)
-		debugPrintf("// DEBUG compileLetStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols))
+		// debug disabled
 		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 		// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-		debugPrintf("// DEBUG compileLetStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg)
+		// debug disabled
 		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
 		// The variable's value (the closure) is now set.
@@ -60,7 +60,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 		valueReg = undefReg
 		// Define symbol for the `let x;` case
-		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg)
+		// debug disabled
 		if c.enclosing == nil {
 			// Top-level: use global variable
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -75,7 +75,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 	} else if !isValueFunc {
 		// Define symbol ONLY for non-function values.
 		// Function assignments were handled above by UpdateRegister.
-		debugPrintf("// DEBUG compileLetStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg)
+		// debug disabled
 		if c.enclosing == nil {
 			// Top-level: use global variable
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -106,13 +106,22 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 
 func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register) (Register, errors.PaseratiError) {
 	// Process all variable declarations in the statement
-	for i, declarator := range node.Declarations {
+	for _, declarator := range node.Declarations {
+		// Hoist function declarations in var statements similar to Annex B in sloppy mode.
+		// If the initializer is a FunctionLiteral with an Identifier name, predefine the name in current scope
+		// so that subsequent references within the same block use the local binding rather than a global.
+		if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
+			if funcLit.Name != nil {
+				// Predefine to enable using it before assignment in the block
+				c.currentSymbolTable.Define(declarator.Name.Value, nilRegister)
+			}
+		}
 		// Set current declarator in legacy fields for backward compatibility
 		node.Name = declarator.Name
 		node.Value = declarator.Value
 		node.ComputedType = declarator.ComputedType
 
-		debugPrintf("// DEBUG compileVarStatement: Defining '%s' (is top-level: %v, declaration %d)\n", declarator.Name.Value, c.enclosing == nil, i)
+		// debug disabled
 		var valueReg Register = nilRegister
 		var err errors.PaseratiError
 		isValueFunc := false // Flag to track if value is a function literal
@@ -122,7 +131,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// --- Handle var f = function g() {} or var f = function() {} ---
 			// 1. Define the *variable name (f)* temporarily for potential recursion
 			//    within the function body (e.g., recursive anonymous function).
-			debugPrintf("// DEBUG compileVarStatement: Defining function '%s' temporarily with nilRegister\n", node.Name.Value)
+			// debug disabled
 			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
 			// 2. Compile the function literal body.
@@ -136,11 +145,11 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// 3. Create the closure object
 			closureReg := c.regAlloc.Alloc()
 			defer c.regAlloc.Free(closureReg)
-			debugPrintf("// DEBUG compileVarStatement: Creating closure for '%s' in R%d with %d upvalues\n", node.Name.Value, closureReg, len(freeSymbols))
+			// debug disabled
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-			debugPrintf("// DEBUG compileVarStatement: Updating symbol table for '%s' from nilRegister to R%d\n", node.Name.Value, closureReg)
+			// debug disabled
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
 			// The variable's value (the closure) is now set.
@@ -163,7 +172,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 			valueReg = undefReg
 			// Define symbol for the `var x;` case
-			debugPrintf("// DEBUG compileVarStatement: Defining '%s' with undefined value in R%d\n", node.Name.Value, valueReg)
+			// debug disabled
 			if c.enclosing == nil {
 				// Top-level: use global variable
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -178,7 +187,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		} else if !isValueFunc {
 			// Define symbol ONLY for non-function values.
 			// Function assignments were handled above by UpdateRegister.
-			debugPrintf("// DEBUG compileVarStatement: Defining '%s' with value in R%d\n", node.Name.Value, valueReg)
+			// debug disabled
 			if c.enclosing == nil {
 				// Top-level: use global variable
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)

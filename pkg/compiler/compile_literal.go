@@ -194,6 +194,12 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register) (Register, errors.PaseratiError) {
 	elementCount := len(node.Elements)
+	// Normalize elisions (holes) to explicit undefined literals so runtime sees correct length and values
+	for i, elem := range node.Elements {
+		if elem == nil {
+			node.Elements[i] = &parser.UndefinedLiteral{Token: parser.GetTokenFromNode(node)}
+		}
+	}
 	if elementCount > 255 { // Check against total element processing
 		return BadRegister, NewCompileError(node, "array literal exceeds maximum size of 255 elements")
 	}
@@ -227,6 +233,7 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 // Original implementation for arrays without spread
 func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Register, tempRegs []Register) (Register, errors.PaseratiError) {
 	elementCount := len(node.Elements)
+	fmt.Printf("[Compiler] ArrayLiteral elements=%d, hint=R%d\n", elementCount, hint)
 
 	// 1. Compile elements and store their final registers
 	elementRegs := make([]Register, elementCount)
@@ -275,6 +282,7 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 	c.emitByte(byte(hint))           // DestReg: where the new array object goes (hint)
 	c.emitByte(byte(firstTargetReg)) // StartReg: start of the contiguous element block
 	c.emitByte(byte(elementCount))   // Count: number of elements
+	fmt.Printf("[Compiler] Emit OpMakeArray dest=R%d start=R%d count=%d\n", hint, firstTargetReg, elementCount)
 
 	// Result (the array) is now in hint register
 	return hint, nil

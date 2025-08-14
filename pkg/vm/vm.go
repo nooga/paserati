@@ -283,8 +283,7 @@ func (vm *VM) SetModuleLoader(loader ModuleLoader) {
 
 // GetGlobal retrieves a global variable by name
 func (vm *VM) GetGlobal(name string) (Value, bool) {
-	// This method is deprecated in favor of index-based access via HeapAlloc
-	// since the heap doesn't store names. Callers should use GetGlobalByIndex instead.
+	// Deprecated; name-based lookup not available from VM directly in unified heap mode
 	return Undefined, false
 }
 
@@ -1023,16 +1022,26 @@ startExecution:
 			// If unwinding is true, leave frame IP at call site for exception handling
 
 			if err != nil {
-				// Convert ANY native error into a VM exception value and throw it
+				// Convert ANY native error into a proper JS Error instance and throw it
 				var excVal Value
 				if exceptionErr, ok := err.(ExceptionError); ok {
 					excVal = exceptionErr.GetExceptionValue()
 				} else {
-					// Generic Error object {name: "Error", message}
-					errObj := NewObject(Null).AsPlainObject()
-					errObj.SetOwn("name", NewString("Error"))
-					errObj.SetOwn("message", NewString(err.Error()))
-					excVal = NewValueFromPlainObject(errObj)
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
 				}
 				vm.throwException(excVal)
 				if vm.frameCount == 0 {
@@ -1488,7 +1497,6 @@ startExecution:
 			ip += 3
 
 			// Create a new slice and copy elements from registers
-			elements := make([]Value, count)
 			startIdx := int(startReg)
 			endIdx := startIdx + count
 
@@ -1499,7 +1507,14 @@ startExecution:
 				return status, Undefined
 			}
 
-			copy(elements, registers[startIdx:endIdx])
+			// Copy elements; if count==0, leave elements empty
+			var elements []Value
+			if count > 0 {
+				elements = make([]Value, count)
+				copy(elements, registers[startIdx:endIdx])
+			} else {
+				elements = make([]Value, 0)
+			}
 
 			// Create the array value
 			arrayValue := NewArray()
@@ -2127,30 +2142,23 @@ startExecution:
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
 			// Extra targeted tracing for iterator delegation debugging
-			if calleeVal.Type() == TypeNativeFunction {
+			if false && calleeVal.Type() == TypeNativeFunction {
 				nf := AsNativeFunction(calleeVal)
 				if nf.Name == "[Symbol.iterator]" || nf.Name == "next" {
 					fmt.Printf("[DBG OpCallMethod] regs func=R%d this=R%d dest=R%d | callee=%s(%s) this=%s(%s)\n",
 						funcReg, thisReg, destReg, calleeVal.Inspect(), calleeVal.TypeName(), thisVal.Inspect(), thisVal.TypeName())
 				}
 			} else if calleeVal.Type() == TypeNativeFunctionWithProps {
-				nfp := calleeVal.AsNativeFunctionWithProps()
-				if nfp.Name == "[Symbol.iterator]" || nfp.Name == "next" {
-					fmt.Printf("[DBG OpCallMethod] regs func=R%d this=R%d dest=R%d | callee=%s(%s) this=%s(%s)\n",
-						funcReg, thisReg, destReg, calleeVal.Inspect(), calleeVal.TypeName(), thisVal.Inspect(), thisVal.TypeName())
-				}
+				_ = calleeVal
 			}
 			// Trace specific iterator-related calls to inspect 'this' binding
-			if calleeVal.Type() == TypeNativeFunction {
+			if false && calleeVal.Type() == TypeNativeFunction {
 				nf := AsNativeFunction(calleeVal)
 				if nf.Name == "[Symbol.iterator]" || nf.Name == "next" {
 					fmt.Printf("[DBG OpCallMethod] calling %s with this=%s (%s)\n", nf.Name, thisVal.Inspect(), thisVal.TypeName())
 				}
 			} else if calleeVal.Type() == TypeNativeFunctionWithProps {
-				nfp := calleeVal.AsNativeFunctionWithProps()
-				if nfp.Name == "[Symbol.iterator]" || nfp.Name == "next" {
-					fmt.Printf("[DBG OpCallMethod] calling %s with this=%s (%s)\n", nfp.Name, thisVal.Inspect(), thisVal.TypeName())
-				}
+				_ = thisVal
 			}
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
@@ -2181,10 +2189,24 @@ startExecution:
 				if exceptionErr, ok := err.(ExceptionError); ok {
 					excVal = exceptionErr.GetExceptionValue()
 				} else {
-					errObj := NewObject(Null).AsPlainObject()
-					errObj.SetOwn("name", NewString("Error"))
-					errObj.SetOwn("message", NewString(err.Error()))
-					excVal = NewValueFromPlainObject(errObj)
+					// Convert Go error to a proper Error instance so constructor/prototype are correct
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							// Fallback plain object if calling Error failed
+							errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+							errObj.SetOwn("name", NewString("Error"))
+							errObj.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(errObj)
+						}
+					} else {
+						// Fallback if Error is unavailable
+						errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+						errObj.SetOwn("name", NewString("Error"))
+						errObj.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(errObj)
+					}
 				}
 				vm.throwException(excVal)
 				if vm.frameCount == 0 {
@@ -2201,7 +2223,7 @@ startExecution:
 			}
 
 			// Minimal targeted debug: observe results of [Symbol.iterator] and next()
-			if !shouldSwitch {
+			if false && !shouldSwitch {
 				switch calleeVal.Type() {
 				case TypeNativeFunction:
 					nf := AsNativeFunction(calleeVal)
@@ -2399,12 +2421,7 @@ startExecution:
 				// Constructor call on builtin function
 				builtin := AsNativeFunction(constructorVal)
 
-				if builtin.Arity >= 0 && builtin.Arity != argCount {
-					frame.ip = callerIP
-					status := vm.runtimeError("Built-in constructor '%s' expected %d arguments but got %d.",
-						builtin.Name, builtin.Arity, argCount)
-					return status, Undefined
-				}
+				// Be permissive with builtin constructor arity; missing args become undefined
 
 				// Collect arguments for builtin constructor call
 				args := make([]Value, argCount)
@@ -2423,11 +2440,23 @@ startExecution:
 				// For builtins, we let them handle instance creation
 				result, err := builtin.Fn(args)
 				if err != nil {
-					// Throw as exception instead of runtime error
-					errObj := NewObject(Null).AsPlainObject()
-					errObj.SetOwn("name", NewString("Error"))
-					errObj.SetOwn("message", NewString(err.Error()))
-					errValue := NewValueFromPlainObject(errObj)
+					// Throw as proper Error instance instead of plain object
+					var errValue Value
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							errValue = res
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							errValue = NewValueFromPlainObject(eo)
+						}
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						errValue = NewValueFromPlainObject(eo)
+					}
 					vm.throwException(errValue)
 					continue // Let exception handling take over
 				}
@@ -2445,12 +2474,7 @@ startExecution:
 				// Constructor call on builtin function with properties
 				builtinWithProps := constructorVal.AsNativeFunctionWithProps()
 
-				if builtinWithProps.Arity >= 0 && builtinWithProps.Arity != argCount {
-					frame.ip = callerIP
-					status := vm.runtimeError("Built-in constructor '%s' expected %d arguments but got %d.",
-						builtinWithProps.Name, builtinWithProps.Arity, argCount)
-					return status, Undefined
-				}
+				// Be permissive with builtin constructor arity
 
 				// Collect arguments for builtin constructor call
 				args := make([]Value, argCount)
@@ -2469,11 +2493,23 @@ startExecution:
 				// For builtins, we let them handle instance creation
 				result, err := builtinWithProps.Fn(args)
 				if err != nil {
-					// Throw as exception instead of runtime error
-					errObj := NewObject(Null).AsPlainObject()
-					errObj.SetOwn("name", NewString("Error"))
-					errObj.SetOwn("message", NewString(err.Error()))
-					errValue := NewValueFromPlainObject(errObj)
+					// Throw as proper Error instance instead of plain object
+					var errValue Value
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							errValue = res
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							errValue = NewValueFromPlainObject(eo)
+						}
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						errValue = NewValueFromPlainObject(eo)
+					}
 					vm.throwException(errValue)
 					continue // Let exception handling take over
 				}

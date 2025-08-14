@@ -962,12 +962,7 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	}
 	heapAlloc.PreallocateBuiltins(globalNames)
 
-	// Debug: report the assigned index for 'Symbol' before installing globals
-	if idx, ok := heapAlloc.GetIndex("Symbol"); ok {
-		fmt.Printf("// [Driver DEBUG] PreallocateBuiltins: Symbol assigned index %d\n", idx)
-	} else {
-		fmt.Printf("// [Driver DEBUG] PreallocateBuiltins: Symbol not present in globalVariables before install\n")
-	}
+	// Debug disabled: PreallocateBuiltins report
 
 	// Set the heap allocator in the main compiler
 	comp.SetHeapAlloc(heapAlloc)
@@ -978,16 +973,7 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 		return err
 	}
 
-	// Debug: verify the runtime heap value at the 'Symbol' index right after install
-	if idx, ok := indexMap["Symbol"]; ok {
-		if val, exists := vmInstance.GetHeap().Get(idx); exists {
-			fmt.Printf("// [Driver DEBUG] Post-SetBuiltinGlobals: heap[%d] = %s (type=%s)\n", idx, val.Inspect(), val.TypeName())
-		} else {
-			fmt.Printf("// [Driver DEBUG] Post-SetBuiltinGlobals: heap[%d] missing\n", idx)
-		}
-	} else {
-		fmt.Printf("// [Driver DEBUG] Post-SetBuiltinGlobals: no index for 'Symbol' in indexMap\n")
-	}
+	// Debug disabled: Post-SetBuiltinGlobals report
 
 	return nil
 }
@@ -997,26 +983,26 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 func (p *Paserati) collectExportedValues() map[string]vm.Value {
 	exports := make(map[string]vm.Value)
 
-	fmt.Printf("// [Driver DEBUG] collectExportedValues called, IsModuleMode=%v\n", p.compiler.IsModuleMode())
+	// Debug disabled
 	if !p.compiler.IsModuleMode() {
 		return exports
 	}
 
 	// Get the export name to global index mapping from the compiler
 	exportIndices := p.compiler.GetExportGlobalIndices()
-	fmt.Printf("// [Driver DEBUG] collectExportedValues: Got %d export indices: %v\n", len(exportIndices), exportIndices)
+	// Debug disabled
 
 	// For each export, get the value directly from the VM's global table using the index
 	for exportName, globalIdx := range exportIndices {
 		if value, exists := p.vmInstance.GetGlobalByIndex(globalIdx); exists {
 			exports[exportName] = value
-			fmt.Printf("// [Driver DEBUG] collectExportedValues: Export '%s' -> global[%d] = %s (type %d)\n", exportName, globalIdx, value.ToString(), int(value.Type()))
+			// Debug disabled
 		} else {
 			exports[exportName] = vm.Undefined
-			fmt.Printf("// [Driver DEBUG] collectExportedValues: Export '%s' -> global[%d] = undefined (not found)\n", exportName, globalIdx)
+			// Debug disabled
 		}
 	}
-	fmt.Printf("// [Driver DEBUG] collectExportedValues: Returning %d exports\n", len(exports))
+	// Debug disabled
 	return exports
 }
 

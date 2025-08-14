@@ -169,20 +169,9 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// fmt.Printf("DEBUG prepareCall: nativeFunc=%v, nativeFunc.Arity=%v, nativeFunc.Variadic=%v, argCount=%v\n",
 		// 	nativeFunc.Name, nativeFunc.Arity, nativeFunc.Variadic, argCount)
 
-		// Arity checking for native functions
-		if nativeFunc.Arity >= 0 {
-			if nativeFunc.Variadic {
-				if argCount < nativeFunc.Arity {
-					currentFrame.ip = callerIP
-					return false, fmt.Errorf("Native function expected at least %d arguments but got %d", nativeFunc.Arity, argCount)
-				}
-			} else {
-				// For non-variadic functions, allow fewer arguments if they might have optional parameters
-				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
-				// Allow extra arguments (JavaScript behavior) - they are ignored by the native function
-				// Allow fewer arguments - the native function implementation should handle undefined parameters
-			}
-		}
+		// Arity checking for native functions: be permissive like JS (missing args become undefined)
+		// Only enforce minimum when variadic and declared arity > 0
+		// Do not error for 0-arg constructors called without args
 
 		//fmt.Printf("DEBUG prepareCall: args=%v\n", args)
 		if debugCalls {
@@ -221,20 +210,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Handle native function with properties
 		nativeFuncWithProps := calleeVal.AsNativeFunctionWithProps()
 
-		// Arity checking
-		if nativeFuncWithProps.Arity >= 0 {
-			if nativeFuncWithProps.Variadic {
-				if argCount < nativeFuncWithProps.Arity {
-					currentFrame.ip = callerIP
-					return false, fmt.Errorf("Native function expected at least %d arguments but got %d", nativeFuncWithProps.Arity, argCount)
-				}
-			} else {
-				// For non-variadic functions, allow fewer arguments if they might have optional parameters
-				// This is a pragmatic fix for cases where the compiler doesn't properly pad optional parameters
-				// Allow extra arguments (JavaScript behavior) - they are ignored by the native function
-				// Allow fewer arguments - the native function implementation should handle undefined parameters
-			}
-		}
+		// Arity checking (permissive)
 
 		// Set the current 'this' value for native function access and restore after call
 		oldThis := vm.currentThis

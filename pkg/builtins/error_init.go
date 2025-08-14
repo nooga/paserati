@@ -132,3 +132,68 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 func InitError() BuiltinInitializer {
 	return &ErrorInitializer{}
 }
+
+// EvalError
+type EvalErrorInitializer struct{}
+
+func (e *EvalErrorInitializer) Name() string  { return "EvalError" }
+func (e *EvalErrorInitializer) Priority() int { return 22 }
+func (e *EvalErrorInitializer) InitTypes(ctx *TypeContext) error {
+	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any)
+	return ctx.DefineGlobal("EvalError", t)
+}
+func (e *EvalErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
+	return initErrorSubclass(ctx, "EvalError")
+}
+
+// RangeError
+type RangeErrorInitializer struct{}
+
+func (e *RangeErrorInitializer) Name() string  { return "RangeError" }
+func (e *RangeErrorInitializer) Priority() int { return 22 }
+func (e *RangeErrorInitializer) InitTypes(ctx *TypeContext) error {
+	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any)
+	return ctx.DefineGlobal("RangeError", t)
+}
+func (e *RangeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
+	return initErrorSubclass(ctx, "RangeError")
+}
+
+// URIError
+type URIErrorInitializer struct{}
+
+func (e *URIErrorInitializer) Name() string  { return "URIError" }
+func (e *URIErrorInitializer) Priority() int { return 22 }
+func (e *URIErrorInitializer) InitTypes(ctx *TypeContext) error {
+	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any)
+	return ctx.DefineGlobal("URIError", t)
+}
+func (e *URIErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
+	return initErrorSubclass(ctx, "URIError")
+}
+
+// helper to initialize simple Error subclasses inheriting Error.prototype
+func initErrorSubclass(ctx *RuntimeContext, name string) error {
+	vmInstance := ctx.VM
+	proto := vm.NewObject(vmInstance.ErrorPrototype).AsPlainObject()
+	proto.SetOwn("name", vm.NewString(name))
+	ctor := vm.NewNativeFunction(-1, true, name, func(args []vm.Value) (vm.Value, error) {
+		var message string
+		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
+			message = args[0].ToString()
+		}
+		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
+		inst.SetOwn("name", vm.NewString(name))
+		inst.SetOwn("message", vm.NewString(message))
+		inst.SetOwn("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+		return vm.NewValueFromPlainObject(inst), nil
+	})
+	if nf := ctor.AsNativeFunction(); nf != nil {
+		withProps := vm.NewNativeFunctionWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
+		withProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(proto))
+		proto.SetOwn("constructor", withProps)
+		return ctx.DefineGlobal(name, withProps)
+	}
+	proto.SetOwn("constructor", ctor)
+	return ctx.DefineGlobal(name, ctor)
+}

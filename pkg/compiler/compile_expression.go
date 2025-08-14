@@ -195,14 +195,16 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	// 3. Check if this is a getter access (compile-time optimization)
 	// Skip getter optimization for computed properties since we can't know the property name at compile time
 	objectStaticType := node.Object.GetComputedType()
-	debugPrintf("// DEBUG compileMemberExpression: objectType for '%s': %v\n", propertyName, objectStaticType)
+	if false {
+		debugPrintf("")
+	}
 	if objectStaticType == nil {
-		debugPrintf("// DEBUG compileMemberExpression: Object node type: %T, Object computed type is NIL for property '%s'\n", node.Object, propertyName)
+		// debug disabled
 
 		// REGRESSION FIX: Handle Symbol.iterator when type checking didn't set computed type
 		// This is a workaround for the with statement regression
 		if identNode, ok := node.Object.(*parser.Identifier); ok && identNode.Value == "Symbol" {
-			debugPrintf("// DEBUG compileMemberExpression: Applying Symbol workaround for property '%s'\n", propertyName)
+			// debug disabled
 			// Skip getter optimization and use direct property access
 			// The objectReg was already compiled above at line 167
 			propertyIdx := c.chunk.AddConstant(vm.String(propertyName))
@@ -213,7 +215,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 	if !isComputedProperty && objectStaticType != nil {
 		// Check if accessing a getter property
 		widenedType := types.GetWidenedType(objectStaticType)
-		debugPrintf("// DEBUG compileMemberExpression: widenedType for '%s': %v\n", propertyName, widenedType)
+		// debug disabled
 		if objType, ok := widenedType.(*types.ObjectType); ok {
 			// Check for class instance getters
 			if objType.IsClassInstance() && objType.ClassMeta != nil {
@@ -255,7 +257,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		if objectStaticType == nil {
 			// This can happen in finally blocks where type information may not be fully tracked
 			// Use OpGetProp with the actual property name "length" instead of optimistic getter
-			debugPrintf("// DEBUG CompileMember: .length requested but object type is nil. Using OpGetProp for length.\n")
+			// debug disabled
 		} else {
 			// Widen the type to handle cases like `string | null` having `.length`
 			widenedObjectType := types.GetWidenedType(objectStaticType)
@@ -269,8 +271,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			}
 			// If type doesn't support .length, fall through to generic OpGetProp
 			// The type checker *should* have caught this, but OpGetProp will likely return undefined/error at runtime.
-			debugPrintf("// DEBUG CompileMember: .length requested on non-array/string type %s (widened from %s). Falling through to OpGetProp.\n",
-				widenedObjectType.String(), objectStaticType.String())
+			// debug disabled
 		}
 
 		// For .length property access without type info, always use OpGetProp with "length"
@@ -375,8 +376,10 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 }
 
 func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Register) (Register, errors.PaseratiError) {
-	line := parser.GetTokenFromNode(node).Line                           // Use '[' token line
-	debugPrintf(">>> Enter compileIndexExpression: %s\n", node.String()) // <<< DEBUG ENTRY
+	line := parser.GetTokenFromNode(node).Line // Use '[' token line
+	if false {
+		debugPrintf("")
+	}
 
 	// Manage temporary registers with automatic cleanup
 	var tempRegs []Register
@@ -387,37 +390,37 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Reg
 	}()
 
 	// 1. Compile the expression being indexed (the base: array/object/string)
-	debugPrintf("--- Compiling Base: %s\n", node.Left.String()) // <<< DEBUG
+	// debug disabled
 	arrayReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, arrayReg)
 	_, err := c.compileNode(node.Left, arrayReg)
 	if err != nil {
-		debugPrintf("<<< Exit compileIndexExpression (Error compiling base)\n") // <<< DEBUG EXIT
+		// debug disabled
 		return BadRegister, NewCompileError(node.Left, "error compiling base of index expression").CausedBy(err)
 	}
 
 	// 2. Compile the index expression
-	debugPrintf("--- Compiling Index: %s\n", node.Index.String()) // <<< DEBUG
+	// debug disabled
 	indexReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, indexReg)
 	_, err = c.compileNode(node.Index, indexReg)
 	if err != nil {
-		debugPrintf("<<< Exit compileIndexExpression (Error compiling index)\n") // <<< DEBUG EXIT
+		// debug disabled
 		return BadRegister, NewCompileError(node.Index, "error compiling index part of index expression").CausedBy(err)
 	}
 	// <<< DEBUG INDEX RESULT >>>
-	debugPrintf("--- Index Compiled. indexReg: %s\n", indexReg)
+	// debug disabled
 
-	debugPrintf("--- Using hint register = %s\n", hint) // <<< DEBUG DEST REG
+	// debug disabled
 
 	// 3. Emit OpGetIndex using hint as destination
-	debugPrintf("--- Emitting OpGetIndex %s, %s, %s (Dest, Base, Index)\n", hint, arrayReg, indexReg) // <<< DEBUG EMIT
+	// debug disabled
 	c.emitOpCode(vm.OpGetIndex, line)
 	c.emitByte(byte(hint))
 	c.emitByte(byte(arrayReg))
 	c.emitByte(byte(indexReg))
 
-	debugPrintf("<<< Exit compileIndexExpression (Success)\n") // <<< DEBUG EXIT
+	// debug disabled
 	return hint, nil
 }
 

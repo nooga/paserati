@@ -378,6 +378,14 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		}
 		return Undefined, fmt.Errorf("runtime error during user function execution")
 	}
+	// If we reached a direct-call boundary and returned without InterpretRuntimeError,
+	// propagate any pending exception to the native caller.
+	if vm.unwinding && vm.currentException != Null {
+		ex := vm.currentException
+		vm.currentException = Null
+		vm.unwinding = false
+		return Undefined, exceptionError{exception: ex}
+	}
 
 	return result, nil
 }

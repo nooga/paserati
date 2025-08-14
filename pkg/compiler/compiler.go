@@ -44,7 +44,7 @@ type IteratorCleanupInfo struct {
 	UsesIteratorProtocol bool
 }
 
-const debugCompiler = true // Enable for debugging register allocation issue
+const debugCompiler = false // Set to true to trace compiler output
 const debugCompilerStats = false
 const debugCompiledCode = false
 const debugPrint = false // Enable debug output
@@ -559,21 +559,23 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				return BadRegister, nil // Return nil error here, main error is tracked
 			}
 
-			// 3. Create the closure object in a register
-			c.emitClosure(hint, funcConstIndex, funcLit, freeSymbols) // <<< Call emitClosure
+			// 3. Create the closure object in a dedicated persistent register and pin it
+			bindingReg := c.regAlloc.Alloc()
+			c.emitClosure(bindingReg, funcConstIndex, funcLit, freeSymbols)
+			c.regAlloc.Pin(bindingReg)
 
 			// 4. Update the symbol table entry with the register holding the closure.
-			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, hint) // <<< Use closureReg
+			c.currentSymbolTable.UpdateRegister(funcLit.Name.Value, bindingReg)
 
 			// 5. If at top level, also set as global variable
 			if c.enclosing == nil {
 				globalIdx := c.GetOrAssignGlobalIndex(funcLit.Name.Value)
-				c.emitSetGlobal(globalIdx, hint, funcLit.Token.Line)
+				c.emitSetGlobal(globalIdx, bindingReg, funcLit.Token.Line)
 				c.currentSymbolTable.DefineGlobal(funcLit.Name.Value, globalIdx)
 			}
 
 			// Function declarations don't produce a value for the script result
-			return hint, nil // Handled
+			return BadRegister, nil // Handled
 		}
 
 		// Original ExpressionStatement logic for other expressions

@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strconv"
@@ -44,6 +45,7 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("setPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("defineProperty", types.NewSimpleFunction([]types.Type{types.Any, types.String, types.Any}, types.Any)).
 		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, types.String}, types.Any)).
+		WithProperty("is", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Boolean)).
 		WithProperty("prototype", objectProtoType)
 
 	// Define the constructor globally
@@ -223,122 +225,16 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
 		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOfImpl))
 		ctorPropsObj.Properties.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", objectSetPrototypeOfImpl))
-		// defineProperty with proper error semantics and attribute enforcement
-		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
-			if len(args) < 3 {
-				return vm.Undefined, nil
-			}
-			obj := args[0]
-			propName := args[1].ToString()
-			descriptor := args[2]
-
-			if !obj.IsObject() {
-				return vm.Undefined, nil
-			}
-
-			// Parse descriptor fields
-			var value vm.Value = vm.Undefined
-			var writablePtr, enumerablePtr, configurablePtr *bool
-			hasGetter := false
-			hasSetter := false
-			if po := descriptor.AsPlainObject(); po != nil {
-				if v, ok := po.GetOwn("value"); ok {
-					value = v
-				}
-				if v, ok := po.GetOwn("writable"); ok {
-					b := v.IsTruthy()
-					writablePtr = &b
-				}
-				if v, ok := po.GetOwn("enumerable"); ok {
-					b := v.IsTruthy()
-					enumerablePtr = &b
-				}
-				if v, ok := po.GetOwn("configurable"); ok {
-					b := v.IsTruthy()
-					configurablePtr = &b
-				}
-				if _, ok := po.GetOwn("get"); ok {
-					hasGetter = true
-				}
-				if _, ok := po.GetOwn("set"); ok {
-					hasSetter = true
-				}
-			} else if d := descriptor.AsDictObject(); d != nil {
-				if v, ok := d.GetOwn("value"); ok {
-					value = v
-				}
-				if v, ok := d.GetOwn("writable"); ok {
-					b := v.IsTruthy()
-					writablePtr = &b
-				}
-				if v, ok := d.GetOwn("enumerable"); ok {
-					b := v.IsTruthy()
-					enumerablePtr = &b
-				}
-				if v, ok := d.GetOwn("configurable"); ok {
-					b := v.IsTruthy()
-					configurablePtr = &b
-				}
-				if _, ok := d.GetOwn("get"); ok {
-					hasGetter = true
-				}
-				if _, ok := d.GetOwn("set"); ok {
-					hasSetter = true
-				}
-			} else {
-				value = descriptor
-			}
-
-			// Accessor descriptors are not supported yet; ignore get/set but forbid mixing
-			if hasGetter || hasSetter {
-				// Forbid mixing data and accessor fields minimally: if any of value/writable provided, throw TypeError
-				if value.Type() != vm.TypeUndefined || writablePtr != nil {
-					typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
-					errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")})
-					return vm.Undefined, vmInstance.NewExceptionError(errVal)
-				}
-				// Otherwise, silently ignore for now (accessors unimplemented)
-			}
-
-			if po := obj.AsPlainObject(); po != nil {
-				// Enforce non-configurable update rules
-				if curVal, curW, curE, curC, ok := po.GetOwnDescriptor(propName); ok {
-					if curC == false {
-						// Cannot make configurable true
-						if configurablePtr != nil && *configurablePtr != curC {
-							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
-							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot redefine property: " + propName)})
-							return vm.Undefined, vmInstance.NewExceptionError(errVal)
-						}
-						// Cannot change enumerable from false to true
-						if curE == false && enumerablePtr != nil && *enumerablePtr != curE {
-							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
-							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot redefine property: " + propName)})
-							return vm.Undefined, vmInstance.NewExceptionError(errVal)
-						}
-						// If current writable is false, cannot change writable to true
-						if curW == false && writablePtr != nil && *writablePtr {
-							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
-							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot redefine property: " + propName)})
-							return vm.Undefined, vmInstance.NewExceptionError(errVal)
-						}
-						// If current writable is false and new value provided and not SameValue, throw
-						if curW == false && value.Type() != vm.TypeUndefined && !curVal.Is(value) {
-							typeErrCtor, _ := vmInstance.GetGlobal("TypeError")
-							errVal, _ := vmInstance.Call(typeErrCtor, vm.Undefined, []vm.Value{vm.NewString("Cannot assign to read only property '" + propName + "'")})
-							return vm.Undefined, vmInstance.NewExceptionError(errVal)
-						}
-					}
-				}
-				po.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
-			} else if d := obj.AsDictObject(); d != nil {
-				// DictObject: assign value only
-				d.SetOwn(propName, value)
-			}
-
-			return obj, nil
-		}))
+		// defineProperty delegates to the full implementation with symbol/accessor support
+		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", objectDefinePropertyImpl))
 		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", objectGetOwnPropertyDescriptorImpl))
+		// Object.is
+		ctorPropsObj.Properties.SetOwn("is", vm.NewNativeFunction(2, false, "is", func(args []vm.Value) (vm.Value, error) {
+			if len(args) < 2 {
+				return vm.BooleanValue(false), nil
+			}
+			return vm.BooleanValue(sameValue(args[0], args[1])), nil
+		}))
 
 		objectCtor = ctorWithProps
 	}
@@ -520,6 +416,41 @@ func objectValuesImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	return values, nil
+}
+
+// sameValue implements the ES SameValue comparison semantics
+func sameValue(x, y vm.Value) bool {
+	if x.Type() != y.Type() {
+		// Special-case +0 and -0 for numbers: SameValue(-0, +0) is false
+		if (x.Type() == vm.TypeFloatNumber || x.Type() == vm.TypeIntegerNumber) && (y.Type() == vm.TypeFloatNumber || y.Type() == vm.TypeIntegerNumber) {
+			// handled below by numeric rules
+		} else {
+			return false
+		}
+	}
+	switch x.Type() {
+	case vm.TypeNull, vm.TypeUndefined:
+		return true
+	case vm.TypeBoolean:
+		return x.AsBoolean() == y.AsBoolean()
+	case vm.TypeString:
+		return x.ToString() == y.ToString()
+	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+		// NaN is SameValue to NaN
+		xf := x.ToFloat()
+		yf := y.ToFloat()
+		if math.IsNaN(xf) && math.IsNaN(yf) {
+			return true
+		}
+		// Distinguish +0 and -0: compare reciprocals
+		if xf == 0 && yf == 0 {
+			return 1/xf == 1/yf
+		}
+		return xf == yf
+	default:
+		// Objects/functions: identity
+		return x.Is(y)
+	}
 }
 
 func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
@@ -876,6 +807,22 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 		// In absence of a direct VM reference here, mimic failure by returning undefined;
 		// harness verifyProperty will report descriptor mismatch. We will revisit once we thread VM here.
 		return vm.Undefined, nil
+	}
+
+	// Explicitly default missing attributes to false for data descriptors
+	if !(hasGetter || hasSetter) {
+		if writablePtr == nil {
+			b := false
+			writablePtr = &b
+		}
+	}
+	if enumerablePtr == nil {
+		b := false
+		enumerablePtr = &b
+	}
+	if configurablePtr == nil {
+		b := false
+		configurablePtr = &b
 	}
 
 	// Define the property with attributes (on plain objects only for now)

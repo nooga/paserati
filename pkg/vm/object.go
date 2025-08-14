@@ -317,37 +317,24 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 		}
 	}
 
-	// New property: create shape transition with specified attributes (defaults false if nil)
+	// New property: always create a new shape to honor descriptor attributes
 	cur := o.shape
-	cur.mu.RLock()
-	next, ok := cur.transitions[keyFromString(name).hash()]
-	cur.mu.RUnlock()
-	if !ok {
-		off := len(cur.fields)
-		// Defaults per defineProperty: false when creating via descriptor if not specified
-		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: false, enumerable: false, configurable: false, isAccessor: false}
-		if writable != nil {
-			fld.writable = *writable
-		}
-		if enumerable != nil {
-			fld.enumerable = *enumerable
-		}
-		if configurable != nil {
-			fld.configurable = *configurable
-		}
-		newFields := make([]Field, len(cur.fields)+1)
-		copy(newFields, cur.fields)
-		newFields[len(cur.fields)] = fld
-		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
-		cur.mu.Lock()
-		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
-			next = existing
-		} else {
-			cur.transitions[keyFromString(name).hash()] = next
-		}
-		cur.mu.Unlock()
+	off := len(cur.fields)
+	// Defaults per defineProperty: false when creating via descriptor if not specified
+	fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: false, enumerable: false, configurable: false, isAccessor: false}
+	if writable != nil {
+		fld.writable = *writable
 	}
+	if enumerable != nil {
+		fld.enumerable = *enumerable
+	}
+	if configurable != nil {
+		fld.configurable = *configurable
+	}
+	newFields := make([]Field, len(cur.fields)+1)
+	copy(newFields, cur.fields)
+	newFields[len(cur.fields)] = fld
+	next := &Shape{parent: cur, fields: newFields, transitions: make(map[string]*Shape), version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
 }
@@ -459,39 +446,26 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 			return
 		}
 	}
-	// New field
+	// New field: create new shape explicitly
 	cur := o.shape
-	cur.mu.RLock()
-	next, ok := cur.transitions[key.hash()]
-	cur.mu.RUnlock()
-	if !ok {
-		off := len(cur.fields)
-		fld := Field{offset: off, name: key.debugName(), keyKind: key.kind, writable: false, enumerable: false, configurable: false, isAccessor: false}
-		if key.isSymbol() {
-			fld.symbolVal = key.symbolVal
-		}
-		if writable != nil {
-			fld.writable = *writable
-		}
-		if enumerable != nil {
-			fld.enumerable = *enumerable
-		}
-		if configurable != nil {
-			fld.configurable = *configurable
-		}
-		newFields := make([]Field, len(cur.fields)+1)
-		copy(newFields, cur.fields)
-		newFields[len(cur.fields)] = fld
-		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
-		cur.mu.Lock()
-		if existing, exists := cur.transitions[key.hash()]; exists {
-			next = existing
-		} else {
-			cur.transitions[key.hash()] = next
-		}
-		cur.mu.Unlock()
+	off := len(cur.fields)
+	fld := Field{offset: off, name: key.debugName(), keyKind: key.kind, writable: false, enumerable: false, configurable: false, isAccessor: false}
+	if key.isSymbol() {
+		fld.symbolVal = key.symbolVal
 	}
+	if writable != nil {
+		fld.writable = *writable
+	}
+	if enumerable != nil {
+		fld.enumerable = *enumerable
+	}
+	if configurable != nil {
+		fld.configurable = *configurable
+	}
+	newFields := make([]Field, len(cur.fields)+1)
+	copy(newFields, cur.fields)
+	newFields[len(cur.fields)] = fld
+	next := &Shape{parent: cur, fields: newFields, transitions: make(map[string]*Shape), version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
 }

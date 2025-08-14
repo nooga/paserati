@@ -18,13 +18,8 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		vm.propCache[cacheKey] = cache
 	}
 
-	// Debug trace for tricky harness props
 	if debugVM {
-		if propName == "name" || propName == "constructor" || propName == "value" || propName == "next" {
-			if debugVM {
-				fmt.Printf("[DBG opGetProp] '%s' on %s (%s)\n", propName, objVal.Inspect(), objVal.TypeName())
-			}
-		}
+		fmt.Printf("[opGetProp] ip=%d obj=%s(%s) prop=%q\n", ip, objVal.Inspect(), objVal.TypeName(), propName)
 	}
 
 	// 1. Special properties (.length, etc.)
@@ -120,7 +115,7 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	}
 
 	// Additional debug: when asking for 'constructor' on an object, show prototype's name if present
-	if debugVM && propName == "constructor" && objVal.Type() == TypeObject {
+	if false && propName == "constructor" && objVal.Type() == TypeObject {
 		po := AsPlainObject(*objVal)
 		proto := po.GetPrototype()
 		protoName := "<no name>"
@@ -129,9 +124,7 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 				protoName = n.ToString()
 			}
 		}
-		if debugVM {
-			fmt.Printf("[DBG opGetProp] object prototype name: %s\n", protoName)
-		}
+		_ = protoName
 	}
 
 	// 6. PlainObject with inline cache
@@ -140,6 +133,9 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 
 		// Try cache lookup first (full entry): handle own and proto hits
 		if entry, hit := cache.lookupEntry(po.shape); hit {
+			if debugVM {
+				fmt.Printf("[opGetProp] IC hit state=%d isProto=%v accessor=%v offset=%d\n", cache.state, entry.isProto, entry.isAccessor, entry.offset)
+			}
 			vm.cacheStats.totalHits++
 			switch cache.state {
 			case CacheStateMonomorphic:
@@ -160,8 +156,25 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 								vm.throwException(ee.GetExceptionValue())
 								return false, InterpretRuntimeError, Undefined
 							}
-							status := vm.runtimeError("Getter call failed: %v", err)
-							return false, status, Undefined
+							// Wrap non-exception Go error into a proper JS Error instance and throw
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+							vm.throwException(excVal)
+							return false, InterpretRuntimeError, Undefined
 						}
 						*dest = res
 						return true, InterpretOK, *dest
@@ -196,8 +209,24 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 									vm.throwException(ee.GetExceptionValue())
 									return false, InterpretRuntimeError, Undefined
 								}
-								status := vm.runtimeError("Getter call failed: %v", err)
-								return false, status, Undefined
+								var excVal Value
+								if errCtor, ok := vm.GetGlobal("Error"); ok {
+									if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+										excVal = res
+									} else {
+										eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+										eo.SetOwn("name", NewString("Error"))
+										eo.SetOwn("message", NewString(err.Error()))
+										excVal = NewValueFromPlainObject(eo)
+									}
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
+								vm.throwException(excVal)
+								return false, InterpretRuntimeError, Undefined
 							}
 							*dest = res
 							return true, InterpretOK, *dest
@@ -214,6 +243,9 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		}
 
 		// Cache miss - do slow path lookup
+		if debugVM {
+			fmt.Printf("[opGetProp] IC miss, resolving slow path for %q\n", propName)
+		}
 		vm.cacheStats.totalMisses++
 
 		// Use enhanced property resolution with prototype caching and metadata
@@ -226,8 +258,24 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 							vm.throwException(ee.GetExceptionValue())
 							return false, InterpretRuntimeError, Undefined
 						}
-						status := vm.runtimeError("Getter call failed: %v", err)
-						return false, status, Undefined
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						return false, InterpretRuntimeError, Undefined
 					}
 					*dest = res
 				} else {
