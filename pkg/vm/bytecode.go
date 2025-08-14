@@ -158,11 +158,15 @@ const (
 
 	// --- Arguments Object ---
 	OpGetArguments OpCode = 73 // Rx: Create arguments object from current function arguments, store in Rx
-	
+
 	// --- Generator Support ---
 	OpCreateGenerator OpCode = 74 // Rx FuncReg: Create generator object from function in FuncReg, store in Rx
 	OpYield           OpCode = 75 // Rx, Ry: Suspend generator execution, yield value in Rx, store sent value in Ry
 	OpResumeGenerator OpCode = 76 // Internal: Resume generator execution (used by .next() calls)
+
+	// --- Large Literal Support ---
+	OpAllocArray OpCode = 77 // Rx Len(16bit): Preallocate array of length Len into Rx, filled with undefined
+	OpArrayCopy  OpCode = 78 // Rx DestOffset(16bit) StartReg Count: Copy Count registers starting at StartReg into Rx at DestOffset
 )
 
 // String returns a human-readable name for the OpCode.
@@ -336,7 +340,7 @@ func (op OpCode) String() string {
 	// --- Arguments Object ---
 	case OpGetArguments:
 		return "OpGetArguments"
-	
+
 	// --- Generator Support ---
 	case OpCreateGenerator:
 		return "OpCreateGenerator"
@@ -344,6 +348,12 @@ func (op OpCode) String() string {
 		return "OpYield"
 	case OpResumeGenerator:
 		return "OpResumeGenerator"
+
+	// --- Large Literal Support ---
+	case OpAllocArray:
+		return "OpAllocArray"
+	case OpArrayCopy:
+		return "OpArrayCopy"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -483,6 +493,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpStringConcat, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual,
 		OpRemainder, OpExponent,
+		OpIn, OpInstanceof,
 		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
 		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight:
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz
@@ -540,6 +551,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.loadThisInstruction(builder, instruction.String(), offset)
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
+	case OpGetOwnKeys:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset)
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Operations Disassembly ---
@@ -575,7 +588,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	// --- Arguments Object ---
 	case OpGetArguments:
 		return c.registerInstruction(builder, instruction.String(), offset)
-	
+
 	// --- Generator Support ---
 	case OpCreateGenerator:
 		return c.callInstruction(builder, "OpCreateGenerator", offset)
@@ -583,6 +596,30 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterInstruction(builder, "OpYield", offset)
 	case OpResumeGenerator:
 		return c.simpleInstruction(builder, "OpResumeGenerator", offset)
+
+	// --- Large Literal Support ---
+	case OpAllocArray:
+		// Rx, Len(16)
+		if offset+3 >= len(c.Code) {
+			builder.WriteString("OpAllocArray (missing operands)\n")
+			return offset + 1
+		}
+		destReg := c.Code[offset+1]
+		lenVal := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+		builder.WriteString(fmt.Sprintf("%-16s R%d, Len %d\n", "OpAllocArray", destReg, lenVal))
+		return offset + 4
+	case OpArrayCopy:
+		// Rx, DestOffset(16), StartReg, Count
+		if offset+5 >= len(c.Code) {
+			builder.WriteString("OpArrayCopy (missing operands)\n")
+			return offset + 1
+		}
+		destReg := c.Code[offset+1]
+		off := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+		startReg := c.Code[offset+4]
+		count := c.Code[offset+5]
+		builder.WriteString(fmt.Sprintf("%-16s R%d, Off %d, R%d, Count %d\n", "OpArrayCopy", destReg, off, startReg, count))
+		return offset + 6
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))

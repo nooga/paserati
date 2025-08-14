@@ -7288,10 +7288,11 @@ func (p *Parser) tryParseTypeArguments() []Expression {
 		return nil // No type arguments
 	}
 
-	// Save current state for potential backtracking
+	// Save current state for potential backtracking (tokens and lexer)
 	savedCur := p.curToken
 	savedPeek := p.peekToken
 	savedErrorCount := len(p.errors)
+	lexerState := p.l.SaveState()
 
 	// If we're not at '<', advance to it
 	if !p.curTokenIs(lexer.LT) {
@@ -7302,6 +7303,7 @@ func (p *Parser) tryParseTypeArguments() []Expression {
 
 	if err != nil {
 		// Backtrack on failure
+		p.l.RestoreState(lexerState)
 		p.curToken = savedCur
 		p.peekToken = savedPeek
 		// Remove any errors added during failed parse
@@ -7550,10 +7552,11 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 		// Check if this looks like a generic call by doing a simple lookahead
 		// We need to look for pattern: identifier < TypeExpr > (
 		if p.looksLikeGenericCall() {
-			// Save current state for potential backtracking
+			// Save current state for potential backtracking (tokens and lexer)
 			savedCur := p.curToken
 			savedPeek := p.peekToken
 			savedErrorCount := len(p.errors)
+			lexerState := p.l.SaveState()
 
 			// Try to parse type arguments (current token is '<')
 			typeArgs, err := p.parseTypeArguments()
@@ -7568,7 +7571,8 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 				callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
 				return callExpr
 			} else {
-				// Failed to parse as generic call, backtrack and parse as comparison
+				// Failed to parse as generic call, backtrack lexer and tokens, then parse as comparison
+				p.l.RestoreState(lexerState)
 				p.curToken = savedCur
 				p.peekToken = savedPeek
 				// Remove any errors added during failed parse

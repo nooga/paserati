@@ -360,6 +360,18 @@ func (c *Compiler) compileWhileStatement(node *parser.WhileStatement, hint Regis
 func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, label string, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
+	// Defer-safety: patch any outstanding placeholder jump to a valid anchor on early returns
+	var (
+		jumpToEndPlaceholderPos = -1
+		patchedCondition        = false
+	)
+	defer func() {
+		if jumpToEndPlaceholderPos >= 0 && !patchedCondition {
+			c.patchJump(jumpToEndPlaceholderPos)
+			patchedCondition = true
+		}
+	}()
+
 	// --- Setup Loop Context ---
 	loopStartPos := len(c.chunk.Code) // Position before condition evaluation
 	loopContext := &LoopContext{
@@ -381,7 +393,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	}
 
 	// --- Jump Out If False ---
-	jumpToEndPlaceholderPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
+	jumpToEndPlaceholderPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, line)
 
 	// --- Compile Body ---
 	bodyReg := c.regAlloc.Alloc()
@@ -401,6 +413,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	// --- Finish Loop ---
 	// Patch the initial conditional jump to land here (after the backward jump)
 	c.patchJump(jumpToEndPlaceholderPos)
+	patchedCondition = true
 
 	// Pop context and patch breaks
 	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
@@ -430,6 +443,17 @@ func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register)
 }
 
 func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label string, hint Register) (Register, errors.PaseratiError) {
+	// Defer-safety: patch any outstanding placeholder jump to a valid anchor on early returns
+	var (
+		conditionExitJumpPlaceholderPos = -1
+		patchedConditionExit            = false
+	)
+	defer func() {
+		if conditionExitJumpPlaceholderPos != -1 && !patchedConditionExit {
+			c.patchJump(conditionExitJumpPlaceholderPos)
+			patchedConditionExit = true
+		}
+	}()
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {
@@ -459,7 +483,6 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	// Scope for body/vars is handled by compileNode for the BlockStatement
 
 	// --- 2. Condition (Optional) ---
-	var conditionExitJumpPlaceholderPos int = -1
 	if node.Condition != nil {
 		conditionReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, conditionReg)
@@ -520,6 +543,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	// This needs to happen *at* the final position
 	if conditionExitJumpPlaceholderPos != -1 {
 		c.patchJump(conditionExitJumpPlaceholderPos) // Patch to jump to current position
+		patchedConditionExit = true
 	}
 
 	// Patch all break jumps
@@ -908,6 +932,35 @@ func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Regis
 }
 
 func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, label string, hint Register) (Register, errors.PaseratiError) {
+	// Defer-safety: ensure jumps get patched even if we return early
+	var (
+		iteratorPathJump        = -1
+		conditionExitJumpPos    = -1
+		iteratorExitJump        = -1
+		skipIteratorPathJump    = -1
+		patchedIteratorPath     = false
+		patchedConditionExit    = false
+		patchedIteratorExit     = false
+		patchedSkipIteratorPath = false
+	)
+	defer func() {
+		if iteratorPathJump >= 0 && !patchedIteratorPath {
+			c.patchJump(iteratorPathJump)
+			patchedIteratorPath = true
+		}
+		if conditionExitJumpPos >= 0 && !patchedConditionExit {
+			c.patchJump(conditionExitJumpPos)
+			patchedConditionExit = true
+		}
+		if iteratorExitJump >= 0 && !patchedIteratorExit {
+			c.patchJump(iteratorExitJump)
+			patchedIteratorExit = true
+		}
+		if skipIteratorPathJump >= 0 && !patchedSkipIteratorPath {
+			c.patchJump(skipIteratorPathJump)
+			patchedSkipIteratorPath = true
+		}
+	}()
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {
@@ -947,7 +1000,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.emitByte(byte(arrayTypeReg))
 
 	// Jump to iterator protocol if not array
-	iteratorPathJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, isArrayReg, node.Token.Line)
+	iteratorPathJump = c.emitPlaceholderJump(vm.OpJumpIfFalse, isArrayReg, node.Token.Line)
 
 	// === FAST PATH: Array iteration ===
 	indexReg := c.regAlloc.Alloc()
@@ -987,7 +1040,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.emitByte(byte(lengthReg))    // right operand (length)
 
 	// Jump out of loop if condition is false
-	conditionExitJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+	conditionExitJumpPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
 
 	// 4. Get current element: iterable[index]
 	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
@@ -1057,7 +1110,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.emitUint16(uint16(int16(backOffset)))
 
 	// Jump to end after array iteration is complete
-	skipIteratorPathJump := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+	skipIteratorPathJump = c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 
 	// === ITERATOR PROTOCOL PATH: For generators, user-defined iterables ===
 	c.patchJump(iteratorPathJump) // Patch to land here
@@ -1124,7 +1177,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.emitByte(byte(notDoneReg))
 	c.emitByte(byte(doneReg))
 
-	iteratorExitJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
+	iteratorExitJump = c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
 
 	// Get result.value for loop variable
 	valueReg := c.regAlloc.Alloc()
@@ -1176,9 +1229,11 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 	// Patch iterator exit jump
 	c.patchJump(iteratorExitJump)
+	patchedIteratorExit = true
 
 	// Patch skip iterator path jump (from array completion)
 	c.patchJump(skipIteratorPathJump)
+	patchedSkipIteratorPath = true
 
 	// 10. Clean up loop context and patch jumps
 	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]
@@ -1186,6 +1241,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 	// Patch condition exit jump (from array path)
 	c.patchJump(conditionExitJumpPos)
+	patchedConditionExit = true
 
 	// Patch all break jumps
 	for _, breakPos := range poppedContext.BreakPlaceholderPosList {
@@ -1200,6 +1256,17 @@ func (c *Compiler) compileForInStatement(node *parser.ForInStatement, hint Regis
 }
 
 func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, label string, hint Register) (Register, errors.PaseratiError) {
+	// Defer-safety: ensure condition exit is patched
+	var (
+		conditionExitJumpPos = -1
+		patchedConditionExit = false
+	)
+	defer func() {
+		if conditionExitJumpPos >= 0 && !patchedConditionExit {
+			c.patchJump(conditionExitJumpPos)
+			patchedConditionExit = true
+		}
+	}()
 	// Track temporary registers for cleanup
 	var tempRegs []Register
 	defer func() {
@@ -1261,7 +1328,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	c.emitByte(byte(lengthReg))    // right operand (length)
 
 	// Jump out of loop if condition is false
-	conditionExitJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+	conditionExitJumpPos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
 
 	// 5. Get current key: keys[keyIndex]
 	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
@@ -1336,6 +1403,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 
 	// Patch condition exit jump
 	c.patchJump(conditionExitJumpPos)
+	patchedConditionExit = true
 
 	// Patch all break jumps
 	for _, breakPos := range poppedContext.BreakPlaceholderPosList {

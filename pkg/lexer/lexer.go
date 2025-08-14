@@ -10,7 +10,7 @@ import (
 )
 
 // Debug flags
-const debugLexer = true
+const debugLexer = false
 
 // templateState represents the state of a template literal context
 type templateState struct {
@@ -163,7 +163,7 @@ const (
 	WHILE    TokenType = "WHILE"
 	DO       TokenType = "DO" // Added for do...while
 	FOR      TokenType = "FOR"
-	WITH     TokenType = "WITH" // Added for with statements
+	WITH     TokenType = "WITH"     // Added for with statements
 	BREAK    TokenType = "BREAK"    // Added
 	CONTINUE TokenType = "CONTINUE" // Added
 	TYPE     TokenType = "TYPE"     // Added for type aliases
@@ -328,7 +328,7 @@ type Lexer struct {
 	inTemplate    bool // true when we're inside a template literal
 	braceDepth    int  // tracks nested braces inside ${...} interpolations
 	templateStart int  // position where current template started (for error reporting)
-	
+
 	// --- NEW: Template stack for nested template literals ---
 	templateStack []templateState // stack to handle nested template literals
 
@@ -354,7 +354,7 @@ func (l *Lexer) SaveState() LexerState {
 	// Make a deep copy of the template stack
 	stackCopy := make([]templateState, len(l.templateStack))
 	copy(stackCopy, l.templateStack)
-	
+
 	return LexerState{
 		Position:      l.position,
 		ReadPosition:  l.readPosition,
@@ -398,7 +398,7 @@ func (l *Lexer) SetPosition(pos int) {
 	l.readPosition = pos + 1
 	l.ch = l.input[l.position]
 	// NOTE: Line number is NOT recalculated here. Backtracking assumes it's okay.
-	
+
 	// DEPRECATED: This method resets template state which breaks backtracking.
 	// Use SaveState/RestoreState instead for proper template literal handling.
 	l.inTemplate = false
@@ -532,7 +532,7 @@ func (l *Lexer) skipWhitespace() {
 			l.readChar()
 			continue
 		}
-		
+
 		// Unicode whitespace characters
 		if l.ch >= 128 {
 			// Read UTF-8 rune to check if it's Unicode whitespace
@@ -546,7 +546,7 @@ func (l *Lexer) skipWhitespace() {
 				continue
 			}
 		}
-		
+
 		// Not whitespace, stop skipping
 		break
 	}
@@ -557,18 +557,18 @@ func isUnicodeWhitespace(r rune) bool {
 	// JavaScript whitespace characters according to ECMAScript specification
 	switch r {
 	case 0x0009, // Tab
-		 0x000B, // Vertical Tab  
-		 0x000C, // Form Feed
-		 0x0020, // Space
-		 0x00A0, // Non-breaking space
-		 0x1680, // Ogham space mark
-		 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, // Various Unicode spaces
-		 0x2028, // Line separator
-		 0x2029, // Paragraph separator  
-		 0x202F, // Narrow no-break space
-		 0x205F, // Medium mathematical space
-		 0x3000, // Ideographic space
-		 0xFEFF: // Zero width no-break space (BOM)
+		0x000B,                                                                                 // Vertical Tab
+		0x000C,                                                                                 // Form Feed
+		0x0020,                                                                                 // Space
+		0x00A0,                                                                                 // Non-breaking space
+		0x1680,                                                                                 // Ogham space mark
+		0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, // Various Unicode spaces
+		0x2028, // Line separator
+		0x2029, // Paragraph separator
+		0x202F, // Narrow no-break space
+		0x205F, // Medium mathematical space
+		0x3000, // Ideographic space
+		0xFEFF: // Zero width no-break space (BOM)
 		return true
 	}
 	return false
@@ -1065,11 +1065,11 @@ func (l *Lexer) NextToken() Token {
 			tokType := LookupIdent(literal)
 			// readIdentifierWithUnicode leaves l.position *after* the last char of the identifier
 			tok = Token{Type: tokType, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			//return tok // Return early, readIdentifierWithUnicode already called readChar()  
+			//return tok // Return early, readIdentifierWithUnicode already called readChar()
 		} else if isDigit(l.ch) {
 			literal := l.readNumber() // Consumes digits and potentially '.'
 			// readNumber leaves l.position *after* the last char of the number
-			
+
 			// Check for BigInt suffix 'n'
 			if l.ch == 'n' {
 				l.readChar() // Consume the 'n' suffix
@@ -1082,19 +1082,19 @@ func (l *Lexer) NextToken() Token {
 			if l.peekChar() == '!' && l.line == 1 && (l.position == 0 || (l.position == 1 && startPos == 0)) {
 				// Hashbang comment - only valid at very start of file
 				l.skipHashbangComment()
-				l.skipWhitespace() // Skip any whitespace after the hashbang comment
+				l.skipWhitespace()   // Skip any whitespace after the hashbang comment
 				return l.NextToken() // Get the next token after the comment
 			} else {
 				// Try to read a private identifier: #identifier (including Unicode escapes)
 				l.readChar() // Consume '#'
-				
+
 				// Save position in case we need to backtrack
 				savedPosition := l.position
 				savedCh := l.ch
-				
+
 				// Try to read an identifier (including Unicode escapes)
 				identifierPart := l.readIdentifierWithUnicode()
-				
+
 				if identifierPart != "" {
 					// Successfully read an identifier part
 					literal := "#" + identifierPart
@@ -1138,16 +1138,16 @@ func (l *Lexer) readIdentifier() string {
 // or Unicode characters, and returns the resolved identifier string (e.g., "\u0064o" becomes "do")
 func (l *Lexer) readIdentifierWithUnicode() string {
 	var result strings.Builder
-	
+
 	for l.ch != 0 {
 		if l.ch == '\\' && l.peekChar() == 'u' {
 			// Parse unicode escape sequence \uXXXX or \u{...}
 			l.readChar() // consume '\'
 			l.readChar() // consume 'u'
-			
+
 			var unicodeHex string
 			var validUnicode bool
-			
+
 			if l.ch == '{' {
 				// \u{XXXX} format - variable length
 				l.readChar() // consume '{'
@@ -1171,7 +1171,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 				}
 				validUnicode = len(unicodeHex) == 4
 			}
-			
+
 			if validUnicode {
 				// Convert hex to rune
 				if codePoint, err := strconv.ParseInt(unicodeHex, 16, 32); err == nil {
@@ -1215,7 +1215,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 			}
 		} else {
 			// Check if current position starts a Unicode character
-			if l.ch >= 128 {  // Non-ASCII character
+			if l.ch >= 128 { // Non-ASCII character
 				// Read UTF-8 rune
 				remaining := []byte(l.input[l.position:])
 				r, size := utf8.DecodeRune(remaining)
@@ -1223,7 +1223,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 					// Invalid UTF-8, treat as illegal
 					break
 				}
-				
+
 				// Check if this Unicode character is valid for identifiers
 				if result.Len() == 0 {
 					// First character - must be ID_Start
@@ -1240,7 +1240,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 				} else {
 					// Continuation character - must be ID_Continue
 					if isUnicodeIDContinue(r) {
-						result.WriteRune(r) 
+						result.WriteRune(r)
 						// Advance position by the UTF-8 character size
 						for i := 0; i < size; i++ {
 							l.readChar()
@@ -1272,7 +1272,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 			}
 		}
 	}
-	
+
 	return result.String()
 }
 
@@ -1676,7 +1676,7 @@ func (l *Lexer) skipHashbangComment() {
 	// Consume the opening '#!'
 	l.readChar() // Consume '#'
 	l.readChar() // Consume '!'
-	
+
 	// Skip until end of line
 	for l.ch != '\n' && l.ch != 0 {
 		l.readChar()
@@ -1725,17 +1725,17 @@ func isUnicodeIDStart(r rune) bool {
 	if r < 128 {
 		return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || r == '$'
 	}
-	
+
 	// Standard Unicode Letter categories
 	if unicode.IsLetter(r) {
 		return true
 	}
-	
+
 	// Special cases: $ and _
 	if r == '$' || r == '_' {
 		return true
 	}
-	
+
 	// ECMAScript Other_ID_Start characters
 	// These are specific Unicode code points that are allowed to start identifiers
 	switch r {
@@ -1747,7 +1747,7 @@ func isUnicodeIDStart(r rune) bool {
 	case 0x1886: // ᢆ (Unicode 9.0)
 		return true
 	}
-	
+
 	return false
 }
 
@@ -1758,17 +1758,17 @@ func isUnicodeIDContinue(r rune) bool {
 	if r < 128 {
 		return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '$'
 	}
-	
+
 	// If it can start an identifier, it can also continue one
 	if isUnicodeIDStart(r) {
 		return true
 	}
-	
+
 	// Standard Unicode categories for continuation
 	if unicode.IsDigit(r) || unicode.IsMark(r) {
 		return true
 	}
-	
+
 	// ECMAScript Other_ID_Continue characters
 	// These are specific Unicode code points that can continue (but not start) identifiers
 	switch r {
@@ -1777,10 +1777,10 @@ func isUnicodeIDContinue(r rune) bool {
 	case 0x1369, 0x136A, 0x136B, 0x136C, 0x136D, 0x136E, 0x136F, 0x1370, 0x1371: // Ethiopian digits
 	case 0x19DA: // ᧚ NEW TAI LUE THAM DIGIT ONE
 	case 0x200C: // ZWNJ - Zero Width Non-Joiner
-	case 0x200D: // ZWJ - Zero Width Joiner  
+	case 0x200D: // ZWJ - Zero Width Joiner
 		return true
 	}
-	
+
 	return false
 }
 
@@ -1791,14 +1791,14 @@ func (l *Lexer) canStartIdentifier() bool {
 	if l.ch < 128 {
 		return isLetter(l.ch) || l.ch == '$' || (l.ch == '\\' && l.peekChar() == 'u')
 	}
-	
+
 	// Unicode character - decode and check
 	remaining := []byte(l.input[l.position:])
 	r, _ := utf8.DecodeRune(remaining)
 	if r == utf8.RuneError {
 		return false
 	}
-	
+
 	return isUnicodeIDStart(r)
 }
 
@@ -1884,7 +1884,7 @@ func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
 				templateStart: l.templateStart,
 			})
 		}
-		
+
 		// Start new template literal
 		l.inTemplate = true
 		l.templateStart = startPos
@@ -1908,7 +1908,7 @@ func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
 		literal := string(l.ch) // The closing backtick
 		l.readChar()            // Consume the backtick
 		debugPrintf("readTemplateLiteral: CLOSING - after readChar, ch='%c', position=%d", l.ch, l.position)
-		
+
 		// Pop previous template state from stack if it exists
 		if len(l.templateStack) > 0 {
 			debugPrintf("readTemplateLiteral: CLOSING - has template stack, length=%d", len(l.templateStack))

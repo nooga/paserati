@@ -8,6 +8,9 @@ import (
 	"os"
 	"paserati/pkg/builtins"
 	"paserati/pkg/driver"
+	errorsPkg "paserati/pkg/errors"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -32,6 +35,8 @@ func main() {
 	)
 
 	flag.Parse()
+	// Ensure AST dump is off for harness runs unless explicitly enabled
+	parser.DumpASTEnabled = false
 
 	// CPU profiling
 	if *cpuprofile != "" {
@@ -261,6 +266,38 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 				result.Failed = true
 				if !treeMode {
 					fmt.Printf("FAIL %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
+					// Attempt to compile and dump bytecode for debugging Unknown opcode issues
+					pas := createTest262Paserati()
+					defer pas.Cleanup()
+					prog := parserFromFile(testFile, testRoot)
+					chunk, cerrs := pas.CompileProgram(prog)
+					if len(cerrs) > 0 {
+						fmt.Printf("[Disasm] compile errors: %d\n", len(cerrs))
+						// Print errors with includes-expanded source for clarity
+						if raw, rerr := os.ReadFile(testFile); rerr == nil {
+							src := string(raw)
+							if hdr := extractFrontmatterHeader(src); hdr != "" {
+								if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
+									var builder strings.Builder
+									for _, inc := range includeNames {
+										incPath := filepath.Join(testRoot, "harness", inc)
+										if incBytes, ierr := os.ReadFile(incPath); ierr == nil {
+											builder.Write(incBytes)
+											builder.WriteString("\n")
+										}
+									}
+									builder.WriteString(src)
+									src = builder.String()
+								}
+							}
+							errorsPkg.DisplayErrors(cerrs, src)
+						}
+						// Do not disassemble or run when compile failed
+						continue
+					}
+					if chunk != nil {
+						fmt.Println(chunk.DisassembleChunk(testFile))
+					}
 				}
 			}
 		} else if passed {
@@ -391,19 +428,71 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			paserati.Cleanup()
 		}()
 
-		// Execute the test
-		_, errs := paserati.RunString(string(content))
-
-		if len(errs) > 0 {
-			// Check if this was expected (negative test)
-			if isNegativeTest(string(content)) {
-				resultChan <- testResult{passed: true, err: nil} // Expected failure
-			} else {
-				resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", errs[0])}
+		// Execute the test with harness includes (if any)
+		sourceWithIncludes := string(content)
+		if hdr := extractFrontmatterHeader(sourceWithIncludes); hdr != "" {
+			if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
+				var builder strings.Builder
+				for _, inc := range includeNames {
+					incPath := filepath.Join(testRoot, "harness", inc)
+					incBytes, err := os.ReadFile(incPath)
+					if err != nil {
+						resultChan <- testResult{passed: false, err: fmt.Errorf("failed to read include %s: %v", inc, err)}
+						return
+					}
+					builder.WriteString("\n// [included] ")
+					builder.WriteString(inc)
+					builder.WriteString("\n")
+					builder.Write(incBytes)
+					builder.WriteString("\n")
+				}
+				builder.WriteString("\n// [test body]\n")
+				builder.WriteString(sourceWithIncludes)
+				sourceWithIncludes = builder.String()
 			}
-		} else {
-			resultChan <- testResult{passed: true, err: nil}
 		}
+
+		// Parse once, compile once, execute that exact chunk
+		lx := lexer.NewLexer(sourceWithIncludes)
+		p := parser.NewParser(lx)
+		prog, parseErrs := p.ParseProgram()
+		if len(parseErrs) > 0 {
+			// Negative tests that expect SyntaxError are handled as failures unless marked
+			if isNegativeTest(string(content)) {
+				resultChan <- testResult{passed: true, err: nil}
+				return
+			}
+			errorsPkg.DisplayErrors(parseErrs, sourceWithIncludes)
+			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", parseErrs[0])}
+			return
+		}
+
+		chunk, compileErrs := paserati.CompileProgram(prog)
+		if len(compileErrs) > 0 {
+			if isNegativeTest(string(content)) {
+				resultChan <- testResult{passed: true, err: nil}
+				return
+			}
+			errorsPkg.DisplayErrors(compileErrs, sourceWithIncludes)
+			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", compileErrs[0])}
+			return
+		}
+
+		// Execute compiled chunk
+		_, runtimeErrs := paserati.InterpretChunk(chunk)
+		if len(runtimeErrs) > 0 {
+			if isNegativeTest(string(content)) {
+				resultChan <- testResult{passed: true, err: nil}
+				return
+			}
+			// Show disassembly of the exact chunk that ran to debug 0xFFFF issues
+			fmt.Println(chunk.DisassembleChunk(testFile))
+			errorsPkg.DisplayErrors(runtimeErrs, sourceWithIncludes)
+			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", runtimeErrs[0])}
+			return
+		}
+
+		resultChan <- testResult{passed: true, err: nil}
 	}()
 
 	// Wait for result or timeout
@@ -416,6 +505,83 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 		paserati.Cleanup()
 		return false, fmt.Errorf("test timed out after %v", timeout)
 	}
+}
+
+// helper: build a parser.Program from a file
+func parserFromFile(path string, testDir string) *parser.Program {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return &parser.Program{}
+	}
+	// Honor includes for better parity
+	content := string(bytes)
+	if hdr := extractFrontmatterHeader(content); hdr != "" {
+		if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
+			var b strings.Builder
+			for _, inc := range includeNames {
+				incPath := filepath.Join(testDir, "harness", inc)
+				if incBytes, e := os.ReadFile(incPath); e == nil {
+					b.WriteString("\n")
+					b.Write(incBytes)
+					b.WriteString("\n")
+				}
+			}
+			b.WriteString(content)
+			content = b.String()
+		}
+	}
+	lx := lexer.NewLexer(content)
+	p := parser.NewParser(lx)
+	prog, _ := p.ParseProgram()
+	return prog
+}
+
+// extractFrontmatterHeader returns the content between the leading /*--- and ---*/ block, or empty string if none
+func extractFrontmatterHeader(content string) string {
+	start := strings.Index(content, "/*---")
+	if start == -1 {
+		return ""
+	}
+	end := strings.Index(content[start+5:], "---*/")
+	if end == -1 {
+		return ""
+	}
+	// slice within content
+	return content[start+5 : start+5+end]
+}
+
+// extractIncludes parses an includes: [a.js, b.js] list from the header block
+func extractIncludes(header string) []string {
+	// Look for "includes:" and then capture everything inside the next [...] pair
+	idx := strings.Index(header, "includes:")
+	if idx == -1 {
+		return nil
+	}
+	rest := header[idx+len("includes:"):]
+	// find '[' and matching ']'
+	open := strings.Index(rest, "[")
+	if open == -1 {
+		return nil
+	}
+	close := strings.Index(rest[open+1:], "]")
+	if close == -1 {
+		return nil
+	}
+	inside := rest[open+1 : open+1+close]
+	// Split by commas
+	parts := strings.Split(inside, ",")
+	var out []string
+	for _, p := range parts {
+		name := strings.TrimSpace(p)
+		name = strings.TrimPrefix(name, "'")
+		name = strings.TrimSuffix(name, "'")
+		name = strings.TrimPrefix(name, "\"")
+		name = strings.TrimSuffix(name, "\"")
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // createTest262Paserati creates a Paserati instance with Test262 builtins

@@ -247,6 +247,8 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 // CompileProgram compiles a parsed program using the initialized Paserati session
 // This is used by the test framework to compile with proper initialization
 func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.PaseratiError) {
+	// Honor session setting to ignore type errors (used for Test262)
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
 	return p.compiler.Compile(program)
 }
 
@@ -295,7 +297,9 @@ func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiE
 	p.checker.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 
-	// Compile the module (type checking is already done by LoadModule)
+	// Compile the module
+	// Honor session setting to ignore type errors (used for Test262)
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
 	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
 	if len(compileErrs) > 0 {
 		return nil, compileErrs

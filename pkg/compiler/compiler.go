@@ -366,9 +366,12 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// Use the already type-checked program node.
 	resultReg, err := c.compileNode(program, resultReg)
 	if err != nil {
-		// An error occurred during compilation. addError should have already been called
-		// when the error was generated lower down. The returned `err` is mainly for control flow.
-		// We don't need to append err.Error() here again.
+		// Treat any non-nil error from code generation as a hard compile failure.
+		// Ensure it is included in the errors list, then abort without emitting epilogue.
+		if len(c.errors) == 0 {
+			c.errors = append(c.errors, err)
+		}
+		return nil, c.errors
 	}
 
 	// Emit final return instruction if no *compilation* errors occurred
@@ -1255,7 +1258,7 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // As
 func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) int {
 	pos := len(c.chunk.Code)
 	c.emitOpCode(op, line)
-	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined {
+	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
 		c.emitByte(byte(srcReg)) // Register operand
 		c.emitUint16(0xFFFF)     // Placeholder offset
 	} else { // OpJump
@@ -1269,7 +1272,7 @@ func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) 
 func (c *Compiler) patchJump(placeholderPos int) {
 	op := vm.OpCode(c.chunk.Code[placeholderPos])
 	operandStartPos := placeholderPos + 1
-	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined {
+	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
 		operandStartPos = placeholderPos + 2 // Skip register byte
 	}
 

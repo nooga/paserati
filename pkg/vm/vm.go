@@ -703,11 +703,7 @@ startExecution:
 					case OpMultiply:
 						registers[destReg] = Number(leftNum * rightNum)
 					case OpDivide:
-						if rightNum == 0 {
-							frame.ip = ip
-							status := vm.runtimeError("Division by zero.")
-							return status, Undefined
-						}
+						// JavaScript semantics: number division by zero yields ±Infinity; 0/0 yields NaN
 						registers[destReg] = Number(leftNum / rightNum)
 					}
 				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
@@ -829,23 +825,17 @@ startExecution:
 					registers[destReg] = BooleanValue(!isStrictlyEqual)
 				}
 			case OpGreater, OpLess, OpLessEqual:
-				// Strictly numbers for comparison
-				if !IsNumber(leftVal) || !IsNumber(rightVal) {
-					frame.ip = ip
-					opStr := opcode.String() // Get opcode name
-					status := vm.runtimeError("Operands must be numbers for comparison (%s).", opStr[2:])
-					return status, Undefined
-				}
-				leftNum := AsNumber(leftVal)
-				rightNum := AsNumber(rightVal)
+				// JavaScript ToPrimitive/ToNumber coercion for comparisons (non-string)
+				l := leftVal.ToFloat()
+				r := rightVal.ToFloat()
 				var result bool
 				switch opcode {
 				case OpGreater:
-					result = leftNum > rightNum
+					result = l > r
 				case OpLess:
-					result = leftNum < rightNum
+					result = l < r
 				case OpLessEqual:
-					result = leftNum <= rightNum
+					result = l <= r
 				}
 				registers[destReg] = BooleanValue(result)
 			}
@@ -1522,6 +1512,58 @@ startExecution:
 			arrayObj.elements = elements
 			arrayObj.length = len(elements)
 			registers[destReg] = arrayValue
+
+		case OpAllocArray:
+			destReg := code[ip]
+			lenHi := code[ip+1]
+			lenLo := code[ip+2]
+			ip += 3
+			length := int(uint16(lenHi)<<8 | uint16(lenLo))
+			arrVal := NewArray()
+			arrObj := AsArray(arrVal)
+			if length > 0 {
+				arrObj.elements = make([]Value, length)
+				for i := 0; i < length; i++ {
+					arrObj.elements[i] = Undefined
+				}
+				arrObj.length = length
+			}
+			registers[destReg] = arrVal
+
+		case OpArrayCopy:
+			destReg := code[ip]
+			offHi := code[ip+1]
+			offLo := code[ip+2]
+			startReg := code[ip+3]
+			count := int(code[ip+4])
+			ip += 5
+
+			arrVal := registers[destReg]
+			if arrVal.Type() != TypeArray {
+				frame.ip = ip
+				status := vm.runtimeError("OpArrayCopy target is not an array")
+				return status, Undefined
+			}
+			arrObj := AsArray(arrVal)
+			offset := int(uint16(offHi)<<8 | uint16(offLo))
+			start := int(startReg)
+			end := start + count
+			if start < 0 || end > len(registers) {
+				frame.ip = ip
+				status := vm.runtimeError("OpArrayCopy register range out of bounds")
+				return status, Undefined
+			}
+			need := offset + count
+			if need > len(arrObj.elements) {
+				grow := need - len(arrObj.elements)
+				arrObj.elements = append(arrObj.elements, make([]Value, grow)...)
+			}
+			for i := 0; i < count; i++ {
+				arrObj.elements[offset+i] = registers[start+i]
+			}
+			if need > arrObj.length {
+				arrObj.length = need
+			}
 
 		case OpGetIndex:
 			destReg := code[ip]
@@ -3389,6 +3431,26 @@ startExecution:
 
 		default:
 			frame.ip = ip // Save IP before erroring
+			// Extra diagnostics for opcode 255 (often indicates unpatched jump placeholder bytes)
+			if opcode == 255 {
+				start := ip - 4
+				if start < 0 {
+					start = 0
+				}
+				end := ip + 8
+				if end > len(code) {
+					end = len(code)
+				}
+				fmt.Fprintf(os.Stderr, "[VM Debug] Unknown opcode 255 at ip=%d. Bytes around: ")
+				for i := start; i < end; i++ {
+					if i == ip {
+						fmt.Fprintf(os.Stderr, "<%d> ", code[i])
+					} else {
+						fmt.Fprintf(os.Stderr, "%d ", code[i])
+					}
+				}
+				fmt.Fprintln(os.Stderr)
+			}
 			status := vm.runtimeError("Unknown opcode %d encountered.", opcode)
 			return status, Undefined
 		}

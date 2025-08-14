@@ -792,6 +792,35 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 	}()
 
 	if node.Operator == "||" { // a || b
+		// Defer-safety: ensure any placeholder jumps are patched to a valid anchor
+		var (
+			jumpToRightPlaceholder = -1
+			jumpToEndPlaceholder   = -1
+			patchedRight           = false
+			patchedEnd             = false
+		)
+		defer func() {
+			// Anchor to current end of code by default
+			endAnchor := len(c.chunk.Code)
+			if jumpToRightPlaceholder >= 0 && !patchedRight {
+				c.patchJump(jumpToRightPlaceholder)
+				patchedRight = true
+			}
+			if jumpToEndPlaceholder >= 0 && !patchedEnd {
+				// Manually patch OpJump to end if not already patched
+				op := vm.OpCode(c.chunk.Code[jumpToEndPlaceholder])
+				if op == vm.OpJump {
+					operandStartPos := jumpToEndPlaceholder + 1
+					jumpInstructionEndPos := operandStartPos + 2
+					offset := endAnchor - jumpInstructionEndPos
+					c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
+					c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
+				} else {
+					c.patchJump(jumpToEndPlaceholder)
+				}
+				patchedEnd = true
+			}
+		}()
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
 		_, err := c.compileNode(node.Left, leftReg)
@@ -800,14 +829,15 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		}
 
 		// Jump to right eval if left is FALSEY
-		jumpToRightPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
+		jumpToRightPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
 
 		// If left was TRUTHY: result is left, move to hint and jump to end
 		c.emitMove(hint, leftReg, line)
-		jumpToEndPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
+		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJump, 0, line)
 
 		// Patch jumpToRightPlaceholder to land here (start of right operand eval)
 		c.patchJump(jumpToRightPlaceholder)
+		patchedRight = true
 
 		// Compile right operand directly to hint (only executed if left was falsey)
 		_, err = c.compileNode(node.Right, hint)
@@ -817,9 +847,37 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 
 		// Patch jumpToEndPlaceholder to land here
 		c.patchJump(jumpToEndPlaceholder)
+		patchedEnd = true
 		return hint, nil
 
 	} else if node.Operator == "&&" { // a && b
+		// Defer-safety for placeholders in this block
+		var (
+			jumpToEndPlaceholder         = -1
+			jumpSkipFalseMovePlaceholder = -1
+			patchedEnd                   = false
+			patchedSkip                  = false
+		)
+		defer func() {
+			endAnchor := len(c.chunk.Code)
+			if jumpToEndPlaceholder >= 0 && !patchedEnd {
+				c.patchJump(jumpToEndPlaceholder)
+				patchedEnd = true
+			}
+			if jumpSkipFalseMovePlaceholder >= 0 && !patchedSkip {
+				op := vm.OpCode(c.chunk.Code[jumpSkipFalseMovePlaceholder])
+				if op == vm.OpJump {
+					operandStartPos := jumpSkipFalseMovePlaceholder + 1
+					jumpInstructionEndPos := operandStartPos + 2
+					offset := endAnchor - jumpInstructionEndPos
+					c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
+					c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
+				} else {
+					c.patchJump(jumpSkipFalseMovePlaceholder)
+				}
+				patchedSkip = true
+			}
+		}()
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
 		_, err := c.compileNode(node.Left, leftReg)
@@ -828,7 +886,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		}
 
 		// If left is FALSEY, jump to end, result is left
-		jumpToEndPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
+		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
 
 		// If left was TRUTHY (didn't jump), compile right operand directly to hint
 		_, err = c.compileNode(node.Right, hint)
@@ -836,18 +894,47 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			return BadRegister, err
 		}
 		// Jump over the false path's move
-		jumpSkipFalseMovePlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
+		jumpSkipFalseMovePlaceholder = c.emitPlaceholderJump(vm.OpJump, 0, line)
 		// Patch jumpToEndPlaceholder to land here (false path)
 		c.patchJump(jumpToEndPlaceholder)
+		patchedEnd = true
 		// Result is left, move leftReg to hint
 		c.emitMove(hint, leftReg, line)
 
 		// Patch the skip jump
 		c.patchJump(jumpSkipFalseMovePlaceholder)
+		patchedSkip = true
 
 		return hint, nil
 
 	} else if node.Operator == "??" { // a ?? b
+		// Defer-safety for placeholders
+		var (
+			jumpSkipRightPlaceholder = -1
+			jumpEndPlaceholder       = -1
+			patchedSkip              = false
+			patchedEnd               = false
+		)
+		defer func() {
+			endAnchor := len(c.chunk.Code)
+			if jumpSkipRightPlaceholder >= 0 && !patchedSkip {
+				c.patchJump(jumpSkipRightPlaceholder)
+				patchedSkip = true
+			}
+			if jumpEndPlaceholder >= 0 && !patchedEnd {
+				op := vm.OpCode(c.chunk.Code[jumpEndPlaceholder])
+				if op == vm.OpJump {
+					operandStartPos := jumpEndPlaceholder + 1
+					jumpInstructionEndPos := operandStartPos + 2
+					offset := endAnchor - jumpInstructionEndPos
+					c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
+					c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
+				} else {
+					c.patchJump(jumpEndPlaceholder)
+				}
+				patchedEnd = true
+			}
+		}()
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
 		_, err := c.compileNode(node.Left, leftReg)
@@ -861,7 +948,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		c.emitIsNullish(isNullishReg, leftReg, line)
 
 		// Jump if *NOT* nullish (jump if false) to skip the right side eval
-		jumpSkipRightPlaceholder := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
+		jumpSkipRightPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
 
 		// --- Eval Right Path ---
 		// Compile right operand directly to hint (only executed if left was nullish)
@@ -871,16 +958,18 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		}
 
 		// Jump over the skip-right landing pad
-		jumpEndPlaceholder := c.emitPlaceholderJump(vm.OpJump, 0, line)
+		jumpEndPlaceholder = c.emitPlaceholderJump(vm.OpJump, 0, line)
 
 		// --- Skip Right Path ---
 		// Land here if left was NOT nullish. Patch the jump from the nullish check.
 		c.patchJump(jumpSkipRightPlaceholder)
+		patchedSkip = true
 		// Result is left (not nullish), move it to hint.
 		c.emitMove(hint, leftReg, line)
 
 		// Land here after either path finishes. Patch the jump from the right-eval path.
 		c.patchJump(jumpEndPlaceholder)
+		patchedEnd = true
 
 		return hint, nil
 	}
@@ -1389,6 +1478,65 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 }
 
 func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register) (Register, errors.PaseratiError) {
+	// local helpers for safe slicing in debug prints
+	min := func(a, b int) int {
+		if a < b {
+			return a
+		}
+		return b
+	}
+	max := func(a, b int) int {
+		if a > b {
+			return a
+		}
+		return b
+	}
+
+	// Defer-safety: ensure jump placeholders always get patched to a valid anchor
+	// even if later logic returns early. We track anchors and whether we patched.
+	var (
+		jumpIfFalsePos  = -1
+		jumpElsePos     = -1
+		patchedIfFalse  = false
+		patchedElseJump = false
+		hasElse         = false
+		elseAnchor      = -1 // start of else block
+		noElseEndAnchor = -1 // end of if block when there is no else
+	)
+	defer func() {
+		if jumpIfFalsePos >= 0 && !patchedIfFalse {
+			// Decide anchor: prefer elseAnchor if we recorded it; otherwise use noElseEndAnchor; as a last resort, current code length
+			anchor := elseAnchor
+			if anchor < 0 {
+				anchor = noElseEndAnchor
+			}
+			if anchor < 0 {
+				anchor = len(c.chunk.Code)
+			}
+			// Compute and write offset
+			op := vm.OpCode(c.chunk.Code[jumpIfFalsePos])
+			operandStartPos := jumpIfFalsePos + 1
+			if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
+				operandStartPos = jumpIfFalsePos + 2 // skip register byte
+			}
+			jumpInstructionEndPos := operandStartPos + 2
+			offset := anchor - jumpInstructionEndPos
+			c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
+			c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
+			patchedIfFalse = true
+			debugPrintf("[IfExpr][defer] Patched OpJumpIfFalse at pos=%d to anchor=%d (offset=%d)", jumpIfFalsePos, anchor, offset)
+		}
+		if hasElse && jumpElsePos >= 0 && !patchedElseJump {
+			// Patch else-jump to end of else (current end)
+			oprandPos := jumpElsePos + 1
+			jumpInstructionEndPos := oprandPos + 2
+			offset := len(c.chunk.Code) - jumpInstructionEndPos
+			c.chunk.Code[oprandPos] = byte(int16(offset) >> 8)
+			c.chunk.Code[oprandPos+1] = byte(int16(offset) & 0xFF)
+			patchedElseJump = true
+			debugPrintf("[IfExpr][defer] Patched OpJump (over else) at pos=%d to end (offset=%d)", jumpElsePos, offset)
+		}
+	}()
 	// Manage temporary registers with automatic cleanup
 	var tempRegs []Register
 	defer func() {
@@ -1406,7 +1554,9 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 	}
 
 	// 2. Emit placeholder jump for false condition
-	jumpIfFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+	debugPrintf("[IfExpr] Before OpJumpIfFalse emit: codeLen=%d", len(c.chunk.Code))
+	jumpIfFalsePos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+	debugPrintf("[IfExpr] Emitted OpJumpIfFalse at pos=%d; codeLen now=%d", jumpIfFalsePos, len(c.chunk.Code))
 
 	// 3. Compile the consequence block
 	// Allocate temporary register for consequence compilation
@@ -1416,15 +1566,25 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 	if err != nil {
 		return BadRegister, err
 	}
+	// Dump disassembly after consequence compilation, before any patching
+	debugPrintf("[IfExpr] Disassembly after consequence, pre-patch (codeLen=%d):\n%s", len(c.chunk.Code), c.chunk.DisassembleChunk("<if-consequence>"))
 	// TODO: How does an if-expr produce a value? Need convention.
 	// Does the last expr statement value remain in a register?
 
 	if node.Alternative != nil {
+		hasElse = true
 		// 4a. If there's an else, emit placeholder jump over the else block
-		jumpElsePos := c.emitPlaceholderJump(vm.OpJump, 0, node.Consequence.Token.Line) // Use line of opening brace? Or token after consequence?
+		debugPrintf("[IfExpr] Else present. Before OpJump emit-over-else: codeLen=%d", len(c.chunk.Code))
+		jumpElsePos = c.emitPlaceholderJump(vm.OpJump, 0, node.Consequence.Token.Line)
+		debugPrintf("[IfExpr] Emitted OpJump over else at pos=%d; codeLen now=%d", jumpElsePos, len(c.chunk.Code))
 
 		// 5a. Backpatch the OpJumpIfFalse to jump *here* (start of else)
+		elseAnchor = len(c.chunk.Code)
+		debugPrintf("[IfExpr] Patching OpJumpIfFalse at pos=%d to elseAnchor=%d; codeLen=%d", jumpIfFalsePos, elseAnchor, len(c.chunk.Code))
 		c.patchJump(jumpIfFalsePos)
+		patchedIfFalse = true
+		debugPrintf("[IfExpr] Patched OpJumpIfFalse at pos=%d; codeLen=%d; bytes=%v", jumpIfFalsePos, len(c.chunk.Code), c.chunk.Code[max(0, jumpIfFalsePos-4):min(len(c.chunk.Code), jumpIfFalsePos+6)])
+		debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (else path entry):\n%s", c.chunk.DisassembleChunk("<if-else-entry>"))
 
 		// 6a. Compile the alternative block
 		// Allocate temporary register for alternative compilation
@@ -1436,11 +1596,20 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		}
 
 		// 7a. Backpatch the OpJump to jump *here* (end of else block)
+		debugPrintf("[IfExpr] Patching OpJump over else at pos=%d; codeLen=%d", jumpElsePos, len(c.chunk.Code))
 		c.patchJump(jumpElsePos)
+		patchedElseJump = true
+		debugPrintf("[IfExpr] Patched OpJump over else at pos=%d; codeLen=%d; bytes=%v", jumpElsePos, len(c.chunk.Code), c.chunk.Code[max(0, jumpElsePos-4):min(len(c.chunk.Code), jumpElsePos+6)])
+		debugPrintf("[IfExpr] Disassembly after patchJump over else (end):\n%s", c.chunk.DisassembleChunk("<if-else-exit>"))
 
 	} else {
 		// 4b. If no else, backpatch OpJumpIfFalse to jump *here* (end of if block)
+		noElseEndAnchor = len(c.chunk.Code)
+		debugPrintf("[IfExpr] No else. Patching OpJumpIfFalse at pos=%d to endAnchor=%d; codeLen=%d", jumpIfFalsePos, noElseEndAnchor, len(c.chunk.Code))
 		c.patchJump(jumpIfFalsePos)
+		patchedIfFalse = true
+		debugPrintf("[IfExpr] Patched (no-else) OpJumpIfFalse at pos=%d; codeLen=%d; bytes=%v", jumpIfFalsePos, len(c.chunk.Code), c.chunk.Code[max(0, jumpIfFalsePos-4):min(len(c.chunk.Code), jumpIfFalsePos+6)])
+		debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (no-else end):\n%s", c.chunk.DisassembleChunk("<if-no-else-exit>"))
 		// TODO: What value should an if without else produce? Undefined?
 		// If so, might need to emit OpLoadUndefined here.
 	}

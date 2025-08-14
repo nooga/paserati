@@ -233,58 +233,129 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 // Original implementation for arrays without spread
 func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Register, tempRegs []Register) (Register, errors.PaseratiError) {
 	elementCount := len(node.Elements)
-	fmt.Printf("[Compiler] ArrayLiteral elements=%d, hint=R%d\n", elementCount, hint)
+	// debug disabled
 
-	// 1. Compile elements and store their final registers
-	elementRegs := make([]Register, elementCount)
-	elementRegsContinuous := true
-	for i, elem := range node.Elements {
-		elemReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, elemReg)
-		_, err := c.compileNode(elem, elemReg)
-		if err != nil {
-			return BadRegister, err
-		}
-		elementRegs[i] = elemReg // Store the register holding the final result of this element
-		if i > 0 && elementRegs[i] != elementRegs[i-1]+1 {
-			elementRegsContinuous = false
-		}
+	// Dynamic chunking based on available registers.
+	// We reserve half of available registers for element computation and other temps.
+	available := c.regAlloc.AvailableTotal()
+	if available < 0 {
+		available = 0
+	}
+	maxChunkByAvail := available / 2
+	// Cap chunk size to 32 for good locality.
+	// Determine if we should use chunking path (large literal or tight registers)
+	useChunking := elementCount > 32 || elementCount > maxChunkByAvail
+
+	line := node.Token.Line
+
+	if elementCount == 0 {
+		// Empty array via OpMakeArray
+		c.emitOpCode(vm.OpMakeArray, line)
+		c.emitByte(byte(hint))
+		c.emitByte(0)
+		c.emitByte(0)
+		return hint, nil
 	}
 
-	// 2. Allocate a contiguous block for the elements and move them
-	var firstTargetReg Register
-	if elementCount > 0 && elementRegsContinuous {
-		firstTargetReg = elementRegs[0]
-	} else if elementCount > 0 {
-		// Allocate a contiguous block for all elements
-		firstTargetReg = c.regAlloc.AllocContiguous(elementCount)
-		// Mark all registers in the block for cleanup
-		for i := 0; i < elementCount; i++ {
-			tempRegs = append(tempRegs, firstTargetReg+Register(i))
-		}
-
-		// Move elements from their original registers (elementRegs)
-		// into the new contiguous block starting at firstTargetReg.
-		for i := 0; i < elementCount; i++ {
-			targetReg := firstTargetReg + Register(i)
-			sourceReg := elementRegs[i]
-			if sourceReg != targetReg { // Avoid redundant moves
-				c.emitMove(targetReg, sourceReg, node.Token.Line)
+	if !useChunking {
+		// Fast path: materialize into a contiguous block and OpMakeArray
+		elementRegs := make([]Register, elementCount)
+		elementRegsContinuous := true
+		for i, elem := range node.Elements {
+			elemReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, elemReg)
+			if _, err := c.compileNode(elem, elemReg); err != nil {
+				return BadRegister, err
+			}
+			elementRegs[i] = elemReg
+			if i > 0 && elementRegs[i] != elementRegs[i-1]+1 {
+				elementRegsContinuous = false
 			}
 		}
-	} else {
-		// Handle empty array case: OpMakeArray needs a StartReg, use 0.
-		firstTargetReg = 0
+		var firstTargetReg Register
+		if elementRegsContinuous {
+			firstTargetReg = elementRegs[0]
+		} else {
+			firstTargetReg = c.regAlloc.AllocContiguous(elementCount)
+			for i := 0; i < elementCount; i++ {
+				tempRegs = append(tempRegs, firstTargetReg+Register(i))
+			}
+			for i := 0; i < elementCount; i++ {
+				t := firstTargetReg + Register(i)
+				s := elementRegs[i]
+				if t != s {
+					c.emitMove(t, s, line)
+				}
+			}
+		}
+		c.emitOpCode(vm.OpMakeArray, line)
+		c.emitByte(byte(hint))
+		c.emitByte(byte(firstTargetReg))
+		c.emitByte(byte(elementCount))
+		fmt.Printf("[Compiler] Emit OpMakeArray dest=R%d start=R%d count=%d\n", hint, firstTargetReg, elementCount)
+		return hint, nil
 	}
 
-	// 3. Emit OpMakeArray using the contiguous block - result goes to hint
-	c.emitOpCode(vm.OpMakeArray, node.Token.Line)
-	c.emitByte(byte(hint))           // DestReg: where the new array object goes (hint)
-	c.emitByte(byte(firstTargetReg)) // StartReg: start of the contiguous element block
-	c.emitByte(byte(elementCount))   // Count: number of elements
-	fmt.Printf("[Compiler] Emit OpMakeArray dest=R%d start=R%d count=%d\n", hint, firstTargetReg, elementCount)
+	// Large literal path: allocate and copy in chunks to avoid register blowup
+	// 1) Pre-allocate array to full length
+	c.emitOpCode(vm.OpAllocArray, line)
+	c.emitByte(byte(hint))
+	c.emitUint16(uint16(elementCount))
 
-	// Result (the array) is now in hint register
+	// 2) Emit in chunks
+	offset := 0
+	for offset < elementCount {
+		// Recompute availability for each chunk
+		available = c.regAlloc.AvailableTotal()
+		maxChunkByAvail = available / 2
+		if maxChunkByAvail < 1 {
+			maxChunkByAvail = 1
+		}
+		remaining := elementCount - offset
+		// Hard caps: 32, availability, and maximum contiguous currently possible
+		maxContig := c.regAlloc.MaxContiguousAvailable()
+		if maxContig < 1 {
+			return BadRegister, NewCompileError(node, "array literal: no registers available for chunking")
+		}
+		n := remaining
+		if n > 32 {
+			n = 32
+		}
+		if n > maxChunkByAvail {
+			n = maxChunkByAvail
+		}
+		if n > maxContig {
+			n = maxContig
+		}
+		if n < 1 {
+			n = 1
+		}
+
+		// Allocate a contiguous block for this chunk
+		startReg := c.regAlloc.AllocContiguous(n)
+		// Compile chunk elements into the allocated registers
+		for i := 0; i < n; i++ {
+			if _, err := c.compileNode(node.Elements[offset+i], startReg+Register(i)); err != nil {
+				// Free already allocated regs before returning
+				for j := 0; j <= i; j++ {
+					c.regAlloc.Free(startReg + Register(j))
+				}
+				return BadRegister, err
+			}
+		}
+		// Copy chunk into array at current offset
+		c.emitOpCode(vm.OpArrayCopy, line)
+		c.emitByte(byte(hint))
+		c.emitUint16(uint16(offset))
+		c.emitByte(byte(startReg))
+		c.emitByte(byte(n))
+		// Free the temporary registers for this chunk immediately
+		for i := 0; i < n; i++ {
+			c.regAlloc.Free(startReg + Register(i))
+		}
+		offset += n
+	}
+
 	return hint, nil
 }
 

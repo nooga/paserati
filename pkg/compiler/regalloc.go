@@ -101,56 +101,10 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 		return ra.Alloc()
 	}
 
-	// <<< NEW: Try to find a contiguous block in the free list first >>>
-	if len(ra.freeRegs) >= count {
-		// Sort the free registers to find contiguous blocks
-		sortedFree := make([]Register, len(ra.freeRegs))
-		copy(sortedFree, ra.freeRegs)
-
-		// Simple bubble sort (fine for small lists)
-		for i := 0; i < len(sortedFree)-1; i++ {
-			for j := 0; j < len(sortedFree)-i-1; j++ {
-				if sortedFree[j] > sortedFree[j+1] {
-					sortedFree[j], sortedFree[j+1] = sortedFree[j+1], sortedFree[j]
-				}
-			}
-		}
-
-		// Look for a contiguous block
-		for i := 0; i <= len(sortedFree)-count; i++ {
-			firstReg := sortedFree[i]
-			isContiguous := true
-
-			// Check if we have 'count' consecutive registers starting from firstReg
-			for j := 1; j < count; j++ {
-				if i+j >= len(sortedFree) || sortedFree[i+j] != firstReg+Register(j) {
-					isContiguous = false
-					break
-				}
-			}
-
-			if isContiguous {
-				// Found a contiguous block! Remove these registers from free list
-				for j := 0; j < count; j++ {
-					regToRemove := firstReg + Register(j)
-					for k := 0; k < len(ra.freeRegs); k++ {
-						if ra.freeRegs[k] == regToRemove {
-							ra.freeRegs = append(ra.freeRegs[:k], ra.freeRegs[k+1:]...)
-							break
-						}
-					}
-				}
-
-				if debugRegAlloc {
-					fmt.Printf("[REGALLOC] CONTIGUOUS REUSE R%d-R%d (%d registers from free list, %d remaining free)\n",
-						firstReg, firstReg+Register(count-1), count, len(ra.freeRegs))
-				}
-
-				return firstReg
-			}
-		}
+	// Prefer non-panicking path
+	if reg, ok := ra.TryAllocContiguous(count); ok {
+		return reg
 	}
-	// <<< END NEW >>>
 
 	// Original logic: allocate new contiguous block from nextReg
 	firstReg := ra.nextReg
@@ -176,6 +130,133 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 	}
 
 	return firstReg
+}
+
+// TryAllocContiguous attempts to allocate a contiguous block without panicking.
+// It returns the first register and ok=false if not enough space.
+func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
+	if count <= 0 {
+		return 0, false
+	}
+	if count == 1 {
+		// Single register always possible unless we're at hard limit
+		if int(ra.nextReg) < 256 {
+			return ra.Alloc(), true
+		}
+		if len(ra.freeRegs) > 0 {
+			return ra.Alloc(), true
+		}
+		return 0, false
+	}
+
+	// Check free list for a contiguous run
+	if len(ra.freeRegs) >= count {
+		sortedFree := make([]Register, len(ra.freeRegs))
+		copy(sortedFree, ra.freeRegs)
+		// Bubble sort is fine for small lists
+		for i := 0; i < len(sortedFree)-1; i++ {
+			for j := 0; j < len(sortedFree)-i-1; j++ {
+				if sortedFree[j] > sortedFree[j+1] {
+					sortedFree[j], sortedFree[j+1] = sortedFree[j+1], sortedFree[j]
+				}
+			}
+		}
+		for i := 0; i <= len(sortedFree)-count; i++ {
+			firstReg := sortedFree[i]
+			isContiguous := true
+			for j := 1; j < count; j++ {
+				if i+j >= len(sortedFree) || sortedFree[i+j] != firstReg+Register(j) {
+					isContiguous = false
+					break
+				}
+			}
+			if isContiguous {
+				// Remove these from free list
+				for j := 0; j < count; j++ {
+					regToRemove := firstReg + Register(j)
+					for k := 0; k < len(ra.freeRegs); k++ {
+						if ra.freeRegs[k] == regToRemove {
+							ra.freeRegs = append(ra.freeRegs[:k], ra.freeRegs[k+1:]...)
+							break
+						}
+					}
+				}
+				if debugRegAlloc {
+					fmt.Printf("[REGALLOC] TRY CONTIGUOUS REUSE R%d-R%d (%d regs)\n", firstReg, firstReg+Register(count-1), count)
+				}
+				return firstReg, true
+			}
+		}
+	}
+
+	// Tail space from nextReg
+	if int(ra.nextReg)+count <= 256 {
+		firstReg := ra.nextReg
+		for i := 0; i < count; i++ {
+			reg := firstReg + Register(i)
+			if reg > ra.maxReg {
+				ra.maxReg = reg
+			}
+		}
+		ra.nextReg = firstReg + Register(count)
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC] TRY CONTIGUOUS NEW R%d-R%d (%d regs)\n", firstReg, firstReg+Register(count-1), count)
+		}
+		return firstReg, true
+	}
+
+	return 0, false
+}
+
+// AvailableTotal returns the approximate number of registers that can still be allocated
+// without exceeding the 256 limit, counting both the tail and the free list.
+func (ra *RegisterAllocator) AvailableTotal() int {
+	tail := 256 - int(ra.nextReg)
+	if tail < 0 {
+		tail = 0
+	}
+	return tail + len(ra.freeRegs)
+}
+
+// MaxContiguousAvailable returns the maximum size of a contiguous block currently available
+// either in the free list or from the tail (nextReg..255).
+func (ra *RegisterAllocator) MaxContiguousAvailable() int {
+	// Tail run size
+	maxRun := 256 - int(ra.nextReg)
+	if maxRun < 0 {
+		maxRun = 0
+	}
+	if len(ra.freeRegs) == 0 {
+		return maxRun
+	}
+	// Analyze free list runs
+	sorted := make([]Register, len(ra.freeRegs))
+	copy(sorted, ra.freeRegs)
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := 0; j < len(sorted)-i-1; j++ {
+			if sorted[j] > sorted[j+1] {
+				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
+			}
+		}
+	}
+	runLen := 1
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] == sorted[i-1]+1 {
+			runLen++
+			if runLen > maxRun {
+				maxRun = runLen
+			}
+		} else {
+			if runLen > maxRun {
+				maxRun = runLen
+			}
+			runLen = 1
+		}
+	}
+	if runLen > maxRun {
+		maxRun = runLen
+	}
+	return maxRun
 }
 
 // isAvailable checks if a register is available for allocation.
