@@ -84,14 +84,18 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Check frame limit
 		if vm.frameCount == MaxFrames {
 			currentFrame.ip = callerIP
-			return false, fmt.Errorf("Stack overflow")
+			trace := vm.CaptureStackTrace()
+			fmt.Printf("\n=== VM Stack (overflow) ===\n%s\n===========================\n", trace)
+			return false, fmt.Errorf("Stack overflow\nStack: %s", trace)
 		}
 
 		// Check register stack space
 		requiredRegs := calleeFunc.RegisterSize
 		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 			currentFrame.ip = callerIP
-			return false, fmt.Errorf("Register stack overflow")
+			trace := vm.CaptureStackTrace()
+			fmt.Printf("\n=== VM Stack (register overflow) ===\n%s\n====================================\n", trace)
+			return false, fmt.Errorf("Register stack overflow\nStack: %s", trace)
 		}
 
 		// Store return IP in current frame
@@ -276,7 +280,11 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 
 	default:
 		currentFrame.ip = callerIP
-		return false, fmt.Errorf("Cannot call non-function value of type %v", calleeVal.Type())
+		// Immediately print stack frames for debugging
+		fmt.Printf("\n=== VM Stack (non-callable) ===\n%s\n===============================\n", vm.CaptureStackTrace())
+		// Include the stack trace in the error as well
+		trace := vm.CaptureStackTrace()
+		return false, fmt.Errorf("Cannot call non-function value of type '%s'\nStack: %s", calleeVal.TypeName(), trace)
 	}
 }
 

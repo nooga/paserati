@@ -229,78 +229,73 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 // If the property exists and is non-writable, this is a no-op.
 func (o *PlainObject) SetOwn(name string, v Value) {
 	// Backward-compat name path
-	//fmt.Printf("DEBUG PlainObject.SetOwn: name=%q, value=%v, shape=%p\n", name, v.Inspect(), o.shape)
-	// try to find existing field
 	for _, f := range o.shape.fields {
 		if f.keyKind == KeyKindString && f.name == name {
-			// existing property, overwrite value
-			// If not writable, ignore the set (non-strict mode semantics)
+			// existing property: honor writable flag
 			if f.writable {
 				o.properties[f.offset] = v
 			}
 			return
 		}
 	}
-	// new property: shape transition or creation
-	//fmt.Printf("DEBUG PlainObject.SetOwn: Adding new property %q\n", name)
+	// new property: regular assignment semantics -> writable: true, enumerable: true, configurable: true
 	cur := o.shape
-	// reuse transition if exists (with read lock)
 	cur.mu.RLock()
 	next, ok := cur.transitions[keyFromString(name).hash()]
 	cur.mu.RUnlock()
-
 	if !ok {
-		// create new shape by extending fields
 		off := len(cur.fields)
-		// Default attributes for regular assignment are writable/enumerable/configurable = true
 		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: true, configurable: true}
-		// copy fields slice
 		newFields := make([]Field, len(cur.fields)+1)
 		copy(newFields, cur.fields)
 		newFields[len(cur.fields)] = fld
-		// new transitions map
 		newTrans := make(map[string]*Shape)
-		// assign new shape and bump version
 		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
-
-		// cache transition (with write lock and double-check)
 		cur.mu.Lock()
 		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
-			// Another goroutine created the transition while we were working
 			next = existing
 		} else {
 			cur.transitions[keyFromString(name).hash()] = next
 		}
 		cur.mu.Unlock()
 	}
-	// adopt new shape
-	//fmt.Printf("DEBUG PlainObject.SetOwn: Shape transition: %p -> %p\n", o.shape, next)
 	o.shape = next
-	// append value in properties slice
 	o.properties = append(o.properties, v)
-	//fmt.Printf("DEBUG PlainObject.SetOwn: Property %q added, new shape has %d fields\n", name, len(o.shape.fields))
 }
 
 // DefineOwnProperty defines or updates an own property with explicit attributes.
 // For existing properties, unspecified attributes (nil) will keep previous values.
 func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool, enumerable *bool, configurable *bool) {
-	// Name-based wrapper
-	// Try to find existing field
+	// Update existing
 	for i, f := range o.shape.fields {
 		if f.keyKind == KeyKindString && f.name == name {
-			// Existing property: update value and attributes respecting current flags
+			// Existing property: enforce non-configurable rules
+			newF := f
 			if f.isAccessor {
-				// Converting accessor to data property: replace field
-				f.isAccessor = false
-				f.writable = false
+				// Convert accessor to data property: only if configurable
+				if !f.configurable {
+					return
+				}
+				newF.isAccessor = false
+				newF.writable = false
 			}
-			// If writable is specified and current is false while new is true/false, allow toggle only if configurable is true
-			// Minimal semantics: do not allow changing value when current writable is false
+			// If current non-configurable, cannot change configurable or enumerable
+			if !f.configurable {
+				if configurable != nil && *configurable != f.configurable {
+					return
+				}
+				if enumerable != nil && *enumerable != f.enumerable {
+					return
+				}
+			}
+			// If current writable is false, cannot make it true
+			if f.writable == false && writable != nil && *writable == true {
+				return
+			}
+			// Update value only if writable or becoming defined new
 			if f.writable {
 				o.properties[f.offset] = value
 			}
-			// Update flags if provided
-			newF := f
 			if writable != nil {
 				newF.writable = *writable
 			}
@@ -310,17 +305,14 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 			if configurable != nil {
 				newF.configurable = *configurable
 			}
-			// Write back updated field in shape (copy-on-write not implemented; mutate in place)
 			o.shape.fields[i] = newF
 			o.shape.version++
 			return
 		}
 	}
-
-	// New property: always create a new shape to honor descriptor attributes
+	// New property via descriptor: defaults false unless specified
 	cur := o.shape
 	off := len(cur.fields)
-	// Defaults per defineProperty: false when creating via descriptor if not specified
 	fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: false, enumerable: false, configurable: false, isAccessor: false}
 	if writable != nil {
 		fld.writable = *writable
@@ -345,6 +337,10 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 	// Find existing field
 	for i, f := range o.shape.fields {
 		if f.keyKind == KeyKindString && f.name == name {
+			// If existing field is not configurable, cannot change it to accessor or modify flags
+			if !f.configurable {
+				return
+			}
 			// Update to accessor kind
 			newF := f
 			newF.isAccessor = true
@@ -419,19 +415,32 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 
 // DefineOwnPropertyByKey defines or updates an own property for arbitrary key kinds.
 func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writable *bool, enumerable *bool, configurable *bool) {
-	// Try to find existing field
 	for i, f := range o.shape.fields {
-		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
-			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
+		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) || (key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
 		if match {
+			newF := f
 			if f.isAccessor {
-				f.isAccessor = false
-				f.writable = false
+				// Only allow conversion if configurable
+				if !f.configurable {
+					return
+				}
+				newF.isAccessor = false
+				newF.writable = false
+			}
+			if !f.configurable {
+				if configurable != nil && *configurable != f.configurable {
+					return
+				}
+				if enumerable != nil && *enumerable != f.enumerable {
+					return
+				}
+			}
+			if f.writable == false && writable != nil && *writable == true {
+				return
 			}
 			if f.writable {
 				o.properties[f.offset] = value
 			}
-			newF := f
 			if writable != nil {
 				newF.writable = *writable
 			}
@@ -446,7 +455,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 			return
 		}
 	}
-	// New field: create new shape explicitly
+	// New
 	cur := o.shape
 	off := len(cur.fields)
 	fld := Field{offset: off, name: key.debugName(), keyKind: key.kind, writable: false, enumerable: false, configurable: false, isAccessor: false}
@@ -477,6 +486,10 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
 			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
 		if match {
+			// If existing field is not configurable, cannot modify
+			if !f.configurable {
+				return
+			}
 			newF := f
 			newF.isAccessor = true
 			if enumerable != nil {
@@ -568,10 +581,10 @@ func (o *PlainObject) HasOwnByKey(key PropertyKey) bool {
 
 // OwnKeys returns the list of own property names in insertion order.
 func (o *PlainObject) OwnKeys() []string {
-	// Return only string-named keys (symbols excluded) in insertion order
+	// Return only string-named enumerable keys (symbols excluded) in insertion order
 	keys := make([]string, 0, len(o.shape.fields))
 	for _, f := range o.shape.fields {
-		if f.keyKind == KeyKindString {
+		if f.keyKind == KeyKindString && f.enumerable {
 			keys = append(keys, f.name)
 		}
 	}

@@ -482,9 +482,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			return BadRegister, nil // Return nil error here, main error is tracked
 		}
 
-		// Allocate register for the closure and emit OpClosure
-		//closureReg := c.regAlloc.Alloc()
-		c.emitClosure(hint, funcConstIndex, node, freeSymbols) // <<< Call emitClosure
+		// Ensure we have a valid destination register for the closure
+		if hint == NoHint || hint == BadRegister {
+			hint = c.regAlloc.Alloc()
+		}
+		// Emit OpClosure into the destination register
+		c.emitClosure(hint, funcConstIndex, node, freeSymbols)
 
 		// emitClosure now handles setting lastExprReg/Valid correctly.
 		return hint, nil // <<< Return nil error
@@ -504,23 +507,77 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			return BadRegister, err
 		}
 
-		// Allocate register for the closure and emit OpClosure using the generic emitClosureGeneric
+		// Ensure destination register is valid
+		if hint == NoHint || hint == BadRegister {
+			hint = c.regAlloc.Alloc()
+		}
+		// Emit OpClosure using the generic emitter
 		c.emitClosureGeneric(hint, funcConstIndex, node.Token.Line, node.Name, freeSymbols)
 
 		return hint, nil
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
-		for _, stmt := range node.Statements {
-			// For statements in blocks, allocate a temporary register if needed
-			stmtReg := c.regAlloc.Alloc()
-			_, err := c.compileNode(stmt, stmtReg)
-			c.regAlloc.Free(stmtReg) // Free immediately since block statements don't return values
-			if err != nil {
-				return BadRegister, err // Propagate errors up
+		// 0) Predefine block-scoped let/const so inner closures can capture stable locations
+		if len(node.Statements) > 0 {
+			for _, stmt := range node.Statements {
+				switch s := stmt.(type) {
+				case *parser.LetStatement:
+					if s.Name != nil {
+						if sym, _, found := c.currentSymbolTable.Resolve(s.Name.Value); !found || sym.Register == nilRegister {
+							reg := c.regAlloc.Alloc()
+							c.currentSymbolTable.Define(s.Name.Value, reg)
+							c.regAlloc.Pin(reg)
+						}
+					}
+				case *parser.ConstStatement:
+					if s.Name != nil {
+						if sym, _, found := c.currentSymbolTable.Resolve(s.Name.Value); !found || sym.Register == nilRegister {
+							reg := c.regAlloc.Alloc()
+							c.currentSymbolTable.Define(s.Name.Value, reg)
+							c.regAlloc.Pin(reg)
+						}
+					}
+				}
 			}
 		}
-		return BadRegister, nil // ADDED: Explicit return
+
+		// 1) Hoist function declarations within this block (function-scoped hoisting)
+		if len(node.HoistedDeclarations) > 0 {
+			// Pre-allocate registers for all hoisted function names to enable mutual recursion with stable locations
+			for name := range node.HoistedDeclarations {
+				if sym, _, found := c.currentSymbolTable.Resolve(name); !found || sym.Register == nilRegister {
+					reg := c.regAlloc.Alloc()
+					c.currentSymbolTable.Define(name, reg)
+					c.regAlloc.Pin(reg)
+				}
+			}
+			// Compile each hoisted function and emit its closure into the preallocated register
+			for name, decl := range node.HoistedDeclarations {
+				if funcLit, ok := decl.(*parser.FunctionLiteral); ok {
+					funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, name)
+					if err != nil {
+						return BadRegister, err
+					}
+					// Use the preallocated register for this name
+					sym, _, _ := c.currentSymbolTable.Resolve(name)
+					bindingReg := sym.Register
+					c.emitClosure(bindingReg, funcConstIndex, funcLit, freeSymbols)
+					// Already pinned above
+				}
+			}
+		}
+
+		// 2) Compile statements in order
+		for _, stmt := range node.Statements {
+			stmtReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(stmt, stmtReg)
+			c.regAlloc.Free(stmtReg)
+			if err != nil {
+				return BadRegister, err
+			}
+		}
+		return BadRegister, nil
 
 	// --- Statements ---
 	case *parser.TypeAliasStatement: // Added
@@ -719,6 +776,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.TemplateLiteral:
 		return c.compileTemplateLiteral(node, hint) // TODO: Fix this
+
+	case *parser.TaggedTemplateExpression:
+		return c.compileTaggedTemplate(node, hint)
 
 	case *parser.BooleanLiteral:
 		// Handle boolean literals by using appropriate opcode
@@ -1429,15 +1489,14 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 	for i, freeSym := range freeSymbols {
 		debugPrintf("// [emitClosure %s] Emitting upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register) // DEBUG
 
-		// --- Check for self-capture first ---
-		// If a free symbol has nilRegister, it MUST be the temporary one
-		// added for recursion resolution inside compileFunctionLiteral. It signifies self-capture.
-		if freeSym.Register == nilRegister {
+		// --- Check for self-capture only if the free symbol name matches this function's own name ---
+		if freeSym.Register == nilRegister && funcNameForLookup != "" && freeSym.Name == funcNameForLookup {
 			debugPrintf("// [emitClosure SelfCapture] Symbol '%s' is self-reference. Emitting isLocal=1, index=destReg=R%d\n", freeSym.Name, destReg) // DEBUG
 			c.emitByte(1)                                                                                                                             // isLocal = true (capture from the stack where the closure *will be* placed)
 			c.emitByte(byte(destReg))                                                                                                                 // Index = the destination register of OpClosure itself
 			continue                                                                                                                                  // Skip the normal lookup below
 		}
+
 		// --- END Check ---
 
 		// Resolve the symbol again in the *enclosing* compiler's context (c)
@@ -1495,7 +1554,7 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 		debugPrintf("// [emitClosureGeneric %s] Emitting upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register)
 
 		// Check for self-capture first
-		if freeSym.Register == nilRegister {
+		if freeSym.Register == nilRegister && funcNameForLookup != "" && freeSym.Name == funcNameForLookup {
 			debugPrintf("// [emitClosureGeneric SelfCapture] Symbol '%s' is self-reference. Emitting isLocal=1, index=destReg=R%d\n", freeSym.Name, destReg)
 			c.emitByte(1)             // isLocal = true
 			c.emitByte(byte(destReg)) // Index = the destination register of OpClosure itself

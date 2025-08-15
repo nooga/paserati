@@ -45,12 +45,19 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 
 	} else if node.Value != nil {
 		// Compile other value types normally
-		valueReg = c.regAlloc.Alloc()
-		defer c.regAlloc.Free(valueReg)
-		_, err = c.compileNode(node.Value, valueReg)
+		// Use existing predefined register if present
+		targetReg := valueReg
+		if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+			targetReg = sym.Register
+		} else {
+			targetReg = c.regAlloc.Alloc()
+			defer c.regAlloc.Free(targetReg)
+		}
+		_, err = c.compileNode(node.Value, targetReg)
 		if err != nil {
 			return BadRegister, err
 		}
+		valueReg = targetReg
 	} // else: node.Value is nil (implicit undefined handled below)
 
 	// Handle implicit undefined (`let x;`)
@@ -68,9 +75,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
 			// Function scope: use local symbol table
-			c.currentSymbolTable.Define(node.Name.Value, valueReg)
-			// Pin the register since local variables can be captured by upvalues
-			c.regAlloc.Pin(valueReg)
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, valueReg)
+				c.regAlloc.Pin(valueReg)
+			}
 		}
 	} else if !isValueFunc {
 		// Define symbol ONLY for non-function values.
@@ -83,9 +93,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
 			// Function scope: use local symbol table
-			c.currentSymbolTable.Define(node.Name.Value, valueReg)
-			// Pin the register since local variables can be captured by upvalues
-			c.regAlloc.Pin(valueReg)
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, valueReg)
+				c.regAlloc.Pin(valueReg)
+			}
 		}
 	} else if c.enclosing == nil {
 		// Top-level function: also set as global
@@ -251,12 +264,19 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 
 	} else {
 		// Compile other value types normally
-		valueReg = c.regAlloc.Alloc()
-		defer c.regAlloc.Free(valueReg)
-		_, err = c.compileNode(node.Value, valueReg)
+		// Use existing predefined register if present
+		targetReg := valueReg
+		if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+			targetReg = sym.Register
+		} else {
+			targetReg = c.regAlloc.Alloc()
+			defer c.regAlloc.Free(targetReg)
+		}
+		_, err = c.compileNode(node.Value, targetReg)
 		if err != nil {
 			return BadRegister, err
 		}
+		valueReg = targetReg
 	}
 
 	// Define symbol ONLY for non-function values.
@@ -270,9 +290,12 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
 			// Function scope: use local symbol table
-			c.currentSymbolTable.Define(node.Name.Value, valueReg)
-			// Pin the register since local variables can be captured by upvalues
-			c.regAlloc.Pin(valueReg)
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, valueReg)
+				c.regAlloc.Pin(valueReg)
+			}
 		}
 	} else if c.enclosing == nil {
 		// Top-level function: also set as global
@@ -464,6 +487,30 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 
 	// 1. Initializer
 	if node.Initializer != nil {
+		// If initializer is a var-declaration, predefine its bindings so Resolve() works in condition/update.
+		if vs, ok := node.Initializer.(*parser.VarStatement); ok {
+			// Prefer explicit declarations if present; otherwise fall back to legacy Name field
+			if len(vs.Declarations) > 0 {
+				for _, d := range vs.Declarations {
+					if c.enclosing == nil {
+						// Top-level: predefine as global so identifier resolves as global in condition/update
+						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
+						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
+					} else {
+						// Function scope: predefine local binding; register will be set by compileVarStatement
+						c.currentSymbolTable.Define(d.Name.Value, nilRegister)
+					}
+				}
+			} else if vs.Name != nil {
+				name := vs.Name.Value
+				if c.enclosing == nil {
+					globalIdx := c.GetOrAssignGlobalIndex(name)
+					c.currentSymbolTable.DefineGlobal(name, globalIdx)
+				} else {
+					c.currentSymbolTable.Define(name, nilRegister)
+				}
+			}
+		}
 		initReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, initReg)
 		if _, err := c.compileNode(node.Initializer, initReg); err != nil {
@@ -1066,17 +1113,28 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 		// This is an existing variable being assigned to
 		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
-			symbolRef, _, found := c.currentSymbolTable.Resolve(ident.Value)
+			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
 			if !found {
-				return BadRegister, NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
-			}
-			// Check if this is a global variable or local register
-			if symbolRef.IsGlobal {
-				// Store element value using OpSetGlobal for global variables
-				c.emitSetGlobal(symbolRef.GlobalIndex, elementReg, node.Token.Line)
+				// Define a function/global-scoped binding (var semantics)
+				target := c.currentSymbolTable
+				for target.Outer != nil {
+					target = target.Outer
+				}
+				reg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, reg)
+				sym := target.Define(ident.Value, reg)
+				c.regAlloc.Pin(sym.Register)
+				c.emitMove(sym.Register, elementReg, node.Token.Line)
 			} else {
-				// Store element value in the existing variable's register for local variables
-				c.emitMove(symbolRef.Register, elementReg, node.Token.Line)
+				// Check if this is a global variable or local register
+				if symbolRef.IsGlobal {
+					// Store element value using OpSetGlobal for global variables
+					c.emitSetGlobal(symbolRef.GlobalIndex, elementReg, node.Token.Line)
+				} else {
+					// Store element value in the existing variable's register for local variables
+					_ = definingTable
+					c.emitMove(symbolRef.Register, elementReg, node.Token.Line)
+				}
 			}
 		}
 	}
@@ -1275,6 +1333,45 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		}
 	}()
 
+	// Predefine var header bindings (top-level as global, function scope as local) so body Resolve works
+	if vs, ok := node.Variable.(*parser.VarStatement); ok {
+		if len(vs.Declarations) > 0 {
+			for _, d := range vs.Declarations {
+				if c.enclosing == nil {
+					idx := c.GetOrAssignGlobalIndex(d.Name.Value)
+					c.currentSymbolTable.DefineGlobal(d.Name.Value, idx)
+					fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", d.Name.Value, idx)
+				} else {
+					c.currentSymbolTable.Define(d.Name.Value, nilRegister)
+					fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", d.Name.Value)
+				}
+			}
+		} else if vs.Name != nil {
+			name := vs.Name.Value
+			if c.enclosing == nil {
+				idx := c.GetOrAssignGlobalIndex(name)
+				c.currentSymbolTable.DefineGlobal(name, idx)
+				fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", name, idx)
+			} else {
+				c.currentSymbolTable.Define(name, nilRegister)
+				fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", name)
+			}
+		} else {
+			fmt.Printf("// [ForInPredefine] VarStatement without Name/Declarations\n")
+		}
+	} else {
+		switch node.Variable.(type) {
+		case *parser.LetStatement:
+			fmt.Printf("// [ForInHeader] let\n")
+		case *parser.ConstStatement:
+			fmt.Printf("// [ForInHeader] const\n")
+		case *parser.ExpressionStatement:
+			fmt.Printf("// [ForInHeader] bare identifier\n")
+		default:
+			fmt.Printf("// [ForInHeader] other type %T\n", node.Variable)
+		}
+	}
+
 	// 1. Compile the object expression first
 	objectReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, objectReg)
@@ -1351,20 +1448,75 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		c.regAlloc.Pin(symbol.Register)
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
+	} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
+		// Handle 'var k in obj' - assign into the pre-defined binding (global at top-level, local in function)
+		if varStmt.Name != nil {
+			name := varStmt.Name.Value
+			fmt.Printf("// [ForInAssign] assigning to var %s\n", name)
+			// Resolve the pre-defined binding from the header
+			symbolRef, _, found := c.currentSymbolTable.Resolve(name)
+			if !found {
+				// As a fallback, predefine now mirroring regular for behavior
+				if c.enclosing == nil {
+					idx := c.GetOrAssignGlobalIndex(name)
+					c.currentSymbolTable.DefineGlobal(name, idx)
+					symbolRef, _, found = c.currentSymbolTable.Resolve(name)
+				} else {
+					c.currentSymbolTable.Define(name, nilRegister)
+					symbolRef, _, found = c.currentSymbolTable.Resolve(name)
+				}
+			}
+			if !found {
+				return BadRegister, NewCompileError(varStmt, fmt.Sprintf("internal compiler error: failed to resolve var '%s' in for-in", name))
+			}
+			if symbolRef.IsGlobal {
+				// Update global via OpSetGlobal using the assigned global index
+				c.emitSetGlobal(symbolRef.GlobalIndex, currentKeyReg, node.Token.Line)
+			} else {
+				// Local (function-scoped) var: ensure it has a register then move
+				if symbolRef.Register == nilRegister {
+					reg := c.regAlloc.Alloc()
+					// Pin register since it may be captured by closures
+					c.regAlloc.Pin(reg)
+					c.currentSymbolTable.UpdateRegister(name, reg)
+					symbolRef.Register = reg
+				}
+				c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
+			}
+		}
 	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 		// This is an existing variable being assigned to
 		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
-			symbolRef, _, found := c.currentSymbolTable.Resolve(ident.Value)
+			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
 			if !found {
-				return BadRegister, NewCompileError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
-			}
-			// Check if this is a global variable or local register
-			if symbolRef.IsGlobal {
-				// Store key value using OpSetGlobal for global variables
-				c.emitSetGlobal(symbolRef.GlobalIndex, currentKeyReg, node.Token.Line)
+				fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", ident.Value)
+				// Define a function/global-scoped binding (var semantics)
+				if c.enclosing == nil {
+					idx := c.GetOrAssignGlobalIndex(ident.Value)
+					c.currentSymbolTable.DefineGlobal(ident.Value, idx)
+					c.emitSetGlobal(idx, currentKeyReg, node.Token.Line)
+				} else {
+					target := c.currentSymbolTable
+					for target.Outer != nil {
+						target = target.Outer
+					}
+					reg := c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, reg)
+					sym := target.Define(ident.Value, reg)
+					c.regAlloc.Pin(sym.Register)
+					c.emitMove(sym.Register, currentKeyReg, node.Token.Line)
+				}
 			} else {
-				// Store key value in the existing variable's register for local variables
-				c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
+				// Check if this is a global variable or local register
+				if symbolRef.IsGlobal {
+					fmt.Printf("// [ForInAssign] writing global %s\n", ident.Value)
+					c.emitSetGlobal(symbolRef.GlobalIndex, currentKeyReg, node.Token.Line)
+				} else {
+					// Store key value in the existing variable's register for local variables
+					_ = definingTable
+					fmt.Printf("// [ForInAssign] writing local %s R%d\n", ident.Value, symbolRef.Register)
+					c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
+				}
 			}
 		}
 	}

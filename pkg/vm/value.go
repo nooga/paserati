@@ -729,22 +729,24 @@ func (v Value) ToInteger() int32 {
 
 // Inspect returns a developer-friendly representation of Value, similar to a REPL.
 func (v Value) Inspect() string {
-	return v.inspectWithContext(false) // Top-level call, strings unquoted
+	return v.inspectWithDepth(false, 0, 64) // Top-level call, depth-limited to avoid stack overflow
 }
 
 // InspectNested is used for nested contexts where strings should be quoted
 func (v Value) InspectNested() string {
-	return v.inspectWithContext(true) // Nested call, strings quoted
+	return v.inspectWithDepth(true, 0, 64) // Nested call, depth-limited
 }
 
-func (v Value) inspectWithContext(nested bool) string {
+// inspectWithDepth is a depth-limited inspector to prevent runaway recursion in debug prints.
+func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
+	if depth >= maxDepth {
+		return "<…>"
+	}
 	switch v.typ {
 	case TypeString:
 		if nested {
-			// In nested context (like inside objects/arrays), quote the string
 			return fmt.Sprintf(`"%s"`, v.AsString())
 		}
-		// At top level, return unquoted string
 		return v.AsString()
 	case TypeSymbol:
 		return fmt.Sprintf("Symbol(%s)", v.AsSymbol())
@@ -790,32 +792,21 @@ func (v Value) inspectWithContext(nested bool) string {
 		}
 		return "[Function (anonymous)]"
 	case TypeObject:
-		// Plain object literal inspect - check for toString() first
 		obj := v.AsPlainObject()
-
-		// Fast path: Check for special built-in objects with known patterns
 		if toStringResult := tryBuiltinToString(obj); toStringResult != "" {
-			// In nested context, quote the toString result like a string
 			if nested {
 				return fmt.Sprintf(`"%s"`, toStringResult)
 			}
 			return toStringResult
 		}
-
-		// General path: Look for toString method in prototype chain
 		if toStringMethod := findToStringMethod(obj); toStringMethod.Type() != TypeUndefined && toStringMethod.IsFunction() {
-			// For now, we'll handle specific cases rather than calling the method
-			// to avoid VM state complications in the inspect method
 			if dateString := tryFormatAsDate(obj); dateString != "" {
-				// In nested context, quote the date string like a string
 				if nested {
 					return fmt.Sprintf(`"%s"`, dateString)
 				}
 				return dateString
 			}
 		}
-
-		// Default object literal representation
 		var b strings.Builder
 		b.WriteString("{")
 		for i, field := range obj.shape.fields {
@@ -824,12 +815,11 @@ func (v Value) inspectWithContext(nested bool) string {
 			}
 			b.WriteString(field.name)
 			b.WriteString(": ")
-			b.WriteString(obj.properties[i].InspectNested()) // Use nested context
+			b.WriteString(obj.properties[i].inspectWithDepth(true, depth+1, maxDepth))
 		}
 		b.WriteString("}")
 		return b.String()
 	case TypeDictObject:
-		// Dictionary object literal inspect (sorted keys)
 		dict := v.AsDictObject()
 		keys := make([]string, 0, len(dict.properties))
 		for k := range dict.properties {
@@ -838,27 +828,24 @@ func (v Value) inspectWithContext(nested bool) string {
 		sort.Strings(keys)
 		parts := make([]string, len(keys))
 		for i, k := range keys {
-			parts[i] = k + ": " + dict.properties[k].InspectNested() // Use nested context
+			parts[i] = k + ": " + dict.properties[k].inspectWithDepth(true, depth+1, maxDepth)
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	case TypeArray:
-		// Array literal inspect
 		arr := v.AsArray()
 		elems := make([]string, len(arr.elements))
 		for i, el := range arr.elements {
-			elems[i] = el.InspectNested() // Use nested context
+			elems[i] = el.inspectWithDepth(true, depth+1, maxDepth)
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
 	case TypeArguments:
-		// Arguments object inspect - show like array but with [Arguments] tag
 		args := v.AsArguments()
 		elems := make([]string, len(args.args))
 		for i, el := range args.args {
-			elems[i] = el.InspectNested() // Use nested context
+			elems[i] = el.inspectWithDepth(true, depth+1, maxDepth)
 		}
 		return "[Arguments] { 0: " + strings.Join(elems, ", ") + " }"
 	case TypeMap:
-		// Map object inspect - show as Map { key => value, ... }
 		mapObj := v.AsMap()
 		if mapObj.Size() == 0 {
 			return "Map {}"
@@ -866,18 +853,17 @@ func (v Value) inspectWithContext(nested bool) string {
 		var parts []string
 		for keyStr, value := range mapObj.entries {
 			key := mapObj.keys[keyStr]
-			parts = append(parts, key.InspectNested()+" => "+value.InspectNested())
+			parts = append(parts, key.inspectWithDepth(true, depth+1, maxDepth)+" => "+value.inspectWithDepth(true, depth+1, maxDepth))
 		}
 		return "Map { " + strings.Join(parts, ", ") + " }"
 	case TypeSet:
-		// Set object inspect - show as Set { value1, value2, ... }
 		setObj := v.AsSet()
 		if setObj.Size() == 0 {
 			return "Set {}"
 		}
 		var parts []string
 		for _, value := range setObj.values {
-			parts = append(parts, value.InspectNested())
+			parts = append(parts, value.inspectWithDepth(true, depth+1, maxDepth))
 		}
 		return "Set { " + strings.Join(parts, ", ") + " }"
 	case TypeNull:
@@ -1187,6 +1173,94 @@ func valuesEqual(a, b Value) bool { return a.Is(b) }
 // valuesStrictEqual compares two values using ECMAScript Strict Equality (===).
 func valuesStrictEqual(a, b Value) bool { return a.StrictlyEquals(b) }
 
+// valuesAbstractEqual implements the ECMAScript Abstract Equality Comparison (==)
+// with a pragmatic subset sufficient for Test262 harness helpers:
+// - undefined == null is true
+// - number == string performs ToNumber on string
+// - boolean == x compares ToNumber(boolean) to x
+// - bigint == string parses string as BigInt if possible
+// - number == bigint compares only when number is finite integral and within int64 range
+// - otherwise falls back to Strict Equality when types match, or false
+func valuesAbstractEqual(a, b Value) bool {
+	// If types are identical, use strict equality
+	if a.Type() == b.Type() {
+		return a.StrictlyEquals(b)
+	}
+
+	// null/undefined
+	if (a.Type() == TypeNull && b.Type() == TypeUndefined) || (a.Type() == TypeUndefined && b.Type() == TypeNull) {
+		return true
+	}
+
+	// number and string
+	if IsNumber(a) && b.Type() == TypeString {
+		return AsNumber(a) == b.ToFloat()
+	}
+	if a.Type() == TypeString && IsNumber(b) {
+		return a.ToFloat() == AsNumber(b)
+	}
+
+	// boolean compared to anything -> compare ToNumber(boolean) to other via abstract again
+	if a.Type() == TypeBoolean {
+		num := 0.0
+		if a.AsBoolean() {
+			num = 1.0
+		}
+		return valuesAbstractEqual(Number(num), b)
+	}
+	if b.Type() == TypeBoolean {
+		num := 0.0
+		if b.AsBoolean() {
+			num = 1.0
+		}
+		return valuesAbstractEqual(a, Number(num))
+	}
+
+	// bigint and string
+	if a.IsBigInt() && b.Type() == TypeString {
+		if bi, ok := stringToBigInt(b.ToString()); ok {
+			return a.AsBigInt().Cmp(bi) == 0
+		}
+		return false
+	}
+	if b.IsBigInt() && a.Type() == TypeString {
+		if bi, ok := stringToBigInt(a.ToString()); ok {
+			return b.AsBigInt().Cmp(bi) == 0
+		}
+		return false
+	}
+
+	// number and bigint
+	if IsNumber(a) && b.IsBigInt() {
+		n := a.ToFloat()
+		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return false
+		}
+		// Limit to int64 for now
+		if n < math.MinInt64 || n > math.MaxInt64 {
+			return false
+		}
+		ni := int64(n)
+		return new(big.Int).SetInt64(ni).Cmp(b.AsBigInt()) == 0
+	}
+	if a.IsBigInt() && IsNumber(b) {
+		n := b.ToFloat()
+		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return false
+		}
+		if n < math.MinInt64 || n > math.MaxInt64 {
+			return false
+		}
+		ni := int64(n)
+		return a.AsBigInt().Cmp(new(big.Int).SetInt64(ni)) == 0
+	}
+
+	// TODO: object-to-primitive cases (ToPrimitive) if needed
+
+	// Default: not equal
+	return false
+}
+
 // AsNativeFunction returns the NativeFunctionObject pointer from a native function value.
 func AsNativeFunction(v Value) *NativeFunctionObject { return v.AsNativeFunction() }
 
@@ -1322,6 +1396,7 @@ func (a *ArgumentsObject) Set(index int, value Value) {
 // MapObject methods
 func (m *MapObject) Set(key, value Value) {
 	keyStr := hashKey(key)
+	// fmt.Printf("[DBG Map.set] m=%p key=%s (%s) -> %s\n", m, keyStr, key.TypeName(), value.Inspect())
 	if _, exists := m.entries[keyStr]; !exists {
 		m.size++
 	}
@@ -1331,6 +1406,7 @@ func (m *MapObject) Set(key, value Value) {
 
 func (m *MapObject) Get(key Value) Value {
 	keyStr := hashKey(key)
+	// fmt.Printf("[DBG Map.get] m=%p key=%s (%s) -> %v\n", m, keyStr, key.TypeName(), m.entries[keyStr])
 	if value, exists := m.entries[keyStr]; exists {
 		return value
 	}
@@ -1362,6 +1438,18 @@ func (m *MapObject) Clear() {
 
 func (m *MapObject) Size() int {
 	return m.size
+}
+
+// ForEach calls fn for each entry in the map. Order is currently unspecified.
+func (m *MapObject) ForEach(fn func(key Value, value Value)) {
+	for keyStr, value := range m.entries {
+		if originalKey, ok := m.keys[keyStr]; ok {
+			fn(originalKey, value)
+		} else {
+			// Fallback: synthesize string key
+			fn(NewString(keyStr), value)
+		}
+	}
 }
 
 // SetObject methods
@@ -1396,6 +1484,13 @@ func (s *SetObject) Clear() {
 
 func (s *SetObject) Size() int {
 	return s.size
+}
+
+// ForEach calls fn for each value in the set. Order is currently unspecified.
+func (s *SetObject) ForEach(fn func(value Value)) {
+	for _, value := range s.values {
+		fn(value)
+	}
 }
 
 // NewValueFromPlainObject creates a Value from a PlainObject pointer

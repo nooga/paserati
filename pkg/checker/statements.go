@@ -718,6 +718,18 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 					letStmt.ComputedType = elementType
 					letStmt.Name.SetComputedType(elementType)
 				}
+			} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
+				// Var in for-in header hoists to nearest function/global scope.
+				if varStmt.Name != nil {
+					// Define in the outer (original) environment, not the temporary loop block.
+					if originalEnv != nil {
+						originalEnv.Define(varStmt.Name.Value, elementType, false)
+					} else {
+						c.env.Define(varStmt.Name.Value, elementType, false)
+					}
+					varStmt.ComputedType = elementType
+					varStmt.Name.SetComputedType(elementType)
+				}
 			} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
 				// Define the loop variable with string type (property names)
 				if constStmt.Name != nil {
@@ -732,7 +744,15 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 						// Check if the variable exists and is assignable to string
 						varType, _, exists := c.env.Resolve(ident.Value)
 						if !exists {
-							c.addError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
+							// In non-strict mode JS, bare identifier in for-in creates/targets global var.
+							// For our checker (which may be disabled during Test262), emulate by defining in outermost env.
+							// Walk to outermost environment and define there to unblock body resolution.
+							outer := c.env
+							for outer.outer != nil {
+								outer = outer.outer
+							}
+							outer.Define(ident.Value, elementType, false)
+							// No error added; body will see the binding.
 						} else if !types.IsAssignable(elementType, varType) {
 							c.addError(ident, fmt.Sprintf("cannot assign property name type '%s' to variable type '%s'", elementType.String(), varType.String()))
 						}

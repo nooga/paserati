@@ -256,7 +256,7 @@ type Parameter struct {
 	DefaultValue    Expression  // Default value expression (param = defaultValue)
 	IsThis          bool        // Whether this is an explicit 'this' parameter
 	IsDestructuring bool        // Whether this parameter uses destructuring pattern
-	
+
 	// Parameter property modifiers (only valid in constructor context)
 	IsPublic    bool // true if marked with 'public' (constructor parameter property)
 	IsPrivate   bool // true if marked with 'private' (constructor parameter property)
@@ -268,7 +268,7 @@ func (p *Parameter) expressionNode()      {} // Parameters can appear in type ex
 func (p *Parameter) TokenLiteral() string { return p.Token.Literal }
 func (p *Parameter) String() string {
 	var out bytes.Buffer
-	
+
 	// Add access modifiers for parameter properties
 	if p.IsPublic {
 		out.WriteString("public ")
@@ -282,7 +282,7 @@ func (p *Parameter) String() string {
 	if p.IsReadonly {
 		out.WriteString("readonly ")
 	}
-	
+
 	if p.IsThis {
 		out.WriteString("this")
 	} else if p.IsDestructuring && p.Pattern != nil {
@@ -460,6 +460,20 @@ type TemplateStringPart struct {
 
 func (tsp *TemplateStringPart) TokenLiteral() string { return tsp.Value }
 func (tsp *TemplateStringPart) String() string       { return tsp.Value }
+
+// TaggedTemplateExpression represents a tagged template: tag`...`
+type TaggedTemplateExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // token of the tag expression's first token (for position)
+	Tag            Expression  // the tag function/expression
+	Template       *TemplateLiteral
+}
+
+func (tte *TaggedTemplateExpression) expressionNode()      {}
+func (tte *TaggedTemplateExpression) TokenLiteral() string { return tte.Token.Literal }
+func (tte *TaggedTemplateExpression) String() string {
+	return tte.Tag.String() + tte.Template.String()
+}
 
 // NullLiteral represents the `null` keyword.
 type NullLiteral struct {
@@ -1690,10 +1704,10 @@ func (oie *OptionalIndexExpression) String() string {
 
 // OptionalCallExpression represents optional function call (e.g., func?.()).
 type OptionalCallExpression struct {
-	BaseExpression               // Embed base for ComputedType
-	Token          lexer.Token   // The '?.' token
-	Function       Expression    // The function expression on the left
-	Arguments      []Expression  // The function arguments
+	BaseExpression              // Embed base for ComputedType
+	Token          lexer.Token  // The '?.' token
+	Function       Expression   // The function expression on the left
+	Arguments      []Expression // The function arguments
 }
 
 func (oce *OptionalCallExpression) expressionNode()      {}
@@ -1784,10 +1798,10 @@ func (ss *SwitchStatement) String() string {
 // import defaultImport, { export1, export2 } from "module"
 // import defaultImport, * as name from "module"
 type ImportDeclaration struct {
-	Token       lexer.Token          // The 'import' token
-	Specifiers  []ImportSpecifier    // What to import (default, named, namespace)
-	Source      *StringLiteral       // From where ("./module")
-	IsTypeOnly  bool                 // true for "import type" statements
+	Token      lexer.Token       // The 'import' token
+	Specifiers []ImportSpecifier // What to import (default, named, namespace)
+	Source     *StringLiteral    // From where ("./module")
+	IsTypeOnly bool              // true for "import type" statements
 }
 
 func (id *ImportDeclaration) statementNode()       {}
@@ -1798,18 +1812,18 @@ func (id *ImportDeclaration) String() string {
 	if id.IsTypeOnly {
 		out.WriteString("type ")
 	}
-	
+
 	if len(id.Specifiers) > 0 {
 		specStrs := make([]string, len(id.Specifiers))
 		for i, spec := range id.Specifiers {
 			specStrs[i] = spec.String()
 		}
-		
+
 		// Group specifiers by type for cleaner output
 		hasDefault := false
 		hasNamed := false
 		hasNamespace := false
-		
+
 		for _, spec := range id.Specifiers {
 			switch spec.(type) {
 			case *ImportDefaultSpecifier:
@@ -1820,7 +1834,7 @@ func (id *ImportDeclaration) String() string {
 				hasNamespace = true
 			}
 		}
-		
+
 		// Output in TypeScript order: default, named, namespace
 		parts := []string{}
 		for _, spec := range id.Specifiers {
@@ -1829,7 +1843,7 @@ func (id *ImportDeclaration) String() string {
 				hasDefault = false // Only add once
 			}
 		}
-		
+
 		if hasNamed {
 			namedParts := []string{}
 			for _, spec := range id.Specifiers {
@@ -1841,17 +1855,17 @@ func (id *ImportDeclaration) String() string {
 				parts = append(parts, "{ "+strings.Join(namedParts, ", ")+" }")
 			}
 		}
-		
+
 		for _, spec := range id.Specifiers {
 			if _, ok := spec.(*ImportNamespaceSpecifier); ok && hasNamespace {
 				parts = append(parts, spec.String())
 				hasNamespace = false // Only add once
 			}
 		}
-		
+
 		out.WriteString(strings.Join(parts, ", "))
 	}
-	
+
 	if id.Source != nil {
 		out.WriteString(" from ")
 		out.WriteString(id.Source.String())
@@ -1872,9 +1886,9 @@ type ImportDefaultSpecifier struct {
 	Local *Identifier // Local binding name
 }
 
-func (ids *ImportDefaultSpecifier) importSpecifier()      {}
-func (ids *ImportDefaultSpecifier) TokenLiteral() string  { return ids.Token.Literal }
-func (ids *ImportDefaultSpecifier) String() string        { return ids.Local.String() }
+func (ids *ImportDefaultSpecifier) importSpecifier()     {}
+func (ids *ImportDefaultSpecifier) TokenLiteral() string { return ids.Token.Literal }
+func (ids *ImportDefaultSpecifier) String() string       { return ids.Local.String() }
 
 // ImportNamedSpecifier represents: import { name } or import { name as alias }
 type ImportNamedSpecifier struct {
@@ -1884,8 +1898,8 @@ type ImportNamedSpecifier struct {
 	IsTypeOnly bool        // true for "import { type name }" syntax
 }
 
-func (ins *ImportNamedSpecifier) importSpecifier()      {}
-func (ins *ImportNamedSpecifier) TokenLiteral() string  { return ins.Token.Literal }
+func (ins *ImportNamedSpecifier) importSpecifier()     {}
+func (ins *ImportNamedSpecifier) TokenLiteral() string { return ins.Token.Literal }
 func (ins *ImportNamedSpecifier) String() string {
 	if ins.Imported.Value != ins.Local.Value {
 		return ins.Imported.String() + " as " + ins.Local.String()
@@ -1899,9 +1913,9 @@ type ImportNamespaceSpecifier struct {
 	Local *Identifier // Local binding name
 }
 
-func (ins *ImportNamespaceSpecifier) importSpecifier()      {}
-func (ins *ImportNamespaceSpecifier) TokenLiteral() string  { return ins.Token.Literal }
-func (ins *ImportNamespaceSpecifier) String() string        { return "* as " + ins.Local.String() }
+func (ins *ImportNamespaceSpecifier) importSpecifier()     {}
+func (ins *ImportNamespaceSpecifier) TokenLiteral() string { return ins.Token.Literal }
+func (ins *ImportNamespaceSpecifier) String() string       { return "* as " + ins.Local.String() }
 
 // ExportDeclaration is the interface for different export declaration types
 type ExportDeclaration interface {
@@ -1916,23 +1930,23 @@ type ExportDeclaration interface {
 // export { name1 as alias1 };
 // export { name1 } from "module";
 type ExportNamedDeclaration struct {
-	Token       lexer.Token        // The 'export' token
-	Declaration Statement          // Direct export: export const x = 1
-	Specifiers  []ExportSpecifier  // Named exports: export { x, y }
-	Source      *StringLiteral     // Re-export source: export { x } from "mod"
-	IsTypeOnly  bool               // true for "export type" statements
+	Token       lexer.Token       // The 'export' token
+	Declaration Statement         // Direct export: export const x = 1
+	Specifiers  []ExportSpecifier // Named exports: export { x, y }
+	Source      *StringLiteral    // Re-export source: export { x } from "mod"
+	IsTypeOnly  bool              // true for "export type" statements
 }
 
-func (end *ExportNamedDeclaration) statementNode()        {}
-func (end *ExportNamedDeclaration) exportDeclaration()    {}
-func (end *ExportNamedDeclaration) TokenLiteral() string  { return end.Token.Literal }
+func (end *ExportNamedDeclaration) statementNode()       {}
+func (end *ExportNamedDeclaration) exportDeclaration()   {}
+func (end *ExportNamedDeclaration) TokenLiteral() string { return end.Token.Literal }
 func (end *ExportNamedDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("export ")
 	if end.IsTypeOnly {
 		out.WriteString("type ")
 	}
-	
+
 	if end.Declaration != nil {
 		// Direct export: export const x = 1;
 		out.WriteString(end.Declaration.String())
@@ -1945,14 +1959,14 @@ func (end *ExportNamedDeclaration) String() string {
 		}
 		out.WriteString(strings.Join(specStrs, ", "))
 		out.WriteString(" }")
-		
+
 		if end.Source != nil {
 			out.WriteString(" from ")
 			out.WriteString(end.Source.String())
 		}
 		out.WriteString(";")
 	}
-	
+
 	return out.String()
 }
 
@@ -1962,9 +1976,9 @@ type ExportDefaultDeclaration struct {
 	Declaration Expression  // The default export expression
 }
 
-func (edd *ExportDefaultDeclaration) statementNode()        {}
-func (edd *ExportDefaultDeclaration) exportDeclaration()    {}
-func (edd *ExportDefaultDeclaration) TokenLiteral() string  { return edd.Token.Literal }
+func (edd *ExportDefaultDeclaration) statementNode()       {}
+func (edd *ExportDefaultDeclaration) exportDeclaration()   {}
+func (edd *ExportDefaultDeclaration) TokenLiteral() string { return edd.Token.Literal }
 func (edd *ExportDefaultDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("export default ")
@@ -1983,9 +1997,9 @@ type ExportAllDeclaration struct {
 	IsTypeOnly bool           // true for "export type * from" statements
 }
 
-func (ead *ExportAllDeclaration) statementNode()        {}
-func (ead *ExportAllDeclaration) exportDeclaration()    {}
-func (ead *ExportAllDeclaration) TokenLiteral() string  { return ead.Token.Literal }
+func (ead *ExportAllDeclaration) statementNode()       {}
+func (ead *ExportAllDeclaration) exportDeclaration()   {}
+func (ead *ExportAllDeclaration) TokenLiteral() string { return ead.Token.Literal }
 func (ead *ExportAllDeclaration) String() string {
 	var out bytes.Buffer
 	out.WriteString("export ")
@@ -2019,8 +2033,8 @@ type ExportNamedSpecifier struct {
 	Exported *Identifier // Export name (same as Local if no alias)
 }
 
-func (ens *ExportNamedSpecifier) exportSpecifier()      {}
-func (ens *ExportNamedSpecifier) TokenLiteral() string  { return ens.Token.Literal }
+func (ens *ExportNamedSpecifier) exportSpecifier()     {}
+func (ens *ExportNamedSpecifier) TokenLiteral() string { return ens.Token.Literal }
 func (ens *ExportNamedSpecifier) String() string {
 	if ens.Local.Value != ens.Exported.Value {
 		return ens.Local.String() + " as " + ens.Exported.String()
@@ -2034,19 +2048,19 @@ func (ens *ExportNamedSpecifier) String() string {
 
 // FunctionTypeExpression represents a type like (number, string) => boolean
 type FunctionTypeExpression struct {
-	BaseExpression                // Embed base for ComputedType (Function type)
-	Token          lexer.Token    // The '(' token starting the parameter list
+	BaseExpression                  // Embed base for ComputedType (Function type)
+	Token          lexer.Token      // The '(' token starting the parameter list
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	Parameters     []Expression   // Slice of Expression nodes representing parameter types
-	RestParameter  Expression     // Optional rest parameter type (e.g., ...args: string[])
-	ReturnType     Expression     // Expression node for the return type
+	Parameters     []Expression     // Slice of Expression nodes representing parameter types
+	RestParameter  Expression       // Optional rest parameter type (e.g., ...args: string[])
+	ReturnType     Expression       // Expression node for the return type
 }
 
 func (fte *FunctionTypeExpression) expressionNode()      {}
 func (fte *FunctionTypeExpression) TokenLiteral() string { return fte.Token.Literal }
 func (fte *FunctionTypeExpression) String() string {
 	var out bytes.Buffer
-	
+
 	// Add type parameters if present
 	if len(fte.TypeParameters) > 0 {
 		out.WriteString("<")
@@ -2058,7 +2072,7 @@ func (fte *FunctionTypeExpression) String() string {
 		}
 		out.WriteString(">")
 	}
-	
+
 	params := []string{}
 	for _, p := range fte.Parameters {
 		params = append(params, p.String())
@@ -2090,7 +2104,7 @@ type MappedTypeExpression struct {
 	TypeParameter  *Identifier // The iteration variable (e.g., "P" in [P in K])
 	ConstraintType Expression  // The type being iterated over (e.g., K in [P in K])
 	ValueType      Expression  // The resulting value type for each property
-	
+
 	// Modifiers for the mapped type
 	ReadonlyModifier string // "+", "-", or "" (for readonly modifier)
 	OptionalModifier string // "+", "-", or "" (for optional modifier)
@@ -2100,16 +2114,16 @@ func (mte *MappedTypeExpression) expressionNode()      {}
 func (mte *MappedTypeExpression) TokenLiteral() string { return mte.Token.Literal }
 func (mte *MappedTypeExpression) String() string {
 	var out bytes.Buffer
-	
+
 	out.WriteString("{ ")
-	
+
 	// Add modifiers
 	if mte.ReadonlyModifier == "+" {
 		out.WriteString("readonly ")
 	} else if mte.ReadonlyModifier == "-" {
 		out.WriteString("-readonly ")
 	}
-	
+
 	out.WriteString("[")
 	if mte.TypeParameter != nil {
 		out.WriteString(mte.TypeParameter.String())
@@ -2119,25 +2133,25 @@ func (mte *MappedTypeExpression) String() string {
 		out.WriteString(mte.ConstraintType.String())
 	}
 	out.WriteString("]")
-	
+
 	// Add optional modifier
 	if mte.OptionalModifier == "+" {
 		out.WriteString("?")
 	} else if mte.OptionalModifier == "-" {
 		out.WriteString("-?")
 	}
-	
+
 	out.WriteString(": ")
 	if mte.ValueType != nil {
 		out.WriteString(mte.ValueType.String())
 	}
-	
+
 	out.WriteString(" }")
-	
+
 	if mte.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", mte.ComputedType.String()))
 	}
-	
+
 	return out.String()
 }
 
@@ -2149,21 +2163,21 @@ func (mte *MappedTypeExpression) GetComputedType() types.Type { return mte.Compu
 
 // ConditionalTypeExpression represents a conditional type like T extends U ? X : Y
 type ConditionalTypeExpression struct {
-	BaseExpression               // Embed base for ComputedType (types.ConditionalType)
-	CheckType      Expression    // The type being checked (T in T extends U ? X : Y)
-	ExtendsToken   lexer.Token  // The 'extends' token
-	ExtendsType    Expression    // The type being extended/checked against (U in T extends U ? X : Y)
-	QuestionToken  lexer.Token  // The '?' token
-	TrueType       Expression    // The type when condition is true (X in T extends U ? X : Y)
-	ColonToken     lexer.Token  // The ':' token
-	FalseType      Expression    // The type when condition is false (Y in T extends U ? X : Y)
+	BaseExpression             // Embed base for ComputedType (types.ConditionalType)
+	CheckType      Expression  // The type being checked (T in T extends U ? X : Y)
+	ExtendsToken   lexer.Token // The 'extends' token
+	ExtendsType    Expression  // The type being extended/checked against (U in T extends U ? X : Y)
+	QuestionToken  lexer.Token // The '?' token
+	TrueType       Expression  // The type when condition is true (X in T extends U ? X : Y)
+	ColonToken     lexer.Token // The ':' token
+	FalseType      Expression  // The type when condition is false (Y in T extends U ? X : Y)
 }
 
 func (cte *ConditionalTypeExpression) expressionNode()      {}
 func (cte *ConditionalTypeExpression) TokenLiteral() string { return cte.ExtendsToken.Literal }
 func (cte *ConditionalTypeExpression) String() string {
 	var out bytes.Buffer
-	
+
 	if cte.CheckType != nil {
 		out.WriteString(cte.CheckType.String())
 	}
@@ -2179,11 +2193,11 @@ func (cte *ConditionalTypeExpression) String() string {
 	if cte.FalseType != nil {
 		out.WriteString(cte.FalseType.String())
 	}
-	
+
 	if cte.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", cte.ComputedType.String()))
 	}
-	
+
 	return out.String()
 }
 
@@ -2241,16 +2255,16 @@ func (kte *KeyofTypeExpression) expressionNode()      {}
 func (kte *KeyofTypeExpression) TokenLiteral() string { return kte.Token.Literal }
 func (kte *KeyofTypeExpression) String() string {
 	var out bytes.Buffer
-	
+
 	out.WriteString("keyof ")
 	if kte.Type != nil {
 		out.WriteString(kte.Type.String())
 	}
-	
+
 	if kte.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", kte.ComputedType.String()))
 	}
-	
+
 	return out.String()
 }
 
@@ -2272,14 +2286,14 @@ func (tte *TypeofTypeExpression) expressionNode()      {}
 func (tte *TypeofTypeExpression) TokenLiteral() string { return tte.Token.Literal }
 func (tte *TypeofTypeExpression) String() string {
 	var out bytes.Buffer
-	
+
 	out.WriteString("typeof ")
 	out.WriteString(tte.Identifier)
-	
+
 	if tte.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", tte.ComputedType.String()))
 	}
-	
+
 	return out.String()
 }
 
@@ -2301,14 +2315,14 @@ func (ite *InferTypeExpression) expressionNode()      {}
 func (ite *InferTypeExpression) TokenLiteral() string { return ite.Token.Literal }
 func (ite *InferTypeExpression) String() string {
 	var out bytes.Buffer
-	
+
 	out.WriteString("infer ")
 	out.WriteString(ite.TypeParameter)
-	
+
 	if ite.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", ite.ComputedType.String()))
 	}
-	
+
 	return out.String()
 }
 
@@ -2331,7 +2345,7 @@ func (tpe *TypePredicateExpression) expressionNode()      {}
 func (tpe *TypePredicateExpression) TokenLiteral() string { return tpe.Token.Literal }
 func (tpe *TypePredicateExpression) String() string {
 	var out bytes.Buffer
-	
+
 	if tpe.Parameter != nil {
 		out.WriteString(tpe.Parameter.String())
 	}
@@ -2339,11 +2353,11 @@ func (tpe *TypePredicateExpression) String() string {
 	if tpe.Type != nil {
 		out.WriteString(tpe.Type.String())
 	}
-	
+
 	if tpe.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", tpe.ComputedType.String()))
 	}
-	
+
 	return out.String()
 }
 
@@ -2366,7 +2380,7 @@ func (iate *IndexedAccessTypeExpression) expressionNode()      {}
 func (iate *IndexedAccessTypeExpression) TokenLiteral() string { return iate.Token.Literal }
 func (iate *IndexedAccessTypeExpression) String() string {
 	var out bytes.Buffer
-	
+
 	if iate.ObjectType != nil {
 		out.WriteString(iate.ObjectType.String())
 	}
@@ -2375,11 +2389,11 @@ func (iate *IndexedAccessTypeExpression) String() string {
 		out.WriteString(iate.IndexType.String())
 	}
 	out.WriteString("]")
-	
+
 	if iate.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", iate.ComputedType.String()))
 	}
-	
+
 	return out.String()
 }
 
@@ -2530,13 +2544,13 @@ type ObjectTypeProperty struct {
 	IsCallSignature bool         // Whether this is a call signature like (param: type): returnType
 	Parameters      []Expression // Parameters for call signatures (only used when IsCallSignature is true)
 	ReturnType      Expression   // Return type for call signatures (only used when IsCallSignature is true)
-	
+
 	// Index signature fields
-	IsIndexSignature bool       // Whether this is an index signature like [key: string]: Type
+	IsIndexSignature bool        // Whether this is an index signature like [key: string]: Type
 	KeyName          *Identifier // The key parameter name (e.g., "key" in [key: string]: Type)
 	KeyType          Expression  // The key type (e.g., "string" in [key: string]: Type)
 	ValueType        Expression  // The value type (e.g., "Type" in [key: string]: Type)
-	
+
 	// Computed property fields
 	IsComputedProperty bool       // Whether this is a computed property [expr]: Type
 	ComputedName       Expression // The computed property expression
@@ -2648,9 +2662,9 @@ type InterfaceProperty struct {
 	Optional               bool        // Whether the property is optional (Name?)
 	IsConstructorSignature bool        // Whether this is a constructor signature (new (): T)
 	IsComputedProperty     bool        // Whether this is a computed property name [expr]:
-	
+
 	// Index signature fields
-	IsIndexSignature bool       // Whether this is an index signature like [key: string]: Type
+	IsIndexSignature bool        // Whether this is an index signature like [key: string]: Type
 	KeyName          *Identifier // The key parameter name (e.g., "key" in [key: string]: Type)
 	KeyType          Expression  // The key type (e.g., "string" in [key: string]: Type)
 	ValueType        Expression  // The value type (e.g., "Type" in [key: string]: Type)

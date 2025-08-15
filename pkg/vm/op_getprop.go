@@ -484,6 +484,70 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 		return true, InterpretOK, *dest
 	}
 
+	// Map: consult Map.prototype for symbol properties (e.g., [Symbol.iterator])
+	if base.Type() == TypeMap {
+		proto := vm.MapPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// Set: consult Set.prototype for symbol properties
+	if base.Type() == TypeSet {
+		proto := vm.SetPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
 	// PlainObject: search by symbol identity
 	if base.Type() == TypeObject {
 		po := AsPlainObject(base)

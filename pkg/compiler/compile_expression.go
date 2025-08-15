@@ -1031,22 +1031,19 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 
 		case *parser.IndexExpression:
 			// delete obj[key]
-			// For now, we'll handle this similarly to member expressions if the key is a string literal
-			// Full dynamic property deletion would require a different opcode
-			if strLit, ok := operand.Index.(*parser.StringLiteral); ok {
-				objReg := c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, objReg)
-				_, err := c.compileNode(operand.Left, objReg)
-				if err != nil {
-					return BadRegister, err
-				}
-				propIdx := c.chunk.AddConstant(vm.String(strLit.Value))
-				c.emitDeleteProp(hint, objReg, propIdx, node.Token.Line)
-			} else {
-				// For dynamic keys, we'd need a different approach
-				// For now, compile error
-				return BadRegister, NewCompileError(node, "delete with dynamic property keys not yet supported")
+			objReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, objReg)
+			_, err := c.compileNode(operand.Left, objReg)
+			if err != nil {
+				return BadRegister, err
 			}
+			keyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyReg)
+			_, err = c.compileNode(operand.Index, keyReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			c.emitDeleteIndex(hint, objReg, keyReg, node.Token.Line)
 
 		default:
 			// For other expressions (like identifiers), the type checker should have caught this
@@ -1405,6 +1402,84 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
 	}
 
+	return hint, nil
+}
+
+// compileTaggedTemplate compiles tag`...` as a call: tag(cookedStrings, ...substitutions)
+// For now we only pass cooked strings (no raw) and expand substitutions as additional args.
+func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, hint Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+	// temp regs cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, r := range tempRegs {
+			c.regAlloc.Free(r)
+		}
+	}()
+
+	// Collect cooked strings and substitution expressions
+	cookedStrings := []vm.Value{}
+	substitutions := []parser.Expression{}
+	for i, part := range node.Template.Parts {
+		if i%2 == 0 {
+			cookedStrings = append(cookedStrings, vm.String(part.String()))
+		} else if expr, ok := part.(parser.Expression); ok {
+			substitutions = append(substitutions, expr)
+		}
+	}
+
+	// Allocate contiguous block: function + [cookedStrings, ...subs]
+	argCount := 1 + len(substitutions)
+	funcBase := c.regAlloc.AllocContiguous(1 + argCount)
+	for i := 0; i < 1+argCount; i++ {
+		tempRegs = append(tempRegs, funcBase+Register(i))
+	}
+
+	// 1) Compile tag into funcBase
+	if _, err := c.compileNode(node.Tag, funcBase); err != nil {
+		return BadRegister, err
+	}
+
+	// 2) Build cooked strings array and load into funcBase+1
+	// Create array constant of cooked strings and attach a non-writable, non-configurable `.raw` copy
+	arrVal := vm.NewArray()
+	arr := arrVal.AsArray()
+	for _, v := range cookedStrings {
+		arr.Append(v)
+	}
+	// Build raw array (identical to cooked for now; no escape processing yet)
+	rawVal := vm.NewArray()
+	rawArr := rawVal.AsArray()
+	for _, v := range cookedStrings {
+		rawArr.Append(v)
+	}
+	// Attach `.raw` on the array object before loading as constant. We approximate attributes by not exposing attrs bits here.
+	if po := arrVal.AsArray(); po != nil {
+		// Array is a wrapped object; setOwn will create a data property
+		// In our VM, property attributes are not fully modeled on ArrayObject; acceptable for harness use.
+		arrVal.AsArray() // ensure allocation
+	}
+	// Since ArrayObject doesn't expose SetOwn, create a PlainObject wrapper to carry .raw: use DictObject-like approach
+	// Simpler: after load, immediately set property in bytecode
+	c.emitLoadNewConstant(funcBase+1, arrVal, line)
+	// Load raw into a temp and set property 'raw' on the cooked array
+	tmpReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, tmpReg)
+	c.emitLoadNewConstant(tmpReg, rawVal, line)
+	nameIdx := c.chunk.AddConstant(vm.String("raw"))
+	c.emitSetProp(funcBase+1, tmpReg, nameIdx, line)
+
+	// 3) Compile substitutions into subsequent registers
+	for i, expr := range substitutions {
+		if _, err := c.compileNode(expr, funcBase+Register(2+i)); err != nil {
+			return BadRegister, err
+		}
+	}
+
+	// 4) Emit call: tag(cookedStrings, ...subs)
+	// IMPORTANT: Do not reuse funcBase as the destination; use 'hint' only, leaving funcBase intact until after emit
+	c.emitCall(hint, funcBase, byte(argCount), line)
+	// Ensure funcBase block stays alive through the call; cleanup is handled by tempRegs defer
 	return hint, nil
 }
 

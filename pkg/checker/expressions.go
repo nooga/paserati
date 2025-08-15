@@ -710,6 +710,16 @@ func (c *Checker) checkTemplateLiteral(node *parser.TemplateLiteral) {
 	debugPrintf("// [Checker TemplateLit] Set template literal type to: string\n")
 }
 
+// checkTaggedTemplateExpression: the result type is any (string) for now; proper semantics later
+func (c *Checker) checkTaggedTemplateExpression(node *parser.TaggedTemplateExpression) {
+	// Check tag expression
+	c.visit(node.Tag)
+	// Check template parts
+	c.checkTemplateLiteral(node.Template)
+	// Result of a tag call is Any for now
+	node.SetComputedType(types.Any)
+}
+
 // Helper function
 func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	// 1. Visit the object part

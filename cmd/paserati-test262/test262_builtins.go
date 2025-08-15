@@ -1041,53 +1041,8 @@ func (a *AssertInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	// Note: Do not attach assert.compareArray; the harness includes provide it
 
 	// Minimal deepEqual stub; attach to global and assert
-	deepEqualFn := vm.NewNativeFunction(2, false, "deepEqual", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 2 {
-			return vm.BooleanValue(false), nil
-		}
-		a := args[0]
-		b := args[1]
-		if sameValueSimple(a, b) {
-			return vm.BooleanValue(true), nil
-		}
-		if aa := a.AsArray(); aa != nil {
-			if bb := b.AsArray(); bb != nil {
-				if aa.Length() != bb.Length() {
-					return vm.BooleanValue(false), nil
-				}
-				for i := 0; i < aa.Length(); i++ {
-					if !sameValueSimple(aa.Get(i), bb.Get(i)) {
-						return vm.BooleanValue(false), nil
-					}
-				}
-				return vm.BooleanValue(true), nil
-			}
-		}
-		return vm.BooleanValue(false), nil
-	})
-	if err := ctx.DefineGlobal("deepEqual", deepEqualFn); err != nil {
-		return err
-	}
-	// assert.deepEqual should THROW on mismatch, mirroring Test262 harness behavior
-	assertDeepEqualThrow := vm.NewNativeFunction(2, true, "deepEqual", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 2 {
-			// Treat as failed assertion
-			msg := "Expected undefined to be structurally equal to undefined. "
-			errVal, _ := vmInstance.Call(sharedTest262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString(msg)})
-			return vm.Undefined, test262ExceptionError{v: errVal}
-		}
-		a := args[0]
-		b := args[1]
-		okVal, _ := deepEqualFn.AsNativeFunction().Fn([]vm.Value{a, b})
-		if !okVal.AsBoolean() {
-			// Build simple message like harness: Expected <a> to be structurally equal to <b>.
-			msg := "Expected " + a.Inspect() + " to be structurally equal to " + b.Inspect() + ". "
-			errVal, _ := vmInstance.Call(sharedTest262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString(msg)})
-			return vm.Undefined, test262ExceptionError{v: errVal}
-		}
-		return vm.Undefined, nil
-	})
-	assertFn.AsNativeFunctionWithProps().Properties.SetOwn("deepEqual", assertDeepEqualThrow)
+	// Removed: harness provides deepEqual.js and assert.deepEqual; do not override here.
+	// ... existing code ...
 
 	// decimalToHexString helper used by a few harness tests
 	decToHexFn := vm.NewNativeFunction(1, false, "decimalToHexString", func(args []vm.Value) (vm.Value, error) {

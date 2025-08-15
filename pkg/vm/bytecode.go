@@ -93,6 +93,7 @@ const (
 	OpGetProp         OpCode = 41 // Rx Ry NameIdx(16bit): Rx = Ry[NameIdx]
 	OpSetProp         OpCode = 42 // Rx Ry NameIdx(16bit): Rx[NameIdx] = Ry (Object in Rx, Value in Ry)
 	OpDeleteProp      OpCode = 62 // Rx Ry NameIdx(16bit): Rx = delete Ry[NameIdx] (returns boolean)
+	OpDeleteIndex     OpCode = 79 // Rx Ry Rz: Rx = delete Ry[Rz] (returns boolean)
 
 	// --- NEW: Method Calls and This Context ---
 	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
@@ -270,6 +271,8 @@ func (op OpCode) String() string {
 		return "OpSetProp"
 	case OpDeleteProp:
 		return "OpDeleteProp"
+	case OpDeleteIndex:
+		return "OpDeleteIndex"
 	case OpCallMethod:
 		return "OpCallMethod"
 	case OpLoadThis:

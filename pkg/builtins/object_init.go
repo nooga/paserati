@@ -20,8 +20,11 @@ func (o *ObjectInitializer) Priority() int {
 
 func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Object.prototype type using fluent API
+	// For property key parameters, accept string | symbol
+	keyStringOrSymbol := types.NewUnionType(types.String, types.Symbol)
 	objectProtoType := types.NewObjectType().
-		WithProperty("hasOwnProperty", types.NewSimpleFunction([]types.Type{types.String}, types.Boolean)).
+		WithProperty("hasOwnProperty", types.NewSimpleFunction([]types.Type{keyStringOrSymbol}, types.Boolean)).
+		WithProperty("propertyIsEnumerable", types.NewSimpleFunction([]types.Type{keyStringOrSymbol}, types.Boolean)).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("isPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean))
@@ -37,14 +40,14 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("values", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: &types.TupleType{ElementTypes: []types.Type{types.String, types.Any}}})).
 		WithProperty("getOwnPropertyNames", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.String})).
-		WithProperty("getOwnPropertySymbols", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("getOwnPropertySymbols", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.Symbol})).
 		WithProperty("assign", types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any})).
-		WithProperty("hasOwn", types.NewSimpleFunction([]types.Type{types.Any, types.String}, types.Boolean)).
+		WithProperty("hasOwn", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol}, types.Boolean)).
 		WithProperty("fromEntries", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("getPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("setPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
-		WithProperty("defineProperty", types.NewSimpleFunction([]types.Type{types.Any, types.String, types.Any}, types.Any)).
-		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, types.String}, types.Any)).
+		WithProperty("defineProperty", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol, types.Any}, types.Any)).
+		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol}, types.Any)).
 		WithProperty("is", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Boolean)).
 		WithProperty("prototype", objectProtoType)
 
@@ -71,7 +74,24 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), nil
 		}
 		thisValue := vmInstance.GetThis()
-		propName := args[0].ToString()
+		keyVal := args[0]
+		// Handle symbol and string keys
+		if keyVal.Type() == vm.TypeSymbol {
+			key := vm.NewSymbolKey(keyVal)
+			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
+				return vm.BooleanValue(plainObj.HasOwnByKey(key)), nil
+			}
+			if dictObj := thisValue.AsDictObject(); dictObj != nil {
+				// DictObject has only string keys; symbols are not supported
+				return vm.BooleanValue(false), nil
+			}
+			if arrObj := thisValue.AsArray(); arrObj != nil {
+				// Arrays: symbol own keys generally none here
+				return vm.BooleanValue(false), nil
+			}
+			return vm.BooleanValue(false), nil
+		}
+		propName := keyVal.ToString()
 
 		// Check if this object has the property as own property
 		if plainObj := thisValue.AsPlainObject(); plainObj != nil {
@@ -94,6 +114,11 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.BooleanValue(false), nil
 	}))
+	// Ensure attributes per spec: writable true, enumerable false, configurable true
+	if v, ok := objectProto.GetOwn("hasOwnProperty"); ok {
+		w, e, c := true, false, true
+		objectProto.DefineOwnProperty("hasOwnProperty", v, &w, &e, &c)
+	}
 
 	// propertyIsEnumerable
 	objectProto.SetOwn("propertyIsEnumerable", vm.NewNativeFunction(1, false, "propertyIsEnumerable", func(args []vm.Value) (vm.Value, error) {
@@ -101,7 +126,25 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), nil
 		}
 		thisValue := vmInstance.GetThis()
-		propName := args[0].ToString()
+		keyVal := args[0]
+		if keyVal.Type() == vm.TypeSymbol {
+			key := vm.NewSymbolKey(keyVal)
+			if po := thisValue.AsPlainObject(); po != nil {
+				if _, _, en, _, ok := po.GetOwnDescriptorByKey(key); ok {
+					return vm.BooleanValue(en), nil
+				}
+				return vm.BooleanValue(false), nil
+			}
+			if dict := thisValue.AsDictObject(); dict != nil {
+				// DictObject doesn’t support symbol keys
+				return vm.BooleanValue(false), nil
+			}
+			if arr := thisValue.AsArray(); arr != nil {
+				return vm.BooleanValue(false), nil
+			}
+			return vm.BooleanValue(false), nil
+		}
+		propName := keyVal.ToString()
 		if po := thisValue.AsPlainObject(); po != nil {
 			if _, _, en, _, ok := po.GetOwnDescriptor(propName); ok {
 				return vm.BooleanValue(en), nil
@@ -124,6 +167,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.BooleanValue(false), nil
 	}))
+	if v, ok := objectProto.GetOwn("propertyIsEnumerable"); ok {
+		w, e, c := true, false, true
+		objectProto.DefineOwnProperty("propertyIsEnumerable", v, &w, &e, &c)
+	}
 
 	objectProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
@@ -148,10 +195,18 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString("[object Object]"), nil
 		}
 	}))
+	if v, ok := objectProto.GetOwn("toString"); ok {
+		w, e, c := true, false, true
+		objectProto.DefineOwnProperty("toString", v, &w, &e, &c)
+	}
 
 	objectProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		return vmInstance.GetThis(), nil // Return this
 	}))
+	if v, ok := objectProto.GetOwn("valueOf"); ok {
+		w, e, c := true, false, true
+		objectProto.DefineOwnProperty("valueOf", v, &w, &e, &c)
+	}
 
 	objectProto.SetOwn("isPrototypeOf", vm.NewNativeFunction(1, false, "isPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
@@ -188,6 +243,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		return vm.BooleanValue(false), nil
 	}))
+	if v, ok := objectProto.GetOwn("isPrototypeOf"); ok {
+		w, e, c := true, false, true
+		objectProto.DefineOwnProperty("isPrototypeOf", v, &w, &e, &c)
+	}
 
 	// Create Object constructor
 	objectCtor := vm.NewNativeFunction(-1, true, "Object", func(args []vm.Value) (vm.Value, error) {
@@ -210,6 +269,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Add prototype property
 		ctorPropsObj.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(objectProto))
+		if v, ok := ctorPropsObj.Properties.GetOwn("prototype"); ok {
+			w, e, c := false, false, false
+			ctorPropsObj.Properties.DefineOwnProperty("prototype", v, &w, &e, &c)
+		}
 
 		// Add static methods
 		ctorPropsObj.Properties.SetOwn("create", vm.NewNativeFunction(1, false, "create", objectCreateImpl))
@@ -241,6 +304,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Set constructor property on prototype
 	objectProto.SetOwn("constructor", objectCtor)
+	if v, ok := objectProto.GetOwn("constructor"); ok {
+		w, e, c := true, false, true
+		objectProto.DefineOwnProperty("constructor", v, &w, &e, &c)
+	}
 
 	// Store in VM
 	vmInstance.ObjectPrototype = vm.NewValueFromPlainObject(objectProto)
@@ -661,18 +728,28 @@ func objectHasOwnImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
-	propName := args[1].ToString()
+	keyVal := args[1]
 
 	// Check if object has the property as own property
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		_, hasOwn := plainObj.GetOwn(propName)
+		if keyVal.Type() == vm.TypeSymbol {
+			return vm.BooleanValue(plainObj.HasOwnByKey(vm.NewSymbolKey(keyVal))), nil
+		}
+		_, hasOwn := plainObj.GetOwn(keyVal.ToString())
 		return vm.BooleanValue(hasOwn), nil
 	}
 	if dictObj := obj.AsDictObject(); dictObj != nil {
-		_, hasOwn := dictObj.GetOwn(propName)
+		if keyVal.Type() == vm.TypeSymbol {
+			return vm.BooleanValue(false), nil
+		}
+		_, hasOwn := dictObj.GetOwn(keyVal.ToString())
 		return vm.BooleanValue(hasOwn), nil
 	}
 	if arrObj := obj.AsArray(); arrObj != nil {
+		if keyVal.Type() == vm.TypeSymbol {
+			return vm.BooleanValue(false), nil
+		}
+		propName := keyVal.ToString()
 		// For arrays, check if it's a valid index or 'length'
 		if propName == "length" {
 			return vm.BooleanValue(true), nil
@@ -830,10 +907,23 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 		// Enforce non-configurable rules when updating existing property
 		var exists bool
 		var w0, e0, c0 bool
+		var isAccessor0 bool
 		if keyIsSymbol {
-			_, w0, e0, c0, exists = plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+			if g, s, e, c, ok := plainObj.GetOwnAccessorByKey(vm.NewSymbolKey(propSym)); ok {
+				isAccessor0, e0, c0, exists = true, e, c, true
+				_ = g
+				_ = s
+			} else {
+				_, w0, e0, c0, exists = plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+			}
 		} else {
-			_, w0, e0, c0, exists = plainObj.GetOwnDescriptor(propName)
+			if g, s, e, c, ok := plainObj.GetOwnAccessor(propName); ok {
+				isAccessor0, e0, c0, exists = true, e, c, true
+				_ = g
+				_ = s
+			} else {
+				_, w0, e0, c0, exists = plainObj.GetOwnDescriptor(propName)
+			}
 		}
 		if exists && !c0 {
 			// Non-configurable: cannot change configurable or enumerable
@@ -843,8 +933,15 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 			if enumerablePtr != nil && *enumerablePtr != e0 {
 				return obj, nil
 			}
-			// If current writable is false and descriptor tries to set writable true, reject
-			if !w0 && writablePtr != nil && *writablePtr {
+			// If data non-writable cannot make writable true
+			if !isAccessor0 && !w0 && writablePtr != nil && *writablePtr {
+				return obj, nil
+			}
+			// Disallow converting kind when not configurable
+			if isAccessor0 && !(hasGetter || hasSetter) {
+				return obj, nil
+			}
+			if !isAccessor0 && (hasGetter || hasSetter) {
 				return obj, nil
 			}
 		}

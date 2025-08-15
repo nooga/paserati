@@ -7,6 +7,7 @@ import (
 	"os"
 	"paserati/pkg/errors"
 	"strconv"
+	"strings"
 	"unsafe"
 )
 
@@ -642,54 +643,22 @@ startExecution:
 			// Type checking specific to operation groups
 			switch opcode {
 			case OpAdd:
-				// Allow string concatenation, number addition, or BigInt addition
-				if IsNumber(leftVal) && IsNumber(rightVal) {
-					registers[destReg] = Number(AsNumber(leftVal) + AsNumber(rightVal))
+				// JS semantics: ToPrimitive on both, if either is String → concatenate ToString(lhs)+ToString(rhs);
+				// else if both BigInt → BigInt add; else Number add; BigInt/Number mixing is an error.
+				if IsString(leftVal) || IsString(rightVal) {
+					registers[destReg] = String(leftVal.ToString() + rightVal.ToString())
 				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
-					// BigInt + BigInt = BigInt
 					result := new(big.Int).Add(leftVal.AsBigInt(), rightVal.AsBigInt())
 					registers[destReg] = NewBigInt(result)
-				} else if leftVal.IsBigInt() && IsNumber(rightVal) {
-					// BigInt + Number is not allowed in JavaScript
+				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
 					frame.ip = ip
 					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
 					return status, Undefined
-				} else if IsNumber(leftVal) && rightVal.IsBigInt() {
-					// Number + BigInt is not allowed in JavaScript
-					frame.ip = ip
-					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
-					return status, Undefined
-				} else if IsString(leftVal) && IsString(rightVal) {
-					// Consider performance of string concat later
-					registers[destReg] = String(AsString(leftVal) + AsString(rightVal))
-				} else if IsString(leftVal) && IsNumber(rightVal) {
-					registers[destReg] = String(AsString(leftVal) + fmt.Sprintf("%v", AsNumber(rightVal)))
-				} else if IsNumber(leftVal) && IsString(rightVal) {
-					registers[destReg] = String(fmt.Sprintf("%v", AsNumber(leftVal)) + AsString(rightVal))
-				} else if IsString(leftVal) && rightVal.IsBigInt() {
-					// String + BigInt concatenation
-					registers[destReg] = String(AsString(leftVal) + rightVal.AsBigInt().String() + "n")
-				} else if leftVal.IsBigInt() && IsString(rightVal) {
-					// BigInt + String concatenation
-					registers[destReg] = String(leftVal.AsBigInt().String() + "n" + AsString(rightVal))
-				} else if IsString(leftVal) && rightVal.IsBoolean() {
-					// String + Boolean concatenation (boolean converted to string)
-					boolStr := "false"
-					if rightVal.AsBoolean() {
-						boolStr = "true"
-					}
-					registers[destReg] = String(AsString(leftVal) + boolStr)
-				} else if leftVal.IsBoolean() && IsString(rightVal) {
-					// Boolean + String concatenation (boolean converted to string)
-					boolStr := "false"
-					if leftVal.AsBoolean() {
-						boolStr = "true"
-					}
-					registers[destReg] = String(boolStr + AsString(rightVal))
+				} else if IsNumber(leftVal) && IsNumber(rightVal) {
+					registers[destReg] = Number(AsNumber(leftVal) + AsNumber(rightVal))
 				} else {
-					frame.ip = ip
-					status := vm.runtimeError("Operands must be two numbers, two BigInts, two strings, a string and a number/BigInt, or a string and a boolean for '+'.")
-					return status, Undefined
+					// Fallback: attempt string concatenation per spec coercions
+					registers[destReg] = String(leftVal.ToString() + rightVal.ToString())
 				}
 			case OpSubtract, OpMultiply, OpDivide:
 				// Handle numbers and BigInts separately (no mixing allowed)
@@ -810,8 +779,8 @@ startExecution:
 					return status, Undefined
 				}
 			case OpEqual, OpNotEqual:
-				// Use a helper for equality check (handles type differences)
-				isEqual := valuesEqual(leftVal, rightVal)
+				// Use Abstract Equality (==) per JS semantics
+				isEqual := valuesAbstractEqual(leftVal, rightVal)
 				if opcode == OpEqual {
 					registers[destReg] = BooleanValue(isEqual)
 				} else {
@@ -852,36 +821,55 @@ startExecution:
 
 			// Check if property exists in object or its prototype chain
 			var hasProperty bool
-			propKey := propVal.ToString()
-
-			switch objVal.Type() {
-			case TypeObject:
-				plainObj := objVal.AsPlainObject()
-				// Use prototype-aware Has() method instead of HasOwn()
-				hasProperty = plainObj.Has(propKey)
-			case TypeDictObject:
-				dictObj := objVal.AsDictObject()
-				// Use prototype-aware Has() method instead of HasOwn()
-				hasProperty = dictObj.Has(propKey)
-			case TypeArray:
-				// For arrays, check if the property is a valid index or inherited property
-				arrayObj := objVal.AsArray()
-				if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
-					// Check if index is within bounds
-					hasProperty = index < arrayObj.Length()
-				} else {
-					// Check for array properties (length) or inherited properties
-					if propKey == "length" {
-						hasProperty = true
-					} else {
-						// Arrays should inherit from Array.prototype, for now just return false
-						// TODO: Implement proper array prototype chain traversal
-						hasProperty = false
+			if propVal.Type() == TypeSymbol {
+				// Symbol key: walk prototype chain for symbol
+				switch objVal.Type() {
+				case TypeObject:
+					po := objVal.AsPlainObject()
+					for cur := po; cur != nil; {
+						if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+							hasProperty = true
+							break
+						}
+						pv := cur.GetPrototype()
+						if !pv.IsObject() {
+							break
+						}
+						cur = pv.AsPlainObject()
 					}
+				case TypeDictObject:
+					// DictObject currently ignores symbols
+					hasProperty = false
+				case TypeArray:
+					// No symbol support here yet
+					hasProperty = false
+				default:
+					hasProperty = false
 				}
-			default:
-				// TypeError: Right-hand side of 'in' is not an object
-				hasProperty = false
+			} else {
+				propKey := propVal.ToString()
+				switch objVal.Type() {
+				case TypeObject:
+					plainObj := objVal.AsPlainObject()
+					// Use prototype-aware Has() method instead of HasOwn()
+					hasProperty = plainObj.Has(propKey)
+				case TypeDictObject:
+					dictObj := objVal.AsDictObject()
+					// Use prototype-aware Has() method instead of HasOwn()
+					hasProperty = dictObj.Has(propKey)
+				case TypeArray:
+					// For arrays, check if the property is a valid index or known property
+					arrayObj := objVal.AsArray()
+					if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
+						// Check if index is within bounds
+						hasProperty = index < arrayObj.Length()
+					} else {
+						hasProperty = propKey == "length"
+					}
+				default:
+					// Non-object RHS
+					hasProperty = false
+				}
 			}
 
 			registers[destReg] = BooleanValue(hasProperty)
@@ -978,9 +966,29 @@ startExecution:
 			wasUnwinding := vm.unwinding
 
 			calleeVal := callerRegisters[funcReg]
+			// Targeted debug for deepEqual recursion investigation
+			if false { // flip to true for local debugging
+				calleeName := ""
+				switch calleeVal.Type() {
+				case TypeFunction:
+					calleeName = calleeVal.AsFunction().Name
+				case TypeClosure:
+					calleeName = calleeVal.AsClosure().Fn.Name
+				case TypeNativeFunction, TypeNativeFunctionWithProps:
+					calleeName = calleeVal.TypeName()
+				}
+				if calleeName == "deepEqual" || calleeName == "compareEquality" || calleeName == "compareObjectEquality" {
+					fmt.Printf("[CALL] %s args=%d this=<regular>\n", calleeName, argCount)
+				}
+			}
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
 			shouldSwitch, err := vm.prepareCall(calleeVal, Undefined, args, destReg, callerRegisters, callerIP)
+			if err != nil && !debugCalls {
+				if strings.Contains(err.Error(), "Cannot call non-function value") {
+					err = fmt.Errorf("Cannot call non-function value %s (%s) at bytecode ip=%d (dest=R%d, func=R%d)", calleeVal.Inspect(), calleeVal.TypeName(), callSiteIP, destReg, funcReg)
+				}
+			}
 
 			if debugCalls {
 				fmt.Printf("[DEBUG vm.go] OpCall: prepareCall returned shouldSwitch=%v, err=%v, wasUnwinding=%v, nowUnwinding=%v\n",
@@ -1602,7 +1610,7 @@ startExecution:
 						}
 						// Trace iterator symbol resolution in for-of
 						// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
-						fmt.Printf("[DBG OpGetIndex:Array] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
+						// fmt.Printf("[DBG OpGetIndex:Array] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
 						// }
 						continue
 					default:
@@ -1644,7 +1652,7 @@ startExecution:
 						return status, value
 					}
 					// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
-					fmt.Printf("[DBG OpGetIndex:Object] [Symbol.iterator] -> %s (%s) base=%s\n", registers[destReg].Inspect(), registers[destReg].TypeName(), baseVal.Inspect())
+					// fmt.Printf("[DBG OpGetIndex:Object] [Symbol.iterator] -> %s (%s) base=%s\n", registers[destReg].Inspect(), registers[destReg].TypeName(), baseVal.Inspect())
 					// }
 					continue
 				default:
@@ -1748,7 +1756,7 @@ startExecution:
 						return status, value
 					}
 					// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
-					fmt.Printf("[DBG OpGetIndex:Generator] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
+					// fmt.Printf("[DBG OpGetIndex:Generator] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
 					// }
 					continue
 				default:
@@ -1894,6 +1902,15 @@ startExecution:
 				str := AsString(srcVal)
 				// Use rune count for string length to handle multi-byte chars correctly
 				length = float64(len(str))
+			case TypeObject, TypeDictObject:
+				if po := srcVal.AsPlainObject(); po != nil {
+					if v, ok := po.GetOwn("length"); ok {
+						length = v.ToFloat()
+						break
+					}
+				}
+				// If no own length, fallthrough to error
+				fallthrough
 			default:
 				frame.ip = ip
 				status := vm.runtimeError("Cannot get length of type '%v'", srcVal.Type())
@@ -2110,55 +2127,7 @@ startExecution:
 				return status, value
 			}
 
-		case OpDeleteProp:
-			destReg := code[ip]
-			objReg := code[ip+1]
-			nameConstIdxHi := code[ip+2]
-			nameConstIdxLo := code[ip+3]
-			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
-			ip += 4
-
-			// Get property name from constants
-			if int(nameConstIdx) >= len(constants) {
-				frame.ip = ip
-				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
-				return status, Undefined
-			}
-			nameVal := constants[nameConstIdx]
-			if !IsString(nameVal) { // Compiler should ensure this
-				frame.ip = ip
-				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
-				return status, Undefined
-			}
-			propName := AsString(nameVal)
-
-			// Get the object
-			obj := registers[objReg]
-
-			// Handle delete operation
-			var success bool
-			if obj.IsObject() {
-				if plainObj := obj.AsPlainObject(); plainObj != nil {
-					success = plainObj.DeleteOwn(propName)
-				} else if dictObj := obj.AsDictObject(); dictObj != nil {
-					// DictObject supports deletion directly
-					success = dictObj.DeleteOwn(propName)
-
-				} else if arrObj := obj.AsArray(); arrObj != nil {
-					// Arrays don't support property deletion (only element deletion in the future)
-					success = false
-
-				} else {
-					// Other object types don't support property deletion
-					success = false
-				}
-			} else {
-				// Non-object types don't support property deletion
-				success = false
-			}
-
-			// Store the result (boolean) in the destination register
-			registers[destReg] = BooleanValue(success)
+		// (OpDeleteProp handled later in switch)
 
 		case OpCallMethod:
 			// Refactored to use centralized prepareCall
@@ -2183,6 +2152,24 @@ startExecution:
 
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
+			// Targeted debug for deepEqual recursion investigation
+			if false { // flip to true for local debugging
+				calleeName := ""
+				switch calleeVal.Type() {
+				case TypeFunction:
+					calleeName = calleeVal.AsFunction().Name
+				case TypeClosure:
+					calleeName = calleeVal.AsClosure().Fn.Name
+				case TypeNativeFunction, TypeNativeFunctionWithProps:
+					calleeName = calleeVal.TypeName()
+				}
+				if calleeName == "deepEqual" || calleeName == "compareEquality" || calleeName == "compareObjectEquality" {
+					fmt.Printf("[CALLM] %s args=%d this=%s\n", calleeName, argCount, thisVal.TypeName())
+				}
+			}
+			if !(calleeVal.IsFunction() || calleeVal.IsNativeFunction()) {
+				// fmt.Printf("[DBG OpCallMethod BAD] ip=%d funcReg=R%d thisReg=R%d destReg=R%d callee=%s (%s) this=%s (%s) args=%d\n", callSiteIP, funcReg, thisReg, destReg, calleeVal.Inspect(), calleeVal.TypeName(), thisVal.Inspect(), thisVal.TypeName(), argCount)
+			}
 			// Extra targeted tracing for iterator delegation debugging
 			if false && calleeVal.Type() == TypeNativeFunction {
 				nf := AsNativeFunction(calleeVal)
@@ -2790,8 +2777,22 @@ startExecution:
 			var keys []string
 			switch objValue.Type() {
 			case TypeObject:
-				obj := objValue.AsPlainObject()
-				keys = obj.OwnKeys()
+				// Enumerate own and inherited enumerable string-named properties (for-in semantics)
+				seen := make(map[string]bool)
+				cur := objValue.AsPlainObject()
+				for cur != nil {
+					for _, k := range cur.OwnKeys() {
+						if !seen[k] {
+							seen[k] = true
+							keys = append(keys, k)
+						}
+					}
+					pv := cur.GetPrototype()
+					if !pv.IsObject() {
+						break
+					}
+					cur = pv.AsPlainObject()
+				}
 			case TypeDictObject:
 				dict := objValue.AsDictObject()
 				keys = dict.OwnKeys()
@@ -3428,6 +3429,65 @@ startExecution:
 			// This should not be directly encountered in normal execution
 			status := vm.runtimeError("OpResumeGenerator is an internal opcode")
 			return status, Undefined
+
+		case OpDeleteProp:
+			destReg := code[ip]
+			objReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			propName := AsString(nameVal)
+			obj := registers[objReg]
+			success := false
+			if obj.IsObject() {
+				if po := obj.AsPlainObject(); po != nil {
+					success = po.DeleteOwn(propName)
+				} else if d := obj.AsDictObject(); d != nil {
+					success = d.DeleteOwn(propName)
+				}
+			}
+			registers[destReg] = BooleanValue(success)
+
+		case OpDeleteIndex:
+			destReg := code[ip]
+			objReg := code[ip+1]
+			keyReg := code[ip+2]
+			ip += 3
+
+			obj := registers[objReg]
+			key := registers[keyReg]
+			var success bool
+			if obj.IsObject() {
+				if po := obj.AsPlainObject(); po != nil {
+					if key.Type() == TypeSymbol {
+						success = po.DeleteOwnByKey(NewSymbolKey(key))
+					} else {
+						success = po.DeleteOwn(key.ToString())
+					}
+				} else if d := obj.AsDictObject(); d != nil {
+					if key.Type() == TypeSymbol {
+						success = false
+					} else {
+						success = d.DeleteOwn(key.ToString())
+					}
+				} else if a := obj.AsArray(); a != nil {
+					// Not supporting element deletion yet
+					success = false
+				}
+			}
+			registers[destReg] = BooleanValue(success)
 
 		default:
 			frame.ip = ip // Save IP before erroring

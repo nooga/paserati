@@ -364,6 +364,14 @@ func (c *Compiler) emitDeleteProp(dest, obj Register, nameConstIdx uint16, line 
 	c.emitUint16(nameConstIdx)
 }
 
+// emitDeleteIndex emits OpDeleteIndex DestReg, ObjReg, KeyReg
+func (c *Compiler) emitDeleteIndex(dest, obj, key Register, line int) {
+	c.emitOpCode(vm.OpDeleteIndex, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(obj))
+	c.emitByte(byte(key))
+}
+
 // --- END REVISED/NEW ---
 
 // --- NEW: Global Variable Emit Functions ---

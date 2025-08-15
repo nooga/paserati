@@ -158,6 +158,7 @@ var precedences = map[lexer.TokenType]int{
 	lexer.LPAREN:            CALL,
 	lexer.LBRACKET:          INDEX,
 	lexer.DOT:               MEMBER,
+	lexer.TEMPLATE_START:    CALL,   // Tagged template: tag`...`
 	lexer.OPTIONAL_CHAINING: MEMBER, // Same precedence as regular member access
 
 	// Postfix operators need precedence for the parseExpression loop termination condition
@@ -261,6 +262,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerInfix(lexer.LPAREN, p.parseCallExpression)    // Value context: function call
 	p.registerInfix(lexer.LBRACKET, p.parseIndexExpression) // Value context: array/member index
 	p.registerInfix(lexer.DOT, p.parseMemberExpression)
+	p.registerInfix(lexer.TEMPLATE_START, p.parseTaggedTemplateInfix) // tag`...`
 	p.registerInfix(lexer.OPTIONAL_CHAINING, p.parseOptionalChainingExpression)
 	p.registerInfix(lexer.QUESTION, p.parseTernaryExpression)
 	// Assignment Operators
@@ -1492,7 +1494,6 @@ func (p *Parser) parseIdentifier() Expression {
 	debugPrint("parseIdentifier (VALUE context): Just identifier '%s', returning.", ident.Value)
 	return ident
 }
-
 func (p *Parser) parseNumberLiteral() Expression {
 	lit := &NumberLiteral{Token: p.curToken}
 
@@ -3402,6 +3403,23 @@ func (p *Parser) parseCallExpression(function Expression) Expression {
 	return exp
 }
 
+// parseTaggedTemplateInfix handles the infix case where peek is TEMPLATE_START after a tag expression
+func (p *Parser) parseTaggedTemplateInfix(left Expression) Expression {
+	// Current token is TEMPLATE_START (parser advanced before calling infix)
+	if !p.curTokenIs(lexer.TEMPLATE_START) {
+		return left
+	}
+	// Parse template literal starting at current TEMPLATE_START
+	tmpl := p.parseTemplateLiteral()
+	if tmpl == nil {
+		return nil
+	}
+	if tl, ok := tmpl.(*TemplateLiteral); ok {
+		return &TaggedTemplateExpression{Token: p.curToken, Tag: left, Template: tl}
+	}
+	return nil
+}
+
 // parseExpressionList parses a comma-separated list of expressions until a specific end token.
 func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 	list := []Expression{}
@@ -4893,14 +4911,12 @@ func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 		TypeArguments:  typeArgs,
 	}
 }
-
 func (p *Parser) parseObjectLiteral() Expression {
 	objLit := &ObjectLiteral{
 		Token: p.curToken, // The '{' token
 		// --- MODIFIED: Initialize slice ---
 		Properties: []*ObjectProperty{},
 	}
-
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken() // Consume '{' or ',' to get to the key
 
@@ -6626,6 +6642,12 @@ func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt S
 			p.nextToken()
 			letStmt.TypeAnnotation = p.parseTypeExpression()
 		}
+		// Handle type annotation for var statements as in TypeScript
+		if vs, ok := varStmt.(*VarStatement); ok {
+			p.nextToken()
+			p.nextToken()
+			vs.TypeAnnotation = p.parseTypeExpression()
+		}
 	}
 	if p.peekTokenIs(lexer.ASSIGN) {
 		// Handle assignment
@@ -6635,8 +6657,22 @@ func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt S
 			letStmt.Value = p.parseExpression(LOWEST)
 		} else if constStmt, ok := varStmt.(*ConstStatement); ok {
 			constStmt.Value = p.parseExpression(LOWEST)
+		} else if vs, ok := varStmt.(*VarStatement); ok {
+			vs.Value = p.parseExpression(LOWEST)
 		}
 		// For expression statements, we'd need to create an assignment expression
+	}
+
+	// If initializer was a single 'var' binding, synthesize a single declarator
+	if vs, ok := varStmt.(*VarStatement); ok {
+		if vs.Name != nil {
+			decl := &VarDeclarator{
+				Name:           vs.Name,
+				TypeAnnotation: vs.TypeAnnotation,
+				Value:          vs.Value,
+			}
+			vs.Declarations = []*VarDeclarator{decl}
+		}
 	}
 
 	// Expect semicolon after initializer
@@ -7969,7 +8005,7 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 // export const x = 1;
 // export function foo() {}
 // export { name1, name2 };
-// export { name1 as alias1 };
+// export { name1 as alias };
 // export { name1 } from "module";
 // export default expression;
 // export * from "module";

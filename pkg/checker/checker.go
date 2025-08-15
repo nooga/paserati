@@ -5,9 +5,9 @@ import (
 	"math/big"
 	"os"
 	"paserati/pkg/builtins"
-	"paserati/pkg/errors" // Added import
+	"paserati/pkg/errors"  // Added import
 	"paserati/pkg/modules" // Added for real ModuleLoader integration
-	"paserati/pkg/source" // Added import for source context
+	"paserati/pkg/source"  // Added import for source context
 
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
@@ -28,7 +28,7 @@ func (c *Checker) isStringConcatenatable(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	
+
 	switch t {
 	case types.String, types.Number, types.Boolean, types.BigInt:
 		return true
@@ -37,7 +37,7 @@ func (c *Checker) isStringConcatenatable(t types.Type) bool {
 	case types.Any:
 		return true
 	}
-	
+
 	// Handle union types - all members must be string-concatenatable
 	if unionType, ok := t.(*types.UnionType); ok {
 		for _, member := range unionType.Types {
@@ -47,18 +47,18 @@ func (c *Checker) isStringConcatenatable(t types.Type) bool {
 		}
 		return true
 	}
-	
+
 	// Handle literal types
 	if _, ok := t.(*types.LiteralType); ok {
 		// Number and string literals are always concatenatable
 		return true
 	}
-	
+
 	// Handle enum member types
 	if types.IsEnumMemberType(t) {
 		return true // Enum members can be coerced to strings
 	}
-	
+
 	// Be conservative for other types
 	return false
 }
@@ -115,16 +115,16 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 func (c *Checker) resolveParameterizedForwardReference(paramRef *types.ParameterizedForwardReferenceType) types.Type {
 	debugPrintf("// [Checker ResolveParamRef] Attempting to resolve %s\n", paramRef.String())
 
-	// For generic classes, during method body checking, we can access the current forward reference 
+	// For generic classes, during method body checking, we can access the current forward reference
 	// to get the instance type directly without going through the constructor
 	if c.currentForwardRef != nil && c.currentForwardRef.ClassName == paramRef.ClassName {
 		debugPrintf("// [Checker ResolveParamRef] Using current forward reference for %s\n", paramRef.ClassName)
-		
+
 		// If we're inside the same generic class, we need to create an instantiated version
 		// of the current class's instance type with the type arguments from the paramRef
 		if c.currentClassInstanceType != nil {
 			debugPrintf("// [Checker ResolveParamRef] Found current class instance type: %s\n", c.currentClassInstanceType.String())
-			
+
 			// Create a substitution map from type parameters to the provided type arguments
 			if len(paramRef.TypeArguments) == len(c.currentForwardRef.TypeParameters) {
 				substitution := make(map[string]types.Type)
@@ -132,7 +132,7 @@ func (c *Checker) resolveParameterizedForwardReference(paramRef *types.Parameter
 					substitution[typeParam.Name] = paramRef.TypeArguments[i]
 					debugPrintf("// [Checker ResolveParamRef] Mapping %s -> %s\n", typeParam.Name, paramRef.TypeArguments[i].String())
 				}
-				
+
 				// Substitute the type parameters in the instance type
 				resolvedType := c.substituteTypes(c.currentClassInstanceType, substitution)
 				debugPrintf("// [Checker ResolveParamRef] Substituted instance type: %s\n", resolvedType.String())
@@ -179,10 +179,10 @@ type Checker struct {
 	// TODO: Add Type Registry if needed
 	env    *Environment           // Current type environment
 	errors []errors.PaseratiError // Changed from []TypeError
-	
+
 	// --- Module System Integration ---
-	moduleEnv    *ModuleEnvironment     // Module-aware environment (nil for non-module files)
-	moduleLoader modules.ModuleLoader   // Real ModuleLoader for dependency resolution
+	moduleEnv    *ModuleEnvironment   // Module-aware environment (nil for non-module files)
+	moduleLoader modules.ModuleLoader // Real ModuleLoader for dependency resolution
 
 	// --- NEW: Context for checking function bodies ---
 	// Expected return type of the function currently being checked (set by explicit annotation).
@@ -199,7 +199,7 @@ type Checker struct {
 	// --- NEW: Context for access control checking ---
 	// Current class context for access modifier validation
 	currentClassContext *types.AccessContext
-	
+
 	// --- NEW: Current class instance type being built ---
 	// Used to set proper 'this' context in class methods
 	currentClassInstanceType *types.ObjectType
@@ -212,7 +212,7 @@ type Checker struct {
 	// Track the current generic class being processed to allow forward references
 	currentGenericClass *types.GenericType
 	currentForwardRef   *types.ForwardReferenceType
-	
+
 	// --- NEW: Generator function tracking ---
 	// Track generator function names for yield* validation
 	generatorFunctions map[string]bool
@@ -220,7 +220,7 @@ type Checker struct {
 	// --- NEW: Recursive type alias tracking ---
 	// Track type aliases being resolved to prevent infinite recursion
 	resolvingTypeAliases map[string]bool
-	
+
 	// --- NEW: Anonymous class tracking ---
 	// Counter for generating unique anonymous class names
 	anonymousClassCounter int
@@ -271,7 +271,7 @@ func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
 	if currentClass == targetClass {
 		return false // Same class is not a subclass of itself
 	}
-	
+
 	// Look up the current class type - try type alias first
 	currentType, exists := c.env.ResolveType(currentClass)
 	if !exists {
@@ -281,10 +281,10 @@ func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
 			return false
 		}
 	}
-	
+
 	// Get the class metadata
 	var currentClassType *types.ObjectType
-	
+
 	// Handle both direct class types and constructor types
 	if forwardRef, ok := currentType.(*types.ForwardReferenceType); ok {
 		// For forward references, use the current class instance type context
@@ -310,11 +310,11 @@ func (c *Checker) isSubclassOf(currentClass, targetClass string) bool {
 			}
 		}
 	}
-	
+
 	if currentClassType == nil || !currentClassType.IsClassInstance() {
 		return false
 	}
-	
+
 	// Check inheritance chain
 	return c.checkInheritanceChain(currentClassType, targetClass)
 }
@@ -417,7 +417,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				debugPrintf("// [Checker Pass 1] Skipping Import with nil Source\n")
 			}
 			nodesProcessedPass1[importStmt] = true
-			nodesProcessedPass2[importStmt] = true // Also mark for Pass 2 skip  
+			nodesProcessedPass2[importStmt] = true // Also mark for Pass 2 skip
 		} else if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok {
 			// Handle exported type declarations (interfaces, type aliases, classes)
 			if exportStmt.Declaration != nil {
@@ -485,8 +485,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				Body:                    nil, // Don't process body during hoisting
 				IsArrow:                 false,
 				IsGenerator:             funcLit.IsGenerator, // Detect generator functions during hoisting
-				AllowSelfReference:      false, // Don't allow self-reference during hoisting
-				AllowOverloadCompletion: false, // Don't check overloads during hoisting
+				AllowSelfReference:      false,               // Don't allow self-reference during hoisting
+				AllowOverloadCompletion: false,               // Don't check overloads during hoisting
 			}
 
 			// Resolve parameters and signature with type parameter support
@@ -1021,11 +1021,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 // resolveForwardReferences resolves typeof forward references after variables have been defined
 func (c *Checker) resolveForwardReferences() {
 	debugPrintf("// [Checker resolveForwardReferences] Starting forward reference resolution\n")
-	
+
 	// Walk through all type aliases and resolve any TypeofType forward references
 	// We need to iterate through the environment to find type aliases
 	c.resolveTypeofForwardReferences(c.env)
-	
+
 	// After resolving type aliases, we need to update any variable types that reference resolved aliases
 	c.updateVariableTypesAfterAliasResolution(c.env)
 }
@@ -1034,8 +1034,8 @@ func (c *Checker) resolveForwardReferences() {
 func (c *Checker) resolveTypeofForwardReferences(env *Environment) {
 	// We need to resolve TypeofType instances in type aliases
 	// This requires walking through the environment's type aliases and replacing TypeofType with actual types
-	
-	// Since we can't easily iterate through environment internals, 
+
+	// Since we can't easily iterate through environment internals,
 	// let's use a visitor pattern to find and resolve TypeofType instances
 	c.resolveTypeofInEnvironment(env)
 }
@@ -1043,19 +1043,19 @@ func (c *Checker) resolveTypeofForwardReferences(env *Environment) {
 // resolveTypeofInEnvironment resolves typeof types in the given environment
 func (c *Checker) resolveTypeofInEnvironment(env *Environment) {
 	debugPrintf("// [Checker resolveTypeofInEnvironment] Starting typeof resolution\n")
-	
+
 	// Get all type aliases from the environment
 	aliases := env.GetAllTypeAliases()
 	debugPrintf("// [Checker resolveTypeofInEnvironment] Found %d type aliases to check\n", len(aliases))
-	
+
 	// For each type alias, check if it contains TypeofType and resolve it
 	for name, aliasType := range aliases {
 		debugPrintf("// [Checker resolveTypeofInEnvironment] Checking alias '%s': %T\n", name, aliasType)
-		
+
 		// Recursively resolve any TypeofType instances in the alias
 		resolvedType := c.resolveTypeofInType(aliasType)
 		if resolvedType != aliasType {
-			debugPrintf("// [Checker resolveTypeofInEnvironment] Updated alias '%s' from %s to %s\n", 
+			debugPrintf("// [Checker resolveTypeofInEnvironment] Updated alias '%s' from %s to %s\n",
 				name, aliasType.String(), resolvedType.String())
 			env.DefineTypeAlias(name, resolvedType)
 		}
@@ -1067,33 +1067,33 @@ func (c *Checker) resolveTypeofInType(t types.Type) types.Type {
 	if t == nil {
 		return nil
 	}
-	
+
 	switch typ := t.(type) {
 	case *types.TypeofType:
 		// Try to resolve the typeof type
 		return c.resolveTypeofTypeIfNeeded(typ)
-		
+
 	case *types.ConditionalType:
 		// Recursively resolve in conditional type components
 		resolvedCheckType := c.resolveTypeofInType(typ.CheckType)
 		resolvedExtendsType := c.resolveTypeofInType(typ.ExtendsType)
 		resolvedTrueType := c.resolveTypeofInType(typ.TrueType)
 		resolvedFalseType := c.resolveTypeofInType(typ.FalseType)
-		
+
 		// If any component changed, re-evaluate the conditional type
 		if resolvedCheckType != typ.CheckType || resolvedExtendsType != typ.ExtendsType ||
-		   resolvedTrueType != typ.TrueType || resolvedFalseType != typ.FalseType {
+			resolvedTrueType != typ.TrueType || resolvedFalseType != typ.FalseType {
 			debugPrintf("// [resolveTypeofInType] Re-evaluating conditional type after typeof resolution\n")
 			// Re-evaluate the conditional type with resolved typeof types
 			return c.computeConditionalType(resolvedCheckType, resolvedExtendsType, resolvedTrueType, resolvedFalseType)
 		}
-		
+
 	case *types.ArrayType:
 		resolvedElementType := c.resolveTypeofInType(typ.ElementType)
 		if resolvedElementType != typ.ElementType {
 			return &types.ArrayType{ElementType: resolvedElementType}
 		}
-		
+
 	case *types.UnionType:
 		changed := false
 		resolvedTypes := make([]types.Type, len(typ.Types))
@@ -1107,10 +1107,10 @@ func (c *Checker) resolveTypeofInType(t types.Type) types.Type {
 		if changed {
 			return types.NewUnionType(resolvedTypes...)
 		}
-		
-	// Add more cases as needed for other composite types
+
+		// Add more cases as needed for other composite types
 	}
-	
+
 	// Return the original type if no TypeofType was found
 	return t
 }
@@ -1120,7 +1120,7 @@ func (c *Checker) containsUnresolvedTypeofType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	
+
 	switch typ := t.(type) {
 	case *types.TypeofType:
 		// Check if this typeof can be resolved right now
@@ -1128,46 +1128,46 @@ func (c *Checker) containsUnresolvedTypeofType(t types.Type) bool {
 		// If it's still a TypeofType, it's unresolved
 		_, stillUnresolved := resolvedType.(*types.TypeofType)
 		return stillUnresolved
-		
+
 	case *types.ConditionalType:
 		// Check recursively in conditional type components
 		return c.containsUnresolvedTypeofType(typ.CheckType) ||
-		       c.containsUnresolvedTypeofType(typ.ExtendsType) ||
-		       c.containsUnresolvedTypeofType(typ.TrueType) ||
-		       c.containsUnresolvedTypeofType(typ.FalseType)
-		
+			c.containsUnresolvedTypeofType(typ.ExtendsType) ||
+			c.containsUnresolvedTypeofType(typ.TrueType) ||
+			c.containsUnresolvedTypeofType(typ.FalseType)
+
 	case *types.ArrayType:
 		return c.containsUnresolvedTypeofType(typ.ElementType)
-		
+
 	case *types.UnionType:
 		for _, memberType := range typ.Types {
 			if c.containsUnresolvedTypeofType(memberType) {
 				return true
 			}
 		}
-		
-	// Add more cases as needed for other composite types
+
+		// Add more cases as needed for other composite types
 	}
-	
+
 	return false
 }
 
 // updateVariableTypesAfterAliasResolution updates variable types that reference resolved type aliases
 func (c *Checker) updateVariableTypesAfterAliasResolution(env *Environment) {
 	debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Starting variable type updates\n")
-	
+
 	// Get all variables from the environment
 	variables := env.GetAllVariables()
 	debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Found %d variables to check\n", len(variables))
-	
+
 	// For each variable, check if its type needs to be updated
 	for name, symbolInfo := range variables {
 		debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Checking variable '%s': %T\n", name, symbolInfo.Type)
-		
+
 		// Check if the variable's type contains unresolved conditional types or type aliases
 		updatedType := c.resolveTypeofInType(symbolInfo.Type)
 		if updatedType != symbolInfo.Type {
-			debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Updated variable '%s' from %s to %s\n", 
+			debugPrintf("// [Checker updateVariableTypesAfterAliasResolution] Updated variable '%s' from %s to %s\n",
 				name, symbolInfo.Type.String(), updatedType.String())
 			// Update the variable's type in the environment
 			env.Update(name, updatedType)
@@ -1785,6 +1785,8 @@ func (c *Checker) visit(node parser.Node) {
 	// --- NEW: Handle TemplateLiteral ---
 	case *parser.TemplateLiteral:
 		c.checkTemplateLiteral(node)
+	case *parser.TaggedTemplateExpression:
+		c.checkTaggedTemplateExpression(node)
 
 	// --- NEW: Handle ThisExpression ---
 	case *parser.ThisExpression:
@@ -1840,13 +1842,13 @@ func (c *Checker) visit(node parser.Node) {
 		// First try regular resolution, then check with objects
 		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
 		isFromWith := false
-		
+
 		// If not found as a regular variable, try with object resolution
 		if !found {
 			typ, isFromWith, found = c.env.ResolveWithFallback(node.Value)
 			isConst = false // Properties from with objects are never const
 		}
-		
+
 		if !found {
 			// Special handling for 'arguments' identifier - only available in function scope
 			if node.Value == "arguments" {
@@ -1863,7 +1865,7 @@ func (c *Checker) visit(node parser.Node) {
 						debugPrintf("// [Checker Debug] visit(Identifier): 'arguments' resolved as IArguments type in function scope\n")
 						node.SetComputedType(iArgumentsType)
 						node.IsConstant = false // arguments is not a constant
-						return // Successfully handled 'arguments' identifier
+						return                  // Successfully handled 'arguments' identifier
 					}
 				}
 				// If in global scope or IArguments type not found, fall through to error
@@ -2698,7 +2700,7 @@ func (c *Checker) visit(node parser.Node) {
 		} else {
 			className = node.Name
 		}
-		
+
 		classDecl := &parser.ClassDeclaration{
 			Token:          node.Token,
 			Name:           className,
@@ -2896,7 +2898,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	if node == nil {
 		return
 	}
-	
+
 	// Check if we have an initializer (required for const, optional for let/var)
 	if node.Value == nil {
 		if node.IsConst {
@@ -3093,7 +3095,7 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 				if typeParam, isTypeParam := expectedSig.ReturnType.(*types.TypeParameterType); isTypeParam {
 					if typeParam.Parameter != nil && typeParam.Parameter.Constraint != nil {
 						contextualReturnType = typeParam.Parameter.Constraint
-						debugPrintf("// [Checker ArrowFuncContext] Using type parameter constraint as contextual return type: %s -> %s\n", 
+						debugPrintf("// [Checker ArrowFuncContext] Using type parameter constraint as contextual return type: %s -> %s\n",
 							expectedSig.ReturnType.String(), contextualReturnType.String())
 					} else {
 						debugPrintf("// [Checker ArrowFuncContext] Skipping type parameter without constraint for inference: %s\n", expectedSig.ReturnType.String())
@@ -3329,7 +3331,7 @@ func (c *Checker) EnableModuleMode(modulePath string, moduleLoader modules.Modul
 		// Create a base environment if none exists
 		c.env = NewEnvironment()
 	}
-	
+
 	c.moduleEnv = NewModuleEnvironment(c.env, modulePath, moduleLoader)
 	c.moduleLoader = moduleLoader
 	debugPrintf("// [Checker] Enabled module mode for: %s\n", modulePath)
@@ -3374,7 +3376,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 
 	sourceModulePath := node.Source.Value
 	debugPrintf("// [Checker] Processing import from: %s (IsTypeOnly: %v)\n", sourceModulePath, node.IsTypeOnly)
-	
+
 	// Handle bare imports (side-effect only)
 	if len(node.Specifiers) == 0 {
 		debugPrintf("// [Checker] Bare import (side effects only): %s\n", sourceModulePath)
@@ -3382,7 +3384,7 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 		// No bindings are created in the local environment
 		return
 	}
-	
+
 	// Validate and process import specifiers
 	for _, spec := range node.Specifiers {
 		switch importSpec := spec.(type) {
@@ -3392,33 +3394,33 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 				c.addError(node, "import default specifier missing local name")
 				continue
 			}
-			
+
 			localName := importSpec.Local.Value
 			c.processImportBinding(localName, sourceModulePath, "default", ImportDefault, node.IsTypeOnly)
-			
+
 		case *parser.ImportNamedSpecifier:
 			// Named import: import { name } or import { name as alias }
 			if importSpec.Local == nil || importSpec.Imported == nil {
 				c.addError(node, "import named specifier missing names")
 				continue
 			}
-			
+
 			localName := importSpec.Local.Value
 			importedName := importSpec.Imported.Value
 			// Use per-specifier type-only flag if available, otherwise fall back to declaration-level flag
 			isTypeOnly := importSpec.IsTypeOnly || node.IsTypeOnly
 			c.processImportBinding(localName, sourceModulePath, importedName, ImportNamed, isTypeOnly)
-			
+
 		case *parser.ImportNamespaceSpecifier:
 			// Namespace import: import * as name from "module"
 			if importSpec.Local == nil {
 				c.addError(node, "import namespace specifier missing local name")
 				continue
 			}
-			
+
 			localName := importSpec.Local.Value
 			c.processImportBinding(localName, sourceModulePath, "*", ImportNamespace, node.IsTypeOnly)
-			
+
 		default:
 			c.addError(node, fmt.Sprintf("unknown import specifier type: %T", spec))
 		}
@@ -3430,17 +3432,17 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 	// If we're in module mode, use the module environment for proper tracking
 	if c.IsModuleMode() {
 		c.moduleEnv.DefineImport(localName, sourceModule, sourceName, importType)
-		
+
 		// Try to resolve the actual type from the source module
 		resolvedType := c.moduleEnv.ResolveImportedType(localName)
 		if resolvedType != types.Any {
 			debugPrintf("// [Checker] Imported %s: %s = %s (resolved, type-only: %v)\n", localName, sourceName, resolvedType.String(), isTypeOnly)
-			
+
 			// Always register the imported type in the local type environment for type annotation resolution
 			// This allows interfaces and type aliases to be used in type annotations
 			c.env.DefineTypeAlias(localName, resolvedType)
 			debugPrintf("// [Checker] Registered imported type %s in local type environment\n", localName)
-			
+
 			// For type-only imports, don't register in the value environment
 			if !isTypeOnly {
 				// If this is a class (constructor function), also register it in the value environment
@@ -3482,24 +3484,24 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 		// Direct export: export const x = 1; export function foo() {}
 		debugPrintf("// [Checker] Processing direct export declaration\n")
 		c.visit(node.Declaration)
-		
+
 		// Extract and register exported names
 		c.processExportDeclaration(node.Declaration)
-		
+
 	} else if len(node.Specifiers) > 0 {
 		// Named exports: export { x, y } or export { x } from "module"
 		debugPrintf("// [Checker] Processing named export specifiers\n")
-		
+
 		if node.Source != nil {
 			// Re-export: export { x } from "module"
 			sourceModule := node.Source.Value
 			debugPrintf("// [Checker] Re-export from: %s\n", sourceModule)
-			
+
 			for _, spec := range node.Specifiers {
 				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
 					localName := exportSpec.Local.Value
 					exportName := exportSpec.Exported.Value
-					
+
 					if c.IsModuleMode() {
 						c.moduleEnv.DefineReExport(exportName, sourceModule, localName, node.IsTypeOnly)
 						debugPrintf("// [Checker] Re-exported: %s as %s from %s\n", localName, exportName, sourceModule)
@@ -3515,10 +3517,10 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 						c.addError(node, "export specifier missing local name")
 						continue
 					}
-					
+
 					localName := exportSpec.Local.Value
 					exportName := exportSpec.Exported.Value
-					
+
 					// Check if the local name exists in current scope
 					if localType, _, exists := c.env.Resolve(localName); exists {
 						// Register the export in module environment
@@ -3541,19 +3543,19 @@ func (c *Checker) checkExportDefaultDeclaration(node *parser.ExportDefaultDeclar
 		c.addError(node, "export default statement missing declaration")
 		return
 	}
-	
+
 	debugPrintf("// [Checker] Processing default export\n")
-	
+
 	// Type check the default export expression
 	c.visit(node.Declaration)
-	
+
 	// Register the default export
 	if c.IsModuleMode() {
 		exportType := node.Declaration.GetComputedType()
 		if exportType == nil {
 			exportType = types.Any
 		}
-		
+
 		c.moduleEnv.DefineExport("default", "default", exportType, nil)
 		debugPrintf("// [Checker] Default export registered (type: %s)\n", exportType.String())
 	} else {
@@ -3567,16 +3569,22 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 		c.addError(node, "export * statement missing source module")
 		return
 	}
-	
+
 	sourceModule := node.Source.Value
-	debugPrintf("// [Checker] Processing export%s * from: %s\n", 
-		func() string { if node.IsTypeOnly { return " type" } else { return "" } }(), sourceModule)
-	
+	debugPrintf("// [Checker] Processing export%s * from: %s\n",
+		func() string {
+			if node.IsTypeOnly {
+				return " type"
+			} else {
+				return ""
+			}
+		}(), sourceModule)
+
 	if node.Exported != nil {
 		// export * as name from "module"
 		exportName := node.Exported.Value
 		debugPrintf("// [Checker] Export all as namespace: %s\n", exportName)
-		
+
 		if c.IsModuleMode() {
 			// This creates a namespace export that contains all exports from the source module
 			c.moduleEnv.DefineReExport(exportName, sourceModule, "*", node.IsTypeOnly)
@@ -3584,11 +3592,11 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 	} else {
 		// export * from "module" - re-exports all named exports (but not default)
 		debugPrintf("// [Checker] Export all (anonymous) from: %s\n", sourceModule)
-		
+
 		if c.IsModuleMode() {
 			// Mark dependency first
 			c.moduleEnv.Dependencies[sourceModule] = true
-			
+
 			// Resolve and expand exports from the source module
 			if c.moduleLoader != nil {
 				moduleRecord, err := c.moduleLoader.LoadModule(sourceModule, c.source.Path)
@@ -3596,11 +3604,11 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 					c.addError(node, "failed to load source module")
 					return
 				}
-				
+
 				// Get all export names from the source module (excluding default export)
 				exportNames := moduleRecord.GetExportNames()
 				debugPrintf("// [Checker] Source module '%s' has %d exports: %v\n", sourceModule, len(exportNames), exportNames)
-				
+
 				// Create individual re-export bindings for each named export
 				for _, exportName := range exportNames {
 					if exportName != "default" { // Skip default export in export *
@@ -3608,7 +3616,7 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 						c.moduleEnv.DefineReExport(exportName, sourceModule, exportName, node.IsTypeOnly)
 					}
 				}
-				
+
 				debugPrintf("// [Checker] Completed export * expansion for %d exports from '%s'\n", len(exportNames), sourceModule)
 			} else {
 				c.addError(node, "module loader not available for resolving exports")
@@ -3628,13 +3636,13 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if !exists {
 				exportType = types.Any
 			}
-			
+
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
 			debugPrintf("// [Checker] Exported let: %s (type: %s)\n", localName, exportType.String())
 		}
-		
+
 	case *parser.ConstStatement:
 		if node.Name != nil {
 			localName := node.Name.Value
@@ -3643,13 +3651,13 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if !exists {
 				exportType = types.Any
 			}
-			
+
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
 			debugPrintf("// [Checker] Exported const: %s (type: %s)\n", localName, exportType.String())
 		}
-		
+
 	case *parser.VarStatement:
 		if node.Name != nil {
 			localName := node.Name.Value
@@ -3658,13 +3666,13 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if !exists {
 				exportType = types.Any
 			}
-			
+
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
 			debugPrintf("// [Checker] Exported var: %s (type: %s)\n", localName, exportType.String())
 		}
-		
+
 	case *parser.ExpressionStatement:
 		// Functions and classes are expressions wrapped in ExpressionStatement
 		switch expr := node.Expression.(type) {
@@ -3675,13 +3683,13 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				if exportType == nil {
 					exportType = types.Any
 				}
-				
+
 				if c.IsModuleMode() {
 					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 				}
 				debugPrintf("// [Checker] Exported function: %s (type: %s)\n", localName, exportType.String())
 			}
-			
+
 		case *parser.ClassExpression:
 			if expr.Name != nil {
 				localName := expr.Name.Value
@@ -3689,13 +3697,13 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				if exportType == nil {
 					exportType = types.Any
 				}
-				
+
 				if c.IsModuleMode() {
 					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 				}
 				debugPrintf("// [Checker] Exported class: %s (type: %s)\n", localName, exportType.String())
 			}
-			
+
 		case *parser.EnumDeclaration:
 			if expr.Name != nil {
 				localName := expr.Name.Value
@@ -3703,17 +3711,17 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				if exportType == nil {
 					exportType = types.Any
 				}
-				
+
 				if c.IsModuleMode() {
 					c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 				}
 				debugPrintf("// [Checker] Exported enum: %s (type: %s)\n", localName, exportType.String())
 			}
-			
+
 		default:
 			debugPrintf("// [Checker] Exported expression: %T\n", expr)
 		}
-		
+
 	case *parser.InterfaceDeclaration:
 		if node.Name != nil {
 			localName := node.Name.Value
@@ -3722,13 +3730,13 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if !exists {
 				exportType = types.Any
 			}
-			
+
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
 			debugPrintf("// [Checker] Exported interface: %s (type: %s)\n", localName, exportType.String())
 		}
-		
+
 	case *parser.TypeAliasStatement:
 		if node.Name != nil {
 			localName := node.Name.Value
@@ -3737,13 +3745,13 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 			if !exists {
 				exportType = types.Any
 			}
-			
+
 			if c.IsModuleMode() {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
 			debugPrintf("// [Checker] Exported type: %s (type: %s)\n", localName, exportType.String())
 		}
-		
+
 	default:
 		debugPrintf("// [Checker] Exported unknown declaration type: %T\n", decl)
 	}
@@ -3752,10 +3760,10 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 // getAssignmentErrorTypes returns appropriate type strings for assignment error messages
 func (c *Checker) getAssignmentErrorTypes(sourceType, targetType types.Type) (string, string) {
 	var sourceTypeStr, targetTypeStr string
-	
+
 	// For most cases, use literal types for source to match TypeScript behavior
 	sourceTypeStr = sourceType.String()
-	
+
 	// For target type, handle enum types specially
 	if enumType, ok := targetType.(*types.UnionType); ok {
 		// Check if this is an enum union type
@@ -3775,21 +3783,21 @@ func (c *Checker) getAssignmentErrorTypes(sourceType, targetType types.Type) (st
 	} else {
 		targetTypeStr = targetType.String()
 	}
-	
+
 	return sourceTypeStr, targetTypeStr
 }
 
 // getEnumAssignmentErrorTypes returns appropriate type strings for enum assignment error messages
 func (c *Checker) getEnumAssignmentErrorTypes(sourceType, targetType types.Type) (string, string) {
 	var sourceTypeStr, targetTypeStr string
-	
+
 	// For enum assignments, use widened source type for better error messages
 	if literalType, ok := sourceType.(*types.LiteralType); ok {
 		switch literalType.Value.Type() {
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 			sourceTypeStr = "number"
 		case vm.TypeString:
-			sourceTypeStr = "string" 
+			sourceTypeStr = "string"
 		case vm.TypeBoolean:
 			sourceTypeStr = "boolean"
 		default:
@@ -3798,7 +3806,7 @@ func (c *Checker) getEnumAssignmentErrorTypes(sourceType, targetType types.Type)
 	} else {
 		sourceTypeStr = sourceType.String()
 	}
-	
+
 	// For enum target types, use the enum name or full string representation
 	if enumType, ok := targetType.(*types.UnionType); ok {
 		// Check if this is an enum union type
@@ -3818,7 +3826,7 @@ func (c *Checker) getEnumAssignmentErrorTypes(sourceType, targetType types.Type)
 	} else {
 		targetTypeStr = targetType.String()
 	}
-	
+
 	return sourceTypeStr, targetTypeStr
 }
 
