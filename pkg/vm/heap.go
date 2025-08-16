@@ -10,6 +10,8 @@ import (
 type Heap struct {
 	values []Value // The actual global values
 	size   int     // Current size of the heap
+	// optional name -> index map to enable VM.GetGlobal(name)
+	nameToIndex map[string]int
 }
 
 // NewHeap creates a new heap with the specified initial capacity
@@ -50,12 +52,12 @@ func (h *Heap) Set(index int, value Value) error {
 	if index < 0 {
 		return fmt.Errorf("heap index cannot be negative: %d", index)
 	}
-	
+
 	// Auto-resize if needed
 	if index >= len(h.values) {
 		h.Resize(index + 1)
 	}
-	
+
 	h.values[index] = value
 	if index >= h.size {
 		h.size = index + 1
@@ -85,10 +87,10 @@ func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]i
 			maxIndex = index
 		}
 	}
-	
+
 	if maxIndex >= 0 {
 		h.Resize(maxIndex + 1)
-		
+
 		// Set each builtin global at its assigned index
 		for name, value := range globals {
 			if index, exists := indexMap[name]; exists {
@@ -97,7 +99,19 @@ func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]i
 				}
 			}
 		}
+		// Store name->index mapping for lookup by name
+		if h.nameToIndex == nil {
+			h.nameToIndex = make(map[string]int, len(indexMap))
+		}
+		for name, idx := range indexMap {
+			h.nameToIndex[name] = idx
+		}
 	}
-	
+
 	return nil
+}
+
+// GetNameToIndex returns the current name->index mapping (if available)
+func (h *Heap) GetNameToIndex() map[string]int {
+	return h.nameToIndex
 }

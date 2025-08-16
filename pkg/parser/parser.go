@@ -489,6 +489,9 @@ func (p *Parser) parseStatement() Statement {
 			return p.parseExpressionStatement()
 		}
 		return p.parseBlockStatement()
+	case lexer.RBRACE:
+		// End of current block scope; let the caller handle it
+		return nil
 	case lexer.IDENT:
 		// Check if this is a labeled statement (identifier followed by colon)
 		if p.peekTokenIs(lexer.COLON) {
@@ -1420,7 +1423,7 @@ func (p *Parser) parseExpressionStatement() *ExpressionStatement {
 
 	stmt.Expression = p.parseExpression(LOWEST)
 
-	// Optional semicolon - Consume it here
+	// Optional semicolon - consume if next
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
 	}
@@ -1445,7 +1448,7 @@ func (p *Parser) parseExpression(precedence int) Expression {
 	}
 	debugPrint("parseExpression(prec=%d): after prefix, leftExp=%T, cur='%s', peek='%s'", precedence, leftExp, p.curToken.Literal, p.peekToken.Literal)
 
-	for !p.peekTokenIs(lexer.SEMICOLON) && precedence < p.peekPrecedence() {
+	for !p.peekTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.SEMICOLON) && precedence < p.peekPrecedence() {
 		infix := p.infixParseFns[p.peekToken.Type]
 		if infix == nil {
 			debugPrint("parseExpression(prec=%d): no infix for peek='%s', returning leftExp=%T", precedence, leftExp, p.peekToken.Literal, leftExp)
@@ -2276,7 +2279,6 @@ func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 	return pattern
 }
 
-// parseObjectParameterPattern parses object destructuring in function parameters
 // Examples: {x, y}, {x = 1, y}, {x: localX, ...rest}
 func (p *Parser) parseObjectParameterPattern() *ObjectParameterPattern {
 	pattern := &ObjectParameterPattern{Token: p.curToken} // The '{' token
@@ -3479,7 +3481,7 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, pa
 
 	if p.curTokenIs(lexer.LBRACE) {
 		debugPrint("parseArrowFunctionBodyAndFinish: Parsing BlockStatement body...")
-		arrowFunc.Body = p.parseBlockStatement() // parseBlockStatement consumes { and } internally
+		arrowFunc.Body = p.parseBlockStatement() // parseBlockStatement leaves cur at '}'
 	} else {
 		debugPrint("parseArrowFunctionBodyAndFinish: Parsing Expression body...")
 		// No nextToken here - curToken is already the start of the expression
@@ -3817,8 +3819,6 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 
 // parseArrayDestructuringAssignment handles array destructuring like [a, b, c] = expr
 func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expression {
-	debugPrint("parseArrayDestructuringAssignment starting")
-
 	destructure := &ArrayDestructuringAssignment{
 		Token: arrayLit.Token, // The '[' token from the array literal
 	}
@@ -3882,14 +3882,11 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 		return nil
 	}
 
-	debugPrint("parseArrayDestructuringAssignment completed: %s", destructure.String())
 	return destructure
 }
 
 // parseObjectDestructuringAssignment handles object destructuring like {a, b, c} = expr
 func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Expression {
-	debugPrint("parseObjectDestructuringAssignment starting")
-
 	destructure := &ObjectDestructuringAssignment{
 		Token: objectLit.Token, // The '{' token from the object literal
 	}
@@ -3991,14 +3988,11 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 		return nil
 	}
 
-	debugPrint("parseObjectDestructuringAssignment completed: %s", destructure.String())
 	return destructure
 }
 
 // parseArrayDestructuringDeclaration handles let/const/var [a, b] = expr
 func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isConst bool) *ArrayDestructuringDeclaration {
-	debugPrint("parseArrayDestructuringDeclaration starting")
-
 	decl := &ArrayDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
@@ -4115,7 +4109,6 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 		p.nextToken()
 	}
 
-	debugPrint("parseArrayDestructuringDeclaration completed: %s", decl.String())
 	return decl
 }
 
@@ -4236,8 +4229,6 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 
 // parseObjectDestructuringDeclaration handles let/const/var {a, b} = expr
 func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isConst bool) *ObjectDestructuringDeclaration {
-	debugPrint("parseObjectDestructuringDeclaration starting")
-
 	decl := &ObjectDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
@@ -4279,7 +4270,6 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 		p.nextToken()
 	}
 
-	debugPrint("parseObjectDestructuringDeclaration completed: %s", decl.String())
 	return decl
 }
 
@@ -4365,13 +4355,10 @@ func (p *Parser) parseWithStatement() *WithStatement {
 // --- New: For Statement Parsing ---
 
 func (p *Parser) parseForStatement() Statement {
-	debugPrint("parseForStatement: START, cur='%s'", p.curToken.Literal)
-
 	// Parse the opening structure first
 	forToken := p.curToken
 
 	if !p.expectPeek(lexer.LPAREN) {
-		debugPrint("parseForStatement: ERROR expected LPAREN")
 		return nil
 	}
 
@@ -6373,16 +6360,11 @@ func (p *Parser) isForOfLoop() bool {
 
 // parseForOfStatement parses for...of loops
 func (p *Parser) parseForOfStatement() *ForStatement {
-	debugPrint("parseForOfStatement: START, cur='%s'", p.curToken.Literal)
-
-	// Create ForOfStatement
-	stmt := &ForOfStatement{Token: p.curToken} // 'for'
+	stmt := &ForStatement{Token: p.curToken} // 'for'
 
 	if !p.expectPeek(lexer.LPAREN) { // Consume '(', cur='('
-		debugPrint("parseForOfStatement: ERROR expected LPAREN")
 		return nil
 	}
-	debugPrint("parseForOfStatement: Consumed '(', cur='%s', peek='%s'", p.curToken.Literal, p.peekToken.Literal)
 
 	// Parse variable declaration or identifier
 	p.nextToken() // Move past '('
@@ -6392,34 +6374,30 @@ func (p *Parser) parseForOfStatement() *ForStatement {
 		// Parse let declaration
 		letStmt := &LetStatement{Token: p.curToken}
 		if !p.expectPeek(lexer.IDENT) {
-			debugPrint("parseForOfStatement: ERROR expected IDENT after let")
 			return nil
 		}
 		letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		// Note: No type annotation or value assignment in for...of
-		stmt.Variable = letStmt
+		stmt.Initializer = letStmt
 	} else if p.curTokenIs(lexer.CONST) {
 		// Parse const declaration
 		constStmt := &ConstStatement{Token: p.curToken}
 		if !p.expectPeek(lexer.IDENT) {
-			debugPrint("parseForOfStatement: ERROR expected IDENT after const")
 			return nil
 		}
 		constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		stmt.Variable = constStmt
+		stmt.Initializer = constStmt
 	} else if p.curTokenIs(lexer.IDENT) {
 		// Parse bare identifier (reusing existing variable)
 		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
-		stmt.Variable = exprStmt
+		stmt.Initializer = exprStmt
 	} else {
-		debugPrint("parseForOfStatement: ERROR expected variable declaration or identifier")
 		return nil
 	}
 
 	// Expect 'of'
 	if !p.expectPeek(lexer.OF) {
-		debugPrint("parseForOfStatement: ERROR expected OF")
 		return nil
 	}
 	debugPrint("parseForOfStatement: Found 'of', cur='%s'", p.curToken.Literal)
@@ -6427,39 +6405,16 @@ func (p *Parser) parseForOfStatement() *ForStatement {
 	// Parse iterable expression
 	p.nextToken() // Move past 'of'
 	debugPrint("parseForOfStatement: Parsing iterable, cur='%s'", p.curToken.Literal)
-	stmt.Iterable = p.parseExpression(LOWEST)
+	stmt.Condition = p.parseExpression(LOWEST)
 
 	// Expect ')'
 	if !p.expectPeek(lexer.RPAREN) {
-		debugPrint("parseForOfStatement: ERROR expected RPAREN")
 		return nil
 	}
 	debugPrint("parseForOfStatement: Found ')', cur='%s'", p.curToken.Literal)
 
 	// Parse body (same logic as regular for loop)
-	if p.peekTokenIs(lexer.LBRACE) {
-		// Block statement case
-		if !p.expectPeek(lexer.LBRACE) {
-			debugPrint("parseForOfStatement: ERROR expected LBRACE for body")
-			return nil
-		}
-		stmt.Body = p.parseBlockStatement()
-	} else {
-		// Single statement case
-		p.nextToken() // Move to the start of the statement
-		debugPrint("parseForOfStatement: Parsing single body statement, cur='%s'", p.curToken.Literal)
-		bodyStmt := p.parseStatement()
-		if bodyStmt == nil {
-			debugPrint("parseForOfStatement: ERROR parsing single body statement")
-			return nil
-		}
-		// Wrap the single statement in a BlockStatement
-		stmt.Body = &BlockStatement{
-			Token:               p.curToken,
-			Statements:          []Statement{bodyStmt},
-			HoistedDeclarations: make(map[string]Expression),
-		}
-	}
+	stmt.Body = p.parseForBody()
 
 	debugPrint("parseForOfStatement: FINISHED")
 
@@ -7795,7 +7750,6 @@ func (p *Parser) parseMappedTypeExpression(startToken lexer.Token) Expression {
 // ----------------------------------------------------------------------------
 // Module System: Import/Export Parsing Methods
 // ----------------------------------------------------------------------------
-
 // parseImportDeclaration parses various import statement forms:
 // import defaultImport from "module"
 // import * as name from "module"

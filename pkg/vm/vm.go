@@ -134,6 +134,9 @@ type VM struct {
 
 	// TypedArray prototypes
 	Uint8ArrayPrototype   Value
+	Int8ArrayPrototype    Value
+	Int16ArrayPrototype   Value
+	Uint32ArrayPrototype  Value
 	Int32ArrayPrototype   Value
 	Float32ArrayPrototype Value
 
@@ -284,7 +287,14 @@ func (vm *VM) SetModuleLoader(loader ModuleLoader) {
 
 // GetGlobal retrieves a global variable by name
 func (vm *VM) GetGlobal(name string) (Value, bool) {
-	// Deprecated; name-based lookup not available from VM directly in unified heap mode
+	// Attempt to resolve by a name->index map if the heap exposes one
+	if vm != nil && vm.heap != nil {
+		if nm, ok := any(vm.heap).(interface{ GetNameToIndex() map[string]int }); ok {
+			if idx, exists := nm.GetNameToIndex()[name]; exists {
+				return vm.heap.Get(idx)
+			}
+		}
+	}
 	return Undefined, false
 }
 

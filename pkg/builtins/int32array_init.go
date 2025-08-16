@@ -18,7 +18,7 @@ func (i *Int32ArrayInitializer) Priority() int {
 func (i *Int32ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Int32Array.prototype type
 	int32ArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any).      // Reference to underlying ArrayBuffer
+		WithProperty("buffer", types.Any). // Reference to underlying ArrayBuffer
 		WithProperty("byteLength", types.Number).
 		WithProperty("byteOffset", types.Number).
 		WithProperty("length", types.Number).
@@ -29,8 +29,8 @@ func (i *Int32ArrayInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Create Int32Array constructor type with multiple overloads
 	int32ArrayCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{types.Number}, int32ArrayProtoType).                    // Int32Array(length)
-		WithSimpleCallSignature([]types.Type{types.Any}, int32ArrayProtoType).                       // Int32Array(buffer, byteOffset?, length?)
+		WithSimpleCallSignature([]types.Type{types.Number}, int32ArrayProtoType).                                // Int32Array(length)
+		WithSimpleCallSignature([]types.Type{types.Any}, int32ArrayProtoType).                                   // Int32Array(buffer, byteOffset?, length?)
 		WithSimpleCallSignature([]types.Type{&types.ArrayType{ElementType: types.Number}}, int32ArrayProtoType). // Int32Array(array)
 		WithProperty("BYTES_PER_ELEMENT", types.Number).
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, int32ArrayProtoType)).
@@ -115,6 +115,46 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		return vm.Undefined, nil
+	}))
+
+	// Add fill method
+	int32ArrayProto.SetOwn("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta := thisArray.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, nil
+		}
+		value := vm.Undefined
+		if len(args) > 0 {
+			value = args[0]
+		}
+		start := 0
+		end := ta.GetLength()
+		if len(args) > 1 && !args[1].IsUndefined() {
+			start = int(args[1].ToFloat())
+			if start < 0 {
+				start = ta.GetLength() + start
+			}
+			if start < 0 {
+				start = 0
+			}
+		}
+		if len(args) > 2 && !args[2].IsUndefined() {
+			end = int(args[2].ToFloat())
+			if end < 0 {
+				end = ta.GetLength() + end
+			}
+			if end < 0 {
+				end = 0
+			}
+			if end > ta.GetLength() {
+				end = ta.GetLength()
+			}
+		}
+		for i := start; i < end; i++ {
+			ta.SetElement(i, value)
+		}
+		return thisArray, nil
 	}))
 
 	// Add subarray method
@@ -242,7 +282,7 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if len(args) > 1 {
 				byteOffset = int(args[1].ToFloat())
 			}
-			
+
 			length := -1 // Use remaining buffer
 			if len(args) > 2 {
 				length = int(args[2].ToFloat())

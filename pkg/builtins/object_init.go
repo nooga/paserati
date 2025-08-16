@@ -1026,6 +1026,32 @@ func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
 			descriptor.SetOwn("configurable", vm.BooleanValue(c))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
+		// Fallback: synthesize accessor descriptor from __get__/__set__ conventions used by object literal emitter
+		if !keyIsSymbol {
+			getName := "__get__" + propName
+			setName := "__set__" + propName
+			var g vm.Value = vm.Undefined
+			var s vm.Value = vm.Undefined
+			if gv, ok := plainObj.GetOwn(getName); ok {
+				g = gv
+			}
+			if sv, ok := plainObj.GetOwn(setName); ok {
+				s = sv
+			}
+			if g.Type() != vm.TypeUndefined || s.Type() != vm.TypeUndefined {
+				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+				if g.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("get", g)
+				}
+				if s.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("set", s)
+				}
+				// Object literal accessors default to enumerable:true, configurable:true
+				descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+				descriptor.SetOwn("configurable", vm.BooleanValue(true))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+		}
 		// not found
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
 		if v, w, e, c, ok := dictObj.GetOwnDescriptor(propName); ok {

@@ -18,7 +18,7 @@ func (u *Uint8ClampedArrayInitializer) Priority() int {
 func (u *Uint8ClampedArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Uint8ClampedArray.prototype type
 	uint8ClampedArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any).      // Reference to underlying ArrayBuffer
+		WithProperty("buffer", types.Any). // Reference to underlying ArrayBuffer
 		WithProperty("byteLength", types.Number).
 		WithProperty("byteOffset", types.Number).
 		WithProperty("length", types.Number).
@@ -29,8 +29,8 @@ func (u *Uint8ClampedArrayInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Create Uint8ClampedArray constructor type with multiple overloads
 	uint8ClampedArrayCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{types.Number}, uint8ClampedArrayProtoType).                    // Uint8ClampedArray(length)
-		WithSimpleCallSignature([]types.Type{types.Any}, uint8ClampedArrayProtoType).                       // Uint8ClampedArray(buffer, byteOffset?, length?)
+		WithSimpleCallSignature([]types.Type{types.Number}, uint8ClampedArrayProtoType).                                // Uint8ClampedArray(length)
+		WithSimpleCallSignature([]types.Type{types.Any}, uint8ClampedArrayProtoType).                                   // Uint8ClampedArray(buffer, byteOffset?, length?)
 		WithSimpleCallSignature([]types.Type{&types.ArrayType{ElementType: types.Number}}, uint8ClampedArrayProtoType). // Uint8ClampedArray(array)
 		WithProperty("BYTES_PER_ELEMENT", types.Number).
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, uint8ClampedArrayProtoType)).
@@ -115,6 +115,46 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		return vm.Undefined, nil
+	}))
+
+	// Add fill method
+	uint8ClampedArrayProto.SetOwn("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta := thisArray.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, nil
+		}
+		value := vm.Undefined
+		if len(args) > 0 {
+			value = args[0]
+		}
+		start := 0
+		end := ta.GetLength()
+		if len(args) > 1 && !args[1].IsUndefined() {
+			start = int(args[1].ToFloat())
+			if start < 0 {
+				start = ta.GetLength() + start
+			}
+			if start < 0 {
+				start = 0
+			}
+		}
+		if len(args) > 2 && !args[2].IsUndefined() {
+			end = int(args[2].ToFloat())
+			if end < 0 {
+				end = ta.GetLength() + end
+			}
+			if end < 0 {
+				end = 0
+			}
+			if end > ta.GetLength() {
+				end = ta.GetLength()
+			}
+		}
+		for i := start; i < end; i++ {
+			ta.SetElement(i, value)
+		}
+		return thisArray, nil
 	}))
 
 	// Add subarray method
@@ -242,7 +282,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if len(args) > 1 {
 				byteOffset = int(args[1].ToFloat())
 			}
-			
+
 			length := -1 // Use remaining buffer
 			if len(args) > 2 {
 				length = int(args[2].ToFloat())

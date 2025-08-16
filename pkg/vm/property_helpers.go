@@ -117,20 +117,89 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		// Get the appropriate typed array prototype based on element type
 		ta := objVal.AsTypedArray()
 		if ta != nil {
+			// Resolve prototype dynamically via global constructors to avoid missing VM fields
 			switch ta.GetElementType() {
-			case TypedArrayUint8, TypedArrayUint8Clamped:
-				if vm.Uint8ArrayPrototype.Type() == TypeObject {
-					prototype = vm.Uint8ArrayPrototype.AsPlainObject()
+			case TypedArrayUint8:
+				if ctor, ok := vm.GetGlobal("Uint8Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
+			case TypedArrayUint8Clamped:
+				if ctor, ok := vm.GetGlobal("Uint8ClampedArray"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
+			case TypedArrayInt8:
+				if ctor, ok := vm.GetGlobal("Int8Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
+			case TypedArrayInt16:
+				if ctor, ok := vm.GetGlobal("Int16Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
+			case TypedArrayUint16:
+				if ctor, ok := vm.GetGlobal("Uint16Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
+			case TypedArrayUint32:
+				if ctor, ok := vm.GetGlobal("Uint32Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
 				}
 			case TypedArrayInt32:
-				if vm.Int32ArrayPrototype.Type() == TypeObject {
-					prototype = vm.Int32ArrayPrototype.AsPlainObject()
+				if ctor, ok := vm.GetGlobal("Int32Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
 				}
 			case TypedArrayFloat32:
-				if vm.Float32ArrayPrototype.Type() == TypeObject {
-					prototype = vm.Float32ArrayPrototype.AsPlainObject()
+				if ctor, ok := vm.GetGlobal("Float32Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
 				}
-				// Add more cases as we implement more TypedArray types
+			case TypedArrayFloat64:
+				if ctor, ok := vm.GetGlobal("Float64Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
 			}
 		}
 	default:

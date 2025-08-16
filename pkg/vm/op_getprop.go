@@ -85,15 +85,27 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		// Check for null/undefined specifically for a better error message
 		switch objVal.Type() {
 		case TypeNull, TypeUndefined:
-			status := vm.runtimeError("Cannot read property '%s' of %s", propName, objVal.TypeName())
-			return false, status, Undefined
+			// Throw JS TypeError: Cannot read property 'X' of null/undefined
+			var excVal Value
+			if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+				if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString(fmt.Sprintf("Cannot read property '%s' of %s", propName, objVal.TypeName()))}); callErr == nil {
+					excVal = res
+				}
+			}
+			if excVal.Type() == 0 {
+				eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+				eo.SetOwn("name", NewString("TypeError"))
+				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot read property '%s' of %s", propName, objVal.TypeName())))
+				excVal = NewValueFromPlainObject(eo)
+			}
+			vm.throwException(excVal)
+			return false, InterpretRuntimeError, Undefined
 		default:
-			// Generic error for other non-object types
+			// Generic error for other non-object types -> TypeError
 			if debugVM && (propName == "value" || propName == "next") {
 				if debugVM {
 					fmt.Printf("[DBG opGetProp] Trap '%s' on non-object %s value=%s\n", propName, objVal.TypeName(), objVal.Inspect())
 				}
-				// Try to dump a small backtrace of registers around current frame if available
 				if vm.frameCount > 0 {
 					fr := &vm.frames[vm.frameCount-1]
 					topN := 0
@@ -104,13 +116,23 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 						fmt.Printf("    [R%d]=%s(%s)\n", i, fr.registers[i].Inspect(), fr.registers[i].TypeName())
 					}
 				}
-			} else {
-				if debugVM {
-					fmt.Printf("[DBG opGetProp] ERROR: '%s' on non-object %s value=%s\n", propName, objVal.TypeName(), objVal.Inspect())
+			} else if debugVM {
+				fmt.Printf("[DBG opGetProp] ERROR: '%s' on non-object %s value=%s\n", propName, objVal.TypeName(), objVal.Inspect())
+			}
+			var excVal Value
+			if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+				if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString(fmt.Sprintf("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName()))}); callErr == nil {
+					excVal = res
 				}
 			}
-			status := vm.runtimeError("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())
-			return false, status, Undefined
+			if excVal.Type() == 0 {
+				eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+				eo.SetOwn("name", NewString("TypeError"))
+				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())))
+				excVal = NewValueFromPlainObject(eo)
+			}
+			vm.throwException(excVal)
+			return false, InterpretRuntimeError, Undefined
 		}
 	}
 
@@ -548,60 +570,102 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 		return true, InterpretOK, *dest
 	}
 
-	// PlainObject: search by symbol identity
+	// PlainObject: search by symbol identity (with accessor invocation semantics)
 	if base.Type() == TypeObject {
 		po := AsPlainObject(base)
-		// Inline cache for own symbol property on plain objects
-		cacheKey := generateSymbolCacheKey(ip, symKey)
-		cache, exists := vm.propCache[cacheKey]
-		if !exists {
-			cache = &PropInlineCache{state: CacheStateUninitialized}
-			vm.propCache[cacheKey] = cache
-		}
-		if offset, hit := cache.lookupInCache(po.shape); hit {
-			if offset < len(po.properties) {
-				*dest = po.properties[offset]
-				if debugVM {
-					fmt.Printf("[DBG opGetPropSymbol] IC hit own[%s] -> %s (%s)\n", symKey.AsSymbol(), dest.Inspect(), dest.TypeName())
+		key := NewSymbolKey(symKey)
+		// Own accessor first
+		if g, _, _, _, ok := po.GetOwnAccessorByKey(key); ok {
+			if g.Type() != TypeUndefined {
+				res, err := vm.Call(g, base, nil)
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+					// Wrap non-exception Go error
+					var excVal Value
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res2, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res2
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+					vm.throwException(excVal)
+					return false, InterpretRuntimeError, Undefined
 				}
+				*dest = res
 				return true, InterpretOK, *dest
 			}
-		}
-		if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-			*dest = v
-			// Update IC with resolved offset
-			for _, f := range po.shape.fields {
-				if f.keyKind == KeyKindSymbol && f.symbolVal.obj == symKey.obj {
-					cache.updateCache(po.shape, f.offset, f.isAccessor, f.writable)
-					break
-				}
-			}
-			if debugVM {
-				fmt.Printf("[DBG opGetPropSymbol] PlainObject own[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-			}
+			*dest = Undefined
 			return true, InterpretOK, *dest
 		}
-		// Walk prototype chain
+		// Own data property
+		if v, ok := po.GetOwnByKey(key); ok {
+			*dest = v
+			return true, InterpretOK, *dest
+		}
+		// Walk prototype chain searching for accessor/data
 		current := po.GetPrototype()
 		for current.typ != TypeNull && current.typ != TypeUndefined {
-			if current.IsObject() {
-				if proto := current.AsPlainObject(); proto != nil {
-					if v, ok := proto.GetOwnByKey(NewSymbolKey(symKey)); ok {
-						*dest = v
-						if debugVM {
-							fmt.Printf("[DBG opGetPropSymbol] PlainObject proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-						}
-						return true, InterpretOK, *dest
-					}
-					current = proto.prototype
-				} else if dict := current.AsDictObject(); dict != nil {
-					current = dict.prototype
-				} else {
-					break
-				}
-			} else {
+			if !current.IsObject() {
 				break
 			}
+			if proto := current.AsPlainObject(); proto != nil {
+				if g, _, _, _, ok := proto.GetOwnAccessorByKey(key); ok {
+					if g.Type() != TypeUndefined {
+						res, err := vm.Call(g, base, nil)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
+							}
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res2, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res2
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+							vm.throwException(excVal)
+							return false, InterpretRuntimeError, Undefined
+						}
+						*dest = res
+						return true, InterpretOK, *dest
+					}
+					*dest = Undefined
+					return true, InterpretOK, *dest
+				}
+				if v, ok := proto.GetOwnByKey(key); ok {
+					*dest = v
+					return true, InterpretOK, *dest
+				}
+				current = proto.prototype
+				continue
+			}
+			if dict := current.AsDictObject(); dict != nil {
+				current = dict.prototype
+				continue
+			}
+			break
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest

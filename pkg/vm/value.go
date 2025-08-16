@@ -70,6 +70,7 @@ type ArgumentsObject struct {
 }
 
 // GeneratorState represents the execution state of a generator
+// This allows the generator to resume execution from where it left off
 type GeneratorState int
 
 const (
@@ -305,7 +306,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeRegExp
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer
 }
 
 func (v Value) IsDictObject() bool {
@@ -362,7 +363,7 @@ func (v Value) TypeName() string {
 		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		return "function"
-	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp:
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)
