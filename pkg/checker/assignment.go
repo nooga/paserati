@@ -340,8 +340,13 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			continue // Skip malformed properties
 		}
 
-		// Get the property name
-		propName := prop.Key.Value
+		// Get the property name (skip computed properties for now)
+		keyIdent, ok := prop.Key.(*parser.Identifier)
+		if !ok {
+			// Computed property - can't check statically
+			continue
+		}
+		propName := keyIdent.Value
 
 		// Determine the property type from RHS
 		var propType types.Type = types.Any // Default fallback
@@ -403,7 +408,10 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			// Create a new object type excluding the destructured properties
 			extractedProps := make(map[string]struct{})
 			for _, prop := range node.Properties {
-				extractedProps[prop.Key.Value] = struct{}{}
+				if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+					extractedProps[keyIdent.Value] = struct{}{}
+				}
+				// Skip computed properties (can't determine statically)
 			}
 			
 			// Build remaining properties map

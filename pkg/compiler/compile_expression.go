@@ -1273,10 +1273,19 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			c.emitByte(byte(thisReg))     // Object register
 			c.emitByte(byte(propertyReg)) // Key register
 		} else {
-			// Regular property: obj.prop()
+			// Regular property: obj.prop() or private method: obj.#method()
 			propertyName := c.extractPropertyName(memberExpr.Property)
-			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-			c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
+			// Check for private field/method access
+			if len(propertyName) > 0 && propertyName[0] == '#' {
+				// Private method call: strip # prefix for storage
+				fieldName := propertyName[1:]
+				nameConstIdx := c.chunk.AddConstant(vm.String(fieldName))
+				c.emitGetPrivateField(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
+			} else {
+				// Public method call
+				nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+				c.emitGetProp(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
+			}
 		}
 
 		// 4. Compile arguments directly into their target positions (funcReg+1, funcReg+2, ...)

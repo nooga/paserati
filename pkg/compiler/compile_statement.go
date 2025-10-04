@@ -1149,9 +1149,22 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			extractedReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, extractedReg)
 
-			propName := prop.Key.Value
-			propConstIdx := c.chunk.AddConstant(vm.String(propName))
-			c.emitGetProp(extractedReg, elementReg, propConstIdx, node.Token.Line)
+			// Handle property access (identifier or computed)
+			if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+				propConstIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+				c.emitGetProp(extractedReg, elementReg, propConstIdx, node.Token.Line)
+			} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				keyReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, keyReg)
+				_, err := c.compileNode(computed.Expr, keyReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+				c.emitByte(byte(extractedReg))
+				c.emitByte(byte(elementReg))
+				c.emitByte(byte(keyReg))
+			}
 
 			// Define the variable as a local
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
@@ -1161,18 +1174,20 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			}
 		}
 	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
-		// This is an existing variable being assigned to
-		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
-			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
+		// This is an existing variable/pattern being assigned to
+		switch target := exprStmt.Expression.(type) {
+		case *parser.Identifier:
+			// Simple identifier: for (x of items)
+			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
 			if !found {
 				// Define a function/global-scoped binding (var semantics)
-				target := c.currentSymbolTable
-				for target.Outer != nil {
-					target = target.Outer
+				scope := c.currentSymbolTable
+				for scope.Outer != nil {
+					scope = scope.Outer
 				}
 				reg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, reg)
-				sym := target.Define(ident.Value, reg)
+				sym := scope.Define(target.Value, reg)
 				c.regAlloc.Pin(sym.Register)
 				c.emitMove(sym.Register, elementReg, node.Token.Line)
 			} else {
@@ -1185,6 +1200,22 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 					_ = definingTable
 					c.emitMove(symbolRef.Register, elementReg, node.Token.Line)
 				}
+			}
+		case *parser.ArrayLiteral:
+			// Array destructuring assignment: for ([x, y] of items)
+			if err := c.compileNestedArrayDestructuring(target, elementReg, node.Token.Line); err != nil {
+				return BadRegister, err
+			}
+		case *parser.ObjectLiteral:
+			// Object destructuring assignment: for ({a, b} of items)
+			if err := c.compileNestedObjectDestructuring(target, elementReg, node.Token.Line); err != nil {
+				return BadRegister, err
+			}
+		case *parser.MemberExpression:
+			// Member expression: for (obj.x of items) or for (obj[key] of items)
+			// Compile the assignment: memberExpr = elementReg
+			if err := c.compileAssignmentToMember(target, elementReg, node.Token.Line); err != nil {
+				return BadRegister, err
 			}
 		}
 	}
@@ -1336,9 +1367,22 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			extractedReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, extractedReg)
 
-			propName := prop.Key.Value
-			propConstIdx := c.chunk.AddConstant(vm.String(propName))
-			c.emitGetProp(extractedReg, valueReg, propConstIdx, node.Token.Line)
+			// Handle property access (identifier or computed)
+			if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+				propConstIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+				c.emitGetProp(extractedReg, valueReg, propConstIdx, node.Token.Line)
+			} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				keyReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, keyReg)
+				_, err := c.compileNode(computed.Expr, keyReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+				c.emitByte(byte(extractedReg))
+				c.emitByte(byte(valueReg))
+				c.emitByte(byte(keyReg))
+			}
 
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
 				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
@@ -1576,9 +1620,22 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			extractedReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, extractedReg)
 
-			propName := prop.Key.Value
-			propConstIdx := c.chunk.AddConstant(vm.String(propName))
-			c.emitGetProp(extractedReg, currentKeyReg, propConstIdx, node.Token.Line)
+			// Handle property access (identifier or computed)
+			if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+				propConstIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+				c.emitGetProp(extractedReg, currentKeyReg, propConstIdx, node.Token.Line)
+			} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				keyReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, keyReg)
+				_, err := c.compileNode(computed.Expr, keyReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+				c.emitByte(byte(extractedReg))
+				c.emitByte(byte(currentKeyReg))
+				c.emitByte(byte(keyReg))
+			}
 
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
 				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
@@ -1623,38 +1680,55 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			}
 		}
 	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
-		// This is an existing variable being assigned to
-		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
-			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
+		// This is an existing variable/pattern being assigned to
+		switch target := exprStmt.Expression.(type) {
+		case *parser.Identifier:
+			// Simple identifier: for (x in obj)
+			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
 			if !found {
-				fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", ident.Value)
+				fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", target.Value)
 				// Define a function/global-scoped binding (var semantics)
 				if c.enclosing == nil {
-					idx := c.GetOrAssignGlobalIndex(ident.Value)
-					c.currentSymbolTable.DefineGlobal(ident.Value, idx)
+					idx := c.GetOrAssignGlobalIndex(target.Value)
+					c.currentSymbolTable.DefineGlobal(target.Value, idx)
 					c.emitSetGlobal(idx, currentKeyReg, node.Token.Line)
 				} else {
-					target := c.currentSymbolTable
-					for target.Outer != nil {
-						target = target.Outer
+					scope := c.currentSymbolTable
+					for scope.Outer != nil {
+						scope = scope.Outer
 					}
 					reg := c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, reg)
-					sym := target.Define(ident.Value, reg)
+					sym := scope.Define(target.Value, reg)
 					c.regAlloc.Pin(sym.Register)
 					c.emitMove(sym.Register, currentKeyReg, node.Token.Line)
 				}
 			} else {
 				// Check if this is a global variable or local register
 				if symbolRef.IsGlobal {
-					fmt.Printf("// [ForInAssign] writing global %s\n", ident.Value)
+					fmt.Printf("// [ForInAssign] writing global %s\n", target.Value)
 					c.emitSetGlobal(symbolRef.GlobalIndex, currentKeyReg, node.Token.Line)
 				} else {
 					// Store key value in the existing variable's register for local variables
 					_ = definingTable
-					fmt.Printf("// [ForInAssign] writing local %s R%d\n", ident.Value, symbolRef.Register)
+					fmt.Printf("// [ForInAssign] writing local %s R%d\n", target.Value, symbolRef.Register)
 					c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
 				}
+			}
+		case *parser.ArrayLiteral:
+			// Array destructuring assignment: for ([x, y] in obj)
+			if err := c.compileNestedArrayDestructuring(target, currentKeyReg, node.Token.Line); err != nil {
+				return BadRegister, err
+			}
+		case *parser.ObjectLiteral:
+			// Object destructuring assignment: for ({a, b} in obj)
+			if err := c.compileNestedObjectDestructuring(target, currentKeyReg, node.Token.Line); err != nil {
+				return BadRegister, err
+			}
+		case *parser.MemberExpression:
+			// Member expression: for (obj.x in items) or for (obj[key] in items)
+			if err := c.compileAssignmentToMember(target, currentKeyReg, node.Token.Line); err != nil {
+				return BadRegister, err
 			}
 		}
 	}

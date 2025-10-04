@@ -2841,6 +2841,16 @@ func (c *Checker) visit(node parser.Node) {
 		// This will be used as a key, so it should be string-like
 		node.SetComputedType(node.Expr.GetComputedType())
 
+	case *parser.ArrayParameterPattern:
+		// Array destructuring pattern in catch clause or function parameters
+		// Define all bindings with type 'any' (catch parameters are implicitly any)
+		c.checkArrayParameterPattern(node)
+
+	case *parser.ObjectParameterPattern:
+		// Object destructuring pattern in catch clause or function parameters
+		// Define all bindings with type 'any' (catch parameters are implicitly any)
+		c.checkObjectParameterPattern(node)
+
 	default:
 		// Optional: Add error for unhandled node types
 		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
@@ -3042,11 +3052,18 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 
 		// Get the property type from the object
 		var propType types.Type = types.Undefined
-		if objType != nil {
-			if pt, exists := objType.Properties[prop.Key.Value]; exists {
-				propType = pt
+		var propName string
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			propName = keyIdent.Value
+			if objType != nil {
+				if pt, exists := objType.Properties[propName]; exists {
+					propType = pt
+				}
+			} else if valueType == types.Any {
+				propType = types.Any
 			}
-		} else if valueType == types.Any {
+		} else {
+			// Computed property - can't check statically
 			propType = types.Any
 		}
 
@@ -3081,9 +3098,10 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			// Create a new object type excluding the destructured properties
 			extractedProps := make(map[string]struct{})
 			for _, prop := range node.Properties {
-				if prop.Key != nil {
-					extractedProps[prop.Key.Value] = struct{}{}
+				if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+					extractedProps[keyIdent.Value] = struct{}{}
 				}
+				// Skip computed properties (can't determine statically)
 			}
 
 			// Build remaining properties map
@@ -3274,10 +3292,21 @@ func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
 	// Define the catch parameter if present
 	if clause.Parameter != nil {
 		// In JavaScript/TypeScript, catch parameter is implicitly 'any' type
-		if !c.env.Define(clause.Parameter.Value, types.Any, false) {
-			c.addError(clause.Parameter, fmt.Sprintf("parameter '%s' already declared", clause.Parameter.Value))
+		switch param := clause.Parameter.(type) {
+		case *parser.Identifier:
+			// Simple identifier: catch (e)
+			if !c.env.Define(param.Value, types.Any, false) {
+				c.addError(param, fmt.Sprintf("parameter '%s' already declared", param.Value))
+			}
+			param.SetComputedType(types.Any)
+		case *parser.ArrayParameterPattern, *parser.ObjectParameterPattern:
+			// Destructuring pattern: catch ([x, y]) or catch ({message})
+			// Type check the pattern and define all bindings
+			c.visit(clause.Parameter)
+			// The visit will define all bindings from the pattern
+		default:
+			c.addError(clause.Parameter, fmt.Sprintf("unexpected catch parameter type: %T", param))
 		}
-		clause.Parameter.SetComputedType(types.Any)
 	}
 
 	// Check the catch body
@@ -3285,6 +3314,82 @@ func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
 
 	// Restore the original environment
 	c.env = originalEnv
+}
+
+// checkArrayParameterPattern handles type checking for array destructuring patterns in catch clauses
+func (c *Checker) checkArrayParameterPattern(node *parser.ArrayParameterPattern) {
+	// In catch clauses, all bindings are type 'any'
+	for _, element := range node.Elements {
+		if element == nil || element.Target == nil {
+			continue
+		}
+		c.definePatternBinding(element.Target, types.Any)
+	}
+	node.SetComputedType(types.Any)
+}
+
+// checkObjectParameterPattern handles type checking for object destructuring patterns in catch clauses
+func (c *Checker) checkObjectParameterPattern(node *parser.ObjectParameterPattern) {
+	// In catch clauses, all bindings are type 'any'
+	for _, prop := range node.Properties {
+		if prop == nil || prop.Target == nil {
+			continue
+		}
+		c.definePatternBinding(prop.Target, types.Any)
+	}
+	// Handle rest property if present
+	if node.RestProperty != nil && node.RestProperty.Target != nil {
+		c.definePatternBinding(node.RestProperty.Target, types.Any)
+	}
+	node.SetComputedType(types.Any)
+}
+
+// definePatternBinding defines a binding from a destructuring pattern (helper for catch clauses)
+func (c *Checker) definePatternBinding(target parser.Expression, bindingType types.Type) {
+	switch t := target.(type) {
+	case *parser.Identifier:
+		if !c.env.Define(t.Value, bindingType, false) {
+			c.addError(t, fmt.Sprintf("parameter '%s' already declared", t.Value))
+		}
+		t.SetComputedType(bindingType)
+	case *parser.ArrayParameterPattern:
+		// Nested array parameter pattern
+		for _, element := range t.Elements {
+			if element != nil && element.Target != nil {
+				c.definePatternBinding(element.Target, bindingType)
+			}
+		}
+		t.SetComputedType(bindingType)
+	case *parser.ArrayLiteral:
+		// Nested array literal pattern (e.g., catch ([[x, y], z]))
+		for _, element := range t.Elements {
+			if element != nil {
+				c.definePatternBinding(element, bindingType)
+			}
+		}
+		t.SetComputedType(bindingType)
+	case *parser.ObjectParameterPattern:
+		// Nested object parameter pattern
+		for _, prop := range t.Properties {
+			if prop != nil && prop.Target != nil {
+				c.definePatternBinding(prop.Target, bindingType)
+			}
+		}
+		if t.RestProperty != nil && t.RestProperty.Target != nil {
+			c.definePatternBinding(t.RestProperty.Target, bindingType)
+		}
+		t.SetComputedType(bindingType)
+	case *parser.ObjectLiteral:
+		// Nested object literal pattern (e.g., catch ({a: {b, c}}))
+		for _, prop := range t.Properties {
+			if prop != nil && prop.Value != nil {
+				c.definePatternBinding(prop.Value, bindingType)
+			}
+		}
+		t.SetComputedType(bindingType)
+	default:
+		c.addError(target, fmt.Sprintf("unexpected pattern binding target: %T", t))
+	}
 }
 
 // checkThrowStatement performs type checking for throw statements

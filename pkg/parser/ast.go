@@ -1082,7 +1082,7 @@ func (ts *TryStatement) String() string {
 // CatchClause represents a catch block.
 type CatchClause struct {
 	Token     lexer.Token     // The 'catch' token
-	Parameter *Identifier     // Exception variable (optional in ES2019+)
+	Parameter Expression      // Exception variable: identifier or destructuring pattern (optional in ES2019+)
 	Body      *BlockStatement // The catch block
 }
 
@@ -2796,9 +2796,9 @@ func (ada *ArrayDestructuringAssignment) String() string {
 
 // DestructuringProperty represents key: target in object destructuring
 type DestructuringProperty struct {
-	Key     *Identifier // Property name in source object
-	Target  Expression  // Target variable (can be different from key)
-	Default Expression  // Default value (nil if no default)
+	Key     Expression // Property name (Identifier or ComputedPropertyName)
+	Target  Expression // Target variable (can be different from key)
+	Default Expression // Default value (nil if no default)
 }
 
 // String() for DestructuringProperty (helpful for debugging)

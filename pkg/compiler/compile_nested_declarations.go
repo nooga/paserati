@@ -238,13 +238,28 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 
 		// Allocate register for extracted value
 		extractedReg := c.regAlloc.Alloc()
-		
-		// Get property from object
-		propNameIdx := c.chunk.AddConstant(vm.String(prop.Key.Value))
-		c.emitOpCode(vm.OpGetProp, line)
-		c.emitByte(byte(extractedReg)) // destination register
-		c.emitByte(byte(valueReg))     // object register
-		c.emitUint16(propNameIdx)      // property name constant index
+
+		// Handle property access (identifier or computed)
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+			c.emitOpCode(vm.OpGetProp, line)
+			c.emitByte(byte(extractedReg)) // destination register
+			c.emitByte(byte(valueReg))     // object register
+			c.emitUint16(propNameIdx)      // property name constant index
+		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+			keyReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(computed.Expr, keyReg)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				c.regAlloc.Free(keyReg)
+				return err
+			}
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(extractedReg))
+			c.emitByte(byte(valueReg))
+			c.emitByte(byte(keyReg))
+			c.regAlloc.Free(keyReg)
+		}
 		
 		// Handle assignment based on target type (identifier vs nested pattern)
 		if ident, ok := prop.Target.(*parser.Identifier); ok {

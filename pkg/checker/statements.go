@@ -724,14 +724,19 @@ func (c *Checker) checkObjectDestructuringInForLoop(node *parser.ObjectDestructu
 		var propType types.Type
 
 		// Try to extract property type from source object
-		propKey := prop.Key.Value // Identifier.Value gives the string key
-		if objType, ok := sourceType.(*types.ObjectType); ok {
-			if pt, exists := objType.Properties[propKey]; exists {
-				propType = pt
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			propKey := keyIdent.Value
+			if objType, ok := sourceType.(*types.ObjectType); ok {
+				if pt, exists := objType.Properties[propKey]; exists {
+					propType = pt
+				} else {
+					propType = types.Any
+				}
 			} else {
 				propType = types.Any
 			}
 		} else {
+			// Computed property - can't check statically
 			propType = types.Any
 		}
 

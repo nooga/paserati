@@ -858,12 +858,28 @@ func (c *Compiler) compileObjectDestructuringWithValueReg(node *parser.ObjectDes
 
 		// Allocate register for extracted property value
 		extractedReg := c.regAlloc.Alloc()
-		
-		// Add property name as a constant
-		propNameIdx := c.chunk.AddConstant(vm.String(prop.Key.Value))
-		
-		// Get valueReg.propertyName using GetProp operation
-		c.emitGetProp(extractedReg, valueReg, propNameIdx, line)
+
+		// Handle property access (identifier or computed)
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			// Static property key
+			propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+			c.emitGetProp(extractedReg, valueReg, propNameIdx, line)
+		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+			// Computed property key - evaluate expression
+			keyReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(computed.Expr, keyReg)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				c.regAlloc.Free(keyReg)
+				return err
+			}
+			// Use GetIndex for dynamic property access
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(extractedReg)) // Destination
+			c.emitByte(byte(valueReg))     // Object
+			c.emitByte(byte(keyReg))       // Key
+			c.regAlloc.Free(keyReg)
+		}
 		
 		// Handle assignment with potential default value (recursive assignment)
 		if prop.Default != nil {
@@ -917,12 +933,25 @@ func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestr
 
 		// Allocate register for extracted property value
 		valueReg := c.regAlloc.Alloc()
-		
-		// Add property name as a constant
-		propNameIdx := c.chunk.AddConstant(vm.String(prop.Key.Value))
-		
-		// Get temp.propertyName using GetProp operation
-		c.emitGetProp(valueReg, tempReg, propNameIdx, line)
+
+		// Handle property access (identifier or computed)
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+			c.emitGetProp(valueReg, tempReg, propNameIdx, line)
+		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+			keyReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(computed.Expr, keyReg)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(keyReg)
+				return BadRegister, err
+			}
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(valueReg))
+			c.emitByte(byte(tempReg))
+			c.emitByte(byte(keyReg))
+			c.regAlloc.Free(keyReg)
+		}
 		
 		// Handle assignment with potential default value
 		if prop.Default != nil {
@@ -1011,9 +1040,10 @@ func (c *Compiler) compileObjectRestProperty(objReg Register, extractedProps []*
 	// Create array with extracted property names
 	excludeNames := make([]vm.Value, 0, len(extractedProps))
 	for _, prop := range extractedProps {
-		if prop.Key != nil {
-			excludeNames = append(excludeNames, vm.String(prop.Key.Value))
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			excludeNames = append(excludeNames, vm.String(keyIdent.Value))
 		}
+		// Skip computed properties (can't exclude statically)
 	}
 	
 	if len(excludeNames) == 0 {
@@ -1075,9 +1105,10 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 	// Create array with extracted property names
 	excludeNames := make([]vm.Value, 0, len(extractedProps))
 	for _, prop := range extractedProps {
-		if prop.Key != nil {
-			excludeNames = append(excludeNames, vm.String(prop.Key.Value))
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			excludeNames = append(excludeNames, vm.String(keyIdent.Value))
 		}
+		// Skip computed properties (can't exclude statically)
 	}
 	
 	if len(excludeNames) == 0 {
@@ -1316,14 +1347,29 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 
 		// Allocate register for extracted value
 		valueReg := c.regAlloc.Alloc()
-		
-		// Get property from object
-		propNameIdx := c.chunk.AddConstant(vm.String(prop.Key.Value))
-		c.emitOpCode(vm.OpGetProp, line)
-		c.emitByte(byte(valueReg))   // destination register
-		c.emitByte(byte(tempReg))    // object register
-		c.emitUint16(propNameIdx)    // property name constant index
-		
+
+		// Handle property access (identifier or computed)
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+			c.emitOpCode(vm.OpGetProp, line)
+			c.emitByte(byte(valueReg))   // destination register
+			c.emitByte(byte(tempReg))    // object register
+			c.emitUint16(propNameIdx)    // property name constant index
+		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+			keyReg := c.regAlloc.Alloc()
+			_, err := c.compileNode(computed.Expr, keyReg)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(keyReg)
+				return BadRegister, err
+			}
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(valueReg))
+			c.emitByte(byte(tempReg))
+			c.emitByte(byte(keyReg))
+			c.regAlloc.Free(keyReg)
+		}
+
 		// Handle assignment based on target type (identifier vs nested pattern)
 		if ident, ok := prop.Target.(*parser.Identifier); ok {
 			// Simple identifier target
@@ -1425,5 +1471,51 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 		c.regAlloc.Pin(valueReg)
 	}
 	
+	return nil
+}
+// compileAssignmentToMember compiles assignment to a member expression: obj.prop = valueReg or obj[key] = valueReg
+func (c *Compiler) compileAssignmentToMember(memberExpr *parser.MemberExpression, valueReg Register, line int) errors.PaseratiError {
+	// Compile the object expression
+	objectReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectReg)
+
+	_, err := c.compileNode(memberExpr.Object, objectReg)
+	if err != nil {
+		return err
+	}
+
+	// Check if this is a computed property
+	if computedKey, ok := memberExpr.Property.(*parser.ComputedPropertyName); ok {
+		// Computed property: obj[expr] = value
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+
+		// Emit OpSetIndex: objectReg[keyReg] = valueReg
+		c.emitOpCode(vm.OpSetIndex, line)
+		c.emitByte(byte(objectReg))
+		c.emitByte(byte(keyReg))
+		c.emitByte(byte(valueReg))
+	} else {
+		// Regular property: obj.prop = value
+		propName := c.extractPropertyName(memberExpr.Property)
+
+		// Check for private field (starts with #)
+		if len(propName) > 0 && propName[0] == '#' {
+			// Private field
+			fieldName := propName[1:]
+			nameConstIdx := c.chunk.AddConstant(vm.String(fieldName))
+			c.emitSetPrivateField(objectReg, valueReg, nameConstIdx, line)
+		} else {
+			// Regular property
+			nameConstIdx := c.chunk.AddConstant(vm.String(propName))
+			c.emitSetProp(objectReg, valueReg, nameConstIdx, line)
+		}
+	}
+
 	return nil
 }

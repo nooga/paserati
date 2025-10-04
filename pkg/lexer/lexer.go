@@ -1482,6 +1482,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 						// First character - must be ID_Start
 						if isUnicodeIDStart(r) {
 							result.WriteRune(r)
+							continue
 						} else {
 							// Invalid start character - fall back to literal
 							result.WriteString("\\u")
@@ -1494,6 +1495,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 						// Continuation character - must be ID_Continue
 						if isUnicodeIDContinue(r) {
 							result.WriteRune(r)
+							continue
 						} else {
 							// Invalid continue character - stop here
 							// Don't consume this character, backtrack
@@ -1566,6 +1568,9 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 					if isLetter(l.ch) || isDigit(l.ch) || l.ch == '_' || l.ch == '$' {
 						result.WriteByte(l.ch)
 						l.readChar()
+					} else if l.ch == '\\' && l.peekChar() == 'u' {
+						// Unicode escape sequence - continue to top of loop to handle it
+						continue
 					} else {
 						break
 					}
@@ -2040,12 +2045,12 @@ func isUnicodeIDStart(r rune) bool {
 	// ECMAScript Other_ID_Start characters
 	// These are specific Unicode code points that are allowed to start identifiers
 	switch r {
-	case 0x2118: // ℘ SCRIPT CAPITAL P
-	case 0x212E: // ℮ ESTIMATED SYMBOL
-	case 0x309B: // ゛ KATAKANA-HIRAGANA VOICED SOUND MARK
-	case 0x309C: // ゜ KATAKANA-HIRAGANA SEMI-VOICED SOUND MARK
-	case 0x1885: // ᢅ (Unicode 9.0)
-	case 0x1886: // ᢆ (Unicode 9.0)
+	case 0x2118, // ℘ SCRIPT CAPITAL P
+		0x212E, // ℮ ESTIMATED SYMBOL
+		0x309B, // ゛ KATAKANA-HIRAGANA VOICED SOUND MARK
+		0x309C, // ゜ KATAKANA-HIRAGANA SEMI-VOICED SOUND MARK
+		0x1885, // ᢅ (Unicode 9.0)
+		0x1886: // ᢆ (Unicode 9.0)
 		return true
 	}
 
@@ -2073,12 +2078,12 @@ func isUnicodeIDContinue(r rune) bool {
 	// ECMAScript Other_ID_Continue characters
 	// These are specific Unicode code points that can continue (but not start) identifiers
 	switch r {
-	case 0x00B7: // · MIDDLE DOT
-	case 0x0387: // · GREEK ANO TELEIA
-	case 0x1369, 0x136A, 0x136B, 0x136C, 0x136D, 0x136E, 0x136F, 0x1370, 0x1371: // Ethiopian digits
-	case 0x19DA: // ᧚ NEW TAI LUE THAM DIGIT ONE
-	case 0x200C: // ZWNJ - Zero Width Non-Joiner
-	case 0x200D: // ZWJ - Zero Width Joiner
+	case 0x00B7, // · MIDDLE DOT
+		0x0387, // · GREEK ANO TELEIA
+		0x1369, 0x136A, 0x136B, 0x136C, 0x136D, 0x136E, 0x136F, 0x1370, 0x1371, // Ethiopian digits
+		0x19DA, // ᧚ NEW TAI LUE THAM DIGIT ONE
+		0x200C, // ZWNJ - Zero Width Non-Joiner
+		0x200D: // ZWJ - Zero Width Joiner
 		return true
 	}
 

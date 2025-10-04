@@ -1237,53 +1237,31 @@ func (p *Parser) parseConstStatement() Statement {
 	}
 }
 
-func (p *Parser) parseVarStatement() *VarStatement {
-	stmt := &VarStatement{Token: p.curToken}
+func (p *Parser) parseVarStatement() Statement {
+	varToken := p.curToken // Save the 'var' token
 
-	// Parse first declaration
-	if !p.expectPeek(lexer.IDENT) {
-		return nil
-	}
+	// Peek at the next token to determine if it's a destructuring pattern
+	p.nextToken() // Move to what comes after 'var'
 
-	firstDeclarator := &VarDeclarator{}
-	firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-	// Optional Type Annotation
-	if p.peekTokenIs(lexer.COLON) {
-		p.nextToken() // Consume ':'
-		p.nextToken() // Consume token starting the type expression
-		firstDeclarator.TypeAnnotation = p.parseTypeExpression()
-		if firstDeclarator.TypeAnnotation == nil {
-			return nil
-		}
-	}
-
-	// Allow omitting = value, defaulting to undefined
-	if p.peekTokenIs(lexer.ASSIGN) {
-		p.nextToken() // Consume '='
-		p.nextToken() // Consume token starting the expression
-		firstDeclarator.Value = p.parseExpression(LOWEST)
-	}
-
-	stmt.Declarations = []*VarDeclarator{firstDeclarator}
-
-	// Parse additional declarations separated by commas
-	for p.peekTokenIs(lexer.COMMA) {
-		p.nextToken() // Consume ','
-
-		if !p.expectPeek(lexer.IDENT) {
-			return nil
-		}
-
-		declarator := &VarDeclarator{}
-		declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	switch p.curToken.Type {
+	case lexer.LBRACKET:
+		// Array destructuring: var [a, b] = ...
+		return p.parseArrayDestructuringDeclaration(varToken, false, true)
+	case lexer.LBRACE:
+		// Object destructuring: var {a, b} = ...
+		return p.parseObjectDestructuringDeclaration(varToken, false, true)
+	case lexer.IDENT:
+		// Regular identifier case - original logic
+		stmt := &VarStatement{Token: varToken}
+		firstDeclarator := &VarDeclarator{}
+		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
 		// Optional Type Annotation
 		if p.peekTokenIs(lexer.COLON) {
 			p.nextToken() // Consume ':'
 			p.nextToken() // Consume token starting the type expression
-			declarator.TypeAnnotation = p.parseTypeExpression()
-			if declarator.TypeAnnotation == nil {
+			firstDeclarator.TypeAnnotation = p.parseTypeExpression()
+			if firstDeclarator.TypeAnnotation == nil {
 				return nil
 			}
 		}
@@ -1292,26 +1270,60 @@ func (p *Parser) parseVarStatement() *VarStatement {
 		if p.peekTokenIs(lexer.ASSIGN) {
 			p.nextToken() // Consume '='
 			p.nextToken() // Consume token starting the expression
-			declarator.Value = p.parseExpression(LOWEST)
+			firstDeclarator.Value = p.parseExpression(LOWEST)
 		}
 
-		stmt.Declarations = append(stmt.Declarations, declarator)
-	}
+		stmt.Declarations = []*VarDeclarator{firstDeclarator}
 
-	// Set legacy fields for backward compatibility (first declaration)
-	if len(stmt.Declarations) > 0 {
-		stmt.Name = stmt.Declarations[0].Name
-		stmt.TypeAnnotation = stmt.Declarations[0].TypeAnnotation
-		stmt.Value = stmt.Declarations[0].Value
-		stmt.ComputedType = stmt.Declarations[0].ComputedType
-	}
+		// Parse additional declarations separated by commas
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
 
-	// Optional semicolon - Consume it here
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
 
-	return stmt
+			declarator := &VarDeclarator{}
+			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+			// Optional Type Annotation
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // Consume ':'
+				p.nextToken() // Consume token starting the type expression
+				declarator.TypeAnnotation = p.parseTypeExpression()
+				if declarator.TypeAnnotation == nil {
+					return nil
+				}
+			}
+
+			// Allow omitting = value, defaulting to undefined
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // Consume '='
+				p.nextToken() // Consume token starting the expression
+				declarator.Value = p.parseExpression(LOWEST)
+			}
+
+			stmt.Declarations = append(stmt.Declarations, declarator)
+		}
+
+		// Set legacy fields for backward compatibility (first declaration)
+		if len(stmt.Declarations) > 0 {
+			stmt.Name = stmt.Declarations[0].Name
+			stmt.TypeAnnotation = stmt.Declarations[0].TypeAnnotation
+			stmt.Value = stmt.Declarations[0].Value
+			stmt.ComputedType = stmt.Declarations[0].ComputedType
+		}
+
+		// Optional semicolon - Consume it here
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+
+		return stmt
+	default:
+		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'var', got %s", p.curToken.Type))
+		return nil
+	}
 }
 
 func (p *Parser) parseReturnStatement() *ReturnStatement {
@@ -2252,26 +2264,29 @@ func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 		return pattern
 	}
 
-	p.nextToken() // Move to first element
+	// Parse elements, handling elisions
+	for {
+		p.nextToken() // Move to next position
 
-	// Parse first element
-	element := p.parseParameterDestructuringElement()
-	if element == nil {
-		p.addError(p.curToken, "failed to parse array parameter element")
-		return nil
-	}
-	elements = append(elements, element)
-
-	// Parse subsequent elements
-	for p.peekTokenIs(lexer.COMMA) {
-		p.nextToken() // Consume ','
-
-		// Check for trailing comma
-		if p.peekTokenIs(lexer.RBRACKET) {
+		// Check for end of array
+		if p.curTokenIs(lexer.RBRACKET) {
 			break
 		}
 
-		p.nextToken() // Move to next element
+		// Check for elision (comma with no element before it)
+		if p.curTokenIs(lexer.COMMA) {
+			// Elision: [, x] or [x, , y]
+			elements = append(elements, &DestructuringElement{Target: nil})
+			// Check if this is the end: [,] or [x,]
+			if p.peekTokenIs(lexer.RBRACKET) {
+				p.nextToken() // Consume ]
+				break
+			}
+			// More elements follow, continue to parse them
+			continue
+		}
+
+		// Parse actual element
 		element := p.parseParameterDestructuringElement()
 		if element == nil {
 			p.addError(p.curToken, "failed to parse array parameter element")
@@ -2280,15 +2295,25 @@ func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 		elements = append(elements, element)
 
 		// If this is a rest element, it must be the last one
-		if element.IsRest && !p.peekTokenIs(lexer.RBRACKET) {
-			p.addError(p.peekToken, "rest element must be last element in array parameter")
-			return nil
+		if element.IsRest {
+			if !p.expectPeek(lexer.RBRACKET) {
+				p.addError(p.peekToken, "rest element must be last element in array parameter")
+				return nil
+			}
+			break
 		}
-	}
 
-	if !p.expectPeek(lexer.RBRACKET) {
-		p.addError(p.peekToken, "expected ']' after array parameter elements")
-		return nil
+		// Check for more elements
+		if !p.peekTokenIs(lexer.COMMA) {
+			// No more elements, expect ]
+			if !p.expectPeek(lexer.RBRACKET) {
+				p.addError(p.peekToken, "expected ']' after array parameter elements")
+				return nil
+			}
+			break
+		}
+		// Consume comma and continue
+		p.nextToken()
 	}
 
 	pattern.Elements = elements
@@ -2381,23 +2406,25 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 	// Check for rest element
 	if p.curTokenIs(lexer.SPREAD) {
 		element.IsRest = true
-		if !p.expectPeek(lexer.IDENT) {
-			p.addError(p.peekToken, "expected identifier after '...' in parameter rest element")
+		// Rest element can have: ...identifier, ...[array], or ...{object}
+		if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.LBRACKET) && !p.peekTokenIs(lexer.LBRACE) {
+			p.addError(p.peekToken, "expected identifier or pattern after '...' in parameter rest element")
 			return nil
 		}
+		p.nextToken() // Move to the target
 	}
 
 	// Parse target (support nested patterns in parameter context)
 	if p.curTokenIs(lexer.IDENT) {
 		element.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else if p.curTokenIs(lexer.LBRACKET) {
-		// Nested array destructuring in parameter: function f([a, [b, c]]) { ... }
+		// Nested array destructuring: function f([a, [b, c]]) or function f([...[x, y]])
 		element.Target = p.parseArrayLiteral()
 		if element.Target == nil {
 			return nil
 		}
 	} else if p.curTokenIs(lexer.LBRACE) {
-		// Nested object destructuring in parameter: function f({user: {name, age}}) { ... }
+		// Nested object destructuring: function f({user: {name, age}}) or function f([...{a, b}])
 		element.Target = p.parseObjectLiteral()
 		if element.Target == nil {
 			return nil
@@ -2423,20 +2450,61 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 }
 
 // parseParameterDestructuringProperty parses a property in object parameter destructuring
-// Handles: key, key: target, key = default, key: target = default
+// Handles: key, key: target, key = default, key: target = default, [computed]: target
 func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 	prop := &DestructuringProperty{}
 
-	// Parse key (must be identifier)
-	if !p.curTokenIs(lexer.IDENT) {
-		p.addError(p.curToken, "object parameter property key must be an identifier")
+	// Parse key (identifier or computed property)
+	if p.curTokenIs(lexer.LBRACKET) {
+		// Computed property: [expression]: target
+		p.nextToken() // Move past '['
+		// Parse the computed expression
+		computedExpr := p.parseExpression(LOWEST)
+		if computedExpr == nil {
+			p.addError(p.curToken, "expected expression in computed property key")
+			return nil
+		}
+		if !p.expectPeek(lexer.RBRACKET) {
+			p.addError(p.peekToken, "expected ']' after computed property key")
+			return nil
+		}
+		// Wrap in ComputedPropertyName
+		prop.Key = &ComputedPropertyName{
+			Expr: computedExpr,
+		}
+		// Computed properties must have explicit target
+		if !p.expectPeek(lexer.COLON) {
+			p.addError(p.peekToken, "computed property in destructuring must have explicit target")
+			return nil
+		}
+		p.nextToken() // Move to target
+		// Parse target
+		if p.curTokenIs(lexer.IDENT) {
+			prop.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		} else if p.curTokenIs(lexer.LBRACKET) {
+			prop.Target = p.parseArrayLiteral()
+			if prop.Target == nil {
+				return nil
+			}
+		} else if p.curTokenIs(lexer.LBRACE) {
+			prop.Target = p.parseObjectLiteral()
+			if prop.Target == nil {
+				return nil
+			}
+		} else {
+			p.addError(p.curToken, "computed property target must be an identifier or nested pattern")
+			return nil
+		}
+	} else if p.curTokenIs(lexer.IDENT) {
+		// Regular identifier key
+		prop.Key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
+		p.addError(p.curToken, "object parameter property key must be an identifier or computed property")
 		return nil
 	}
 
-	prop.Key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-	// Check for explicit target (key: target)
-	if p.peekTokenIs(lexer.COLON) {
+	// For regular identifiers, check for explicit target (key: target)
+	if _, isIdent := prop.Key.(*Identifier); isIdent && p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
 		p.nextToken() // Move to target
 
@@ -4398,10 +4466,26 @@ func (p *Parser) parseForStatement() Statement {
 		return p.parseForStatementOrForOf(forToken)
 	}
 
-	// For identifiers, check if it's followed by OF/IN
+	// For destructuring patterns, check if followed by OF/IN
+	if p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) {
+		// Advance to the pattern
+		p.nextToken() // Now at [ or {
+		// Destructuring patterns in for loops are always for-of/for-in (assignment patterns)
+		// Parse as expression to handle cases like: for ([x] of items) or for ({a} in obj)
+		return p.parseForStatementOrForOf(forToken)
+	}
+
+	// For identifiers, check if it's followed by OF/IN or could be a member expression
 	if p.peekTokenIs(lexer.IDENT) {
 		// Save position, advance to check what follows
 		p.nextToken() // Now at IDENT
+
+		// Check for member expression patterns: obj.x, obj[x], this.x
+		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
+			// This is a member expression - could be for-of/for-in assignment
+			return p.parseForStatementOrForOf(forToken)
+		}
+
 		if p.peekTokenIs(lexer.OF) || p.peekTokenIs(lexer.IN) {
 			return p.parseForStatementOrForOf(forToken)
 		}
@@ -6604,10 +6688,35 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 			return nil
 		}
 	} else if p.curTokenIs(lexer.IDENT) {
-		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
+		// Could be bare identifier or member expression
+		// Check if followed by . or [ to determine if it's a member expression
+		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
+			// Member expression: parse it fully
+			expr := p.parseExpression(LOWEST)
+			exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
+			varStmt = exprStmt
+			varName = "" // Member expression doesn't have a simple name
+		} else {
+			// Simple identifier
+			ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
+			varStmt = exprStmt
+			varName = p.curToken.Literal
+		}
+	} else if p.curTokenIs(lexer.LBRACKET) {
+		// Array destructuring assignment: for ([x] of items)
+		// Parse as ArrayLiteral (which acts as assignment pattern)
+		arrayPattern := p.parseArrayLiteral()
+		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: arrayPattern}
 		varStmt = exprStmt
-		varName = p.curToken.Literal
+		varName = "" // Destructuring doesn't have a single name
+	} else if p.curTokenIs(lexer.LBRACE) {
+		// Object destructuring assignment: for ({a} of items)
+		// Parse as ObjectLiteral (which acts as assignment pattern)
+		objPattern := p.parseObjectLiteral()
+		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: objPattern}
+		varStmt = exprStmt
+		varName = "" // Destructuring doesn't have a single name
 	} else {
 		return nil
 	}
@@ -7424,14 +7533,24 @@ func (p *Parser) parseCatchClause() *CatchClause {
 	// Optional parameter (ES2019+ allows catch without parameter)
 	if p.peekTokenIs(lexer.LPAREN) {
 		p.nextToken() // consume '('
+		p.nextToken() // move to parameter
 
-		if !p.expectPeek(lexer.IDENT) {
-			return nil // Expected identifier for catch parameter
-		}
-
-		clause.Parameter = &Identifier{
-			Token: p.curToken,
-			Value: p.curToken.Literal,
+		// Parameter can be identifier or destructuring pattern
+		switch p.curToken.Type {
+		case lexer.IDENT:
+			clause.Parameter = &Identifier{
+				Token: p.curToken,
+				Value: p.curToken.Literal,
+			}
+		case lexer.LBRACKET:
+			// Array destructuring: catch ([x, y])
+			clause.Parameter = p.parseArrayParameterPattern()
+		case lexer.LBRACE:
+			// Object destructuring: catch ({message, code})
+			clause.Parameter = p.parseObjectParameterPattern()
+		default:
+			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern for catch parameter, got %s", p.curToken.Type))
+			return nil
 		}
 
 		if !p.expectPeek(lexer.RPAREN) {

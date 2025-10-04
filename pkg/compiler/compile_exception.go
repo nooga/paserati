@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"paserati/pkg/errors"
 	"paserati/pkg/parser"
 	"paserati/pkg/vm"
@@ -49,10 +50,35 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 			if node.CatchClause.Parameter != nil {
 				// Define catch parameter in the current function scope
 				// This allows the catch block to access all function-local variables
-				paramName := node.CatchClause.Parameter.Value
-
-				// Define the catch parameter (this might shadow an existing variable)
-				c.currentSymbolTable.Define(paramName, catchReg)
+				switch param := node.CatchClause.Parameter.(type) {
+				case *parser.Identifier:
+					c.currentSymbolTable.Define(param.Value, catchReg)
+				case *parser.ArrayParameterPattern:
+					// Convert ArrayParameterPattern to ArrayDestructuringDeclaration
+					decl := &parser.ArrayDestructuringDeclaration{
+						Token:    param.Token,
+						IsConst:  false, // catch parameters are not const
+						Elements: param.Elements,
+						Value:    nil, // value already in catchReg
+					}
+					if err := c.compileArrayDestructuringDeclarationWithValueReg(decl, catchReg, node.Token.Line); err != nil {
+						return BadRegister, err
+					}
+				case *parser.ObjectParameterPattern:
+					// Convert ObjectParameterPattern to ObjectDestructuringDeclaration
+					decl := &parser.ObjectDestructuringDeclaration{
+						Token:        param.Token,
+						IsConst:      false, // catch parameters are not const
+						Properties:   param.Properties,
+						RestProperty: param.RestProperty,
+						Value:        nil, // value already in catchReg
+					}
+					if err := c.compileObjectDestructuringDeclarationWithValueReg(decl, catchReg, node.Token.Line); err != nil {
+						return BadRegister, err
+					}
+				default:
+					return BadRegister, NewCompileError(node, fmt.Sprintf("unexpected catch parameter type: %T", param))
+				}
 
 				// Compile catch body
 				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
@@ -140,10 +166,35 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 			if node.CatchClause.Parameter != nil {
 				// Define catch parameter in the current function scope
 				// This allows the catch block to access all function-local variables
-				paramName := node.CatchClause.Parameter.Value
-
-				// Define the catch parameter (this might shadow an existing variable)
-				c.currentSymbolTable.Define(paramName, catchReg)
+				switch param := node.CatchClause.Parameter.(type) {
+				case *parser.Identifier:
+					c.currentSymbolTable.Define(param.Value, catchReg)
+				case *parser.ArrayParameterPattern:
+					// Convert ArrayParameterPattern to ArrayDestructuringDeclaration
+					decl := &parser.ArrayDestructuringDeclaration{
+						Token:    param.Token,
+						IsConst:  false, // catch parameters are not const
+						Elements: param.Elements,
+						Value:    nil, // value already in catchReg
+					}
+					if err := c.compileArrayDestructuringDeclarationWithValueReg(decl, catchReg, node.Token.Line); err != nil {
+						return BadRegister, err
+					}
+				case *parser.ObjectParameterPattern:
+					// Convert ObjectParameterPattern to ObjectDestructuringDeclaration
+					decl := &parser.ObjectDestructuringDeclaration{
+						Token:        param.Token,
+						IsConst:      false, // catch parameters are not const
+						Properties:   param.Properties,
+						RestProperty: param.RestProperty,
+						Value:        nil, // value already in catchReg
+					}
+					if err := c.compileObjectDestructuringDeclarationWithValueReg(decl, catchReg, node.Token.Line); err != nil {
+						return BadRegister, err
+					}
+				default:
+					return BadRegister, NewCompileError(node, fmt.Sprintf("unexpected catch parameter type: %T", param))
+				}
 
 				// Compile catch body
 				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {

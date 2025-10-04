@@ -348,9 +348,16 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 		c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
 	}
 
-	// Add methods to prototype (excluding constructor and static methods)
+	// Add methods to prototype (excluding constructor, static methods, and private methods)
 	for _, method := range node.Body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic {
+			// Skip private methods - they're handled as field initializers
+			methodName := c.extractPropertyName(method.Key)
+			if len(methodName) > 0 && methodName[0] == '#' {
+				debugPrintf("// DEBUG setupClassPrototype: Skipping private method '%s' (handled as field initializer)\n", methodName)
+				continue
+			}
+
 			if method.Kind == "getter" {
 				err := c.addGetterToPrototype(method, prototypeReg, node.Name.Value)
 				if err != nil {
@@ -542,6 +549,37 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 		}
 	}
 
+	// Add private methods as field initializers
+	// Private methods must be stored as private fields containing function values
+	// This allows them to be referenced (e.g., const fn = this.#method)
+	for _, method := range node.Body.Methods {
+		if method.Kind != "constructor" && !method.IsStatic {
+			// Check if this is a private method (key starts with #)
+			methodName := c.extractPropertyName(method.Key)
+			if len(methodName) > 0 && methodName[0] == '#' {
+				// Create assignment: this.#method = function() {...}
+				assignment := &parser.AssignmentExpression{
+					Token:    method.Token,
+					Operator: "=",
+					Left: &parser.MemberExpression{
+						Token:    method.Token,
+						Object:   &parser.ThisExpression{Token: method.Token},
+						Property: method.Key,
+					},
+					Value: method.Value, // The function literal
+				}
+
+				fieldInitStatement := &parser.ExpressionStatement{
+					Token:      method.Token,
+					Expression: assignment,
+				}
+
+				fieldInitializers = append(fieldInitializers, fieldInitStatement)
+				debugPrintf("// DEBUG injectFieldInitializers: Added private method initializer for '%s'\n", methodName)
+			}
+		}
+	}
+
 	// ADDED: Extract parameter property assignments from constructor parameters
 	if functionLiteral.Parameters != nil {
 		for _, param := range functionLiteral.Parameters {
@@ -649,9 +687,13 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 		}
 	}
 
-	// Add static methods (including getters/setters)
+	// Add static methods (including getters/setters, but handle private methods specially)
 	for _, method := range node.Body.Methods {
 		if method.IsStatic && method.Kind != "constructor" {
+			// Check if this is a private static method
+			methodName := c.extractPropertyName(method.Key)
+			isPrivate := len(methodName) > 0 && methodName[0] == '#'
+
 			if method.Kind == "getter" {
 				err := c.addStaticGetter(method, constructorReg)
 				if err != nil {
@@ -659,6 +701,12 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 				}
 			} else if method.Kind == "setter" {
 				err := c.addStaticSetter(method, constructorReg)
+				if err != nil {
+					return err
+				}
+			} else if isPrivate {
+				// Private static method - store as private field on constructor
+				err := c.addStaticPrivateMethod(method, constructorReg)
 				if err != nil {
 					return err
 				}
@@ -739,6 +787,33 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 	c.emitSetProp(constructorReg, methodReg, methodNameIdx, method.Token.Line)
 
 	debugPrintf("// DEBUG addStaticMethod: Static method '%s' added to constructor\n", c.extractPropertyName(method.Key))
+	return nil
+}
+
+// addStaticPrivateMethod compiles a static private method and adds it as a private field on the constructor
+func (c *Compiler) addStaticPrivateMethod(method *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
+	methodName := c.extractPropertyName(method.Key)
+	debugPrintf("// DEBUG addStaticPrivateMethod: Adding static private method '%s'\n", methodName)
+
+	// Compile the method function (static methods don't have `this` context)
+	nameHint := methodName
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	if err != nil {
+		return err
+	}
+
+	// Create closure for method
+	methodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(methodReg)
+	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
+
+	// Store as private field on constructor: constructor.#method = methodFunction
+	// Strip the # prefix for storage
+	fieldName := methodName[1:]
+	methodNameIdx := c.chunk.AddConstant(vm.String(fieldName))
+	c.emitSetPrivateField(constructorReg, methodReg, methodNameIdx, method.Token.Line)
+
+	debugPrintf("// DEBUG addStaticPrivateMethod: Static private method '%s' stored as private field\n", methodName)
 	return nil
 }
 
