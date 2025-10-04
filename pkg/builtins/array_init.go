@@ -787,6 +787,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	arrayCtor := ctorWithProps
 
+	// Set constructor property on Array.prototype to point to Array constructor
+	arrayProto.SetOwn("constructor", arrayCtor)
+	// Make it non-enumerable like in standard JavaScript
+	if v, ok := arrayProto.GetOwn("constructor"); ok {
+		w, e, c := true, false, true // writable, not enumerable, configurable
+		arrayProto.DefineOwnProperty("constructor", v, &w, &e, &c)
+	}
+
 	// Set Array prototype in VM
 	vmInstance.ArrayPrototype = vm.NewValueFromPlainObject(arrayProto)
 

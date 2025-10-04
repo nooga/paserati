@@ -1,6 +1,5 @@
 // Test with statement with getters/setters
-// FIXME: Getters/setters in with statements not yet implemented
-// expect_runtime_error: Operands must be two numbers
+// expect: 84
 
 let obj = {
     _value: 42,

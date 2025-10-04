@@ -2951,20 +2951,66 @@ startExecution:
 			registers[destReg] = value
 
 		case OpTypeGuardIterable:
+			// Save IP of the opcode itself (before reading operands) for exception handling
+			guardIP := ip - 1  // ip was already incremented past the opcode
+			frame.ip = guardIP
+
 			srcReg := int(code[ip])
 			ip++
-			frame.ip = ip
-			if ok, status, value := vm.opTypeGuardIterable(srcReg, registers); !ok {
-				return status, value
+
+			if !vm.opTypeGuardIterable(srcReg, registers) {
+				// Type guard failed and threw exception via ThrowTypeError
+				// Similar to OpThrow: check if unwinding or if handler was found
+				if vm.unwinding {
+					// No handler found or hit direct call boundary, continue unwinding
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					continue
+				} else {
+					// Handler found and executed, resync variables and jump to handler
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 			}
+			frame.ip = ip
 
 		case OpTypeGuardIteratorReturn:
+			// Save IP of the opcode itself (before reading operands) for exception handling
+			guardIP := ip - 1  // ip was already incremented past the opcode
+			frame.ip = guardIP
+
 			srcReg := int(code[ip])
 			ip++
-			frame.ip = ip
-			if ok, status, value := vm.opTypeGuardIteratorReturn(srcReg, registers); !ok {
-				return status, value
+
+			if !vm.opTypeGuardIteratorReturn(srcReg, registers) {
+				// Type guard failed and threw exception via ThrowTypeError
+				// Similar to OpThrow: check if unwinding or if handler was found
+				if vm.unwinding {
+					// No handler found or hit direct call boundary, continue unwinding
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					continue
+				} else {
+					// Handler found and executed, resync variables and jump to handler
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 			}
+			frame.ip = ip
 
 		case OpSetPrivateField:
 			objReg := code[ip]

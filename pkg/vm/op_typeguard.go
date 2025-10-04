@@ -1,16 +1,18 @@
 package vm
 
+import "fmt"
+
 // OpTypeGuardIterable checks if a value is iterable (has Symbol.iterator)
 // If not iterable, throws TypeError
 // Format: OpTypeGuardIterable srcReg
-func (vm *VM) opTypeGuardIterable(srcReg int, registers []Value) (bool, InterpretResult, Value) {
+func (vm *VM) opTypeGuardIterable(srcReg int, registers []Value) bool {
 	value := registers[srcReg]
 
 	// Check if value has Symbol.iterator property
 	// Null and undefined are not iterable
 	if value.Type() == TypeNull || value.Type() == TypeUndefined {
-		status := vm.runtimeError("%s is not iterable", value.TypeName())
-		return false, status, Undefined
+		vm.ThrowTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
+		return false
 	}
 
 	// For primitive types (string, number, boolean, symbol), check if they have Symbol.iterator
@@ -18,11 +20,11 @@ func (vm *VM) opTypeGuardIterable(srcReg int, registers []Value) (bool, Interpre
 	switch value.Type() {
 	case TypeString:
 		// Strings are iterable
-		return true, InterpretOK, Undefined
+		return true
 	case TypeFloatNumber, TypeIntegerNumber, TypeBoolean, TypeSymbol, TypeBigInt:
 		// Not iterable
-		status := vm.runtimeError("%s is not iterable", value.TypeName())
-		return false, status, Undefined
+		vm.ThrowTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
+		return false
 	}
 
 	// For objects, arrays, generators - they should have Symbol.iterator
@@ -30,24 +32,24 @@ func (vm *VM) opTypeGuardIterable(srcReg int, registers []Value) (bool, Interpre
 	switch value.Type() {
 	case TypeArray, TypeTypedArray, TypeGenerator:
 		// These are always iterable
-		return true, InterpretOK, Undefined
+		return true
 	case TypeObject, TypeDictObject:
 		// Need to check if Symbol.iterator exists
 		// For now, optimistically assume objects with Symbol.iterator will work
 		// The actual call to Symbol.iterator will fail if it doesn't exist
-		return true, InterpretOK, Undefined
+		return true
 	}
 
 	// Default: not iterable
-	status := vm.runtimeError("%s is not iterable", value.TypeName())
-	return false, status, Undefined
+	vm.ThrowTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
+	return false
 }
 
 // OpTypeGuardIteratorReturn checks if iterator.return() result is an Object
 // Per ECMAScript spec 7.4.6 IteratorClose step 9:
 // If Type(innerResult.[[value]]) is not Object, throw a TypeError
 // Format: OpTypeGuardIteratorReturn srcReg
-func (vm *VM) opTypeGuardIteratorReturn(srcReg int, registers []Value) (bool, InterpretResult, Value) {
+func (vm *VM) opTypeGuardIteratorReturn(srcReg int, registers []Value) bool {
 	value := registers[srcReg]
 
 	// Check if value is an object type
@@ -56,10 +58,10 @@ func (vm *VM) opTypeGuardIteratorReturn(srcReg int, registers []Value) (bool, In
 	switch value.Type() {
 	case TypeObject, TypeDictObject, TypeArray, TypeTypedArray, TypeFunction, TypeRegExp:
 		// These are all object types - valid
-		return true, InterpretOK, Undefined
+		return true
 	default:
 		// Primitives and null/undefined are NOT objects
-		status := vm.runtimeError("Iterator result %s is not an object", value.TypeName())
-		return false, status, Undefined
+		vm.ThrowTypeError(fmt.Sprintf("Iterator result %s is not an object", value.TypeName()))
+		return false
 	}
 }

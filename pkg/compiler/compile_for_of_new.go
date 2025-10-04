@@ -225,7 +225,8 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			}
 		case *parser.ArrayLiteral:
 			// Array destructuring assignment: for ([x, y] of items)
-			if err := c.compileNestedArrayDestructuring(target, valueReg, node.Token.Line); err != nil {
+			// Per ECMAScript spec, array destructuring in for-of MUST use iterator protocol
+			if err := c.compileForOfArrayAssignmentWithIterator(target, valueReg, node.Token.Line); err != nil {
 				return BadRegister, err
 			}
 		case *parser.ObjectLiteral:
@@ -277,6 +278,112 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	}
 
 	return BadRegister, nil
+}
+
+// compileForOfArrayAssignmentWithIterator uses iterator protocol for array assignment destructuring in for-of
+// This handles: for ([x, y] of items) where x, y are already declared
+// Per ECMAScript spec 13.7.5.13, array assignment patterns MUST use iterator protocol
+func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.ArrayLiteral, valueReg Register, line int) errors.PaseratiError {
+	// Get Symbol.iterator from the value
+	symbolObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(symbolObjReg)
+	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	c.emitGetGlobal(symbolObjReg, symIdx, line)
+
+	propNameReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(propNameReg)
+	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
+
+	iteratorKeyReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorKeyReg)
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorKeyReg))
+	c.emitByte(byte(symbolObjReg))
+	c.emitByte(byte(propNameReg))
+
+	// Get iterable[Symbol.iterator]
+	iteratorMethodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorMethodReg)
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorMethodReg))
+	c.emitByte(byte(valueReg))
+	c.emitByte(byte(iteratorKeyReg))
+
+	// Call the iterator method
+	iteratorObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorObjReg)
+	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, valueReg, 0, line)
+
+	// Track done state
+	doneReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(doneReg)
+	c.emitLoadFalse(doneReg, line)
+
+	// Process each element in the array pattern
+	for i, element := range arrayLit.Elements {
+		if element == nil {
+			// Elision - consume but don't assign
+			c.compileIteratorNext(iteratorObjReg, BadRegister, doneReg, line, true)
+			continue
+		}
+
+		// Check for rest element
+		if spreadExpr, ok := element.(*parser.SpreadElement); ok {
+			if i != len(arrayLit.Elements)-1 {
+				return NewCompileError(arrayLit, "rest element must be last in destructuring pattern")
+			}
+			// Collect remaining values into array
+			restArrayReg := c.regAlloc.Alloc()
+			err := c.compileIteratorToArray(iteratorObjReg, restArrayReg, line)
+			if err != nil {
+				c.regAlloc.Free(restArrayReg)
+				return err
+			}
+			// Assign to target
+			err = c.compileRecursiveAssignment(spreadExpr.Argument, restArrayReg, line)
+			c.regAlloc.Free(restArrayReg)
+			if err != nil {
+				return err
+			}
+			c.emitLoadTrue(doneReg, line)
+			break
+		}
+
+		// Regular element - extract value from iterator
+		extractedReg := c.regAlloc.Alloc()
+		c.compileIteratorNext(iteratorObjReg, extractedReg, doneReg, line, false)
+
+		// Handle assignment with default value
+		var target parser.Expression
+		var defaultExpr parser.Expression
+
+		if assignExpr, ok := element.(*parser.AssignmentExpression); ok && assignExpr.Operator == "=" {
+			target = assignExpr.Left
+			defaultExpr = assignExpr.Value
+		} else {
+			target = element
+		}
+
+		// Assign to target (with optional default)
+		if defaultExpr != nil {
+			err := c.compileConditionalAssignment(target, extractedReg, defaultExpr, line)
+			c.regAlloc.Free(extractedReg)
+			if err != nil {
+				return err
+			}
+		} else {
+			err := c.compileRecursiveAssignment(target, extractedReg, line)
+			c.regAlloc.Free(extractedReg)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Call iterator cleanup (this will validate return() result is an object)
+	c.emitIteratorCleanupWithDone(iteratorObjReg, doneReg, line)
+
+	return nil
 }
 
 // compileForOfArrayDestructuring uses iterator protocol to destructure array patterns in for-of loops

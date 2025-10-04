@@ -407,6 +407,12 @@ func (op OpCode) String() string {
 	case OpSetPrototype:
 		return "OpSetPrototype"
 
+	// Type guards
+	case OpTypeGuardIterable:
+		return "OpTypeGuardIterable"
+	case OpTypeGuardIteratorReturn:
+		return "OpTypeGuardIteratorReturn"
+
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}

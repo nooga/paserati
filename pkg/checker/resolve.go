@@ -778,7 +778,8 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 		// Add this parameter to the temporary environment BEFORE checking its default value
 		// This way, the next parameter's default value can reference this parameter
 		// Skip 'this' parameters as they don't have names and don't go into the scope
-		if !paramNode.IsThis {
+		// Skip destructuring parameters as they don't have a single name (bindings are added during destructuring)
+		if !paramNode.IsThis && !paramNode.IsDestructuring {
 			tempEnv.Define(paramNode.Name.Value, resolvedParamType, false) // false = not const
 		}
 
