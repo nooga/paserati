@@ -308,10 +308,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	w, e, c := true, false, true
 	setProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
 
-	// Set Set.prototype
-	vmInstance.SetPrototype = vm.NewValueFromPlainObject(setProto)
-
-	// Create Set constructor function
+	// Create Set constructor function (before setting prototype, so we can reference it)
 	setConstructor := vm.NewNativeFunctionWithProps(0, false, "Set", func(args []vm.Value) (vm.Value, error) {
 		// Create new Set instance
 		newSet := vm.NewSet()
@@ -358,6 +355,16 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		return newSet, nil
 	})
+
+	// Set constructor property on Set.prototype to point to Set constructor
+	setProto.SetOwn("constructor", setConstructor)
+	if v, ok := setProto.GetOwn("constructor"); ok {
+		w, e, c := true, false, true // writable, not enumerable, configurable
+		setProto.DefineOwnProperty("constructor", v, &w, &e, &c)
+	}
+
+	// Set Set.prototype in VM (must be before adding prototype property to constructor)
+	vmInstance.SetPrototype = vm.NewValueFromPlainObject(setProto)
 
 	// Add prototype property
 	setConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.SetPrototype)

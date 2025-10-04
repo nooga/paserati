@@ -154,11 +154,18 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return result, nil
 	})
 
-	// Set up prototype relationship
-	regexpCtor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(regexpProto))
+	// Set constructor property on RegExp.prototype to point to RegExp constructor
+	regexpProto.SetOwn("constructor", regexpCtor)
+	if v, ok := regexpProto.GetOwn("constructor"); ok {
+		w, e, c := true, false, true // writable, not enumerable, configurable
+		regexpProto.DefineOwnProperty("constructor", v, &w, &e, &c)
+	}
 
 	// Register RegExp prototype in VM
 	vmInstance.RegExpPrototype = vm.NewValueFromPlainObject(regexpProto)
+
+	// Set up prototype relationship
+	regexpCtor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(regexpProto))
 
 	return ctx.DefineGlobal("RegExp", regexpCtor)
 }
