@@ -115,7 +115,13 @@ func (vm *VM) unwindException() bool {
 		// Look for handlers covering the current IP
 		handlers := vm.findAllExceptionHandlers(frame.ip)
 
-		// fmt.Printf("[DEBUG] unwindException: Found %d handlers for IP %d\n", len(handlers), frame.ip)
+		if debugExceptions {
+			fmt.Printf("[DEBUG unwindException] Looking for handlers at IP %d, found %d handlers\n", frame.ip, len(handlers))
+			for i, h := range handlers {
+				fmt.Printf("[DEBUG unwindException]   Handler %d: TryStart=%d, TryEnd=%d, HandlerPC=%d, IsCatch=%v, IsFinally=%v\n",
+					i, h.TryStart, h.TryEnd, h.HandlerPC, h.IsCatch, h.IsFinally)
+			}
+		}
 
 		for _, handler := range handlers {
 			if handler.IsCatch {

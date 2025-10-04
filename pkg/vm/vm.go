@@ -4003,10 +4003,18 @@ startExecution:
 			registers[destReg] = resultObj
 
 		case OpThrow:
-			// Execute throw and update IP
+			// Save IP BEFORE throwing for handler lookup
+			// Handler ranges are compiled to include the throw instruction
+			throwIP := ip - 1 // IP of the OpThrow opcode itself
+			frame.ip = throwIP
+
+			if debugExceptions {
+				fmt.Printf("[DEBUG OpThrow] About to throw at IP %d, saved frame.ip=%d for handler lookup\n", throwIP, frame.ip)
+			}
+
+			// Execute throw and update IP past operands
 			vm.executeOpThrow(code, &ip)
-			// Save IP after executeOpThrow has advanced it past operands
-			frame.ip = ip
+
 			// If unwinding is active, check if we need to terminate or continue
 			if vm.unwinding {
 				// Exception was thrown and we're unwinding
