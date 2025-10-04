@@ -2440,12 +2440,15 @@ func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
 	// Skip calling return if it's nullish (jump if NOT not-nullish = jump if nullish)
 	skipCallJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notNullishReg, line)
 
-	// Call iterator.return() - ignore return value and errors
+	// Call iterator.return()
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)
 
-	// Use regular method call - VM should handle any errors gracefully
 	c.emitCallMethod(resultReg, returnMethodReg, iteratorReg, 0, line)
+
+	// Per ECMAScript spec 7.4.6 IteratorClose step 9:
+	// If Type(innerResult.[[value]]) is not Object, throw a TypeError
+	c.emitTypeGuardIteratorReturn(resultReg, line)
 
 	// Patch the skip jump
 	c.patchJump(skipCallJump)
@@ -2490,16 +2493,34 @@ func (c *Compiler) emitIteratorCleanupWithDone(iteratorReg Register, doneReg Reg
 	// Skip calling return if it's nullish
 	skipCallJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notNullishReg, line)
 
-	// Call iterator.return() - ignore return value and errors
+	// Call iterator.return()
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)
 	c.emitCallMethod(resultReg, returnMethodReg, iteratorReg, 0, line)
+
+	// Per ECMAScript spec 7.4.6 IteratorClose step 9:
+	// If Type(innerResult.[[value]]) is not Object, throw a TypeError
+	c.emitTypeGuardIteratorReturn(resultReg, line)
 
 	// Patch the skip call jump
 	c.patchJump(skipCallJump)
 
 	// Patch the skip all jump (when done is true)
 	c.patchJump(skipAllJump)
+}
+
+// emitTypeGuardIterable emits bytecode to check if a value is iterable
+// Throws TypeError at runtime if not iterable
+func (c *Compiler) emitTypeGuardIterable(valueReg Register, line int) {
+	c.emitOpCode(vm.OpTypeGuardIterable, line)
+	c.emitByte(byte(valueReg))
+}
+
+// emitTypeGuardIteratorReturn emits bytecode to check if iterator.return() result is an object
+// Per ECMAScript spec 7.4.6 IteratorClose step 9
+func (c *Compiler) emitTypeGuardIteratorReturn(resultReg Register, line int) {
+	c.emitOpCode(vm.OpTypeGuardIteratorReturn, line)
+	c.emitByte(byte(resultReg))
 }
 
 // getNextAnonymousId generates a unique ID for anonymous classes

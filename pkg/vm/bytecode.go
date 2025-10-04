@@ -104,6 +104,11 @@ const (
 	OpGetPrivateField OpCode = 91 // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
 	OpSetPrivateField OpCode = 92 // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
 
+	// --- Type Guards for Runtime Validation ---
+	OpTypeGuardIterable      OpCode = 93 // Rx: Throw TypeError if Rx is not iterable
+	OpTypeGuardIteratorReturn OpCode = 94 // Rx: Throw TypeError if Rx (iterator.return() result) is not an object
+	// --- END Type Guards ---
+
 	// --- NEW: Method Calls and This Context ---
 	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
 	OpLoadThis      OpCode = 44 // Rx: Load 'this' value from current call context into register Rx
@@ -598,6 +603,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateField:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpTypeGuardIterable:
+		return c.registerInstruction(builder, instruction.String(), offset)
+	case OpTypeGuardIteratorReturn:
+		return c.registerInstruction(builder, instruction.String(), offset)
 	case OpCallMethod:
 		return c.callMethodInstruction(builder, instruction.String(), offset)
 	case OpSpreadCall:

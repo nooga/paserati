@@ -2950,6 +2950,22 @@ startExecution:
 			}
 			registers[destReg] = value
 
+		case OpTypeGuardIterable:
+			srcReg := int(code[ip])
+			ip++
+			frame.ip = ip
+			if ok, status, value := vm.opTypeGuardIterable(srcReg, registers); !ok {
+				return status, value
+			}
+
+		case OpTypeGuardIteratorReturn:
+			srcReg := int(code[ip])
+			ip++
+			frame.ip = ip
+			if ok, status, value := vm.opTypeGuardIteratorReturn(srcReg, registers); !ok {
+				return status, value
+			}
+
 		case OpSetPrivateField:
 			objReg := code[ip]
 			valReg := code[ip+1]
