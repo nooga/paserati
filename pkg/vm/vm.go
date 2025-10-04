@@ -3932,11 +3932,38 @@ startExecution:
 				resultPlainObj := NewObject(vm.ObjectPrototype)
 				resultPlainObjPtr := resultPlainObj.AsPlainObject()
 
-				// Copy properties not in exclude list
+				// Copy properties not in exclude list (only enumerable properties)
 				for _, key := range sourceObj.OwnKeys() {
 					if _, shouldExclude := excludeNames[key]; !shouldExclude {
-						if value, exists := sourceObj.GetOwn(key); exists {
-							resultPlainObjPtr.SetOwn(key, value)
+						// Check if property is accessor (getter/setter)
+						if getter, _, _, enumerable, isAccessor := sourceObj.GetOwnAccessor(key); isAccessor {
+							// Property is an accessor
+							if !enumerable {
+								continue // Skip non-enumerable accessors
+							}
+							// Call getter if present
+							if getter.Type() != TypeUndefined {
+								res, err := vm.Call(getter, sourceValue, nil)
+								if err != nil {
+									// Propagate error
+									frame.ip = ip
+									status := vm.runtimeError("Error calling getter for property '%s': %v", key, err)
+									return status, Undefined
+								}
+								// Store the getter's return value (not the getter function itself)
+								resultPlainObjPtr.SetOwn(key, res)
+							} else {
+								// No getter: store undefined
+								resultPlainObjPtr.SetOwn(key, Undefined)
+							}
+						} else {
+							// Regular data property
+							_, _, enumerable, _, exists := sourceObj.GetOwnDescriptor(key)
+							if exists && enumerable {
+								if value, _ := sourceObj.GetOwn(key); true {
+									resultPlainObjPtr.SetOwn(key, value)
+								}
+							}
 						}
 					}
 				}
@@ -3947,11 +3974,15 @@ startExecution:
 				resultPlainObj := NewObject(vm.ObjectPrototype)
 				resultPlainObjPtr := resultPlainObj.AsPlainObject()
 
-				// Copy properties not in exclude list
+				// Copy properties not in exclude list (only enumerable properties)
 				for _, key := range sourceDict.OwnKeys() {
 					if _, shouldExclude := excludeNames[key]; !shouldExclude {
-						if value, exists := sourceDict.GetOwn(key); exists {
-							resultPlainObjPtr.SetOwn(key, value)
+						// Check if property is enumerable
+						_, _, enumerable, _, exists := sourceDict.GetOwnDescriptor(key)
+						if exists && enumerable {
+							if value, _ := sourceDict.GetOwn(key); true {
+								resultPlainObjPtr.SetOwn(key, value)
+							}
 						}
 					}
 				}

@@ -4281,18 +4281,37 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 			break
 		}
 
-		// Parse property name
-		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.STRING) && !p.curTokenIs(lexer.NUMBER) {
+		// Parse property name (identifier, string, number, or computed [expr])
+		var propertyKey Expression
+
+		if p.curTokenIs(lexer.LBRACKET) {
+			// Computed property name: [expr]
+			p.nextToken() // Move past '['
+			propertyKey = p.parseExpression(LOWEST)
+			if propertyKey == nil {
+				return nil, nil
+			}
+			if !p.expectPeek(lexer.RBRACKET) {
+				return nil, nil
+			}
+			// Wrap in ComputedPropertyName
+			propertyKey = &ComputedPropertyName{
+				Expr: propertyKey,
+			}
+		} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.STRING) || p.curTokenIs(lexer.NUMBER) {
+			// Regular property name
+			propertyKey = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		} else {
 			p.addError(p.curToken, fmt.Sprintf("expected property name, got %s", p.curToken.Type))
 			return nil, nil
 		}
 
-		propertyName := p.curToken.Literal
-		propertyToken := p.curToken
-
 		property := &DestructuringProperty{
-			Key: &Identifier{Token: propertyToken, Value: propertyName},
+			Key: propertyKey,
 		}
+
+		// Check if this is a computed property - computed properties require explicit target
+		_, isComputed := propertyKey.(*ComputedPropertyName)
 
 		// Check what follows the property name
 		if p.peekTokenIs(lexer.COLON) {
@@ -4328,18 +4347,34 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 					return nil, nil
 				}
 			}
+		} else if isComputed {
+			// Computed properties MUST have an explicit target with ':'
+			p.addError(p.peekToken, "computed property names in destructuring require an explicit target (e.g., {[expr]: target})")
+			return nil, nil
 		} else if p.peekTokenIs(lexer.ASSIGN) {
 			// Shorthand with default: { prop = default }
-			property.Target = &Identifier{Token: propertyToken, Value: propertyName}
-			p.nextToken() // Consume '='
-			p.nextToken() // Move to default expression
-			property.Default = p.parseExpression(COMMA)
-			if property.Default == nil {
+			// Only valid for identifier keys
+			if ident, ok := propertyKey.(*Identifier); ok {
+				property.Target = &Identifier{Token: ident.Token, Value: ident.Value}
+				p.nextToken() // Consume '='
+				p.nextToken() // Move to default expression
+				property.Default = p.parseExpression(COMMA)
+				if property.Default == nil {
+					return nil, nil
+				}
+			} else {
+				p.addError(p.curToken, "shorthand syntax only works with identifier keys")
 				return nil, nil
 			}
 		} else {
 			// Shorthand without default: { prop }
-			property.Target = &Identifier{Token: propertyToken, Value: propertyName}
+			// Only valid for identifier keys
+			if ident, ok := propertyKey.(*Identifier); ok {
+				property.Target = &Identifier{Token: ident.Token, Value: ident.Value}
+			} else {
+				p.addError(p.curToken, "shorthand syntax only works with identifier keys")
+				return nil, nil
+			}
 		}
 
 		properties = append(properties, property)

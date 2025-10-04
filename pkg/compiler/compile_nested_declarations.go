@@ -250,11 +250,36 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 
 		// Handle property access (identifier or computed)
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
-			propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
-			c.emitOpCode(vm.OpGetProp, line)
-			c.emitByte(byte(extractedReg)) // destination register
-			c.emitByte(byte(valueReg))     // object register
-			c.emitUint16(propNameIdx)      // property name constant index
+			// Check if the property name is numeric (for array index access)
+			isNumeric := false
+			for _, ch := range keyIdent.Value {
+				if ch < '0' || ch > '9' {
+					isNumeric = false
+					break
+				}
+				isNumeric = true
+			}
+
+			if isNumeric && len(keyIdent.Value) > 0 {
+				// Use OpGetIndex for numeric properties (array elements)
+				var indexNum float64
+				fmt.Sscanf(keyIdent.Value, "%f", &indexNum)
+				indexConstIdx := c.chunk.AddConstant(vm.Number(indexNum))
+				indexReg := c.regAlloc.Alloc()
+				c.emitLoadConstant(indexReg, indexConstIdx, line)
+				c.emitOpCode(vm.OpGetIndex, line)
+				c.emitByte(byte(extractedReg))
+				c.emitByte(byte(valueReg))
+				c.emitByte(byte(indexReg))
+				c.regAlloc.Free(indexReg)
+			} else {
+				// Use OpGetProp for regular string properties
+				propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+				c.emitOpCode(vm.OpGetProp, line)
+				c.emitByte(byte(extractedReg)) // destination register
+				c.emitByte(byte(valueReg))     // object register
+				c.emitUint16(propNameIdx)      // property name constant index
+			}
 		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
 			keyReg := c.regAlloc.Alloc()
 			_, err := c.compileNode(computed.Expr, keyReg)

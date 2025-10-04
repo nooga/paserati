@@ -1156,62 +1156,72 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 	// Create array of property names to exclude
 	excludeArrayReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(excludeArrayReg)
-	
+
 	// Create array with extracted property names
 	excludeNames := make([]vm.Value, 0, len(extractedProps))
 	for _, prop := range extractedProps {
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
 			excludeNames = append(excludeNames, vm.String(keyIdent.Value))
+			if debugAssignment {
+				fmt.Printf("// [ObjectRest] Excluding property: %s\n", keyIdent.Value)
+			}
 		}
 		// Skip computed properties (can't exclude statically)
 	}
+	if debugAssignment {
+		fmt.Printf("// [ObjectRest] Total excludeNames: %d\n", len(excludeNames))
+	}
 	
+	// Always use OpCopyObjectExcluding to ensure we only copy enumerable properties
+	// Even when excludeNames is empty, we still need to filter out non-enumerable properties
 	if len(excludeNames) == 0 {
-		// No properties to exclude, just copy the whole object
-		c.emitOpCode(vm.OpMakeEmptyObject, line)
+		// Create empty array for exclude list
+		c.emitOpCode(vm.OpMakeArray, line)
 		c.emitByte(byte(excludeArrayReg))
-		
-		// Create result register for the rest object
-		restObjReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(restObjReg)
-		
-		c.emitMove(restObjReg, objReg, line)
-		return c.defineDestructuredVariableWithValue(varName, isConst, restObjReg, line)
+		c.emitByte(0) // start register (unused for count=0)
+		c.emitByte(0) // count: 0 elements
+	} else {
+		// Emit code to create the exclude array
+		// Allocate contiguous registers for all array elements
+		startReg := c.regAlloc.AllocContiguous(len(excludeNames))
+		// Mark all registers for cleanup
+		for i := 0; i < len(excludeNames); i++ {
+			defer c.regAlloc.Free(startReg + Register(i))
+		}
+		if debugAssignment {
+			fmt.Printf("// [ObjectRest] Allocated contiguous registers starting at %d for %d elements\n", startReg, len(excludeNames))
+		}
+
+		// Load each string constant into consecutive registers
+		for i, name := range excludeNames {
+			nameConstIdx := c.chunk.AddConstant(name)
+			targetReg := startReg + Register(i)
+			c.emitLoadConstant(targetReg, nameConstIdx, line)
+			if debugAssignment {
+				fmt.Printf("// [ObjectRest] Loading '%s' into reg %d (const idx %d)\n", name.AsString(), targetReg, nameConstIdx)
+			}
+		}
+
+		// Create array from the element registers
+		c.emitOpCode(vm.OpMakeArray, line)
+		c.emitByte(byte(excludeArrayReg))      // destination register
+		c.emitByte(byte(startReg))             // start register (first element)
+		c.emitByte(byte(len(excludeNames)))    // element count
+		if debugAssignment {
+			fmt.Printf("// [ObjectRest] OpMakeArray: dest=%d, start=%d, count=%d\n", excludeArrayReg, startReg, len(excludeNames))
+		}
 	}
-	
-	// Emit code to create the exclude array
-	// First allocate contiguous registers for all elements
-	startReg := c.regAlloc.Alloc()
-	elementRegs := make([]Register, len(excludeNames))
-	elementRegs[0] = startReg
-	for i := 1; i < len(excludeNames); i++ {
-		elementRegs[i] = c.regAlloc.Alloc()
-		defer c.regAlloc.Free(elementRegs[i])
-	}
-	defer c.regAlloc.Free(startReg)
-	
-	// Load each string constant into consecutive registers
-	for i, name := range excludeNames {
-		nameConstIdx := c.chunk.AddConstant(name)
-		c.emitLoadConstant(elementRegs[i], nameConstIdx, line)
-	}
-	
-	// Create array from the element registers
-	c.emitOpCode(vm.OpMakeArray, line)
-	c.emitByte(byte(excludeArrayReg))      // destination register
-	c.emitByte(byte(startReg))             // start register (first element)
-	c.emitByte(byte(len(excludeNames)))    // element count
-	
+
 	// Create result register for the rest object
 	restObjReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(restObjReg)
-	
-	// Use the new opcode: restObj = copyObjectExcluding(sourceObj, excludeArray)
+
+	// Use OpCopyObjectExcluding which filters out non-enumerable properties
 	c.emitOpCode(vm.OpCopyObjectExcluding, line)
 	c.emitByte(byte(restObjReg))     // destination register
 	c.emitByte(byte(objReg))         // source object register
 	c.emitByte(byte(excludeArrayReg)) // exclude array register
-	
+
 	// Define the rest variable with the rest object
 	return c.defineDestructuredVariableWithValue(varName, isConst, restObjReg, line)
 }
@@ -1543,9 +1553,66 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 		return BadRegister, err
 	}
 
-	// TODO: Add runtime null/undefined check for ECMAScript compliance
-	// JavaScript requires throwing TypeError when destructuring null/undefined
-	// For now, relying on type checker to catch this at compile time
+	// ECMAScript compliance: Throw TypeError if destructuring null or undefined
+	// This is required at runtime even if type checker catches it at compile time
+	// We need to check: if (tempReg === null || tempReg === undefined) throw TypeError
+
+	// Allocate register for null/undefined checks
+	checkReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(checkReg)
+
+	// Check if tempReg is null
+	nullConstIdx := c.chunk.AddConstant(vm.Null)
+	c.emitLoadConstant(checkReg, nullConstIdx, line)
+	c.emitOpCode(vm.OpEqual, line)
+	c.emitByte(byte(checkReg))  // result register
+	c.emitByte(byte(tempReg))   // left operand
+	c.emitByte(byte(checkReg))  // right operand (null)
+
+	// Jump past error if not null
+	notNullJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
+
+	// Throw TypeError: Cannot destructure null
+	errorReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(errorReg)
+	typeErrorIdx := c.chunk.AddConstant(vm.String("TypeError"))
+	c.emitGetGlobal(errorReg, typeErrorIdx, line)
+
+	msgReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(msgReg)
+	msgConstIdx := c.chunk.AddConstant(vm.String("Cannot destructure 'null'"))
+	c.emitLoadConstant(msgReg, msgConstIdx, line)
+
+	resultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(resultReg)
+	c.emitCall(resultReg, errorReg, 1, line)  // Call TypeError constructor with message
+	c.emitOpCode(vm.OpThrow, line)
+	c.emitByte(byte(resultReg))
+
+	// Patch jump for not-null case
+	c.patchJump(notNullJump)
+
+	// Check if tempReg is undefined
+	undefConstIdx := c.chunk.AddConstant(vm.Undefined)
+	c.emitLoadConstant(checkReg, undefConstIdx, line)
+	c.emitOpCode(vm.OpEqual, line)
+	c.emitByte(byte(checkReg))  // result register
+	c.emitByte(byte(tempReg))   // left operand
+	c.emitByte(byte(checkReg))  // right operand (undefined)
+
+	// Jump past error if not undefined
+	notUndefJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
+
+	// Throw TypeError: Cannot destructure undefined
+	c.emitGetGlobal(errorReg, typeErrorIdx, line)
+	msgConstIdx = c.chunk.AddConstant(vm.String("Cannot destructure 'undefined'"))
+	c.emitLoadConstant(msgReg, msgConstIdx, line)
+	c.emitCall(resultReg, errorReg, 1, line)  // Call TypeError constructor with message
+	c.emitOpCode(vm.OpThrow, line)
+	c.emitByte(byte(resultReg))
+
+	// Patch jump for not-undefined case
+	c.patchJump(notUndefJump)
 
 	// 2. For each property, compile: define target = temp.property
 	for _, prop := range node.Properties {
@@ -1560,11 +1627,38 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 
 		// Handle property access (identifier or computed)
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
-			propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
-			c.emitOpCode(vm.OpGetProp, line)
-			c.emitByte(byte(valueReg))   // destination register
-			c.emitByte(byte(tempReg))    // object register
-			c.emitUint16(propNameIdx)    // property name constant index
+			// Check if the property name is numeric (for array index access)
+			// This handles cases like {0: x, 1: y} destructuring from arrays
+			isNumeric := false
+			for _, ch := range keyIdent.Value {
+				if ch < '0' || ch > '9' {
+					isNumeric = false
+					break
+				}
+				isNumeric = true
+			}
+
+			if isNumeric && len(keyIdent.Value) > 0 {
+				// Use OpGetIndex for numeric properties (array elements)
+				// Convert string to number for proper array indexing
+				var indexNum float64
+				fmt.Sscanf(keyIdent.Value, "%f", &indexNum)
+				indexConstIdx := c.chunk.AddConstant(vm.Number(indexNum))
+				indexReg := c.regAlloc.Alloc()
+				c.emitLoadConstant(indexReg, indexConstIdx, line)
+				c.emitOpCode(vm.OpGetIndex, line)
+				c.emitByte(byte(valueReg))
+				c.emitByte(byte(tempReg))
+				c.emitByte(byte(indexReg))
+				c.regAlloc.Free(indexReg)
+			} else {
+				// Use OpGetProp for regular string properties
+				propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+				c.emitOpCode(vm.OpGetProp, line)
+				c.emitByte(byte(valueReg))   // destination register
+				c.emitByte(byte(tempReg))    // object register
+				c.emitUint16(propNameIdx)    // property name constant index
+			}
 		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
 			keyReg := c.regAlloc.Alloc()
 			_, err := c.compileNode(computed.Expr, keyReg)
