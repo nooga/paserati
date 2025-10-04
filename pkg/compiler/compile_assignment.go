@@ -1537,11 +1537,15 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	// 1. Compile RHS expression into temp register
 	tempReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(tempReg)
-	
+
 	_, err := c.compileNode(node.Value, tempReg)
 	if err != nil {
 		return BadRegister, err
 	}
+
+	// TODO: Add runtime null/undefined check for ECMAScript compliance
+	// JavaScript requires throwing TypeError when destructuring null/undefined
+	// For now, relying on type checker to catch this at compile time
 
 	// 2. For each property, compile: define target = temp.property
 	for _, prop := range node.Properties {

@@ -4251,7 +4251,8 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 	// Handle empty pattern {}
 	if p.peekTokenIs(lexer.RBRACE) {
 		p.nextToken() // Consume '}'
-		return properties, nil
+		// Return empty slice (not nil) to distinguish from error case
+		return []*DestructuringProperty{}, nil
 	}
 
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
