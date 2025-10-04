@@ -7,7 +7,6 @@ import (
 	"os"
 	"paserati/pkg/errors"
 	"strconv"
-	"strings"
 	"unsafe"
 )
 
@@ -64,6 +63,7 @@ type CallFrame struct {
 	targetRegister    byte  // Which register in the CALLER the result should go into
 	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
 	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
+	newTargetValue    Value // The constructor that was invoked with 'new' (for new.target)
 	isDirectCall      bool  // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
 	isSentinelFrame   bool  // Whether this frame is a sentinel that should cause vm.run() to return immediately
 	argCount          int   // Actual number of arguments passed to this function (for arguments object)
@@ -114,19 +114,29 @@ type VM struct {
 	emptyRestArray Value
 
 	// Built-in prototypes owned by this VM
-	ObjectPrototype    Value
-	FunctionPrototype  Value
-	ArrayPrototype     Value
-	StringPrototype    Value
-	NumberPrototype    Value
-	BigIntPrototype    Value
-	BooleanPrototype   Value
-	RegExpPrototype    Value
-	MapPrototype       Value
-	SetPrototype       Value
-	GeneratorPrototype Value
-	ErrorPrototype     Value
-	SymbolPrototype    Value
+	ObjectPrototype         Value
+	FunctionPrototype       Value
+	ArrayPrototype          Value
+	StringPrototype         Value
+	NumberPrototype         Value
+	BigIntPrototype         Value
+	BooleanPrototype        Value
+	RegExpPrototype         Value
+	MapPrototype            Value
+	SetPrototype            Value
+	GeneratorPrototype      Value
+	ErrorPrototype          Value
+	TypeErrorPrototype      Value
+	ReferenceErrorPrototype Value
+	SymbolPrototype         Value
+
+	// Well-known symbols
+	SymbolIterator    Value
+	SymbolToPrimitive Value
+	SymbolToStringTag Value
+
+	// Constructor call context for native functions
+	inConstructorCall bool // true when executing a native function via OpNew
 
 	// Exception/call boundary diagnostics
 	lastThrownException       Value // remembers the last thrown exception value
@@ -560,6 +570,15 @@ startExecution:
 					fmt.Printf("[DBG LoadConst] R%d = const[%d] -> %s (%s)\n", reg, constIdx, cval.Inspect(), cval.TypeName())
 				}
 			}
+
+			// For functions, set their [[Prototype]] to Function.prototype
+			if cval.Type() == TypeFunction {
+				fn := cval.AsFunction()
+				if fn != nil {
+					fn.Prototype = vm.FunctionPrototype
+				}
+			}
+
 			registers[reg] = cval
 
 		case OpLoadNull:
@@ -594,12 +613,22 @@ startExecution:
 			srcReg := code[ip+1]
 			ip += 2
 			srcVal := registers[srcReg]
-			if !IsNumber(srcVal) { // Use local IsNumber
-				frame.ip = ip
-				status := vm.runtimeError("Operand must be a number for negation.")
-				return status, Undefined
+
+			// Handle BigInt negation
+			if srcVal.IsBigInt() {
+				result := new(big.Int).Neg(srcVal.AsBigInt())
+				registers[destReg] = NewBigInt(result)
+			} else if IsNumber(srcVal) {
+				registers[destReg] = Number(-AsNumber(srcVal))
+			} else {
+				// For objects, call ToPrimitive first, then convert to number
+				primVal := srcVal
+				if srcVal.IsObject() || srcVal.IsCallable() {
+					primVal = vm.toPrimitive(srcVal, "number")
+				}
+				numVal := primVal.ToFloat()
+				registers[destReg] = Number(-numVal)
 			}
-			registers[destReg] = Number(-AsNumber(srcVal)) // Use local Number/AsNumber
 
 		case OpNot:
 			destReg := code[ip]
@@ -618,13 +647,39 @@ startExecution:
 			typeofStr := getTypeofString(srcVal)
 			registers[destReg] = String(typeofStr)
 
+		case OpTypeofIdentifier:
+			// Special typeof for identifiers that returns "undefined" for unresolvable references
+			// instead of throwing ReferenceError (per ECMAScript spec)
+			destReg := code[ip]
+			nameIdxHi := code[ip+1]
+			nameIdxLo := code[ip+2]
+			ip += 3
+			nameIdx := uint16(nameIdxHi)<<8 | uint16(nameIdxLo)
+
+			identifierName := AsString(constants[nameIdx])
+
+			// Try to resolve the identifier - check heap for global variables
+			// Use the heap's nameToIndex map if available
+			if heapIdx, exists := vm.heap.nameToIndex[identifierName]; exists {
+				val, _ := vm.heap.Get(heapIdx)
+				typeofStr := getTypeofString(val)
+				registers[destReg] = String(typeofStr)
+			} else {
+				// Identifier not found - return "undefined" without throwing ReferenceError
+				registers[destReg] = String("undefined")
+			}
+
 		case OpToNumber:
 			destReg := code[ip]
 			srcReg := code[ip+1]
 			ip += 2
 			srcVal := registers[srcReg]
-			// Convert value to number, handling Date objects specially
-			registers[destReg] = Number(srcVal.ToFloat())
+			// For objects, call ToPrimitive first, then convert to number
+			primVal := srcVal
+			if srcVal.IsObject() || srcVal.IsCallable() {
+				primVal = vm.toPrimitive(srcVal, "number")
+			}
+			registers[destReg] = Number(primVal.ToFloat())
 
 		case OpStringConcat:
 			destReg := code[ip]
@@ -634,6 +689,13 @@ startExecution:
 			leftVal := registers[leftReg]
 			rightVal := registers[rightReg]
 
+			// Check for Symbol - cannot convert Symbol to string
+			if leftVal.IsSymbol() || rightVal.IsSymbol() {
+				frame.ip = ip
+				vm.ThrowTypeError("Cannot convert a Symbol value to a string")
+				return InterpretRuntimeError, Undefined
+			}
+
 			// Optimized string concatenation: convert both operands to strings
 			leftStr := leftVal.ToString()
 			rightStr := rightVal.ToString()
@@ -641,7 +703,7 @@ startExecution:
 
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
 			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
-			OpGreater, OpLess, OpLessEqual,
+			OpGreater, OpLess, OpLessEqual, OpGreaterEqual,
 			OpRemainder, OpExponent:
 			destReg := code[ip]
 			leftReg := code[ip+1]
@@ -655,40 +717,63 @@ startExecution:
 			case OpAdd:
 				// JS semantics: ToPrimitive on both, if either is String → concatenate ToString(lhs)+ToString(rhs);
 				// else if both BigInt → BigInt add; else Number add; BigInt/Number mixing is an error.
-				if IsString(leftVal) || IsString(rightVal) {
-					registers[destReg] = String(leftVal.ToString() + rightVal.ToString())
-				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
-					result := new(big.Int).Add(leftVal.AsBigInt(), rightVal.AsBigInt())
+
+				// Step 1: Convert objects to primitives via ToPrimitive
+				leftPrim := vm.toPrimitive(leftVal, "default")
+				// Check if toPrimitive threw an exception
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+
+				rightPrim := vm.toPrimitive(rightVal, "default")
+				// Check if toPrimitive threw an exception
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+
+				// Step 2: If either is a string, do string concatenation
+				if IsString(leftPrim) || IsString(rightPrim) {
+					// Check for Symbol - cannot convert Symbol to string
+					if leftPrim.IsSymbol() || rightPrim.IsSymbol() {
+						frame.ip = ip
+						vm.ThrowTypeError("Cannot convert a Symbol value to a string")
+						return InterpretRuntimeError, Undefined
+					}
+					registers[destReg] = String(leftPrim.ToString() + rightPrim.ToString())
+				} else if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
+					// Both are BigInt: do BigInt addition
+					result := new(big.Int).Add(leftPrim.AsBigInt(), rightPrim.AsBigInt())
 					registers[destReg] = NewBigInt(result)
-				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
+				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
+					// One is BigInt, the other is not: error (cannot mix BigInt with non-BigInt)
 					frame.ip = ip
 					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
 					return status, Undefined
-				} else if IsNumber(leftVal) && IsNumber(rightVal) {
-					registers[destReg] = Number(AsNumber(leftVal) + AsNumber(rightVal))
 				} else {
-					// Fallback: attempt string concatenation per spec coercions
-					registers[destReg] = String(leftVal.ToString() + rightVal.ToString())
+					// Neither is a string, neither is BigInt: convert both to numbers and add
+					// This handles: Number + Number, Boolean + Number, Number + Boolean, Boolean + Boolean, etc.
+					leftNum := leftPrim.ToFloat()
+					rightNum := rightPrim.ToFloat()
+					registers[destReg] = Number(leftNum + rightNum)
 				}
 			case OpSubtract, OpMultiply, OpDivide:
+				// Apply ToPrimitive and type coercion like JavaScript
+				// First convert objects to primitives
+				leftPrim := vm.toPrimitive(leftVal, "default")
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+
+				rightPrim := vm.toPrimitive(rightVal, "default")
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+
 				// Handle numbers and BigInts separately (no mixing allowed)
-				if IsNumber(leftVal) && IsNumber(rightVal) {
-					// Number arithmetic
-					leftNum := AsNumber(leftVal)
-					rightNum := AsNumber(rightVal)
-					switch opcode {
-					case OpSubtract:
-						registers[destReg] = Number(leftNum - rightNum)
-					case OpMultiply:
-						registers[destReg] = Number(leftNum * rightNum)
-					case OpDivide:
-						// JavaScript semantics: number division by zero yields ±Infinity; 0/0 yields NaN
-						registers[destReg] = Number(leftNum / rightNum)
-					}
-				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
+				if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
 					// BigInt arithmetic
-					leftBig := leftVal.AsBigInt()
-					rightBig := rightVal.AsBigInt()
+					leftBig := leftPrim.AsBigInt()
+					rightBig := rightPrim.AsBigInt()
 					result := new(big.Int)
 					switch opcode {
 					case OpSubtract:
@@ -706,33 +791,36 @@ startExecution:
 						result.Div(leftBig, rightBig)
 						registers[destReg] = NewBigInt(result)
 					}
-				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
-					// Cannot mix BigInt and Number
+				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
+					// Cannot mix BigInt and non-BigInt
 					frame.ip = ip
 					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
 					return status, Undefined
 				} else {
-					frame.ip = ip
-					opStr := opcode.String()                                                                    // Get opcode name
-					status := vm.runtimeError("Operands must be two numbers or two BigInts for %s.", opStr[2:]) // Simple way to get op name like Subtract
-					return status, Undefined
+					// Neither is BigInt: convert both to numbers and perform operation
+					// This handles: Number, String, Boolean, null, undefined
+					leftNum := leftPrim.ToFloat()
+					rightNum := rightPrim.ToFloat()
+					switch opcode {
+					case OpSubtract:
+						registers[destReg] = Number(leftNum - rightNum)
+					case OpMultiply:
+						registers[destReg] = Number(leftNum * rightNum)
+					case OpDivide:
+						// JavaScript semantics: number division by zero yields ±Infinity; 0/0 yields NaN
+						registers[destReg] = Number(leftNum / rightNum)
+					}
 				}
 			case OpRemainder:
+				// Apply ToPrimitive and type coercion
+				leftPrim := vm.toPrimitive(leftVal, "default")
+				rightPrim := vm.toPrimitive(rightVal, "default")
+
 				// Handle numbers and BigInts separately (no mixing allowed)
-				if IsNumber(leftVal) && IsNumber(rightVal) {
-					// Number remainder
-					leftNum := AsNumber(leftVal)
-					rightNum := AsNumber(rightVal)
-					if rightNum == 0 {
-						frame.ip = ip
-						status := vm.runtimeError("Division by zero (in remainder operation).")
-						return status, Undefined
-					}
-					registers[destReg] = Number(math.Mod(leftNum, rightNum))
-				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
+				if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
 					// BigInt remainder
-					leftBig := leftVal.AsBigInt()
-					rightBig := rightVal.AsBigInt()
+					leftBig := leftPrim.AsBigInt()
+					rightBig := rightPrim.AsBigInt()
 					if rightBig.Sign() == 0 {
 						frame.ip = ip
 						status := vm.runtimeError("Division by zero (in remainder operation).")
@@ -741,28 +829,29 @@ startExecution:
 					result := new(big.Int)
 					result.Rem(leftBig, rightBig)
 					registers[destReg] = NewBigInt(result)
-				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
-					// Cannot mix BigInt and Number
+				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
+					// Cannot mix BigInt and non-BigInt
 					frame.ip = ip
 					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
 					return status, Undefined
 				} else {
-					frame.ip = ip
-					status := vm.runtimeError("Operands must be two numbers or two BigInts for %%.")
-					return status, Undefined
+					// Neither is BigInt: convert both to numbers
+					leftNum := leftPrim.ToFloat()
+					rightNum := rightPrim.ToFloat()
+					// JavaScript semantics: remainder of division
+					registers[destReg] = Number(math.Mod(leftNum, rightNum))
 				}
 
 			case OpExponent:
+				// Apply ToPrimitive and type coercion
+				leftPrim := vm.toPrimitive(leftVal, "default")
+				rightPrim := vm.toPrimitive(rightVal, "default")
+
 				// Handle numbers and BigInts separately (no mixing allowed)
-				if IsNumber(leftVal) && IsNumber(rightVal) {
-					// Number exponentiation
-					leftNum := AsNumber(leftVal)
-					rightNum := AsNumber(rightVal)
-					registers[destReg] = Number(math.Pow(leftNum, rightNum))
-				} else if leftVal.IsBigInt() && rightVal.IsBigInt() {
+				if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
 					// BigInt exponentiation
-					leftBig := leftVal.AsBigInt()
-					rightBig := rightVal.AsBigInt()
+					leftBig := leftPrim.AsBigInt()
+					rightBig := rightPrim.AsBigInt()
 					// BigInt exponentiation requires non-negative exponent
 					if rightBig.Sign() < 0 {
 						frame.ip = ip
@@ -778,19 +867,20 @@ startExecution:
 					result := new(big.Int)
 					result.Exp(leftBig, rightBig, nil) // nil modulus means no modular exponentiation
 					registers[destReg] = NewBigInt(result)
-				} else if (leftVal.IsBigInt() && IsNumber(rightVal)) || (IsNumber(leftVal) && rightVal.IsBigInt()) {
-					// Cannot mix BigInt and Number
+				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
+					// Cannot mix BigInt and non-BigInt
 					frame.ip = ip
 					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
 					return status, Undefined
 				} else {
-					frame.ip = ip
-					status := vm.runtimeError("Operands must be two numbers or two BigInts for **.")
-					return status, Undefined
+					// Neither is BigInt: convert both to numbers
+					leftNum := leftPrim.ToFloat()
+					rightNum := rightPrim.ToFloat()
+					registers[destReg] = Number(math.Pow(leftNum, rightNum))
 				}
 			case OpEqual, OpNotEqual:
-				// Use Abstract Equality (==) per JS semantics
-				isEqual := valuesAbstractEqual(leftVal, rightVal)
+				// Use Abstract Equality (==) per JS semantics with object-to-primitive conversion
+				isEqual := vm.abstractEqual(leftVal, rightVal)
 				if opcode == OpEqual {
 					registers[destReg] = BooleanValue(isEqual)
 				} else {
@@ -803,18 +893,56 @@ startExecution:
 				} else { // OpStrictNotEqual
 					registers[destReg] = BooleanValue(!isStrictlyEqual)
 				}
-			case OpGreater, OpLess, OpLessEqual:
-				// JavaScript ToPrimitive/ToNumber coercion for comparisons (non-string)
-				l := leftVal.ToFloat()
-				r := rightVal.ToFloat()
+			case OpGreater, OpLess, OpLessEqual, OpGreaterEqual:
+				// ECMAScript comparison: if both are strings, compare lexicographically
+				// Otherwise convert to numbers and compare
 				var result bool
-				switch opcode {
-				case OpGreater:
-					result = l > r
-				case OpLess:
-					result = l < r
-				case OpLessEqual:
-					result = l <= r
+
+				// Check if both operands are strings
+				if leftVal.Type() == TypeString && rightVal.Type() == TypeString {
+					// String comparison (lexicographic)
+					leftStr := leftVal.ToString()
+					rightStr := rightVal.ToString()
+					switch opcode {
+					case OpGreater:
+						result = leftStr > rightStr
+					case OpLess:
+						result = leftStr < rightStr
+					case OpLessEqual:
+						result = leftStr <= rightStr
+					case OpGreaterEqual:
+						result = leftStr >= rightStr
+					}
+				} else {
+					// Numeric comparison - convert both to primitives then to numbers
+					// ToPrimitive with "number" hint for objects
+					leftPrim := leftVal
+					rightPrim := rightVal
+					if leftVal.IsObject() {
+						leftPrim = vm.toPrimitive(leftVal, "number")
+					}
+					if rightVal.IsObject() {
+						rightPrim = vm.toPrimitive(rightVal, "number")
+					}
+
+					l := leftPrim.ToFloat()
+					r := rightPrim.ToFloat()
+
+					// Per ECMAScript spec, if either operand is NaN, comparison returns false
+					if math.IsNaN(l) || math.IsNaN(r) {
+						result = false
+					} else {
+						switch opcode {
+						case OpGreater:
+							result = l > r
+						case OpLess:
+							result = l < r
+						case OpLessEqual:
+							result = l <= r
+						case OpGreaterEqual:
+							result = l >= r
+						}
+					}
 				}
 				registers[destReg] = BooleanValue(result)
 			}
@@ -876,6 +1004,22 @@ startExecution:
 					} else {
 						hasProperty = propKey == "length"
 					}
+				case TypeFunction:
+					// Functions are objects and can have properties
+					fn := objVal.AsFunction()
+					if fn.Properties != nil {
+						hasProperty = fn.Properties.Has(propKey)
+					} else {
+						hasProperty = false
+					}
+				case TypeNativeFunctionWithProps:
+					// Native functions with properties (like Number, String, etc.)
+					nf := objVal.AsNativeFunctionWithProps()
+					if nf.Properties != nil {
+						hasProperty = nf.Properties.Has(propKey)
+					} else {
+						hasProperty = false
+					}
 				default:
 					// Non-object RHS
 					hasProperty = false
@@ -902,16 +1046,51 @@ startExecution:
 			} else if constructorVal.Type() == TypeClosure {
 				closure := AsClosure(constructorVal)
 				constructorPrototype = closure.Fn.getOrCreatePrototype()
+			} else if constructorVal.Type() == TypeNativeFunctionWithProps {
+				// Native functions (like Object, Array, etc.) have .prototype property
+				nativeFn := constructorVal.AsNativeFunctionWithProps()
+				if proto, exists := nativeFn.Properties.GetOwn("prototype"); exists {
+					constructorPrototype = proto
+				}
+			} else if constructorVal.Type() == TypeNativeFunction {
+				// Some native functions might also be constructors
+				// Try to get their prototype via opGetProp
+				if ok, _, _ := vm.opGetProp(0, &constructorVal, "prototype", &constructorPrototype); !ok {
+					constructorPrototype = Undefined
+				}
 			}
 
 			// Walk prototype chain of object
 			result := false
-			if objVal.IsObject() {
+			// Check if objVal has a prototype chain to walk
+			if objVal.IsObject() || objVal.Type() == TypeArray || objVal.Type() == TypeRegExp ||
+				objVal.Type() == TypeMap || objVal.Type() == TypeSet || objVal.Type() == TypeArguments ||
+				objVal.Type() == TypeFunction || objVal.Type() == TypeClosure {
 				var current Value
-				if objVal.Type() == TypeObject {
+
+				// Get the initial prototype based on type
+				// For built-in types, use the VM's prototype values
+				switch objVal.Type() {
+				case TypeObject:
 					current = objVal.AsPlainObject().GetPrototype()
-				} else if objVal.Type() == TypeDictObject {
+				case TypeDictObject:
 					current = objVal.AsDictObject().GetPrototype()
+				case TypeArray:
+					current = vm.ArrayPrototype
+				case TypeRegExp:
+					current = vm.RegExpPrototype
+				case TypeMap:
+					current = vm.MapPrototype
+				case TypeSet:
+					current = vm.SetPrototype
+				case TypeArguments:
+					current = vm.ObjectPrototype // Arguments objects inherit from Object.prototype
+			case TypeFunction:
+				current = vm.FunctionPrototype
+			case TypeClosure:
+				current = vm.FunctionPrototype
+				default:
+					current = Undefined
 				}
 
 				// Walk the prototype chain
@@ -974,6 +1153,8 @@ startExecution:
 
 			// Check if we're in an unwinding state before the call
 			wasUnwinding := vm.unwinding
+			// Save the frame IP before the call to detect if an exception handler changed it
+			frameIPBeforeCall := frame.ip
 
 			calleeVal := callerRegisters[funcReg]
 			// Targeted debug for deepEqual recursion investigation
@@ -993,16 +1174,68 @@ startExecution:
 			}
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
+			// Save the current frame index to detect if it gets popped by a direct-call boundary
+			currentFrameIndex := vm.frameCount - 1
+
 			shouldSwitch, err := vm.prepareCall(calleeVal, Undefined, args, destReg, callerRegisters, callerIP)
-			if err != nil && !debugCalls {
-				if strings.Contains(err.Error(), "Cannot call non-function value") {
-					err = fmt.Errorf("Cannot call non-function value %s (%s) at bytecode ip=%d (dest=R%d, func=R%d)", calleeVal.Inspect(), calleeVal.TypeName(), callSiteIP, destReg, funcReg)
-				}
-			}
+			// Note: prepareCall now throws TypeError directly for non-callable values,
+			// so err will be nil in that case (exception is already thrown)
 
 			if debugCalls {
 				fmt.Printf("[DEBUG vm.go] OpCall: prepareCall returned shouldSwitch=%v, err=%v, wasUnwinding=%v, nowUnwinding=%v\n",
 					shouldSwitch, err != nil, wasUnwinding, vm.unwinding)
+			}
+
+			// Check if our frame was popped by a direct-call boundary during exception unwinding
+			if !wasUnwinding && vm.unwinding && vm.frameCount <= currentFrameIndex {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCall: Current frame was popped (frameCount=%d, was %d), exception hit direct-call boundary\n",
+						vm.frameCount, currentFrameIndex+1)
+				}
+				// Our frame was popped - we need to exit this VM loop immediately
+				// The exception should be handled by the caller (executeUserFunctionSafe)
+				// Don't update frame variables, just continue to let the main loop handle unwinding
+				continue
+			}
+
+			// If an exception was thrown and handled during prepareCall, the frame IP will have changed
+			// Check if exception handler changed the IP (even if unwinding was cleared by handleCatchBlock)
+			if !wasUnwinding && frame.ip != frameIPBeforeCall {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCall: Exception handler found, frame.ip changed from %d to %d, unwinding=%v\n",
+						frameIPBeforeCall, frame.ip, vm.unwinding)
+				}
+				// Exception handler was found - reload frame state and jump to handler
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCall: Reloaded frame state, ip=%d, continuing to handler\n", ip)
+				}
+				continue
+			}
+
+			// If exception was thrown but not handled, unwinding will still be true
+			if !wasUnwinding && vm.unwinding {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCall: Exception thrown but not handled, unwinding=%v, frameCount=%d\n", vm.unwinding, vm.frameCount)
+				}
+				// Exception was thrown but not handled - reload frame state
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCall: Reloaded frame state, ip=%d (frame.ip=%d), unwinding=%v\n", ip, frame.ip, vm.unwinding)
+				}
+				continue
 			}
 
 			// DISABLED: This logic was incorrectly detecting exception handling
@@ -1456,7 +1689,14 @@ startExecution:
 			// Create the closure Value using the constructor
 			// newClosureVal := NewClosure(protoFunc, upvalues)
 			// Create a new closure value using the value-level constructor
-			registers[destReg] = NewClosure(protoFunc, upvalues)
+			closureVal := NewClosure(protoFunc, upvalues)
+
+			// Set the function's [[Prototype]] to Function.prototype
+			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
+				cl.Fn.Prototype = vm.FunctionPrototype
+			}
+
+			registers[destReg] = closureVal
 
 		case OpLoadFree:
 			destReg := code[ip]
@@ -1547,6 +1787,143 @@ startExecution:
 				arrObj.length = length
 			}
 			registers[destReg] = arrVal
+
+		case OpDefineAccessor:
+			objReg := code[ip]
+			getterReg := code[ip+1]
+			setterReg := code[ip+2]
+			nameIdxHi := code[ip+3]
+			nameIdxLo := code[ip+4]
+			ip += 5
+
+			nameIdx := int(uint16(nameIdxHi)<<8 | uint16(nameIdxLo))
+			if nameIdx >= len(frame.closure.Fn.Chunk.Constants) {
+				frame.ip = ip
+				status := vm.runtimeError("OpDefineAccessor: name constant index out of bounds")
+				return status, Undefined
+			}
+
+			objVal := registers[objReg]
+			getterVal := registers[getterReg]
+			setterVal := registers[setterReg]
+			nameVal := frame.closure.Fn.Chunk.Constants[nameIdx]
+
+			if false {
+				fmt.Printf("[DEBUG OpDefineAccessor] prop=%s getter=%v setter=%v hasGetter=%v hasSetter=%v\n",
+					nameVal.ToString(), getterVal.TypeName(), setterVal.TypeName(), getterVal.Type() != TypeUndefined, setterVal.Type() != TypeUndefined)
+			}
+
+			// Accept both objects and functions (functions can have properties like constructors)
+			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction {
+				frame.ip = ip
+				status := vm.runtimeError("OpDefineAccessor: target must be an object or function, got %s", objVal.TypeName())
+				return status, Undefined
+			}
+
+			if nameVal.Type() != TypeString {
+				frame.ip = ip
+				status := vm.runtimeError("OpDefineAccessor: property name must be a string")
+				return status, Undefined
+			}
+
+			propName := AsString(nameVal)
+
+			// Get the underlying object (functions have an associated object for properties)
+			var obj *PlainObject
+			if objVal.Type() == TypeFunction {
+				obj = objVal.AsFunction().Properties
+			} else {
+				obj = objVal.AsPlainObject()
+			}
+
+			// Determine which accessors are defined
+			hasGetter := getterVal.Type() != TypeUndefined
+			hasSetter := setterVal.Type() != TypeUndefined
+
+			// Default attributes: enumerable=true, configurable=true for object literal accessors
+			enumerable := true
+			configurable := true
+
+			obj.DefineAccessorProperty(propName, getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
+
+		case OpDefineAccessorDynamic:
+			objReg := code[ip]
+			getterReg := code[ip+1]
+			setterReg := code[ip+2]
+			nameReg := code[ip+3]
+			ip += 4
+
+			objVal := registers[objReg]
+			getterVal := registers[getterReg]
+			setterVal := registers[setterReg]
+			nameVal := registers[nameReg]
+
+			// Accept both objects and functions (functions can have properties like constructors)
+			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction {
+				frame.ip = ip
+				status := vm.runtimeError("OpDefineAccessorDynamic: target must be an object or function, got %s", objVal.TypeName())
+				return status, Undefined
+			}
+
+			// Convert name to string (ToPropertyKey)
+			var propName string
+			switch nameVal.Type() {
+			case TypeString:
+				propName = AsString(nameVal)
+			case TypeIntegerNumber, TypeFloatNumber:
+				propName = nameVal.ToString()
+			case TypeSymbol:
+				// Symbols are handled via PropertyKey
+				var obj *PlainObject
+				if objVal.Type() == TypeFunction {
+					obj = objVal.AsFunction().Properties
+				} else {
+					obj = objVal.AsPlainObject()
+				}
+				hasGetter := getterVal.Type() != TypeUndefined
+				hasSetter := setterVal.Type() != TypeUndefined
+				enumerable := true
+				configurable := true
+				obj.DefineAccessorPropertyByKey(NewSymbolKey(nameVal), getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
+				continue
+			default:
+				propName = nameVal.ToString()
+			}
+
+			var obj *PlainObject
+			if objVal.Type() == TypeFunction {
+				obj = objVal.AsFunction().Properties
+			} else {
+				obj = objVal.AsPlainObject()
+			}
+			hasGetter := getterVal.Type() != TypeUndefined
+			hasSetter := setterVal.Type() != TypeUndefined
+			enumerable := true
+			configurable := true
+			obj.DefineAccessorProperty(propName, getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
+
+		case OpSetPrototype:
+			objReg := code[ip]
+			protoReg := code[ip+1]
+			ip += 2
+
+			objVal := registers[objReg]
+			protoVal := registers[protoReg]
+
+			// Only set prototype for object values (not primitives)
+			if objVal.Type() != TypeObject {
+				frame.ip = ip
+				status := vm.runtimeError("OpSetPrototype: target must be an object, got %s", objVal.TypeName())
+				return status, Undefined
+			}
+
+			obj := objVal.AsPlainObject()
+
+			// Only set prototype if the value is an object or null (per ECMAScript spec)
+			if protoVal.Type() == TypeObject || protoVal.Type() == TypeNull {
+				obj.SetPrototype(protoVal)
+			}
+			// If protoVal is not an object or null, we silently ignore it (per spec)
 
 		case OpArrayCopy:
 			destReg := code[ip]
@@ -1713,9 +2090,8 @@ startExecution:
 						// (debug-only tracing removed; keep runtime lean)
 						continue
 					default:
-						frame.ip = ip
-						status := vm.runtimeError("String index must be a number, string, or symbol, got '%v'", indexVal.Type())
-						return status, Undefined
+						// JavaScript allows any value as a string index - convert to string
+						key = indexVal.ToString()
 					}
 
 					// Use opGetProp to access string properties (handles prototype chain)
@@ -1746,6 +2122,12 @@ startExecution:
 					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
 						return status, value
 					}
+				case TypeIntegerNumber, TypeFloatNumber:
+					// Convert number to string for property access (JavaScript behavior)
+					key := indexVal.ToString()
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
 				default:
 					frame.ip = ip
 					status := vm.runtimeError("Generator index must be a string or symbol, got '%v'", indexVal.Type())
@@ -1769,10 +2151,121 @@ startExecution:
 					// fmt.Printf("[DBG OpGetIndex:Generator] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
 					// }
 					continue
+				case TypeIntegerNumber, TypeFloatNumber:
+					// Convert number to string for property access (JavaScript behavior)
+					key := indexVal.ToString()
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
+					continue
 				default:
 					frame.ip = ip
 					status := vm.runtimeError("Callable index must be a string or symbol, got '%v'", indexVal.Type())
 					return status, Undefined
+				}
+
+			case TypeProxy:
+				proxy := baseVal.AsProxy()
+				if proxy.Revoked {
+					// Proxy is revoked, throw TypeError
+					var excVal Value
+					if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+						if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("Cannot perform property access on a revoked Proxy")}); callErr == nil {
+							excVal = res
+						}
+					}
+					if excVal.Type() == 0 {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("TypeError"))
+						eo.SetOwn("message", NewString("Cannot perform property access on a revoked Proxy"))
+						excVal = NewValueFromPlainObject(eo)
+					}
+					vm.throwException(excVal)
+					return InterpretRuntimeError, Undefined
+				}
+
+				// Check if handler has a get trap
+				getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
+				if ok && getTrap.IsFunction() {
+					// Call the get trap: handler.get(target, propertyKey, receiver)
+					trapArgs := []Value{proxy.target, indexVal, baseVal}
+					result, err := vm.Call(getTrap, proxy.handler, trapArgs)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							return InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						return InterpretRuntimeError, Undefined
+					}
+					registers[destReg] = result
+				} else {
+					// No get trap, fallback to target - implement recursive call by duplicating logic
+					targetBase := proxy.target
+					switch targetBase.Type() {
+					case TypeArray:
+						// Handle array indexing on target
+						arr := targetBase.AsArray()
+						if IsNumber(indexVal) {
+							idx := int(AsNumber(indexVal))
+							if idx < 0 || idx >= len(arr.elements) {
+								registers[destReg] = Undefined
+							} else {
+								registers[destReg] = arr.elements[idx]
+							}
+						} else {
+							// String/Symbol index on array
+							var key string
+							switch indexVal.Type() {
+							case TypeString:
+								key = AsString(indexVal)
+							default:
+								registers[destReg] = Undefined
+							}
+							if key != "" {
+								if ok, status, value := vm.opGetProp(ip, &targetBase, key, &registers[destReg]); !ok {
+									return status, value
+								}
+							}
+						}
+					case TypeObject, TypeDictObject:
+						// Handle object indexing on target
+						var key string
+						switch indexVal.Type() {
+						case TypeString:
+							key = AsString(indexVal)
+						case TypeFloatNumber, TypeIntegerNumber:
+							key = indexVal.ToString()
+						default:
+							registers[destReg] = Undefined
+						}
+						if key != "" {
+							if ok, status, value := vm.opGetProp(ip, &targetBase, key, &registers[destReg]); !ok {
+								return status, value
+							}
+						} else {
+							registers[destReg] = Undefined
+						}
+					default:
+						registers[destReg] = Undefined
+					}
 				}
 
 			default:
@@ -1844,13 +2337,14 @@ startExecution:
 					arr.length = len(arr.elements)
 				}
 
-			case TypeObject, TypeDictObject: // <<< NEW
+			case TypeObject, TypeDictObject, TypeFunction: // Functions can have properties
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
 					key = AsString(indexVal)
 				case TypeFloatNumber, TypeIntegerNumber:
-					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
+					// Use ToString() for ECMAScript-compliant number-to-string conversion
+					key = indexVal.ToString()
 				case TypeSymbol:
 					if baseVal.Type() == TypeDictObject {
 						// DictObject does not support symbol keys; no legacy stringization
@@ -1862,18 +2356,45 @@ startExecution:
 					}
 					continue
 				default:
-					frame.ip = ip
-					status := vm.runtimeError("Object index must be a string, number, or symbol, got '%v'", indexVal.Type())
-					return status, Undefined
+					// ToPropertyKey: convert to string, calling toString() method for objects
+					if indexVal.IsObject() {
+						primitiveVal := vm.toPrimitive(indexVal, "string")
+						key = primitiveVal.ToString()
+					} else {
+						// JavaScript allows any value as an object property key - convert to string
+						// undefined → "undefined", null → "null", true → "true", etc.
+						key = indexVal.ToString()
+					}
 				}
 
-				// Set the property on the object
+				// Set the property on the object (with accessor awareness)
 				if baseVal.Type() == TypeDictObject {
 					dict := AsDictObject(baseVal)
 					dict.SetOwn(key, valueVal)
+			} else if baseVal.Type() == TypeFunction {
+				// For functions, set property on the function's Properties object
+				if status, res := vm.setFunctionProperty(baseVal, key, valueVal, ip); status != InterpretOK {
+					return status, res
+				}
 				} else {
 					obj := AsPlainObject(baseVal)
-					obj.SetOwn(key, valueVal)
+					// Check if this is an accessor property with a setter
+					if _, setter, _, _, ok := obj.GetOwnAccessor(key); ok && setter.Type() != TypeUndefined {
+						// Call the setter with the value
+						_, err := vm.Call(setter, baseVal, []Value{valueVal})
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return InterpretRuntimeError, Undefined
+							}
+							frame.ip = ip
+							status := vm.runtimeError("Error calling setter: %v", err)
+							return status, Undefined
+						}
+					} else {
+						// No setter, set as data property
+						obj.SetOwn(key, valueVal)
+					}
 				}
 
 			case TypeTypedArray:
@@ -1939,24 +2460,135 @@ startExecution:
 			destVal := registers[destReg]
 			sourceVal := registers[sourceReg]
 
-			// Validate that both are arrays
+			// Validate destination is an array
 			if destVal.Type() != TypeArray {
 				frame.ip = ip
 				status := vm.runtimeError("OpArraySpread: destination must be an array, got '%v'", destVal.Type())
 				return status, Undefined
 			}
-			if sourceVal.Type() != TypeArray {
-				frame.ip = ip
-				status := vm.runtimeError("OpArraySpread: source must be an array, got '%v'", sourceVal.Type())
-				return status, Undefined
+
+			destArray := AsArray(destVal)
+
+			// Handle different source types based on ECMAScript iterator protocol
+			switch sourceVal.Type() {
+			case TypeArray:
+				// Fast path for arrays
+				sourceArray := AsArray(sourceVal)
+				destArray.elements = append(destArray.elements, sourceArray.elements...)
+
+			case TypeString:
+				// Strings are iterable character by character
+				str := AsString(sourceVal)
+				for _, char := range str {
+					destArray.elements = append(destArray.elements, NewString(string(char)))
+				}
+
+			case TypeSet:
+				// Sets are iterable - spread their values into the array
+				setObj := sourceVal.AsSet()
+				setObj.ForEach(func(value Value) {
+					destArray.elements = append(destArray.elements, value)
+				})
+
+			case TypeMap:
+				// Maps are iterable - spread [key, value] pairs into the array
+				mapObj := sourceVal.AsMap()
+				mapObj.ForEach(func(key Value, value Value) {
+					pairVal := NewArray()
+					pairArr := pairVal.AsArray()
+					pairArr.elements = []Value{key, value}
+					destArray.elements = append(destArray.elements, pairVal)
+				})
+
+			case TypeObject, TypeDictObject:
+				// Check if object has Symbol.iterator method
+				var iteratorMethod Value
+				var hasIterator bool
+
+				if sourceVal.Type() == TypeObject {
+					obj := sourceVal.AsPlainObject()
+					// Use proper symbol key lookup instead of string
+					iteratorMethod, hasIterator = obj.GetOwnByKey(NewSymbolKey(vm.SymbolIterator))
+				} else {
+					// DictObject doesn't support symbol keys
+					hasIterator = false
+				}
+
+				if hasIterator && (iteratorMethod.IsCallable() || iteratorMethod.IsFunction()) {
+					// Call the iterator method to get an iterator
+					iterator, err := vm.Call(iteratorMethod, sourceVal, []Value{})
+					if err != nil {
+						frame.ip = ip
+						status := vm.runtimeError("error calling Symbol.iterator: %v", err)
+						return status, Undefined
+					}
+
+					// Now iterate using the iterator's next() method
+					for {
+						// Get the next method
+						var nextMethod Value
+						var hasNext bool
+						if iterator.Type() == TypeObject {
+							nextMethod, hasNext = iterator.AsPlainObject().GetOwn("next")
+						} else if iterator.Type() == TypeDictObject {
+							nextMethod, hasNext = iterator.AsDictObject().GetOwn("next")
+						} else {
+							break
+						}
+
+						if !hasNext {
+							frame.ip = ip
+							status := vm.runtimeError("iterator does not have a next method")
+							return status, Undefined
+						}
+
+						// Call next()
+						result, err := vm.Call(nextMethod, iterator, []Value{})
+						if err != nil {
+							frame.ip = ip
+							status := vm.runtimeError("error calling next(): %v", err)
+							return status, Undefined
+						}
+
+						// Check if iteration is done
+						if result.Type() != TypeObject && result.Type() != TypeDictObject {
+							break
+						}
+
+						var doneVal Value
+						var valueVal Value
+						var hasDone, hasValue bool
+
+						if result.Type() == TypeObject {
+							resultObj := result.AsPlainObject()
+							doneVal, hasDone = resultObj.GetOwn("done")
+							valueVal, hasValue = resultObj.GetOwn("value")
+						} else {
+							resultDict := result.AsDictObject()
+							doneVal, hasDone = resultDict.GetOwn("done")
+							valueVal, hasValue = resultDict.GetOwn("value")
+						}
+
+						if hasDone && doneVal.IsBoolean() && doneVal.AsBoolean() {
+							break
+						}
+
+						// Get the value
+						if hasValue {
+							destArray.elements = append(destArray.elements, valueVal)
+						}
+					}
+				} else {
+					// Not iterable, skip (rather than error)
+				}
+
+			default:
+				// For other types (null, undefined, etc.), skip rather than error
+				// This matches JavaScript behavior where spreading non-iterables is usually a TypeError
+				// but we'll be more lenient for now
 			}
 
-			// Extract array objects
-			destArray := AsArray(destVal)
-			sourceArray := AsArray(sourceVal)
-
-			// Append all elements from source to destination
-			destArray.elements = append(destArray.elements, sourceArray.elements...)
+			// Update array length
 			destArray.length = len(destArray.elements)
 
 		// --- NEW: Object Spread Support ---
@@ -1968,16 +2600,24 @@ startExecution:
 			destVal := registers[destReg]
 			sourceVal := registers[sourceReg]
 
-			// Validate that both are objects (TypeObject or TypeDictObject)
+			// Validate destination is an object
 			if destVal.Type() != TypeObject && destVal.Type() != TypeDictObject {
 				frame.ip = ip
 				status := vm.runtimeError("OpObjectSpread: destination must be an object, got '%v'", destVal.Type())
 				return status, Undefined
 			}
+
+			// Handle null and undefined sources (per ECMAScript spec: they contribute no properties)
+			if sourceVal.Type() == TypeNull || sourceVal.Type() == TypeUndefined {
+				// Skip - null and undefined contribute no enumerable properties
+				continue
+			}
+
+			// Only process actual objects
 			if sourceVal.Type() != TypeObject && sourceVal.Type() != TypeDictObject {
-				frame.ip = ip
-				status := vm.runtimeError("OpObjectSpread: source must be an object, got '%v'", sourceVal.Type())
-				return status, Undefined
+				// For other primitive types, they should be converted to objects first
+				// But for now, skip them as they typically have no enumerable properties
+				continue
 			}
 
 			// Copy all enumerable properties from source to destination
@@ -2023,9 +2663,15 @@ startExecution:
 			ip += 2
 			srcVal := registers[srcReg]
 
+			// Apply ToPrimitive for objects (calls valueOf/toString per ECMAScript spec)
+			srcPrim := vm.toPrimitive(srcVal, "number")
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+
 			// JavaScript-style type coercion for bitwise operations
 			// undefined becomes 0, null becomes 0, booleans become 0/1, etc.
-			srcInt := int64(srcVal.ToInteger())
+			srcInt := int64(srcPrim.ToInteger())
 			result := ^srcInt
 			registers[destReg] = Number(float64(result))
 
@@ -2035,43 +2681,108 @@ startExecution:
 			leftReg := code[ip+1]
 			rightReg := code[ip+2]
 			ip += 3
+
 			leftVal := registers[leftReg]
 			rightVal := registers[rightReg]
 
-			// JavaScript-style type coercion for bitwise operations
-			// undefined becomes 0, null becomes 0, booleans become 0/1, etc.
-			leftInt := int64(leftVal.ToInteger())
-			rightInt := int64(rightVal.ToInteger())
-			var result int64 // Keep result var for cases that use it
+			// Check for BigInt operations
+			leftIsBigInt := leftVal.Type() == TypeBigInt
+			rightIsBigInt := rightVal.Type() == TypeBigInt
 
-			switch opcode {
-			case OpBitwiseAnd:
-				result = leftInt & rightInt
-				registers[destReg] = Number(float64(result)) // Store result
-			case OpBitwiseOr:
-				result = leftInt | rightInt
-				registers[destReg] = Number(float64(result)) // Store result
-			case OpBitwiseXor:
-				result = leftInt ^ rightInt
-				registers[destReg] = Number(float64(result)) // Store result
-			case OpShiftLeft:
-				shiftAmount := uint64(rightInt) & 63 // Cap to 64 bits
-				result = leftInt << shiftAmount
-				registers[destReg] = Number(float64(result)) // Store result
-			case OpShiftRight: // Arithmetic shift (preserves sign)
-				shiftAmount := uint64(rightInt) & 63
-				result = leftInt >> shiftAmount
-				registers[destReg] = Number(float64(result)) // Store result
-			case OpUnsignedShiftRight: // Logical shift (zero-fills)
-				// Convert left operand to uint32 first to mimic JS >>> behavior
-				leftUint32 := uint32(leftVal.ToInteger()) // Use ToInteger() for coercion
-				shiftAmount := uint64(rightInt) & 31      // JS uses lower 5 bits for 32-bit shift count
-				unsignedResult := leftUint32 >> shiftAmount
-				// Result is converted back to Number (float64)
-				registers[destReg] = Number(float64(unsignedResult)) // Store the uint32 result directly as Number
-				// No need to assign to 'result' variable here
+			// BigInt bitwise/shift operations
+			if leftIsBigInt || rightIsBigInt {
+				// Both operands must be BigInt for bitwise operations
+				if (leftIsBigInt && !rightIsBigInt) || (!leftIsBigInt && rightIsBigInt) {
+					// TypeError: Cannot mix BigInt and other types
+					typeErrObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
+					typeErrObj.SetOwn("name", NewString("TypeError"))
+					typeErrObj.SetOwn("message", NewString("Cannot mix BigInt and other types"))
+					vm.throwException(NewValueFromPlainObject(typeErrObj))
+					return InterpretRuntimeError, Undefined
+				}
+
+				// Unsigned right shift (>>>) with BigInt is not allowed
+				if opcode == OpUnsignedShiftRight {
+					typeErrObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
+					typeErrObj.SetOwn("name", NewString("TypeError"))
+					typeErrObj.SetOwn("message", NewString("BigInt does not support unsigned right shift"))
+					vm.throwException(NewValueFromPlainObject(typeErrObj))
+					return InterpretRuntimeError, Undefined
+				}
+
+				// Convert right operand to BigInt for shift count
+				var rightBigInt *big.Int
+				if rightVal.Type() == TypeBigInt {
+					rightBigInt = rightVal.AsBigInt()
+				} else {
+					// Convert number to BigInt
+					intVal := rightVal.ToInteger()
+					rightBigInt = big.NewInt(int64(intVal))
+				}
+
+				leftBigInt := leftVal.AsBigInt()
+
+				var result *big.Int
+				switch opcode {
+				case OpBitwiseAnd:
+					result = new(big.Int).And(leftBigInt, rightBigInt)
+				case OpBitwiseOr:
+					result = new(big.Int).Or(leftBigInt, rightBigInt)
+				case OpBitwiseXor:
+					result = new(big.Int).Xor(leftBigInt, rightBigInt)
+				case OpShiftLeft:
+					// For BigInt, shift amount is ToBigInt, not masked to 32 bits
+					// Convert shift count to int64
+					shiftAmount := rightBigInt.Int64()
+					result = new(big.Int).Lsh(leftBigInt, uint(shiftAmount))
+				case OpShiftRight:
+					// Convert shift count to int64
+					shiftAmount := rightBigInt.Int64()
+					result = new(big.Int).Rsh(leftBigInt, uint(shiftAmount))
+				}
+
+				registers[destReg] = NewBigInt(result)
+				continue
 			}
-			// No shared assignment needed here anymore
+
+			// Regular number bitwise/shift operations
+			// Apply ToPrimitive for objects (calls valueOf/toString per ECMAScript spec)
+			leftPrim := vm.toPrimitive(leftVal, "number")
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+
+			rightPrim := vm.toPrimitive(rightVal, "number")
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Use ToInt32 for left operand, ToUint32 for right operand (shift count)
+			leftInt32 := leftPrim.ToInteger()
+			rightInt32 := rightPrim.ToInteger()
+
+			shiftAmount := uint32(rightInt32) & 31 // Mask to 5 bits for 32-bit operations
+
+			// Handle unsigned right shift specially to preserve unsigned result
+			if opcode == OpUnsignedShiftRight {
+				unsignedResult := uint32(leftInt32) >> shiftAmount
+				registers[destReg] = Number(float64(unsignedResult))
+			} else {
+				var result int32
+				switch opcode {
+				case OpBitwiseAnd:
+					result = leftInt32 & rightInt32
+				case OpBitwiseOr:
+					result = leftInt32 | rightInt32
+				case OpBitwiseXor:
+					result = leftInt32 ^ rightInt32
+				case OpShiftLeft:
+					result = int32(uint32(leftInt32) << shiftAmount)
+				case OpShiftRight: // arithmetic
+					result = leftInt32 >> shiftAmount
+				}
+				registers[destReg] = Number(float64(result))
+			}
 
 		// --- NEW: Object Opcodes ---
 		case OpMakeEmptyObject:
@@ -2134,6 +2845,108 @@ startExecution:
 			propName := AsString(nameVal)
 
 			if ok, status, value := vm.opSetProp(ip, &registers[objReg], propName, &registers[valReg]); !ok {
+				return status, value
+			}
+
+		case OpGetPrivateField:
+			destReg := code[ip]
+			objReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get field name from constants (stored without # prefix)
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for private field name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			fieldName := AsString(nameVal)
+
+			objVal := registers[objReg]
+
+			// Private fields can be accessed on objects or functions (for static private fields)
+			var obj *PlainObject
+			if objVal.Type() == TypeObject {
+				obj = objVal.AsPlainObject()
+			} else if objVal.Type() == TypeFunction {
+				// Static private fields are stored on the constructor's Properties object
+				fn := objVal.AsFunction()
+				if fn.Properties == nil {
+					frame.ip = ip
+					status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
+					return status, Undefined
+				}
+				obj = fn.Properties
+			} else {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot read private field '%s' of %s", fieldName, objVal.TypeName())
+				return status, Undefined
+			}
+
+			value, exists := obj.GetPrivateField(fieldName)
+			if !exists {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
+				return status, Undefined
+			}
+			registers[destReg] = value
+
+		case OpSetPrivateField:
+			objReg := code[ip]
+			valReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get field name from constants (stored without # prefix)
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for private field name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			fieldName := AsString(nameVal)
+
+			objVal := registers[objReg]
+
+			// Private fields can be set on objects or functions (for static private fields)
+			var obj *PlainObject
+			if objVal.Type() == TypeObject {
+				obj = objVal.AsPlainObject()
+			} else if objVal.Type() == TypeFunction {
+				// Static private fields are stored on the constructor's Properties object
+				fn := objVal.AsFunction()
+				if fn.Properties == nil {
+					// Create Properties object if it doesn't exist
+					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = fn.Properties
+			} else {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot set private field '%s' of %s", fieldName, objVal.TypeName())
+				return status, Undefined
+			}
+
+			obj.SetPrivateField(fieldName, registers[valReg])
+
+		case OpDefineMethod:
+			frame.ip = ip
+			status, value := vm.handleOpDefineMethod(code, &ip, constants, registers)
+			if status != InterpretOK {
 				return status, value
 			}
 
@@ -2323,9 +3136,16 @@ startExecution:
 				// Constructor call on closure
 				constructorClosure := AsClosure(constructorVal)
 				constructorFunc := constructorClosure.Fn
+				// Check if it's an arrow function - arrow functions cannot be constructors
+				if constructorFunc.IsArrowFunction {
+					frame.ip = callerIP
+					vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+					return InterpretRuntimeError, Undefined
+				}
 				// Allow fewer arguments for constructors with optional parameters
 				// The compiler handles padding with undefined for missing optional parameters
-				if argCount > constructorFunc.Arity {
+				// For variadic functions, allow any number of arguments >= Arity
+				if !constructorFunc.Variadic && argCount > constructorFunc.Arity {
 					frame.ip = callerIP
 					status := vm.runtimeError("Constructor expected at most %d arguments but got %d.", constructorFunc.Arity, argCount)
 					return status, Undefined
@@ -2342,11 +3162,42 @@ startExecution:
 					return status, Undefined
 				}
 
-				// Get constructor's .prototype property (create lazily if needed)
-				instancePrototype := constructorFunc.getOrCreatePrototype()
+				// Determine the new.target value for this constructor call
+				// If the caller is already a constructor (super() call), inherit its new.target
+				// Otherwise, new.target is the constructor being called
+				var newTargetValue Value
+				if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+					// This is a super() call from a derived constructor - inherit new.target
+					newTargetValue = frame.newTargetValue
+				} else {
+					// Direct new Constructor() call - new.target is the constructor
+					newTargetValue = constructorVal
+				}
 
-				// Create new instance object with constructor's prototype
-				newInstance := NewObject(instancePrototype)
+				// Get the prototype to use for the instance from new.target.prototype
+				// This ensures derived classes create instances with the correct prototype
+				var instancePrototype Value
+				if newTargetValue.Type() == TypeClosure {
+					newTargetClosure := AsClosure(newTargetValue)
+					newTargetFunc := newTargetClosure.Fn
+					instancePrototype = newTargetFunc.getOrCreatePrototype()
+				} else if newTargetValue.Type() == TypeFunction {
+					newTargetFunc := AsFunction(newTargetValue)
+					instancePrototype = newTargetFunc.getOrCreatePrototype()
+				} else {
+					// Fallback: use the constructor's prototype
+					instancePrototype = constructorFunc.getOrCreatePrototype()
+				}
+
+				// For derived constructors, 'this' is uninitialized until super() is called
+				// For base constructors, create the instance immediately
+				var newInstance Value
+				if constructorFunc.IsDerivedConstructor {
+					newInstance = Undefined // 'this' is uninitialized in derived constructors
+				} else {
+					// Create new instance object with new.target's prototype
+					newInstance = NewObject(instancePrototype)
+				}
 
 				frame.ip = callerIP // Store return IP
 
@@ -2354,16 +3205,23 @@ startExecution:
 				newFrame.closure = constructorClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
-				newFrame.thisValue = newInstance  // Set the new instance as 'this'
-				newFrame.isConstructorCall = true // Mark this as a constructor call
+				newFrame.thisValue = newInstance       // Set the new instance as 'this' (or undefined for derived)
+				newFrame.isConstructorCall = true      // Mark this as a constructor call
+				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
-				// Copy arguments to new frame (starting from register 0)
+				// Copy fixed arguments and handle rest parameters
 				argStartRegInCaller := constructorReg + 1
-				for i := 0; i < argCount; i++ {
-					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
-						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+
+				// Copy fixed arguments (up to Arity)
+				for i := 0; i < constructorFunc.Arity; i++ {
+					if i < len(newFrame.registers) {
+						if i < argCount && int(argStartRegInCaller)+i < len(callerRegisters) {
+							newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+						} else {
+							newFrame.registers[i] = Undefined
+						}
 					} else {
 						vm.nextRegSlot -= requiredRegs
 						frame.ip = callerIP
@@ -2371,6 +3229,31 @@ startExecution:
 						return status, Undefined
 					}
 				}
+
+				// Handle rest parameters for variadic constructors
+				if constructorFunc.Variadic {
+					extraArgCount := argCount - constructorFunc.Arity
+					var restArray Value
+
+					if extraArgCount == 0 {
+						restArray = vm.emptyRestArray
+					} else {
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := constructorFunc.Arity + i
+							if argIndex < argCount && int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							}
+						}
+					}
+
+					// Store rest array at the appropriate position
+					if constructorFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[constructorFunc.Arity] = restArray
+					}
+				}
+
 				vm.frameCount++
 
 				// Store the new instance in the caller's destination register
@@ -2391,12 +3274,19 @@ startExecution:
 			case TypeFunction:
 				// Constructor call on function (create implicit closure)
 				funcToCall := AsFunction(constructorVal)
+				// Check if it's an arrow function - arrow functions cannot be constructors
+				if funcToCall.IsArrowFunction {
+					frame.ip = callerIP
+					vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+					return InterpretRuntimeError, Undefined
+				}
 				constructorClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
 				constructorFunc := constructorClosure.Fn
 
 				// Allow fewer arguments for constructors with optional parameters
 				// The compiler handles padding with undefined for missing optional parameters
-				if argCount > constructorFunc.Arity {
+				// For variadic functions, allow any number of arguments >= Arity
+				if !constructorFunc.Variadic && argCount > constructorFunc.Arity {
 					frame.ip = callerIP
 					status := vm.runtimeError("Constructor expected at most %d arguments but got %d.", constructorFunc.Arity, argCount)
 					return status, Undefined
@@ -2413,11 +3303,42 @@ startExecution:
 					return status, Undefined
 				}
 
-				// Get constructor's .prototype property (create lazily if needed)
-				instancePrototype := constructorFunc.getOrCreatePrototype()
+				// Determine the new.target value for this constructor call
+				// If the caller is already a constructor (super() call), inherit its new.target
+				// Otherwise, new.target is the constructor being called
+				var newTargetValue Value
+				if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+					// This is a super() call from a derived constructor - inherit new.target
+					newTargetValue = frame.newTargetValue
+				} else {
+					// Direct new Constructor() call - new.target is the constructor
+					newTargetValue = constructorVal
+				}
 
-				// Create new instance object with constructor's prototype
-				newInstance := NewObject(instancePrototype)
+				// Get the prototype to use for the instance from new.target.prototype
+				// This ensures derived classes create instances with the correct prototype
+				var instancePrototype Value
+				if newTargetValue.Type() == TypeClosure {
+					newTargetClosure := AsClosure(newTargetValue)
+					newTargetFunc := newTargetClosure.Fn
+					instancePrototype = newTargetFunc.getOrCreatePrototype()
+				} else if newTargetValue.Type() == TypeFunction {
+					newTargetFunc := AsFunction(newTargetValue)
+					instancePrototype = newTargetFunc.getOrCreatePrototype()
+				} else {
+					// Fallback: use the constructor's prototype
+					instancePrototype = constructorFunc.getOrCreatePrototype()
+				}
+
+				// For derived constructors, 'this' is uninitialized until super() is called
+				// For base constructors, create the instance immediately
+				var newInstance Value
+				if constructorFunc.IsDerivedConstructor {
+					newInstance = Undefined // 'this' is uninitialized in derived constructors
+				} else {
+					// Create new instance object with new.target's prototype
+					newInstance = NewObject(instancePrototype)
+				}
 
 				frame.ip = callerIP
 
@@ -2425,16 +3346,23 @@ startExecution:
 				newFrame.closure = constructorClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
-				newFrame.thisValue = newInstance  // Set the new instance as 'this'
-				newFrame.isConstructorCall = true // Mark this as a constructor call
+				newFrame.thisValue = newInstance       // Set the new instance as 'this' (or undefined for derived)
+				newFrame.isConstructorCall = true      // Mark this as a constructor call
+				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
-				// Copy arguments to new frame
+				// Copy fixed arguments and handle rest parameters
 				argStartRegInCaller := constructorReg + 1
-				for i := 0; i < argCount; i++ {
-					if i < len(newFrame.registers) && int(argStartRegInCaller)+i < len(callerRegisters) {
-						newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+
+				// Copy fixed arguments (up to Arity)
+				for i := 0; i < constructorFunc.Arity; i++ {
+					if i < len(newFrame.registers) {
+						if i < argCount && int(argStartRegInCaller)+i < len(callerRegisters) {
+							newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+						} else {
+							newFrame.registers[i] = Undefined
+						}
 					} else {
 						vm.nextRegSlot -= requiredRegs
 						frame.ip = callerIP
@@ -2442,6 +3370,31 @@ startExecution:
 						return status, Undefined
 					}
 				}
+
+				// Handle rest parameters for variadic constructors
+				if constructorFunc.Variadic {
+					extraArgCount := argCount - constructorFunc.Arity
+					var restArray Value
+
+					if extraArgCount == 0 {
+						restArray = vm.emptyRestArray
+					} else {
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := constructorFunc.Arity + i
+							if argIndex < argCount && int(argStartRegInCaller)+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							}
+						}
+					}
+
+					// Store rest array at the appropriate position
+					if constructorFunc.Arity < len(newFrame.registers) {
+						newFrame.registers[constructorFunc.Arity] = restArray
+					}
+				}
+
 				vm.frameCount++
 
 				// Store the new instance in the caller's destination register
@@ -2477,7 +3430,10 @@ startExecution:
 
 				// Execute builtin constructor
 				// For builtins, we let them handle instance creation
+				// Set constructor call flag so native functions can differentiate
+				vm.inConstructorCall = true
 				result, err := builtin.Fn(args)
+				vm.inConstructorCall = false
 				if err != nil {
 					// Throw as proper Error instance instead of plain object
 					var errValue Value
@@ -2530,7 +3486,10 @@ startExecution:
 
 				// Execute builtin constructor
 				// For builtins, we let them handle instance creation
+				// Set constructor call flag so native functions can differentiate
+				vm.inConstructorCall = true
 				result, err := builtinWithProps.Fn(args)
+				vm.inConstructorCall = false
 				if err != nil {
 					// Throw as proper Error instance instead of plain object
 					var errValue Value
@@ -2568,6 +3527,20 @@ startExecution:
 				return status, Undefined
 			}
 
+	case OpSpreadNew:
+		status, _ := vm.handleOpSpreadNew(code, &ip, frame, registers)
+		if status == InterpretOK && vm.frameCount > 0 {
+			frame = &vm.frames[vm.frameCount-1]
+			closure = frame.closure
+			function = closure.Fn
+			code = function.Chunk.Code
+			constants = function.Chunk.Constants
+			registers = frame.registers
+			ip = frame.ip
+		} else if status != InterpretOK {
+			return status, Undefined
+		}
+
 		case OpLoadThis:
 			destReg := code[ip]
 			ip++
@@ -2575,6 +3548,33 @@ startExecution:
 			// Load 'this' value from current call frame context
 			// If no 'this' context is set (regular function call), return undefined
 			registers[destReg] = frame.thisValue
+
+		case OpSetThis:
+			srcReg := code[ip]
+			ip++
+
+			// Set 'this' value in current call frame context
+			// This is used by super() to update the this binding
+			// In derived constructors, super() can only be called once
+			// Throw ReferenceError if 'this' is already initialized
+			if frame.thisValue.Type() != TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("super() already called")
+				return InterpretRuntimeError, Undefined
+			}
+			frame.thisValue = registers[srcReg]
+
+		case OpLoadNewTarget:
+			destReg := code[ip]
+			ip++
+
+			// Load 'new.target' value from current call frame context
+			// If not in a constructor call, return undefined
+			if frame.isConstructorCall {
+				registers[destReg] = frame.newTargetValue
+			} else {
+				registers[destReg] = Undefined
+			}
 
 		case OpGetGlobal:
 			destReg := code[ip]
@@ -2586,9 +3586,10 @@ startExecution:
 			// Use unified global heap
 			value, exists := vm.heap.Get(int(globalIdx))
 			if !exists {
-				// Auto-resize heap if needed and return undefined for uninitialized globals
-				vm.heap.Resize(int(globalIdx) + 1)
-				value = Undefined
+				// Throw ReferenceError for unresolvable global
+				frame.ip = ip
+				vm.ThrowReferenceError("is not defined")
+				return InterpretRuntimeError, Undefined
 			}
 
 			// Store the retrieved value in the destination register
@@ -3460,8 +4461,78 @@ startExecution:
 			}
 			propName := AsString(nameVal)
 			obj := registers[objReg]
+
+			// Check for undefined or null base object - should throw ReferenceError
+			if obj.Type() == TypeUndefined || obj.Type() == TypeNull {
+				frame.ip = ip
+				vm.ThrowReferenceError("Cannot delete property '" + propName + "' of " + obj.Type().String())
+				return InterpretRuntimeError, Undefined
+			}
+
 			success := false
-			if obj.IsObject() {
+			if obj.Type() == TypeProxy {
+				proxy := obj.AsProxy()
+				if proxy.Revoked {
+					// Proxy is revoked, throw TypeError
+					var excVal Value
+					if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+						if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("Cannot delete property from a revoked Proxy")}); callErr == nil {
+							excVal = res
+						}
+					}
+					if excVal.Type() == 0 {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("TypeError"))
+						eo.SetOwn("message", NewString("Cannot delete property from a revoked Proxy"))
+						excVal = NewValueFromPlainObject(eo)
+					}
+					vm.throwException(excVal)
+					return InterpretRuntimeError, Undefined
+				}
+
+				// Check if handler has a delete trap
+				deleteTrap, ok := proxy.handler.AsPlainObject().GetOwn("deleteProperty")
+				if ok && deleteTrap.IsFunction() {
+					// Call the delete trap: handler.deleteProperty(target, propertyKey)
+					trapArgs := []Value{proxy.target, NewString(propName)}
+					result, err := vm.Call(deleteTrap, proxy.handler, trapArgs)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							return InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						return InterpretRuntimeError, Undefined
+					}
+					success = result.IsTruthy()
+				} else {
+					// No delete trap, fallback to target
+					if proxy.target.IsObject() {
+						if po := proxy.target.AsPlainObject(); po != nil {
+							success = po.DeleteOwn(propName)
+						} else if d := proxy.target.AsDictObject(); d != nil {
+							success = d.DeleteOwn(propName)
+						}
+					}
+				}
+			} else if obj.IsObject() {
 				if po := obj.AsPlainObject(); po != nil {
 					success = po.DeleteOwn(propName)
 				} else if d := obj.AsDictObject(); d != nil {
@@ -3478,6 +4549,15 @@ startExecution:
 
 			obj := registers[objReg]
 			key := registers[keyReg]
+
+			// Check for undefined or null base object - should throw ReferenceError
+			if obj.Type() == TypeUndefined || obj.Type() == TypeNull {
+				frame.ip = ip
+				keyStr := key.ToString()
+				vm.ThrowReferenceError("Cannot delete property '" + keyStr + "' of " + obj.Type().String())
+				return InterpretRuntimeError, Undefined
+			}
+
 			var success bool
 			if obj.IsObject() {
 				if po := obj.AsPlainObject(); po != nil {
@@ -3498,6 +4578,47 @@ startExecution:
 				}
 			}
 			registers[destReg] = BooleanValue(success)
+
+		case OpDeleteGlobal:
+			// OpDeleteGlobal: Rx HeapIdx(16bit): Rx = delete global[HeapIdx]
+			destReg := code[ip]
+			heapIdx := (uint16(code[ip+1]) << 8) | uint16(code[ip+2])  // Big-endian
+			ip += 3
+
+			// Try to delete from heap - returns false if non-configurable
+			success := vm.heap.Delete(int(heapIdx))
+			registers[destReg] = BooleanValue(success)
+
+		case OpToPropertyKey:
+			// OpToPropertyKey: Rx Ry: Rx = ToPropertyKey(Ry)
+			// Converts value to property key, calling toString() method for objects
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+
+			srcVal := registers[srcReg]
+			var keyStr string
+
+			switch srcVal.Type() {
+			case TypeString:
+				keyStr = AsString(srcVal)
+			case TypeFloatNumber, TypeIntegerNumber:
+				keyStr = srcVal.ToString()
+			case TypeSymbol:
+				// Symbols are valid property keys, keep as-is
+				registers[destReg] = srcVal
+				continue
+			default:
+				// For objects and other types, call ToPrimitive with "string" hint
+				if srcVal.IsObject() {
+					primitiveVal := vm.toPrimitive(srcVal, "string")
+					keyStr = primitiveVal.ToString()
+				} else {
+					keyStr = srcVal.ToString()
+				}
+			}
+
+			registers[destReg] = String(keyStr)
 
 		default:
 			frame.ip = ip // Save IP before erroring
@@ -3873,23 +4994,361 @@ func (vm *VM) printDisassemblyAroundIP() {
 	fmt.Fprintf(os.Stderr, "==========================\n\n")
 }
 
-// extractSpreadArguments extracts arguments from a spread array value
-func (vm *VM) extractSpreadArguments(arrayVal Value) ([]Value, error) {
-	if arrayVal.Type() != TypeArray {
-		return nil, fmt.Errorf("spread argument must be an array, got %T", arrayVal.Type())
+// extractSpreadArguments extracts arguments from a spread iterable value (Array, Set, Map, String, etc.)
+func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
+	switch iterableVal.Type() {
+	case TypeArray:
+		// Fast path for arrays
+		arrayObj := AsArray(iterableVal)
+		args := make([]Value, len(arrayObj.elements))
+		copy(args, arrayObj.elements)
+		return args, nil
+
+	case TypeString:
+		// Strings are iterable - spread into individual characters
+		str := AsString(iterableVal)
+		args := make([]Value, 0, len(str))
+		for _, char := range str {
+			args = append(args, NewString(string(char)))
+		}
+		return args, nil
+
+	case TypeSet:
+		// Sets are iterable - spread into their values
+		setObj := iterableVal.AsSet()
+		args := make([]Value, 0, setObj.Size())
+		setObj.ForEach(func(value Value) {
+			args = append(args, value)
+		})
+		return args, nil
+
+	case TypeMap:
+		// Maps are iterable - spread into [key, value] pairs
+		mapObj := iterableVal.AsMap()
+		args := make([]Value, 0, mapObj.Size())
+		mapObj.ForEach(func(key Value, value Value) {
+			// Each entry is a [key, value] pair
+			pairVal := NewArray()
+			pairArr := pairVal.AsArray()
+			pairArr.elements = []Value{key, value}
+			args = append(args, pairVal)
+		})
+		return args, nil
+
+	default:
+		// Check if the value has Symbol.iterator method (custom iterables)
+		if iterableVal.Type() == TypeObject || iterableVal.Type() == TypeDictObject {
+			var iteratorMethod Value
+			var hasIterator bool
+
+			if iterableVal.Type() == TypeObject {
+				obj := iterableVal.AsPlainObject()
+				// Use the actual Symbol.iterator value to get the property
+				iteratorMethod, hasIterator = obj.GetOwnByKey(NewSymbolKey(vm.SymbolIterator))
+			} else {
+				// DictObject doesn't support symbol keys, so skip
+				hasIterator = false
+			}
+
+			if hasIterator && (iteratorMethod.IsCallable() || iteratorMethod.IsFunction()) {
+				// Call the iterator method to get an iterator
+				iterator, err := vm.Call(iteratorMethod, iterableVal, []Value{})
+				if err != nil {
+					return nil, fmt.Errorf("error calling Symbol.iterator: %v", err)
+				}
+
+				// Now iterate using the iterator's next() method
+				var args []Value
+				for {
+					// Get the next method
+					var nextMethod Value
+					var hasNext bool
+					if iterator.Type() == TypeObject {
+						nextMethod, hasNext = iterator.AsPlainObject().GetOwn("next")
+					} else if iterator.Type() == TypeDictObject {
+						nextMethod, hasNext = iterator.AsDictObject().GetOwn("next")
+					} else {
+						break
+					}
+
+					if !hasNext {
+						return nil, fmt.Errorf("iterator does not have a next method")
+					}
+
+					// Call next()
+					result, err := vm.Call(nextMethod, iterator, []Value{})
+					if err != nil {
+						return nil, fmt.Errorf("error calling next(): %v", err)
+					}
+
+					// Check if iteration is done
+					if result.Type() != TypeObject && result.Type() != TypeDictObject {
+						break
+					}
+
+					var doneVal Value
+					var valueVal Value
+					var hasDone, hasValue bool
+
+					if result.Type() == TypeObject {
+						resultObj := result.AsPlainObject()
+						doneVal, hasDone = resultObj.GetOwn("done")
+						valueVal, hasValue = resultObj.GetOwn("value")
+					} else {
+						resultDict := result.AsDictObject()
+						doneVal, hasDone = resultDict.GetOwn("done")
+						valueVal, hasValue = resultDict.GetOwn("value")
+					}
+
+					if hasDone && doneVal.IsBoolean() && doneVal.AsBoolean() {
+						break
+					}
+
+					// Get the value
+					if hasValue {
+						args = append(args, valueVal)
+					}
+				}
+
+				return args, nil
+			}
+		}
+
+		// For other types, only arrays and built-in iterables are supported for now
+		return nil, fmt.Errorf("spread argument must be an array or iterable (Array, String, Set, Map), got %s", iterableVal.TypeName())
 	}
-
-	arrayObj := AsArray(arrayVal)
-	args := make([]Value, len(arrayObj.elements))
-	copy(args, arrayObj.elements)
-
-	return args, nil
 }
 
 // GetThis returns the current 'this' value for native function execution
 // This allows native functions to access the 'this' context without it being passed as an argument
 func (vm *VM) GetThis() Value {
 	return vm.currentThis
+}
+
+// IsConstructorCall returns true if currently executing a native function via 'new'
+func (vm *VM) IsConstructorCall() bool {
+	return vm.inConstructorCall
+}
+
+// NewBooleanObject creates a Boolean wrapper object with the given primitive value
+func (vm *VM) NewBooleanObject(primitiveValue bool) Value {
+	obj := NewObject(vm.BooleanPrototype).AsPlainObject()
+	obj.SetOwn("[[PrimitiveValue]]", BooleanValue(primitiveValue))
+	return NewValueFromPlainObject(obj)
+}
+
+// NewNumberObject creates a Number wrapper object with the given primitive value
+func (vm *VM) NewNumberObject(primitiveValue float64) Value {
+	obj := NewObject(vm.NumberPrototype).AsPlainObject()
+	obj.SetOwn("[[PrimitiveValue]]", NumberValue(primitiveValue))
+	return NewValueFromPlainObject(obj)
+}
+
+// NewStringObject creates a String wrapper object with the given primitive value
+func (vm *VM) NewStringObject(primitiveValue string) Value {
+	obj := NewObject(vm.StringPrototype).AsPlainObject()
+	obj.SetOwn("[[PrimitiveValue]]", NewString(primitiveValue))
+	return NewValueFromPlainObject(obj)
+}
+
+// toPrimitive implements JavaScript ToPrimitive abstract operation
+// hint can be "string", "number", or "default"
+func (vm *VM) toPrimitive(val Value, hint string) Value {
+	// If already primitive, return as-is
+	// Note: Functions are objects and should go through ToPrimitive to call toString/valueOf
+	if !val.IsObject() && !val.IsCallable() && val.typ != TypeArray && val.typ != TypeArguments && val.typ != TypeRegExp && val.typ != TypeMap && val.typ != TypeSet && val.typ != TypeProxy {
+		return val
+	}
+
+	// ECMAScript special case: Date objects treat "default" hint as "string" hint
+	// This ensures that date + date returns a string concatenation, not numeric addition
+	if hint == "default" {
+		// Check if this is a Date object by looking for getTime method
+		var getTimeMethod Value
+		if ok, _, _ := vm.opGetProp(0, &val, "getTime", &getTimeMethod); ok {
+			if getTimeMethod.Type() == TypeNativeFunction || getTimeMethod.Type() == TypeNativeFunctionWithProps {
+				// This looks like a Date object - use "string" hint
+				hint = "string"
+			}
+		}
+	}
+
+	// Step 1: Check for Symbol.toPrimitive method (ECMAScript spec step 1-4)
+	// This takes precedence over valueOf/toString
+	var toPrimMethod Value
+	if vm.SymbolToPrimitive.Type() != TypeUndefined {
+		ok, status, _ := vm.opGetPropSymbol(0, &val, vm.SymbolToPrimitive, &toPrimMethod)
+		// If getter threw an error, return undefined (exception is already set)
+		if status == InterpretRuntimeError {
+			return Undefined
+		}
+		if ok {
+			if toPrimMethod.Type() != TypeNull && toPrimMethod.Type() != TypeUndefined {
+				// Call Symbol.toPrimitive with hint as argument
+				var hintArg Value
+				if hint == "string" {
+					hintArg = NewString("string")
+				} else if hint == "number" {
+					hintArg = NewString("number")
+				} else {
+					hintArg = NewString("default")
+				}
+
+				if toPrimMethod.Type() == TypeFunction || toPrimMethod.Type() == TypeClosure ||
+					toPrimMethod.Type() == TypeNativeFunction || toPrimMethod.Type() == TypeNativeFunctionWithProps {
+					result, err := vm.Call(toPrimMethod, val, []Value{hintArg})
+					if err == nil {
+						// Result must be a primitive
+						if !result.IsObject() && result.typ != TypeArray && result.typ != TypeArguments &&
+							result.typ != TypeRegExp && result.typ != TypeMap && result.typ != TypeSet && result.typ != TypeProxy {
+							return result
+						}
+						// If result is not primitive, throw TypeError
+						vm.ThrowTypeError("Symbol.toPrimitive must return a primitive value")
+						return Undefined
+					}
+					// If Symbol.toPrimitive throws, propagate the exception
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+					}
+					return Undefined
+				}
+			}
+		}
+	}
+
+	// Step 2: Fall back to OrdinaryToPrimitive (valueOf/toString)
+	var methods []string
+	if hint == "string" {
+		methods = []string{"toString", "valueOf"}
+	} else {
+		// "number" or "default" hints prefer valueOf first
+		methods = []string{"valueOf", "toString"}
+	}
+
+	for _, methodName := range methods {
+		// Try to get the method
+		var methodVal Value
+		if ok, _, _ := vm.opGetProp(0, &val, methodName, &methodVal); ok {
+			// Check if it's a function
+			if methodVal.Type() == TypeFunction || methodVal.Type() == TypeClosure ||
+				methodVal.Type() == TypeNativeFunction || methodVal.Type() == TypeNativeFunctionWithProps {
+				// Call the method with 'this' bound to val
+				result, err := vm.Call(methodVal, val, nil)
+				if err != nil {
+					// According to ECMAScript spec, if valueOf/toString throws, the exception should propagate
+					// We need to re-throw this exception at the VM level
+					if ee, ok := err.(ExceptionError); ok {
+						// Store the exception to be thrown when toPrimitive returns
+						vm.throwException(ee.GetExceptionValue())
+					}
+					// Return undefined, but the exception state is set so the operation will fail
+					return Undefined
+				}
+
+				// If result is primitive, return it
+				if !result.IsObject() && result.typ != TypeArray && result.typ != TypeArguments &&
+					result.typ != TypeRegExp && result.typ != TypeMap && result.typ != TypeSet && result.typ != TypeProxy {
+					return result
+				}
+				// If result is still an object, continue to next method
+			}
+		}
+	}
+
+	// If no method returned a primitive, fallback to string representation
+	return NewString(val.ToString())
+}
+
+// abstractEqual implements ECMAScript Abstract Equality (==) with object-to-primitive conversion
+func (vm *VM) abstractEqual(a, b Value) bool {
+	// If types are identical, use strict equality
+	if a.Type() == b.Type() {
+		return a.StrictlyEquals(b)
+	}
+
+	// null/undefined
+	if (a.Type() == TypeNull && b.Type() == TypeUndefined) || (a.Type() == TypeUndefined && b.Type() == TypeNull) {
+		return true
+	}
+
+	// number and string
+	if IsNumber(a) && b.Type() == TypeString {
+		return AsNumber(a) == b.ToFloat()
+	}
+	if a.Type() == TypeString && IsNumber(b) {
+		return a.ToFloat() == AsNumber(b)
+	}
+
+	// boolean compared to anything -> compare ToNumber(boolean) to other via abstract again
+	if a.Type() == TypeBoolean {
+		num := 0.0
+		if a.AsBoolean() {
+			num = 1.0
+		}
+		return vm.abstractEqual(Number(num), b)
+	}
+	if b.Type() == TypeBoolean {
+		num := 0.0
+		if b.AsBoolean() {
+			num = 1.0
+		}
+		return vm.abstractEqual(a, Number(num))
+	}
+
+	// bigint and string
+	if a.IsBigInt() && b.Type() == TypeString {
+		if bi, ok := stringToBigInt(b.ToString()); ok {
+			return a.AsBigInt().Cmp(bi) == 0
+		}
+		return false
+	}
+	if b.IsBigInt() && a.Type() == TypeString {
+		if bi, ok := stringToBigInt(a.ToString()); ok {
+			return b.AsBigInt().Cmp(bi) == 0
+		}
+		return false
+	}
+
+	// number and bigint
+	if IsNumber(a) && b.IsBigInt() {
+		n := a.ToFloat()
+		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return false
+		}
+		if n < math.MinInt64 || n > math.MaxInt64 {
+			return false
+		}
+		ni := int64(n)
+		return new(big.Int).SetInt64(ni).Cmp(b.AsBigInt()) == 0
+	}
+	if a.IsBigInt() && IsNumber(b) {
+		n := b.ToFloat()
+		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return false
+		}
+		if n < math.MinInt64 || n > math.MaxInt64 {
+			return false
+		}
+		ni := int64(n)
+		return a.AsBigInt().Cmp(new(big.Int).SetInt64(ni)) == 0
+	}
+
+	// Object compared to primitive: convert object to primitive and retry
+	// Per ECMAScript spec 7.2.15 step 10-11
+	if a.IsObject() && !b.IsObject() {
+		// Convert object to primitive with "default" hint
+		aPrim := vm.toPrimitive(a, "default")
+		return vm.abstractEqual(aPrim, b)
+	}
+	if b.IsObject() && !a.IsObject() {
+		// Convert object to primitive with "default" hint
+		bPrim := vm.toPrimitive(b, "default")
+		return vm.abstractEqual(a, bPrim)
+	}
+
+	// Default: not equal
+	return false
 }
 
 // executeGenerator starts or resumes generator execution
@@ -4701,4 +6160,120 @@ func (vm *VM) findExportValueInHeap(exportName string) Value {
 
 	// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Could not find '%s' in heap\n", exportName)
 	return Undefined
+}
+
+// ThrowTypeError creates and throws a proper TypeError instance
+func (vm *VM) ThrowTypeError(message string) {
+	// Get the TypeError constructor from globals
+	typeErrorCtor, exists := vm.GetGlobal("TypeError")
+	if !exists || typeErrorCtor.Type() == TypeUndefined {
+		// Fallback: create a basic error object
+		errObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("TypeError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	// Call the TypeError constructor to create a proper instance
+	errorInstance, err := vm.Call(typeErrorCtor, Undefined, []Value{NewString(message)})
+	if err != nil {
+		// Fallback if constructor call fails
+		errObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("TypeError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	vm.throwException(errorInstance)
+}
+
+// ThrowReferenceError creates and throws a proper ReferenceError instance
+func (vm *VM) ThrowReferenceError(message string) {
+	// Get the ReferenceError constructor from globals
+	refErrorCtor, exists := vm.GetGlobal("ReferenceError")
+	if !exists || refErrorCtor.Type() == TypeUndefined {
+		// Fallback: create a basic error object
+		errObj := NewObject(vm.ReferenceErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("ReferenceError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	// Call the ReferenceError constructor to create a proper instance
+	errorInstance, err := vm.Call(refErrorCtor, Undefined, []Value{NewString(message)})
+	if err != nil {
+		// Fallback if constructor call fails
+		errObj := NewObject(vm.ReferenceErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("ReferenceError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	vm.throwException(errorInstance)
+}
+
+// ThrowSyntaxError creates and throws a proper SyntaxError instance
+func (vm *VM) ThrowSyntaxError(message string) {
+	// Get the SyntaxError constructor from globals
+	syntaxErrorCtor, exists := vm.GetGlobal("SyntaxError")
+	if !exists || syntaxErrorCtor.Type() == TypeUndefined {
+		// Fallback: create a basic error object
+		errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("SyntaxError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	// Call the SyntaxError constructor to create a proper instance
+	errorInstance, err := vm.Call(syntaxErrorCtor, Undefined, []Value{NewString(message)})
+	if err != nil {
+		// Fallback if constructor call fails
+		errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("SyntaxError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	vm.throwException(errorInstance)
+}
+
+// ThrowRangeError creates and throws a proper RangeError instance
+func (vm *VM) ThrowRangeError(message string) {
+	// Get the RangeError constructor from globals
+	rangeErrorCtor, exists := vm.GetGlobal("RangeError")
+	if !exists || rangeErrorCtor.Type() == TypeUndefined {
+		// Fallback: create a basic error object
+		errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("RangeError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	// Call the RangeError constructor to create a proper instance
+	errorInstance, err := vm.Call(rangeErrorCtor, Undefined, []Value{NewString(message)})
+	if err != nil {
+		// Fallback if constructor call fails
+		errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("RangeError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	vm.throwException(errorInstance)
 }

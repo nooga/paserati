@@ -67,6 +67,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		nameConstIdx      uint16  // For static properties
 		isComputed        bool    // True if this is a computed property
 		keyReg           Register // For computed properties
+		isPrivateField    bool    // True if this is a private field (#field)
 	}
 
 	// Track temporary registers for cleanup
@@ -200,7 +201,18 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// Regular property access: obj.prop = value
 			memberInfo.isComputed = false
 			propName := c.extractPropertyName(lhsNode.Property)
-			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+
+			// Check for private field (starts with #)
+			if len(propName) > 0 && propName[0] == '#' {
+				// Private field - store the field name without # prefix
+				fieldName := propName[1:]
+				memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(fieldName))
+				memberInfo.isPrivateField = true
+			} else {
+				// Regular property
+				memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+				memberInfo.isPrivateField = false
+			}
 		}
 
 		// If compound or logical assignment, load the current property value
@@ -213,41 +225,16 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitByte(byte(currentValueReg))       // Destination register
 				c.emitByte(byte(memberInfo.objectReg))  // Object register
 				c.emitByte(byte(memberInfo.keyReg))     // Key register (computed at runtime)
+			} else if memberInfo.isPrivateField {
+				// For private fields, use OpGetPrivateField
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitGetPrivateField(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
 			} else {
-				// For static properties, check if this is a getter property for compound assignments
-				propName := c.extractPropertyName(lhsNode.Property)
-				objectStaticType := lhsNode.Object.GetComputedType()
-				if objectStaticType != nil {
-					if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
-						getterMethodName := "__get__" + propName
-						if c.hasMethodInType(objType, getterMethodName) {
-							// Use getter method call for reading current value
-							currentValueReg = c.regAlloc.Alloc()
-							tempRegs = append(tempRegs, currentValueReg)
-							
-							getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
-							getterMethodReg := c.regAlloc.Alloc()
-							tempRegs = append(tempRegs, getterMethodReg)
-							c.emitGetProp(getterMethodReg, memberInfo.objectReg, getterIdx, line)
-							c.emitCallMethod(currentValueReg, getterMethodReg, memberInfo.objectReg, 0, line)
-						} else {
-							// Normal property access for reading
-							currentValueReg = c.regAlloc.Alloc()
-							tempRegs = append(tempRegs, currentValueReg)
-							c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
-						}
-					} else {
-						// Normal property access for reading
-						currentValueReg = c.regAlloc.Alloc()
-						tempRegs = append(tempRegs, currentValueReg)
-						c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
-					}
-				} else {
-					// Normal property access for reading
-					currentValueReg = c.regAlloc.Alloc()
-					tempRegs = append(tempRegs, currentValueReg)
-					c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
-				}
+				// For static properties, use OpGetProp which handles getters automatically
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
 			}
 		} else {
 			// For simple assignment '=', we don't need the current value
@@ -489,109 +476,23 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			c.emitByte(byte(indexInfo.indexReg))
 			c.emitByte(byte(hint))
 		case lhsIsMemberExpr:
-			// Check if this is a setter property using type information
-			setterDetected := false
-			if memberExpr, ok := node.Left.(*parser.MemberExpression); ok && !memberInfo.isComputed {
-				propName := c.extractPropertyName(memberExpr.Property)
-				setterMethodName := "__set__" + propName
-				
-				// Check type information for setter detection
-				objectStaticType := memberExpr.Object.GetComputedType()
-				if objectStaticType != nil {
-					if objType, ok := types.GetWidenedType(objectStaticType).(*types.ObjectType); ok {
-						// Check for class instance setters
-						if objType.IsClassInstance() && objType.ClassMeta != nil {
-							if classMemberInfo := objType.ClassMeta.GetMemberAccess(propName); classMemberInfo != nil && classMemberInfo.IsSetter {
-								// Direct setter call - we know it exists
-								debugPrintf("// DEBUG Assign Store Member: Detected class setter for '%s', emitting direct call\n", propName)
-								
-								totalRegs := 1 + 1 // method + 1 argument
-								setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
-								for i := 0; i < totalRegs; i++ {
-									tempRegs = append(tempRegs, setterMethodReg+Register(i))
-								}
-								
-								setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
-								c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
-								
-								argReg := setterMethodReg + 1
-								if hint != argReg {
-									c.emitMove(argReg, hint, line)
-								}
-								
-								dummyResultReg := c.regAlloc.Alloc()
-								tempRegs = append(tempRegs, dummyResultReg)
-								c.emitCallMethod(dummyResultReg, setterMethodReg, memberInfo.objectReg, 1, line)
-								setterDetected = true
-							}
-						}
-						
-						// Check for object literal setters
-						if !setterDetected && objType.Properties != nil {
-							setterPropertyName := "__set__" + propName
-							if _, hasSetter := objType.Properties[setterPropertyName]; hasSetter {
-								// Direct setter call - we know it exists from type info
-								debugPrintf("// DEBUG Assign Store Member: Detected object literal setter for '%s', emitting direct call\n", propName)
-								
-								totalRegs := 1 + 1 // method + 1 argument
-								setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
-								for i := 0; i < totalRegs; i++ {
-									tempRegs = append(tempRegs, setterMethodReg+Register(i))
-								}
-								
-								setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
-								c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
-								
-								argReg := setterMethodReg + 1
-								if hint != argReg {
-									c.emitMove(argReg, hint, line)
-								}
-								
-								dummyResultReg := c.regAlloc.Alloc()
-								tempRegs = append(tempRegs, dummyResultReg)
-								c.emitCallMethod(dummyResultReg, setterMethodReg, memberInfo.objectReg, 1, line)
-								setterDetected = true
-							}
-						}
-					}
-				} else {
-					// Fallback: No type information available - use optimistic approach
-					debugPrintf("// DEBUG Assign Store Member: No type info for '%s', using optimistic setter\n", propName)
-					
-					totalRegs := 1 + 1 // method + 1 argument
-					setterMethodReg := c.regAlloc.AllocContiguous(totalRegs)
-					for i := 0; i < totalRegs; i++ {
-						tempRegs = append(tempRegs, setterMethodReg+Register(i))
-					}
-					
-					setterIdx := c.chunk.AddConstant(vm.String(setterMethodName))
-					c.emitGetProp(setterMethodReg, memberInfo.objectReg, setterIdx, line)
-					
-					argReg := setterMethodReg + 1
-					if hint != argReg {
-						c.emitMove(argReg, hint, line)
-					}
-					
-					// Optimistic setter call that falls back to regular property assignment
-					c.emitOptimisticSetterCall(setterMethodReg, memberInfo.objectReg, argReg, memberInfo.nameConstIdx, line)
-					setterDetected = true
-				}
-			}
-			
-			if !setterDetected {
-				// Normal property assignment
-				if memberInfo.isComputed {
-					// Use OpSetIndex for computed properties: objectReg[keyReg] = hint
-					debugPrintf("// DEBUG Assign Store Member: Emitting SetIndex R%d[R%d] = R%d\n", memberInfo.objectReg, memberInfo.keyReg, hint)
-					c.emitOpCode(vm.OpSetIndex, line)
-					c.emitByte(byte(memberInfo.objectReg)) // Object register
-					c.emitByte(byte(memberInfo.keyReg))    // Key register (computed at runtime)
-					c.emitByte(byte(hint))                 // Value register
-				} else {
-					// Use OpSetProp for static properties: objectReg.nameConstIdx = hint
-					debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
-					c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
-				}
+			// OpSetProp now properly handles accessor properties via OpDefineAccessor
+			if memberInfo.isComputed {
+				// Use OpSetIndex for computed properties: objectReg[keyReg] = hint
+				debugPrintf("// DEBUG Assign Store Member: Emitting SetIndex R%d[R%d] = R%d\n", memberInfo.objectReg, memberInfo.keyReg, hint)
+				c.emitOpCode(vm.OpSetIndex, line)
+				c.emitByte(byte(memberInfo.objectReg)) // Object register
+				c.emitByte(byte(memberInfo.keyReg))    // Key register (computed at runtime)
+				c.emitByte(byte(hint))                 // Value register
+			} else if memberInfo.isPrivateField {
+				// Use OpSetPrivateField for private fields: objectReg.#field = hint
+				debugPrintf("// DEBUG Assign Store Private Field: Emitting SetPrivateField R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
+				c.emitSetPrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+			} else {
+				// Use OpSetProp for static properties: objectReg.nameConstIdx = hint
+				// OpSetProp will invoke setters if the property is an accessor
+				debugPrintf("// DEBUG Assign Store Member: Emitting SetProp R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
+				c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
 			}
 		}
 	} else {

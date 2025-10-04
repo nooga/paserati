@@ -1958,9 +1958,27 @@ func (c *Checker) visit(node parser.Node) {
 				// delete operator returns boolean indicating success
 				resultType = types.Boolean
 				// The operand must be a property access expression
-				switch node.Right.(type) {
-				case *parser.MemberExpression, *parser.IndexExpression:
-					// Valid delete target
+				switch rightNode := node.Right.(type) {
+				case *parser.MemberExpression:
+					// Check if the property is readonly
+					if objType := rightNode.Object.GetComputedType(); objType != nil {
+						if objTypeResolved, ok := objType.(*types.ObjectType); ok {
+							propName := ""
+							if ident, ok := rightNode.Property.(*parser.Identifier); ok {
+								propName = ident.Value
+							}
+							if propName != "" {
+								if _, exists := objTypeResolved.Properties[propName]; exists {
+									// Check if property is readonly (for built-in types like Math)
+									if objTypeResolved.IsReadOnly(propName) {
+										c.addError(node, "The operand of a 'delete' operator cannot be a read-only property.")
+									}
+								}
+							}
+						}
+					}
+				case *parser.IndexExpression:
+					// Valid delete target (bracket notation)
 				case *parser.Identifier:
 					// In TypeScript, deleting a variable is not allowed
 					c.addError(node, "delete cannot be applied to variables")
@@ -2073,8 +2091,23 @@ func (c *Checker) visit(node parser.Node) {
 					(c.isStringConcatenatable(leftType) && widenedRightType == types.String) {
 					// TypeScript allows string concatenation with most types (including unions)
 					resultType = types.String
+				} else if (widenedLeftType == types.Boolean || widenedLeftType == types.Null || widenedLeftType == types.Undefined) &&
+					(widenedRightType == types.Boolean || widenedRightType == types.Null || widenedRightType == types.Undefined || widenedRightType == types.Number) {
+					// JavaScript allows boolean/null/undefined in addition, they're coerced to numbers
+					// true → 1, false → 0, null → 0, undefined → NaN
+					resultType = types.Number
+				} else if (widenedRightType == types.Boolean || widenedRightType == types.Null || widenedRightType == types.Undefined) &&
+					(widenedLeftType == types.Number) {
+					// Number + boolean/null/undefined → number
+					resultType = types.Number
+				} else if c.isObjectType(widenedLeftType) || c.isObjectType(widenedRightType) {
+					// JavaScript allows objects in addition via ToPrimitive conversion
+					// Object + anything or anything + Object → depends on ToPrimitive result
+					// If ToPrimitive returns string, result is string; otherwise number
+					// Conservative: assume string since that's most common for objects
+					resultType = types.String
 				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.addError(node.Right, fmt.Sprintf("operator '+' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
 			case "-", "*", "/":
@@ -2117,6 +2150,14 @@ func (c *Checker) visit(node parser.Node) {
 					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
+				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
+					(widenedLeftType == types.Number && widenedRightType == types.String) {
+					// JavaScript allows string-number arithmetic, resulting in NaN
+					resultType = types.Number
+				} else if (widenedLeftType == types.String && widenedRightType == types.BigInt) ||
+					(widenedLeftType == types.BigInt && widenedRightType == types.String) {
+					// JavaScript allows string-BigInt arithmetic, resulting in NaN
+					resultType = types.BigInt
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
@@ -2179,10 +2220,43 @@ func (c *Checker) visit(node parser.Node) {
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
 					// Both operands are numbers, result is number.
 					resultType = types.Number
-				} else {
-					// Operands are not numbers (and not 'any'). This is a type error.
-					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
+					// Both operands are BigInt, result is BigInt.
+					resultType = types.BigInt
+				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
+					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
+					// Mixing BigInt and Number is not allowed for bitwise/shift operations
+					c.addError(node, fmt.Sprintf("operator '%s' cannot mix BigInt and Number types", node.Operator))
 					// Keep resultType = types.Any (default)
+				} else {
+					// Check if either operand is an object type (can be converted via valueOf/toString)
+					leftIsObject := false
+					rightIsObject := false
+
+					switch widenedLeftType.(type) {
+					case *types.ObjectType:
+						leftIsObject = true
+					}
+
+					switch widenedRightType.(type) {
+					case *types.ObjectType:
+						rightIsObject = true
+					}
+
+					if leftIsObject && rightIsObject {
+						// Both operands are objects (can be converted via valueOf/toString)
+						resultType = types.Number
+					} else if leftIsObject && widenedRightType == types.Number {
+						// Left operand is object, right is number
+						resultType = types.Number
+					} else if widenedLeftType == types.Number && rightIsObject {
+						// Left operand is number, right is object
+						resultType = types.Number
+					} else {
+						// Operands are not compatible types for bitwise/shift operations.
+						c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+						// Keep resultType = types.Any (default)
+					}
 				}
 			// --- END NEW ---
 
@@ -2191,6 +2265,8 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Any // Comparison with any results in any? Or boolean? Let's try Any first.
 					// Alternatively: resultType = types.Boolean (safer, result is always boolean)
 				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
+					resultType = types.Boolean
+				} else if widenedLeftType == types.String && widenedRightType == types.String {
 					resultType = types.Boolean
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))

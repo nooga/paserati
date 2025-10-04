@@ -30,6 +30,44 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 
 	// Other function properties (if any) - not available on bound functions
 	if fn != nil && fn.Properties != nil {
+		// Check for accessor properties first (getters/setters)
+		if getter, _, _, _, exists := fn.Properties.GetOwnAccessor(propName); exists {
+			if getter.Type() != TypeUndefined {
+				// Call the getter with the function object as 'this'
+				res, err := vm.Call(getter, objVal, nil)
+				if err != nil {
+					// If the getter throws, we need to propagate the exception
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+					} else {
+						// Wrap non-exception error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+					}
+					// Return undefined; the exception is already set
+					return Undefined, false
+				}
+				return res, true
+			}
+			// Getter is undefined - return undefined
+			return Undefined, true
+		}
+		// Check for regular data properties
 		if prop, exists := fn.Properties.GetOwn(propName); exists {
 			return prop, true
 		}
@@ -50,6 +88,80 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			return NewString(objVal.AsNativeFunctionWithProps().Name), true
 		case TypeBoundFunction:
 			return NewString(objVal.AsBoundFunction().Name), true
+		}
+	}
+
+	// Expose intrinsic function properties like .length
+	// Length is the number of parameters (excluding rest parameters)
+	if propName == "length" {
+		switch objVal.Type() {
+		case TypeFunction:
+			return NumberValue(float64(objVal.AsFunction().Arity)), true
+		case TypeClosure:
+			return NumberValue(float64(objVal.AsClosure().Fn.Arity)), true
+		case TypeNativeFunction:
+			nf := objVal.AsNativeFunction()
+			if nf.Variadic {
+				return NumberValue(0), true // Variadic functions report length 0
+			}
+			return NumberValue(float64(nf.Arity)), true
+		case TypeAsyncNativeFunction:
+			anf := objVal.AsAsyncNativeFunction()
+			if anf.Variadic {
+				return NumberValue(0), true
+			}
+			return NumberValue(float64(anf.Arity)), true
+		case TypeNativeFunctionWithProps:
+			nfp := objVal.AsNativeFunctionWithProps()
+			if nfp.Variadic {
+				return NumberValue(0), true
+			}
+			return NumberValue(float64(nfp.Arity)), true
+		case TypeBoundFunction:
+			// Bound functions have reduced arity by the number of bound arguments
+			bf := objVal.AsBoundFunction()
+			// Get the original function's arity
+			var originalArity int
+			switch bf.OriginalFunction.Type() {
+			case TypeFunction:
+				originalArity = bf.OriginalFunction.AsFunction().Arity
+			case TypeClosure:
+				originalArity = bf.OriginalFunction.AsClosure().Fn.Arity
+			case TypeNativeFunction:
+				nf := bf.OriginalFunction.AsNativeFunction()
+				if nf.Variadic {
+					originalArity = 0
+				} else {
+					originalArity = nf.Arity
+				}
+			case TypeNativeFunctionWithProps:
+				nfp := bf.OriginalFunction.AsNativeFunctionWithProps()
+				if nfp.Variadic {
+					originalArity = 0
+				} else {
+					originalArity = nfp.Arity
+				}
+			case TypeAsyncNativeFunction:
+				anf := bf.OriginalFunction.AsAsyncNativeFunction()
+				if anf.Variadic {
+					originalArity = 0
+				} else {
+					originalArity = anf.Arity
+				}
+			case TypeBoundFunction:
+				// Recursively get the bound function's length
+				if length, ok := vm.handleCallableProperty(bf.OriginalFunction, "length"); ok {
+					if length.IsNumber() {
+						originalArity = int(length.ToFloat())
+					}
+				}
+			}
+			// Subtract the number of partial arguments
+			boundLength := originalArity - len(bf.PartialArgs)
+			if boundLength < 0 {
+				boundLength = 0
+			}
+			return NumberValue(float64(boundLength)), true
 		}
 	}
 
@@ -82,6 +194,11 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 
 // handlePrimitiveMethod handles prototype method lookup for primitive types
 func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool) {
+	// Handle undefined/null objects
+	if objVal.Type() == TypeUndefined || objVal.Type() == TypeNull {
+		return Undefined, false
+	}
+
 	var prototype *PlainObject
 
 	switch objVal.Type() {
@@ -221,6 +338,11 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 
 // handleSpecialProperties handles special properties like .length
 func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, bool) {
+	// Handle undefined/null objects
+	if objVal.Type() == TypeUndefined || objVal.Type() == TypeNull {
+		return Undefined, false
+	}
+
 	if propName == "length" {
 		switch objVal.Type() {
 		case TypeArray:

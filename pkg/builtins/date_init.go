@@ -762,6 +762,13 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create Date constructor
 	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Date", func(args []vm.Value) (vm.Value, error) {
+		// When called as a function (not constructor), return current date/time string
+		if !vmInstance.IsConstructorCall() {
+			t := time.Now()
+			return vm.NewString(t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")), nil
+		}
+
+		// When called as constructor with 'new', create Date object
 		var timestamp float64
 
 		if len(args) == 0 {

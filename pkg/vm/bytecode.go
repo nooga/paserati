@@ -45,9 +45,10 @@ const (
 	OpGreater        OpCode = 16 // Rx Ry Rz: Rx = (Ry > Rz)
 	OpLess           OpCode = 17 // Rx Ry Rz: Rx = (Ry < Rz)
 	OpLessEqual      OpCode = 18 // Rx Ry Rz: Rx = (Ry <= Rz)
+	OpGreaterEqual   OpCode = 89 // Rx Ry Rz: Rx = (Ry >= Rz)
+	OpDefineMethod   OpCode = 90 // ObjReg ValueReg NameIdx(16bit): Define non-enumerable method on object
 	OpIn             OpCode = 59 // Rx Ry Rz: Rx = (Ry in Rz) - property existence check
 	OpInstanceof     OpCode = 61 // Rx Ry Rz: Rx = (Ry instanceof Rz) - instance check
-	// Add GreaterEqual later if needed
 
 	// --- NEW: Remainder and Exponent Opcodes ---
 	OpRemainder OpCode = 31 // Rx Ry Rz: Rx = Ry % Rz (Assuming next available number)
@@ -57,6 +58,7 @@ const (
 	OpCall   OpCode = 19 // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
 	OpReturn OpCode = 20 // Rx: Return value from register Rx.
 	OpNew    OpCode = 45 // Rx ConstructorReg ArgCount: Create new instance using ConstructorReg with ArgCount args, result in Rx
+	OpSpreadNew OpCode = 83 // Rx ConstructorReg SpreadArgReg: Create new instance using ConstructorReg with spread array as args, result in Rx
 
 	// Closure related
 	OpClosure         OpCode = 21 // Rx FuncConstIdx UpvalueCount [IsLocal1 Index1 IsLocal2 Index2 ...]: Create closure for function Const[FuncConstIdx] with UpvalueCount upvalues, store in Rx.
@@ -94,10 +96,19 @@ const (
 	OpSetProp         OpCode = 42 // Rx Ry NameIdx(16bit): Rx[NameIdx] = Ry (Object in Rx, Value in Ry)
 	OpDeleteProp      OpCode = 62 // Rx Ry NameIdx(16bit): Rx = delete Ry[NameIdx] (returns boolean)
 	OpDeleteIndex     OpCode = 79 // Rx Ry Rz: Rx = delete Ry[Rz] (returns boolean)
+	OpDeleteGlobal    OpCode = 86 // Rx HeapIdx(16bit): Rx = delete global[HeapIdx] (returns boolean)
+	OpToPropertyKey   OpCode = 87 // Rx Ry: Rx = ToPropertyKey(Ry) - converts value to property key (string), calling toString() if needed
+	OpTypeofIdentifier OpCode = 88 // Rx NameIdx(16bit): Rx = typeof identifier - returns "undefined" if identifier doesn't exist (no ReferenceError)
+
+	// --- Private Field Operations (ECMAScript # fields) ---
+	OpGetPrivateField OpCode = 91 // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
+	OpSetPrivateField OpCode = 92 // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
 
 	// --- NEW: Method Calls and This Context ---
 	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
-	OpLoadThis   OpCode = 44 // Rx: Load 'this' value from current call context into register Rx
+	OpLoadThis      OpCode = 44 // Rx: Load 'this' value from current call context into register Rx
+	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
+	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Operations ---
@@ -168,6 +179,13 @@ const (
 	// --- Large Literal Support ---
 	OpAllocArray OpCode = 77 // Rx Len(16bit): Preallocate array of length Len into Rx, filled with undefined
 	OpArrayCopy  OpCode = 78 // Rx DestOffset(16bit) StartReg Count: Copy Count registers starting at StartReg into Rx at DestOffset
+
+	// --- Accessor Property Support ---
+	OpDefineAccessor        OpCode = 80 // ObjReg GetterReg SetterReg NameIdx(16bit): Define accessor property on object
+	OpDefineAccessorDynamic OpCode = 84 // ObjReg GetterReg SetterReg NameReg: Define accessor property with dynamic name
+
+	// --- Prototype Support ---
+	OpSetPrototype OpCode = 85 // ObjReg ProtoReg: Set object's prototype to ProtoReg value (for __proto__ in object literals)
 )
 
 // String returns a human-readable name for the OpCode.
@@ -233,6 +251,10 @@ func (op OpCode) String() string {
 		return "OpJump"
 	case OpLessEqual:
 		return "OpLessEqual"
+	case OpGreaterEqual:
+		return "OpGreaterEqual"
+	case OpDefineMethod:
+		return "OpDefineMethod"
 	case OpIn:
 		return "OpIn"
 	case OpRemainder:
@@ -273,12 +295,28 @@ func (op OpCode) String() string {
 		return "OpDeleteProp"
 	case OpDeleteIndex:
 		return "OpDeleteIndex"
+	case OpDeleteGlobal:
+		return "OpDeleteGlobal"
+	case OpToPropertyKey:
+		return "OpToPropertyKey"
+	case OpTypeofIdentifier:
+		return "OpTypeofIdentifier"
+	case OpGetPrivateField:
+		return "OpGetPrivateField"
+	case OpSetPrivateField:
+		return "OpSetPrivateField"
 	case OpCallMethod:
 		return "OpCallMethod"
 	case OpLoadThis:
 		return "OpLoadThis"
+	case OpSetThis:
+		return "OpSetThis"
+	case OpLoadNewTarget:
+		return "OpLoadNewTarget"
 	case OpNew:
 		return "OpNew"
+	case OpSpreadNew:
+		return "OpSpreadNew"
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Op Cases ---
@@ -357,6 +395,12 @@ func (op OpCode) String() string {
 		return "OpAllocArray"
 	case OpArrayCopy:
 		return "OpArrayCopy"
+	case OpDefineAccessor:
+		return "OpDefineAccessor"
+	case OpDefineAccessorDynamic:
+		return "OpDefineAccessorDynamic"
+	case OpSetPrototype:
+		return "OpSetPrototype"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -494,7 +538,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
-	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpStringConcat, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual,
+	case OpAdd, OpSubtract, OpMultiply, OpDivide, OpStringConcat, OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual, OpGreater, OpLess, OpLessEqual, OpGreaterEqual,
 		OpRemainder, OpExponent,
 		OpIn, OpInstanceof,
 		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
@@ -544,6 +588,16 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpDeleteProp:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpDeleteGlobal:
+		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
+	case OpToPropertyKey:
+		return c.simpleInstruction(builder, instruction.String(), offset)
+	case OpTypeofIdentifier:
+		return c.registerConstantInstruction(builder, instruction.String(), offset, false)
+	case OpGetPrivateField:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpSetPrivateField:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpCallMethod:
 		return c.callMethodInstruction(builder, instruction.String(), offset)
 	case OpSpreadCall:
@@ -552,8 +606,14 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.spreadCallMethodInstruction(builder, instruction.String(), offset)
 	case OpLoadThis:
 		return c.loadThisInstruction(builder, instruction.String(), offset)
+	case OpSetThis:
+		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis: one register operand
+	case OpLoadNewTarget:
+		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
+	case OpSpreadNew:
+		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Same format as OpSpreadCall: Rx FuncReg SpreadArgReg
 	case OpGetOwnKeys:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset)
 	// --- END NEW ---
@@ -611,6 +671,49 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		lenVal := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
 		builder.WriteString(fmt.Sprintf("%-16s R%d, Len %d\n", "OpAllocArray", destReg, lenVal))
 		return offset + 4
+	case OpDefineAccessor:
+		// ObjReg, GetterReg, SetterReg, NameIdx(16bit)
+		if offset+5 >= len(c.Code) {
+			builder.WriteString("OpDefineAccessor (missing operands)\n")
+			return offset + 1
+		}
+		objReg := c.Code[offset+1]
+		getterReg := c.Code[offset+2]
+		setterReg := c.Code[offset+3]
+		nameIdx := uint16(c.Code[offset+4])<<8 | uint16(c.Code[offset+5])
+		name := "[unknown]"
+		if int(nameIdx) < len(c.Constants) && c.Constants[nameIdx].Type() == TypeString {
+			name = c.Constants[nameIdx].ToString()
+		}
+		builder.WriteString(fmt.Sprintf("%-20s R%d R%d R%d %d (%s)\n",
+			"OpDefineAccessor", objReg, getterReg, setterReg, nameIdx, name))
+		return offset + 6
+
+	case OpDefineAccessorDynamic:
+		// ObjReg, GetterReg, SetterReg, NameReg
+		if offset+4 >= len(c.Code) {
+			builder.WriteString("OpDefineAccessorDynamic (missing operands)\n")
+			return offset + 1
+		}
+		objReg := c.Code[offset+1]
+		getterReg := c.Code[offset+2]
+		setterReg := c.Code[offset+3]
+		nameReg := c.Code[offset+4]
+		builder.WriteString(fmt.Sprintf("%-20s R%d R%d R%d R%d\n",
+			"OpDefineAccessorDynamic", objReg, getterReg, setterReg, nameReg))
+		return offset + 5
+
+	case OpSetPrototype:
+		// ObjReg, ProtoReg
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpSetPrototype (missing operands)\n")
+			return offset + 1
+		}
+		objReg := c.Code[offset+1]
+		protoReg := c.Code[offset+2]
+		builder.WriteString(fmt.Sprintf("%-20s R%d R%d\n", "OpSetPrototype", objReg, protoReg))
+		return offset + 3
+
 	case OpArrayCopy:
 		// Rx, DestOffset(16), StartReg, Count
 		if offset+5 >= len(c.Code) {

@@ -173,23 +173,23 @@ func (cm *ClassMetadata) IsAccessibleFrom(memberName string, accessContext *Acce
 	if memberInfo == nil {
 		return false // Member doesn't exist
 	}
-	
+
 	switch memberInfo.AccessLevel {
 	case AccessPublic:
 		return true // Always accessible
-		
+
 	case AccessPrivate:
 		// Only accessible within the same class
-		return accessContext != nil && 
+		return accessContext != nil &&
 			   accessContext.CurrentClassName == cm.SourceClassName
-			   
+
 	case AccessProtected:
 		// Accessible within the same class or subclasses
-		return accessContext != nil && 
+		return accessContext != nil &&
 			   (accessContext.CurrentClassName == cm.SourceClassName ||
 			    accessContext.IsSubclassOf(cm.SourceClassName))
 	}
-	
+
 	return false
 }
 

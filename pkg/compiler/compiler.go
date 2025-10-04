@@ -101,6 +101,9 @@ type Compiler struct {
 
 	// --- Type Error Handling ---
 	ignoreTypeErrors bool // When true, compilation continues despite type errors
+
+	// --- NEW: Class Context for super() support ---
+	compilingSuperClassName string // Name of parent class when compiling derived class constructor
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -221,19 +224,20 @@ func (c *Compiler) GetModuleExports() map[string]vm.Value {
 func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	// Pass the checker and module bindings down to nested compilers
 	return &Compiler{
-		chunk:              vm.NewChunk(),
-		regAlloc:           NewRegisterAllocator(),
-		currentSymbolTable: NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
-		enclosing:          enclosingCompiler,
-		freeSymbols:        []*Symbol{},
-		errors:             []errors.PaseratiError{},
-		loopContextStack:   make([]*LoopContext, 0),
-		compilingFuncName:  "",
-		typeChecker:        enclosingCompiler.typeChecker, // Inherit checker from enclosing
-		stats:              enclosingCompiler.stats,
-		constantCache:      make(map[uint16]Register),        // Each function has its own constant cache
-		moduleBindings:     enclosingCompiler.moduleBindings, // Inherit module bindings
-		moduleLoader:       enclosingCompiler.moduleLoader,   // Inherit module loader
+		chunk:                   vm.NewChunk(),
+		regAlloc:                NewRegisterAllocator(),
+		currentSymbolTable:      NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
+		enclosing:               enclosingCompiler,
+		freeSymbols:             []*Symbol{},
+		errors:                  []errors.PaseratiError{},
+		loopContextStack:        make([]*LoopContext, 0),
+		compilingFuncName:       "",
+		typeChecker:             enclosingCompiler.typeChecker, // Inherit checker from enclosing
+		stats:                   enclosingCompiler.stats,
+		constantCache:           make(map[uint16]Register),        // Each function has its own constant cache
+		moduleBindings:          enclosingCompiler.moduleBindings, // Inherit module bindings
+		moduleLoader:            enclosingCompiler.moduleLoader,   // Inherit module loader
+		compilingSuperClassName: enclosingCompiler.compilingSuperClassName, // Inherit super class context
 	}
 }
 
@@ -818,9 +822,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil
 
 	case *parser.NewTargetExpression:
-		// Load new.target value - for now, just load undefined
-		// TODO: Implement proper new.target support by tracking constructor context
-		c.emitLoadUndefined(hint, node.Token.Line)
+		// Load new.target value from constructor context
+		c.emitLoadNewTarget(hint, node.Token.Line)
 		return hint, nil
 
 	case *parser.ImportMetaExpression:
@@ -1180,7 +1183,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 			arity++
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false)
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false) // isArrowFunction = false
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil
@@ -1380,10 +1383,15 @@ func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInf
 
 	case lvalueMemberExpr:
 		info := memberInfo.(struct {
-			objectReg    Register
-			nameConstIdx uint16
+			objectReg      Register
+			nameConstIdx   uint16
+			isPrivateField bool
 		})
-		c.emitSetProp(info.objectReg, valueReg, info.nameConstIdx, line)
+		if info.isPrivateField {
+			c.emitSetPrivateField(info.objectReg, valueReg, info.nameConstIdx, line)
+		} else {
+			c.emitSetProp(info.objectReg, valueReg, info.nameConstIdx, line)
+		}
 
 	case lvalueIndexExpr:
 		info := indexInfo.(struct {
@@ -2455,7 +2463,9 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 	debugPrintf("// DEBUG compileClassExpression: Starting compilation for class '%s'\n", node.Name.Value)
 
 	// 1. Create constructor function
-	constructorReg, err := c.compileConstructor(node)
+	// For class expressions, we don't pre-load the super constructor like we do for declarations
+	// because the expression might be in a different scope
+	constructorReg, err := c.compileConstructor(node, BadRegister)
 	if err != nil {
 		return BadRegister, err
 	}

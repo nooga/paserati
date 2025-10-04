@@ -20,15 +20,15 @@ func (m *MathInitializer) Priority() int {
 func (m *MathInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Math namespace type with all constants and methods
 	mathType := types.NewObjectType().
-		// Constants
-		WithProperty("E", types.Number).
-		WithProperty("LN10", types.Number).
-		WithProperty("LN2", types.Number).
-		WithProperty("LOG10E", types.Number).
-		WithProperty("LOG2E", types.Number).
-		WithProperty("PI", types.Number).
-		WithProperty("SQRT1_2", types.Number).
-		WithProperty("SQRT2", types.Number).
+		// Constants (readonly)
+		WithReadOnlyProperty("E", types.Number).
+		WithReadOnlyProperty("LN10", types.Number).
+		WithReadOnlyProperty("LN2", types.Number).
+		WithReadOnlyProperty("LOG10E", types.Number).
+		WithReadOnlyProperty("LOG2E", types.Number).
+		WithReadOnlyProperty("PI", types.Number).
+		WithReadOnlyProperty("SQRT1_2", types.Number).
+		WithReadOnlyProperty("SQRT2", types.Number).
 		// Methods
 		WithProperty("abs", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
 		WithProperty("acos", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
@@ -74,15 +74,17 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Math object
 	mathObj := vm.NewObject(vm.Null).AsPlainObject()
 
-	// Add constants
-	mathObj.SetOwn("E", vm.NumberValue(math.E))
-	mathObj.SetOwn("LN10", vm.NumberValue(math.Ln10))
-	mathObj.SetOwn("LN2", vm.NumberValue(math.Ln2))
-	mathObj.SetOwn("LOG10E", vm.NumberValue(math.Log10E))
-	mathObj.SetOwn("LOG2E", vm.NumberValue(math.Log2E))
-	mathObj.SetOwn("PI", vm.NumberValue(math.Pi))
-	mathObj.SetOwn("SQRT1_2", vm.NumberValue(math.Sqrt2/2))
-	mathObj.SetOwn("SQRT2", vm.NumberValue(math.Sqrt2))
+	// Add constants (non-configurable, non-writable per ECMAScript spec)
+	f := false
+	t := true
+	mathObj.DefineOwnProperty("E", vm.NumberValue(math.E), &f, &t, &f)
+	mathObj.DefineOwnProperty("LN10", vm.NumberValue(math.Ln10), &f, &t, &f)
+	mathObj.DefineOwnProperty("LN2", vm.NumberValue(math.Ln2), &f, &t, &f)
+	mathObj.DefineOwnProperty("LOG10E", vm.NumberValue(math.Log10E), &f, &t, &f)
+	mathObj.DefineOwnProperty("LOG2E", vm.NumberValue(math.Log2E), &f, &t, &f)
+	mathObj.DefineOwnProperty("PI", vm.NumberValue(math.Pi), &f, &t, &f)
+	mathObj.DefineOwnProperty("SQRT1_2", vm.NumberValue(math.Sqrt2/2), &f, &t, &f)
+	mathObj.DefineOwnProperty("SQRT2", vm.NumberValue(math.Sqrt2), &f, &t, &f)
 
 	// Add methods
 	mathObj.SetOwn("abs", vm.NewNativeFunction(1, false, "abs", func(args []vm.Value) (vm.Value, error) {

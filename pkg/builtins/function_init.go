@@ -20,9 +20,11 @@ func (f *FunctionInitializer) Priority() int {
 func (f *FunctionInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Function.prototype type using fluent API
 	functionProtoType := types.NewObjectType().
+		WithProperty("length", types.Number). // Number of parameters (excluding rest and defaults after first optional)
 		WithProperty("call", types.NewVariadicFunction([]types.Type{}, types.Any, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("apply", types.NewSimpleFunction([]types.Type{types.Any, &types.ArrayType{ElementType: types.Any}}, types.Any)).
-		WithProperty("bind", types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any}))
+		WithProperty("bind", types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any})).
+		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Create Function constructor type using fluent API
 	functionCtorType := types.NewObjectType().
@@ -67,6 +69,12 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return functionPrototypeBindImpl(vmInstance, args)
 	}
 	functionProto.SetOwn("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
+
+	// Function.prototype.toString
+	toStringImpl := func(args []vm.Value) (vm.Value, error) {
+		return functionPrototypeToStringImpl(vmInstance, args)
+	}
+	functionProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
 
 	// Create Function constructor
 	functionCtor := vm.NewNativeFunction(-1, true, "Function", func(args []vm.Value) (vm.Value, error) {
@@ -202,4 +210,57 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 	// Create a bound function using the new BoundFunction type
 	result := vm.NewBoundFunction(originalFunc, boundThis, partialArgs, functionName)
 	return result, nil
+}
+
+func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	// Get 'this' function from VM context
+	thisFunction := vmInstance.GetThis()
+
+	if !thisFunction.IsCallable() {
+		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
+	}
+
+	// Return a string representation of the function
+	var name string
+	switch thisFunction.Type() {
+	case vm.TypeNativeFunction:
+		nf := thisFunction.AsNativeFunction()
+		name = nf.Name
+		if name == "" {
+			name = "anonymous"
+		}
+		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
+	case vm.TypeNativeFunctionWithProps:
+		nfp := thisFunction.AsNativeFunctionWithProps()
+		name = nfp.Name
+		if name == "" {
+			name = "anonymous"
+		}
+		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
+	case vm.TypeFunction:
+		fn := thisFunction.AsFunction()
+		name = fn.Name
+		if name == "" {
+			name = "anonymous"
+		}
+		return vm.NewString(fmt.Sprintf("function %s() { [bytecode] }", name)), nil
+	case vm.TypeClosure:
+		cl := thisFunction.AsClosure()
+		if cl.Fn != nil {
+			name = cl.Fn.Name
+		}
+		if name == "" {
+			name = "anonymous"
+		}
+		return vm.NewString(fmt.Sprintf("function %s() { [bytecode] }", name)), nil
+	case vm.TypeBoundFunction:
+		bf := thisFunction.AsBoundFunction()
+		name = bf.Name
+		if name == "" {
+			name = "bound anonymous"
+		}
+		return vm.NewString(fmt.Sprintf("function %s() { [bound] }", name)), nil
+	default:
+		return vm.NewString("function() { [unknown] }"), nil
+	}
 }

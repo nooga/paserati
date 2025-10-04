@@ -57,11 +57,11 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("unscopables", types.Symbol).
 		WithProperty("asyncIterator", types.Symbol).
 		// Symbol constructor signature - returns symbol
-		WithSimpleCallSignature([]types.Type{}, types.Symbol).  // Symbol()
+		WithSimpleCallSignature([]types.Type{}, types.Symbol). // Symbol()
 		WithSimpleCallSignature(
 			[]types.Type{types.NewUnionType(types.String, types.Number, types.Undefined)},
 			types.Symbol,
-		)  // Symbol(description)
+		) // Symbol(description)
 
 	// Register Symbol constructor
 	ctx.DefineGlobal("Symbol", symbolCtorType)
@@ -81,6 +81,9 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
+	// Debug print to see if this is being called
+	//fmt.Printf("[DEBUG] SymbolInitializer.InitRuntime called\n")
+
 	// Use the VM's Symbol.prototype
 	symbolProto := vmInstance.SymbolPrototype.AsPlainObject()
 
@@ -88,13 +91,13 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	symbolProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' value
 		thisVal := vmInstance.GetThis()
-		
+
 		// Check if it's a symbol
 		if !thisVal.IsSymbol() {
 			// Should throw TypeError
 			return vm.NewString("Symbol()"), nil
 		}
-		
+
 		desc := thisVal.AsSymbol()
 		if desc == "" {
 			return vm.NewString("Symbol()"), nil
@@ -106,13 +109,13 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	symbolProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' value
 		thisVal := vmInstance.GetThis()
-		
+
 		// Check if it's a symbol
 		if !thisVal.IsSymbol() {
 			// Should throw TypeError
 			return vm.Undefined, nil
 		}
-		
+
 		return thisVal, nil
 	}))
 
@@ -208,6 +211,11 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("asyncIterator", SymbolAsyncIterator)
 
 	symbolCtor := ctorWithProps
+
+	// Store well-known symbols on VM for fast access
+	vmInstance.SymbolIterator = SymbolIterator
+	vmInstance.SymbolToPrimitive = SymbolToPrimitive
+	vmInstance.SymbolToStringTag = SymbolToStringTag
 
 	// Register Symbol constructor as global
 	return ctx.DefineGlobal("Symbol", symbolCtor)

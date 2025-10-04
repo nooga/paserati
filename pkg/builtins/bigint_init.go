@@ -54,9 +54,21 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Add BigInt prototype methods
 	bigintProto.SetOwn("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisBigInt := vmInstance.GetThis()
-		
-		// Check if this is a BigInt
-		if thisBigInt.Type() != vm.TypeBigInt {
+
+		// Get the primitive BigInt value
+		var primitiveBigInt vm.Value
+		if thisBigInt.Type() == vm.TypeBigInt {
+			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
+			if po := thisBigInt.AsPlainObject(); po != nil {
+				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
+					primitiveBigInt = dataVal
+				} else {
+					primitiveBigInt = thisBigInt
+				}
+			} else {
+				primitiveBigInt = thisBigInt
+			}
+		} else {
 			// For non-BigInts, try to convert or throw error
 			return vm.NewString(thisBigInt.ToString()), nil
 		}
@@ -70,7 +82,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		bigIntVal := thisBigInt.AsBigInt()
+		bigIntVal := primitiveBigInt.AsBigInt()
 		if radix == 10 {
 			return vm.NewString(bigIntVal.String()), nil
 		}
@@ -81,25 +93,44 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	bigintProto.SetOwn("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		thisBigInt := vmInstance.GetThis()
-		
-		// Check if this is a BigInt
-		if thisBigInt.Type() != vm.TypeBigInt {
+
+		// Get the primitive BigInt value
+		var primitiveBigInt vm.Value
+		if thisBigInt.Type() == vm.TypeBigInt {
+			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
+			if po := thisBigInt.AsPlainObject(); po != nil {
+				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
+					primitiveBigInt = dataVal
+				} else {
+					primitiveBigInt = thisBigInt
+				}
+			} else {
+				primitiveBigInt = thisBigInt
+			}
+		} else {
+			// For non-BigInts, try to convert or throw error
 			return vm.NewString(thisBigInt.ToString()), nil
 		}
 
 		// For now, just return the string representation (proper locale support would be complex)
 		// TODO: Implement proper locale formatting
-		return vm.NewString(thisBigInt.AsBigInt().String()), nil
+		return vm.NewString(primitiveBigInt.AsBigInt().String()), nil
 	}))
 
 	bigintProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisBigInt := vmInstance.GetThis()
-		
+
 		// Return the primitive BigInt value
 		if thisBigInt.Type() == vm.TypeBigInt {
+			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
+			if po := thisBigInt.AsPlainObject(); po != nil {
+				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
+					return dataVal, nil
+				}
+			}
 			return thisBigInt, nil
 		}
-		
+
 		// Cannot convert other types to BigInt
 		// In real JS this would throw TypeError
 		return vm.Undefined, fmt.Errorf("TypeError: Cannot convert to BigInt")
@@ -114,18 +145,31 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// BigInt() without arguments should throw TypeError
 			return vm.Undefined, fmt.Errorf("TypeError: BigInt constructor requires an argument")
 		}
-		
+
 		arg := args[0]
-		switch arg.Type() {
-		case vm.TypeBigInt:
+
+		// If argument is already a BigInt, return it (handles both primitive and object wrapper cases)
+		if arg.Type() == vm.TypeBigInt {
+			// Check if it's already an object wrapper
+			if po := arg.AsPlainObject(); po != nil {
+				if _, exists := po.GetOwn("[[BigIntData]]"); exists {
+					// Already an object wrapper, return as-is
+					return arg, nil
+				}
+			}
+			// It's a primitive BigInt, return as-is
 			return arg, nil
+		}
+
+		// Convert argument to primitive BigInt
+		switch arg.Type() {
 		case vm.TypeString:
 			str := strings.TrimSpace(arg.ToString())
 			if str == "" {
 				// Empty string should throw SyntaxError
 				return vm.Undefined, fmt.Errorf("SyntaxError: Cannot convert empty string to BigInt")
 			}
-			
+
 			// Try to parse as BigInt
 			bigVal := new(big.Int)
 			if _, ok := bigVal.SetString(str, 0); !ok {
@@ -162,22 +206,22 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 2 {
 			return vm.Undefined, fmt.Errorf("TypeError: BigInt.asIntN requires 2 arguments")
 		}
-		
+
 		bits := int(args[0].ToFloat())
 		bigintVal := args[1]
-		
+
 		if bigintVal.Type() != vm.TypeBigInt {
 			return vm.Undefined, fmt.Errorf("TypeError: Second argument must be a BigInt")
 		}
-		
+
 		if bits < 0 || bits > 64 {
 			return vm.Undefined, fmt.Errorf("RangeError: Invalid bit width")
 		}
-		
+
 		// Truncate to N bits with sign extension
 		val := bigintVal.AsBigInt()
 		result := new(big.Int).Set(val)
-		
+
 		// For now, just return the original value (proper implementation would require bit manipulation)
 		// TODO: Implement proper N-bit signed integer truncation
 		return vm.NewBigInt(result), nil
@@ -187,22 +231,22 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 2 {
 			return vm.Undefined, fmt.Errorf("TypeError: BigInt.asUintN requires 2 arguments")
 		}
-		
+
 		bits := int(args[0].ToFloat())
 		bigintVal := args[1]
-		
+
 		if bigintVal.Type() != vm.TypeBigInt {
 			return vm.Undefined, fmt.Errorf("TypeError: Second argument must be a BigInt")
 		}
-		
+
 		if bits < 0 || bits > 64 {
 			return vm.Undefined, fmt.Errorf("RangeError: Invalid bit width")
 		}
-		
+
 		// Truncate to N bits without sign extension
 		val := bigintVal.AsBigInt()
 		result := new(big.Int).Set(val)
-		
+
 		// For now, just return the original value (proper implementation would require bit manipulation)
 		// TODO: Implement proper N-bit unsigned integer truncation
 		return vm.NewBigInt(result), nil

@@ -725,13 +725,18 @@ func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceTyp
 		// Extract parameter types from constructor implementation
 		paramTypes := c.extractParameterTypes(constructor.Value)
 		optionalParams := c.extractOptionalParams(constructor.Value)
+		isVariadic := constructor.Value.RestParameter != nil
+		restParamType := c.extractRestParameterType(constructor.Value)
+
+		debugPrintf("// [Checker Class] createConstructorSignature: RestParameter=%v, IsVariadic=%v, RestParamType=%v\n",
+			constructor.Value.RestParameter != nil, isVariadic, restParamType)
 
 		return &types.Signature{
 			ParameterTypes:    paramTypes,
 			ReturnType:        instanceType,
 			OptionalParams:    optionalParams,
-			IsVariadic:        constructor.Value.RestParameter != nil,
-			RestParameterType: c.extractRestParameterType(constructor.Value),
+			IsVariadic:        isVariadic,
+			RestParameterType: restParamType,
 		}
 	}
 

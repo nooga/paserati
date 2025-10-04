@@ -1,6 +1,113 @@
 package vm
 
+import "fmt"
+
+const debugOpSetProp = false
+
 func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Value) (bool, InterpretResult, Value) {
+
+	// Handle Proxy objects first
+	if objVal.Type() == TypeProxy {
+		proxy := objVal.AsProxy()
+		if proxy.Revoked {
+			// Proxy is revoked, throw TypeError
+			var excVal Value
+			if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+				if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("Cannot set property on a revoked Proxy")}); callErr == nil {
+					excVal = res
+				}
+			}
+			if excVal.Type() == 0 {
+				eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+				eo.SetOwn("name", NewString("TypeError"))
+				eo.SetOwn("message", NewString("Cannot set property on a revoked Proxy"))
+				excVal = NewValueFromPlainObject(eo)
+			}
+			vm.throwException(excVal)
+			return false, InterpretRuntimeError, Undefined
+		}
+
+		// Check if handler has a set trap
+		setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set")
+		if ok && setTrap.IsFunction() {
+			// Call the set trap: handler.set(target, propertyKey, value, receiver)
+			trapArgs := []Value{proxy.target, NewString(propName), *valueToSet, *objVal}
+			result, err := vm.Call(setTrap, proxy.handler, trapArgs)
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+				// Wrap non-exception Go error
+				var excVal Value
+				if errCtor, ok := vm.GetGlobal("Error"); ok {
+					if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+						excVal = res
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+				} else {
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
+				}
+				vm.throwException(excVal)
+				return false, InterpretRuntimeError, Undefined
+			}
+			return true, InterpretOK, result
+		} else {
+			// No set trap, fallback to target - implement directly to avoid recursion
+			target := proxy.target
+			if target.Type() == TypeObject {
+				po := target.AsPlainObject()
+				// Check for accessor first
+				if _, s, _, _, ok := po.GetOwnAccessor(propName); ok {
+					if s.Type() != TypeUndefined {
+						_, err := vm.prepareMethodCall(s, target, []Value{*valueToSet}, 0, vm.frames[vm.frameCount-1].registers, ip)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
+							}
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+							vm.throwException(excVal)
+							return false, InterpretRuntimeError, Undefined
+						}
+						return true, InterpretOK, *valueToSet
+					}
+				}
+				// Data property
+				po.SetOwn(propName, *valueToSet)
+				return true, InterpretOK, *valueToSet
+			} else if target.Type() == TypeDictObject {
+				dict := target.AsDictObject()
+				dict.SetOwn(propName, *valueToSet)
+				return true, InterpretOK, *valueToSet
+			} else {
+				// For other types, just return the value
+				return true, InterpretOK, *valueToSet
+			}
+		}
+	}
 
 	// FIX: Use hash-based cache key to avoid collisions
 	// Combine instruction pointer with property name hash
@@ -109,44 +216,74 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 		// Normal property setting with accessor awareness
 		originalShape := po.shape
-		// If accessor exists, call setter
-		if _, s, _, _, ok := po.GetOwnAccessor(propName); ok {
-			if s.Type() != TypeUndefined {
-				// Call setter with this=objVal and arg=valueToSet
-				_, err := vm.prepareMethodCall(s, *objVal, []Value{*valueToSet}, 0, vm.frames[vm.frameCount-1].registers, ip)
-				if err != nil {
-					// Propagate as VM exception
-					if ee, ok := err.(ExceptionError); ok {
-						vm.throwException(ee.GetExceptionValue())
-						return false, InterpretRuntimeError, Undefined
+		// Check for accessor in prototype chain (not just own properties)
+		if debugOpSetProp {
+			fmt.Printf("[DEBUG opSetProp setter check] propName=%q\n", propName)
+		}
+
+		// Walk prototype chain looking for setter
+		current := po
+		for current != nil {
+			if _, s, _, _, ok := current.GetOwnAccessor(propName); ok {
+				if debugOpSetProp {
+					fmt.Printf("[DEBUG opSetProp] GetOwnAccessor found accessor for %q, setter type=%s\n", propName, s.Type().String())
+				}
+				if s.Type() != TypeUndefined {
+					if debugOpSetProp {
+						fmt.Printf("[DEBUG opSetProp] Invoking setter for %q with value=%v\n", propName, *valueToSet)
 					}
-					// Wrap non-exception Go error into a proper JS Error instance and throw
-					var excVal Value
-					if errCtor, ok := vm.GetGlobal("Error"); ok {
-						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-							excVal = res
+					// Call setter with this=objVal (original object, not prototype)
+					_, err := vm.Call(s, *objVal, []Value{*valueToSet})
+					if err != nil {
+						// Propagate as VM exception
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							return false, InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error into a proper JS Error instance and throw
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
 						} else {
 							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
 							eo.SetOwn("name", NewString("Error"))
 							eo.SetOwn("message", NewString(err.Error()))
 							excVal = NewValueFromPlainObject(eo)
 						}
-					} else {
-						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-						eo.SetOwn("name", NewString("Error"))
-						eo.SetOwn("message", NewString(err.Error()))
-						excVal = NewValueFromPlainObject(eo)
+						vm.throwException(excVal)
+						return false, InterpretRuntimeError, Undefined
 					}
-					vm.throwException(excVal)
-					return false, InterpretRuntimeError, Undefined
+					// If setter handled, return original value per JS semantics (assignment expr yields RHS)
+					if debugOpSetProp {
+						fmt.Printf("[DEBUG opSetProp] Setter invoked successfully\n")
+					}
+					return true, InterpretOK, *valueToSet
 				}
-				// If setter handled, return original value per JS semantics (assignment expr yields RHS)
+				// No setter: ignore in non-strict
+				if debugOpSetProp {
+					fmt.Printf("[DEBUG opSetProp] Setter is undefined, ignoring\n")
+				}
 				return true, InterpretOK, *valueToSet
 			}
-			// No setter: ignore in non-strict
-			return true, InterpretOK, *valueToSet
+
+			// Move up the prototype chain
+			protoVal := current.GetPrototype()
+			if !protoVal.IsObject() {
+				break
+			}
+			current = protoVal.AsPlainObject()
 		}
 		// Data property path
+		if debugOpSetProp {
+			fmt.Printf("[DEBUG opSetProp] No accessor found, using data property path\n")
+		}
 		po.SetOwn(propName, *valueToSet)
 
 		// Update cache if shape didn't change (existing property)
@@ -183,6 +320,106 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 // opSetPropSymbol handles setting a symbol-keyed property on an object with IC support.
 func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *Value) (bool, InterpretResult, Value) {
+	// Handle Proxy objects first
+	if objVal.Type() == TypeProxy {
+		proxy := objVal.AsProxy()
+		if proxy.Revoked {
+			// Proxy is revoked, throw TypeError
+			var excVal Value
+			if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+				if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("Cannot set property on a revoked Proxy")}); callErr == nil {
+					excVal = res
+				}
+			}
+			if excVal.Type() == 0 {
+				eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+				eo.SetOwn("name", NewString("TypeError"))
+				eo.SetOwn("message", NewString("Cannot set property on a revoked Proxy"))
+				excVal = NewValueFromPlainObject(eo)
+			}
+			vm.throwException(excVal)
+			return false, InterpretRuntimeError, Undefined
+		}
+
+		// Check if handler has a set trap
+		setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set")
+		if ok && setTrap.IsFunction() {
+			// Call the set trap: handler.set(target, propertyKey, value, receiver)
+			trapArgs := []Value{proxy.target, symKey, *valueToSet, *objVal}
+			result, err := vm.Call(setTrap, proxy.handler, trapArgs)
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+				// Wrap non-exception Go error
+				var excVal Value
+				if errCtor, ok := vm.GetGlobal("Error"); ok {
+					if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+						excVal = res
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+				} else {
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
+				}
+				vm.throwException(excVal)
+				return false, InterpretRuntimeError, Undefined
+			}
+			return true, InterpretOK, result
+		} else {
+			// No set trap, fallback to target - implement directly to avoid recursion
+			target := proxy.target
+			if target.Type() == TypeObject {
+				po := target.AsPlainObject()
+				key := NewSymbolKey(symKey)
+				// Check for accessor first
+				if _, s, _, _, ok := po.GetOwnAccessorByKey(key); ok {
+					if s.Type() != TypeUndefined {
+						_, err := vm.Call(s, target, []Value{*valueToSet})
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
+							}
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+							vm.throwException(excVal)
+							return false, InterpretRuntimeError, Undefined
+						}
+						return true, InterpretOK, *valueToSet
+					}
+				}
+				// Data property
+				po.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
+				return true, InterpretOK, *valueToSet
+			} else {
+				// For other types, just return the value
+				return true, InterpretOK, *valueToSet
+			}
+		}
+	}
+
 	// Only PlainObject supports symbol keys for now
 	if objVal.Type() != TypeObject {
 		// DictObject or others: ignore symbol set (non-strict semantics)

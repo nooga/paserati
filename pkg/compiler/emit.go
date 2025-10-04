@@ -85,6 +85,14 @@ func (c *Compiler) emitTypeof(dest, src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+func (c *Compiler) emitTypeofIdentifier(dest Register, identifierName string, line int) {
+	// Add identifier name as a constant and emit OpTypeofIdentifier
+	nameIdx := c.chunk.AddConstant(vm.String(identifierName))
+	c.emitOpCode(vm.OpTypeofIdentifier, line)
+	c.emitByte(byte(dest))
+	c.emitUint16(nameIdx)
+}
+
 func (c *Compiler) emitAdd(dest, left, right Register, line int) {
 	c.emitOpCode(vm.OpAdd, line)
 	c.emitByte(byte(dest))
@@ -155,6 +163,13 @@ func (c *Compiler) emitLessEqual(dest, left, right Register, line int) {
 	c.emitByte(byte(right))
 }
 
+func (c *Compiler) emitGreaterEqual(dest, left, right Register, line int) {
+	c.emitOpCode(vm.OpGreaterEqual, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(left))
+	c.emitByte(byte(right))
+}
+
 func (c *Compiler) emitIn(dest, left, right Register, line int) {
 	c.emitOpCode(vm.OpIn, line)
 	c.emitByte(byte(dest))
@@ -210,9 +225,29 @@ func (c *Compiler) emitNew(dest, constructorReg Register, argCount byte, line in
 	c.emitByte(argCount)
 }
 
+// emitSpreadNew emits OpSpreadNew for constructor calls with spread arguments
+func (c *Compiler) emitSpreadNew(dest, constructorReg, spreadArgReg Register, line int) {
+	c.emitOpCode(vm.OpSpreadNew, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(constructorReg))
+	c.emitByte(byte(spreadArgReg))
+}
+
 // emitLoadThis emits OpLoadThis to load 'this' value from current call context
 func (c *Compiler) emitLoadThis(dest Register, line int) {
 	c.emitOpCode(vm.OpLoadThis, line)
+	c.emitByte(byte(dest))
+}
+
+// emitSetThis emits OpSetThis to set the 'this' value in the current call frame context
+func (c *Compiler) emitSetThis(src Register, line int) {
+	c.emitOpCode(vm.OpSetThis, line)
+	c.emitByte(byte(src))
+}
+
+// emitLoadNewTarget emits OpLoadNewTarget to load new.target value from current constructor call context
+func (c *Compiler) emitLoadNewTarget(dest Register, line int) {
+	c.emitOpCode(vm.OpLoadNewTarget, line)
 	c.emitByte(byte(dest))
 }
 
@@ -354,6 +389,51 @@ func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int)
 	c.emitByte(byte(obj))
 	c.emitByte(byte(val))
 	c.emitUint16(nameConstIdx)
+}
+
+// emitGetPrivateField emits OpGetPrivateField DestReg, ObjReg, NameConstIdx(Uint16)
+// For ECMAScript private field access: obj.#field
+func (c *Compiler) emitGetPrivateField(dest, obj Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpGetPrivateField, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(obj))
+	c.emitUint16(nameConstIdx)
+}
+
+// emitSetPrivateField emits OpSetPrivateField ObjReg, ValueReg, NameConstIdx(Uint16)
+// For ECMAScript private field assignment: obj.#field = value
+func (c *Compiler) emitSetPrivateField(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpSetPrivateField, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
+// emitDefineMethod emits OpDefineMethod ObjReg, ValueReg, NameConstIdx(Uint16)
+// Used for defining non-enumerable methods (e.g., class methods)
+func (c *Compiler) emitDefineMethod(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpDefineMethod, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
+// emitDefineAccessor emits OpDefineAccessor ObjReg, GetterReg, SetterReg, NameConstIdx(Uint16)
+func (c *Compiler) emitDefineAccessor(obj, getter, setter Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpDefineAccessor, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(getter))
+	c.emitByte(byte(setter))
+	c.emitUint16(nameConstIdx)
+}
+
+// emitDefineAccessorDynamic emits OpDefineAccessorDynamic ObjReg, GetterReg, SetterReg, NameReg
+func (c *Compiler) emitDefineAccessorDynamic(obj, getter, setter, nameReg Register, line int) {
+	c.emitOpCode(vm.OpDefineAccessorDynamic, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(getter))
+	c.emitByte(byte(setter))
+	c.emitByte(byte(nameReg))
 }
 
 // emitDeleteProp emits OpDeleteProp DestReg, ObjReg, NameConstIdx(Uint16)

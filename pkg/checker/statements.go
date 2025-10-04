@@ -644,6 +644,13 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 					constStmt.ComputedType = elementType
 					constStmt.Name.SetComputedType(elementType)
 				}
+			} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
+				// Array destructuring: for(const [x, y] of arr)
+				// Define each destructured variable with its type from the element
+				c.checkArrayDestructuringInForLoop(arrayDestr, elementType)
+			} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
+				// Object destructuring: for(const {x, y} of arr)
+				c.checkObjectDestructuringInForLoop(objDestr, elementType)
 			} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 				// This is an existing variable being assigned to
 				if exprStmt.Expression != nil {
@@ -673,6 +680,123 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 	c.env = originalEnv
 	debugPrintf("// [Checker ForOfStmt] Restored outer scope %p (from %p)\n", originalEnv, loopEnv)
 
+}
+
+// checkArrayDestructuringInForLoop type-checks array destructuring patterns in for-of/for-in loops
+func (c *Checker) checkArrayDestructuringInForLoop(node *parser.ArrayDestructuringDeclaration, sourceType types.Type) {
+	// For each element in the destructuring pattern, extract its type and define it
+	for i, element := range node.Elements {
+		var elemType types.Type
+
+		// Try to extract element type from source (tuple or array)
+		if tupleType, ok := sourceType.(*types.TupleType); ok && i < len(tupleType.ElementTypes) {
+			elemType = tupleType.ElementTypes[i]
+		} else if arrayType, ok := sourceType.(*types.ArrayType); ok {
+			elemType = arrayType.ElementType
+		} else {
+			elemType = types.Any
+		}
+
+		// Handle rest elements
+		if element.IsRest {
+			// Rest elements get array type
+			elemType = &types.ArrayType{ElementType: elemType}
+		}
+
+		// Apply default value type if present
+		if element.Default != nil {
+			c.visit(element.Default)
+			defaultType := element.Default.GetComputedType()
+			if defaultType != nil {
+				elemType = defaultType
+			}
+		}
+
+		// Define the variable(s) from the target
+		c.defineDestructuringTarget(element.Target, elemType, node.IsConst)
+	}
+}
+
+// checkObjectDestructuringInForLoop type-checks object destructuring patterns in for-of/for-in loops
+func (c *Checker) checkObjectDestructuringInForLoop(node *parser.ObjectDestructuringDeclaration, sourceType types.Type) {
+	// For each property in the destructuring pattern, extract its type and define it
+	for _, prop := range node.Properties {
+		var propType types.Type
+
+		// Try to extract property type from source object
+		propKey := prop.Key.Value // Identifier.Value gives the string key
+		if objType, ok := sourceType.(*types.ObjectType); ok {
+			if pt, exists := objType.Properties[propKey]; exists {
+				propType = pt
+			} else {
+				propType = types.Any
+			}
+		} else {
+			propType = types.Any
+		}
+
+		// Apply default value type if present
+		if prop.Default != nil {
+			c.visit(prop.Default)
+			defaultType := prop.Default.GetComputedType()
+			if defaultType != nil {
+				propType = defaultType
+			}
+		}
+
+		// Define the variable from the target
+		c.defineDestructuringTarget(prop.Target, propType, node.IsConst)
+	}
+
+	// Handle rest property
+	if node.RestProperty != nil {
+		// Rest gets the remaining object type (simplified as the source type for now)
+		c.defineDestructuringTarget(node.RestProperty.Target, sourceType, node.IsConst)
+	}
+}
+
+// defineDestructuringTarget defines variables from a destructuring target (handles nested patterns)
+func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.Type, isConst bool) {
+	switch t := target.(type) {
+	case *parser.Identifier:
+		// Simple identifier - define it
+		c.env.Define(t.Value, typ, isConst)
+		t.SetComputedType(typ)
+	case *parser.ArrayLiteral:
+		// Nested array destructuring - recursively handle
+		for i, elem := range t.Elements {
+			var elemType types.Type
+			if tupleType, ok := typ.(*types.TupleType); ok && i < len(tupleType.ElementTypes) {
+				elemType = tupleType.ElementTypes[i]
+			} else if arrayType, ok := typ.(*types.ArrayType); ok {
+				elemType = arrayType.ElementType
+			} else {
+				elemType = types.Any
+			}
+			c.defineDestructuringTarget(elem, elemType, isConst)
+		}
+	case *parser.ObjectLiteral:
+		// Nested object destructuring - recursively handle
+		for _, prop := range t.Properties {
+			// Extract key name from the property
+			if ident, ok := prop.Key.(*parser.Identifier); ok {
+				var propType types.Type
+				if objType, ok := typ.(*types.ObjectType); ok {
+					if pt, exists := objType.Properties[ident.Value]; exists {
+						propType = pt
+					} else {
+						propType = types.Any
+					}
+				} else {
+					propType = types.Any
+				}
+				c.env.Define(ident.Value, propType, isConst)
+				ident.SetComputedType(propType)
+			}
+		}
+	default:
+		// Unsupported target type - just skip
+	}
 }
 
 func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
@@ -730,6 +854,12 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 					varStmt.ComputedType = elementType
 					varStmt.Name.SetComputedType(elementType)
 				}
+			} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
+				// Array destructuring: for(const [x, y] in obj)
+				c.checkArrayDestructuringInForLoop(arrayDestr, elementType)
+			} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
+				// Object destructuring: for(const {x, y} in obj)
+				c.checkObjectDestructuringInForLoop(objDestr, elementType)
 			} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
 				// Define the loop variable with string type (property names)
 				if constStmt.Name != nil {

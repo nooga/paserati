@@ -27,7 +27,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &NumberInitializer{})
 	initializers = append(initializers, &BigIntInitializer{})
 	initializers = append(initializers, &SymbolInitializer{})
-	// initializers = append(initializers, &BooleanInitializer{})
+	initializers = append(initializers, &BooleanInitializer{})
 	initializers = append(initializers, &MapInitializer{})
 	initializers = append(initializers, &SetInitializer{})
 	initializers = append(initializers, &RegExpInitializer{})

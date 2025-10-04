@@ -7,14 +7,17 @@ import (
 
 type FunctionObject struct {
 	Object
-	Arity        int
-	Variadic     bool
-	Chunk        *Chunk
-	Name         string
-	UpvalueCount int
-	RegisterSize int
-	IsGenerator  bool         // True for generator functions (function*)
-	Properties   *PlainObject // For properties like .prototype (created lazily)
+	Arity               int
+	Variadic            bool
+	Chunk               *Chunk
+	Name                string
+	UpvalueCount        int
+	RegisterSize        int
+	IsGenerator         bool         // True for generator functions (function*)
+	IsArrowFunction     bool         // True for arrow functions (cannot be used as constructors)
+	IsDerivedConstructor bool        // True for derived class constructors (must call super())
+	Properties          *PlainObject // For properties like .prototype (created lazily)
+	Prototype           Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
 }
 
 type Upvalue struct {
@@ -96,7 +99,7 @@ type VMCaller interface {
 	CallBytecode(fn Value, thisValue Value, args []Value) Value
 }
 
-func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool) Value {
+func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isArrowFunction bool) Value {
 	fnObj := &FunctionObject{
 		Arity:        arity,
 		Variadic:     variadic,
@@ -105,6 +108,7 @@ func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name stri
 		UpvalueCount: upvalueCount,
 		RegisterSize: registerSize,
 		IsGenerator:  isGenerator,
+		IsArrowFunction: isArrowFunction,
 		Properties:   nil, // Start with nil - create lazily
 	}
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}

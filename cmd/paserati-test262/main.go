@@ -32,6 +32,8 @@ func main() {
 		cpuprofile = flag.String("cpuprofile", "", "Write CPU profile to file")
 		gcstats    = flag.Bool("gcstats", false, "Print garbage collection statistics")
 		treeMode   = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
+		suiteMode  = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
+		filterMode = flag.Bool("filter", false, "Filter out legacy JS patterns not relevant for modern TS runtime")
 		disasm     = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
 	)
 
@@ -88,10 +90,12 @@ func main() {
 	fmt.Printf("Found %d test files\n", len(testFiles))
 
 	// Run tests
-	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *disasm)
+	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *filterMode, *disasm)
 
-	// Print summary or tree
-	if *treeMode {
+	// Print summary, tree, or suite
+	if *suiteMode {
+		printSuiteSummary(fileResults, testDir, testPath)
+	} else if *treeMode {
 		printTreeSummary(fileResults, testDir)
 	} else {
 		printSummary(&stats)
@@ -185,8 +189,42 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 	return testFiles, err
 }
 
+// shouldFilterTest determines if a test file should be filtered out due to legacy patterns
+func shouldFilterTest(testPath string) bool {
+	content, err := os.ReadFile(testPath)
+	if err != nil {
+		return false
+	}
+
+	contentStr := string(content)
+
+	// Filter out 'with' statement tests - deprecated feature not allowed in strict mode
+	if strings.Contains(contentStr, "with (") {
+		return true
+	}
+
+	// Filter out very old ES5 era patterns that are not relevant for modern TS
+	// Look for specific Sputnik-era test patterns that test legacy features
+	if strings.Contains(contentStr, "Sputnik") && strings.Contains(contentStr, "es5id") {
+		// Check for specific legacy patterns that we don't want to support
+		legacyPatterns := []string{
+			"arguments.callee", // Legacy arguments object usage
+			"__func__",         // Old function name patterns
+			"eval(",            // Direct eval calls in legacy contexts
+		}
+
+		for _, pattern := range legacyPatterns {
+			if strings.Contains(contentStr, pattern) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, disasm bool) (TestStats, []TestResult) {
+func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, filterMode bool, disasm bool) (TestStats, []TestResult) {
 	var stats TestStats
 	var fileResults []TestResult
 	stats.Total = len(testFiles)
@@ -199,7 +237,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 	var dirFileCount = make(map[string]int)
 	var dirProcessedCount = make(map[string]int)
 
-	if treeMode {
+	if treeMode || suiteMode {
 		tree = &TreeNode{
 			Name:     "test",
 			Path:     testDir,
@@ -235,16 +273,37 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 				current = current.Children[part]
 			}
 		}
-		// Initial display
-		fmt.Print("\033[2J\033[H") // Clear screen
-		fmt.Println("\n=== Test262 Progress ===")
-		fmt.Printf("Starting %d tests...\n", len(testFiles))
-		fmt.Printf("\n%-60s %8s %40s\n", "Directory", "% Passed", "Total/Pass/Fail/Skip/Timeout")
-		fmt.Println(strings.Repeat("-", 110))
-		printColoredTreeNode(tree, "", true, false)
+
+		// Initial display for tree mode only
+		if treeMode {
+			fmt.Print("\033[2J\033[H") // Clear screen
+			fmt.Println("\n=== Test262 Progress ===")
+			fmt.Printf("Starting %d tests...\n", len(testFiles))
+			fmt.Printf("\n%-60s %8s %40s\n", "Directory", "% Passed", "Total/Pass/Fail/Skip/Timeout")
+			fmt.Println(strings.Repeat("-", 110))
+			printColoredTreeNode(tree, "", true, false)
+		}
 	}
 
 	for i, testFile := range testFiles {
+		// Apply legacy filtering if enabled
+		if filterMode && shouldFilterTest(testFile) {
+			if verbose {
+				fmt.Printf("FILTER %d/%d %s - legacy pattern filtered out\n", i+1, stats.Total, testFile)
+			}
+			result := TestResult{
+				Path:     testFile,
+				Passed:   false,
+				Failed:   false,
+				TimedOut: false,
+				Skipped:  true,
+				Duration: 0,
+			}
+			fileResults = append(fileResults, result)
+			stats.Skipped++
+			continue
+		}
+
 		testStart := time.Now()
 		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm)
 		testDuration := time.Since(testStart)
@@ -318,7 +377,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 
 		fileResults = append(fileResults, result)
 
-		// Update tree display in tree mode
+		// Update tree display in tree mode only
 		if treeMode {
 			relPath, _ := filepath.Rel(testDir, testFile)
 			updateNodeStats(tree, relPath, result)
@@ -354,6 +413,10 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 			}
 
 			lastDir = currentDir
+		} else if suiteMode {
+			// For suite mode, still track stats but don't show live updates
+			relPath, _ := filepath.Rel(testDir, testFile)
+			updateNodeStats(tree, relPath, result)
 		}
 
 		// Force GC more frequently to help with memory management
@@ -751,6 +814,235 @@ func printTreeSummary(results []TestResult, testDir string) {
 		tree.Stats.Timeouts, float64(tree.Stats.Timeouts)/float64(tree.Stats.Total)*100,
 		tree.Stats.Skipped, float64(tree.Stats.Skipped)/float64(tree.Stats.Total)*100)
 	fmt.Printf("Duration: %v\n", tree.Stats.Duration)
+}
+
+// printSuiteSummary prints pass rates for each test suite with hierarchical subdivision
+func printSuiteSummary(results []TestResult, testDir string, testPath *string) {
+	// Build a hierarchical map of suite stats (suite -> subsuite -> stats)
+	suiteStats := make(map[string]map[string]*TestStats)
+
+	// Define the main test suites
+	mainSuites := []string{"annexB", "built-ins", "intl402", "language", "staging"}
+
+	// Initialize the hierarchical structure
+	for _, suite := range mainSuites {
+		suiteStats[suite] = make(map[string]*TestStats)
+	}
+	suiteStats["other"] = make(map[string]*TestStats)
+
+	// Categorize results by hierarchical suite structure
+	for _, result := range results {
+		relPath, err := filepath.Rel(testDir, result.Path)
+		if err != nil {
+			continue
+		}
+
+		parts := strings.Split(relPath, string(filepath.Separator))
+		if len(parts) == 0 {
+			continue
+		}
+
+		// Get the full path from the original test262 root to determine the correct suite
+		fullRelPath, err := filepath.Rel(filepath.Join(*testPath, "test"), result.Path)
+		if err != nil {
+			continue
+		}
+
+		fullParts := strings.Split(fullRelPath, string(filepath.Separator))
+		if len(fullParts) == 0 {
+			continue
+		}
+
+		mainSuite := fullParts[0]
+		var subsuite string
+
+		// Determine the subsuite based on the path structure
+		// Use deeper nesting to show more detail (e.g., language/expressions/addition)
+		if len(fullParts) >= 3 {
+			// Show three levels: language/expressions/addition
+			subsuite = filepath.Join(fullParts[1], fullParts[2])
+		} else if len(fullParts) >= 2 {
+			// Show two levels: language/expressions
+			subsuite = fullParts[1]
+		} else {
+			// If there's no subsuite level, use the main suite name
+			subsuite = mainSuite
+		}
+
+		// Initialize subsuite stats if needed
+		if suiteStats[mainSuite] == nil {
+			suiteStats[mainSuite] = make(map[string]*TestStats)
+		}
+		if suiteStats[mainSuite][subsuite] == nil {
+			suiteStats[mainSuite][subsuite] = &TestStats{}
+		}
+
+		stats := suiteStats[mainSuite][subsuite]
+		stats.Total++
+		stats.Duration += result.Duration
+		if result.Passed {
+			stats.Passed++
+		} else if result.Failed {
+			stats.Failed++
+		} else if result.TimedOut {
+			stats.Timeouts++
+		} else if result.Skipped {
+			stats.Skipped++
+		}
+	}
+
+	// Print header
+	fmt.Println("\n=== Test262 Suite Results ===")
+	fmt.Printf("%-25s %8s %8s %8s %8s %8s %8s %12s\n",
+		"Suite", "Total", "Passed", "Failed", "Skip", "Timeout", "% Pass", "Duration")
+	fmt.Println(strings.Repeat("-", 100))
+
+	// Sort main suites for consistent output
+	var sortedMainSuites []string
+	for suite := range suiteStats {
+		sortedMainSuites = append(sortedMainSuites, suite)
+	}
+	sort.Strings(sortedMainSuites)
+
+	// Calculate overall totals and collect all subsuite stats for recommendations
+	var overallStats TestStats
+	var allSubsuiteStats []struct {
+		mainSuite string
+		subSuite  string
+		stats     *TestStats
+	}
+
+	// Print each main suite and its subsuites
+	for _, mainSuite := range sortedMainSuites {
+		subsuiteMap := suiteStats[mainSuite]
+		if len(subsuiteMap) == 0 {
+			continue
+		}
+
+		// Calculate totals for this main suite
+		var mainSuiteStats TestStats
+		var sortedSubsuites []string
+
+		for subsuite := range subsuiteMap {
+			sortedSubsuites = append(sortedSubsuites, subsuite)
+		}
+		sort.Strings(sortedSubsuites)
+
+		// Print subsuites
+		for _, subsuite := range sortedSubsuites {
+			stats := subsuiteMap[subsuite]
+			if stats.Total == 0 {
+				continue
+			}
+
+			// Add to main suite totals
+			mainSuiteStats.Total += stats.Total
+			mainSuiteStats.Passed += stats.Passed
+			mainSuiteStats.Failed += stats.Failed
+			mainSuiteStats.Skipped += stats.Skipped
+			mainSuiteStats.Timeouts += stats.Timeouts
+			mainSuiteStats.Duration += stats.Duration
+
+			// Add to overall totals
+			overallStats.Total += stats.Total
+			overallStats.Passed += stats.Passed
+			overallStats.Failed += stats.Failed
+			overallStats.Skipped += stats.Skipped
+			overallStats.Timeouts += stats.Timeouts
+			overallStats.Duration += stats.Duration
+
+			// Add to recommendations list
+			allSubsuiteStats = append(allSubsuiteStats, struct {
+				mainSuite string
+				subSuite  string
+				stats     *TestStats
+			}{mainSuite, subsuite, stats})
+
+			// Print subsuite
+			var passPercent float64
+			if stats.Total > 0 {
+				passPercent = float64(stats.Passed) / float64(stats.Total) * 100
+			}
+
+			suiteName := mainSuite + "/" + subsuite
+			fmt.Printf("%-25s %8d %8d %8d %8d %8d %7.1f%% %12v\n",
+				suiteName,
+				stats.Total,
+				stats.Passed,
+				stats.Failed,
+				stats.Skipped,
+				stats.Timeouts,
+				passPercent,
+				stats.Duration.Round(time.Millisecond))
+		}
+
+		// Print main suite totals if it has subsuites
+		if mainSuiteStats.Total > 0 {
+			var mainPassPercent float64
+			if mainSuiteStats.Total > 0 {
+				mainPassPercent = float64(mainSuiteStats.Passed) / float64(mainSuiteStats.Total) * 100
+			}
+
+			fmt.Printf("%-25s %8d %8d %8d %8d %8d %7.1f%% %12v\n",
+				mainSuite+" (TOTAL)",
+				mainSuiteStats.Total,
+				mainSuiteStats.Passed,
+				mainSuiteStats.Failed,
+				mainSuiteStats.Skipped,
+				mainSuiteStats.Timeouts,
+				mainPassPercent,
+				mainSuiteStats.Duration.Round(time.Millisecond))
+		}
+	}
+
+	// Print overall totals
+	fmt.Println(strings.Repeat("-", 100))
+	if overallStats.Total > 0 {
+		overallPassPercent := float64(overallStats.Passed) / float64(overallStats.Total) * 100
+		fmt.Printf("%-25s %8d %8d %8d %8d %8d %7.1f%% %12v\n",
+			"GRAND TOTAL",
+			overallStats.Total,
+			overallStats.Passed,
+			overallStats.Failed,
+			overallStats.Skipped,
+			overallStats.Timeouts,
+			overallPassPercent,
+			overallStats.Duration.Round(time.Millisecond))
+	}
+
+	// Print suggestions for which subsuites to focus on
+	fmt.Println("\n=== Subsuite Priority Recommendations ===")
+	fmt.Println("Focus on subsuites with the lowest pass rates first:")
+	var suitePriorities []struct {
+		mainSuite string
+		subSuite  string
+		rate      float64
+		total     int
+	}
+
+	for _, item := range allSubsuiteStats {
+		if item.stats.Total > 0 {
+			rate := float64(item.stats.Passed) / float64(item.stats.Total) * 100
+			suitePriorities = append(suitePriorities, struct {
+				mainSuite string
+				subSuite  string
+				rate      float64
+				total     int
+			}{item.mainSuite, item.subSuite, rate, item.stats.Total})
+		}
+	}
+
+	// Sort by pass rate (ascending)
+	sort.Slice(suitePriorities, func(i, j int) bool {
+		return suitePriorities[i].rate < suitePriorities[j].rate
+	})
+
+	// Only show subsuites with significant test counts (>10 tests)
+	for _, sp := range suitePriorities {
+		if sp.total >= 10 {
+			fmt.Printf("  %-15s/%-8s: %.1f%% pass rate (%d tests)\n", sp.mainSuite, sp.subSuite, sp.rate, sp.total)
+		}
+	}
 }
 
 // ANSI color codes

@@ -35,6 +35,7 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		// Keep concat non-generic for flexibility with different array types
 		WithVariadicProperty("concat", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
 		WithProperty("join", types.NewSimpleFunction([]types.Type{types.String}, types.String)).
+		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("reverse", a.createGenericMethod("reverse", tParam,
 			types.NewSimpleFunction([]types.Type{}, tArrayType))).
 		WithProperty("indexOf", a.createGenericMethod("indexOf", tParam,
@@ -310,6 +311,23 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		result := thisArray.Get(0).ToString()
 		for i := 1; i < thisArray.Length(); i++ {
 			result += separator + thisArray.Get(i).ToString()
+		}
+		return vm.NewString(result), nil
+	}))
+
+	arrayProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+		// Per ECMAScript spec, Array.prototype.toString is equivalent to calling join() with no arguments
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil {
+			return vm.NewString(""), nil
+		}
+		// Build comma-separated string (same as join with default separator)
+		if thisArray.Length() == 0 {
+			return vm.NewString(""), nil
+		}
+		result := thisArray.Get(0).ToString()
+		for i := 1; i < thisArray.Length(); i++ {
+			result += "," + thisArray.Get(i).ToString()
 		}
 		return vm.NewString(result), nil
 	}))

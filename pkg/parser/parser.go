@@ -144,6 +144,10 @@ var precedences = map[lexer.TokenType]int{
 	lexer.REMAINDER: PRODUCT, // Existing
 	lexer.EXPONENT:  POWER,   // Existing (Right-associative handled in infix parsing)
 
+	// Prefix operators - need to be in precedence table to prevent incorrect parsing
+	lexer.TYPEOF: PREFIX, // typeof operator (unary)
+	lexer.VOID:   PREFIX, // void operator (unary)
+
 	// Prefix/Postfix (Handled by registration, not just precedence map)
 	// lexer.BANG does not need precedence here (uses PREFIX in parsePrefix)
 	// lexer.BITWISE_NOT does not need precedence here (uses PREFIX in parsePrefix)
@@ -206,6 +210,9 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.THIS, p.parseThisExpression)         // Added for this keyword
 	p.registerPrefix(lexer.NEW, p.parseNewExpression)           // Added for new keyword
 	p.registerPrefix(lexer.IMPORT, p.parseImportMetaExpression) // Added for import.meta
+	p.registerPrefix(lexer.GET, p.parseIdentifier)              // GET can be used as identifier in object literals
+	p.registerPrefix(lexer.THROW, p.parseIdentifier)            // THROW can be used as identifier in object literals
+	p.registerPrefix(lexer.RETURN, p.parseIdentifier)           // RETURN can be used as identifier in object literals
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
@@ -1109,10 +1116,10 @@ func (p *Parser) parseLetStatement() Statement {
 	switch p.curToken.Type {
 	case lexer.LBRACKET:
 		// Array destructuring: let [a, b] = ...
-		return p.parseArrayDestructuringDeclaration(letToken, false)
+		return p.parseArrayDestructuringDeclaration(letToken, false, true)
 	case lexer.LBRACE:
 		// Object destructuring: let {a, b} = ...
-		return p.parseObjectDestructuringDeclaration(letToken, false)
+		return p.parseObjectDestructuringDeclaration(letToken, false, true)
 	case lexer.IDENT:
 		// Regular identifier: let x = ... or let x = ..., y = ...
 		firstStmt := &LetStatement{Token: letToken}
@@ -1189,10 +1196,10 @@ func (p *Parser) parseConstStatement() Statement {
 		return p.parseConstEnumDeclarationStatement(constToken)
 	case lexer.LBRACKET:
 		// Array destructuring: const [a, b] = ...
-		return p.parseArrayDestructuringDeclaration(constToken, true)
+		return p.parseArrayDestructuringDeclaration(constToken, true, true)
 	case lexer.LBRACE:
 		// Object destructuring: const {a, b} = ...
-		return p.parseObjectDestructuringDeclaration(constToken, true)
+		return p.parseObjectDestructuringDeclaration(constToken, true, true)
 	case lexer.IDENT:
 		// Regular identifier: const x = ...
 		stmt := &ConstStatement{Token: constToken}
@@ -1576,9 +1583,18 @@ func (p *Parser) parseBigIntLiteral() Expression {
 	// Remove separators and validate format
 	cleanedLiteral := strings.ReplaceAll(numericPart, "_", "")
 
-	// BigInt can't be float, so we don't allow dots or exponents
-	if strings.Contains(cleanedLiteral, ".") || strings.ContainsAny(cleanedLiteral, "eE") {
-		msg := fmt.Sprintf("BigInt literal %q cannot contain decimal point or exponent", rawLiteral)
+	// BigInt can't be float, so we don't allow dots or scientific notation
+	// We need to be careful not to reject valid hexadecimal digits like 'e' and 'f'
+	if strings.Contains(cleanedLiteral, ".") {
+		msg := fmt.Sprintf("BigInt literal %q cannot contain decimal point", rawLiteral)
+		p.addError(p.curToken, msg)
+		return nil
+	}
+	// Check for scientific notation patterns (e.g., "1e10", "1e+5", "1e-3")
+	// But allow single 'e' or 'E' that might be part of hexadecimal digits
+	if strings.Contains(cleanedLiteral, "e+") || strings.Contains(cleanedLiteral, "e-") ||
+		strings.Contains(cleanedLiteral, "E+") || strings.Contains(cleanedLiteral, "E-") {
+		msg := fmt.Sprintf("BigInt literal %q cannot contain scientific notation", rawLiteral)
 		p.addError(p.curToken, msg)
 		return nil
 	}
@@ -3992,7 +4008,7 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 }
 
 // parseArrayDestructuringDeclaration handles let/const/var [a, b] = expr
-func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isConst bool) *ArrayDestructuringDeclaration {
+func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isConst bool, requireInitializer bool) *ArrayDestructuringDeclaration {
 	decl := &ArrayDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
@@ -4092,21 +4108,23 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 		}
 	}
 
-	// Require initializer for destructuring
-	if !p.expectPeek(lexer.ASSIGN) {
-		p.addError(p.peekToken, "destructuring declaration must have an initializer")
-		return nil
-	}
+	// Require initializer only when explicitly requested (not for for-of/for-in loops)
+	if requireInitializer {
+		if !p.expectPeek(lexer.ASSIGN) {
+			p.addError(p.peekToken, "destructuring declaration must have an initializer")
+			return nil
+		}
 
-	p.nextToken() // Move to RHS expression
-	decl.Value = p.parseExpression(LOWEST)
-	if decl.Value == nil {
-		return nil
-	}
+		p.nextToken() // Move to RHS expression
+		decl.Value = p.parseExpression(LOWEST)
+		if decl.Value == nil {
+			return nil
+		}
 
-	// Optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
+		// Optional semicolon
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
 	}
 
 	return decl
@@ -4228,7 +4246,7 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 }
 
 // parseObjectDestructuringDeclaration handles let/const/var {a, b} = expr
-func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isConst bool) *ObjectDestructuringDeclaration {
+func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isConst bool, requireInitializer bool) *ObjectDestructuringDeclaration {
 	decl := &ObjectDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
@@ -4253,21 +4271,23 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isCo
 		}
 	}
 
-	// Require initializer for destructuring
-	if !p.expectPeek(lexer.ASSIGN) {
-		p.addError(p.peekToken, "destructuring declaration must have an initializer")
-		return nil
-	}
+	// Require initializer only when explicitly requested (not for for-of/for-in loops)
+	if requireInitializer {
+		if !p.expectPeek(lexer.ASSIGN) {
+			p.addError(p.peekToken, "destructuring declaration must have an initializer")
+			return nil
+		}
 
-	p.nextToken() // Move to RHS expression
-	decl.Value = p.parseExpression(LOWEST)
-	if decl.Value == nil {
-		return nil
-	}
+		p.nextToken() // Move to RHS expression
+		decl.Value = p.parseExpression(LOWEST)
+		if decl.Value == nil {
+			return nil
+		}
 
-	// Optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
+		// Optional semicolon
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
 	}
 
 	return decl
@@ -4362,17 +4382,38 @@ func (p *Parser) parseForStatement() Statement {
 		return nil
 	}
 
-	if !p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken() // Move past '('
+	// Check what comes after the opening paren to decide which parser to use
+	// We need to peek ahead before advancing
 
-		// Try to detect for...of/for...in pattern
-		if p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.CONST) || p.curTokenIs(lexer.VAR) || p.curTokenIs(lexer.IDENT) {
-			// Check if this could be for...of/for...in by looking for pattern: variable of/in expression
-			return p.parseForStatementOrForOf(forToken)
-		}
+	// Handle empty initializer case: for(; ...)
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		return p.parseRegularForStatement(forToken)
 	}
 
-	// If we get here, it's a regular for loop
+	// For declaration keywords or identifiers, we need to check if it's for-of/for-in
+	// Peek ahead to see the first token after '('
+	if p.peekTokenIs(lexer.LET) || p.peekTokenIs(lexer.CONST) || p.peekTokenIs(lexer.VAR) {
+		// Advance to the keyword
+		p.nextToken()
+		return p.parseForStatementOrForOf(forToken)
+	}
+
+	// For identifiers, check if it's followed by OF/IN
+	if p.peekTokenIs(lexer.IDENT) {
+		// Save position, advance to check what follows
+		p.nextToken() // Now at IDENT
+		if p.peekTokenIs(lexer.OF) || p.peekTokenIs(lexer.IN) {
+			return p.parseForStatementOrForOf(forToken)
+		}
+		// Not for-of/for-in, go back and parse as regular for
+		// But we can't go back! So we need to stay at IDENT and let parseRegularForStatement handle it
+		// Actually, parseRegularForStatement will skip LPAREN check since we're at IDENT
+		// So it will parse the ident as an expression
+		return p.parseRegularForStatement(forToken)
+	}
+
+	// Any other token means it's a regular for loop with expression initializer
+	// Don't advance - let parseRegularForStatement handle the LPAREN
 	return p.parseRegularForStatement(forToken)
 }
 
@@ -4968,8 +5009,12 @@ func (p *Parser) parseObjectLiteral() Expression {
 				key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 			} else if p.curTokenIs(lexer.NUMBER) {
 				key = p.parseNumberLiteral()
+			} else if p.curTokenIs(lexer.THROW) {
+				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.RETURN) {
+				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 			} else {
-				p.addError(p.curToken, "expected identifier, string literal, number, or computed property after 'get'")
+				p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'get'")
 				return nil
 			}
 
@@ -5054,8 +5099,12 @@ func (p *Parser) parseObjectLiteral() Expression {
 				key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 			} else if p.curTokenIs(lexer.NUMBER) {
 				key = p.parseNumberLiteral()
+			} else if p.curTokenIs(lexer.THROW) {
+				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.RETURN) {
+				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 			} else {
-				p.addError(p.curToken, "expected identifier, string literal, number, or computed property after 'set'")
+				p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'set'")
 				return nil
 			}
 
@@ -6431,29 +6480,129 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 	var varName string
 
 	if p.curTokenIs(lexer.LET) {
-		letStmt := &LetStatement{Token: p.curToken}
-		if !p.expectPeek(lexer.IDENT) {
+		letToken := p.curToken
+		p.nextToken() // Move past LET
+
+		// Check for destructuring patterns
+		if p.curTokenIs(lexer.LBRACKET) {
+			// Array destructuring: for(let [a, b] ...)
+			// Parse pattern without requiring initializer initially
+			varStmt = p.parseArrayDestructuringDeclaration(letToken, false, false)
+			varName = "" // Destructuring doesn't have a single name
+
+			// Check if there's an initializer for regular for loops: for(let [a,b] = [1,2]; ...)
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // consume '='
+				p.nextToken() // move to RHS
+				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
+					arrayDecl.Value = p.parseExpression(LOWEST)
+				}
+			}
+		} else if p.curTokenIs(lexer.LBRACE) {
+			// Object destructuring: for(let {a, b} ...)
+			varStmt = p.parseObjectDestructuringDeclaration(letToken, false, false)
+			varName = "" // Destructuring doesn't have a single name
+
+			// Check if there's an initializer for regular for loops: for(let {a,b} = obj; ...)
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // consume '='
+				p.nextToken() // move to RHS
+				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
+					objDecl.Value = p.parseExpression(LOWEST)
+				}
+			}
+		} else if p.curTokenIs(lexer.IDENT) {
+			// Regular identifier
+			letStmt := &LetStatement{Token: letToken}
+			letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			varStmt = letStmt
+			varName = p.curToken.Literal
+		} else {
+			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
 			return nil
 		}
-		letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		varStmt = letStmt
-		varName = p.curToken.Literal
 	} else if p.curTokenIs(lexer.CONST) {
-		constStmt := &ConstStatement{Token: p.curToken}
-		if !p.expectPeek(lexer.IDENT) {
+		constToken := p.curToken
+		p.nextToken() // Move past CONST
+
+		// Check for destructuring patterns
+		if p.curTokenIs(lexer.LBRACKET) {
+			// Array destructuring: for(const [a, b] ...)
+			varStmt = p.parseArrayDestructuringDeclaration(constToken, true, false)
+			varName = "" // Destructuring doesn't have a single name
+
+			// Check if there's an initializer for regular for loops
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // consume '='
+				p.nextToken() // move to RHS
+				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
+					arrayDecl.Value = p.parseExpression(LOWEST)
+				}
+			}
+		} else if p.curTokenIs(lexer.LBRACE) {
+			// Object destructuring: for(const {a, b} ...)
+			varStmt = p.parseObjectDestructuringDeclaration(constToken, true, false)
+			varName = "" // Destructuring doesn't have a single name
+
+			// Check if there's an initializer for regular for loops
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // consume '='
+				p.nextToken() // move to RHS
+				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
+					objDecl.Value = p.parseExpression(LOWEST)
+				}
+			}
+		} else if p.curTokenIs(lexer.IDENT) {
+			// Regular identifier
+			constStmt := &ConstStatement{Token: constToken}
+			constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			varStmt = constStmt
+			varName = p.curToken.Literal
+		} else {
+			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'const', got %s", p.curToken.Type))
 			return nil
 		}
-		constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		varStmt = constStmt
-		varName = p.curToken.Literal
 	} else if p.curTokenIs(lexer.VAR) {
-		varDeclaration := &VarStatement{Token: p.curToken}
-		if !p.expectPeek(lexer.IDENT) {
+		varToken := p.curToken
+		p.nextToken() // Move past VAR
+
+		// Check for destructuring patterns
+		if p.curTokenIs(lexer.LBRACKET) {
+			// Array destructuring: for(var [a, b] ...)
+			varStmt = p.parseArrayDestructuringDeclaration(varToken, false, false)
+			varName = "" // Destructuring doesn't have a single name
+
+			// Check if there's an initializer for regular for loops
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // consume '='
+				p.nextToken() // move to RHS
+				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
+					arrayDecl.Value = p.parseExpression(LOWEST)
+				}
+			}
+		} else if p.curTokenIs(lexer.LBRACE) {
+			// Object destructuring: for(var {a, b} ...)
+			varStmt = p.parseObjectDestructuringDeclaration(varToken, false, false)
+			varName = "" // Destructuring doesn't have a single name
+
+			// Check if there's an initializer for regular for loops
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // consume '='
+				p.nextToken() // move to RHS
+				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
+					objDecl.Value = p.parseExpression(LOWEST)
+				}
+			}
+		} else if p.curTokenIs(lexer.IDENT) {
+			// Regular identifier
+			varDeclaration := &VarStatement{Token: varToken}
+			varDeclaration.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			varStmt = varDeclaration
+			varName = p.curToken.Literal
+		} else {
+			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'var', got %s", p.curToken.Type))
 			return nil
 		}
-		varDeclaration.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		varStmt = varDeclaration
-		varName = p.curToken.Literal
 	} else if p.curTokenIs(lexer.IDENT) {
 		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
@@ -6515,15 +6664,26 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 }
 
 // parseRegularForStatement parses a standard C-style for loop
+// Precondition: curToken is the first token after '(' or we're at '(' for empty initializer
 func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 	stmt := &ForStatement{Token: forToken}
 
-	// We're at '(' already consumed, now parse the rest
 	debugPrint("parseRegularForStatement: START")
 
 	// --- 1. Parse Initializer ---
-	if !p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken() // Move to start of initializer
+	// Check if we need to advance (for empty initializer case)
+	if p.curTokenIs(lexer.LPAREN) {
+		// We're still at '(', need to advance
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Move to ';'
+			stmt.Initializer = nil
+		} else {
+			p.nextToken() // Move to start of initializer
+		}
+	}
+
+	// Now parse initializer if curToken is not SEMICOLON
+	if !p.curTokenIs(lexer.SEMICOLON) {
 		if p.curTokenIs(lexer.LET) {
 			letStmt := &LetStatement{Token: p.curToken}
 			if !p.expectPeek(lexer.IDENT) {
@@ -6541,7 +6701,42 @@ func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 				letStmt.Value = p.parseExpression(LOWEST)
 			}
 			stmt.Initializer = letStmt
+		} else if p.curTokenIs(lexer.CONST) {
+			constStmt := &ConstStatement{Token: p.curToken}
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+			constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken()
+				p.nextToken()
+				constStmt.TypeAnnotation = p.parseTypeExpression()
+			}
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken()
+				p.nextToken()
+				constStmt.Value = p.parseExpression(LOWEST)
+			}
+			stmt.Initializer = constStmt
+		} else if p.curTokenIs(lexer.VAR) {
+			varStmt := &VarStatement{Token: p.curToken}
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+			varStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken()
+				p.nextToken()
+				varStmt.TypeAnnotation = p.parseTypeExpression()
+			}
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken()
+				p.nextToken()
+				varStmt.Value = p.parseExpression(LOWEST)
+			}
+			stmt.Initializer = varStmt
 		} else {
+			// Expression initializer (handles any expression including function calls)
 			exprStmt := &ExpressionStatement{Token: p.curToken}
 			exprStmt.Expression = p.parseExpression(LOWEST)
 			stmt.Initializer = exprStmt
@@ -6550,31 +6745,39 @@ func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 			return nil
 		}
 	} else {
-		p.nextToken() // consume first ';'
-		stmt.Initializer = nil
+		// Empty initializer, curToken is already at ';'
+		// Don't advance yet - let condition parsing handle it
 	}
 
 	// --- 2. Parse Condition ---
-	if !p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
+	// At this point, curToken is ';' (after initializer)
+	// Advance past it to get to condition start (or second ';' if empty condition)
+	p.nextToken()
+
+	if !p.curTokenIs(lexer.SEMICOLON) {
 		stmt.Condition = p.parseExpression(LOWEST)
 		if !p.expectPeek(lexer.SEMICOLON) {
 			return nil
 		}
 	} else {
-		p.nextToken() // consume second ';'
+		// Empty condition, curToken is already at second ';'
+		// Don't advance yet - let update parsing handle it
 		stmt.Condition = nil
 	}
 
 	// --- 3. Parse Update ---
-	if !p.peekTokenIs(lexer.RPAREN) {
-		p.nextToken()
+	// At this point, curToken is ';' (after condition)
+	// Advance past it to get to update start (or ')' if empty update)
+	p.nextToken()
+
+	if !p.curTokenIs(lexer.RPAREN) {
 		stmt.Update = p.parseExpression(LOWEST)
 		if !p.expectPeek(lexer.RPAREN) {
 			return nil
 		}
 	} else {
-		p.nextToken() // consume ')'
+		// Empty update, curToken is already at ')'
+		// Don't advance yet - let body parsing handle it
 		stmt.Update = nil
 	}
 
@@ -8345,8 +8548,9 @@ func (p *Parser) isGetterMethod() bool {
 		// get: value - this is a regular property, not a getter
 		return false
 	}
-	// get identifier(...) or get [computed](...) - this is a getter method
-	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) || p.peekTokenIs(lexer.LBRACKET)
+	// get identifier(...) or get [computed](...) or get keywordAsIdentifier(...) - this is a getter method
+	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
+		p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.THROW) || p.peekTokenIs(lexer.RETURN)
 }
 
 // isSetterMethod checks if the current 'set' token is part of a setter method
@@ -8358,6 +8562,7 @@ func (p *Parser) isSetterMethod() bool {
 		// set: value - this is a regular property, not a setter
 		return false
 	}
-	// set identifier(...) or set [computed](...) - this is a setter method
-	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) || p.peekTokenIs(lexer.LBRACKET)
+	// set identifier(...) or set [computed](...) or set keywordAsIdentifier(...) - this is a setter method
+	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
+		p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.THROW) || p.peekTokenIs(lexer.RETURN)
 }

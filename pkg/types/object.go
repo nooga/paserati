@@ -186,6 +186,7 @@ type ObjectType struct {
 	// Using a map for simplicity now. Consider ordered map or slice for stability.
 	Properties         map[string]Type
 	OptionalProperties map[string]bool // Tracks which properties are optional
+	ReadOnlyProperties map[string]bool // Tracks which properties are readonly
 
 	// NEW: Unified callable/constructor support
 	CallSignatures      []*Signature // Object call signatures: obj(args)
@@ -398,7 +399,7 @@ func (ot *ObjectType) IsAccessibleFrom(memberName string, accessContext *AccessC
 		if ot.ClassMeta.HasMember(memberName) {
 			return ot.ClassMeta.IsAccessibleFrom(memberName, accessContext)
 		}
-		
+
 		// Then check parent classes
 		for _, baseType := range ot.BaseTypes {
 			if baseObj, ok := baseType.(*ObjectType); ok {
@@ -407,7 +408,7 @@ func (ot *ObjectType) IsAccessibleFrom(memberName string, accessContext *AccessC
 				}
 			}
 		}
-		
+
 		// Member not found in class hierarchy
 		return false
 	}
@@ -498,6 +499,21 @@ func (ot *ObjectType) WithOptionalProperty(name string, propType Type) *ObjectTy
 	ot.Properties[name] = propType
 	ot.OptionalProperties[name] = true
 	return ot
+}
+
+// WithReadOnlyProperty adds a readonly property to the ObjectType and returns the same instance for chaining
+func (ot *ObjectType) WithReadOnlyProperty(name string, propType Type) *ObjectType {
+	ot.Properties[name] = propType
+	if ot.ReadOnlyProperties == nil {
+		ot.ReadOnlyProperties = make(map[string]bool)
+	}
+	ot.ReadOnlyProperties[name] = true
+	return ot
+}
+
+// IsReadOnly returns whether a property is readonly
+func (ot *ObjectType) IsReadOnly(name string) bool {
+	return ot.ReadOnlyProperties != nil && ot.ReadOnlyProperties[name]
 }
 
 // WithVariadicProperty adds a variadic method property to the ObjectType and returns the same instance for chaining

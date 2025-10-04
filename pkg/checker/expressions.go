@@ -340,8 +340,26 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 							// Default to Any to prevent cascading nil errors.
 							valueType = types.Any
 						}
-						fields[keyName] = valueType
-						preliminaryObjType.Properties[keyName] = valueType
+
+						// Special handling for __proto__: merge prototype properties
+						if keyName == "__proto__" {
+							// __proto__ sets the prototype, so merge its properties into the object type
+							widenedProtoType := types.GetWidenedType(valueType)
+							if protoObjType, ok := widenedProtoType.(*types.ObjectType); ok {
+								// Merge prototype properties into our object
+								for propName, propType := range protoObjType.Properties {
+									// Only add if not already defined (own properties override prototype)
+									if _, exists := fields[propName]; !exists {
+										fields[propName] = propType
+										preliminaryObjType.Properties[propName] = propType
+									}
+								}
+							}
+							// Don't add __proto__ itself as a property
+						} else {
+							fields[keyName] = valueType
+							preliminaryObjType.Properties[keyName] = valueType
+						}
 					}
 				}
 			}
@@ -1693,9 +1711,133 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			}
 		}
 	} else {
-		// Check arguments normally
-		for _, arg := range node.Arguments {
-			c.visit(arg)
+		// Check arguments with proper validation
+		// First, try to get the constructor signature to validate arguments
+		var constructorSig *types.Signature
+		if objType, ok := constructorType.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+			// For now, only validate if there's a single constructor signature
+			// TODO: Implement overload resolution for constructors
+			if len(objType.ConstructSignatures) == 1 {
+				constructorSig = objType.ConstructSignatures[0]
+			}
+		}
+
+		if constructorSig != nil {
+			debugPrintf("// [Checker NewExpression] Got constructor signature: IsVariadic=%v, RestParamType=%v, Params=%d\n",
+				constructorSig.IsVariadic, constructorSig.RestParameterType, len(constructorSig.ParameterTypes))
+
+			// Validate spread arguments first
+			hasSpreadErrors := false
+			currentArgIndex := 0
+			for _, arg := range node.Arguments {
+				if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+					if !c.validateSpreadArgument(spreadElement, constructorSig.IsVariadic, constructorSig.ParameterTypes, currentArgIndex) {
+						hasSpreadErrors = true
+					}
+				}
+				currentArgIndex += 1
+			}
+
+			if !hasSpreadErrors {
+				// Calculate effective argument count, expanding spread elements
+				actualArgCount := c.calculateEffectiveArgCount(node.Arguments)
+
+				if constructorSig.IsVariadic {
+					debugPrintf("// [Checker NewExpression] Taking VARIADIC branch\n")
+					// Variadic constructor
+					minExpectedArgs := len(constructorSig.ParameterTypes)
+					if len(constructorSig.OptionalParams) == len(constructorSig.ParameterTypes) {
+						for i := len(constructorSig.ParameterTypes) - 1; i >= 0; i-- {
+							if constructorSig.OptionalParams[i] {
+								minExpectedArgs--
+							} else {
+								break
+							}
+						}
+					}
+
+					if actualArgCount < minExpectedArgs {
+						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minExpectedArgs, actualArgCount))
+					} else {
+						// Check fixed arguments
+						fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
+
+						// Check variadic arguments
+						if fixedArgsOk && constructorSig.RestParameterType != nil {
+							arrayType, isArray := constructorSig.RestParameterType.(*types.ArrayType)
+							if !isArray {
+								c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", constructorSig.RestParameterType.String()))
+							} else {
+								variadicElementType := arrayType.ElementType
+								if variadicElementType == nil {
+									variadicElementType = types.Any
+								}
+								// Check remaining arguments against the element type
+								for i := len(constructorSig.ParameterTypes); i < len(node.Arguments); i++ {
+									argNode := node.Arguments[i]
+
+									if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
+										if !c.validateSpreadArgument(spreadElement, true, []types.Type{}, 0) {
+											continue
+										}
+
+										c.visit(spreadElement.Argument)
+										argType := spreadElement.Argument.GetComputedType()
+										if argType == nil {
+											continue
+										}
+
+										if !types.IsAssignable(argType, constructorSig.RestParameterType) {
+											c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), constructorSig.RestParameterType.String()))
+										}
+									} else {
+										c.visitWithContext(argNode, &ContextualType{
+											ExpectedType: variadicElementType,
+											IsContextual: true,
+										})
+
+										argType := argNode.GetComputedType()
+										if argType == nil {
+											continue
+										}
+
+										if !types.IsAssignable(argType, variadicElementType) {
+											c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
+										}
+									}
+								}
+							}
+						}
+					}
+				} else {
+					debugPrintf("// [Checker NewExpression] Taking NON-VARIADIC branch\n")
+					// Non-variadic constructor
+					expectedArgCount := len(constructorSig.ParameterTypes)
+					minRequiredArgs := expectedArgCount
+					if len(constructorSig.OptionalParams) == expectedArgCount {
+						for i := expectedArgCount - 1; i >= 0; i-- {
+							if constructorSig.OptionalParams[i] {
+								minRequiredArgs--
+							} else {
+								break
+							}
+						}
+					}
+
+					if actualArgCount < minRequiredArgs {
+						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
+					} else if actualArgCount > expectedArgCount {
+						c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
+					} else {
+						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
+					}
+				}
+			}
+		} else {
+			// No constructor signature - just visit args
+			for _, arg := range node.Arguments {
+				c.visit(arg)
+			}
 		}
 	}
 
@@ -1753,6 +1895,19 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 // This handles TypeScript's typeof operator, which returns a string literal
 // like "string", "number", "boolean", "undefined", "object", or "function".
 func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
+	// Special case: typeof with undefined identifier should not error
+	// Per ECMAScript spec, typeof is the only operator that doesn't throw ReferenceError for undefined variables
+	if ident, ok := node.Operand.(*parser.Identifier); ok {
+		// Check if identifier exists
+		_, _, found := c.env.Resolve(ident.Value)
+		if !found {
+			// Identifier doesn't exist - typeof will return "undefined" string literal type
+			node.SetComputedType(&types.LiteralType{Value: vm.String("undefined")})
+			node.Operand.SetComputedType(types.Any) // Set operand type to Any to avoid errors
+			return
+		}
+	}
+
 	// Visit the operand first to ensure it has a computed type
 	c.visit(node.Operand)
 

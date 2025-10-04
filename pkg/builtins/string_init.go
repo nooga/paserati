@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"fmt"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strings"
@@ -83,6 +84,46 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	stringProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add String prototype methods
+	stringProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+		thisStr := vmInstance.GetThis()
+
+		// If this is a primitive string, return it
+		if thisStr.Type() == vm.TypeString {
+			return thisStr, nil
+		}
+
+		// If this is a String wrapper object, extract [[PrimitiveValue]]
+		if thisStr.IsObject() {
+			if primitiveVal, exists := thisStr.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+				return primitiveVal, nil
+			}
+		}
+
+		// TypeError: String.prototype.valueOf requires that 'this' be a String
+		return vm.Undefined, fmt.Errorf("String.prototype.valueOf requires that 'this' be a String")
+	}))
+
+	stringProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+		thisStr := vmInstance.GetThis()
+
+		// If this is a primitive string, return it
+		if thisStr.Type() == vm.TypeString {
+			return thisStr, nil
+		}
+
+		// If this is a String wrapper object, extract [[PrimitiveValue]]
+		if thisStr.IsObject() {
+			if primitiveVal, exists := thisStr.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+				if primitiveVal.Type() == vm.TypeString {
+					return primitiveVal, nil
+				}
+			}
+		}
+
+		// TypeError: String.prototype.toString requires that 'this' be a String
+		return vm.Undefined, fmt.Errorf("String.prototype.toString requires that 'this' be a String")
+	}))
+
 	stringProto.SetOwn("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
@@ -527,10 +568,20 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Make it a proper constructor with static methods
 	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "String", func(args []vm.Value) (vm.Value, error) {
+		// Determine the primitive string value
+		var primitiveValue string
 		if len(args) == 0 {
-			return vm.NewString(""), nil
+			primitiveValue = ""
+		} else {
+			primitiveValue = args[0].ToString()
 		}
-		return vm.NewString(args[0].ToString()), nil
+
+		// If called with 'new', return a String wrapper object
+		if vmInstance.IsConstructorCall() {
+			return vmInstance.NewStringObject(primitiveValue), nil
+		}
+		// Otherwise, return primitive string (type coercion)
+		return vm.NewString(primitiveValue), nil
 	})
 
 	// Add prototype property

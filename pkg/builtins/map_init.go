@@ -175,6 +175,19 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("clear", v, &w, &e, &c)
 	}
 
+	// Add size accessor (getter)
+	sizeGetter := vm.NewNativeFunction(0, false, "get size", func(args []vm.Value) (vm.Value, error) {
+		thisMap := vmInstance.GetThis()
+		if thisMap.Type() != vm.TypeMap {
+			return vm.IntegerValue(0), nil
+		}
+		mapObj := thisMap.AsMap()
+		return vm.IntegerValue(int32(mapObj.Size())), nil
+	})
+	mapProto.SetOwn("size", sizeGetter)
+	w, e, c := true, false, true
+	mapProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
+
 	// Minimal iterator helpers for harness usage -> implement proper iterators
 	mapProto.SetOwn("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
@@ -318,7 +331,42 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Map constructor function
 	mapConstructor := vm.NewNativeFunctionWithProps(0, false, "Map", func(args []vm.Value) (vm.Value, error) {
 		// Create new Map instance
-		return vm.NewMap(), nil
+		newMap := vm.NewMap()
+		mapObj := newMap.AsMap()
+
+		// If an iterable argument is provided, add all its [key, value] pairs
+		if len(args) > 0 && !args[0].IsUndefined() && args[0].Type() != vm.TypeNull {
+			iterable := args[0]
+
+			// Handle different iterable types
+			switch iterable.Type() {
+			case vm.TypeArray:
+				// Array: expect array of [key, value] pairs
+				arr := iterable.AsArray()
+				for i := 0; i < arr.Length(); i++ {
+					entry := arr.Get(i)
+					// Each entry should be an array with [key, value]
+					if entry.Type() == vm.TypeArray {
+						entryArr := entry.AsArray()
+						if entryArr.Length() >= 2 {
+							key := entryArr.Get(0)
+							value := entryArr.Get(1)
+							mapObj.Set(key, value)
+						}
+					}
+				}
+			case vm.TypeMap:
+				// Map: copy all entries from the source map
+				srcMap := iterable.AsMap()
+				srcMap.ForEach(func(key vm.Value, val vm.Value) {
+					mapObj.Set(key, val)
+				})
+			// For other types, we'd need full iterator protocol support
+			// For now, silently ignore non-iterable arguments
+			}
+		}
+
+		return newMap, nil
 	})
 
 	// Add prototype property

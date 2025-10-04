@@ -188,6 +188,12 @@ func (vm *VM) initializePrototypes() {
 	// Error.prototype inherits from Object.prototype
 	vm.ErrorPrototype = NewObject(vm.ObjectPrototype)
 
+	// TypeError.prototype inherits from Error.prototype
+	vm.TypeErrorPrototype = NewObject(vm.ErrorPrototype)
+
+	// ReferenceError.prototype inherits from Error.prototype
+	vm.ReferenceErrorPrototype = NewObject(vm.ErrorPrototype)
+
 	// Symbol.prototype inherits from Object.prototype
 	vm.SymbolPrototype = NewObject(vm.ObjectPrototype)
 }

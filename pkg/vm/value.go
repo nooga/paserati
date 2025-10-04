@@ -11,6 +11,34 @@ import (
 	"unsafe"
 )
 
+// cleanExponentialFormat removes leading zeros from exponent to match JS format
+// e.g., "1e-07" -> "1e-7", "1e+25" -> "1e+25"
+func cleanExponentialFormat(s string) string {
+	// Find the 'e' or 'E'
+	for i := 0; i < len(s); i++ {
+		if s[i] == 'e' || s[i] == 'E' {
+			// Check if next char is + or -
+			if i+1 < len(s) && (s[i+1] == '+' || s[i+1] == '-') {
+				sign := s[i+1]
+				// Remove leading zeros from exponent
+				expStart := i + 2
+				j := expStart
+				for j < len(s) && s[j] == '0' {
+					j++
+				}
+				// If all zeros or no digits after sign, keep one zero
+				if j >= len(s) {
+					return s[:i+2] + "0"
+				}
+				// Reconstruct: mantissa + e + sign + trimmed exponent
+				return s[:i+1] + string(sign) + s[j:]
+			}
+			break
+		}
+	}
+	return s
+}
+
 type ValueType uint8
 
 const (
@@ -44,7 +72,60 @@ const (
 	TypeSet
 	TypeArrayBuffer
 	TypeTypedArray
+	TypeProxy
 )
+
+// String returns a human-readable string representation of the ValueType
+func (vt ValueType) String() string {
+	switch vt {
+	case TypeNull:
+		return "null"
+	case TypeUndefined:
+		return "undefined"
+	case TypeString:
+		return "string"
+	case TypeSymbol:
+		return "symbol"
+	case TypeFloatNumber, TypeIntegerNumber:
+		return "number"
+	case TypeBigInt:
+		return "bigint"
+	case TypeBoolean:
+		return "boolean"
+	case TypeFunction:
+		return "function"
+	case TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
+		return "native function"
+	case TypeClosure:
+		return "closure"
+	case TypeBoundFunction:
+		return "bound function"
+	case TypeObject:
+		return "object"
+	case TypeDictObject:
+		return "dict object"
+	case TypeArray:
+		return "array"
+	case TypeArguments:
+		return "arguments"
+	case TypeGenerator:
+		return "generator"
+	case TypeRegExp:
+		return "regexp"
+	case TypeMap:
+		return "map"
+	case TypeSet:
+		return "set"
+	case TypeArrayBuffer:
+		return "arraybuffer"
+	case TypeTypedArray:
+		return "typed array"
+	case TypeProxy:
+		return "proxy"
+	default:
+		return "unknown"
+	}
+}
 
 type StringObject struct {
 	Object
@@ -117,6 +198,13 @@ type SetObject struct {
 	values map[string]Value // key -> original value (for value iteration)
 }
 
+type ProxyObject struct {
+	Object
+	target  Value // The target object being proxied
+	handler Value // The handler object with traps
+	Revoked bool  // Whether the proxy has been revoked
+}
+
 type BigIntObject struct {
 	Object
 	value *big.Int
@@ -138,6 +226,20 @@ func (vm *VM) NewTypeError(message string) error {
 	// Fallback generic error object
 	obj := NewObject(Null).AsPlainObject()
 	obj.SetOwn("name", NewString("TypeError"))
+	obj.SetOwn("message", NewString(message))
+	return exceptionError{exception: NewValueFromPlainObject(obj)}
+}
+
+// NewReferenceError constructs a ReferenceError exception error for builtin helpers to return
+func (vm *VM) NewReferenceError(message string) error {
+	ctor, _ := vm.GetGlobal("ReferenceError")
+	if ctor != Undefined {
+		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
+		return exceptionError{exception: errObj}
+	}
+	// Fallback generic error object
+	obj := NewObject(Null).AsPlainObject()
+	obj.SetOwn("name", NewString("ReferenceError"))
 	obj.SetOwn("message", NewString(message))
 	return exceptionError{exception: NewValueFromPlainObject(obj)}
 }
@@ -247,6 +349,15 @@ func NewSet() Value {
 	return Value{typ: TypeSet, obj: unsafe.Pointer(setObj)}
 }
 
+func NewProxy(target Value, handler Value) Value {
+	proxyObj := &ProxyObject{
+		target:  target,
+		handler: handler,
+		Revoked: false,
+	}
+	return Value{typ: TypeProxy, obj: unsafe.Pointer(proxyObj)}
+}
+
 // hashKey creates a unique string key for any JavaScript value
 // Uses SameValueZero equality (NaN === NaN, +0 === -0)
 func hashKey(v Value) string {
@@ -306,7 +417,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy
 }
 
 func (v Value) IsDictObject() bool {
@@ -363,7 +474,7 @@ func (v Value) TypeName() string {
 		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		return "function"
-	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray:
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray, TypeProxy:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)
@@ -461,6 +572,13 @@ func (v Value) AsSet() *SetObject {
 	return (*SetObject)(v.obj)
 }
 
+func (v Value) AsProxy() *ProxyObject {
+	if v.typ != TypeProxy {
+		panic("value is not a proxy")
+	}
+	return (*ProxyObject)(v.obj)
+}
+
 func (v Value) AsFunction() *FunctionObject {
 	if v.typ != TypeFunction {
 		panic("value is not a function template")
@@ -517,11 +635,26 @@ func (v Value) ToString() string {
 	case TypeSymbol:
 		return fmt.Sprintf("Symbol(%s)", (*SymbolObject)(v.obj).value)
 	case TypeFloatNumber:
-		return strconv.FormatFloat(v.AsFloat(), 'f', -1, 64)
+		f := v.AsFloat()
+		// ECMAScript ToString specification (7.1.12.1):
+		// Use exponential notation for very small or very large numbers
+		absF := f
+		if absF < 0 {
+			absF = -absF
+		}
+		// If |f| < 1e-6 or |f| >= 1e21, use exponential notation
+		// Otherwise use fixed notation
+		if absF != 0 && (absF < 1e-6 || absF >= 1e21) {
+			// Use exponential notation and clean up format (remove leading zeros from exponent)
+			exp := strconv.FormatFloat(f, 'e', -1, 64)
+			return cleanExponentialFormat(exp)
+		}
+		// Use fixed notation
+		return strconv.FormatFloat(f, 'f', -1, 64)
 	case TypeIntegerNumber:
 		return strconv.FormatInt(int64(v.AsInteger()), 10)
 	case TypeBigInt:
-		return v.AsBigInt().String() + "n"
+		return v.AsBigInt().String() // No "n" suffix for string conversion
 	case TypeBoolean:
 		if v.AsBoolean() {
 			return "true"
@@ -622,6 +755,54 @@ func (v Value) ToString() string {
 	return fmt.Sprintf("<unknown type %d>", v.typ)
 }
 
+// parseStringToNumber converts a string to a number following ECMAScript rules
+// Handles hex (0x), octal (0o), binary (0b), and decimal (including scientific notation)
+func parseStringToNumber(s string) float64 {
+	str := strings.TrimSpace(s)
+	if str == "" {
+		return 0
+	}
+
+	// Handle hex (0x or 0X)
+	if len(str) >= 2 && (strings.HasPrefix(str, "0x") || strings.HasPrefix(str, "0X")) {
+		if i, err := strconv.ParseInt(str[2:], 16, 64); err == nil {
+			return float64(i)
+		}
+		return math.NaN()
+	}
+
+	// Handle binary (0b or 0B)
+	if len(str) >= 2 && (strings.HasPrefix(str, "0b") || strings.HasPrefix(str, "0B")) {
+		if i, err := strconv.ParseInt(str[2:], 2, 64); err == nil {
+			return float64(i)
+		}
+		return math.NaN()
+	}
+
+	// Handle octal (0o or 0O)
+	if len(str) >= 2 && (strings.HasPrefix(str, "0o") || strings.HasPrefix(str, "0O")) {
+		if i, err := strconv.ParseInt(str[2:], 8, 64); err == nil {
+			return float64(i)
+		}
+		return math.NaN()
+	}
+
+	// Handle decimal (including scientific notation, Infinity, -Infinity)
+	if str == "Infinity" || str == "+Infinity" {
+		return math.Inf(1)
+	}
+	if str == "-Infinity" {
+		return math.Inf(-1)
+	}
+
+	// Try parsing as float
+	if f, err := strconv.ParseFloat(str, 64); err == nil {
+		return f
+	}
+
+	return math.NaN()
+}
+
 func (v Value) ToFloat() float64 {
 	switch v.typ {
 	case TypeIntegerNumber:
@@ -631,22 +812,18 @@ func (v Value) ToFloat() float64 {
 	case TypeBigInt:
 		f, _ := v.AsBigInt().Float64()
 		return f
+	case TypeNull:
+		return 0 // null converts to 0 in JavaScript
+	case TypeUndefined:
+		return math.NaN() // undefined converts to NaN in JavaScript
 	case TypeBoolean:
 		if v.AsBoolean() {
 			return 1
 		}
 		return 0
 	case TypeString:
-		str := strings.TrimSpace(v.AsString())
-		if str == "" {
-			return 0
-		}
-		f, err := strconv.ParseFloat(str, 64)
-		if err == nil {
-			return f
-		}
-		return math.NaN()
-	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeTypedArray:
+		return parseStringToNumber(v.AsString())
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeTypedArray, TypeProxy:
 		// Special case for Date objects - directly get timestamp
 		if obj := v.AsPlainObject(); obj != nil {
 			if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
@@ -668,16 +845,44 @@ func (v Value) ToFloat() float64 {
 // hint can be "number", "string", or "default"
 func (v Value) ToPrimitive(hint string) Value {
 	// If already primitive, return as-is
-	if !v.IsObject() && v.typ != TypeArray && v.typ != TypeArguments && v.typ != TypeRegExp && v.typ != TypeMap && v.typ != TypeSet {
+	if !v.IsObject() && v.typ != TypeArray && v.typ != TypeArguments && v.typ != TypeRegExp && v.typ != TypeMap && v.typ != TypeSet && v.typ != TypeProxy {
 		return v
 	}
 
-	// For objects, we don't have proper valueOf/toString calling implemented yet
-	// So just return the original value. Date objects are handled specially in ToFloat()
-	return v
+	// For objects, we need to call valueOf/toString methods
+	// Since we don't have VM instance here, we use a simplified approach
+	// This will be enhanced when we have access to VM in this context
+	if po := v.AsPlainObject(); po != nil {
+		// For built-in wrappers, we can extract the primitive value directly
+		switch v.typ {
+		case TypeBoolean:
+			return BooleanValue(v.AsBoolean())
+		case TypeFloatNumber, TypeIntegerNumber:
+			return NumberValue(v.ToFloat())
+		case TypeString:
+			return NewString(v.ToString())
+		case TypeBigInt:
+			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
+			if po := v.AsPlainObject(); po != nil {
+				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
+					return dataVal
+				}
+			}
+			// If no [[BigIntData]], return as-is (shouldn't happen for valid BigInt objects)
+			return v
+		}
+	}
+
+	// For other objects, return string representation as fallback
+	return NewString(v.ToString())
 }
 
 func (v Value) ToInteger() int32 {
+	// First apply ToPrimitive if it's an object
+	if v.IsObject() || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeRegExp || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeProxy {
+		v = v.ToPrimitive("number")
+	}
+
 	switch v.typ {
 	case TypeIntegerNumber:
 		return v.AsInteger()
@@ -756,7 +961,7 @@ func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
 	case TypeIntegerNumber:
 		return strconv.FormatInt(int64(v.AsInteger()), 10)
 	case TypeBigInt:
-		return v.AsBigInt().String() + "n"
+		return v.AsBigInt().String() + "n" // Include "n" suffix for display
 	case TypeBoolean:
 		if v.AsBoolean() {
 			return "true"
@@ -820,6 +1025,12 @@ func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
 		}
 		b.WriteString("}")
 		return b.String()
+	case TypeProxy:
+		proxy := v.AsProxy()
+		if proxy.Revoked {
+			return "[Proxy (revoked)]"
+		}
+		return fmt.Sprintf("[Proxy target=%s handler=%s]", proxy.target.Inspect(), proxy.handler.Inspect())
 	case TypeDictObject:
 		dict := v.AsDictObject()
 		keys := make([]string, 0, len(dict.properties))
@@ -938,8 +1149,8 @@ func (v Value) IsFalsey() bool {
 		return v.AsBigInt().Cmp(bigZero) == 0
 	case TypeString:
 		return v.AsString() == ""
-	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp:
-		// All object types (including symbols and regex) are truthy
+	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy:
+		// All object types (including symbols, regex, and proxies) are truthy
 		return false
 	default:
 		return true // Unknown types assumed truthy? Or panic? Let's assume truthy.
@@ -1000,8 +1211,8 @@ func (v Value) Is(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
-		// Objects (including arrays, functions, regex, maps, sets, etc.) are equal only by reference
+	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet, TypeProxy:
+		// Objects (including arrays, functions, regex, maps, sets, proxies, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
 		panic(fmt.Sprintf("Unhandled type in Is comparison: %v", v.typ)) // Should not happen
@@ -1039,8 +1250,8 @@ func (v Value) StrictlyEquals(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet:
-		// Objects (including arrays, functions, regex, maps, sets, etc.) are equal only by reference
+	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet, TypeProxy:
+		// Objects (including arrays, functions, regex, maps, sets, proxies, etc.) are equal only by reference
 		return v.obj == other.obj
 	default:
 		panic(fmt.Sprintf("Unhandled type in StrictlyEquals comparison: %v", v.typ))

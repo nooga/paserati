@@ -282,9 +282,10 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		currentFrame.ip = callerIP
 		// Immediately print stack frames for debugging
 		fmt.Printf("\n=== VM Stack (non-callable) ===\n%s\n===============================\n", vm.CaptureStackTrace())
-		// Include the stack trace in the error as well
-		trace := vm.CaptureStackTrace()
-		return false, fmt.Errorf("Cannot call non-function value of type '%s'\nStack: %s", calleeVal.TypeName(), trace)
+		// Throw a TypeError exception for non-callable values
+		vm.ThrowTypeError(fmt.Sprintf("%s is not a function", calleeVal.TypeName()))
+		// Return false to indicate we're not switching frames (exception was thrown)
+		return false, nil
 	}
 }
 

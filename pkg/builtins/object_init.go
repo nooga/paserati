@@ -254,11 +254,71 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
 		}
 		arg := args[0]
-		if arg.IsObject() {
+
+		// If already an object type, return as-is
+		if arg.IsObject() || arg.Type() == vm.TypeArray || arg.Type() == vm.TypeRegExp ||
+			arg.Type() == vm.TypeMap || arg.Type() == vm.TypeSet || arg.Type() == vm.TypeProxy {
 			return arg, nil
 		}
-		// TODO: Box primitives properly
-		return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
+
+		// Box primitives into wrapper objects (ECMAScript ToObject operation)
+		switch arg.Type() {
+		case vm.TypeNull, vm.TypeUndefined:
+			// null and undefined throw TypeError in strict mode
+			// For now, create an empty object
+			return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
+
+		case vm.TypeBigInt:
+			// Create BigInt wrapper object
+			wrapper := vm.NewObject(vmInstance.BigIntPrototype).AsPlainObject()
+			// Store the primitive value internally
+			wrapper.SetOwn("[[PrimitiveValue]]", arg)
+			// Add valueOf method that returns the primitive
+			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+				return arg, nil
+			}))
+			return vm.NewValueFromPlainObject(wrapper), nil
+
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			// Create Number wrapper object
+			wrapper := vm.NewObject(vmInstance.NumberPrototype).AsPlainObject()
+			wrapper.SetOwn("[[PrimitiveValue]]", arg)
+			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+				return arg, nil
+			}))
+			return vm.NewValueFromPlainObject(wrapper), nil
+
+		case vm.TypeString:
+			// Create String wrapper object
+			wrapper := vm.NewObject(vmInstance.StringPrototype).AsPlainObject()
+			wrapper.SetOwn("[[PrimitiveValue]]", arg)
+			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+				return arg, nil
+			}))
+			return vm.NewValueFromPlainObject(wrapper), nil
+
+		case vm.TypeBoolean:
+			// Create Boolean wrapper object
+			wrapper := vm.NewObject(vmInstance.BooleanPrototype).AsPlainObject()
+			wrapper.SetOwn("[[PrimitiveValue]]", arg)
+			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+				return arg, nil
+			}))
+			return vm.NewValueFromPlainObject(wrapper), nil
+
+		case vm.TypeSymbol:
+			// Create Symbol wrapper object
+			wrapper := vm.NewObject(vmInstance.SymbolPrototype).AsPlainObject()
+			wrapper.SetOwn("[[PrimitiveValue]]", arg)
+			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+				return arg, nil
+			}))
+			return vm.NewValueFromPlainObject(wrapper), nil
+
+		default:
+			// Fallback: create empty object
+			return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
+		}
 	})
 
 	// Make it a proper constructor with static methods
@@ -311,6 +371,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Store in VM
 	vmInstance.ObjectPrototype = vm.NewValueFromPlainObject(objectProto)
+
+	// Also store in context so other initializers can use it
+	ctx.ObjectPrototype = vmInstance.ObjectPrototype
 
 	// Define globally
 	return ctx.DefineGlobal("Object", objectCtor)
@@ -407,9 +470,20 @@ func objectGetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 	case vm.TypeString:
 		// For strings, return String.prototype if available
 		return vm.Null, nil // TODO: Return proper String.prototype
-	case vm.TypeFunction, vm.TypeClosure:
-		// For functions, return Function.prototype if available
-		return vm.Null, nil // TODO: Return proper Function.prototype
+	case vm.TypeFunction:
+		// For functions, return their [[Prototype]]
+		fn := obj.AsFunction()
+		if fn != nil && fn.Prototype.Type() != vm.TypeNull && fn.Prototype.Type() != vm.TypeUndefined {
+			return fn.Prototype, nil
+		}
+		return vm.Null, nil
+	case vm.TypeClosure:
+		// For closures, return their function's [[Prototype]]
+		cl := obj.AsClosure()
+		if cl != nil && cl.Fn != nil && (cl.Fn.Prototype.Type() != vm.TypeNull && cl.Fn.Prototype.Type() != vm.TypeUndefined) {
+			return cl.Fn.Prototype, nil
+		}
+		return vm.Null, nil
 	default:
 		// For primitive values, return null
 		return vm.Null, nil

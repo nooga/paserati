@@ -1110,6 +1110,56 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		c.regAlloc.Pin(symbol.Register)
 		// Store element value in the variable's register
 		c.emitMove(symbol.Register, elementReg, node.Token.Line)
+	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
+		// Array destructuring: for(const [x, y] of arr)
+		// Destructure elementReg into loop-scoped local variables
+		for i, element := range arrayDestr.Elements {
+			if element.Target == nil {
+				continue
+			}
+
+			// Extract element[i] from elementReg
+			indexReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, indexReg)
+			extractedReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, extractedReg)
+
+			c.emitLoadNewConstant(indexReg, vm.Number(float64(i)), node.Token.Line)
+			c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+			c.emitByte(byte(extractedReg))
+			c.emitByte(byte(elementReg))
+			c.emitByte(byte(indexReg))
+
+			// Define the variable as a local (like regular let/const in for-of)
+			if ident, ok := element.Target.(*parser.Identifier); ok {
+				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				c.regAlloc.Pin(symbol.Register)
+				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+			}
+		}
+	} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
+		// Object destructuring: for(const {x, y} of arr)
+		// Destructure elementReg into loop-scoped local variables
+		for _, prop := range objDestr.Properties {
+			if prop.Target == nil {
+				continue
+			}
+
+			// Extract property from elementReg
+			extractedReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, extractedReg)
+
+			propName := prop.Key.Value
+			propConstIdx := c.chunk.AddConstant(vm.String(propName))
+			c.emitGetProp(extractedReg, elementReg, propConstIdx, node.Token.Line)
+
+			// Define the variable as a local
+			if ident, ok := prop.Target.(*parser.Identifier); ok {
+				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				c.regAlloc.Pin(symbol.Register)
+				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+			}
+		}
 	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 		// This is an existing variable being assigned to
 		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
@@ -1252,6 +1302,50 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		symbol := c.currentSymbolTable.Define(constStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register)
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
+	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
+		// Array destructuring in iterator path
+		for i, element := range arrayDestr.Elements {
+			if element.Target == nil {
+				continue
+			}
+
+			indexReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, indexReg)
+			extractedReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, extractedReg)
+
+			c.emitLoadNewConstant(indexReg, vm.Number(float64(i)), node.Token.Line)
+			c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+			c.emitByte(byte(extractedReg))
+			c.emitByte(byte(valueReg))
+			c.emitByte(byte(indexReg))
+
+			if ident, ok := element.Target.(*parser.Identifier); ok {
+				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				c.regAlloc.Pin(symbol.Register)
+				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+			}
+		}
+	} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
+		// Object destructuring in iterator path
+		for _, prop := range objDestr.Properties {
+			if prop.Target == nil {
+				continue
+			}
+
+			extractedReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, extractedReg)
+
+			propName := prop.Key.Value
+			propConstIdx := c.chunk.AddConstant(vm.String(propName))
+			c.emitGetProp(extractedReg, valueReg, propConstIdx, node.Token.Line)
+
+			if ident, ok := prop.Target.(*parser.Identifier); ok {
+				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				c.regAlloc.Pin(symbol.Register)
+				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+			}
+		}
 	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 		if ident, ok := exprStmt.Expression.(*parser.Identifier); ok {
 			symbolRef, _, found := c.currentSymbolTable.Resolve(ident.Value)
@@ -1448,6 +1542,50 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		c.regAlloc.Pin(symbol.Register)
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
+	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
+		// Array destructuring in for-in loop
+		for i, element := range arrayDestr.Elements {
+			if element.Target == nil {
+				continue
+			}
+
+			indexReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, indexReg)
+			extractedReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, extractedReg)
+
+			c.emitLoadNewConstant(indexReg, vm.Number(float64(i)), node.Token.Line)
+			c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+			c.emitByte(byte(extractedReg))
+			c.emitByte(byte(currentKeyReg))
+			c.emitByte(byte(indexReg))
+
+			if ident, ok := element.Target.(*parser.Identifier); ok {
+				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				c.regAlloc.Pin(symbol.Register)
+				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+			}
+		}
+	} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
+		// Object destructuring in for-in loop
+		for _, prop := range objDestr.Properties {
+			if prop.Target == nil {
+				continue
+			}
+
+			extractedReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, extractedReg)
+
+			propName := prop.Key.Value
+			propConstIdx := c.chunk.AddConstant(vm.String(propName))
+			c.emitGetProp(extractedReg, currentKeyReg, propConstIdx, node.Token.Line)
+
+			if ident, ok := prop.Target.(*parser.Identifier); ok {
+				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				c.regAlloc.Pin(symbol.Register)
+				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+			}
+		}
 	} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
 		// Handle 'var k in obj' - assign into the pre-defined binding (global at top-level, local in function)
 		if varStmt.Name != nil {

@@ -137,7 +137,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			arity++
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk, false)
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk, false, true) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
@@ -466,22 +466,36 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			keyConstIdx = c.chunk.AddConstant(vm.String(keyStr))
 		case *parser.ComputedPropertyName:
 			// Handle computed keys: [expr]
+			// Per ECMAScript spec, we must evaluate the key and convert to property key
+			// BEFORE evaluating the value expression (important for side effects)
 			isComputedKey = true
-			keyReg = c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, keyReg)
-			_, err := c.compileNode(keyNode.Expr, keyReg)
+			keyExprReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyExprReg)
+			_, err := c.compileNode(keyNode.Expr, keyExprReg)
 			if err != nil {
 				return BadRegister, err
 			}
+			// Convert to property key immediately (calls toString() if object)
+			keyReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyReg)
+			c.emitOpCode(vm.OpToPropertyKey, line)
+			c.emitByte(byte(keyReg))
+			c.emitByte(byte(keyExprReg))
 		default:
 			// Handle other computed expressions directly (like InfixExpression)
 			isComputedKey = true
-			keyReg = c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, keyReg)
-			_, err := c.compileNode(keyNode, keyReg)
+			keyExprReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyExprReg)
+			_, err := c.compileNode(keyNode, keyExprReg)
 			if err != nil {
 				return BadRegister, err
 			}
+			// Convert to property key immediately (calls toString() if object)
+			keyReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyReg)
+			c.emitOpCode(vm.OpToPropertyKey, line)
+			c.emitByte(byte(keyReg))
+			c.emitByte(byte(keyExprReg))
 		}
 
 		// Handle MethodDefinition (getters/setters) specially
@@ -494,18 +508,41 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				return BadRegister, err
 			}
 
-			// Get the property name for the getter/setter
-			var propName string
-			if isComputedKey {
-				// Computed method name: we cannot resolve a static name at compile time.
-				// Store the compiled function under the computed key using OpSetIndex.
-				// NOTE: For getters/setters, proper accessor definition is a future enhancement.
+			// Handle accessor properties (getters/setters)
+			if methodDef.Kind == "getter" || methodDef.Kind == "setter" {
+				if isComputedKey {
+					// Computed accessor name - use OpDefineAccessorDynamic
+					var getterReg, setterReg Register
+					if methodDef.Kind == "getter" {
+						getterReg = valueReg
+						setterReg = c.regAlloc.Alloc()
+						tempRegs = append(tempRegs, setterReg)
+						c.emitLoadUndefined(setterReg, line)
+					} else { // setter
+						setterReg = valueReg
+						getterReg = c.regAlloc.Alloc()
+						tempRegs = append(tempRegs, getterReg)
+						c.emitLoadUndefined(getterReg, line)
+					}
+					c.emitOpCode(vm.OpDefineAccessorDynamic, line)
+					c.emitByte(byte(hint))      // Object register
+					c.emitByte(byte(getterReg)) // Getter register
+					c.emitByte(byte(setterReg)) // Setter register
+					c.emitByte(byte(keyReg))    // Name register (computed at runtime)
+					debugPrintf("--- OL MethodDefinition: Defined dynamic %s accessor\n", methodDef.Kind)
+					continue
+				}
+			} else if isComputedKey {
+				// Computed regular method name: store as normal property
 				c.emitOpCode(vm.OpSetIndex, line)
 				c.emitByte(byte(hint))     // Object register
 				c.emitByte(byte(keyReg))   // Key register (computed at runtime)
 				c.emitByte(byte(valueReg)) // Value register
 				continue
 			}
+
+			// Get the property name for the getter/setter (static keys only from here)
+			var propName string
 
 			// Extract property name from static key
 			switch keyNode := prop.Key.(type) {
@@ -519,20 +556,30 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				return BadRegister, NewCompileError(prop.Key, "unsupported key type for getter/setter")
 			}
 
-			// Store with appropriate prefix
-			var storeName string
-			if methodDef.Kind == "getter" {
-				storeName = "__get__" + propName
-			} else if methodDef.Kind == "setter" {
-				storeName = "__set__" + propName
+			// Handle accessor properties (getters/setters)
+			if methodDef.Kind == "getter" || methodDef.Kind == "setter" {
+				// Use OpDefineAccessor for proper ECMAScript accessor properties
+				var getterReg, setterReg Register
+				if methodDef.Kind == "getter" {
+					getterReg = valueReg
+					setterReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, setterReg)
+					c.emitLoadUndefined(setterReg, line)
+				} else { // setter
+					setterReg = valueReg
+					getterReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, getterReg)
+					c.emitLoadUndefined(getterReg, line)
+				}
+				nameIdx := c.chunk.AddConstant(vm.String(propName))
+				c.emitDefineAccessor(hint, getterReg, setterReg, nameIdx, line)
+				debugPrintf("--- OL MethodDefinition: Defined %s accessor for '%s'\n", methodDef.Kind, propName)
 			} else {
 				// Regular method
-				storeName = propName
+				storeNameIdx := c.chunk.AddConstant(vm.String(propName))
+				c.emitSetProp(hint, valueReg, storeNameIdx, line)
+				debugPrintf("--- OL MethodDefinition: Stored method '%s'\n", propName)
 			}
-
-			storeNameIdx := c.chunk.AddConstant(vm.String(storeName))
-			c.emitSetProp(hint, valueReg, storeNameIdx, line)
-			debugPrintf("--- OL MethodDefinition: Stored %s as '%s'\n", methodDef.Kind, storeName)
 		} else {
 			// Regular property value
 			valueReg := c.regAlloc.Alloc()
@@ -542,6 +589,22 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				return BadRegister, err
 			}
 			debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
+
+			// Check for __proto__ special property (non-computed only)
+			if !isComputedKey && keyConstIdx != 0xFFFF {
+				// Get the property name from constants to check if it's __proto__
+				if int(keyConstIdx) < len(c.chunk.Constants) {
+					keyVal := c.chunk.Constants[keyConstIdx]
+					if keyVal.Type() == vm.TypeString && vm.AsString(keyVal) == "__proto__" {
+						// Special handling for __proto__: set object's prototype
+						c.emitOpCode(vm.OpSetPrototype, line)
+						c.emitByte(byte(hint))     // Object register
+						c.emitByte(byte(valueReg)) // Prototype value register
+						debugPrintf("--- OL: Emitted OpSetPrototype for __proto__\n")
+						continue
+					}
+				}
+			}
 
 			// Set the property based on whether it's computed or static
 			if isComputedKey {
@@ -676,6 +739,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
 	} else if nameHint != "" {
 		// If anonymous but assigned (e.g., let f = function() { f(); }),
+		// define it in the function's scope for recursion
 		funcNameForLookup = nameHint
 		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
 	}
@@ -687,6 +751,21 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	for _, param := range node.Parameters {
 		// Skip 'this' parameters - they don't have names and don't get compiled as regular parameters
 		if param.IsThis {
+			continue
+		}
+		// Skip destructuring parameters if parser didn't transform them
+		// The desugared declaration statements in the function body will handle binding
+		if param.IsDestructuring {
+			// Parser should have transformed these, but if not, skip them
+			// The destructuring pattern will be handled as statements in the function body
+			debugPrintf("// [Compiling Function Literal] %s: Skipping untransformed destructuring parameter\n", determinedFuncName)
+			continue
+		}
+		// param.Name should never be nil for non-destructuring parameters
+		if param.Name == nil {
+			// Create a temporary identifier node for error reporting
+			tempNode := &parser.Identifier{Token: param.Token, Value: "<parameter>"}
+			functionCompiler.addError(tempNode, "parameter has nil Name but IsDestructuring is false")
 			continue
 		}
 		reg := functionCompiler.regAlloc.Alloc()
@@ -702,7 +781,17 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		if param.IsThis {
 			continue
 		}
+		// Skip destructuring parameters - defaults are handled in the desugared declarations
+		if param.IsDestructuring {
+			continue
+		}
 		if param.DefaultValue != nil {
+			// param.Name should not be nil here (we checked IsDestructuring above)
+			if param.Name == nil {
+				tempNode := &parser.Identifier{Token: param.Token, Value: "<parameter>"}
+				functionCompiler.addError(tempNode, "non-destructuring parameter has nil Name")
+				continue
+			}
 			// Get the parameter's register
 			symbol, _, exists := functionCompiler.currentSymbolTable.Resolve(param.Name.Value)
 			if !exists {
@@ -808,7 +897,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			arity++
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator)
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, false) // isArrowFunction = false for regular functions
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// <<< REMOVE OpClosure EMISSION FROM HERE (should already be removed) >>>

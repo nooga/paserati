@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"fmt"
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -117,21 +118,35 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	numberProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
-		
-		// Return the primitive number value
+
+		// If this is a primitive number, return it
 		if thisNum.Type() == vm.TypeFloatNumber || thisNum.Type() == vm.TypeIntegerNumber {
 			return thisNum, nil
 		}
-		
-		// Convert if possible
-		return vm.NumberValue(thisNum.ToFloat()), nil
+
+		// If this is a Number wrapper object, extract [[PrimitiveValue]]
+		if thisNum.IsObject() {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+				return primitiveVal, nil
+			}
+		}
+
+		// TypeError: Number.prototype.valueOf requires that 'this' be a Number
+		return vm.Undefined, fmt.Errorf("Number.prototype.valueOf requires that 'this' be a Number")
 	}))
 
 	numberProto.SetOwn("toFixed", vm.NewNativeFunction(1, false, "toFixed", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
-		
+
+		// Extract primitive value from wrapper if needed
+		if thisNum.IsObject() {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+				thisNum = primitiveVal
+			}
+		}
+
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.NewString(thisNum.ToString()), nil
+			return vm.Undefined, fmt.Errorf("Number.prototype.toFixed requires that 'this' be a Number")
 		}
 
 		digits := 0
@@ -149,9 +164,16 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	numberProto.SetOwn("toExponential", vm.NewNativeFunction(1, false, "toExponential", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
-		
+
+		// Extract primitive value from wrapper if needed
+		if thisNum.IsObject() {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+				thisNum = primitiveVal
+			}
+		}
+
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.NewString(thisNum.ToString()), nil
+			return vm.Undefined, fmt.Errorf("Number.prototype.toExponential requires that 'this' be a Number")
 		}
 
 		digits := -1
@@ -169,9 +191,16 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	numberProto.SetOwn("toPrecision", vm.NewNativeFunction(1, false, "toPrecision", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
-		
+
+		// Extract primitive value from wrapper if needed
+		if thisNum.IsObject() {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+				thisNum = primitiveVal
+			}
+		}
+
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.NewString(thisNum.ToString()), nil
+			return vm.Undefined, fmt.Errorf("Number.prototype.toPrecision requires that 'this' be a Number")
 		}
 
 		if len(args) == 0 {
@@ -193,35 +222,45 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create Number constructor function
 	numberConstructor := vm.NewNativeFunctionWithProps(1, false, "Number", func(args []vm.Value) (vm.Value, error) {
+		// Determine the primitive number value
+		var primitiveValue float64
 		if len(args) == 0 {
-			return vm.NumberValue(0), nil
+			primitiveValue = 0
+		} else {
+			arg := args[0]
+			switch arg.Type() {
+			case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+				primitiveValue = arg.ToFloat()
+			case vm.TypeString:
+				str := arg.ToString()
+				if str == "" {
+					primitiveValue = 0
+				} else if val, err := strconv.ParseFloat(str, 64); err == nil {
+					primitiveValue = val
+				} else {
+					primitiveValue = math.NaN()
+				}
+			case vm.TypeBoolean:
+				if arg.AsBoolean() {
+					primitiveValue = 1
+				} else {
+					primitiveValue = 0
+				}
+			case vm.TypeNull:
+				primitiveValue = 0
+			case vm.TypeUndefined:
+				primitiveValue = math.NaN()
+			default:
+				primitiveValue = math.NaN()
+			}
 		}
-		
-		arg := args[0]
-		switch arg.Type() {
-		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			return arg, nil
-		case vm.TypeString:
-			str := arg.ToString()
-			if str == "" {
-				return vm.NumberValue(0), nil
-			}
-			if val, err := strconv.ParseFloat(str, 64); err == nil {
-				return vm.NumberValue(val), nil
-			}
-			return vm.NaN, nil
-		case vm.TypeBoolean:
-			if arg.AsBoolean() {
-				return vm.NumberValue(1), nil
-			}
-			return vm.NumberValue(0), nil
-		case vm.TypeNull:
-			return vm.NumberValue(0), nil
-		case vm.TypeUndefined:
-			return vm.NaN, nil
-		default:
-			return vm.NaN, nil
+
+		// If called with 'new', return a Number wrapper object
+		if vmInstance.IsConstructorCall() {
+			return vmInstance.NewNumberObject(primitiveValue), nil
 		}
+		// Otherwise, return primitive number (type coercion)
+		return vm.NumberValue(primitiveValue), nil
 	})
 
 	// Add Number static properties

@@ -97,6 +97,9 @@ type PlainObject struct {
 	// Accessor storage keyed by PropertyKey.hash()
 	getters map[string]Value
 	setters map[string]Value
+	// Private field storage (ECMAScript # fields)
+	// Keyed by field name (without the # prefix)
+	privateFields map[string]Value
 }
 
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
@@ -368,33 +371,22 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 			return
 		}
 	}
-	// New field
+	// New field - for accessors, always create a new shape (don't use transitions)
+	// because accessor properties have different semantics than data properties
 	cur := o.shape
-	cur.mu.RLock()
-	next, ok := cur.transitions[keyFromString(name).hash()]
-	cur.mu.RUnlock()
-	if !ok {
-		off := len(cur.fields)
-		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: false, enumerable: false, configurable: false, isAccessor: true}
-		if enumerable != nil {
-			fld.enumerable = *enumerable
-		}
-		if configurable != nil {
-			fld.configurable = *configurable
-		}
-		newFields := make([]Field, len(cur.fields)+1)
-		copy(newFields, cur.fields)
-		newFields[len(cur.fields)] = fld
-		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
-		cur.mu.Lock()
-		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
-			next = existing
-		} else {
-			cur.transitions[keyFromString(name).hash()] = next
-		}
-		cur.mu.Unlock()
+	off := len(cur.fields)
+	fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: false, enumerable: false, configurable: false, isAccessor: true}
+	if enumerable != nil {
+		fld.enumerable = *enumerable
 	}
+	if configurable != nil {
+		fld.configurable = *configurable
+	}
+	newFields := make([]Field, len(cur.fields)+1)
+	copy(newFields, cur.fields)
+	newFields[len(cur.fields)] = fld
+	newTrans := make(map[string]*Shape)
+	next := &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
 	o.shape = next
 	// Ensure maps
 	if o.getters == nil {
@@ -649,6 +641,37 @@ func (o *PlainObject) GetPrototype() Value {
 func (o *PlainObject) SetPrototype(proto Value) {
 	o.prototype = proto
 	// TODO: Invalidate related caches
+}
+
+// GetPrivateField retrieves a private field value (ECMAScript # fields)
+// Returns (value, true) if the field exists, (Undefined, false) otherwise
+func (o *PlainObject) GetPrivateField(name string) (Value, bool) {
+	if o.privateFields == nil {
+		return Undefined, false
+	}
+	v, ok := o.privateFields[name]
+	if !ok {
+		return Undefined, false
+	}
+	return v, true
+}
+
+// SetPrivateField sets a private field value (ECMAScript # fields)
+// Creates the privateFields map if it doesn't exist
+func (o *PlainObject) SetPrivateField(name string, value Value) {
+	if o.privateFields == nil {
+		o.privateFields = make(map[string]Value)
+	}
+	o.privateFields[name] = value
+}
+
+// HasPrivateField checks if a private field exists
+func (o *PlainObject) HasPrivateField(name string) bool {
+	if o.privateFields == nil {
+		return false
+	}
+	_, ok := o.privateFields[name]
+	return ok
 }
 
 type DictObject struct {

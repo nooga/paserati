@@ -89,6 +89,9 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	referenceErrorPrototype.SetOwn("constructor", referenceErrorConstructor)
 
+	// Store in VM for later use
+	vmInstance.ReferenceErrorPrototype = vm.NewValueFromPlainObject(referenceErrorPrototype)
+
 	// Define globally
 	return ctx.DefineGlobal("ReferenceError", referenceErrorConstructor)
 }

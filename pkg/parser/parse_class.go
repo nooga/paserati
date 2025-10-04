@@ -252,6 +252,32 @@ func (p *Parser) parseClassBody() *ClassBody {
 					properties = append(properties, property)
 				}
 			}
+		} else if p.curTokenIs(lexer.PRIVATE_IDENT) {
+			// IMPORTANT: Check for private fields/methods (#name) BEFORE isValidMethodName()
+			// because isValidMethodName() also matches PRIVATE_IDENT tokens
+			// Private field or method: #fieldName or #methodName()
+			// Private fields/methods are always implicitly private
+			// They cannot have explicit access modifiers
+			if isPublic || isPrivate || isProtected {
+				p.addError(p.curToken, "private fields/methods (#name) cannot have explicit access modifiers")
+				p.nextToken()
+				continue
+			}
+
+			// Check if this is a private method (followed by '(') or private field
+			if p.peekTokenIs(lexer.LPAREN) {
+				// Private method: #methodName()
+				method := p.parsePrivateMethod(isStatic)
+				if method != nil {
+					methods = append(methods, method)
+				}
+			} else {
+				// Private field: #fieldName
+				property := p.parsePrivateProperty(isStatic, isReadonly)
+				if property != nil {
+					properties = append(properties, property)
+				}
+			}
 		} else if p.isValidMethodName() {
 			if p.curToken.Literal == "constructor" {
 				// Parse constructor - let it decide if it's signature or implementation
@@ -288,31 +314,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 					}
 				}
 			}
-		} else if p.curTokenIs(lexer.PRIVATE_IDENT) {
-			// Private field or method: #fieldName or #methodName()
-			// Private fields/methods are always implicitly private
-			// They cannot have explicit access modifiers
-			if isPublic || isPrivate || isProtected {
-				p.addError(p.curToken, "private fields/methods (#name) cannot have explicit access modifiers")
-				p.nextToken()
-				continue
-			}
-			
-			// Check if this is a private method (followed by '(') or private field
-			if p.peekTokenIs(lexer.LPAREN) {
-				// Private method: #methodName()
-				method := p.parsePrivateMethod(isStatic)
-				if method != nil {
-					methods = append(methods, method)
-				}
-			} else {
-				// Private field: #fieldName
-				property := p.parsePrivateProperty(isStatic, isReadonly)
-				if property != nil {
-					properties = append(properties, property)
-				}
-			}
 		} else {
+			// Remove duplicate PRIVATE_IDENT check - now handled earlier in the chain
 			p.addError(p.curToken, "expected identifier, 'get', 'set', or '[' in class body")
 			p.nextToken()
 		}
@@ -410,7 +413,10 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 		ReturnTypeAnnotation: returnTypeAnnotation,
 		Body:                 body,
 	}
-	
+
+	// Transform destructuring parameters
+	functionLiteral = p.transformFunctionWithDestructuring(functionLiteral)
+
 	return &MethodDefinition{
 		Token:       constructorToken,
 		Key:         &Identifier{Token: constructorToken, Value: "constructor"},
@@ -522,7 +528,10 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		ReturnTypeAnnotation: returnTypeAnnotation,
 		Body:                 body,
 	}
-	
+
+	// Transform destructuring parameters
+	functionLiteral = p.transformFunctionWithDestructuring(functionLiteral)
+
 	return &MethodDefinition{
 		Token:       methodToken,
 		Key:         methodName,
@@ -830,10 +839,13 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	}
 	
 	functionLiteral.Body = p.parseBlockStatement()
-	
+
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
-	
+
+	// Transform destructuring parameters
+	functionLiteral = p.transformFunctionWithDestructuring(functionLiteral)
+
 	return &MethodDefinition{
 		Token:       setToken,
 		Key:         propertyName,
@@ -965,7 +977,10 @@ func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expressio
 		ReturnTypeAnnotation: returnTypeAnnotation,
 		Body:                 body,
 	}
-	
+
+	// Transform destructuring parameters
+	functionLiteral = p.transformFunctionWithDestructuring(functionLiteral)
+
 	return &MethodDefinition{
 		Token:       bracketToken,
 		Key:         &ComputedPropertyName{Expr: keyExpr}, // Use computed property name
@@ -1128,7 +1143,10 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		ReturnTypeAnnotation: returnTypeAnnotation,
 		Body:                 body,
 	}
-	
+
+	// Transform destructuring parameters
+	functionLiteral = p.transformFunctionWithDestructuring(functionLiteral)
+
 	return &MethodDefinition{
 		Token:       methodToken,
 		Key:         methodName,

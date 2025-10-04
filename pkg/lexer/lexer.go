@@ -409,6 +409,9 @@ func (l *Lexer) SetPosition(pos int) {
 
 // NewLexer creates a new Lexer.
 func NewLexer(input string) *Lexer {
+	// Preprocess Unicode escapes, but preserve them in strings and comments
+	input = PreprocessUnicodeEscapesContextAware(input)
+
 	// Create a default source file for backward compatibility
 	sourceFile := source.NewEvalSource(input)
 	return NewLexerWithSource(sourceFile)
@@ -527,8 +530,9 @@ func (l *Lexer) peekChar() byte {
 // It relies on readChar to update line and column counts.
 func (l *Lexer) skipWhitespace() {
 	for {
-		// ASCII whitespace (fast path)
-		if l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
+		// ASCII whitespace and control characters (fast path)
+		if l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' ||
+			l.ch == '\f' || l.ch == '\v' { // Form feed and vertical tab
 			l.readChar()
 			continue
 		}
@@ -544,12 +548,243 @@ func (l *Lexer) skipWhitespace() {
 					l.readChar()
 				}
 				continue
+			} else if r != utf8.RuneError && isInvalidInTokenStream(r) {
+				// This is a Format control character that should not appear in token stream
+				// Don't skip it - let the main tokenization handle it as illegal token
+				break
 			}
 		}
 
 		// Not whitespace, stop skipping
 		break
 	}
+}
+
+// skipWhitespaceAndPeek skips whitespace and returns the next non-whitespace character
+// without consuming any characters - just looks ahead
+func (l *Lexer) skipWhitespaceAndPeek() byte {
+	savedPos := l.position
+	savedReadPos := l.readPosition
+	savedLine := l.line
+	savedColumn := l.column
+	savedCh := l.ch
+
+	// First advance to the next character
+	l.readChar()
+
+	// Then skip any whitespace
+	l.skipWhitespace()
+
+	nextChar := l.ch
+
+	// Restore position
+	l.position = savedPos
+	l.readPosition = savedReadPos
+	l.line = savedLine
+	l.column = savedColumn
+	l.ch = savedCh // Restore the original character
+
+	return nextChar
+}
+
+// PreprocessUnicodeEscapesContextAware replaces unicode escape sequences with actual characters,
+// but only when NOT inside string literals, comments, or other contexts where they should remain as escapes
+func PreprocessUnicodeEscapesContextAware(input string) string {
+	result := strings.Builder{}
+	i := 0
+	inString := false
+	stringChar := byte(0)
+	inLineComment := false
+	inBlockComment := false
+
+	for i < len(input) {
+		if inLineComment {
+			// Inside line comment - copy everything until end of line
+			if input[i] == '\n' {
+				inLineComment = false
+			}
+			result.WriteByte(input[i])
+			i++
+			continue
+		}
+
+		if inBlockComment {
+			// Inside block comment - copy everything until */
+			if input[i] == '*' && i+1 < len(input) && input[i+1] == '/' {
+				inBlockComment = false
+				result.WriteByte(input[i])
+				result.WriteByte(input[i+1])
+				i += 2
+				continue
+			}
+			result.WriteByte(input[i])
+			i++
+			continue
+		}
+
+		if inString {
+			// Inside string literal
+			if input[i] == stringChar {
+				// End of string
+				inString = false
+				stringChar = 0
+				result.WriteByte(input[i])
+				i++
+				continue
+			} else if input[i] == '\\' && i+1 < len(input) {
+				// Escape sequence inside string - keep as literal escape
+				result.WriteByte(input[i])
+				result.WriteByte(input[i+1])
+				i += 2
+				continue
+			} else {
+				// Regular character inside string
+				result.WriteByte(input[i])
+				i++
+				continue
+			}
+		}
+
+		// Not in any special context - check for string start
+		if input[i] == '"' || input[i] == '\'' || input[i] == '`' {
+			inString = true
+			stringChar = input[i]
+			result.WriteByte(input[i])
+			i++
+			continue
+		}
+
+		// Check for comments
+		if input[i] == '/' && i+1 < len(input) {
+			if input[i+1] == '/' {
+				// Line comment start
+				inLineComment = true
+				result.WriteByte(input[i])
+				result.WriteByte(input[i+1])
+				i += 2
+				continue
+			} else if input[i+1] == '*' {
+				// Block comment start
+				inBlockComment = true
+				result.WriteByte(input[i])
+				result.WriteByte(input[i+1])
+				i += 2
+				continue
+			}
+		}
+
+		// Process Unicode escapes in code context (not in strings/comments)
+		if input[i] == '\\' && i+1 < len(input) && input[i+1] == 'u' {
+			// Found unicode escape sequence
+			i++ // Skip '\'
+			i++ // Skip 'u'
+
+			var unicodeHex string
+			var isBraced bool
+
+			if i < len(input) && input[i] == '{' {
+				// \u{XXXX} format
+				i++ // Skip '{'
+				for i < len(input) && input[i] != '}' && isHexDigit(input[i]) {
+					unicodeHex += string(input[i])
+					i++
+				}
+				if i < len(input) && input[i] == '}' {
+					i++ // Skip '}'
+					isBraced = true
+				}
+			} else {
+				// \uXXXX format
+				for j := 0; j < 4 && i < len(input) && isHexDigit(input[i]); j++ {
+					unicodeHex += string(input[i])
+					i++
+				}
+			}
+
+			// Convert hex to character
+			if len(unicodeHex) > 0 {
+				if codePoint, err := strconv.ParseInt(unicodeHex, 16, 32); err == nil {
+					result.WriteRune(rune(codePoint))
+				} else {
+					// Invalid hex, keep original
+					result.WriteString("\\u")
+					if isBraced {
+						result.WriteByte('{')
+						result.WriteString(unicodeHex)
+						result.WriteByte('}')
+					} else {
+						result.WriteString(unicodeHex)
+					}
+				}
+			} else {
+				// No hex digits found, keep original
+				result.WriteString("\\u")
+				if isBraced {
+					result.WriteByte('{')
+				}
+			}
+		} else {
+			// Regular character
+			result.WriteByte(input[i])
+			i++
+		}
+	}
+
+	return result.String()
+}
+
+// isWhitespaceUnicodeEscape checks if the current position contains a Unicode escape
+// sequence that resolves to a whitespace character
+func (l *Lexer) isWhitespaceUnicodeEscape() bool {
+	// Save current position
+	savedPos := l.readPosition
+	savedLine := l.line
+	savedColumn := l.column
+
+	// Skip '\u' part
+	l.readChar() // Skip '\'
+	l.readChar() // Skip 'u'
+
+	var unicodeHex string
+	if l.ch == '{' {
+		// \u{XXXX} format
+		l.readChar() // Skip '{'
+		for l.ch != 0 && l.ch != '}' && isHexDigit(l.ch) {
+			unicodeHex += string(l.ch)
+			l.readChar()
+		}
+		if l.ch == '}' {
+			l.readChar() // Skip '}'
+		}
+	} else {
+		// \uXXXX format
+		for i := 0; i < 4 && isHexDigit(l.ch); i++ {
+			unicodeHex += string(l.ch)
+			l.readChar()
+		}
+	}
+
+	// Check if the hex value is a whitespace character
+	if len(unicodeHex) > 0 {
+		if codePoint, err := strconv.ParseInt(unicodeHex, 16, 32); err == nil {
+			r := rune(codePoint)
+			if isUnicodeWhitespace(r) {
+				// Restore position and return true
+				l.readPosition = savedPos
+				l.line = savedLine
+				l.column = savedColumn
+				l.ch = l.input[savedPos-1]
+				return true
+			}
+		}
+	}
+
+	// Restore position and return false
+	l.readPosition = savedPos
+	l.line = savedLine
+	l.column = savedColumn
+	l.ch = l.input[savedPos-1]
+	return false
 }
 
 // isUnicodeWhitespace checks if a rune is considered whitespace in JavaScript/ECMAScript
@@ -570,6 +805,29 @@ func isUnicodeWhitespace(r rune) bool {
 		0x3000, // Ideographic space
 		0xFEFF: // Zero width no-break space (BOM)
 		return true
+	}
+	return false
+}
+
+// isFormatControlCharacter checks if a rune is a Format control character that should not appear in token streams
+func isFormatControlCharacter(r rune) bool {
+	// Format control characters that should not appear in unexpected positions
+	switch r {
+	case 0x180E: // Mongolian Vowel Separator (U+180E) - should cause SyntaxError
+		return true
+	}
+	return false
+}
+
+// isInvalidInTokenStream checks if a Unicode character is invalid in the token stream
+func isInvalidInTokenStream(r rune) bool {
+	// Characters that should not appear in the token stream and should cause SyntaxError
+	if isFormatControlCharacter(r) {
+		return true
+	}
+	// For debugging - log all Unicode characters >= 128
+	if r >= 128 {
+		debugPrintf("isInvalidInTokenStream: checking character U+%04X (%c)", r, r)
 	}
 	return false
 }
@@ -600,6 +858,29 @@ func (l *Lexer) NextToken() Token {
 	startLine := l.line
 	startCol := l.column
 	startPos := l.position
+
+	// --- NEW: Check for invalid Unicode characters in token stream ---
+	if l.ch >= 128 {
+		remaining := []byte(l.input[l.position:])
+		r, size := utf8.DecodeRune(remaining)
+		if r != utf8.RuneError && isInvalidInTokenStream(r) {
+			// This is a Format control character that should not appear in token stream
+			illegalLiteral := string(r)
+			illegalToken := Token{
+				Type:     ILLEGAL,
+				Literal:  illegalLiteral,
+				Line:     startLine,
+				Column:   startCol,
+				StartPos: startPos,
+				EndPos:   startPos + size,
+			}
+			// Skip the invalid character
+			for i := 0; i < size; i++ {
+				l.readChar()
+			}
+			return illegalToken
+		}
+	}
 
 	// --- NEW: Handle template literal state ---
 	if l.inTemplate && l.braceDepth == 0 {
@@ -787,7 +1068,8 @@ func (l *Lexer) NextToken() Token {
 			// Try to read as regex literal
 			pattern, flags, success, foundComplete := l.readRegexLiteral()
 			if success {
-				// Successfully read regex literal
+				// Successfully read regex literal - skip any whitespace that follows
+				l.skipWhitespace()
 				literal := "/" + pattern + "/" + flags
 				tok = Token{Type: REGEX_LITERAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			} else if foundComplete {
@@ -875,15 +1157,20 @@ func (l *Lexer) NextToken() Token {
 		tok = Token{Type: BITWISE_NOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 
 	case '<':
-		peek := l.peekChar()
-		if peek == '=' { // Less than or equal <=
+		// Check if next non-whitespace character is '=' for <=
+		peekAfterWS := l.skipWhitespaceAndPeek()
+		if peekAfterWS == '=' { // Less than or equal <=
+			l.skipWhitespace()                          // Actually consume the whitespace
 			l.readChar()                                // Consume '='
 			literal := l.input[startPos : l.position+1] // Read the actual '<='
 			l.readChar()                                // Advance past '='
 			tok = Token{Type: LE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else if peek == '<' { // Left shift << or Left shift assignment <<=
-			l.readChar()             // Consume second '<'
-			if l.peekChar() == '=' { // Check for <<=
+		} else if peekAfterWS == '<' { // Left shift << or Left shift assignment <<=
+			l.skipWhitespace() // Actually consume the whitespace
+			l.readChar()       // Consume second '<'
+			peek2AfterWS := l.skipWhitespaceAndPeek()
+			if peek2AfterWS == '=' { // Check for <<=
+				l.skipWhitespace()                          // Actually consume the whitespace
 				l.readChar()                                // Consume '='
 				literal := l.input[startPos : l.position+1] // Read "<<="
 				l.readChar()                                // Advance past '='
@@ -899,41 +1186,50 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: LT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '>':
-		peek := l.peekChar()
-		if peek == '=' { // Greater than or equal >=
+		// Check for >= without whitespace (ECMAScript requires no whitespace in compound tokens)
+		if l.peekChar() == '=' { // Greater than or equal >=
 			l.readChar()                                // Consume '='
 			literal := l.input[startPos : l.position+1] // Read the actual '>='
 			l.readChar()                                // Advance past '='
 			tok = Token{Type: GE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else if peek == '>' { // Right shift >>, Unsigned right shift >>>, or assignments
-			l.readChar() // Consume second '>'
-			peek2 := l.peekChar()
-			if peek2 == '>' { // Potential >>> or >>>=
-				l.readChar()             // Consume third '>'
-				if l.peekChar() == '=' { // Check for >>>=
-					l.readChar()                                // Consume '='
-					literal := l.input[startPos : l.position+1] // Read ">>>="
-					l.readChar()                                // Advance past '='
+		} else {
+			// Check for >> operators (allow whitespace for TypeScript generic syntax)
+			peekAfterWS := l.skipWhitespaceAndPeek()
+			if peekAfterWS == '>' { // Right shift >>, Unsigned right shift >>>, or assignments
+			l.skipWhitespace() // Actually consume the whitespace
+			l.readChar()       // Consume second '>'
+			peek2AfterWS := l.skipWhitespaceAndPeek()
+			if peek2AfterWS == '>' { // Potential >>> or >>>=
+				l.skipWhitespace() // Actually consume the whitespace
+				l.readChar()       // Consume third '>'
+				peek3AfterWS := l.skipWhitespaceAndPeek()
+				if peek3AfterWS == '=' { // Check for >>>=
+					l.skipWhitespace()                                             // Actually consume the whitespace
+					l.readChar()                                                   // Consume '='
+					literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>="
+					l.readChar()                                                   // Advance past '='
 					tok = Token{Type: UNSIGNED_RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				} else { // Just >>>
-					literal := l.input[startPos : l.position+1] // Read ">>>"
-					l.readChar()                                // Advance past third '>'
+					literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>"
+					l.readChar()                                                   // Advance past third '>'
 					tok = Token{Type: UNSIGNED_RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				}
-			} else if peek2 == '=' { // Check for >>=
-				l.readChar()                                // Consume '='
-				literal := l.input[startPos : l.position+1] // Read ">>="
-				l.readChar()                                // Advance past '='
+			} else if peek2AfterWS == '=' { // Check for >>=
+				l.skipWhitespace()                                             // Actually consume the whitespace
+				l.readChar()                                                   // Consume '='
+				literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>="
+				l.readChar()                                                   // Advance past '='
 				tok = Token{Type: RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			} else { // Just >>
-				literal := l.input[startPos : l.position+1] // Read ">>"
-				l.readChar()                                // Advance past second '>'
+				literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>"
+				l.readChar()                                                   // Advance past second '>'
 				tok = Token{Type: RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
-		} else { // Just Greater than >
-			literal := string(l.ch) // Just '>'
-			l.readChar()            // Advance past '>'
-			tok = Token{Type: GT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // Just Greater than >
+				literal := string(l.ch) // Just '>'
+				l.readChar()            // Advance past '>'
+				tok = Token{Type: GT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			}
 		}
 	case ';':
 		literal := string(l.ch)
@@ -1074,6 +1370,11 @@ func (l *Lexer) NextToken() Token {
 			if l.ch == 'n' {
 				l.readChar() // Consume the 'n' suffix
 				tok = Token{Type: BIGINT, Literal: literal + "n", Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				// Debug: Check if this looks like it might be mis-tokenized
+				if strings.Contains(literal, ".") {
+					// This should not happen for valid BigInt literals
+					fmt.Printf("DEBUG: Lexer produced BIGINT token with literal: %q\n", literal)
+				}
 			} else {
 				tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}

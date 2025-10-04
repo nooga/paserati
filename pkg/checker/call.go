@@ -318,13 +318,123 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 		return
 	}
 	
-	// Visit and type-check arguments
-	for _, arg := range node.Arguments {
-		c.visit(arg)
+	// Type-check and validate arguments against constructor signature
+	if len(finalConstructor.ConstructSignatures) > 0 {
+		constructorSig := finalConstructor.ConstructSignatures[0]
+
+		// First validate all spread arguments
+		hasSpreadErrors := false
+		currentArgIndex := 0
+		for _, arg := range node.Arguments {
+			if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+				if !c.validateSpreadArgument(spreadElement, constructorSig.IsVariadic, constructorSig.ParameterTypes, currentArgIndex) {
+					hasSpreadErrors = true
+				}
+			}
+			currentArgIndex += 1
+		}
+
+		// If there are spread errors, skip detailed arity checking
+		if !hasSpreadErrors {
+			// Calculate effective argument count, expanding spread elements
+			actualArgCount := c.calculateEffectiveArgCount(node.Arguments)
+
+			if constructorSig.IsVariadic {
+				// Variadic constructor - check minimum required args
+				minExpectedArgs := len(constructorSig.ParameterTypes)
+				if len(constructorSig.OptionalParams) == len(constructorSig.ParameterTypes) {
+					for i := len(constructorSig.ParameterTypes) - 1; i >= 0; i-- {
+						if constructorSig.OptionalParams[i] {
+							minExpectedArgs--
+						} else {
+							break
+						}
+					}
+				}
+
+				if actualArgCount < minExpectedArgs {
+					c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minExpectedArgs, actualArgCount))
+				} else {
+					// Check fixed arguments
+					fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
+
+					// Check variadic arguments
+					if fixedArgsOk && constructorSig.RestParameterType != nil {
+						arrayType, isArray := constructorSig.RestParameterType.(*types.ArrayType)
+						if !isArray {
+							c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", constructorSig.RestParameterType.String()))
+						} else {
+							variadicElementType := arrayType.ElementType
+							if variadicElementType == nil {
+								variadicElementType = types.Any
+							}
+							// Check remaining arguments against the element type
+							for i := len(constructorSig.ParameterTypes); i < len(node.Arguments); i++ {
+								argNode := node.Arguments[i]
+
+								if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
+									if !c.validateSpreadArgument(spreadElement, true, []types.Type{}, 0) {
+										continue
+									}
+
+									c.visit(spreadElement.Argument)
+									argType := spreadElement.Argument.GetComputedType()
+									if argType == nil {
+										continue
+									}
+
+									if !types.IsAssignable(argType, constructorSig.RestParameterType) {
+										c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), constructorSig.RestParameterType.String()))
+									}
+								} else {
+									c.visitWithContext(argNode, &ContextualType{
+										ExpectedType: variadicElementType,
+										IsContextual: true,
+									})
+
+									argType := argNode.GetComputedType()
+									if argType == nil {
+										continue
+									}
+
+									if !types.IsAssignable(argType, variadicElementType) {
+										c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
+									}
+								}
+							}
+						}
+					}
+				}
+			} else {
+				// Non-variadic constructor
+				expectedArgCount := len(constructorSig.ParameterTypes)
+				minRequiredArgs := expectedArgCount
+				if len(constructorSig.OptionalParams) == expectedArgCount {
+					for i := expectedArgCount - 1; i >= 0; i-- {
+						if constructorSig.OptionalParams[i] {
+							minRequiredArgs--
+						} else {
+							break
+						}
+					}
+				}
+
+				if actualArgCount < minRequiredArgs {
+					c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
+				} else if actualArgCount > expectedArgCount {
+					c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
+				} else {
+					c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
+				}
+			}
+		}
+	} else {
+		// No constructor signature - just visit args
+		for _, arg := range node.Arguments {
+			c.visit(arg)
+		}
 	}
-	
-	// TODO: Validate argument types against constructor signature
-	
+
 	// The result type is void (constructors don't return values in the normal sense)
 	node.SetComputedType(types.Void)
 }

@@ -106,12 +106,9 @@ func (vm *VM) unwindException() bool {
 			if debugExceptions {
 				fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d; stopping and returning error to native caller\n", vm.frameCount-1)
 			}
-			// Pop the direct-call frame and reclaim its registers so the caller receives an error
-			dcFrame := &vm.frames[vm.frameCount-1]
-			if dcFrame.closure != nil && dcFrame.closure.Fn != nil {
-				vm.nextRegSlot -= dcFrame.closure.Fn.RegisterSize
-			}
-			vm.frameCount--
+			// DON'T pop the frame here - let the VM loop or executeUserFunctionSafe handle it
+			// Popping the frame here would cause issues because we're still executing code in this frame
+			// Just return true to indicate we hit a boundary
 			return true
 		}
 

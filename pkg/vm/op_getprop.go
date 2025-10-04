@@ -381,6 +381,125 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		return true, InterpretOK, *dest
 	}
 
+	// 13. Proxy objects - delegate to handler
+	if objVal.Type() == TypeProxy {
+		proxy := objVal.AsProxy()
+		if proxy.Revoked {
+			// Proxy is revoked, throw TypeError
+			var excVal Value
+			if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+				if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("Cannot perform property access on a revoked Proxy")}); callErr == nil {
+					excVal = res
+				}
+			}
+			if excVal.Type() == 0 {
+				eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+				eo.SetOwn("name", NewString("TypeError"))
+				eo.SetOwn("message", NewString("Cannot perform property access on a revoked Proxy"))
+				excVal = NewValueFromPlainObject(eo)
+			}
+			vm.throwException(excVal)
+			return false, InterpretRuntimeError, Undefined
+		}
+
+		// Check if handler has a get trap
+		getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
+		if ok && getTrap.IsFunction() {
+			// Call the get trap: handler.get(target, propertyKey, receiver)
+			trapArgs := []Value{proxy.target, NewString(propName), *objVal}
+			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+				// Wrap non-exception Go error
+				var excVal Value
+				if errCtor, ok := vm.GetGlobal("Error"); ok {
+					if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+						excVal = res
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+				} else {
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
+				}
+				vm.throwException(excVal)
+				return false, InterpretRuntimeError, Undefined
+			}
+			*dest = result
+			return true, InterpretOK, *dest
+		} else {
+			// No get trap, fallback to target - implement directly to avoid recursion
+			target := proxy.target
+			if target.Type() == TypeObject {
+				if result, handled := vm.handleSpecialProperties(target, propName); handled {
+					*dest = result
+					return true, InterpretOK, *dest
+				}
+				if result, handled := vm.handlePrimitiveMethod(target, propName); handled {
+					*dest = result
+					return true, InterpretOK, *dest
+				}
+				// Use enhanced property resolution with prototype caching and metadata
+				if holder, offset, isAccessor, found := vm.resolvePropertyMeta(target, propName, nil, 0); found {
+					if isAccessor {
+						if g, _, _, _, ok := holder.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+							res, err := vm.Call(g, target, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+									return false, InterpretRuntimeError, Undefined
+								}
+								var excVal Value
+								if errCtor, ok := vm.GetGlobal("Error"); ok {
+									if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+										excVal = res
+									} else {
+										eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+										eo.SetOwn("name", NewString("Error"))
+										eo.SetOwn("message", NewString(err.Error()))
+										excVal = NewValueFromPlainObject(eo)
+									}
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
+								vm.throwException(excVal)
+								return false, InterpretRuntimeError, Undefined
+							}
+							*dest = res
+						} else {
+							*dest = Undefined
+						}
+					} else {
+						*dest = holder.properties[offset]
+					}
+					return true, InterpretOK, *dest
+				}
+			} else if target.Type() == TypeDictObject {
+				dict := target.AsDictObject()
+				if fv, ok := dict.Get(propName); ok {
+					*dest = fv
+				} else {
+					*dest = Undefined
+				}
+				return true, InterpretOK, *dest
+			} else {
+				*dest = Undefined
+				return true, InterpretOK, *dest
+			}
+		}
+	}
+
 	// Shouldn't reach here, but handle as undefined
 	*dest = Undefined
 	return true, InterpretOK, *dest

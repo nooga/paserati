@@ -2,11 +2,63 @@ package compiler
 
 import (
 	"fmt"
+	"math"
 	"paserati/pkg/errors"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"strconv"
 )
+
+// cleanExponentialFormat removes leading zeros from exponent to match JS format
+// e.g., "1e-07" -> "1e-7", "1e+25" -> "1e+25"
+func cleanExponentialFormat(s string) string {
+	// Find the 'e' or 'E'
+	for i := 0; i < len(s); i++ {
+		if s[i] == 'e' || s[i] == 'E' {
+			// Check if next char is + or -
+			if i+1 < len(s) && (s[i+1] == '+' || s[i+1] == '-') {
+				sign := s[i+1]
+				// Remove leading zeros from exponent
+				expStart := i + 2
+				j := expStart
+				for j < len(s) && s[j] == '0' {
+					j++
+				}
+				// If all zeros or no digits after sign, keep one zero
+				if j >= len(s) {
+					return s[:i+2] + "0"
+				}
+				// Reconstruct: mantissa + e + sign + trimmed exponent
+				return s[:i+1] + string(sign) + s[j:]
+			}
+			break
+		}
+	}
+	return s
+}
+
+// numberToPropertyKey converts a float to a string following ECMAScript ToString specification
+// This matches the behavior in Value.ToString() for consistency
+func numberToPropertyKey(f float64) string {
+	// If it's an integer, format without decimal
+	if f == float64(int64(f)) {
+		return strconv.FormatInt(int64(f), 10)
+	}
+
+	// ECMAScript ToString specification (7.1.12.1):
+	// Use exponential notation for very small or very large numbers
+	absF := math.Abs(f)
+	// If |f| < 1e-6 or |f| >= 1e21, use exponential notation
+	// Otherwise use fixed notation
+	if absF != 0 && (absF < 1e-6 || absF >= 1e21) {
+		// Use exponential notation and clean up the format
+		exp := strconv.FormatFloat(f, 'e', -1, 64)
+		return cleanExponentialFormat(exp)
+	}
+	// Use fixed notation
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
 
 // extractPropertyName extracts the property name from a class member key
 func (c *Compiler) extractPropertyName(key parser.Expression) string {
@@ -16,7 +68,7 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 	case *parser.StringLiteral:
 		return k.Value
 	case *parser.NumberLiteral:
-		return fmt.Sprintf("%v", k.Value)
+		return numberToPropertyKey(k.Value)
 	case *parser.ComputedPropertyName:
 		// Try to extract constant property name first
 		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {
@@ -30,7 +82,7 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 		} else if literal, ok := k.Expr.(*parser.StringLiteral); ok {
 			return literal.Value
 		} else if literal, ok := k.Expr.(*parser.NumberLiteral); ok {
-			return fmt.Sprintf("%v", literal.Value)
+			return numberToPropertyKey(literal.Value)
 		} else {
 			return fmt.Sprintf("__computed_%p", k.Expr)
 		}
@@ -65,35 +117,91 @@ func (c *Compiler) tryExtractConstantComputedPropertyName(expr parser.Expression
 func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("// DEBUG compileClassDeclaration: Starting compilation for class '%s'\n", node.Name.Value)
 
-	// 1. Create constructor function
-	constructorReg, err := c.compileConstructor(node)
+	// If there's a super class, ensure it's defined before we compile the constructor
+	var superConstructorReg Register
+	var needToFreeSuperReg bool
+	if node.SuperClass != nil {
+		// Get the superclass name
+		var superClassName string
+		if ident, ok := node.SuperClass.(*parser.Identifier); ok {
+			superClassName = ident.Value
+		} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
+			superClassName = genericTypeRef.Name.Value
+		} else {
+			superClassName = node.SuperClass.String()
+		}
+
+		// Look up the parent class constructor
+		symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
+		if exists {
+			// Found in symbol table
+			if symbol.IsGlobal {
+				superConstructorReg = c.regAlloc.Alloc()
+				needToFreeSuperReg = true
+				c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+			} else {
+				superConstructorReg = symbol.Register
+				needToFreeSuperReg = false
+			}
+		} else {
+			// Not in symbol table - might be a built-in class (Object, Array, etc.)
+			// Emit code to look up the global variable at runtime
+			globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+			superConstructorReg = c.regAlloc.Alloc()
+			needToFreeSuperReg = true
+			c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+		}
+	}
+
+	// 1. Pre-define the class name so the constructor can reference it
+	// This is needed for cases like: constructor() { Counter.increment(); }
+	// We temporarily define it with nilRegister, then update it later
+	if c.enclosing == nil {
+		// Top-level class declaration
+		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+		c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
+	} else {
+		// Local class declaration
+		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s'\n", node.Name.Value)
+	}
+
+	// 2. Create constructor function
+	constructorReg, err := c.compileConstructor(node, superConstructorReg)
 	if err != nil {
+		if needToFreeSuperReg {
+			c.regAlloc.Free(superConstructorReg)
+		}
 		return BadRegister, err
 	}
 
-	// 2. Set up prototype object with methods
+	if needToFreeSuperReg {
+		c.regAlloc.Free(superConstructorReg)
+	}
+
+	// 3. Set up prototype object with methods
 	err = c.setupClassPrototype(node, constructorReg)
 	if err != nil {
 		return BadRegister, err
 	}
 
-	// 3. Set up static members on the constructor
+	// 4. Set up static members on the constructor
 	err = c.setupStaticMembers(node, constructorReg)
 	if err != nil {
 		return BadRegister, err
 	}
 
-	// 4. Store the class constructor globally
+	// 5. Update the class constructor register/global
 	if c.enclosing == nil {
-		// Top-level class declaration - define as global
-		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-		c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		c.emitSetGlobal(globalIdx, constructorReg, node.Token.Line)
-		debugPrintf("// DEBUG compileClassDeclaration: Defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
+		// Top-level class declaration - set the global value
+		globalIdx := c.GetGlobalIndex(node.Name.Value)
+		c.emitSetGlobal(uint16(globalIdx), constructorReg, node.Token.Line)
+		debugPrintf("// DEBUG compileClassDeclaration: Set global class '%s' to R%d\n", node.Name.Value, constructorReg)
 	} else {
-		// Local class declaration (inside function/block)
-		c.currentSymbolTable.Define(node.Name.Value, constructorReg)
-		debugPrintf("// DEBUG compileClassDeclaration: Defined local class '%s' in R%d\n", node.Name.Value, constructorReg)
+		// Local class declaration - update the register
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, constructorReg)
+		debugPrintf("// DEBUG compileClassDeclaration: Updated local class '%s' to R%d\n", node.Name.Value, constructorReg)
 	}
 
 	// Class declarations don't produce a value for the hint register
@@ -101,7 +209,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 }
 
 // compileConstructor creates a constructor function from the class constructor method
-func (c *Compiler) compileConstructor(node *parser.ClassDeclaration) (Register, errors.PaseratiError) {
+func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstructorReg Register) (Register, errors.PaseratiError) {
 	// Find the constructor method in the class body
 	var constructorMethod *parser.MethodDefinition
 	for _, method := range node.Body.Methods {
@@ -124,11 +232,38 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration) (Register, 
 	// Inject field initializers into the constructor body
 	functionLiteral = c.injectFieldInitializers(node, functionLiteral)
 
+	// Store the super class name in the compiler context so compileSuperConstructorCall can use it
+	// This is a simple approach that avoids complex free variable handling
+	oldSuperClassName := c.compilingSuperClassName
+	if node.SuperClass != nil {
+		if ident, ok := node.SuperClass.(*parser.Identifier); ok {
+			c.compilingSuperClassName = ident.Value
+		} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
+			c.compilingSuperClassName = genericTypeRef.Name.Value
+		} else {
+			c.compilingSuperClassName = node.SuperClass.String()
+		}
+	}
+	defer func() {
+		c.compilingSuperClassName = oldSuperClassName
+	}()
+
 	// Compile the constructor function
-	nameHint := node.Name.Value
+	// Pass empty nameHint to avoid shadowing the class name in the constructor's scope
+	// The class name should be accessible from the parent scope (pre-defined above)
+	nameHint := ""
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(functionLiteral, nameHint)
 	if err != nil {
 		return BadRegister, err
+	}
+
+	// Mark as derived constructor if this class extends another class
+	if node.SuperClass != nil {
+		funcConst := c.chunk.Constants[funcConstIndex]
+		if funcConst.IsFunction() {
+			funcObj := vm.AsFunction(funcConst)
+			funcObj.IsDerivedConstructor = true
+		}
 	}
 
 	// Create closure for constructor
@@ -144,10 +279,27 @@ func (c *Compiler) createDefaultConstructor(node *parser.ClassDeclaration) *pars
 	// Create empty parameter list
 	parameters := []*parser.Parameter{}
 
-	// Create empty block statement for body
+	// Create body - for derived classes, must call super()
+	var statements []parser.Statement
+	if node.SuperClass != nil {
+		// Derived class: default constructor calls super()
+		superCall := &parser.ExpressionStatement{
+			Token: node.Token,
+			Expression: &parser.CallExpression{
+				Token:     node.Token,
+				Function:  &parser.SuperExpression{Token: node.Token},
+				Arguments: []parser.Expression{}, // No arguments
+			},
+		}
+		statements = []parser.Statement{superCall}
+	} else {
+		// Regular class: empty constructor
+		statements = []parser.Statement{}
+	}
+
 	body := &parser.BlockStatement{
 		Token:      node.Token,
-		Statements: []parser.Statement{},
+		Statements: statements,
 	}
 
 	// Create function literal
@@ -262,16 +414,16 @@ func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototy
 		c.emitByte(byte(keyReg))       // Key register (computed at runtime)
 		c.emitByte(byte(methodReg))    // Value register
 	} else {
-		// For static properties, use OpSetProp
+		// Use OpDefineMethod to create non-enumerable method
 		methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))
-		c.emitSetProp(prototypeReg, methodReg, methodNameIdx, method.Token.Line)
+		c.emitDefineMethod(prototypeReg, methodReg, methodNameIdx, method.Token.Line)
 	}
 
 	debugPrintf("// DEBUG addMethodToPrototype: Method '%s' added to prototype\n", c.extractPropertyName(method.Key))
 	return nil
 }
 
-// addGetterToPrototype compiles a getter and adds it to the prototype object with special naming
+// addGetterToPrototype compiles a getter and adds it to the prototype object
 func (c *Compiler) addGetterToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
 	debugPrintf("// DEBUG addGetterToPrototype: Adding getter '%s' to prototype\n", c.extractPropertyName(method.Key))
 
@@ -287,15 +439,35 @@ func (c *Compiler) addGetterToPrototype(method *parser.MethodDefinition, prototy
 	defer c.regAlloc.Free(getterReg)
 	c.emitClosure(getterReg, funcConstIndex, method.Value, freeSymbols)
 
-	// Store getter with special naming: prototype["__get__propertyName"] = getterFunction
-	getterNameIdx := c.chunk.AddConstant(vm.String("__get__" + c.extractPropertyName(method.Key)))
-	c.emitSetProp(prototypeReg, getterReg, getterNameIdx, method.Token.Line)
+	// Undefined setter
+	setterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(setterReg)
+	c.emitLoadUndefined(setterReg, method.Token.Line)
 
-	debugPrintf("// DEBUG addGetterToPrototype: Getter '%s' added to prototype as '__get__%s'\n", c.extractPropertyName(method.Key), c.extractPropertyName(method.Key))
+	// Check if property name is computed
+	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+		// For computed properties, evaluate the key expression at runtime
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+		// Use OpDefineAccessorDynamic for runtime-computed property name
+		c.emitDefineAccessorDynamic(prototypeReg, getterReg, setterReg, keyReg, method.Token.Line)
+		debugPrintf("// DEBUG addGetterToPrototype: Getter with computed key defined on prototype\n")
+	} else {
+		// For literal property names, use constant-based OpDefineAccessor (faster)
+		propName := c.extractPropertyName(method.Key)
+		nameIdx := c.chunk.AddConstant(vm.String(propName))
+		c.emitDefineAccessor(prototypeReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		debugPrintf("// DEBUG addGetterToPrototype: Getter '%s' defined on prototype\n", propName)
+	}
+
 	return nil
 }
 
-// addSetterToPrototype compiles a setter and adds it to the prototype object with special naming
+// addSetterToPrototype compiles a setter and adds it to the prototype object
 func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototypeReg Register, className string) errors.PaseratiError {
 	debugPrintf("// DEBUG addSetterToPrototype: Adding setter '%s' to prototype\n", c.extractPropertyName(method.Key))
 
@@ -311,11 +483,31 @@ func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototy
 	defer c.regAlloc.Free(setterReg)
 	c.emitClosure(setterReg, funcConstIndex, method.Value, freeSymbols)
 
-	// Store setter with special naming: prototype["__set__propertyName"] = setterFunction
-	setterNameIdx := c.chunk.AddConstant(vm.String("__set__" + c.extractPropertyName(method.Key)))
-	c.emitSetProp(prototypeReg, setterReg, setterNameIdx, method.Token.Line)
+	// Undefined getter
+	getterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(getterReg)
+	c.emitLoadUndefined(getterReg, method.Token.Line)
 
-	debugPrintf("// DEBUG addSetterToPrototype: Setter '%s' added to prototype as '__set__%s'\n", c.extractPropertyName(method.Key), c.extractPropertyName(method.Key))
+	// Check if property name is computed
+	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+		// For computed properties, evaluate the key expression at runtime
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+		// Use OpDefineAccessorDynamic for runtime-computed property name
+		c.emitDefineAccessorDynamic(prototypeReg, getterReg, setterReg, keyReg, method.Token.Line)
+		debugPrintf("// DEBUG addSetterToPrototype: Setter with computed key defined on prototype\n")
+	} else {
+		// For literal property names, use constant-based OpDefineAccessor (faster)
+		propName := c.extractPropertyName(method.Key)
+		nameIdx := c.chunk.AddConstant(vm.String(propName))
+		c.emitDefineAccessor(prototypeReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		debugPrintf("// DEBUG addSetterToPrototype: Setter '%s' defined on prototype\n", propName)
+	}
+
 	return nil
 }
 
@@ -384,10 +576,46 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 		return functionLiteral
 	}
 
-	// Create new body with field initializers prepended to original statements
+	// Create new body with field initializers at the correct position
+	// For derived classes, field initializers must come AFTER super() call
+	// For regular classes, they come at the beginning
 	newStatements := make([]parser.Statement, 0, len(fieldInitializers)+len(functionLiteral.Body.Statements))
-	newStatements = append(newStatements, fieldInitializers...)
-	newStatements = append(newStatements, functionLiteral.Body.Statements...)
+
+	isDerivedClass := node.SuperClass != nil
+	if isDerivedClass {
+		// Find the super() call and insert field initializers after it
+		insertPos := 0
+		foundSuper := false
+		for i, stmt := range functionLiteral.Body.Statements {
+			// Check if this statement contains a super() call
+			if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
+				if callExpr, ok := exprStmt.Expression.(*parser.CallExpression); ok {
+					if _, isSuper := callExpr.Function.(*parser.SuperExpression); isSuper {
+						insertPos = i + 1 // Insert after this statement
+						foundSuper = true
+						break
+					}
+				}
+			}
+		}
+
+		if foundSuper {
+			// Insert field initializers after super() call
+			newStatements = append(newStatements, functionLiteral.Body.Statements[:insertPos]...)
+			newStatements = append(newStatements, fieldInitializers...)
+			newStatements = append(newStatements, functionLiteral.Body.Statements[insertPos:]...)
+		} else {
+			// No explicit super() call found - this is an error in real code,
+			// but for now prepend (will fail at runtime when fields try to access this)
+			debugPrintf("// WARNING: Derived class constructor without explicit super() call\n")
+			newStatements = append(newStatements, fieldInitializers...)
+			newStatements = append(newStatements, functionLiteral.Body.Statements...)
+		}
+	} else {
+		// Regular class - prepend field initializers
+		newStatements = append(newStatements, fieldInitializers...)
+		newStatements = append(newStatements, functionLiteral.Body.Statements...)
+	}
 
 	// Create new function literal with modified body
 	newFunctionLiteral := &parser.FunctionLiteral{
@@ -421,12 +649,24 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 		}
 	}
 
-	// Add static methods
+	// Add static methods (including getters/setters)
 	for _, method := range node.Body.Methods {
 		if method.IsStatic && method.Kind != "constructor" {
-			err := c.addStaticMethod(method, constructorReg)
-			if err != nil {
-				return err
+			if method.Kind == "getter" {
+				err := c.addStaticGetter(method, constructorReg)
+				if err != nil {
+					return err
+				}
+			} else if method.Kind == "setter" {
+				err := c.addStaticSetter(method, constructorReg)
+				if err != nil {
+					return err
+				}
+			} else {
+				err := c.addStaticMethod(method, constructorReg)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -437,7 +677,8 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 
 // addStaticProperty compiles a static property and adds it to the constructor
 func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constructorReg Register) errors.PaseratiError {
-	debugPrintf("// DEBUG addStaticProperty: Adding static property '%s'\n", c.extractPropertyName(property.Key))
+	propertyName := c.extractPropertyName(property.Key)
+	debugPrintf("// DEBUG addStaticProperty: Adding static property '%s'\n", propertyName)
 
 	// Allocate a register for the property value
 	valueReg := c.regAlloc.Alloc()
@@ -460,11 +701,20 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 		c.emitLoadUndefined(valueReg, property.Token.Line)
 	}
 
-	// Set constructor[propertyName] = value
-	propertyNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(property.Key)))
-	c.emitSetProp(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
+	// Check if this is a private field (ECMAScript # field)
+	if len(propertyName) > 0 && propertyName[0] == '#' {
+		// Private static field - strip the # and use OpSetPrivateField
+		fieldName := propertyName[1:]
+		propertyNameIdx := c.chunk.AddConstant(vm.String(fieldName))
+		c.emitSetPrivateField(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
+		debugPrintf("// DEBUG addStaticProperty: Static private field '%s' added to constructor\n", propertyName)
+	} else {
+		// Regular static property - use OpSetProp
+		propertyNameIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitSetProp(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
+		debugPrintf("// DEBUG addStaticProperty: Static property '%s' added to constructor\n", propertyName)
+	}
 
-	debugPrintf("// DEBUG addStaticProperty: Static property '%s' added to constructor\n", c.extractPropertyName(property.Key))
 	return nil
 }
 
@@ -489,6 +739,94 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 	c.emitSetProp(constructorReg, methodReg, methodNameIdx, method.Token.Line)
 
 	debugPrintf("// DEBUG addStaticMethod: Static method '%s' added to constructor\n", c.extractPropertyName(method.Key))
+	return nil
+}
+
+// addStaticGetter compiles a static getter and adds it to the constructor
+func (c *Compiler) addStaticGetter(method *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
+	debugPrintf("// DEBUG addStaticGetter: Adding static getter '%s' to constructor\n", c.extractPropertyName(method.Key))
+
+	// Compile the getter function (static getters don't have `this` context)
+	nameHint := "get " + c.extractPropertyName(method.Key)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	if err != nil {
+		return err
+	}
+
+	// Create closure for getter
+	getterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(getterReg)
+	c.emitClosure(getterReg, funcConstIndex, method.Value, freeSymbols)
+
+	// Undefined setter
+	setterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(setterReg)
+	c.emitLoadUndefined(setterReg, method.Token.Line)
+
+	// Check if property name is computed
+	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+		// For computed properties, evaluate the key expression at runtime
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+		// Use OpDefineAccessorDynamic for runtime-computed property name
+		c.emitDefineAccessorDynamic(constructorReg, getterReg, setterReg, keyReg, method.Token.Line)
+		debugPrintf("// DEBUG addStaticGetter: Static getter with computed key defined on constructor\n")
+	} else {
+		// For literal property names, use constant-based OpDefineAccessor (faster)
+		propName := c.extractPropertyName(method.Key)
+		nameIdx := c.chunk.AddConstant(vm.String(propName))
+		c.emitDefineAccessor(constructorReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		debugPrintf("// DEBUG addStaticGetter: Static getter '%s' defined on constructor\n", propName)
+	}
+
+	return nil
+}
+
+// addStaticSetter compiles a static setter and adds it to the constructor
+func (c *Compiler) addStaticSetter(method *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
+	debugPrintf("// DEBUG addStaticSetter: Adding static setter '%s' to constructor\n", c.extractPropertyName(method.Key))
+
+	// Compile the setter function (static setters don't have `this` context)
+	nameHint := "set " + c.extractPropertyName(method.Key)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	if err != nil {
+		return err
+	}
+
+	// Create closure for setter
+	setterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(setterReg)
+	c.emitClosure(setterReg, funcConstIndex, method.Value, freeSymbols)
+
+	// Undefined getter
+	getterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(getterReg)
+	c.emitLoadUndefined(getterReg, method.Token.Line)
+
+	// Check if property name is computed
+	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+		// For computed properties, evaluate the key expression at runtime
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+		// Use OpDefineAccessorDynamic for runtime-computed property name
+		c.emitDefineAccessorDynamic(constructorReg, getterReg, setterReg, keyReg, method.Token.Line)
+		debugPrintf("// DEBUG addStaticSetter: Static setter with computed key defined on constructor\n")
+	} else {
+		// For literal property names, use constant-based OpDefineAccessor (faster)
+		propName := c.extractPropertyName(method.Key)
+		nameIdx := c.chunk.AddConstant(vm.String(propName))
+		c.emitDefineAccessor(constructorReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		debugPrintf("// DEBUG addStaticSetter: Static setter '%s' defined on constructor\n", propName)
+	}
+
 	return nil
 }
 

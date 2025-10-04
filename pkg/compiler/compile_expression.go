@@ -115,6 +115,13 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 		}
 	}()
 
+	// Check if any argument uses spread syntax
+	hasSpread := c.hasSpreadArgument(node.Arguments)
+	if hasSpread {
+		// Use spread call mechanism for new Foo(...args)
+		return c.compileSpreadNewExpression(node, hint, &tempRegs)
+	}
+
 	// 1. Determine total argument count needed (including optional parameter padding)
 	totalArgCount := c.determineTotalArgCountForNew(node)
 
@@ -192,61 +199,26 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		propertyName = c.extractPropertyName(node.Property)
 	}
 
-	// 3. Check if this is a getter access (compile-time optimization)
-	// Skip getter optimization for computed properties since we can't know the property name at compile time
-	objectStaticType := node.Object.GetComputedType()
-	if false {
-		debugPrintf("")
+	// 2.5. Check for private field access (ECMAScript # fields)
+	if !isComputedProperty && len(propertyName) > 0 && propertyName[0] == '#' {
+		// Private field access: obj.#field
+		// Strip the # prefix for storage (internal representation)
+		fieldName := propertyName[1:]
+		nameConstIdx := c.chunk.AddConstant(vm.String(fieldName))
+		c.emitGetPrivateField(hint, objectReg, nameConstIdx, node.Token.Line)
+		return hint, nil
 	}
-	if objectStaticType == nil {
-		// debug disabled
 
+	// 3. Handle Symbol.iterator special case
+	objectStaticType := node.Object.GetComputedType()
+	if objectStaticType == nil {
 		// REGRESSION FIX: Handle Symbol.iterator when type checking didn't set computed type
 		// This is a workaround for the with statement regression
 		if identNode, ok := node.Object.(*parser.Identifier); ok && identNode.Value == "Symbol" {
-			// debug disabled
-			// Skip getter optimization and use direct property access
-			// The objectReg was already compiled above at line 167
+			// Skip optimization and use direct property access
 			propertyIdx := c.chunk.AddConstant(vm.String(propertyName))
 			c.emitGetProp(hint, objectReg, propertyIdx, node.Token.Line)
 			return hint, nil
-		}
-	}
-	if !isComputedProperty && objectStaticType != nil {
-		// Check if accessing a getter property
-		widenedType := types.GetWidenedType(objectStaticType)
-		// debug disabled
-		if objType, ok := widenedType.(*types.ObjectType); ok {
-			// Check for class instance getters
-			if objType.IsClassInstance() && objType.ClassMeta != nil {
-				if memberInfo := objType.ClassMeta.GetMemberAccess(propertyName); memberInfo != nil && memberInfo.IsGetter {
-					getterMethodName := "__get__" + propertyName
-					getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
-					methodReg := c.regAlloc.Alloc()
-					tempRegs = append(tempRegs, methodReg)
-					c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
-
-					// Direct getter call - we know it exists
-					c.emitCallMethod(hint, methodReg, objectReg, 0, node.Token.Line)
-					return hint, nil
-				}
-			}
-
-			// Check for object literal getters by looking at object properties
-			if objType.Properties != nil {
-				getterPropertyName := "__get__" + propertyName
-				if _, hasGetter := objType.Properties[getterPropertyName]; hasGetter {
-					getterMethodName := "__get__" + propertyName
-					getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
-					methodReg := c.regAlloc.Alloc()
-					tempRegs = append(tempRegs, methodReg)
-					c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
-
-					// Direct getter call - we know it exists from type info
-					c.emitCallMethod(hint, methodReg, objectReg, 0, node.Token.Line)
-					return hint, nil
-				}
-			}
 		}
 	}
 
@@ -281,21 +253,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		return hint, nil
 	}
 
-	// 5. Fallback: Optimistic getter call when type information is unavailable
-	if !isComputedProperty && objectStaticType == nil {
-		// No type information available - use optimistic approach as fallback
-		getterMethodName := "__get__" + propertyName
-		getterIdx := c.chunk.AddConstant(vm.String(getterMethodName))
-		methodReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, methodReg)
-		c.emitGetProp(methodReg, objectReg, getterIdx, node.Token.Line)
-
-		// Optimistic call that falls back to regular property access
-		c.emitOptimisticGetterCall(hint, methodReg, objectReg, propertyName, node.Token.Line)
-		return hint, nil
-	}
-
-	// 6. Emit appropriate property access instruction
+	// 5. Emit appropriate property access instruction
 	if isComputedProperty {
 		// Use OpGetIndex for computed properties: hint = objectReg[propertyReg]
 		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
@@ -455,8 +413,9 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		globalIndex  uint16
 	}
 	var memberInfo struct {
-		objectReg    Register
-		nameConstIdx uint16
+		objectReg      Register
+		nameConstIdx   uint16
+		isPrivateField bool
 	}
 	var indexInfo struct {
 		arrayReg Register
@@ -511,12 +470,26 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 
 		// Get property name (handle both identifiers and computed properties)
 		propName := c.extractPropertyName(argNode.Property)
-		memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+
+		// Check if this is a private field
+		if len(propName) > 0 && propName[0] == '#' {
+			// Private field - strip the # and set flag
+			fieldName := propName[1:]
+			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(fieldName))
+			memberInfo.isPrivateField = true
+		} else {
+			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
+			memberInfo.isPrivateField = false
+		}
 
 		// Load current property value
 		currentValueReg = c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, currentValueReg)
-		c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+		if memberInfo.isPrivateField {
+			c.emitGetPrivateField(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+		} else {
+			c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+		}
 
 	case *parser.IndexExpression:
 		lvalueKind = lvalueIndexExpr
@@ -732,11 +705,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		case "<=":
 			c.emitLessEqual(hint, leftReg, rightReg, line)
 		case ">=":
-			// Implement as !(left < right)
-			tempReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, tempReg)
-			c.emitLess(tempReg, leftReg, rightReg, line)
-			c.emitNot(hint, tempReg, line)
+			c.emitGreaterEqual(hint, leftReg, rightReg, line)
 		case "==":
 			c.emitEqual(hint, leftReg, rightReg, line)
 		case "!=":
@@ -1045,9 +1014,43 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			}
 			c.emitDeleteIndex(hint, objReg, keyReg, node.Token.Line)
 
+		case *parser.Identifier:
+			// delete identifier: Try to delete from global scope
+			// If it's a global variable, emit OpDeleteGlobal
+			// If it's not found, return true (per ECMAScript spec)
+			varName := operand.Value
+
+			// Check if this is a global variable
+			if c.heapAlloc != nil {
+				if heapIdx, isGlobal := c.heapAlloc.GetIndex(varName); isGlobal {
+					// It's a global variable - emit OpDeleteGlobal
+					c.emitOpCode(vm.OpDeleteGlobal, node.Token.Line)
+					c.emitByte(byte(hint))
+					c.emitUint16(uint16(heapIdx))
+				} else {
+					// Local variable or not found - return true (spec behavior)
+					c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
+				}
+			} else {
+				// No heap allocator - return true (spec behavior)
+				c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
+			}
+
+		case *parser.CallExpression, *parser.PrefixExpression, *parser.InfixExpression:
+			// delete expression: For other expressions that are not property access,
+			// evaluate the expression and return true (per ECMAScript spec)
+			// We still need to evaluate the expression for potential side effects
+			exprReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, exprReg)
+			_, err := c.compileNode(node.Right, exprReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			// Always return true for non-property-access delete operations
+			c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
+			
 		default:
-			// For other expressions (like identifiers), the type checker should have caught this
-			// But let's return a compile error just in case
+			// For other expressions that we don't support yet
 			return BadRegister, NewCompileError(node, fmt.Sprintf("cannot delete %T", node.Right))
 		}
 	// --- END NEW ---
@@ -1059,6 +1062,24 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 }
 
 func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint Register) (Register, errors.PaseratiError) {
+	// Special case: typeof with identifier should not throw ReferenceError for undefined variables
+	// Per ECMAScript spec, typeof is the only operator with this behavior
+	if ident, ok := node.Operand.(*parser.Identifier); ok {
+		// Check if identifier exists in symbol table
+		_, _, found := c.currentSymbolTable.Resolve(ident.Value)
+
+		if !found {
+			// Identifier doesn't exist - emit special OpTypeofIdentifier that returns "undefined"
+			if hint == NoHint || hint == BadRegister {
+				hint = c.regAlloc.Alloc()
+			}
+			c.emitTypeofIdentifier(hint, ident.Value, node.Token.Line)
+			return hint, nil
+		}
+		// If identifier exists, fall through to normal compilation
+	}
+
+	// For all other expressions, compile normally and then typeof
 	// Manage temporary registers with automatic cleanup
 	var tempRegs []Register
 	defer func() {
@@ -1205,15 +1226,15 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		}
 	}()
 
+	// Check if this is a super constructor call (super()) - must come before spread check
+	if _, isSuperCall := node.Function.(*parser.SuperExpression); isSuperCall {
+		return c.compileSuperConstructorCall(node, hint, &tempRegs)
+	}
+
 	// Check if any argument uses spread syntax
 	hasSpread := c.hasSpreadArgument(node.Arguments)
 	if hasSpread {
 		return c.compileSpreadCallExpression(node, hint, &tempRegs)
-	}
-
-	// Check if this is a super constructor call (super())
-	if _, isSuperCall := node.Function.(*parser.SuperExpression); isSuperCall {
-		return c.compileSuperConstructorCall(node, hint, &tempRegs)
 	}
 
 	// Check if this is a method call (function is a member expression like obj.method() or obj[key]())
@@ -1811,63 +1832,187 @@ func (c *Compiler) compileArgumentsWithOptionalHandlingForNew(node *parser.NewEx
 
 // compileSuperConstructorCall compiles a super() constructor call
 func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// Find the current class context to determine the parent constructor
-	// For now, we'll use a simplified approach similar to Function.call pattern
+	// Get the super class name from the compiler context
+	// This was set by compileConstructor when compiling a derived class
+	if c.compilingSuperClassName == "" {
+		return BadRegister, NewCompileError(node, "super() call outside of derived class constructor")
+	}
 
-	// Load 'this' for the method call context
-	thisReg := c.regAlloc.Alloc()
-	*tempRegs = append(*tempRegs, thisReg)
-	c.emitLoadThis(thisReg, node.Token.Line)
+	// Check if any argument uses spread syntax
+	hasSpread := c.hasSpreadArgument(node.Arguments)
+	if hasSpread {
+		// Use spread call mechanism for super(...args)
+		return c.compileSpreadSuperCall(node, hint, tempRegs)
+	}
 
-	// Get the parent constructor from the current constructor's prototype chain
-	// This follows the pattern: ParentConstructor.call(this, ...args)
+	// Load the parent constructor by name
+	// Try to resolve it in the symbol table first (for user-defined classes)
+	superConstructorReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, superConstructorReg)
 
-	// For simplicity in this WIP implementation, we'll determine the total argument count
-	totalArgCount := len(node.Arguments)
+	symbol, _, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
+	if exists {
+		// Found in symbol table - user-defined class
+		if symbol.IsGlobal {
+			c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+		} else {
+			c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
+		}
+	} else {
+		// Not in symbol table - might be a built-in class (Object, Array, etc.)
+		// Emit code to look up the global variable at runtime
+		globalIdx := c.GetOrAssignGlobalIndex(c.compilingSuperClassName)
+		c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+	}
 
-	// Allocate contiguous registers for the call: [function, this, arg1, arg2, ...]
-	totalRegs := 2 + totalArgCount // function + this + arguments
+	// Calculate effective argument count, expanding spread elements
+	effectiveArgCount := c.calculateEffectiveArgCount(node.Arguments)
+
+	// Allocate contiguous registers for the call: [function, arg1, arg2, ...]
+	totalRegs := 1 + effectiveArgCount // function + arguments
 
 	functionReg := c.regAlloc.AllocContiguous(totalRegs)
 	for i := 0; i < totalRegs; i++ {
 		*tempRegs = append(*tempRegs, functionReg+Register(i))
 	}
 
-	// Load the parent constructor - this is simplified for WIP
-	// In a full implementation, we would look up the actual parent class constructor
-	// For now, we'll load a dummy function that just sets up the instance properties
-	c.emitLoadUndefined(functionReg, node.Token.Line)
+	// Move parent constructor to function register
+	c.emitMove(functionReg, superConstructorReg, node.Token.Line)
 
-	// Load 'this' as the receiver
-	c.emitMove(functionReg+1, thisReg, node.Token.Line)
-
-	// Compile arguments
-	for i, arg := range node.Arguments {
-		argReg := functionReg + Register(2+i)
-		_, err := c.compileNode(arg, argReg)
-		if err != nil {
-			return BadRegister, err
+	// Compile arguments, handling spread elements
+	argIndex := 0
+	for _, arg := range node.Arguments {
+		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
+			// Handle spread element - expand the array
+			if arrayLit, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
+				// Expand array literal elements
+				for _, elem := range arrayLit.Elements {
+					if elem != nil { // Skip holes
+						argReg := functionReg + Register(1+argIndex)
+						_, err := c.compileNode(elem, argReg)
+						if err != nil {
+							return BadRegister, err
+						}
+						argIndex++
+					}
+				}
+			} else {
+				// For non-literal arrays, compile the expression
+				argReg := functionReg + Register(1+argIndex)
+				_, err := c.compileNode(spreadElement.Argument, argReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				argIndex++
+			}
+		} else {
+			// Regular argument
+			argReg := functionReg + Register(1+argIndex)
+			_, err := c.compileNode(arg, argReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			argIndex++
 		}
 	}
 
-	// For now, manually call the parent constructor logic
-	// This is a simplified implementation that directly sets properties
-	// based on common TypeScript constructor patterns
+	// super() creates the instance by calling the parent constructor
+	// Use OpNew to create the instance (not OpCallMethod)
+	resultReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, resultReg)
+	c.emitNew(resultReg, functionReg, byte(effectiveArgCount), node.Token.Line)
 
-	if totalArgCount >= 1 {
-		// Set this.name = first argument (common pattern)
-		nameConstIdx := c.chunk.AddConstant(vm.String("name"))
-		c.emitSetProp(thisReg, functionReg+2, nameConstIdx, node.Token.Line)
+	// Update 'this' to be the newly created instance
+	c.emitSetThis(resultReg, node.Token.Line)
+
+	// Now load the current 'this' (which may have been updated) into hint
+	c.emitLoadThis(hint, node.Token.Line)
+
+	return hint, nil
+}
+
+// compileSpreadSuperCall compiles super(...args) with spread arguments
+func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
+	// For now, only support calls with a single spread argument (the most common case)
+	if len(node.Arguments) != 1 {
+		return BadRegister, NewCompileError(node, "super() with spread currently only supports a single spread argument")
 	}
 
-	if totalArgCount >= 2 {
-		// Set this.species = second argument (for Animal class compatibility)
-		speciesConstIdx := c.chunk.AddConstant(vm.String("species"))
-		c.emitSetProp(thisReg, functionReg+3, speciesConstIdx, node.Token.Line)
+	spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement)
+	if !isSpread {
+		return BadRegister, NewCompileError(node, "expected spread argument")
 	}
 
-	// Return undefined (constructor calls don't return values)
-	c.emitLoadUndefined(hint, node.Token.Line)
+	// Load the parent constructor by name
+	superConstructorReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, superConstructorReg)
+
+	symbol, _, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
+	if exists {
+		// Found in symbol table - user-defined class
+		if symbol.IsGlobal {
+			c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+		} else {
+			c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
+		}
+	} else {
+		// Not in symbol table - might be a built-in class (Object, Array, etc.)
+		globalIdx := c.GetOrAssignGlobalIndex(c.compilingSuperClassName)
+		c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+	}
+
+	// Compile the spread argument (array to spread)
+	spreadArgReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, spreadArgReg)
+	_, err := c.compileNode(spreadElement.Argument, spreadArgReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// Use OpSpreadNew to create the instance with spread arguments
+	resultReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, resultReg)
+	c.emitSpreadNew(resultReg, superConstructorReg, spreadArgReg, node.Token.Line)
+
+	// Update 'this' to be the newly created instance
+	c.emitSetThis(resultReg, node.Token.Line)
+
+	// Now load the current 'this' (which has been updated) into hint
+	c.emitLoadThis(hint, node.Token.Line)
+
+	return hint, nil
+}
+
+// compileSpreadNewExpression compiles new Foo(...args) with spread arguments
+func (c *Compiler) compileSpreadNewExpression(node *parser.NewExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
+	// For now, only support calls with a single spread argument (the most common case)
+	if len(node.Arguments) != 1 {
+		return BadRegister, NewCompileError(node, "new expression with spread currently only supports a single spread argument")
+	}
+
+	spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement)
+	if !isSpread {
+		return BadRegister, NewCompileError(node, "expected spread argument")
+	}
+
+	// Compile the constructor expression
+	constructorReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, constructorReg)
+	_, err := c.compileNode(node.Constructor, constructorReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// Compile the spread argument (array to spread)
+	spreadArgReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, spreadArgReg)
+	_, err = c.compileNode(spreadElement.Argument, spreadArgReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// Use OpSpreadNew to create the instance with spread arguments
+	c.emitSpreadNew(hint, constructorReg, spreadArgReg, node.Token.Line)
 
 	return hint, nil
 }

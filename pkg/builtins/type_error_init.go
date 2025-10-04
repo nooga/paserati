@@ -89,6 +89,9 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	typeErrorPrototype.SetOwn("constructor", typeErrorConstructor)
 
+	// Store in VM for later use
+	vmInstance.TypeErrorPrototype = vm.NewValueFromPlainObject(typeErrorPrototype)
+
 	// Define globally
 	return ctx.DefineGlobal("TypeError", typeErrorConstructor)
 }

@@ -202,11 +202,41 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 	// keys() is an alias of values() for Set
 	setProto.SetOwn("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
-		// Call values()
-		if v, ok := setProto.GetOwn("values"); ok {
-			return v, nil
+		// Call values() method
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, nil
 		}
-		return vm.Undefined, nil
+		// Get the values iterator by calling the values method
+		vals := vm.NewArray()
+		valsArr := vals.AsArray()
+		thisSet.AsSet().ForEach(func(val vm.Value) {
+			valsArr.Append(val)
+		})
+		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+		it.SetOwn("__data__", vals)
+		it.SetOwn("__index__", vm.IntegerValue(0))
+		it.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
+			self := vmInstance.GetThis().AsPlainObject()
+			dataVal, _ := self.GetOwn("__data__")
+			idxVal, _ := self.GetOwn("__index__")
+			data := dataVal.AsArray()
+			idx := int(idxVal.ToInteger())
+			result := vm.NewObject(vm.Undefined).AsPlainObject()
+			if idx >= data.Length() {
+				result.SetOwn("value", vm.Undefined)
+				result.SetOwn("done", vm.BooleanValue(true))
+				return vm.NewValueFromPlainObject(result), nil
+			}
+			result.SetOwn("value", data.Get(idx))
+			result.SetOwn("done", vm.BooleanValue(false))
+			self.SetOwn("__index__", vm.IntegerValue(int32(idx+1)))
+			return vm.NewValueFromPlainObject(result), nil
+		}))
+		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
+			return vm.NewValueFromPlainObject(it), nil
+		}), nil, nil, nil)
+		return vm.NewValueFromPlainObject(it), nil
 	}))
 	if v, ok := setProto.GetOwn("keys"); ok {
 		w, e, c := true, false, true
@@ -265,13 +295,68 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	wb, eb, cb := true, false, true
 	setProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), wIter, &wb, &eb, &cb)
 
+	// Add size accessor (getter)
+	sizeGetter := vm.NewNativeFunction(0, false, "get size", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.IntegerValue(0), nil
+		}
+		setObj := thisSet.AsSet()
+		return vm.IntegerValue(int32(setObj.Size())), nil
+	})
+	setProto.SetOwn("size", sizeGetter)
+	w, e, c := true, false, true
+	setProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
+
 	// Set Set.prototype
 	vmInstance.SetPrototype = vm.NewValueFromPlainObject(setProto)
 
 	// Create Set constructor function
 	setConstructor := vm.NewNativeFunctionWithProps(0, false, "Set", func(args []vm.Value) (vm.Value, error) {
 		// Create new Set instance
-		return vm.NewSet(), nil
+		newSet := vm.NewSet()
+		setObj := newSet.AsSet()
+
+		// If an iterable argument is provided, add all its elements
+		if len(args) > 0 && !args[0].IsUndefined() && args[0].Type() != vm.TypeNull {
+			iterable := args[0]
+
+			// Handle different iterable types
+			switch iterable.Type() {
+			case vm.TypeArray:
+				// Array: iterate and add all elements
+				arr := iterable.AsArray()
+				for i := 0; i < arr.Length(); i++ {
+					setObj.Add(arr.Get(i))
+				}
+			case vm.TypeString:
+				// String: iterate and add each character
+				str := iterable.AsString()
+				for _, char := range str {
+					setObj.Add(vm.NewString(string(char)))
+				}
+			case vm.TypeSet:
+				// Set: copy all values from the source set
+				srcSet := iterable.AsSet()
+				srcSet.ForEach(func(val vm.Value) {
+					setObj.Add(val)
+				})
+			case vm.TypeMap:
+				// Map: add all [key, value] pairs
+				srcMap := iterable.AsMap()
+				srcMap.ForEach(func(key vm.Value, val vm.Value) {
+					pairVal := vm.NewArray()
+					pairArr := pairVal.AsArray()
+					pairArr.Append(key)
+					pairArr.Append(val)
+					setObj.Add(pairVal)
+				})
+			// For other types, we'd need full iterator protocol support
+			// For now, silently ignore non-iterable arguments
+			}
+		}
+
+		return newSet, nil
 	})
 
 	// Add prototype property
