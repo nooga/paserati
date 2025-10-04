@@ -2269,6 +2269,16 @@ startExecution:
 				}
 
 			default:
+				// Check if we're trying to index null or undefined - throw TypeError per ECMAScript spec
+				if baseVal.Type() == TypeNull || baseVal.Type() == TypeUndefined {
+					frame.ip = ip
+					err := vm.NewTypeError(fmt.Sprintf("Cannot read properties of %s (reading '%s')", baseVal.TypeName(), indexVal.ToString()))
+					if excErr, ok := err.(exceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+					}
+					return InterpretRuntimeError, Undefined
+				}
+
 				// Temporary debug to track invalid OpGetIndex bases in iterator paths
 				if debugVM {
 					fmt.Printf("[DBG OpGetIndex] invalid base type: %s value=%s index=%s type=%s ip=%d\n",

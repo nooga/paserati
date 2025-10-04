@@ -2911,8 +2911,15 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		for range node.Elements {
 			elementTypes = append(elementTypes, types.Any)
 		}
+	} else if _, ok := valueType.(*types.ObjectType); ok {
+		// Object types might implement Symbol.iterator (iterable protocol)
+		// At runtime, we'll check and use iterator protocol
+		// For type checking, assume elements are Any since we can't statically determine iterator element type
+		for range node.Elements {
+			elementTypes = append(elementTypes, types.Any)
+		}
 	} else {
-		// Not an array-like type
+		// Not an array-like or iterable type
 		c.addError(node.Value, fmt.Sprintf("cannot destructure non-array type '%s'", valueType.String()))
 		// Continue with Any types to avoid cascading errors
 		for range node.Elements {
@@ -2967,8 +2974,8 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 			}
 
 			// The resulting type is the union of element type and default type
-			// For now, we'll use the element type if it's not undefined
-			if elemType == types.Undefined {
+			// Use the default type if element type is undefined or unknown
+			if elemType == types.Undefined || elemType == types.Unknown {
 				elemType = types.GetWidenedType(defaultType)
 			}
 		}
@@ -3076,8 +3083,8 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			}
 
 			// The resulting type is the union of property type and default type
-			// For now, we'll use the property type if it's not undefined
-			if propType == types.Undefined {
+			// Use the default type if property type is undefined or unknown
+			if propType == types.Undefined || propType == types.Unknown {
 				propType = types.GetWidenedType(defaultType)
 			}
 		}

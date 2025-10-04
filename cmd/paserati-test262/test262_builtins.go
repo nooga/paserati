@@ -80,21 +80,8 @@ func (t *Test262Initializer) InitTypes(ctx *builtins.TypeContext) error {
 }
 
 func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
-	//fmt.Printf("DEBUG: Test262Initializer.InitRuntime called\n")
-
-	// Check what globals are available
-	if sym, _ := ctx.VM.GetGlobal("Symbol"); sym == vm.Undefined {
-		//fmt.Printf("WARNING: Symbol is not defined, recreating it\n")
-		// Create a minimal Symbol constructor
-		symCtor := vm.NewNativeFunction(0, true, "Symbol", func(args []vm.Value) (vm.Value, error) {
-			var desc string
-			if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
-				desc = args[0].ToString()
-			}
-			return vm.NewSymbol(desc), nil
-		})
-		ctx.DefineGlobal("Symbol", symCtor)
-	}
+	// Symbol is already initialized by SymbolInitializer from standard builtins
+	// No need to recreate it here
 
 	// print function for test output
 	printFn := vm.NewNativeFunction(0, true, "print", func(args []vm.Value) (vm.Value, error) {

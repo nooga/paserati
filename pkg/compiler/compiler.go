@@ -2451,6 +2451,57 @@ func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
 	c.patchJump(skipCallJump)
 }
 
+// emitIteratorCleanupWithDone emits bytecode to call iterator.return() if it exists AND iterator is not done
+// Per ECMAScript spec, IteratorClose should only be called if iteratorRecord.[[done]] is false
+func (c *Compiler) emitIteratorCleanupWithDone(iteratorReg Register, doneReg Register, line int) {
+	// First check if iterator is done - if done is true, skip cleanup entirely
+	// We need to negate done so we can use JumpIfFalse (jump if NOT done)
+	notDoneReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(notDoneReg)
+	c.emitOpCode(vm.OpNot, line)
+	c.emitByte(byte(notDoneReg))
+	c.emitByte(byte(doneReg))
+
+	// Skip all cleanup if done is true (i.e., if NOT-done is false)
+	skipAllJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, line)
+
+	// Iterator is NOT done, proceed with normal cleanup
+	// Get iterator.return method (may be undefined)
+	returnMethodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(returnMethodReg)
+
+	returnConstIdx := c.chunk.AddConstant(vm.String("return"))
+	c.emitGetProp(returnMethodReg, iteratorReg, returnConstIdx, line)
+
+	// Check if return method exists (not undefined/null)
+	isNullishReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(isNullishReg)
+	c.emitOpCode(vm.OpIsNullish, line)
+	c.emitByte(byte(isNullishReg))
+	c.emitByte(byte(returnMethodReg))
+
+	// Negate the nullish result so we can use JumpIfFalse to skip when nullish
+	notNullishReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(notNullishReg)
+	c.emitOpCode(vm.OpNot, line)
+	c.emitByte(byte(notNullishReg))
+	c.emitByte(byte(isNullishReg))
+
+	// Skip calling return if it's nullish
+	skipCallJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notNullishReg, line)
+
+	// Call iterator.return() - ignore return value and errors
+	resultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(resultReg)
+	c.emitCallMethod(resultReg, returnMethodReg, iteratorReg, 0, line)
+
+	// Patch the skip call jump
+	c.patchJump(skipCallJump)
+
+	// Patch the skip all jump (when done is true)
+	c.patchJump(skipAllJump)
+}
+
 // getNextAnonymousId generates a unique ID for anonymous classes
 func (c *Compiler) getNextAnonymousId() int {
 	c.anonymousClassCounter++

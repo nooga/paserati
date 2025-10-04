@@ -4089,34 +4089,45 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 	if p.peekTokenIs(lexer.RBRACKET) {
 		p.nextToken() // Consume ']'
 	} else {
-		p.nextToken() // Move past '[' to first element
+		// Parse elements in a loop, handling elisions
+		for {
+			p.nextToken() // Move to next position
 
-		// Parse first element
-		element := p.parseExpression(COMMA)
-		if element != nil {
-			elements = append(elements, element)
-		}
-
-		// Parse remaining elements
-		for p.peekTokenIs(lexer.COMMA) {
-			p.nextToken() // Consume ','
-
-			// Allow trailing comma
-			if p.peekTokenIs(lexer.RBRACKET) {
-				p.nextToken() // Consume ']'
+			// Check for end of array
+			if p.curTokenIs(lexer.RBRACKET) {
 				break
 			}
 
-			p.nextToken() // Move to next element
-			element = p.parseExpression(COMMA)
-			if element != nil {
+			// Check for elision (comma without expression before it)
+			var element Expression
+			if p.curTokenIs(lexer.COMMA) {
+				// Elision: [, a] or [a, , b]
+				element = nil
 				elements = append(elements, element)
-			}
-		}
+				// Don't consume comma - let the loop iteration handle it
+			} else {
+				// Parse actual element
+				element = p.parseExpression(COMMA)
+				elements = append(elements, element)
 
-		// Ensure we end with ']'
-		if !p.expectPeek(lexer.RBRACKET) {
-			return nil
+				// After parsing element, check what's next
+				if p.peekTokenIs(lexer.RBRACKET) {
+					p.nextToken() // Consume ']'
+					break
+				} else if p.peekTokenIs(lexer.COMMA) {
+					p.nextToken() // Consume ','
+					// Check for trailing comma
+					if p.peekTokenIs(lexer.RBRACKET) {
+						p.nextToken() // Consume ']'
+						break
+					}
+					// Continue to next element
+				} else {
+					// Error: expected comma or bracket
+					p.addError(p.peekToken, fmt.Sprintf("expected ',' or ']' in array pattern, got %s", p.peekToken.Type))
+					return nil
+				}
+			}
 		}
 	}
 
@@ -4126,8 +4137,13 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 		var defaultValue Expression
 		var isRest bool
 
-		// Check if this element is a rest element (...rest)
-		if spreadExpr, ok := element.(*SpreadElement); ok {
+		// Handle elision (holes in array pattern)
+		if element == nil {
+			// Elision: [, a] - skip this position
+			target = nil
+			defaultValue = nil
+			isRest = false
+		} else if spreadExpr, ok := element.(*SpreadElement); ok {
 			// This is a rest element: [...rest]
 			target = spreadExpr.Argument
 			defaultValue = nil
@@ -4135,6 +4151,29 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 		} else if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
 			target = assignExpr.Left
 			defaultValue = assignExpr.Value
+			isRest = false
+		} else if arrayDestr, ok := element.(*ArrayDestructuringAssignment); ok {
+			// Nested array destructuring with default: [[a, b] = [1, 2]]
+			// Create an ArrayLiteral to represent the pattern
+			arrayPattern := &ArrayLiteral{Token: arrayDestr.Token}
+			for _, el := range arrayDestr.Elements {
+				arrayPattern.Elements = append(arrayPattern.Elements, el.Target)
+			}
+			target = arrayPattern
+			defaultValue = arrayDestr.Value
+			isRest = false
+		} else if objDestr, ok := element.(*ObjectDestructuringAssignment); ok {
+			// Nested object destructuring with default: [{a, b} = {a: 1, b: 2}]
+			// Create an ObjectLiteral to represent the pattern
+			objPattern := &ObjectLiteral{Token: objDestr.Token}
+			for _, prop := range objDestr.Properties {
+				objPattern.Properties = append(objPattern.Properties, &ObjectProperty{
+					Key:   prop.Key,
+					Value: prop.Target,
+				})
+			}
+			target = objPattern
+			defaultValue = objDestr.Value
 			isRest = false
 		} else {
 			target = element
@@ -4148,8 +4187,8 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 			IsRest:  isRest,
 		}
 
-		// Validate that the target is a valid destructuring target
-		if !p.isValidDestructuringTarget(target) {
+		// Validate that the target is a valid destructuring target (nil is allowed for elision)
+		if target != nil && !p.isValidDestructuringTarget(target) {
 			p.addError(p.curToken, fmt.Sprintf("invalid destructuring target: %s (expected identifier, array pattern, or object pattern)", target.String()))
 			return nil
 		}
@@ -4262,13 +4301,20 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 
 			if p.curTokenIs(lexer.IDENT) {
 				property.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.LBRACKET) {
+				// Nested array destructuring: {prop: [a, b]}
+				property.Target = p.parseArrayLiteral()
+				if property.Target == nil {
+					return nil, nil
+				}
 			} else if p.curTokenIs(lexer.LBRACE) {
-				// For now, nested object destructuring is not fully supported
-				// Skip parsing the nested pattern and treat it as an error
-				p.addError(p.curToken, "nested object destructuring patterns are not yet supported")
-				return nil, nil
+				// Nested object destructuring: {prop: {a, b}}
+				property.Target = p.parseObjectLiteral()
+				if property.Target == nil {
+					return nil, nil
+				}
 			} else {
-				p.addError(p.curToken, fmt.Sprintf("expected identifier or '{' after ':' in destructuring pattern, got %s", p.curToken.Type))
+				p.addError(p.curToken, fmt.Sprintf("expected identifier, array pattern, or object pattern after ':' in destructuring pattern, got %s", p.curToken.Type))
 				return nil, nil
 			}
 

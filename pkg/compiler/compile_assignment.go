@@ -1164,7 +1164,7 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 // compileArrayDestructuringDeclaration compiles let/const [a, b] = expr declarations
 func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestructuringDeclaration, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
-	
+
 	if debugAssignment {
 		fmt.Printf("// [Assignment] Compiling array destructuring declaration: %s\n", node.String())
 	}
@@ -1175,7 +1175,7 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 			if element.Target == nil {
 				continue
 			}
-			
+
 			if ident, ok := element.Target.(*parser.Identifier); ok {
 				// Define variable with undefined value
 				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Undefined, line)
@@ -1188,107 +1188,258 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 	}
 
 	// 1. Compile RHS expression into temp register
-	tempReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(tempReg)
-	
-	_, err := c.compileNode(node.Value, tempReg)
+	valueReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(valueReg)
+
+	_, err := c.compileNode(node.Value, valueReg)
 	if err != nil {
 		return BadRegister, err
 	}
 
-	// 2. For each element, compile: define target = temp[index]
+	// 2. Use iterator protocol for all destructuring
+	// This works for arrays (which have Symbol.iterator built-in) AND custom iterables
+	// Arrays' Symbol.iterator provides optimal performance by returning numeric indices
+	err = c.compileArrayDestructuringIteratorPath(node, valueReg, line)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	return BadRegister, nil
+}
+
+// compileArrayDestructuringFastPath compiles array destructuring using numeric indexing (fast path)
+func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructuringDeclaration, arrayReg Register, line int) errors.PaseratiError {
+	// For each element, compile: define target = array[index]
 	for i, element := range node.Elements {
 		if element.Target == nil {
-			continue // Skip malformed elements
+			continue // Skip elisions
 		}
 
-		// Support both identifier and nested pattern targets
-
 		var valueReg Register
-		
+
 		if element.IsRest {
-			// Rest element: compile temp.slice(i) to get remaining elements
+			// Rest element: compile array.slice(i) to get remaining elements
 			valueReg = c.regAlloc.Alloc()
-			
-			// Call temp.slice(i) to get the rest of the array
-			err := c.compileArraySliceCall(tempReg, i, valueReg, line)
+
+			// Call array.slice(i) to get the rest of the array
+			err := c.compileArraySliceCall(arrayReg, i, valueReg, line)
 			if err != nil {
 				c.regAlloc.Free(valueReg)
-				return BadRegister, err
+				return err
 			}
 		} else {
-			// Regular element: compile temp[i]
+			// Regular element: compile array[i]
 			indexReg := c.regAlloc.Alloc()
 			valueReg = c.regAlloc.Alloc()
-			
+
 			// Load the index as a constant
 			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
 			c.emitLoadConstant(indexReg, indexConstIdx, line)
-			
-			// Get temp[i] using GetIndex operation
+
+			// Get array[i] using GetIndex operation
 			c.emitOpCode(vm.OpGetIndex, line)
-			c.emitByte(byte(valueReg))  // destination register
-			c.emitByte(byte(tempReg))   // array register
-			c.emitByte(byte(indexReg))  // index register
-			
+			c.emitByte(byte(valueReg))   // destination register
+			c.emitByte(byte(arrayReg))   // array register
+			c.emitByte(byte(indexReg))   // index register
+
 			c.regAlloc.Free(indexReg)
 		}
-		
+
 		// Handle assignment based on target type (identifier vs nested pattern)
 		if ident, ok := element.Target.(*parser.Identifier); ok {
 			// Simple identifier target
 			if element.Default != nil {
-				// First, define the variable to reserve the name and get the target register
+				// First, define the variable to reserve the name
 				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
-					return BadRegister, err
+					return err
 				}
-				
+
 				// Get the target identifier for conditional assignment
 				targetIdent := &parser.Identifier{
 					Token: ident.Token,
 					Value: ident.Value,
 				}
-				
+
 				// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
 				err = c.compileConditionalAssignment(targetIdent, valueReg, element.Default, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
-					return BadRegister, err
+					return err
 				}
 			} else {
 				// Define variable with extracted value
 				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
-					return BadRegister, err
+					return err
 				}
 			}
 		} else {
 			// Nested pattern target (ArrayLiteral or ObjectLiteral)
 			if element.Default != nil {
-				// Handle conditional assignment for nested patterns: target = valueReg !== undefined ? valueReg : defaultExpr
+				// Handle conditional assignment for nested patterns
 				err := c.compileConditionalAssignmentForDeclaration(element.Target, valueReg, element.Default, node.IsConst, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
-					return BadRegister, err
+					return err
 				}
 			} else {
 				// Direct nested pattern assignment using recursive compilation
 				err := c.compileNestedPatternDeclaration(element.Target, valueReg, node.IsConst, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
-					return BadRegister, err
+					return err
 				}
 			}
 		}
-		
+
 		// Clean up temporary registers
 		c.regAlloc.Free(valueReg)
 	}
-	
-	return BadRegister, nil
+
+	return nil
+}
+
+// compileArrayDestructuringIteratorPath compiles array destructuring using iterator protocol
+func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestructuringDeclaration, iterableReg Register, line int) errors.PaseratiError {
+	// Get Symbol.iterator via computed index
+	iteratorMethodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorMethodReg)
+
+	// Load global Symbol
+	symbolObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(symbolObjReg)
+	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	c.emitGetGlobal(symbolObjReg, symIdx, line)
+
+	// Get Symbol.iterator
+	propNameReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(propNameReg)
+	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
+
+	iteratorKeyReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorKeyReg)
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorKeyReg))
+	c.emitByte(byte(symbolObjReg))
+	c.emitByte(byte(propNameReg))
+
+	// Get iterable[Symbol.iterator]
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorMethodReg))
+	c.emitByte(byte(iterableReg))
+	c.emitByte(byte(iteratorKeyReg))
+
+	// Call the iterator method to get iterator object
+	iteratorObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorObjReg)
+	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, line)
+
+	// Allocate register to track iterator.done state
+	// We update this each time we call next(), then check it before calling iterator.return()
+	doneReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(doneReg)
+	// Initialize to false
+	c.emitLoadFalse(doneReg, line)
+
+	// Track how many elements we've consumed for rest elements
+	elementIndex := 0
+
+	// For each element, call iterator.next()
+	for _, element := range node.Elements {
+		if element.Target == nil {
+			// Elision: consume iterator value but don't bind
+			c.compileIteratorNext(iteratorObjReg, BadRegister, doneReg, line, true)
+			elementIndex++
+			continue
+		}
+
+		if element.IsRest {
+			// Rest element: collect all remaining iterator values into an array
+			// Rest elements exhaust the iterator, so we'll update done inside compileIteratorToArray
+			restArrayReg := c.regAlloc.Alloc()
+			err := c.compileIteratorToArray(iteratorObjReg, restArrayReg, line)
+			if err != nil {
+				c.regAlloc.Free(restArrayReg)
+				return err
+			}
+
+			// Bind rest array to target
+			if ident, ok := element.Target.(*parser.Identifier); ok {
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, restArrayReg, line)
+				c.regAlloc.Free(restArrayReg)
+				if err != nil {
+					return err
+				}
+			} else {
+				// Nested pattern: [...[x, y]] - destructure the rest array into the pattern
+				err := c.compileNestedPatternDeclaration(element.Target, restArrayReg, node.IsConst, line)
+				c.regAlloc.Free(restArrayReg)
+				if err != nil {
+					return err
+				}
+			}
+			// Rest must be last, so we're done - the iterator is exhausted, set done=true
+			c.emitLoadTrue(doneReg, line)
+			break
+		}
+
+		// Regular element: get next value from iterator
+		valueReg := c.regAlloc.Alloc()
+		c.compileIteratorNext(iteratorObjReg, valueReg, doneReg, line, false)
+
+		// Handle assignment based on target type
+		if ident, ok := element.Target.(*parser.Identifier); ok {
+			if element.Default != nil {
+				// Define variable first
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return err
+				}
+
+				// Conditional assignment with default
+				targetIdent := &parser.Identifier{Token: ident.Token, Value: ident.Value}
+				err = c.compileConditionalAssignment(targetIdent, valueReg, element.Default, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return err
+				}
+			} else {
+				// Define variable with value
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return err
+				}
+			}
+		} else {
+			// Nested pattern
+			if element.Default != nil {
+				err := c.compileConditionalAssignmentForDeclaration(element.Target, valueReg, element.Default, node.IsConst, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return err
+				}
+			} else {
+				err := c.compileNestedPatternDeclaration(element.Target, valueReg, node.IsConst, line)
+				if err != nil {
+					c.regAlloc.Free(valueReg)
+					return err
+				}
+			}
+		}
+
+		c.regAlloc.Free(valueReg)
+		elementIndex++
+	}
+
+	// Call IteratorClose (iterator.return if it exists AND iterator is not done)
+	c.emitIteratorCleanupWithDone(iteratorObjReg, doneReg, line)
+
+	return nil
 }
 
 // compileObjectDestructuringDeclaration compiles let/const {a, b} = expr declarations

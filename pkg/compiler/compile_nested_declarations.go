@@ -66,8 +66,8 @@ func (c *Compiler) compileNestedArrayDeclaration(arrayTarget *parser.ArrayLitera
 		declaration.Elements = append(declaration.Elements, destElement)
 	}
 	
-	// Reuse existing compilation logic but with direct value register
-	return c.compileArrayDestructuringDeclarationWithValueReg(declaration, valueReg, line)
+	// Use iterator protocol for nested destructuring (handles arrays and iterables)
+	return c.compileArrayDestructuringIteratorPath(declaration, valueReg, line)
 }
 
 // compileNestedObjectDeclaration handles nested object pattern declarations
