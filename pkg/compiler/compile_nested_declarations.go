@@ -84,9 +84,15 @@ func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLit
 	
 	// Convert properties to destructuring properties
 	for _, prop := range objectTarget.Properties {
-		keyIdent, ok := prop.Key.(*parser.Identifier)
-		if !ok {
-			return NewCompileError(objectTarget, fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", prop.Key.String()))
+		// Key can be identifier or number (for array destructuring as object)
+		var keyIdent *parser.Identifier
+		if ident, ok := prop.Key.(*parser.Identifier); ok {
+			keyIdent = ident
+		} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
+			// Convert number to identifier for destructuring property
+			keyIdent = &parser.Identifier{Token: numLit.Token, Value: numLit.Token.Literal}
+		} else {
+			return NewCompileError(objectTarget, fmt.Sprintf("invalid destructuring property key: %s (only identifiers and numbers supported)", prop.Key.String()))
 		}
 		
 		var target parser.Expression

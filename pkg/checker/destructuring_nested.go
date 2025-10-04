@@ -121,20 +121,28 @@ func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expec
 func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, expectedType types.Type, context interface{}) {
 	// Validate that expectedType is object-like
 	widenedType := types.GetWidenedType(expectedType)
-	
+
 	if widenedType != types.Any {
 		objType, ok := expectedType.(*types.ObjectType)
 		if !ok {
-			// Try to handle union types
-			if unionType, ok := expectedType.(*types.UnionType); ok {
-				// Look for an object type in the union
+			// Arrays can also be destructured as objects
+			if _, ok := expectedType.(*types.ArrayType); ok {
+				// Allow array destructuring as object (e.g., {0: x, 1: y} from array)
+				// Properties will be checked as any since we can't statically know array indices
+			} else if unionType, ok := expectedType.(*types.UnionType); ok {
+				// Try to handle union types
+				// Look for an object type or array type in the union
 				for _, memberType := range unionType.Types {
 					if objectType, ok := memberType.(*types.ObjectType); ok {
 						objType = objectType
 						break
 					}
+					if _, ok := memberType.(*types.ArrayType); ok {
+						// Found array type, allow it
+						break
+					}
 				}
-				
+
 				if objType == nil {
 					c.addError(objectTarget, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
 					return
@@ -147,19 +155,30 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 		
 		// Check each property in the nested object pattern
 		for _, prop := range objectTarget.Properties {
-			keyIdent, ok := prop.Key.(*parser.Identifier)
-			if !ok {
-				c.addError(prop.Key, "object destructuring key must be an identifier")
+			// Get property name from key (can be identifier or number)
+			var propName string
+			if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+				propName = keyIdent.Value
+			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
+				propName = numLit.Token.Literal
+			} else {
+				c.addError(prop.Key, "object destructuring key must be an identifier or number")
 				continue
 			}
-			
-			propName := keyIdent.Value
+
 			var propType types.Type = types.Undefined
-			
-			if foundType, exists := objType.Properties[propName]; exists {
-				propType = foundType
+
+			if objType != nil {
+				if foundType, exists := objType.Properties[propName]; exists {
+					propType = foundType
+				}
+			} else if _, ok := expectedType.(*types.ArrayType); ok {
+				// For arrays destructured as objects, use element type for numeric keys, any for others
+				if arrType, ok := expectedType.(*types.ArrayType); ok {
+					propType = arrType.ElementType
+				}
 			}
-			
+
 			c.checkDestructuringTargetForProperty(prop.Value, propType, propName)
 		}
 	} else {
@@ -264,20 +283,28 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.ObjectLiteral, expectedType types.Type, isConst bool) {
 	// Validate that expectedType is object-like
 	widenedType := types.GetWidenedType(expectedType)
-	
+
 	if widenedType != types.Any {
 		objType, ok := expectedType.(*types.ObjectType)
 		if !ok {
-			// Try to handle union types
-			if unionType, ok := expectedType.(*types.UnionType); ok {
-				// Look for an object type in the union
+			// Arrays can also be destructured as objects
+			if _, ok := expectedType.(*types.ArrayType); ok {
+				// Allow array destructuring as object (e.g., {0: x, 1: y} from array)
+				// Properties will be checked as any since we can't statically know array indices
+			} else if unionType, ok := expectedType.(*types.UnionType); ok {
+				// Try to handle union types
+				// Look for an object type or array type in the union
 				for _, memberType := range unionType.Types {
 					if objectType, ok := memberType.(*types.ObjectType); ok {
 						objType = objectType
 						break
 					}
+					if _, ok := memberType.(*types.ArrayType); ok {
+						// Found array type, allow it
+						break
+					}
 				}
-				
+
 				if objType == nil {
 					c.addError(objectTarget, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
 					return
@@ -290,19 +317,30 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 		
 		// Check each property in the nested object pattern
 		for _, prop := range objectTarget.Properties {
-			keyIdent, ok := prop.Key.(*parser.Identifier)
-			if !ok {
-				c.addError(prop.Key, "object destructuring key must be an identifier")
+			// Get property name from key (can be identifier or number)
+			var propName string
+			if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+				propName = keyIdent.Value
+			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
+				propName = numLit.Token.Literal
+			} else {
+				c.addError(prop.Key, "object destructuring key must be an identifier or number")
 				continue
 			}
-			
-			propName := keyIdent.Value
+
 			var propType types.Type = types.Undefined
-			
-			if foundType, exists := objType.Properties[propName]; exists {
-				propType = foundType
+
+			if objType != nil {
+				if foundType, exists := objType.Properties[propName]; exists {
+					propType = foundType
+				}
+			} else if _, ok := expectedType.(*types.ArrayType); ok {
+				// For arrays destructured as objects, use element type for numeric keys, any for others
+				if arrType, ok := expectedType.(*types.ArrayType); ok {
+					propType = arrType.ElementType
+				}
 			}
-			
+
 			c.checkDestructuringTargetForDeclaration(prop.Value, propType, isConst)
 		}
 	} else {

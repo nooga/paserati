@@ -4281,7 +4281,7 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 		}
 
 		// Parse property name
-		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.STRING) {
+		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.STRING) && !p.curTokenIs(lexer.NUMBER) {
 			p.addError(p.curToken, fmt.Sprintf("expected property name, got %s", p.curToken.Type))
 			return nil, nil
 		}

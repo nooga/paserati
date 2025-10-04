@@ -3042,10 +3042,14 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		}
 	}
 
-	// Check if the value is an object-like type
+	// Check if the value is an object-like type (arrays are also objects in JavaScript)
 	var objType *types.ObjectType
+	var isArray bool
 	if ot, ok := valueType.(*types.ObjectType); ok {
 		objType = ot
+	} else if _, ok := valueType.(*types.ArrayType); ok {
+		// Arrays can be destructured as objects (e.g., {0: x, 1: y} from [10, 20])
+		isArray = true
 	} else if valueType != types.Any {
 		// Not an object-like type
 		c.addError(node.Value, fmt.Sprintf("cannot destructure non-object type '%s'", valueType.String()))
@@ -3065,6 +3069,11 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			if objType != nil {
 				if pt, exists := objType.Properties[propName]; exists {
 					propType = pt
+				}
+			} else if isArray {
+				// For arrays, numeric keys access array elements
+				if arrType, ok := valueType.(*types.ArrayType); ok {
+					propType = arrType.ElementType
 				}
 			} else if valueType == types.Any {
 				propType = types.Any
