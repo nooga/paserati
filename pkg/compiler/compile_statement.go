@@ -1032,10 +1032,10 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 				if c.enclosing == nil {
 					idx := c.GetOrAssignGlobalIndex(d.Name.Value)
 					c.currentSymbolTable.DefineGlobal(d.Name.Value, idx)
-					fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", d.Name.Value, idx)
+					// fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", d.Name.Value, idx)
 				} else {
 					c.currentSymbolTable.Define(d.Name.Value, nilRegister)
-					fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", d.Name.Value)
+					// fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", d.Name.Value)
 				}
 			}
 		} else if vs.Name != nil {
@@ -1043,24 +1043,24 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			if c.enclosing == nil {
 				idx := c.GetOrAssignGlobalIndex(name)
 				c.currentSymbolTable.DefineGlobal(name, idx)
-				fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", name, idx)
+				// fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", name, idx)
 			} else {
 				c.currentSymbolTable.Define(name, nilRegister)
-				fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", name)
+				// fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", name)
 			}
 		} else {
-			fmt.Printf("// [ForInPredefine] VarStatement without Name/Declarations\n")
+			// fmt.Printf("// [ForInPredefine] VarStatement without Name/Declarations\n")
 		}
 	} else {
 		switch node.Variable.(type) {
 		case *parser.LetStatement:
-			fmt.Printf("// [ForInHeader] let\n")
+			// fmt.Printf("// [ForInHeader] let\n")
 		case *parser.ConstStatement:
-			fmt.Printf("// [ForInHeader] const\n")
+			// fmt.Printf("// [ForInHeader] const\n")
 		case *parser.ExpressionStatement:
-			fmt.Printf("// [ForInHeader] bare identifier\n")
+			// fmt.Printf("// [ForInHeader] bare identifier\n")
 		default:
-			fmt.Printf("// [ForInHeader] other type %T\n", node.Variable)
+			// fmt.Printf("// [ForInHeader] other type %T\n", node.Variable)
 		}
 	}
 
@@ -1201,7 +1201,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		// Handle 'var k in obj' - assign into the pre-defined binding (global at top-level, local in function)
 		if varStmt.Name != nil {
 			name := varStmt.Name.Value
-			fmt.Printf("// [ForInAssign] assigning to var %s\n", name)
+			// fmt.Printf("// [ForInAssign] assigning to var %s\n", name)
 			// Resolve the pre-defined binding from the header
 			symbolRef, _, found := c.currentSymbolTable.Resolve(name)
 			if !found {
@@ -1240,7 +1240,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			// Simple identifier: for (x in obj)
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
 			if !found {
-				fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", target.Value)
+				// fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", target.Value)
 				// Define a function/global-scoped binding (var semantics)
 				if c.enclosing == nil {
 					idx := c.GetOrAssignGlobalIndex(target.Value)
@@ -1260,12 +1260,12 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			} else {
 				// Check if this is a global variable or local register
 				if symbolRef.IsGlobal {
-					fmt.Printf("// [ForInAssign] writing global %s\n", target.Value)
+					// fmt.Printf("// [ForInAssign] writing global %s\n", target.Value)
 					c.emitSetGlobal(symbolRef.GlobalIndex, currentKeyReg, node.Token.Line)
 				} else {
 					// Store key value in the existing variable's register for local variables
 					_ = definingTable
-					fmt.Printf("// [ForInAssign] writing local %s R%d\n", target.Value, symbolRef.Register)
+					// fmt.Printf("// [ForInAssign] writing local %s R%d\n", target.Value, symbolRef.Register)
 					c.emitMove(symbolRef.Register, currentKeyReg, node.Token.Line)
 				}
 			}

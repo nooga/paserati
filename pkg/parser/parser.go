@@ -4145,6 +4145,14 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 		} else if spreadExpr, ok := element.(*SpreadElement); ok {
 			// This is a rest element: [...rest]
 			target = spreadExpr.Argument
+
+			// Validate that rest element doesn't have a default value
+			// Invalid: [...x = []]
+			if _, isAssign := target.(*AssignmentExpression); isAssign {
+				p.addError(p.curToken, "rest element cannot have a default value")
+				return nil
+			}
+
 			defaultValue = nil
 			isRest = true
 		} else if assignExpr, ok := element.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
@@ -6662,6 +6670,13 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 			varStmt = p.parseArrayDestructuringDeclaration(letToken, false, false)
 			varName = "" // Destructuring doesn't have a single name
 
+			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
+			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
+			// to an interface variable, the interface is not nil even though the value is nil
+			if varStmt == nil || varStmt.(*ArrayDestructuringDeclaration) == nil {
+				return nil
+			}
+
 			// Check if there's an initializer for regular for loops: for(let [a,b] = [1,2]; ...)
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken() // consume '='
@@ -6674,6 +6689,13 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 			// Object destructuring: for(let {a, b} ...)
 			varStmt = p.parseObjectDestructuringDeclaration(letToken, false, false)
 			varName = "" // Destructuring doesn't have a single name
+
+			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
+			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
+			// to an interface variable, the interface is not nil even though the value is nil
+			if varStmt == nil || varStmt.(*ObjectDestructuringDeclaration) == nil {
+				return nil
+			}
 
 			// Check if there's an initializer for regular for loops: for(let {a,b} = obj; ...)
 			if p.peekTokenIs(lexer.ASSIGN) {
@@ -6703,6 +6725,13 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 			varStmt = p.parseArrayDestructuringDeclaration(constToken, true, false)
 			varName = "" // Destructuring doesn't have a single name
 
+			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
+			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
+			// to an interface variable, the interface is not nil even though the value is nil
+			if varStmt == nil || varStmt.(*ArrayDestructuringDeclaration) == nil {
+				return nil
+			}
+
 			// Check if there's an initializer for regular for loops
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken() // consume '='
@@ -6715,6 +6744,13 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 			// Object destructuring: for(const {a, b} ...)
 			varStmt = p.parseObjectDestructuringDeclaration(constToken, true, false)
 			varName = "" // Destructuring doesn't have a single name
+
+			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
+			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
+			// to an interface variable, the interface is not nil even though the value is nil
+			if varStmt == nil || varStmt.(*ObjectDestructuringDeclaration) == nil {
+				return nil
+			}
 
 			// Check if there's an initializer for regular for loops
 			if p.peekTokenIs(lexer.ASSIGN) {
