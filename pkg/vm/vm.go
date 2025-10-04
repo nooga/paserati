@@ -2108,14 +2108,31 @@ startExecution:
 				}
 
 			case TypeTypedArray:
-				if !IsNumber(indexVal) {
-					frame.ip = ip
-					status := vm.runtimeError("TypedArray index must be a number, got '%v'", indexVal.Type())
-					return status, Undefined
-				}
 				ta := baseVal.AsTypedArray()
-				idx := int(AsNumber(indexVal))
-				registers[destReg] = ta.GetElement(idx)
+				if IsNumber(indexVal) {
+					// Numeric index - access typed array elements
+					idx := int(AsNumber(indexVal))
+					registers[destReg] = ta.GetElement(idx)
+				} else {
+					// Non-numeric index (Symbol, string, etc.) - access properties via prototype chain
+					switch indexVal.Type() {
+					case TypeSymbol:
+						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
+							return status, value
+						}
+					case TypeString:
+						key := AsString(indexVal)
+						if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+							return status, value
+						}
+					default:
+						// Convert to string for property access
+						key := indexVal.ToString()
+						if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+							return status, value
+						}
+					}
+				}
 
 			case TypeGenerator:
 				// Generators support property access via prototype chain (string or symbol keys)
@@ -2415,14 +2432,31 @@ startExecution:
 				}
 
 			case TypeTypedArray:
-				if !IsNumber(indexVal) {
-					frame.ip = ip
-					status := vm.runtimeError("TypedArray index must be a number, got '%v'", indexVal.Type())
-					return status, Undefined
-				}
 				ta := baseVal.AsTypedArray()
-				idx := int(AsNumber(indexVal))
-				ta.SetElement(idx, valueVal)
+				if IsNumber(indexVal) {
+					// Numeric index - set typed array element
+					idx := int(AsNumber(indexVal))
+					ta.SetElement(idx, valueVal)
+				} else {
+					// Non-numeric index (Symbol, string, etc.) - set property via prototype chain
+					switch indexVal.Type() {
+					case TypeSymbol:
+						if ok, status, value := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+							return status, value
+						}
+					case TypeString:
+						key := AsString(indexVal)
+						if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+							return status, value
+						}
+					default:
+						// Convert to string for property access
+						key := indexVal.ToString()
+						if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+							return status, value
+						}
+					}
+				}
 
 			default:
 				frame.ip = ip

@@ -587,6 +587,50 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
+	case TypeTypedArray:
+		// TypedArrays: consult appropriate TypedArray.prototype chain for symbol properties
+		var proto Value
+		ta := base.AsTypedArray()
+		switch ta.GetElementType() {
+		case TypedArrayFloat32:
+			proto = vm.Float32ArrayPrototype
+		// Add other typed array types as needed
+		default:
+			proto = vm.Float32ArrayPrototype // fallback
+		}
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				if debugVM {
+					fmt.Printf("[DBG opGetPropSymbol] TypedArray.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+				}
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							if debugVM {
+								fmt.Printf("[DBG opGetPropSymbol] TypedArray proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+							}
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
 	case TypeGenerator:
 		// Generators: consult Generator.prototype chain for symbol properties
 		proto := vm.GeneratorPrototype

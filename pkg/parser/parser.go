@@ -7,7 +7,6 @@ import (
 	"paserati/pkg/source"
 	"strconv"
 	"strings"
-	"unsafe"
 )
 
 // --- Debug Flag ---
@@ -6574,8 +6573,8 @@ func (p *Parser) isForOfLoop() bool {
 }
 
 // parseForOfStatement parses for...of loops
-func (p *Parser) parseForOfStatement() *ForStatement {
-	stmt := &ForStatement{Token: p.curToken} // 'for'
+func (p *Parser) parseForOfStatement() *ForOfStatement {
+	stmt := &ForOfStatement{Token: p.curToken} // 'for'
 
 	if !p.expectPeek(lexer.LPAREN) { // Consume '(', cur='('
 		return nil
@@ -6593,7 +6592,7 @@ func (p *Parser) parseForOfStatement() *ForStatement {
 		}
 		letStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		// Note: No type annotation or value assignment in for...of
-		stmt.Initializer = letStmt
+		stmt.Variable = letStmt
 	} else if p.curTokenIs(lexer.CONST) {
 		// Parse const declaration
 		constStmt := &ConstStatement{Token: p.curToken}
@@ -6601,12 +6600,20 @@ func (p *Parser) parseForOfStatement() *ForStatement {
 			return nil
 		}
 		constStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		stmt.Initializer = constStmt
+		stmt.Variable = constStmt
+	} else if p.curTokenIs(lexer.VAR) {
+		// Parse var declaration
+		varStmt := &VarStatement{Token: p.curToken}
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+		varStmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		stmt.Variable = varStmt
 	} else if p.curTokenIs(lexer.IDENT) {
 		// Parse bare identifier (reusing existing variable)
 		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
-		stmt.Initializer = exprStmt
+		stmt.Variable = exprStmt
 	} else {
 		return nil
 	}
@@ -6620,7 +6627,7 @@ func (p *Parser) parseForOfStatement() *ForStatement {
 	// Parse iterable expression
 	p.nextToken() // Move past 'of'
 	debugPrint("parseForOfStatement: Parsing iterable, cur='%s'", p.curToken.Literal)
-	stmt.Condition = p.parseExpression(LOWEST)
+	stmt.Iterable = p.parseExpression(LOWEST)
 
 	// Expect ')'
 	if !p.expectPeek(lexer.RPAREN) {
@@ -6633,8 +6640,7 @@ func (p *Parser) parseForOfStatement() *ForStatement {
 
 	debugPrint("parseForOfStatement: FINISHED")
 
-	// Return as *ForStatement for now - we'll need to handle this in type system
-	return (*ForStatement)(unsafe.Pointer(stmt))
+	return stmt
 }
 
 // parseForStatementOrForOf determines if this is for...of, for...in, or regular for and parses accordingly

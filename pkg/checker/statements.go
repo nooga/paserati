@@ -644,6 +644,13 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 					constStmt.ComputedType = elementType
 					constStmt.Name.SetComputedType(elementType)
 				}
+			} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
+				// Define the loop variable with the element type
+				if varStmt.Name != nil {
+					c.env.Define(varStmt.Name.Value, elementType, false)
+					varStmt.ComputedType = elementType
+					varStmt.Name.SetComputedType(elementType)
+				}
 			} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
 				// Array destructuring: for(const [x, y] of arr)
 				// Define each destructured variable with its type from the element

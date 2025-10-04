@@ -334,9 +334,50 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	float32ArrayProto.SetOwn("constructor", ctorWithProps)
 
+	// Add Symbol.iterator implementation for typed arrays
+	iterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		if thisArray.AsTypedArray() == nil {
+			return vm.Undefined, nil
+		}
+		// Create a typed array iterator object (reuse array iterator logic)
+		return createTypedArrayIterator(vmInstance, thisArray), nil
+	})
+	// Register [Symbol.iterator] using native symbol key
+	float32ArrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, nil, nil, nil)
+
 	// Set Float32Array prototype in VM
 	vmInstance.Float32ArrayPrototype = vm.NewValueFromPlainObject(float32ArrayProto)
 
 	// Register Float32Array constructor as global
 	return ctx.DefineGlobal("Float32Array", ctorWithProps)
+}
+
+// createTypedArrayIterator creates an iterator for typed arrays
+func createTypedArrayIterator(vmInstance *vm.VM, typedArray vm.Value) vm.Value {
+	index := 0
+	ta := typedArray.AsTypedArray()
+	length := ta.GetLength()
+
+	// Create iterator object with next() method
+	iteratorObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	iteratorObj.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		// Create result object {value, done}
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+		if index >= length {
+			result.SetOwn("done", vm.BooleanValue(true))
+			result.SetOwn("value", vm.Undefined)
+		} else {
+			val := ta.GetElement(index)
+			index++
+			result.SetOwn("done", vm.BooleanValue(false))
+			result.SetOwn("value", val)
+		}
+
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+
+	return vm.NewValueFromPlainObject(iteratorObj)
 }

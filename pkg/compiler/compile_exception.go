@@ -236,6 +236,14 @@ func (c *Compiler) compileThrowStatement(node *parser.ThrowStatement, hint Regis
 		return BadRegister, err
 	}
 
+	// Clean up any active iterators before throwing from within a loop
+	for i := len(c.loopContextStack) - 1; i >= 0; i-- {
+		ctx := c.loopContextStack[i]
+		if ctx.IteratorCleanup != nil && ctx.IteratorCleanup.UsesIteratorProtocol {
+			c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, node.Token.Line)
+		}
+	}
+
 	// Move into R0 to guarantee a valid register index at runtime
 	const r0 Register = 0
 	if valueReg != r0 {
