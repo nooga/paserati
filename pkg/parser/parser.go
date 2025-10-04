@@ -7514,6 +7514,9 @@ func (p *Parser) isValidDestructuringTarget(expr Expression) bool {
 	case *ObjectLiteral:
 		// Nested object destructuring: {user: {name, age}} = {user: {name: "John", age: 30}}
 		return true
+	case *UndefinedLiteral:
+		// Elision in destructuring: [,] or [[,]]
+		return true
 	default:
 		return false
 	}

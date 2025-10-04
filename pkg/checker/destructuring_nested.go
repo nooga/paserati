@@ -15,6 +15,9 @@ func (c *Checker) checkDestructuringTarget(target parser.Expression, expectedTyp
 		c.checkNestedArrayTarget(targetNode, expectedType, context)
 	case *parser.ObjectLiteral:
 		c.checkNestedObjectTarget(targetNode, expectedType, context)
+	case *parser.UndefinedLiteral:
+		// Elision in destructuring - no type checking needed, just skip this element
+		return
 	default:
 		c.addError(target, fmt.Sprintf("invalid destructuring target type: %T", target))
 	}
@@ -29,6 +32,9 @@ func (c *Checker) checkDestructuringTargetForProperty(target parser.Expression, 
 		c.checkNestedArrayTarget(targetNode, expectedType, propName)
 	case *parser.ObjectLiteral:
 		c.checkNestedObjectTarget(targetNode, expectedType, propName)
+	case *parser.UndefinedLiteral:
+		// Elision in destructuring - no type checking needed, just skip this element
+		return
 	default:
 		c.addError(target, fmt.Sprintf("invalid destructuring target type: %T", target))
 	}
@@ -190,8 +196,11 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 		// Nested array destructuring declaration
 		c.checkNestedArrayTargetForDeclaration(targetNode, expectedType, isConst)
 	case *parser.ObjectLiteral:
-		// Nested object destructuring declaration  
+		// Nested object destructuring declaration
 		c.checkNestedObjectTargetForDeclaration(targetNode, expectedType, isConst)
+	case *parser.UndefinedLiteral:
+		// Elision in destructuring - no type checking needed, just skip this element
+		return
 	default:
 		c.addError(target, fmt.Sprintf("invalid destructuring target type: %T", target))
 	}

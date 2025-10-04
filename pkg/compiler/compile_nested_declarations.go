@@ -17,6 +17,9 @@ func (c *Compiler) compileNestedPatternDeclaration(target parser.Expression, val
 	case *parser.ObjectLiteral:
 		// Convert to ObjectDestructuringDeclaration and compile
 		return c.compileNestedObjectDeclaration(targetNode, valueReg, isConst, line)
+	case *parser.UndefinedLiteral:
+		// Elision in destructuring - no code to generate, just skip this element
+		return nil
 	default:
 		return NewCompileError(target, fmt.Sprintf("unsupported nested pattern type: %T", target))
 	}

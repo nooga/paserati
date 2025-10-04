@@ -249,9 +249,8 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 	}()
 
 	// Compile the constructor function
-	// Pass empty nameHint to avoid shadowing the class name in the constructor's scope
-	// The class name should be accessible from the parent scope (pre-defined above)
-	nameHint := ""
+	// Use the class name as the function name for proper function.name property
+	nameHint := node.Name.Value
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(functionLiteral, nameHint)
 	if err != nil {
 		return BadRegister, err

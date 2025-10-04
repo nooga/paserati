@@ -1007,16 +1007,71 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 	
 	// 4. Path 2: Value is undefined, evaluate and assign default
 	c.patchJump(jumpToDefault)
-	
+
 	// Compile the default expression
 	defaultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(defaultReg)
-	
-	_, err = c.compileNode(defaultExpr, defaultReg)
-	if err != nil {
-		return err
+
+	// Check if we should apply function name inference
+	// Per ECMAScript spec: if target is an identifier and default is anonymous function, use target name
+	var nameHint string
+	if ident, ok := target.(*parser.Identifier); ok {
+		nameHint = ident.Value
 	}
-	
+
+	// Compile default with potential name hint for anonymous functions
+	if nameHint != "" {
+		if funcLit, ok := defaultExpr.(*parser.FunctionLiteral); ok && funcLit.Name == nil {
+			// Anonymous function literal - use target name
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, nameHint)
+			if err != nil {
+				return err
+			}
+			c.emitClosure(defaultReg, funcConstIndex, funcLit, freeSymbols)
+		} else if classExpr, ok := defaultExpr.(*parser.ClassExpression); ok && classExpr.Name == nil {
+			// Anonymous class expression - give it the target name temporarily
+			// This allows function name inference per ECMAScript spec
+			classExpr.Name = &parser.Identifier{
+				Token: classExpr.Token,
+				Value: nameHint,
+			}
+			_, err = c.compileNode(classExpr, defaultReg)
+			// Restore to anonymous (though it doesn't matter since we're done compiling)
+			classExpr.Name = nil
+			if err != nil {
+				return err
+			}
+		} else if arrowFunc, ok := defaultExpr.(*parser.ArrowFunctionLiteral); ok {
+			// Arrow function - compile with name hint by using compileArrowFunctionWithName
+			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, nameHint)
+			if err != nil {
+				return err
+			}
+			// Create a minimal FunctionLiteral for emitClosure
+			// Arrow function body can be an expression or block, wrap it appropriately
+			var body *parser.BlockStatement
+			if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
+				body = blockBody
+			} else {
+				// Expression body - wrap in block for emitClosure
+				body = &parser.BlockStatement{}
+			}
+			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			c.emitClosure(defaultReg, funcConstIndex, minimalFuncLit, freeSymbols)
+		} else {
+			// Not a function, compile normally
+			_, err = c.compileNode(defaultExpr, defaultReg)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		_, err = c.compileNode(defaultExpr, defaultReg)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Assign default value to target
 	err = c.compileSimpleAssignment(target, defaultReg, line)
 	if err != nil {

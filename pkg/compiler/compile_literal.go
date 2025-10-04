@@ -137,7 +137,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			arity++
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, "<arrow>", functionChunk, false, true) // isArrowFunction = true
+	arrowName := "<arrow>"
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, true) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
@@ -190,6 +191,91 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	}
 
 	return hint, nil // Return hint register with the closure
+}
+
+// compileArrowFunctionWithName compiles an arrow function with a custom name hint
+// This is used for function name inference in destructuring defaults
+func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLiteral, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
+	// Most of this is copied from compileArrowFunctionLiteral, but with name support
+	funcCompiler := newFunctionCompiler(c)
+	funcCompiler.compilingFuncName = nameHint // Use the provided name instead of "<arrow>"
+
+	// Define parameters
+	for _, p := range node.Parameters {
+		reg := funcCompiler.regAlloc.Alloc()
+		funcCompiler.currentSymbolTable.Define(p.Name.Value, reg)
+		funcCompiler.regAlloc.Pin(reg)
+	}
+
+	// Handle default parameters (same as original)
+	for _, param := range node.Parameters {
+		if param.DefaultValue != nil {
+			symbol, _, exists := funcCompiler.currentSymbolTable.Resolve(param.Name.Value)
+			if !exists {
+				funcCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
+				continue
+			}
+			paramReg := symbol.Register
+
+			undefinedReg := funcCompiler.regAlloc.Alloc()
+			defer funcCompiler.regAlloc.Free(undefinedReg)
+			funcCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
+
+			compareReg := funcCompiler.regAlloc.Alloc()
+			defer funcCompiler.regAlloc.Free(compareReg)
+			funcCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
+
+			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
+
+			defaultValueReg := funcCompiler.regAlloc.Alloc()
+			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
+			if err != nil {
+				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
+			} else {
+				if defaultValueReg != paramReg {
+					funcCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
+				}
+			}
+			funcCompiler.regAlloc.Free(defaultValueReg)
+			funcCompiler.patchJump(jumpIfDefinedPos)
+		}
+	}
+
+	// Handle rest parameter (same as original)
+	if node.RestParameter != nil {
+		restParamReg := funcCompiler.regAlloc.Alloc()
+		funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+		funcCompiler.regAlloc.Pin(restParamReg)
+		// Rest parameter collection is handled at runtime during function call
+	}
+
+	// Compile body
+	bodyReg := funcCompiler.regAlloc.Alloc()
+	_, bodyErr := funcCompiler.compileNode(node.Body, bodyReg)
+	if bodyErr != nil {
+		funcCompiler.addError(node.Body, "error compiling arrow function body")
+	}
+
+	// Emit return
+	funcCompiler.emitOpCode(vm.OpReturn, node.Token.Line)
+	funcCompiler.emitByte(byte(bodyReg))
+
+	// Create function value with custom name
+	arity := len(node.Parameters)
+	for _, param := range node.Parameters {
+		if !param.IsThis {
+			arity++
+		}
+	}
+
+	functionChunk := funcCompiler.chunk
+	freeSymbols := funcCompiler.freeSymbols
+	regSize := funcCompiler.regAlloc.MaxRegs()
+
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, true)
+	constIdx := c.chunk.AddConstant(funcValue)
+
+	return constIdx, freeSymbols, nil
 }
 
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register) (Register, errors.PaseratiError) {
