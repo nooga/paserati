@@ -560,6 +560,13 @@ startExecution:
 			ip += 3
 			if int(constIdx) >= len(constants) {
 				frame.ip = ip // Save IP
+				fmt.Printf("[ERROR] OpLoadConst: Invalid constant index %d (have %d constants)\n", constIdx, len(constants))
+				fmt.Printf("[ERROR]   at ip=%d, reg=%d, constIdxHi=%d, constIdxLo=%d\n", ip-3, reg, constIdxHi, constIdxLo)
+				fmt.Printf("[ERROR]   bytes at ip-3: %d %d %d\n", code[ip-3], code[ip-2], code[ip-1])
+				if ip >= 6 {
+					fmt.Printf("[ERROR]   context: [%d %d %d] [%d %d %d] ...\n",
+						code[ip-6], code[ip-5], code[ip-4], code[ip-3], code[ip-2], code[ip-1])
+				}
 				status := vm.runtimeError("Invalid constant index %d", constIdx)
 				return status, Undefined
 			}
@@ -3996,9 +4003,10 @@ startExecution:
 			registers[destReg] = resultObj
 
 		case OpThrow:
-			// Save IP before potential unwinding
-			frame.ip = ip
+			// Execute throw and update IP
 			vm.executeOpThrow(code, &ip)
+			// Save IP after executeOpThrow has advanced it past operands
+			frame.ip = ip
 			// If unwinding is active, check if we need to terminate or continue
 			if vm.unwinding {
 				// Exception was thrown and we're unwinding
