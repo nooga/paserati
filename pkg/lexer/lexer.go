@@ -1330,6 +1330,29 @@ func (l *Lexer) NextToken() Token {
 				l.column = startCol + 1
 				tok = Token{Type: DOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: startPos + 1}
 			}
+		} else if isDigit(l.peekChar()) {
+			// Decimal number starting with dot: .123 => 0.123
+			l.readChar() // Consume '.'
+			// Read remaining digits
+			for isDigit(l.ch) || l.ch == '_' {
+				l.readChar()
+			}
+			// Check for exponent (e.g., .5e10)
+			if l.ch == 'e' || l.ch == 'E' {
+				l.readChar() // Consume 'e' or 'E'
+				if l.ch == '+' || l.ch == '-' {
+					l.readChar() // Consume sign
+				}
+				for isDigit(l.ch) || l.ch == '_' {
+					l.readChar()
+				}
+			}
+			// Check for 'n' suffix (BigInt)
+			if l.ch == 'n' {
+				l.readChar() // Consume 'n'
+			}
+			literal := l.input[startPos:l.position]
+			tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
 			// Just a single dot
 			literal := string(l.ch)
