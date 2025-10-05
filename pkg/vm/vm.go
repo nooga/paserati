@@ -1080,7 +1080,7 @@ startExecution:
 			// Check if objVal has a prototype chain to walk
 			if objVal.IsObject() || objVal.Type() == TypeArray || objVal.Type() == TypeRegExp ||
 				objVal.Type() == TypeMap || objVal.Type() == TypeSet || objVal.Type() == TypeArguments ||
-				objVal.Type() == TypeFunction || objVal.Type() == TypeClosure {
+				objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypePromise {
 				var current Value
 
 				// Get the initial prototype based on type
@@ -1100,6 +1100,8 @@ startExecution:
 					current = vm.SetPrototype
 				case TypeArguments:
 					current = vm.ObjectPrototype // Arguments objects inherit from Object.prototype
+				case TypePromise:
+					current = vm.PromisePrototype
 			case TypeFunction:
 				current = vm.FunctionPrototype
 			case TypeClosure:

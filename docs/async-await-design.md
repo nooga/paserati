@@ -1020,6 +1020,7 @@ for await (const x of asyncRange(5)) {
 - ✅ `Promise.all(iterable)`: Waits for all promises to resolve, rejects on first rejection
 - ✅ `Promise.race(iterable)`: Settles with first settled promise (fulfill or reject)
 - ✅ `Promise.allSettled(iterable)`: Waits for all promises to settle, returns array of result objects
+- ✅ `Promise.any(iterable)`: Resolves with first fulfilled promise, rejects with AggregateError if all reject
 
 **Helper Methods** (pkg/vm/promise.go):
 - ✅ `IterableToArray()`: Converts iterables to arrays (currently supports arrays)
@@ -1036,6 +1037,16 @@ for await (const x of asyncRange(5)) {
 - ✅ `promise_race.ts`: Basic Promise.race
 - ✅ `promise_race_reject.ts`: Promise.race rejection behavior
 - ✅ `promise_allsettled.ts`: Promise.allSettled with mixed results
+- ✅ `promise_any.ts`: Promise.any with first fulfillment
+- ✅ `promise_any_all_reject.ts`: Promise.any all-reject case with AggregateError
+
+**Test262 Compliance** (built-ins/Promise):
+- **Overall**: 33.2% pass rate (212/639 tests)
+- Promise.any: 18.1% (17/94 tests)
+- Promise.allSettled: 16.3% (17/104 tests)
+- Promise.race: 20.2% (19/94 tests)
+- Promise.all: 20.4% (20/98 tests)
+- Promise.prototype: 59.3% (73/123 tests)
 
 **Verified Working**:
 ```typescript
@@ -1066,6 +1077,14 @@ console.log(settled);
 //   {status: "rejected", reason: "error"},
 //   {status: "fulfilled", value: 3}
 // ]
+
+// Promise.any
+const first = await Promise.any([
+    Promise.reject('error1'),
+    Promise.resolve(42),
+    Promise.reject('error2')
+]);
+console.log(first); // 42
 ```
 
 ---

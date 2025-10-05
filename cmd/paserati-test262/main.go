@@ -455,17 +455,6 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 		return false, nil // Skipped
 	}
 
-	// Skip async/await tests for now (parser/runtime not implemented)
-	if strings.Contains(string(content), "async function") || strings.Contains(string(content), "await ") {
-		return false, nil // Skipped
-	}
-
-	// Skip files under test/async* helper directories explicitly if present in path
-	relPath, _ := filepath.Rel(testDir, testFile)
-	if strings.Contains(relPath, string(filepath.Separator)+"asyncHelpers") {
-		return false, nil // Skipped
-	}
-
 	// Create context with timeout to properly cancel goroutines
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel() // Always cancel to free resources

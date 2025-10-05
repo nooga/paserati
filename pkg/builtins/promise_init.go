@@ -54,6 +54,10 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("allSettled", types.NewSimpleFunction(
 			[]types.Type{types.Any}, // iterable
 			types.Any,               // Promise<PromiseSettledResult[]>
+		)).
+		WithProperty("any", types.NewSimpleFunction(
+			[]types.Type{types.Any}, // iterable
+			types.Any,               // Promise<any>
 		))
 
 	// Add call signature for Promise constructor
@@ -323,6 +327,98 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 					// Reject with the first rejection reason
 					vmInstance.Call(reject, vm.Undefined, []vm.Value{reason})
+					return vm.Undefined, nil
+				})
+
+				// Attach handlers
+				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+			}
+
+			return vm.Undefined, nil
+		})
+
+		return vmInstance.NewPromiseFromExecutor(executor)
+	}))
+
+	// Promise.any(iterable)
+	props.SetOwn("any", vm.NewNativeFunction(1, false, "any", func(args []vm.Value) (vm.Value, error) {
+		iterable := vm.Undefined
+		if len(args) > 0 {
+			iterable = args[0]
+		}
+
+		// Convert iterable to array
+		arr, err := vmInstance.IterableToArray(iterable)
+		if err != nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.any requires an iterable")
+		}
+
+		arrayObj := arr.AsArray()
+		if arrayObj == nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.any requires an iterable")
+		}
+
+		length := arrayObj.Length()
+		if length == 0 {
+			// Empty array - reject immediately with AggregateError
+			// TODO: Implement proper AggregateError
+			errorMsg := vm.NewString("AggregateError: All promises were rejected")
+			return vmInstance.NewRejectedPromise(errorMsg), nil
+		}
+
+		// Create a new promise that resolves with the first fulfilled promise
+		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
+			resolve := execArgs[0]
+			reject := execArgs[1]
+
+			// Track rejections and completion count
+			errors := make([]vm.Value, length)
+			remaining := length
+
+			// Attach handlers to each promise
+			for i := 0; i < length; i++ {
+				idx := i // Capture index for closure
+				promiseOrValue := arrayObj.Get(i)
+
+				// Convert non-promises to resolved promises
+				var promise vm.Value
+				if promiseOrValue.Type() == vm.TypePromise {
+					promise = promiseOrValue
+				} else {
+					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+				}
+
+				// Attach fulfillment handler
+				onFulfilled := vm.NewNativeFunction(1, false, "onFulfilled", func(valueArgs []vm.Value) (vm.Value, error) {
+					value := vm.Undefined
+					if len(valueArgs) > 0 {
+						value = valueArgs[0]
+					}
+
+					// Resolve with the first fulfilled value
+					vmInstance.Call(resolve, vm.Undefined, []vm.Value{value})
+					return vm.Undefined, nil
+				})
+
+				// Attach rejection handler
+				onRejected := vm.NewNativeFunction(1, false, "onRejected", func(reasonArgs []vm.Value) (vm.Value, error) {
+					reason := vm.Undefined
+					if len(reasonArgs) > 0 {
+						reason = reasonArgs[0]
+					}
+
+					// Store the error
+					errors[idx] = reason
+					remaining--
+
+					// If all promises rejected, reject with AggregateError
+					if remaining == 0 {
+						// TODO: Create proper AggregateError with errors array
+						// For now, just create a simple error message
+						errorMsg := vm.NewString("AggregateError: All promises were rejected")
+						vmInstance.Call(reject, vm.Undefined, []vm.Value{errorMsg})
+					}
+
 					return vm.Undefined, nil
 				})
 

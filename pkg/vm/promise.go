@@ -300,16 +300,127 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 }
 
 // IterableToArray converts an iterable value to an array
-// For now, supports arrays directly - can be extended for other iterables
+// Supports arrays directly and any object with Symbol.iterator
 func (vm *VM) IterableToArray(value Value) (Value, error) {
 	// If it's already an array, return it
 	if value.Type() == TypeArray {
 		return value, nil
 	}
 
-	// For now, we only support arrays
-	// Future: add support for iterables via Symbol.iterator
-	return Undefined, fmt.Errorf("value is not iterable")
+	// Try to get Symbol.iterator
+	if vm.SymbolIterator.Type() == TypeUndefined {
+		return Undefined, fmt.Errorf("value is not iterable")
+	}
+
+	// Get value[Symbol.iterator]
+	var iteratorMethod Value
+	if value.IsObject() {
+		// Try to get the Symbol.iterator property using the symbol key
+		obj := value.AsPlainObject()
+		if obj != nil {
+			if method, exists := obj.GetOwnByKey(NewSymbolKey(vm.SymbolIterator)); exists {
+				iteratorMethod = method
+			}
+		}
+		// DictObjects don't support symbol keys, so skip them
+	}
+
+	// If no iterator method found, it's not iterable
+	if iteratorMethod.Type() == TypeUndefined || !iteratorMethod.IsCallable() {
+		return Undefined, fmt.Errorf("value is not iterable")
+	}
+
+	// Call the iterator method to get the iterator object
+	iteratorObj, err := vm.Call(iteratorMethod, value, []Value{})
+	if err != nil {
+		return Undefined, err
+	}
+
+	// Get the next method
+	var nextMethod Value
+	if iteratorObj.IsObject() {
+		obj := iteratorObj.AsPlainObject()
+		if obj != nil {
+			if next, exists := obj.GetOwn("next"); exists {
+				nextMethod = next
+			}
+		} else if dictObj := iteratorObj.AsDictObject(); dictObj != nil {
+			if next, exists := dictObj.GetOwn("next"); exists {
+				nextMethod = next
+			}
+		}
+	}
+
+	if !nextMethod.IsCallable() {
+		return Undefined, fmt.Errorf("iterator does not have a next method")
+	}
+
+	// Collect all values from the iterator
+	var elements []Value
+	maxIterations := 10000 // Safety limit
+	for i := 0; i < maxIterations; i++ {
+		// Call next()
+		result, err := vm.Call(nextMethod, iteratorObj, []Value{})
+		if err != nil {
+			return Undefined, err
+		}
+
+		// Get result.done
+		var done Value = Undefined
+		if result.IsObject() {
+			obj := result.AsPlainObject()
+			if obj != nil {
+				if d, exists := obj.GetOwn("done"); exists {
+					done = d
+				}
+			} else if dictObj := result.AsDictObject(); dictObj != nil {
+				if d, exists := dictObj.GetOwn("done"); exists {
+					done = d
+				}
+			}
+		}
+
+		// Check if done is truthy (JavaScript semantics)
+		// Falsy: false, 0, "", null, undefined
+		// Everything else is truthy
+		isDone := false
+		if done.Type() == TypeBoolean {
+			isDone = done.AsBoolean()
+		} else if done.IsNumber() {
+			isDone = done.ToFloat() != 0
+		} else if done.Type() == TypeString {
+			isDone = done.ToString() != ""
+		} else if done.Type() == TypeNull || done.Type() == TypeUndefined {
+			isDone = false
+		} else {
+			// Objects, arrays, functions etc. are truthy
+			isDone = true
+		}
+
+		if isDone {
+			break
+		}
+
+		// Get result.value
+		var itemValue Value = Undefined
+		if result.IsObject() {
+			obj := result.AsPlainObject()
+			if obj != nil {
+				if v, exists := obj.GetOwn("value"); exists {
+					itemValue = v
+				}
+			} else if dictObj := result.AsDictObject(); dictObj != nil {
+				if v, exists := dictObj.GetOwn("value"); exists {
+					itemValue = v
+				}
+			}
+		}
+
+		elements = append(elements, itemValue)
+	}
+
+	// Create array from collected elements
+	return vm.NewArrayFromSlice(elements), nil
 }
 
 // NewArrayFromSlice creates a new array from a slice of values
