@@ -98,21 +98,8 @@ func (vm *VM) unwindException() bool {
 				vm.frameCount-1, frameName, frame.ip, frame.isDirectCall, frame.isNativeFrame)
 		}
 
-		// Check if this is a direct call frame (native function boundary)
-		// Direct call frames are created by CallFunctionDirectly or executeUserFunctionSafe
-		// When we hit this boundary, we must STOP unwinding and return control to the native caller
-		// so builtins (like assert.throws) can observe and handle the exception.
-		if frame.isDirectCall {
-			if debugExceptions {
-				fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d; stopping and returning error to native caller\n", vm.frameCount-1)
-			}
-			// DON'T pop the frame here - let the VM loop or executeUserFunctionSafe handle it
-			// Popping the frame here would cause issues because we're still executing code in this frame
-			// Just return true to indicate we hit a boundary
-			return true
-		}
-
-		// Look for handlers covering the current IP
+		// Look for handlers covering the current IP FIRST
+		// Even in direct call frames (generators/async), we want to handle exceptions within the frame
 		handlers := vm.findAllExceptionHandlers(frame.ip)
 
 		if debugExceptions {
@@ -144,8 +131,23 @@ func (vm *VM) unwindException() bool {
 			}
 		}
 
+		// No handler found in this frame
+		// Check if this is a direct call frame (native function boundary)
+		// Direct call frames are created by CallFunctionDirectly or executeUserFunctionSafe
+		// When we hit this boundary WITHOUT finding a handler, we must STOP unwinding
+		// and return control to the native caller so builtins (like assert.throws) can observe the exception.
+		if frame.isDirectCall {
+			if debugExceptions {
+				fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d with no handler; stopping and returning error to native caller\n", vm.frameCount-1)
+			}
+			// DON'T pop the frame here - let the VM loop or executeUserFunctionSafe handle it
+			// Popping the frame here would cause issues because we're still executing code in this frame
+			// Just return true to indicate we hit a boundary
+			return true
+		}
+
 		// fmt.Printf("[DEBUG] unwindException: No handler in frame %d, unwinding to caller\n", vm.frameCount-1)
-		// No handler in current frame, unwind to caller
+		// No handler in current frame and not a direct call boundary, unwind to caller
 		vm.frameCount--
 		// For register-based VM, just decrement frame count
 		// Register cleanup is handled by the frame management
