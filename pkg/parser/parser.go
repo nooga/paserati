@@ -1161,7 +1161,7 @@ func (p *Parser) parseLetStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: let {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(letToken, false, true)
-	case lexer.IDENT:
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.THROW, lexer.RETURN:
 		// Regular identifier: let x = ... or let x = ..., y = ...
 		stmt := &LetStatement{Token: letToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1190,7 +1190,7 @@ func (p *Parser) parseLetStatement() Statement {
 		for p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // Consume ','
 
-			if !p.expectPeek(lexer.IDENT) {
+			if !p.expectPeekIdentifierOrKeyword() {
 				return nil
 			}
 
@@ -1253,7 +1253,7 @@ func (p *Parser) parseConstStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: const {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(constToken, true, true)
-	case lexer.IDENT:
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.THROW, lexer.RETURN:
 		// Regular identifier: const x = ... or const x = ..., y = ...
 		stmt := &ConstStatement{Token: constToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1283,7 +1283,7 @@ func (p *Parser) parseConstStatement() Statement {
 		for p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // Consume ','
 
-			if !p.expectPeek(lexer.IDENT) {
+			if !p.expectPeekIdentifierOrKeyword() {
 				return nil
 			}
 
@@ -1344,7 +1344,7 @@ func (p *Parser) parseVarStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: var {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
-	case lexer.IDENT:
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.THROW, lexer.RETURN:
 		// Regular identifier case - original logic
 		stmt := &VarStatement{Token: varToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1373,7 +1373,7 @@ func (p *Parser) parseVarStatement() Statement {
 		for p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // Consume ','
 
-			if !p.expectPeek(lexer.IDENT) {
+			if !p.expectPeekIdentifierOrKeyword() {
 				return nil
 			}
 
@@ -3174,6 +3174,20 @@ func (p *Parser) expectPeek(t lexer.TokenType) bool {
 	}
 }
 
+// expectPeekIdentifierOrKeyword accepts IDENT or contextual keywords that can be used as identifiers.
+// Returns true if peek is IDENT, YIELD, GET, THROW, or RETURN and advances.
+func (p *Parser) expectPeekIdentifierOrKeyword() bool {
+	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.YIELD) ||
+		p.peekTokenIs(lexer.GET) || p.peekTokenIs(lexer.THROW) || p.peekTokenIs(lexer.RETURN) {
+		p.nextToken()
+		return true
+	} else {
+		msg := fmt.Sprintf("expected identifier or destructuring pattern after '%s', got %s", p.curToken.Literal, p.peekToken.Type)
+		p.addError(p.peekToken, msg)
+		return false
+	}
+}
+
 // --- Error Handling ---
 
 func (p *Parser) peekError(t lexer.TokenType) {
@@ -3236,10 +3250,30 @@ func (p *Parser) parseTypeofExpression() Expression {
 	return expression
 }
 
-// parseYieldExpression handles yield expressions in generator functions
+// parseYieldExpression handles yield expressions in generator functions or yield as identifier
 func (p *Parser) parseYieldExpression() Expression {
+	yieldToken := p.curToken
+
+	// Heuristic: if peek is an operator, closing bracket, comma, semicolon, or EOF,
+	// treat yield as an identifier rather than a yield expression
+	// This covers cases like: console.log(yield), x = yield, [yield], {yield}, yield;
+	// BUT: if peek is ASTERISK, it could be yield*, so treat as yield expression
+	if p.peekTokenIs(lexer.RPAREN) || p.peekTokenIs(lexer.COMMA) ||
+		p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.RBRACE) ||
+		p.peekTokenIs(lexer.RBRACKET) || p.peekTokenIs(lexer.EOF) ||
+		p.peekTokenIs(lexer.COLON) || // for object properties
+		p.peekTokenIs(lexer.DOT) || // for member access
+		p.peekTokenIs(lexer.PLUS) || p.peekTokenIs(lexer.MINUS) ||
+		p.peekTokenIs(lexer.SLASH) ||
+		p.peekTokenIs(lexer.GT) || p.peekTokenIs(lexer.LT) ||
+		p.peekTokenIs(lexer.EQ) || p.peekTokenIs(lexer.NOT_EQ) {
+		// Treat as identifier
+		return &Identifier{Token: yieldToken, Value: yieldToken.Literal}
+	}
+
+	// Otherwise, parse as yield expression
 	expression := &YieldExpression{
-		Token: p.curToken, // The 'yield' token
+		Token: yieldToken, // The 'yield' token
 	}
 
 	p.nextToken() // Move past 'yield'
@@ -5863,14 +5897,40 @@ func (p *Parser) parseObjectLiteral() Expression {
 					// Create an ObjectProperty with the method name as key and the shorthand method as value
 					methodName := shorthandMethod.Name
 					objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodName, Value: shorthandMethod})
-				} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE)) {
-					// --- NEW: Check for shorthand property syntax (identifier/keyword followed by ',' or '}') ---
-					// This is shorthand like { name, age } equivalent to { name: name, age: age }
+				} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.ASSIGN)) {
+					// --- NEW: Check for shorthand property syntax ---
+					// This handles:
+					// 1. { name, age } - shorthand without default
+					// 2. { name = 5, age = 10 } - shorthand with default (for destructuring)
 					identName := p.curToken.Literal
 					key := propName
 
-					// For shorthand property, the value is also the same identifier
-					value := &Identifier{Token: p.curToken, Value: identName}
+					var value Expression
+					if p.peekTokenIs(lexer.ASSIGN) {
+						// Shorthand with default: { x = 5 }
+						// Create an assignment expression: x = 5
+						// This will be interpreted as default value in destructuring context
+						identToken := p.curToken // Save the identifier token before advancing
+						p.nextToken()            // Consume '='
+						assignToken := p.curToken
+						p.nextToken() // Move to default value expression
+
+						defaultValue := p.parseExpression(COMMA)
+						if defaultValue == nil {
+							return nil
+						}
+
+						// Create assignment expression for destructuring: x = defaultValue
+						value = &AssignmentExpression{
+							Token:    assignToken,
+							Operator: "=",
+							Left:     &Identifier{Token: identToken, Value: identName},
+							Value:    defaultValue,
+						}
+					} else {
+						// Shorthand without default: { x }
+						value = &Identifier{Token: p.curToken, Value: identName}
+					}
 
 					// Append the property
 					objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: key, Value: value})
@@ -5905,7 +5965,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 					p.nextToken() // Consume ':' to get to the start of the value
 
-					value := p.parseExpression(ASSIGNMENT)
+					// Use COMMA precedence to allow assignment expressions (for destructuring defaults)
+					// while still stopping at commas (for next property)
+					value := p.parseExpression(COMMA)
 					if value == nil {
 						return nil
 					} // Error parsing value
