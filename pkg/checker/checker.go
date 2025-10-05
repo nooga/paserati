@@ -784,25 +784,29 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			debugPrintf("// [Checker Pass 3] Inferred return type for '%s': %s\n", funcNameForLog, actualReturnType.String())
 		}
 
-		// For generator functions, wrap the return type in Generator<T, TReturn, TNext>
-		if funcLit.IsGenerator {
+		// Handle async generator functions (both flags) first
+		if funcLit.IsAsync && funcLit.IsGenerator {
+			debugPrintf("// [Checker Pass 3] Async generator function detected, wrapping return type in AsyncGenerator\n")
+			asyncGeneratorType := c.createAsyncGeneratorType(actualReturnType, c.currentInferredYieldTypes)
+			actualReturnType = asyncGeneratorType
+			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+		} else if funcLit.IsGenerator {
+			// For generator functions, wrap the return type in Generator<T, TReturn, TNext>
 			debugPrintf("// [Checker Pass 3] Generator function detected, wrapping return type in Generator\n")
 			generatorType := c.createGeneratorType(actualReturnType, c.currentInferredYieldTypes)
 			actualReturnType = generatorType
 			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+		} else if funcLit.IsAsync {
+			// For async functions, wrap the return type in Promise<T>
+			debugPrintf("// [Checker Pass 3] Async function detected, wrapping return type in Promise\n")
+			innerType := actualReturnType
+			if innerType == nil {
+				innerType = types.Void
+			}
+			promiseType := c.createPromiseType(innerType)
+			actualReturnType = promiseType
+			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
 		}
-
-	// For async functions, wrap the return type in Promise<T>
-	if funcLit.IsAsync {
-		debugPrintf("// [Checker Pass 3] Async function detected, wrapping return type in Promise\n")
-		innerType := actualReturnType
-		if innerType == nil {
-			innerType = types.Void
-		}
-		promiseType := c.createPromiseType(innerType)
-		actualReturnType = promiseType
-		debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
-	}
 
 		// Create the FINAL ObjectType with updated signature
 		finalSignature := &types.Signature{

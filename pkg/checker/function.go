@@ -60,8 +60,16 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	
 	finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBody)
 
-	// 4. Handle generator functions - wrap return type in Generator<T, TReturn, TNext>
-	if node.IsGenerator {
+	// 4. Handle async generator functions (both flags) - wrap in AsyncGenerator<T, TReturn, TNext>
+	if node.IsAsync && node.IsGenerator {
+		// For async generator functions, return type is AsyncGenerator<YieldType, ReturnType, any>
+		debugPrintf("// [Checker FuncLit] Async generator function detected, wrapping return type\n")
+
+		// Use the collected yield types to create AsyncGenerator<T, TReturn, TNext>
+		asyncGeneratorType := c.createAsyncGeneratorType(finalReturnType, c.currentInferredYieldTypes)
+		finalReturnType = asyncGeneratorType
+		debugPrintf("// [Checker FuncLit] Created async generator type: %s\n", finalReturnType.String())
+	} else if node.IsGenerator {
 		// For generator functions, the actual return type becomes Generator<YieldType, ReturnType, any>
 		debugPrintf("// [Checker FuncLit] Generator function detected, wrapping return type\n")
 
@@ -69,10 +77,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		generatorType := c.createGeneratorType(finalReturnType, c.currentInferredYieldTypes)
 		finalReturnType = generatorType
 		debugPrintf("// [Checker FuncLit] Created generator type: %s\n", finalReturnType.String())
-	}
-
-	// 4.5. Handle async functions - wrap return type in Promise<T>
-	if node.IsAsync {
+	} else if node.IsAsync {
 		// For async functions, the actual return type becomes Promise<T>
 		debugPrintf("// [Checker FuncLit] Async function detected, wrapping return type in Promise\n")
 
@@ -141,6 +146,46 @@ func (c *Checker) createGeneratorType(returnType types.Type, yieldTypes []types.
 	generatorObj.WithProperty("return", types.NewOptionalFunction([]types.Type{returnType}, types.Any, []bool{true}))
 	generatorObj.WithProperty("throw", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
 	return generatorObj
+}
+
+// createAsyncGeneratorType creates an instantiated AsyncGenerator<T, TReturn, TNext> type
+// based on the yielded and returned types from the async generator function
+func (c *Checker) createAsyncGeneratorType(returnType types.Type, yieldTypes []types.Type) types.Type {
+	// Handle nil return type (async generators without explicit return default to void)
+	if returnType == nil {
+		returnType = types.Void
+	}
+
+	// Determine the yield type (T) from collected yield expressions
+	var yieldType types.Type
+	if len(yieldTypes) == 0 {
+		// No yield expressions found, use undefined
+		yieldType = types.Undefined
+	} else if len(yieldTypes) == 1 {
+		// Single yield type
+		yieldType = yieldTypes[0]
+	} else {
+		// Multiple yield types, create a union
+		yieldType = types.NewUnionType(yieldTypes...)
+	}
+
+	// Create an instantiated AsyncGenerator<T, TReturn, TNext> type
+	if types.AsyncGeneratorGeneric != nil {
+		return types.NewInstantiatedType(types.AsyncGeneratorGeneric, []types.Type{
+			yieldType,        // T (yield type) - inferred from yield expressions
+			returnType,       // TReturn (return type)
+			types.Unknown,    // TNext (sent type) - TypeScript uses unknown for this
+		})
+	}
+
+	// Fallback if AsyncGeneratorGeneric is not initialized
+	// AsyncGenerator methods return Promise<IteratorResult<T, TReturn>>
+	asyncGeneratorObj := types.NewObjectType()
+	// For simplicity, use Any for the promise return types in fallback
+	asyncGeneratorObj.WithProperty("next", types.NewOptionalFunction([]types.Type{types.Unknown}, types.Any, []bool{true}))
+	asyncGeneratorObj.WithProperty("return", types.NewOptionalFunction([]types.Type{returnType}, types.Any, []bool{true}))
+	asyncGeneratorObj.WithProperty("throw", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
+	return asyncGeneratorObj
 }
 
 // createPromiseType creates an instantiated Promise<T> type

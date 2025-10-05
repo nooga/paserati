@@ -2304,7 +2304,7 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 
 		// 2. Unwrap Promise<T> to get T
 		if argType != nil {
-			// Check if this is a Promise<T> type
+			// Check if this is a Promise<T> type (InstantiatedType before substitution)
 			if instType, ok := argType.(*types.InstantiatedType); ok {
 				if instType.Generic != nil && instType.Generic.Name == "Promise" {
 					// Extract the inner type T from Promise<T>
@@ -2314,6 +2314,37 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 						debugPrintf("// [Checker AwaitExpression] Unwrapped Promise<%s> to %s\n",
 							innerType.String(), innerType.String())
 						return
+					}
+				}
+			}
+
+			// Check if this is a Promise-shaped object (after substitution)
+			// Promise objects have .then(), .catch(), .finally() methods
+			// The .then() callback's first parameter type is the resolved value
+			if objType, ok := argType.(*types.ObjectType); ok {
+				if thenProp, hasThen := objType.Properties["then"]; hasThen {
+					// Extract the type from the .then() callback parameter
+					if thenFuncType, ok := thenProp.(*types.ObjectType); ok {
+						if len(thenFuncType.CallSignatures) > 0 {
+							sig := thenFuncType.CallSignatures[0]
+							// The first parameter should be a function that receives the resolved value
+							if len(sig.ParameterTypes) > 0 {
+								callbackType := sig.ParameterTypes[0]
+								if callbackFuncType, ok := callbackType.(*types.ObjectType); ok {
+									if len(callbackFuncType.CallSignatures) > 0 {
+										callbackSig := callbackFuncType.CallSignatures[0]
+										if len(callbackSig.ParameterTypes) > 0 {
+											// This is the resolved value type
+											resolvedType := callbackSig.ParameterTypes[0]
+											node.SetComputedType(resolvedType)
+											debugPrintf("// [Checker AwaitExpression] Unwrapped Promise-shaped object to %s\n",
+												resolvedType.String())
+											return
+										}
+									}
+								}
+							}
+						}
 					}
 				}
 			}

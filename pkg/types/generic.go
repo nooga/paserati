@@ -258,11 +258,14 @@ var (
 	// Array<T> generic type
 	ArrayGeneric *GenericType
 	
-	// Promise<T> generic type  
+	// Promise<T> generic type
 	PromiseGeneric *GenericType
-	
+
 	// Generator<T, TReturn, TNext> generic type
 	GeneratorGeneric *GenericType
+
+	// AsyncGenerator<T, TReturn, TNext> generic type
+	AsyncGeneratorGeneric *GenericType
 )
 
 func init() {
@@ -273,9 +276,49 @@ func init() {
 	
 	// Create Promise<T> generic type
 	promiseT := NewTypeParameter("T", 0, nil)
-	promiseBody := NewObjectType() // Simplified Promise structure for now
-	promiseBody.WithProperty("then", Any)
-	promiseBody.WithProperty("catch", Any)
+	promiseTType := &TypeParameterType{Parameter: promiseT}
+
+	// Create a proper Promise body that tracks the resolved value type
+	// The .then() method should accept a callback that receives T
+	// For now we'll create a simplified but tracked version
+	promiseBody := NewObjectType()
+
+	// .then(onFulfilled?: (value: T) => any, onRejected?: (reason: any) => any): Promise<any>
+	// The callback parameter should be typed as T
+	thenCallback := NewFunctionType(&Signature{
+		ParameterTypes: []Type{promiseTType},
+		ReturnType:     Any,
+	})
+	rejectCallback := NewFunctionType(&Signature{
+		ParameterTypes: []Type{Any},
+		ReturnType:     Any,
+	})
+	thenReturnPromise := NewObjectType().
+		WithProperty("then", Any).
+		WithProperty("catch", Any).
+		WithProperty("finally", Any)
+	promiseBody.WithProperty("then", NewOptionalFunction(
+		[]Type{thenCallback, rejectCallback},
+		thenReturnPromise,
+		[]bool{true, true}))
+
+	// .catch(onRejected?: (reason: any) => any): Promise<any>
+	promiseBody.WithProperty("catch", NewOptionalFunction(
+		[]Type{rejectCallback},
+		thenReturnPromise,
+		[]bool{true}))
+
+	// .finally(onFinally?: () => void): Promise<any>
+	// Returns a simplified promise type to avoid circular reference
+	finallyCallback := NewFunctionType(&Signature{
+		ParameterTypes: []Type{},
+		ReturnType:     Void,
+	})
+	promiseBody.WithProperty("finally", NewOptionalFunction(
+		[]Type{finallyCallback},
+		thenReturnPromise, // Returns a promise type
+		[]bool{true}))
+
 	PromiseGeneric = NewGenericType("Promise", []*TypeParameter{promiseT}, promiseBody)
 	
 	// Create Generator<T, TReturn, TNext> generic type
@@ -297,21 +340,61 @@ func init() {
 	generatorBody := NewObjectType().
 		// next(value?: TNext): IteratorResult<T, TReturn>
 		WithProperty("next", NewOptionalFunction(
-			[]Type{tNextType}, 
-			iteratorResultType, 
+			[]Type{tNextType},
+			iteratorResultType,
 			[]bool{true})).
-		// return(value?: TReturn): IteratorResult<T, TReturn>
+		// return(value?: any): IteratorResult<T, TReturn>
+		// Note: .return() accepts any value, not just TReturn
 		WithProperty("return", NewOptionalFunction(
-			[]Type{tReturnType}, 
-			iteratorResultType, 
+			[]Type{Any},
+			iteratorResultType,
 			[]bool{true})).
 		// throw(exception?: any): IteratorResult<T, TReturn>
 		WithProperty("throw", NewOptionalFunction(
-			[]Type{Any}, 
-			iteratorResultType, 
+			[]Type{Any},
+			iteratorResultType,
 			[]bool{true}))
 	
 	GeneratorGeneric = NewGenericType("Generator", []*TypeParameter{t, tReturn, tNext}, generatorBody)
+
+	// Create AsyncGenerator<T, TReturn, TNext> generic type
+	tAsync := NewTypeParameter("T", 0, nil)
+	tReturnAsync := NewTypeParameter("TReturn", 1, nil)
+	tNextAsync := NewTypeParameter("TNext", 2, nil)
+
+	tTypeAsync := &TypeParameterType{Parameter: tAsync}
+	tReturnTypeAsync := &TypeParameterType{Parameter: tReturnAsync}
+	tNextTypeAsync := &TypeParameterType{Parameter: tNextAsync}
+
+	// Create IteratorResult<T, TReturn> type for async generator
+	iteratorResultTypeAsync := NewObjectType().
+		WithProperty("value", NewUnionType(tTypeAsync, tReturnTypeAsync)).
+		WithProperty("done", Boolean)
+
+	// For AsyncGenerator, methods return Promise<IteratorResult<T, TReturn>>
+	// We instantiate the Promise generic with IteratorResult
+	promiseIteratorResult := NewInstantiatedType(PromiseGeneric, []Type{iteratorResultTypeAsync})
+
+	// Create async generator body with iterator protocol methods that return promises
+	asyncGeneratorBody := NewObjectType().
+		// next(value?: TNext): Promise<IteratorResult<T, TReturn>>
+		WithProperty("next", NewOptionalFunction(
+			[]Type{tNextTypeAsync},
+			promiseIteratorResult,
+			[]bool{true})).
+		// return(value?: any): Promise<IteratorResult<T, TReturn>>
+		// Note: .return() accepts any value, not just TReturn
+		WithProperty("return", NewOptionalFunction(
+			[]Type{Any},
+			promiseIteratorResult,
+			[]bool{true})).
+		// throw(exception?: any): Promise<IteratorResult<T, TReturn>>
+		WithProperty("throw", NewOptionalFunction(
+			[]Type{Any},
+			promiseIteratorResult,
+			[]bool{true}))
+
+	AsyncGeneratorGeneric = NewGenericType("AsyncGenerator", []*TypeParameter{tAsync, tReturnAsync, tNextAsync}, asyncGeneratorBody)
 }
 
 // substituteSignature performs type parameter substitution in a signature
