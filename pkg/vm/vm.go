@@ -4617,12 +4617,6 @@ startExecution:
 			// Get the value being awaited
 			awaitedValue := registers[promiseReg]
 
-			// Check if we're in an async function context
-			if frame.promiseObj == nil {
-				status := vm.runtimeError("await can only be used inside async functions")
-				return status, Undefined
-			}
-
 			// JavaScript allows awaiting non-promises - they resolve immediately
 			if awaitedValue.Type() != TypePromise {
 				// Non-promise value - just store it and continue
@@ -4649,6 +4643,15 @@ startExecution:
 			case PromisePending:
 				// Promise is pending - need to suspend execution
 				// This is the complex case: save state, attach handlers, schedule resumption
+
+				// Check if we're in an async function context
+				// Top-level await: if not in async context, we can't suspend - drain microtasks
+				if frame.promiseObj == nil {
+					// Top-level await with pending promise - not supported yet
+					// For now, we can't suspend top-level execution
+					status := vm.runtimeError("Top-level await with pending promises is not yet supported")
+					return status, Undefined
+				}
 
 				// Save the execution frame state (similar to OpYield)
 				if frame.promiseObj.Frame == nil {
