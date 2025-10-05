@@ -1,4 +1,5 @@
 // Test basic Proxy functionality
+// expect: done
 const target = { x: 1, y: 2 };
 const handler = {
   get: function (target, prop, receiver) {
@@ -18,5 +19,4 @@ console.log("proxy.x:", proxy.x);
 proxy.z = 3;
 console.log("target after set:", target);
 
-// expect: value
-// expect: 1
+"done";

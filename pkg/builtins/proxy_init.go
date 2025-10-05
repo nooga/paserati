@@ -16,22 +16,26 @@ func (p *ProxyInitializer) Priority() int {
 }
 
 func (p *ProxyInitializer) InitTypes(ctx *TypeContext) error {
-	// Create Proxy constructor type
-	proxyType := types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)
+	// Create Proxy constructor type with both call signature and static methods
+	proxyConstructor := types.NewObjectType()
 
-	err := ctx.DefineGlobal("Proxy", proxyType)
-	if err != nil {
-		return err
+	// Add call signature (for new Proxy(...))
+	callSignature := &types.Signature{
+		ParameterTypes: []types.Type{types.Any, types.Any},
+		ReturnType:     types.Any,
+		OptionalParams: []bool{false, false},
 	}
+	proxyConstructor.CallSignatures = []*types.Signature{callSignature}
 
-	// Also define Proxy.revocable
+	// Add Proxy.revocable static method
 	revocableReturnType := types.NewObjectType()
 	revocableReturnType.WithProperty("proxy", types.Any)
 	revocableReturnType.WithProperty("revoke", types.NewSimpleFunction([]types.Type{}, types.Void))
 
 	revocableType := types.NewSimpleFunction([]types.Type{types.Any, types.Any}, revocableReturnType)
+	proxyConstructor.WithProperty("revocable", revocableType)
 
-	return ctx.DefineGlobal("Proxy.revocable", revocableType)
+	return ctx.DefineGlobal("Proxy", proxyConstructor)
 }
 
 func (p *ProxyInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -58,14 +62,10 @@ func (p *ProxyInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewProxy(target, handler), nil
 	})
 
-	// Add prototype property
-	proxyConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.ObjectPrototype)
-	if v, ok := proxyConstructor.AsNativeFunctionWithProps().Properties.GetOwn("prototype"); ok {
-		w, e, c := false, false, false
-		proxyConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("prototype", v, &w, &e, &c)
-	}
+	// Note: Proxy constructor deliberately has no usable .prototype property
+	// Proxies inherit from their target's prototype, not from Proxy.prototype
 
-	// Add Proxy.revocable
+	// Create Proxy.revocable static method
 	revocableFn := vm.NewNativeFunction(2, false, "Proxy.revocable", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("Proxy.revocable requires target and handler arguments")
@@ -101,11 +101,9 @@ func (p *ProxyInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewValueFromPlainObject(result), nil
 	})
 
-	// Define Proxy constructor in global scope
-	err := ctx.DefineGlobal("Proxy", proxyConstructor)
-	if err != nil {
-		return err
-	}
+	// Add Proxy.revocable as a property on the constructor to match type system
+	proxyConstructor.AsNativeFunctionWithProps().Properties.SetOwn("revocable", revocableFn)
 
-	return ctx.DefineGlobal("Proxy.revocable", revocableFn)
+	// Define Proxy constructor in global scope
+	return ctx.DefineGlobal("Proxy", proxyConstructor)
 }

@@ -45,6 +45,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &JSONInitializer{})
 	// Install Reflect after Object so it can delegate to Object.__ownKeys
 	initializers = append(initializers, &ReflectInitializer{})
+	initializers = append(initializers, &ProxyInitializer{})
 	initializers = append(initializers, &ConsoleInitializer{})
 	initializers = append(initializers, &DateInitializer{})
 	initializers = append(initializers, &PerformanceInitializer{})

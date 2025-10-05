@@ -229,6 +229,16 @@ type ProxyObject struct {
 	Revoked bool  // Whether the proxy has been revoked
 }
 
+// Target returns the proxy's target object
+func (p *ProxyObject) Target() Value {
+	return p.target
+}
+
+// Handler returns the proxy's handler object
+func (p *ProxyObject) Handler() Value {
+	return p.handler
+}
+
 type BigIntObject struct {
 	Object
 	value *big.Int

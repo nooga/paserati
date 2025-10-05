@@ -1003,6 +1003,47 @@ startExecution:
 			} else {
 				propKey := propVal.ToString()
 				switch objVal.Type() {
+				case TypeProxy:
+					proxy := objVal.AsProxy()
+					if proxy.Revoked {
+						vm.runtimeError("Cannot perform 'in' on a revoked Proxy")
+						return InterpretRuntimeError, Undefined
+					}
+
+					// Check if handler has a 'has' trap
+					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsFunction() {
+						// Call handler.has(target, propertyKey)
+						trapArgs := []Value{proxy.target, NewString(propKey)}
+						result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							} else {
+								vm.runtimeError(err.Error())
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Convert result to boolean (truthy check)
+						hasProperty = !result.IsFalsey()
+					} else {
+						// No has trap, fallback to target
+						target := proxy.target
+						switch target.Type() {
+						case TypeObject:
+							hasProperty = target.AsPlainObject().Has(propKey)
+						case TypeDictObject:
+							hasProperty = target.AsDictObject().Has(propKey)
+						case TypeArray:
+							arrayObj := target.AsArray()
+							if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
+								hasProperty = index < arrayObj.Length()
+							} else {
+								hasProperty = propKey == "length"
+							}
+						default:
+							hasProperty = false
+						}
+					}
 				case TypeObject:
 					plainObj := objVal.AsPlainObject()
 					// Use prototype-aware Has() method instead of HasOwn()

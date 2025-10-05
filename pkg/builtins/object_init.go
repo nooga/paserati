@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"fmt"
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -500,6 +501,15 @@ func objectGetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 		}
 		// Return the default AsyncGeneratorPrototype
 		return vm.Null, nil // TODO: Return proper AsyncGeneratorPrototype
+	case vm.TypeProxy:
+		// For proxies, delegate to the target's prototype
+		// Note: getPrototypeOf trap should be called from VM's [[GetPrototypeOf]]
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, fmt.Errorf("Cannot get prototype of revoked Proxy")
+		}
+		// Delegate to target
+		return objectGetPrototypeOfImpl([]vm.Value{proxy.Target()})
 	default:
 		// For primitive values, return null
 		return vm.Null, nil
