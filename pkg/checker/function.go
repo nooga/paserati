@@ -150,10 +150,12 @@ func (c *Checker) createPromiseType(valueType types.Type) types.Type {
 		valueType = types.Void
 	}
 
-	// Check if we have the global PromiseGeneric type (set by builtins)
-	// For now, create a simple promise-like object type
-	// TODO: Once Promise generic type is registered, use it like GeneratorGeneric
+	// Use the global PromiseGeneric type (set by builtins) - same pattern as generators
+	if types.PromiseGeneric != nil {
+		return types.NewInstantiatedType(types.PromiseGeneric, []types.Type{valueType})
+	}
 
+	// Fallback if PromiseGeneric is not initialized
 	// Create a simple object type representing Promise<T>
 	promiseObj := types.NewObjectType()
 

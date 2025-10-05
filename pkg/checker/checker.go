@@ -485,6 +485,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				Body:                    nil, // Don't process body during hoisting
 				IsArrow:                 false,
 				IsGenerator:             funcLit.IsGenerator, // Detect generator functions during hoisting
+			IsAsync:                 funcLit.IsAsync,     // Detect async functions during hoisting
 				AllowSelfReference:      false,               // Don't allow self-reference during hoisting
 				AllowOverloadCompletion: false,               // Don't check overloads during hoisting
 			}
@@ -790,6 +791,18 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			actualReturnType = generatorType
 			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
 		}
+
+	// For async functions, wrap the return type in Promise<T>
+	if funcLit.IsAsync {
+		debugPrintf("// [Checker Pass 3] Async function detected, wrapping return type in Promise\n")
+		innerType := actualReturnType
+		if innerType == nil {
+			innerType = types.Void
+		}
+		promiseType := c.createPromiseType(innerType)
+		actualReturnType = promiseType
+		debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+	}
 
 		// Create the FINAL ObjectType with updated signature
 		finalSignature := &types.Signature{
