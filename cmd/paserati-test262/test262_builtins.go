@@ -307,11 +307,22 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	}
 
 	// $DETACHBUFFER helper expects $262.detachArrayBuffer; host tests create their own $262.
-	// Our default $262 provides a detachArrayBuffer that throws Test262Error with the required message.
+	// Our default $262 provides a detachArrayBuffer that actually detaches the buffer.
 	harness262.SetOwn("detachArrayBuffer", vm.NewNativeFunction(1, false, "detachArrayBuffer", func(args []vm.Value) (vm.Value, error) {
-		// Throw per host-detachArrayBuffer expectations using Test262Error instance
-		errVal, _ := ctx.VM.Call(sharedTest262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString("$262.detachArrayBuffer called.")})
-		return vm.Undefined, test262ExceptionError{v: errVal}
+		if len(args) == 0 {
+			return vm.Undefined, nil
+		}
+
+		// Get the ArrayBuffer argument
+		bufferVal := args[0]
+		if buffer := bufferVal.AsArrayBuffer(); buffer != nil {
+			// Detach the buffer
+			buffer.Detach()
+			return vm.Undefined, nil
+		}
+
+		// If not an ArrayBuffer, just return undefined (some tests may pass other values)
+		return vm.Undefined, nil
 	}))
 
 	// Define global $DETACHBUFFER per harness: relies on $262.detachArrayBuffer.

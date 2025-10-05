@@ -44,6 +44,10 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	arrayBufferProto.SetOwn("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
 		thisBuffer := vmInstance.GetThis()
 		if buffer := thisBuffer.AsArrayBuffer(); buffer != nil {
+			// Return 0 for detached buffers per spec
+			if buffer.IsDetached() {
+				return vm.Number(0), nil
+			}
 			return vm.Number(float64(len(buffer.GetData()))), nil
 		}
 		return vm.Undefined, nil
@@ -54,6 +58,11 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 		buffer := thisBuffer.AsArrayBuffer()
 		if buffer == nil {
 			return vm.Undefined, nil
+		}
+
+		// Throw TypeError if buffer is detached
+		if buffer.IsDetached() {
+			return vm.Undefined, fmt.Errorf("TypeError: Cannot perform slice on a detached ArrayBuffer")
 		}
 
 		data := buffer.GetData()

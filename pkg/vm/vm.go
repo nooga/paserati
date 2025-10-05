@@ -2183,9 +2183,12 @@ startExecution:
 					}
 					continue
 				default:
-					frame.ip = ip
-					status := vm.runtimeError("Callable index must be a string or symbol, got '%v'", indexVal.Type())
-					return status, Undefined
+					// JavaScript allows any value as property key - convert to string
+					key := indexVal.ToString()
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
+					continue
 				}
 
 			case TypeProxy:

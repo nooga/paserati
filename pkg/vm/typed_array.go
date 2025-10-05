@@ -26,12 +26,24 @@ const (
 // ArrayBufferObject represents a raw binary data buffer
 type ArrayBufferObject struct {
 	Object
-	data []byte
+	data     []byte
+	detached bool
 }
 
 // GetData returns the underlying byte slice
 func (ab *ArrayBufferObject) GetData() []byte {
 	return ab.data
+}
+
+// IsDetached returns whether the buffer has been detached
+func (ab *ArrayBufferObject) IsDetached() bool {
+	return ab.detached
+}
+
+// Detach detaches the ArrayBuffer, making it unusable
+func (ab *ArrayBufferObject) Detach() {
+	ab.detached = true
+	ab.data = nil
 }
 
 // TypedArrayObject represents a typed view into an ArrayBuffer
@@ -91,6 +103,11 @@ func (ta *TypedArrayObject) GetElement(index int) Value {
 		return Undefined
 	}
 
+	// Check if buffer is detached
+	if ta.buffer.IsDetached() {
+		return Undefined // In strict mode this should throw, but returning undefined for now
+	}
+
 	offset := ta.byteOffset + index*ta.elementType.BytesPerElement()
 	data := ta.buffer.data[offset:]
 
@@ -125,6 +142,11 @@ func (ta *TypedArrayObject) GetElement(index int) Value {
 func (ta *TypedArrayObject) SetElement(index int, value Value) {
 	if index < 0 || index >= ta.length {
 		return
+	}
+
+	// Check if buffer is detached
+	if ta.buffer.IsDetached() {
+		return // In strict mode this should throw, but silently failing for now
 	}
 
 	// Convert value to number
