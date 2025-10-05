@@ -1011,7 +1011,13 @@ startExecution:
 					}
 
 					// Check if handler has a 'has' trap
-					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsFunction() {
+					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+						// Validate trap is callable
+						if !hasTrap.IsFunction() {
+							vm.runtimeError("'has' on proxy: trap is not a function")
+							return InterpretRuntimeError, Undefined
+						}
+
 						// Call handler.has(target, propertyKey)
 						trapArgs := []Value{proxy.target, NewString(propKey)}
 						result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
@@ -4799,7 +4805,13 @@ startExecution:
 
 				// Check if handler has a delete trap
 				deleteTrap, ok := proxy.handler.AsPlainObject().GetOwn("deleteProperty")
-				if ok && deleteTrap.IsFunction() {
+				if ok {
+					// Validate trap is callable
+					if !deleteTrap.IsFunction() {
+						vm.runtimeError("'deleteProperty' on proxy: trap is not a function")
+						return InterpretRuntimeError, Undefined
+					}
+
 					// Call the delete trap: handler.deleteProperty(target, propertyKey)
 					trapArgs := []Value{proxy.target, NewString(propName)}
 					result, err := vm.Call(deleteTrap, proxy.handler, trapArgs)

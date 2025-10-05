@@ -337,7 +337,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Add static methods
 		ctorPropsObj.Properties.SetOwn("create", vm.NewNativeFunction(1, false, "create", objectCreateImpl))
-		ctorPropsObj.Properties.SetOwn("keys", vm.NewNativeFunction(1, false, "keys", objectKeysImpl))
+		ctorPropsObj.Properties.SetOwn("keys", vm.NewNativeFunction(1, false, "keys", func(args []vm.Value) (vm.Value, error) {
+			return objectKeysWithVM(vmInstance, args)
+		}))
 		ctorPropsObj.Properties.SetOwn("values", vm.NewNativeFunction(1, false, "values", objectValuesImpl))
 		ctorPropsObj.Properties.SetOwn("entries", vm.NewNativeFunction(1, false, "entries", objectEntriesImpl))
 		ctorPropsObj.Properties.SetOwn("getOwnPropertyNames", vm.NewNativeFunction(1, false, "getOwnPropertyNames", objectGetOwnPropertyNamesImpl))
@@ -347,8 +349,12 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwn("assign", vm.NewNativeFunction(1, true, "assign", objectAssignImpl))
 		ctorPropsObj.Properties.SetOwn("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", objectHasOwnImpl))
 		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
-		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", objectGetPrototypeOfImpl))
-		ctorPropsObj.Properties.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", objectSetPrototypeOfImpl))
+		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+			return objectGetPrototypeOfWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+			return objectSetPrototypeOfWithVM(vmInstance, args)
+		}))
 		// defineProperty delegates to the full implementation with symbol/accessor support
 		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", objectDefinePropertyImpl))
 		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", objectGetOwnPropertyDescriptorImpl))
@@ -410,21 +416,61 @@ func objectCreateImpl(args []vm.Value) (vm.Value, error) {
 	}
 }
 
-func objectKeysImpl(args []vm.Value) (vm.Value, error) {
+func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		// TODO: Throw TypeError when error objects are implemented
 		return vm.NewArray(), nil
 	}
 
 	obj := args[0]
 	if !obj.IsObject() {
-		// TODO: Throw TypeError when error objects are implemented
 		return vm.NewArray(), nil
 	}
 
 	keys := vm.NewArray()
 	keysArray := keys.AsArray()
 
+	// Handle Proxy objects - call ownKeys trap if present
+	if obj.Type() == vm.TypeProxy {
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot get keys of revoked Proxy")
+		}
+
+		// Check for ownKeys trap
+		if ownKeysTrap, ok := proxy.Handler().AsPlainObject().GetOwn("ownKeys"); ok {
+			// Validate trap is callable
+			if !ownKeysTrap.IsFunction() {
+				return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap is not a function")
+			}
+
+			// Call handler.ownKeys(target)
+			result, err := vmInstance.Call(ownKeysTrap, proxy.Handler(), []vm.Value{proxy.Target()})
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// Result must be an array-like object
+			if result.Type() != vm.TypeArray {
+				return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap result must be an array")
+			}
+
+			// Use keys from trap result (trap is responsible for filtering)
+			resultArray := result.AsArray()
+			for i := 0; i < resultArray.Length(); i++ {
+				key := resultArray.Get(i)
+				// Object.keys only returns string keys (not symbols)
+				if key.Type() == vm.TypeString {
+					keysArray.Append(key)
+				}
+			}
+			return keys, nil
+		}
+
+		// No ownKeys trap, delegate to target
+		return objectKeysWithVM(vmInstance, []vm.Value{proxy.Target()})
+	}
+
+	// Handle regular objects
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		for _, key := range plainObj.OwnKeys() {
 			if _, _, en, _, ok := plainObj.GetOwnDescriptor(key); ok && en {
@@ -433,11 +479,9 @@ func objectKeysImpl(args []vm.Value) (vm.Value, error) {
 		}
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
 		for _, key := range dictObj.OwnKeys() {
-			// DictObject defaults to enumerable
 			keysArray.Append(vm.NewString(key))
 		}
 	} else if arrObj := obj.AsArray(); arrObj != nil {
-		// Arrays: own enumerable string keys are indices present
 		for i := 0; i < arrObj.Length(); i++ {
 			keysArray.Append(vm.NewString(strconv.Itoa(i)))
 		}
@@ -448,7 +492,7 @@ func objectKeysImpl(args []vm.Value) (vm.Value, error) {
 
 // (Removed duplicate alternate implementations of objectValuesImpl and objectEntriesImpl)
 
-func objectGetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
+func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		return vm.Undefined, nil
 	}
@@ -502,39 +546,88 @@ func objectGetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 		// Return the default AsyncGeneratorPrototype
 		return vm.Null, nil // TODO: Return proper AsyncGeneratorPrototype
 	case vm.TypeProxy:
-		// For proxies, delegate to the target's prototype
-		// Note: getPrototypeOf trap should be called from VM's [[GetPrototypeOf]]
+		// For proxies, call the getPrototypeOf trap if present
 		proxy := obj.AsProxy()
 		if proxy.Revoked {
 			return vm.Undefined, fmt.Errorf("Cannot get prototype of revoked Proxy")
 		}
-		// Delegate to target
-		return objectGetPrototypeOfImpl([]vm.Value{proxy.Target()})
+
+		// Check if handler has a getPrototypeOf trap
+		if trap, ok := proxy.Handler().AsPlainObject().GetOwn("getPrototypeOf"); ok {
+			// Validate trap is callable
+			if !trap.IsFunction() {
+				return vm.Undefined, vmInstance.NewTypeError("'getPrototypeOf' on proxy: trap is not a function")
+			}
+
+			// Call handler.getPrototypeOf(target)
+			result, err := vmInstance.Call(trap, proxy.Handler(), []vm.Value{proxy.Target()})
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// Validate result is object or null
+			if result.Type() != vm.TypeObject && result.Type() != vm.TypeNull {
+				return vm.Undefined, vmInstance.NewTypeError("'getPrototypeOf' on proxy: trap returned neither object nor null")
+			}
+			return result, nil
+		}
+
+		// No trap, delegate to target
+		return objectGetPrototypeOfWithVM(vmInstance, []vm.Value{proxy.Target()})
 	default:
 		// For primitive values, return null
 		return vm.Null, nil
 	}
 }
 
-func objectSetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
+func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) < 2 {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined, nil
+		return vm.Undefined, vmInstance.NewTypeError("Object.setPrototypeOf requires 2 arguments")
 	}
 
 	obj := args[0]
 	proto := args[1]
 
-	// First argument must be an object
-	if obj.Type() != vm.TypeObject {
-		// TODO: Throw TypeError when error objects are implemented
-		return obj, nil // Return the object unchanged as per spec
-	}
-
 	// Second argument must be an object or null
 	if proto.Type() != vm.TypeNull && proto.Type() != vm.TypeObject {
-		// TODO: Throw TypeError when error objects are implemented
-		return obj, nil // Return the object unchanged
+		return vm.Undefined, vmInstance.NewTypeError("Object prototype may only be an Object or null")
+	}
+
+	// Handle Proxy objects
+	if obj.Type() == vm.TypeProxy {
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of revoked Proxy")
+		}
+
+		// Check for setPrototypeOf trap
+		if setProtoTrap, ok := proxy.Handler().AsPlainObject().GetOwn("setPrototypeOf"); ok {
+			// Validate trap is callable
+			if !setProtoTrap.IsFunction() {
+				return vm.Undefined, vmInstance.NewTypeError("'setPrototypeOf' on proxy: trap is not a function")
+			}
+
+			// Call handler.setPrototypeOf(target, proto)
+			result, err := vmInstance.Call(setProtoTrap, proxy.Handler(), []vm.Value{proxy.Target(), proto})
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// Result should be boolean - if false, throw
+			if result.IsFalsey() {
+				return vm.Undefined, vmInstance.NewTypeError("'setPrototypeOf' on proxy: trap returned falsish")
+			}
+
+			return obj, nil
+		}
+
+		// No trap, delegate to target
+		return objectSetPrototypeOfWithVM(vmInstance, []vm.Value{proxy.Target(), proto})
+	}
+
+	// First argument must be an object
+	if obj.Type() != vm.TypeObject {
+		return vm.Undefined, vmInstance.NewTypeError("Object.setPrototypeOf called on non-object")
 	}
 
 	// Set the prototype

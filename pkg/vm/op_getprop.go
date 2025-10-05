@@ -410,7 +410,25 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 
 		// Check if handler has a get trap
 		getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
-		if ok && getTrap.IsFunction() {
+		if ok {
+			// Validate trap is callable
+			if !getTrap.IsFunction() {
+				var excVal Value
+				if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
+					if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("'get' on proxy: trap is not a function")}); callErr == nil {
+						excVal = res
+					}
+				}
+				if excVal.Type() == 0 {
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("TypeError"))
+					eo.SetOwn("message", NewString("'get' on proxy: trap is not a function"))
+					excVal = NewValueFromPlainObject(eo)
+				}
+				vm.throwException(excVal)
+				return false, InterpretRuntimeError, Undefined
+			}
+
 			// Call the get trap: handler.get(target, propertyKey, receiver)
 			trapArgs := []Value{proxy.target, NewString(propName), *objVal}
 			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
