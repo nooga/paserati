@@ -374,6 +374,12 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		return true, InterpretOK, *dest
 	}
 
+	if objVal.Type() == TypeAsyncGenerator {
+		// AsyncGenerator objects don't have additional own properties beyond special ones
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
 	// 12. RegExp objects (after special properties are handled)
 	if objVal.Type() == TypeRegExp {
 		// RegExp objects don't have additional own properties beyond special ones
@@ -651,6 +657,42 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 							*dest = v
 							if debugVM {
 								fmt.Printf("[DBG opGetPropSymbol] Generator proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+							}
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	case TypeAsyncGenerator:
+		// Async generators: consult AsyncGenerator.prototype chain for symbol properties
+		proto := vm.AsyncGeneratorPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				if debugVM {
+					fmt.Printf("[DBG opGetPropSymbol] AsyncGenerator.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+				}
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							if debugVM {
+								fmt.Printf("[DBG opGetPropSymbol] AsyncGenerator proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
 							}
 							return true, InterpretOK, *dest
 						}

@@ -230,6 +230,10 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		if vm.GeneratorPrototype.Type() == TypeObject {
 			prototype = vm.GeneratorPrototype.AsPlainObject()
 		}
+	case TypeAsyncGenerator:
+		if vm.AsyncGeneratorPrototype.Type() == TypeObject {
+			prototype = vm.AsyncGeneratorPrototype.AsPlainObject()
+		}
 	case TypePromise:
 		if vm.PromisePrototype.Type() == TypeObject {
 			prototype = vm.PromisePrototype.AsPlainObject()

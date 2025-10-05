@@ -54,6 +54,20 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		calleeClosure := AsClosure(calleeVal)
 		calleeFunc := calleeClosure.Fn
 
+		// Check if this is an async generator function (both flags set)
+		if calleeFunc.IsAsync && calleeFunc.IsGenerator && !isGeneratorExecution {
+			// Create an async generator object instead of calling the function
+			genVal := NewAsyncGenerator(calleeVal)
+			genObj := genVal.AsAsyncGenerator()
+
+			// Store the arguments for when the generator starts
+			genObj.Args = make([]Value, len(args))
+			copy(genObj.Args, args)
+
+			callerRegisters[destReg] = genVal
+			return false, nil // Don't switch frames
+		}
+
 		// Check if this is a generator function (but skip if we're already executing a generator)
 		if calleeFunc.IsGenerator && !isGeneratorExecution {
 			// Create a generator object instead of calling the function

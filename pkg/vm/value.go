@@ -67,6 +67,7 @@ const (
 	TypeArray
 	TypeArguments
 	TypeGenerator
+	TypeAsyncGenerator
 	TypePromise
 	TypeRegExp
 	TypeMap
@@ -111,6 +112,8 @@ func (vt ValueType) String() string {
 		return "arguments"
 	case TypeGenerator:
 		return "generator"
+	case TypeAsyncGenerator:
+		return "async generator"
 	case TypePromise:
 		return "promise"
 	case TypeRegExp:
@@ -185,6 +188,17 @@ type GeneratorFrame = SuspendedFrame
 type GeneratorObject struct {
 	Object
 	Function     Value           // The generator function
+	State        GeneratorState  // Current state (suspended/completed/executing)
+	Frame        *SuspendedFrame // Execution frame (nil if completed)
+	YieldedValue Value           // Last yielded value
+	ReturnValue  Value           // Final return value (when completed)
+	Done         bool            // True when generator is exhausted
+	Args         []Value         // Arguments passed when the generator was created
+}
+
+type AsyncGeneratorObject struct {
+	Object
+	Function     Value           // The async generator function
 	State        GeneratorState  // Current state (suspended/completed/executing)
 	Frame        *SuspendedFrame // Execution frame (nil if completed)
 	YieldedValue Value           // Last yielded value
@@ -314,6 +328,18 @@ func NewGenerator(function Value) Value {
 	return Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)}
 }
 
+func NewAsyncGenerator(function Value) Value {
+	genObj := &AsyncGeneratorObject{
+		Function:     function,
+		State:        GeneratorSuspendedStart,
+		Frame:        nil, // Will be created when generator starts
+		YieldedValue: Undefined,
+		ReturnValue:  Undefined,
+		Done:         false,
+	}
+	return Value{typ: TypeAsyncGenerator, obj: unsafe.Pointer(genObj)}
+}
+
 // NewArrayWithArgs creates an array based on the Array constructor arguments:
 // - No args: empty array
 // - Single numeric arg: array with that length (filled with undefined)
@@ -425,7 +451,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy
 }
 
 func (v Value) IsDictObject() bool {
@@ -564,6 +590,13 @@ func (v Value) AsGenerator() *GeneratorObject {
 		panic("value is not a generator")
 	}
 	return (*GeneratorObject)(v.obj)
+}
+
+func (v Value) AsAsyncGenerator() *AsyncGeneratorObject {
+	if v.typ != TypeAsyncGenerator {
+		panic("value is not an async generator")
+	}
+	return (*AsyncGeneratorObject)(v.obj)
 }
 
 func (v Value) AsPromise() *PromiseObject {
@@ -727,6 +760,9 @@ func (v Value) ToString() string {
 	case TypeGenerator:
 		// Generator object toString -> [object Generator]
 		return "[object Generator]"
+	case TypeAsyncGenerator:
+		// AsyncGenerator object toString -> [object AsyncGenerator]
+		return "[object AsyncGenerator]"
 	case TypePromise:
 		// Promise object toString -> [object Promise]
 		return "[object Promise]"

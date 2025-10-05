@@ -129,6 +129,7 @@ type VM struct {
 	MapPrototype            Value
 	SetPrototype            Value
 	GeneratorPrototype      Value
+	AsyncGeneratorPrototype Value
 	PromisePrototype        Value
 	ErrorPrototype          Value
 	TypeErrorPrototype      Value
@@ -2144,8 +2145,8 @@ startExecution:
 					}
 				}
 
-			case TypeGenerator:
-				// Generators support property access via prototype chain (string or symbol keys)
+			case TypeGenerator, TypeAsyncGenerator:
+				// Generators and async generators support property access via prototype chain (string or symbol keys)
 				switch indexVal.Type() {
 				case TypeString:
 					key := AsString(indexVal)

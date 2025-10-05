@@ -54,10 +54,11 @@ const (
 	PriorityObject    = 0   // Object must be first (base prototype)
 	PriorityFunction  = 1   // Function second (inherits from Object)
 	PriorityIterator  = 2   // Iterator types (needed for iterables)
-	PriorityArray     = 3   // Array third (inherits from Object, implements Iterable)
-	PriorityArguments = 4   // Arguments object (array-like)
-	PriorityGenerator = 5   // Generator objects (inherits from Object, implements Iterable)
-	PriorityString    = 10  // String primitives
+	PriorityArray          = 3  // Array third (inherits from Object, implements Iterable)
+	PriorityArguments      = 4  // Arguments object (array-like)
+	PriorityGenerator      = 5  // Generator objects (inherits from Object, implements Iterable)
+	PriorityAsyncGenerator = 6  // AsyncGenerator objects (like Generator but returns Promises)
+	PriorityString         = 10 // String primitives
 	PriorityNumber    = 11  // Number primitives
 	PriorityBoolean   = 12  // Boolean primitives
 	PriorityRegExp    = 13  // RegExp constructor
