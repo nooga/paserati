@@ -46,7 +46,7 @@ type IteratorCleanupInfo struct {
 
 const debugCompiler = false // Set to true to trace compiler output
 const debugCompilerStats = false
-const debugCompiledCode = false
+const debugCompiledCode = false // Enable disassembly output
 const debugPrint = false // Enable debug output
 
 func debugPrintf(format string, args ...interface{}) {
@@ -1325,6 +1325,10 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // As
 // For OpJump, srcReg is ignored (pass 0 or any value).
 func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) int {
 	pos := len(c.chunk.Code)
+	if debugCompiler {
+		fmt.Printf("[EMIT PLACEHOLDER] pos=%d op=%v reg=%d line=%d func=%s\n",
+			pos, op, srcReg, line, c.compilingFuncName)
+	}
 	c.emitOpCode(op, line)
 	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
 		c.emitByte(byte(srcReg)) // Register operand
@@ -1347,6 +1351,11 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	// Calculate offset from the position *after* the jump instruction
 	jumpInstructionEndPos := operandStartPos + 2
 	offset := len(c.chunk.Code) - jumpInstructionEndPos
+
+	if debugCompiler {
+		fmt.Printf("[PATCH JUMP] pos=%d op=%v offset=%d (from %d to %d)\n",
+			placeholderPos, op, offset, jumpInstructionEndPos, len(c.chunk.Code))
+	}
 
 	if offset > math.MaxInt16 || offset < math.MinInt16 { // Use math constants
 		// Handle error: jump offset too large

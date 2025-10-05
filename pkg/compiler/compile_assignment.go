@@ -999,6 +999,8 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 	// 3. Path 1: Value is not undefined, assign valueReg to target
 	err := c.compileSimpleAssignment(target, valueReg, line)
 	if err != nil {
+		// CRITICAL: Must patch jump before returning on error!
+		c.patchJump(jumpToDefault)
 		return err
 	}
 	
@@ -1025,6 +1027,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			// Anonymous function literal - use target name
 			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, nameHint)
 			if err != nil {
+				c.patchJump(jumpPastDefault)
 				return err
 			}
 			c.emitClosure(defaultReg, funcConstIndex, funcLit, freeSymbols)
@@ -1039,12 +1042,14 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			// Restore to anonymous (though it doesn't matter since we're done compiling)
 			classExpr.Name = nil
 			if err != nil {
+				c.patchJump(jumpPastDefault)
 				return err
 			}
 		} else if arrowFunc, ok := defaultExpr.(*parser.ArrowFunctionLiteral); ok {
 			// Arrow function - compile with name hint by using compileArrowFunctionWithName
 			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, nameHint)
 			if err != nil {
+				c.patchJump(jumpPastDefault)
 				return err
 			}
 			// Create a minimal FunctionLiteral for emitClosure
@@ -1062,12 +1067,14 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			// Not a function, compile normally
 			_, err = c.compileNode(defaultExpr, defaultReg)
 			if err != nil {
+				c.patchJump(jumpPastDefault)
 				return err
 			}
 		}
 	} else {
 		_, err = c.compileNode(defaultExpr, defaultReg)
 		if err != nil {
+			c.patchJump(jumpPastDefault)
 			return err
 		}
 	}
@@ -1075,6 +1082,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 	// Assign default value to target
 	err = c.compileSimpleAssignment(target, defaultReg, line)
 	if err != nil {
+		c.patchJump(jumpPastDefault)
 		return err
 	}
 	

@@ -42,8 +42,12 @@ func (ra *RegisterAllocator) Alloc() Register {
 		lastIdx := len(ra.freeRegs) - 1
 		reg = ra.freeRegs[lastIdx]
 		ra.freeRegs = ra.freeRegs[:lastIdx]
+		// Update maxReg to track highest register ever used
+		if reg > ra.maxReg {
+			ra.maxReg = reg
+		}
 		if debugRegAlloc {
-			fmt.Printf("[REGALLOC] REUSE R%d (from free list, %d available)\n", reg, len(ra.freeRegs))
+			fmt.Printf("[REGALLOC] REUSE R%d (from free list, %d available, maxReg now %d)\n", reg, len(ra.freeRegs), ra.maxReg)
 		}
 	} else {
 		// Allocate new register if free list is empty
@@ -171,9 +175,13 @@ func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
 				}
 			}
 			if isContiguous {
-				// Remove these from free list
+				// Remove these from free list and update maxReg
 				for j := 0; j < count; j++ {
 					regToRemove := firstReg + Register(j)
+					// Update maxReg to track highest register ever used
+					if regToRemove > ra.maxReg {
+						ra.maxReg = regToRemove
+					}
 					for k := 0; k < len(ra.freeRegs); k++ {
 						if ra.freeRegs[k] == regToRemove {
 							ra.freeRegs = append(ra.freeRegs[:k], ra.freeRegs[k+1:]...)
@@ -182,7 +190,7 @@ func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
 					}
 				}
 				if debugRegAlloc {
-					fmt.Printf("[REGALLOC] TRY CONTIGUOUS REUSE R%d-R%d (%d regs)\n", firstReg, firstReg+Register(count-1), count)
+					fmt.Printf("[REGALLOC] TRY CONTIGUOUS REUSE R%d-R%d (%d regs, maxReg now %d)\n", firstReg, firstReg+Register(count-1), count, ra.maxReg)
 				}
 				return firstReg, true
 			}

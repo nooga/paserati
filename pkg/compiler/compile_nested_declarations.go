@@ -374,27 +374,31 @@ func (c *Compiler) compileConditionalAssignmentForDeclaration(target parser.Expr
 	// 3. Path 1: Value is not undefined, declare variables with valueReg
 	err := c.compileNestedPatternDeclaration(target, valueReg, isConst, line)
 	if err != nil {
+		// CRITICAL: Must patch jump before returning on error!
+		c.patchJump(jumpToDefault)
 		return err
 	}
-	
+
 	// Jump past the default assignment
 	jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
-	
+
 	// 4. Path 2: Value is undefined, evaluate and declare with default
 	c.patchJump(jumpToDefault)
-	
+
 	// Compile the default expression
 	defaultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(defaultReg)
-	
+
 	_, err = c.compileNode(defaultExpr, defaultReg)
 	if err != nil {
+		c.patchJump(jumpPastDefault)
 		return err
 	}
-	
+
 	// Declare variables with default value
 	err = c.compileNestedPatternDeclaration(target, defaultReg, isConst, line)
 	if err != nil {
+		c.patchJump(jumpPastDefault)
 		return err
 	}
 	

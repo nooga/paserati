@@ -84,9 +84,7 @@ func (c *Compiler) compileIteratorToArray(iteratorReg Register, destReg Register
 	// Call array.push(value)
 	// For OpCallMethod, arguments must be in consecutive registers starting at funcReg+1
 	pushMethodReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(pushMethodReg)
 	pushArgReg := c.regAlloc.Alloc() // This will be pushMethodReg+1
-	defer c.regAlloc.Free(pushArgReg)
 
 	pushConstIdx := c.chunk.AddConstant(vm.String("push"))
 	c.emitGetProp(pushMethodReg, destReg, pushConstIdx, line)
@@ -96,8 +94,12 @@ func (c *Compiler) compileIteratorToArray(iteratorReg Register, destReg Register
 
 	// Call push method with 1 argument
 	pushResultReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(pushResultReg)
 	c.emitCallMethod(pushResultReg, pushMethodReg, destReg, 1, line)
+
+	// Free immediately - don't wait for defer at end of function
+	c.regAlloc.Free(pushResultReg)
+	c.regAlloc.Free(pushArgReg)
+	c.regAlloc.Free(pushMethodReg)
 
 	// Jump back to loop start
 	jumpBackPos := len(c.chunk.Code) + 1 + 2

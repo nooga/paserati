@@ -36,6 +36,9 @@ type Parser struct {
 	// --- NEW: Pratt parser for TYPE expressions ---
 	typePrefixParseFns map[lexer.TokenType]prefixParseFn // Handles starts of types (e.g., number, string, ident, (), [])
 	typeInfixParseFns  map[lexer.TokenType]infixParseFn  // Handles type operators (e.g., |, &)
+
+	// Context tracking
+	inGenerator int // Counter for nested generator contexts (0 = not in generator)
 }
 
 // Parsing functions types for Pratt parser
@@ -1971,7 +1974,22 @@ func (p *Parser) parseFunctionLiteral() Expression {
 		return nil
 	}
 
+	// Track generator context when parsing body
+	if lit.IsGenerator {
+		p.inGenerator++
+		if debugParser {
+			fmt.Printf("[PARSER] Entering generator context, inGenerator=%d\n", p.inGenerator)
+		}
+	}
+
 	lit.Body = p.parseBlockStatement() // Includes consuming RBRACE
+
+	if lit.IsGenerator {
+		p.inGenerator--
+		if debugParser {
+			fmt.Printf("[PARSER] Exiting generator context, inGenerator=%d\n", p.inGenerator)
+		}
+	}
 
 	// Transform function if it has destructuring parameters
 	lit = p.transformFunctionWithDestructuring(lit)
@@ -3254,45 +3272,76 @@ func (p *Parser) parseTypeofExpression() Expression {
 func (p *Parser) parseYieldExpression() Expression {
 	yieldToken := p.curToken
 
-	// Heuristic: if peek is an operator, closing bracket, comma, semicolon, or EOF,
-	// treat yield as an identifier rather than a yield expression
-	// This covers cases like: console.log(yield), x = yield, [yield], {yield}, yield;
-	// BUT: if peek is ASTERISK, it could be yield*, so treat as yield expression
+	// If we're inside a generator, always treat as yield expression
+	if p.inGenerator > 0 {
+		if debugParser {
+			fmt.Printf("[PARSER] Parsing yield expression (inGenerator=%d)\n", p.inGenerator)
+		}
+
+		expression := &YieldExpression{
+			Token: yieldToken, // The 'yield' token
+		}
+
+		// Check if next token is yield* delegation
+		if p.peekTokenIs(lexer.ASTERISK) {
+			p.nextToken() // Move to '*'
+			expression.Delegate = true
+		}
+
+		// yield can have an optional value
+		// Check if there's an expression following yield (or yield*)
+		// Don't try to parse if next token is closing punctuation or comma
+		if !p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) &&
+			!p.peekTokenIs(lexer.RBRACKET) && !p.peekTokenIs(lexer.RPAREN) &&
+			!p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.EOF) &&
+			!p.peekTokenIs(lexer.COLON) { // for switch cases and object properties
+			// Advance to the value expression
+			p.nextToken()
+			// Parse the value to yield with LOWEST precedence to consume the entire right-hand side
+			expression.Value = p.parseExpression(LOWEST)
+			if expression.Value == nil {
+				// If parsing failed, treat as yield with no value
+				expression.Value = nil
+			}
+		}
+
+		return expression
+	}
+
+	// Not in generator context - use heuristic to determine if yield is identifier or error
+	// Heuristic: if followed by punctuation/operators that suggest end of statement or usage as value,
+	// treat as identifier. Otherwise, it's likely an error (yield expression outside generator).
+	// Common identifier contexts: yield), yield,, yield;, yield}, yield], yield.prop, yield + x
 	if p.peekTokenIs(lexer.RPAREN) || p.peekTokenIs(lexer.COMMA) ||
 		p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.RBRACE) ||
 		p.peekTokenIs(lexer.RBRACKET) || p.peekTokenIs(lexer.EOF) ||
 		p.peekTokenIs(lexer.COLON) || // for object properties
 		p.peekTokenIs(lexer.DOT) || // for member access
+		p.peekTokenIs(lexer.ASSIGN) || // for assignments
 		p.peekTokenIs(lexer.PLUS) || p.peekTokenIs(lexer.MINUS) ||
-		p.peekTokenIs(lexer.SLASH) ||
+		p.peekTokenIs(lexer.ASTERISK) || p.peekTokenIs(lexer.SLASH) ||
 		p.peekTokenIs(lexer.GT) || p.peekTokenIs(lexer.LT) ||
 		p.peekTokenIs(lexer.EQ) || p.peekTokenIs(lexer.NOT_EQ) {
-		// Treat as identifier
+		// Treat as identifier in non-generator context
 		return &Identifier{Token: yieldToken, Value: yieldToken.Literal}
 	}
 
-	// Otherwise, parse as yield expression
+	// Otherwise, parse as yield expression (will be caught as error by type checker)
 	expression := &YieldExpression{
-		Token: yieldToken, // The 'yield' token
+		Token: yieldToken,
 	}
 
-	p.nextToken() // Move past 'yield'
-
-	// Check for yield* delegation
-	if p.curTokenIs(lexer.ASTERISK) {
+	if p.peekTokenIs(lexer.ASTERISK) {
+		p.nextToken() // Move to '*'
 		expression.Delegate = true
-		p.nextToken() // Move past '*'
 	}
 
-	// yield can have an optional value
-	// Check if there's an expression following yield (or yield*)
-	if !p.curTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
-		// Parse the value to yield with LOWEST precedence to consume the entire right-hand side
+	if !p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) &&
+		!p.peekTokenIs(lexer.RBRACKET) && !p.peekTokenIs(lexer.RPAREN) &&
+		!p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.EOF) &&
+		!p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Advance to value expression
 		expression.Value = p.parseExpression(LOWEST)
-		if expression.Value == nil {
-			// If parsing failed, treat as yield with no value
-			expression.Value = nil
-		}
 	}
 
 	return expression
