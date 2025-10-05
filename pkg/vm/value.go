@@ -166,14 +166,19 @@ const (
 
 // GeneratorFrame stores the execution state of a suspended generator
 // This allows the generator to resume execution from where it left off
-type GeneratorFrame struct {
+// SuspendedFrame stores execution state when a function is suspended
+// Used by both generators (yield) and async functions (await)
+type SuspendedFrame struct {
 	pc        int     // Program counter - next instruction to execute
 	registers []Value // Register state at suspension point
 	locals    []Value // Local variable state
 	stackBase int     // Base of this frame's stack
-	yieldPC   int     // PC of the yield instruction (for resumption)
-	outputReg byte    // Register where sent value should be stored on resumption
+	suspendPC int     // PC of the suspend instruction (yield/await) for resumption
+	outputReg byte    // Register where sent/resolved value should be stored on resumption
 }
+
+// GeneratorFrame is an alias for backwards compatibility
+type GeneratorFrame = SuspendedFrame
 
 // GeneratorObject represents a JavaScript generator instance
 // Based on the design from generators-implementation-plan.md
@@ -181,7 +186,7 @@ type GeneratorObject struct {
 	Object
 	Function     Value           // The generator function
 	State        GeneratorState  // Current state (suspended/completed/executing)
-	Frame        *GeneratorFrame // Execution frame (nil if completed)
+	Frame        *SuspendedFrame // Execution frame (nil if completed)
 	YieldedValue Value           // Last yielded value
 	ReturnValue  Value           // Final return value (when completed)
 	Done         bool            // True when generator is exhausted

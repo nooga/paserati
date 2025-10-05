@@ -830,26 +830,75 @@ console.log('End');  // Output: "End" then "Then: 42"
 - VM automatically drains microtasks after synchronous execution completes
 - Promise objects inherit from Promise.prototype via prototype chain
 
-### Phase 2: Async Function Transformation (Week 3-4)
+### Phase 2: Async Function Transformation ✅ COMPLETED
 
 **Goals**: Compile async functions to promise-returning state machines
 
-- [ ] Add `async` keyword to lexer/parser
-- [ ] Parse `async function` declarations and expressions
-- [ ] Add `AsyncFunctionLiteral` AST node
-- [ ] Implement async function type in checker (`Function → Promise<T>`)
-- [ ] Add `OpAwait`, `OpCreateAsyncFunction`, `OpResumeAsync` opcodes
-- [ ] Compiler: Transform async functions to state machines
-- [ ] VM: Execute `OpAwait` and async resumption
-- [ ] Test: Basic async/await without top-level await
+- [x] Add `async` keyword to lexer/parser
+- [x] Parse `async function` declarations and expressions
+- [x] Parse `async` arrow functions
+- [x] Implement async function type in checker (`Function → Promise<T>`)
+- [x] Add `OpAwait` opcode (95)
+- [x] Compiler: Generate OpAwait bytecode for await expressions
+- [x] VM: Async functions return Promise immediately
+- [x] VM: OpAwait suspension/resumption using SuspendedFrame (like generators)
+- [x] Attach promise settlement handlers to resume execution
+- [x] Test: Basic async/await with already-resolved promises
+- [x] Test: Async/await with pending promises
 
-**Deliverables**:
+**Implementation Notes**:
+
+**Architectural Decision**: Reuse GeneratorFrame → Rename to SuspendedFrame
+- Both generators and async functions use identical suspension mechanism
+- Same saved state: PC, registers, output register
+- Generator: Explicit resumption via `.next()`
+- Async: Automatic resumption via promise settlement handlers
+
+**Implementation Details**:
+1. **executeAsyncFunction** (pkg/vm/async.go): Creates Promise, schedules async function body as microtask
+2. **executeAsyncFunctionBody** (pkg/vm/async.go): Uses sentinel frame approach like generators, sets `frame.promiseObj` for OpAwait access
+3. **OpAwait** (pkg/vm/vm.go): Handles three cases:
+   - Already fulfilled: Store result and continue
+   - Already rejected: Throw error
+   - Pending: Save SuspendedFrame, attach handlers, suspend
+4. **resumeAsyncFunction** (pkg/vm/vm.go): Restores saved frame, resumes execution from await point
+5. **resumeAsyncFunctionWithException** (pkg/vm/vm.go): Resumes and throws exception at await point
+
+**Current Status**: ✅ **FULLY WORKING**
+- ✅ Lexer, Parser, Type Checker complete
+- ✅ OpAwait compilation working
+- ✅ Async functions return Promise on call via executeAsyncFunction
+- ✅ OpAwait VM execution with full suspension/resumption
+- ✅ Promise settlement handlers trigger async resumption
+- ✅ Multiple awaits in sequence working
+- ✅ Smoke tests passing (async_await_basic, async_await_multiple, async_await_pending)
+
+**Verified Working**:
 ```typescript
 async function test() {
     const x = await Promise.resolve(42);
     return x + 1;
 }
 test().then(console.log);  // Prints 43
+
+// Multiple awaits
+async function multipleAwaits() {
+    const a = await Promise.resolve(10);
+    const b = await Promise.resolve(20);
+    const c = await Promise.resolve(30);
+    return a + b + c;
+}
+multipleAwaits().then(console.log); // Prints 60
+
+// Pending promises
+let resolve: (value: number) => void;
+const pending = new Promise<number>(r => { resolve = r; });
+async function testPending() {
+    const result = await pending;
+    return result + 100;
+}
+testPending().then(console.log); // Will print 142 after resolve(42)
+resolve(42);
 ```
 
 ### Phase 3: Await Expression (Week 4-5)

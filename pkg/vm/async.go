@@ -41,17 +41,89 @@ func (vm *VM) executeAsyncFunction(calleeVal Value, thisValue Value, args []Valu
 }
 
 // executeAsyncFunctionBody executes the body of an async function
-// This is similar to normal function execution but handles OpAwait specially
-// TODO: This is a simplified version - needs proper sentinel frame approach like generators
+// Uses sentinel frame approach like generators to isolate execution
 func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []Value, promiseObj *PromiseObject) (Value, error) {
-	// For now, just call the function normally
-	// The proper implementation will use sentinel frames like generators do
-	// This is a placeholder until we implement the full async execution model
+	// Store promise object and function reference for later resumption
+	promiseObj.Function = calleeVal
+	promiseObj.ThisValue = thisValue
 
-	// TODO: Implement proper async execution with:
-	// 1. Sentinel frame setup
-	// 2. Frame reference to promiseObj for OpAwait handling
-	// 3. Microtask-based resumption
+	// Extract function object
+	var funcObj *FunctionObject
+	var closureObj *ClosureObject
 
-	return Undefined, fmt.Errorf("Async function execution not yet fully implemented - needs sentinel frame approach")
+	if calleeVal.Type() == TypeFunction {
+		funcObj = calleeVal.AsFunction()
+	} else if calleeVal.Type() == TypeClosure {
+		closureObj = calleeVal.AsClosure()
+		funcObj = closureObj.Fn
+	} else {
+		return Undefined, fmt.Errorf("Invalid async function type")
+	}
+
+	// Set up caller context for sentinel frame approach
+	callerRegisters := make([]Value, 1)
+	destReg := byte(0)
+
+	// Add a sentinel frame that will cause vm.run() to return when async function yields/returns
+	sentinelFrame := &vm.frames[vm.frameCount]
+	sentinelFrame.isSentinelFrame = true
+	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.targetRegister = destReg    // Target register in caller
+	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.frameCount++
+
+	// Check if we have space for the async function frame
+	if vm.frameCount >= MaxFrames {
+		vm.frameCount-- // Remove sentinel frame
+		return Undefined, fmt.Errorf("Stack overflow")
+	}
+
+	// Allocate registers for the async function
+	regSize := funcObj.RegisterSize
+	if vm.nextRegSlot+regSize > len(vm.registerStack) {
+		vm.frameCount-- // Remove sentinel frame
+		return Undefined, fmt.Errorf("Out of registers")
+	}
+
+	// Set up the async function frame
+	frame := &vm.frames[vm.frameCount]
+	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.ip = 0 // Start from beginning
+	frame.targetRegister = destReg
+	frame.thisValue = thisValue
+	frame.isConstructorCall = false
+	frame.isDirectCall = true      // Mark as direct call for proper return handling
+	frame.promiseObj = promiseObj  // Link frame to promise object - critical for OpAwait!
+
+	if closureObj != nil {
+		frame.closure = closureObj
+	} else {
+		// Create a temporary closure for the function
+		closureVal := NewClosure(funcObj, nil)
+		frame.closure = closureVal.AsClosure()
+	}
+
+	// Set up arguments in registers
+	frame.argCount = len(args)
+	for i, arg := range args {
+		if i < len(frame.registers) {
+			frame.registers[i] = arg
+		}
+	}
+
+	// Update VM state
+	vm.frameCount++
+	vm.nextRegSlot += regSize
+
+	// Execute the VM run loop - it will return when the async function yields or completes
+	status, result := vm.run()
+
+	if status == InterpretRuntimeError {
+		if vm.unwinding && vm.currentException != Null {
+			return Undefined, exceptionError{exception: vm.currentException}
+		}
+		return Undefined, fmt.Errorf("runtime error during async function execution")
+	}
+
+	return result, nil
 }

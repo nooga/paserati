@@ -33,6 +33,11 @@ type PromiseObject struct {
 	Result           Value // Fulfillment value or rejection reason
 	FulfillReactions []PromiseReaction
 	RejectReactions  []PromiseReaction
+
+	// For async functions: suspended execution state
+	Frame            *SuspendedFrame // Execution frame (nil if not an async function promise)
+	Function         Value           // The async function (for resumption)
+	ThisValue        Value           // The 'this' value when async function was called
 }
 
 // GetState returns the promise state
