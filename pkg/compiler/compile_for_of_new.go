@@ -24,16 +24,20 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		return BadRegister, err
 	}
 
-	// 2. Get Symbol.iterator from global Symbol
+	// 2. Get Symbol.iterator or Symbol.asyncIterator from global Symbol
 	symbolObjReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, symbolObjReg)
 	symIdx := c.GetOrAssignGlobalIndex("Symbol")
 	c.emitGetGlobal(symbolObjReg, symIdx, node.Token.Line)
 
-	// 3. Get Symbol.iterator property (Symbol["iterator"])
+	// 3. Get Symbol.iterator or Symbol.asyncIterator property
 	propNameReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, propNameReg)
-	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), node.Token.Line)
+	if node.IsAsync {
+		c.emitLoadNewConstant(propNameReg, vm.String("asyncIterator"), node.Token.Line)
+	} else {
+		c.emitLoadNewConstant(propNameReg, vm.String("iterator"), node.Token.Line)
+	}
 
 	iteratorKeyReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorKeyReg)
@@ -75,10 +79,20 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
-	// 8. Call iterator.next() to get {value, done}
+	// 8. Call iterator.next() to get {value, done} (or Promise<{value, done}> for async)
 	resultReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, resultReg)
 	c.emitCallMethod(resultReg, nextMethodReg, iteratorObjReg, 0, node.Token.Line)
+
+	// 8a. For async iterators, await the promise
+	if node.IsAsync {
+		awaitedReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, awaitedReg)
+		c.emitOpCode(vm.OpAwait, node.Token.Line)
+		c.emitByte(byte(awaitedReg))
+		c.emitByte(byte(resultReg))
+		resultReg = awaitedReg // Use awaited result
+	}
 
 	// 9. Get result.done
 	doneReg := c.regAlloc.Alloc()

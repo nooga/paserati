@@ -138,6 +138,14 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vmInstance.NewRejectedPromise(exception), nil
 	}))
 
+	// Add Symbol.asyncIterator - async generators are their own async iterators
+	// Set asyncGeneratorProto[Symbol.asyncIterator] = function() { return this; }
+	asyncIteratorMethod := vm.NewNativeFunction(0, false, "[Symbol.asyncIterator]", func(args []vm.Value) (vm.Value, error) {
+		return vmInstance.GetThis(), nil
+	})
+	// Use DefineOwnPropertyByKey with symbol key (like generators do with Symbol.iterator)
+	asyncGeneratorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolAsyncIterator), asyncIteratorMethod, nil, nil, nil)
+
 	vmInstance.AsyncGeneratorPrototype = vm.NewValueFromPlainObject(asyncGeneratorProto)
 
 	return nil

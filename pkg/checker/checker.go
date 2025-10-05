@@ -217,6 +217,11 @@ type Checker struct {
 	// Track generator function names for yield* validation
 	generatorFunctions map[string]bool
 
+	// --- NEW: Current function context ---
+	// Track if we're currently inside an async or generator function
+	inAsyncFunction     bool
+	inGeneratorFunction bool
+
 	// --- NEW: Recursive type alias tracking ---
 	// Track type aliases being resolved to prevent infinite recursion
 	resolvingTypeAliases map[string]bool
@@ -665,9 +670,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		outerInferredReturnTypes := c.currentInferredReturnTypes
 		outerInferredYieldTypes := c.currentInferredYieldTypes
 		outerThisType := c.currentThisType
+		outerInAsyncFunction := c.inAsyncFunction
+		outerInGeneratorFunction := c.inGeneratorFunction
+
 		c.currentExpectedReturnType = funcSignature.ReturnType // Use return type from initial signature
 		c.currentInferredReturnTypes = nil
 		c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
+		c.inAsyncFunction = funcLit.IsAsync
+		c.inGeneratorFunction = funcLit.IsGenerator
+
 		if c.currentExpectedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
 		}
@@ -859,6 +870,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.currentInferredReturnTypes = outerInferredReturnTypes
 		c.currentInferredYieldTypes = outerInferredYieldTypes
 		c.currentThisType = outerThisType
+		c.inAsyncFunction = outerInAsyncFunction
+		c.inGeneratorFunction = outerInGeneratorFunction
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
 
@@ -4066,6 +4079,20 @@ func (c *Checker) isGeneratorType(t types.Type) bool {
 		}
 	}
 	return false
+}
+
+func (c *Checker) isAsyncGeneratorType(t types.Type) bool {
+	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
+		if instantiatedType.Generic != nil {
+			return instantiatedType.Generic.Name == "AsyncGenerator"
+		}
+	}
+	return false
+}
+
+// isInAsyncContext checks if we're currently inside an async function or async generator
+func (c *Checker) isInAsyncContext() bool {
+	return c.inAsyncFunction
 }
 
 // getNextAnonymousId generates a unique ID for anonymous classes

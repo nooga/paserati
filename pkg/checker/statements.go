@@ -556,6 +556,13 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		return
 	}
 
+	// for-await-of can only be used in async contexts
+	if node.IsAsync && !c.isInAsyncContext() {
+		debugPrintf("// [Checker ForOfStmt] IsAsync check: node.IsAsync=%v, c.inAsyncFunction=%v, c.inGeneratorFunction=%v\n", node.IsAsync, c.inAsyncFunction, c.inGeneratorFunction)
+		c.addError(node, "for-await-of can only be used in async functions or async generator functions")
+		return
+	}
+
 	originalEnv := c.env
 	loopEnv := NewEnclosedEnvironment(originalEnv)
 	c.env = loopEnv
@@ -571,59 +578,80 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 
 		// Determine the element type from the iterable
 		var elementType types.Type
-		if arrayType, ok := iterableType.(*types.ArrayType); ok {
-			elementType = arrayType.ElementType
-		} else if iterableType == types.String || types.IsAssignable(iterableType, types.String) {
-			// String iteration yields individual characters (strings)
-			// This handles both the general string type and string literal types
-			elementType = types.String
-		} else if iterableType == types.Any {
-			elementType = types.Any
-		} else if c.isGeneratorType(iterableType) {
-			// Special handling for Generator types - they are iterable
-			elementType = types.Any // Safe fallback for generator elements
-		} else if c.isIterableBySymbolIterator(iterableType) {
-			// If it has a Symbol.iterator method (computed), treat as iterable
-			elementType = types.Any
+
+		// For async iteration (for await...of), handle AsyncIterable and AsyncGenerator
+		if node.IsAsync {
+			// Check for AsyncGenerator type
+			if c.isAsyncGeneratorType(iterableType) {
+				// AsyncGenerator<T, TReturn, TNext> yields Promise<T>
+				// For now, use Any as element type (will be awaited)
+				elementType = types.Any
+			} else if arrayType, ok := iterableType.(*types.ArrayType); ok {
+				// Arrays can be async-iterated (each element is awaited)
+				elementType = arrayType.ElementType
+			} else if iterableType == types.Any {
+				elementType = types.Any
+			} else {
+				// Should be AsyncIterable<T> or have Symbol.asyncIterator
+				// For now, accept any type and use Any as element type
+				elementType = types.Any
+			}
 		} else {
-			// Special case: if the iterable comes from a generator function call, assume it's iterable
-			// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking
-			if callExpr, ok := node.Iterable.(*parser.CallExpression); ok {
-				if ident, ok := callExpr.Function.(*parser.Identifier); ok {
-					if c.generatorFunctions[ident.Value] {
-						elementType = types.Any // Safe fallback for generator elements
-						goto handleVariable
+			// Regular for...of (synchronous iteration)
+			if arrayType, ok := iterableType.(*types.ArrayType); ok {
+				elementType = arrayType.ElementType
+			} else if iterableType == types.String || types.IsAssignable(iterableType, types.String) {
+				// String iteration yields individual characters (strings)
+				// This handles both the general string type and string literal types
+				elementType = types.String
+			} else if iterableType == types.Any {
+				elementType = types.Any
+			} else if c.isGeneratorType(iterableType) {
+				// Special handling for Generator types - they are iterable
+				elementType = types.Any // Safe fallback for generator elements
+			} else if c.isIterableBySymbolIterator(iterableType) {
+				// If it has a Symbol.iterator method (computed), treat as iterable
+				elementType = types.Any
+			} else {
+				// Special case: if the iterable comes from a generator function call, assume it's iterable
+				// This handles cases where generator functions haven't been fully resolved yet in multi-pass checking
+				if callExpr, ok := node.Iterable.(*parser.CallExpression); ok {
+					if ident, ok := callExpr.Function.(*parser.Identifier); ok {
+						if c.generatorFunctions[ident.Value] {
+							elementType = types.Any // Safe fallback for generator elements
+							goto handleVariable
+						}
 					}
 				}
-			}
 
-			// Check if the type is assignable to Iterable<any>
-			if iterableGeneric, found, _ := c.env.Resolve("Iterable"); found {
-				if genericType, ok := iterableGeneric.(*types.GenericType); ok {
-					// Create Iterable<any> to check assignability
-					iterableAny := &types.InstantiatedType{
-						Generic:       genericType,
-						TypeArguments: []types.Type{types.Any},
-					}
+				// Check if the type is assignable to Iterable<any>
+				if iterableGeneric, found, _ := c.env.Resolve("Iterable"); found {
+					if genericType, ok := iterableGeneric.(*types.GenericType); ok {
+						// Create Iterable<any> to check assignability
+						iterableAny := &types.InstantiatedType{
+							Generic:       genericType,
+							TypeArguments: []types.Type{types.Any},
+						}
 
-					if types.IsAssignable(iterableType, iterableAny) {
-						// It's iterable, but we can't easily extract the element type
-						// For now, use Any as a safe fallback
-						elementType = types.Any
+						if types.IsAssignable(iterableType, iterableAny) {
+							// It's iterable, but we can't easily extract the element type
+							// For now, use Any as a safe fallback
+							elementType = types.Any
+						} else {
+							// Not iterable
+							c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+							elementType = types.Any
+						}
 					} else {
-						// Not iterable
+						// Iterable type exists but isn't a generic - something's wrong
 						c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
 						elementType = types.Any
 					}
 				} else {
-					// Iterable type exists but isn't a generic - something's wrong
+					// No Iterable type found - fallback to old behavior
 					c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
 					elementType = types.Any
 				}
-			} else {
-				// No Iterable type found - fallback to old behavior
-				c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
-				elementType = types.Any
 			}
 		}
 

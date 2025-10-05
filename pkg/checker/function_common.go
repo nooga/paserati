@@ -351,14 +351,20 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	outerExpectedReturnType := c.currentExpectedReturnType
 	outerInferredReturnTypes := c.currentInferredReturnTypes
 	outerInferredYieldTypes := c.currentInferredYieldTypes
-	
+
 	c.currentExpectedReturnType = expectedReturnType
 	c.currentInferredReturnTypes = nil
 	c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 	if expectedReturnType == nil {
 		c.currentInferredReturnTypes = []types.Type{}
 	}
-	
+
+	// Set async/generator context
+	outerInAsyncFunction := c.inAsyncFunction
+	outerInGeneratorFunction := c.inGeneratorFunction
+	c.inAsyncFunction = ctx.IsAsync
+	c.inGeneratorFunction = ctx.IsGenerator
+
 	// Set up 'this' context - check for explicit 'this' parameter
 	outerThisType := c.currentThisType
 	hasExplicitThisParam := false
@@ -423,11 +429,13 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 		finalReturnType = c.inferFinalReturnType(expectedReturnType, ctx.FunctionName)
 	}
 	
-	// Restore return context and this context
+	// Restore return context, this context, and async/generator context
 	c.currentExpectedReturnType = outerExpectedReturnType
 	c.currentInferredReturnTypes = outerInferredReturnTypes
 	c.currentInferredYieldTypes = outerInferredYieldTypes
 	c.currentThisType = outerThisType
+	c.inAsyncFunction = outerInAsyncFunction
+	c.inGeneratorFunction = outerInGeneratorFunction
 	
 	return finalReturnType
 }

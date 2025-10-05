@@ -4678,24 +4678,35 @@ func (p *Parser) parseForStatement() Statement {
 	// Parse the opening structure first
 	forToken := p.curToken
 
+	// Check for 'for await (' syntax (for-await-of loop)
+	isAsync := false
+	if p.peekTokenIs(lexer.AWAIT) {
+		isAsync = true
+		p.nextToken() // Consume 'await' token
+	}
+
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
 	}
 
-	// Check what comes after the opening paren to decide which parser to use
+	// Check what comes after the opening paren (and optional 'await') to decide which parser to use
 	// We need to peek ahead before advancing
 
 	// Handle empty initializer case: for(; ...)
 	if p.peekTokenIs(lexer.SEMICOLON) {
+		if isAsync {
+			p.addError(p.curToken, "for-await can only be used with for-of loops, not regular for loops")
+			return nil
+		}
 		return p.parseRegularForStatement(forToken)
 	}
 
 	// For declaration keywords or identifiers, we need to check if it's for-of/for-in
-	// Peek ahead to see the first token after '('
+	// Peek ahead to see the first token after '(' (and optional 'await')
 	if p.peekTokenIs(lexer.LET) || p.peekTokenIs(lexer.CONST) || p.peekTokenIs(lexer.VAR) {
 		// Advance to the keyword
 		p.nextToken()
-		return p.parseForStatementOrForOf(forToken)
+		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
 
 	// For destructuring patterns, check if followed by OF/IN
@@ -4704,7 +4715,7 @@ func (p *Parser) parseForStatement() Statement {
 		p.nextToken() // Now at [ or {
 		// Destructuring patterns in for loops are always for-of/for-in (assignment patterns)
 		// Parse as expression to handle cases like: for ([x] of items) or for ({a} in obj)
-		return p.parseForStatementOrForOf(forToken)
+		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
 
 	// For identifiers, check if it's followed by OF/IN or could be a member expression
@@ -4715,21 +4726,29 @@ func (p *Parser) parseForStatement() Statement {
 		// Check for member expression patterns: obj.x, obj[x], this.x
 		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
 			// This is a member expression - could be for-of/for-in assignment
-			return p.parseForStatementOrForOf(forToken)
+			return p.parseForStatementOrForOf(forToken, isAsync)
 		}
 
 		if p.peekTokenIs(lexer.OF) || p.peekTokenIs(lexer.IN) {
-			return p.parseForStatementOrForOf(forToken)
+			return p.parseForStatementOrForOf(forToken, isAsync)
 		}
 		// Not for-of/for-in, go back and parse as regular for
 		// But we can't go back! So we need to stay at IDENT and let parseRegularForStatement handle it
 		// Actually, parseRegularForStatement will skip LPAREN check since we're at IDENT
 		// So it will parse the ident as an expression
+		if isAsync {
+			p.addError(p.curToken, "for-await can only be used with for-of loops, not regular for loops")
+			return nil
+		}
 		return p.parseRegularForStatement(forToken)
 	}
 
 	// Any other token means it's a regular for loop with expression initializer
 	// Don't advance - let parseRegularForStatement handle the LPAREN
+	if isAsync {
+		p.addError(p.curToken, "for-await can only be used with for-of loops, not regular for loops")
+		return nil
+	}
 	return p.parseRegularForStatement(forToken)
 }
 
@@ -6882,7 +6901,7 @@ func (p *Parser) parseForOfStatement() *ForOfStatement {
 }
 
 // parseForStatementOrForOf determines if this is for...of, for...in, or regular for and parses accordingly
-func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
+func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) Statement {
 	// We're positioned at the variable declaration or identifier
 	// Parse the variable part and see what comes next
 
@@ -7080,7 +7099,7 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 		// This is a for...of loop!
 		p.nextToken() // consume variable name, cur='of'
 
-		stmt := &ForOfStatement{Token: forToken}
+		stmt := &ForOfStatement{Token: forToken, IsAsync: isAsync}
 		stmt.Variable = varStmt
 
 		// Parse iterable
@@ -7099,6 +7118,10 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 		return stmt
 	} else if p.peekTokenIs(lexer.IN) {
 		// This is a for...in loop!
+		if isAsync {
+			p.addError(p.curToken, "for-await can only be used with for-of loops, not for-in loops")
+			return nil
+		}
 		p.nextToken() // consume variable name, cur='in'
 
 		stmt := &ForInStatement{Token: forToken}
@@ -7120,6 +7143,11 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token) Statement {
 		return stmt
 	} else {
 		// This is a regular for loop with variable declaration
+		// for-await cannot be used with regular for loops
+		if isAsync {
+			p.addError(p.curToken, "for-await can only be used with for-of loops, not regular for loops")
+			return nil
+		}
 		// We need to continue parsing as regular for loop
 		// Reset and parse as regular for statement
 		return p.parseRegularForStatementWithVar(forToken, varStmt, varName)

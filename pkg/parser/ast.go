@@ -888,11 +888,13 @@ func (fs *ForStatement) String() string {
 // ForOfStatement represents a 'for (<variable> of <iterable>) { body }' statement.
 // Variable can be either a *Identifier (e.g., for (item of items)) or
 // a variable declaration like *LetStatement (e.g., for (let item of items))
+// For async iteration, use 'for await (variable of asyncIterable)'
 type ForOfStatement struct {
 	Token    lexer.Token     // The 'for' token
 	Variable Statement       // Can be *LetStatement or *ConstStatement or *ExpressionStatement with *Identifier
 	Iterable Expression      // The expression being iterated over (array, string, etc.)
 	Body     *BlockStatement // The loop body
+	IsAsync  bool            // True for 'for await...of' loops
 }
 
 func (fos *ForOfStatement) statementNode()       {}
