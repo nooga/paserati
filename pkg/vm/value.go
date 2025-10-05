@@ -1141,6 +1141,21 @@ func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
 			return fmt.Sprintf("%s { length: %d }", typeName, ta.length)
 		}
 		return "TypedArray {}"
+	case TypePromise:
+		promise := v.AsPromise()
+		if promise != nil {
+			switch promise.State {
+			case PromisePending:
+				return "Promise { <pending> }"
+			case PromiseFulfilled:
+				return fmt.Sprintf("Promise { %s }", promise.Result.inspectWithDepth(false, depth+1, maxDepth))
+			case PromiseRejected:
+				return fmt.Sprintf("Promise { <rejected> %s }", promise.Result.inspectWithDepth(false, depth+1, maxDepth))
+			default:
+				return "Promise { <unknown state> }"
+			}
+		}
+		return "Promise {}"
 	default:
 		return fmt.Sprintf("<unknown %d>", v.typ)
 	}
@@ -1167,8 +1182,8 @@ func (v Value) IsFalsey() bool {
 		return v.AsBigInt().Cmp(bigZero) == 0
 	case TypeString:
 		return v.AsString() == ""
-	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy:
-		// All object types (including symbols, regex, and proxies) are truthy
+	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy, TypePromise:
+		// All object types (including symbols, regex, proxies, and promises) are truthy
 		return false
 	default:
 		return true // Unknown types assumed truthy? Or panic? Let's assume truthy.

@@ -1,4 +1,4 @@
-// expect: <unknown 19>
+// expect: Promise { <pending> }
 // Basic async function test - should return a Promise
 
 async function test() {
