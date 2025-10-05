@@ -1044,6 +1044,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return c.compileYieldExpression(node, hint)
 	// --- END Generator Support ---
 
+	// --- Async/Await Support ---
+	case *parser.AwaitExpression:
+		return c.compileAwaitExpression(node, hint)
+	// --- END Async/Await Support ---
+
 	default:
 		// Add check here? If type is FunctionLiteral and wasn't caught above, it's an error.
 		if _, ok := node.(*parser.FunctionLiteral); ok {
@@ -1183,7 +1188,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 			arity++
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false) // isArrowFunction = false
+	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false) // isGenerator=false, isAsync=false, isArrowFunction=false
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil

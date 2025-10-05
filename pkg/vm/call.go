@@ -69,6 +69,14 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			return false, nil // Don't switch frames
 		}
 
+		// Check if this is an async function - wrap execution in a Promise
+		if calleeFunc.IsAsync {
+			// Create a Promise and start async execution
+			promiseVal := vm.executeAsyncFunction(calleeVal, thisValue, args)
+			callerRegisters[destReg] = promiseVal
+			return false, nil // Don't switch frames - async execution happens via microtasks
+		}
+
 		// Arity checking
 		if calleeFunc.Variadic {
 			if argCount < calleeFunc.Arity {

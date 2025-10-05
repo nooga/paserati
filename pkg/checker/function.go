@@ -22,6 +22,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		Body:                      node.Body,
 		IsArrow:                   false,
 		IsGenerator:               node.IsGenerator, // Detect generator functions
+		IsAsync:                   node.IsAsync,     // Detect async functions
 		AllowSelfReference:        node.Name != nil, // Allow recursion for named functions
 		AllowOverloadCompletion:   node.Name != nil, // Check for overloads for named functions
 	}
@@ -63,11 +64,28 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	if node.IsGenerator {
 		// For generator functions, the actual return type becomes Generator<YieldType, ReturnType, any>
 		debugPrintf("// [Checker FuncLit] Generator function detected, wrapping return type\n")
-		
+
 		// Use the collected yield types to create the proper Generator<T, TReturn, TNext> type
 		generatorType := c.createGeneratorType(finalReturnType, c.currentInferredYieldTypes)
 		finalReturnType = generatorType
 		debugPrintf("// [Checker FuncLit] Created generator type: %s\n", finalReturnType.String())
+	}
+
+	// 4.5. Handle async functions - wrap return type in Promise<T>
+	if node.IsAsync {
+		// For async functions, the actual return type becomes Promise<T>
+		debugPrintf("// [Checker FuncLit] Async function detected, wrapping return type in Promise\n")
+
+		// Handle nil return type (async functions without explicit return default to Promise<void>)
+		innerType := finalReturnType
+		if innerType == nil {
+			innerType = types.Void
+		}
+
+		// Create Promise<T> type
+		promiseType := c.createPromiseType(innerType)
+		finalReturnType = promiseType
+		debugPrintf("// [Checker FuncLit] Created Promise type: %s\n", finalReturnType.String())
 	}
 
 	// 5. Create final function type
@@ -123,6 +141,50 @@ func (c *Checker) createGeneratorType(returnType types.Type, yieldTypes []types.
 	generatorObj.WithProperty("return", types.NewOptionalFunction([]types.Type{returnType}, types.Any, []bool{true}))
 	generatorObj.WithProperty("throw", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
 	return generatorObj
+}
+
+// createPromiseType creates an instantiated Promise<T> type
+func (c *Checker) createPromiseType(valueType types.Type) types.Type {
+	// Handle nil value type (shouldn't happen, but default to void)
+	if valueType == nil {
+		valueType = types.Void
+	}
+
+	// Check if we have the global PromiseGeneric type (set by builtins)
+	// For now, create a simple promise-like object type
+	// TODO: Once Promise generic type is registered, use it like GeneratorGeneric
+
+	// Create a simple object type representing Promise<T>
+	promiseObj := types.NewObjectType()
+
+	// Add then method: then<TResult1 = T, TResult2 = never>(
+	//   onfulfilled?: (value: T) => TResult1 | PromiseLike<TResult1>,
+	//   onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>
+	// ): Promise<TResult1 | TResult2>
+	promiseObj.WithProperty("then", types.NewOptionalFunction(
+		[]types.Type{
+			types.NewOptionalFunction([]types.Type{valueType}, types.Any, []bool{false}),
+			types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{false}),
+		},
+		promiseObj, // Returns another Promise
+		[]bool{true, true}, // Both parameters optional
+	))
+
+	// Add catch method: catch<TResult = never>(onrejected?: (reason: any) => TResult): Promise<T | TResult>
+	promiseObj.WithProperty("catch", types.NewOptionalFunction(
+		[]types.Type{types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{false})},
+		promiseObj,
+		[]bool{true},
+	))
+
+	// Add finally method: finally(onfinally?: () => void): Promise<T>
+	promiseObj.WithProperty("finally", types.NewOptionalFunction(
+		[]types.Type{types.NewOptionalFunction([]types.Type{}, types.Void, []bool{})},
+		promiseObj,
+		[]bool{true},
+	))
+
+	return promiseObj
 }
 
 func (c *Checker) checkMethodDefinition(node *parser.MethodDefinition) {

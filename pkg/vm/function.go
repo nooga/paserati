@@ -14,6 +14,7 @@ type FunctionObject struct {
 	UpvalueCount        int
 	RegisterSize        int
 	IsGenerator         bool         // True for generator functions (function*)
+	IsAsync             bool         // True for async functions
 	IsArrowFunction     bool         // True for arrow functions (cannot be used as constructors)
 	IsDerivedConstructor bool        // True for derived class constructors (must call super())
 	Properties          *PlainObject // For properties like .prototype (created lazily)
@@ -99,7 +100,7 @@ type VMCaller interface {
 	CallBytecode(fn Value, thisValue Value, args []Value) Value
 }
 
-func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isArrowFunction bool) Value {
+func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isAsync bool, isArrowFunction bool) Value {
 	fnObj := &FunctionObject{
 		Arity:        arity,
 		Variadic:     variadic,
@@ -108,6 +109,7 @@ func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name stri
 		UpvalueCount: upvalueCount,
 		RegisterSize: registerSize,
 		IsGenerator:  isGenerator,
+		IsAsync:      isAsync,
 		IsArrowFunction: isArrowFunction,
 		Properties:   nil, // Start with nil - create lazily
 	}

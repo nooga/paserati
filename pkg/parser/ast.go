@@ -555,6 +555,7 @@ type FunctionLiteral struct {
 	Token                lexer.Token      // The 'function' token
 	Name                 *Identifier      // Optional function name
 	IsGenerator          bool             // true for function* (generator functions)
+	IsAsync              bool             // true for async functions
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter     // Regular parameters
 	RestParameter        *RestParameter   // Optional rest parameter (...args)
@@ -669,6 +670,7 @@ func (ue *UpdateExpression) String() string {
 type ArrowFunctionLiteral struct {
 	BaseExpression                        // Embed base for ComputedType (Function type)
 	Token                lexer.Token      // The '=>' token
+	IsAsync              bool             // true for async arrow functions
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter     // Regular parameters
 	RestParameter        *RestParameter   // Optional rest parameter (...args)
@@ -1191,6 +1193,28 @@ func (ye *YieldExpression) String() string {
 	}
 	if ye.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", ye.ComputedType.String()))
+	}
+	return out.String()
+}
+
+// AwaitExpression represents an await expression (async/await).
+// await <Argument>
+type AwaitExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The 'await' token
+	Argument       Expression  // The expression to await (typically a Promise)
+}
+
+func (ae *AwaitExpression) expressionNode()      {}
+func (ae *AwaitExpression) TokenLiteral() string { return ae.Token.Literal }
+func (ae *AwaitExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("await ")
+	if ae.Argument != nil {
+		out.WriteString(ae.Argument.String())
+	}
+	if ae.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", ae.ComputedType.String()))
 	}
 	return out.String()
 }

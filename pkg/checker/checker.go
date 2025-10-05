@@ -2467,6 +2467,9 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.YieldExpression:
 		c.checkYieldExpression(node)
 
+	case *parser.AwaitExpression:
+		c.checkAwaitExpression(node)
+
 	case *parser.AssignmentExpression:
 		c.checkAssignmentExpression(node)
 

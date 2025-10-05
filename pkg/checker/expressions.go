@@ -2295,6 +2295,44 @@ setYieldedType:
 	//   yieldedType.String())
 }
 
+// checkAwaitExpression checks an await expression and unwraps the Promise type
+func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
+	// 1. Check the argument expression
+	if node.Argument != nil {
+		c.visit(node.Argument)
+		argType := node.Argument.GetComputedType()
+
+		// 2. Unwrap Promise<T> to get T
+		if argType != nil {
+			// Check if this is a Promise<T> type
+			if instType, ok := argType.(*types.InstantiatedType); ok {
+				if instType.Generic != nil && instType.Generic.Name == "Promise" {
+					// Extract the inner type T from Promise<T>
+					if len(instType.TypeArguments) > 0 {
+						innerType := instType.TypeArguments[0]
+						node.SetComputedType(innerType)
+						debugPrintf("// [Checker AwaitExpression] Unwrapped Promise<%s> to %s\n",
+							innerType.String(), innerType.String())
+						return
+					}
+				}
+			}
+
+			// If not a Promise type, await still accepts the value and returns it
+			// This matches TypeScript behavior where await can be used on non-Promise values
+			node.SetComputedType(argType)
+			debugPrintf("// [Checker AwaitExpression] Non-Promise type %s, returning as-is\n",
+				argType.String())
+		} else {
+			// No type information, default to any
+			node.SetComputedType(types.Any)
+		}
+	} else {
+		// No argument (shouldn't happen in valid code)
+		node.SetComputedType(types.Undefined)
+	}
+}
+
 // isIterableBySymbolIterator returns true if the type has a computed Symbol.iterator method.
 func (c *Checker) isIterableBySymbolIterator(t types.Type) bool {
 	if t == nil {

@@ -213,6 +213,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.THROW, p.parseIdentifier)            // THROW can be used as identifier in object literals
 	p.registerPrefix(lexer.RETURN, p.parseIdentifier)           // RETURN can be used as identifier in object literals
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
+	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
@@ -222,6 +223,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.VOID, p.parseVoidExpression)     // Added for void operator
 	p.registerPrefix(lexer.DELETE, p.parsePrefixExpression) // Added for delete operator
 	p.registerPrefix(lexer.YIELD, p.parseYieldExpression)   // Added for yield expressions
+	p.registerPrefix(lexer.AWAIT, p.parseAwaitExpression)   // Added for await expressions
 	p.registerPrefix(lexer.INC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.DEC, p.parsePrefixUpdateExpression)
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
@@ -469,6 +471,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseSwitchStatement()
 	case lexer.FUNCTION:
 		return p.parseFunctionDeclarationStatement()
+	case lexer.ASYNC:
+		return p.parseAsyncFunctionDeclarationStatement()
 	case lexer.CLASS:
 		return p.parseClassDeclarationStatement()
 	case lexer.ENUM:
@@ -541,6 +545,44 @@ func (p *Parser) parseFunctionDeclarationStatement() *ExpressionStatement {
 			Token:      p.curToken,
 			Expression: nil,
 		}
+	}
+
+	// Wrap it in an ExpressionStatement
+	stmt := &ExpressionStatement{
+		Token:      p.curToken,
+		Expression: funcExpr,
+	}
+
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+// --- Async Function Declaration Statement Parsing ---
+func (p *Parser) parseAsyncFunctionDeclarationStatement() *ExpressionStatement {
+	// We're at the 'async' token, peek should be 'function'
+	if !p.expectPeek(lexer.FUNCTION) {
+		return &ExpressionStatement{
+			Token:      p.curToken,
+			Expression: nil,
+		}
+	}
+
+	// Parse the function as an expression (FunctionLiteral with IsAsync=true)
+	funcExpr := p.parseFunctionLiteral()
+	if funcExpr == nil {
+		return &ExpressionStatement{
+			Token:      p.curToken,
+			Expression: nil,
+		}
+	}
+
+	// Mark it as async
+	if funcLit, ok := funcExpr.(*FunctionLiteral); ok {
+		funcLit.IsAsync = true
 	}
 
 	// Wrap it in an ExpressionStatement
@@ -3164,6 +3206,107 @@ func (p *Parser) parseYieldExpression() Expression {
 			// If parsing failed, treat as yield with no value
 			expression.Value = nil
 		}
+	}
+
+	return expression
+}
+
+// parseAsyncExpression handles async function expressions and async arrow functions
+// async function() { ... }
+// async () => { ... }
+// async x => x
+func (p *Parser) parseAsyncExpression() Expression {
+	asyncToken := p.curToken // Save the 'async' token
+
+	p.nextToken() // Move past 'async'
+
+	// Check if this is an async function expression
+	if p.curTokenIs(lexer.FUNCTION) {
+		funcExpr := p.parseFunctionLiteral()
+		if funcLit, ok := funcExpr.(*FunctionLiteral); ok {
+			funcLit.IsAsync = true
+		}
+		return funcExpr
+	}
+
+	// Check if this is an async arrow function with single parameter: async x => x
+	if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.ARROW) {
+		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.nextToken() // Move to '=>'
+		param := &Parameter{
+			Token:          ident.Token,
+			Name:           ident,
+			TypeAnnotation: nil,
+		}
+		arrowExpr := p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
+		if arrowLit, ok := arrowExpr.(*ArrowFunctionLiteral); ok {
+			arrowLit.IsAsync = true
+		}
+		return arrowExpr
+	}
+
+	// Check if this is an async arrow function with parenthesized parameters: async () => ...
+	if p.curTokenIs(lexer.LPAREN) {
+		// Save parser state for potential backtracking
+		startState := p.l.SaveState()
+		startCur := p.curToken
+		startPeek := p.peekToken
+		startErrors := len(p.errors)
+
+		p.nextToken() // Consume '('
+		params, restParam, _ := p.parseParameterList()
+
+		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
+			p.nextToken() // Consume ')', cur is now '=>'
+			p.errors = p.errors[:startErrors]
+			arrowExpr := p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil)
+			if arrowLit, ok := arrowExpr.(*ArrowFunctionLiteral); ok {
+				arrowLit.IsAsync = true
+			}
+			return arrowExpr
+		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
+			// async (params): ReturnType => body
+			p.nextToken() // Consume ')', cur is now ':'
+			p.nextToken() // Consume ':', cur is start of type
+			p.errors = p.errors[:startErrors]
+			returnTypeAnnotation := p.parseTypeExpression()
+			if !p.expectPeek(lexer.ARROW) {
+				return nil
+			}
+			arrowExpr := p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation)
+			if arrowLit, ok := arrowExpr.(*ArrowFunctionLiteral); ok {
+				arrowLit.IsAsync = true
+			}
+			return arrowExpr
+		} else {
+			// Backtrack - not a valid async arrow function
+			p.l.RestoreState(startState)
+			p.curToken = startCur
+			p.peekToken = startPeek
+			p.errors = p.errors[:startErrors]
+		}
+	}
+
+	// If we get here, it's an invalid async expression
+	p.addError(asyncToken, fmt.Sprintf("unexpected token after 'async': %s", p.curToken.Type))
+	return &Identifier{Token: asyncToken, Value: "async"}
+}
+
+// parseAwaitExpression handles await expressions
+// await <expression>
+func (p *Parser) parseAwaitExpression() Expression {
+	expression := &AwaitExpression{
+		Token: p.curToken, // The 'await' token
+	}
+
+	p.nextToken() // Move past 'await'
+
+	// Parse the expression to await with prefix precedence
+	// (higher than assignment but lower than most operators)
+	expression.Argument = p.parseExpression(PREFIX)
+	if expression.Argument == nil {
+		p.addError(p.curToken, "expected expression after 'await'")
+		return nil
 	}
 
 	return expression

@@ -16,6 +16,7 @@ type FunctionCheckContext struct {
 	Body                      parser.Node                 // Function body (block or expression)
 	IsArrow                   bool                        // Whether this is an arrow function
 	IsGenerator               bool                        // Whether this is a generator function (function*)
+	IsAsync                   bool                        // Whether this is an async function
 	AllowSelfReference        bool                        // Whether to allow recursive self-reference
 	AllowOverloadCompletion   bool                        // Whether to check for overload completion
 	ContextualParameterTypes  []types.Type               // Contextual parameter types from expected signature

@@ -181,6 +181,9 @@ const (
 	OpYield           OpCode = 75 // Rx, Ry: Suspend generator execution, yield value in Rx, store sent value in Ry
 	OpResumeGenerator OpCode = 76 // Internal: Resume generator execution (used by .next() calls)
 
+	// --- Async/Await Support ---
+	OpAwait OpCode = 95 // Rx, PromiseReg: Await promise in PromiseReg, store result in Rx when resolved
+
 	// --- Large Literal Support ---
 	OpAllocArray OpCode = 77 // Rx Len(16bit): Preallocate array of length Len into Rx, filled with undefined
 	OpArrayCopy  OpCode = 78 // Rx DestOffset(16bit) StartReg Count: Copy Count registers starting at StartReg into Rx at DestOffset
@@ -394,6 +397,10 @@ func (op OpCode) String() string {
 		return "OpYield"
 	case OpResumeGenerator:
 		return "OpResumeGenerator"
+
+	// --- Async/Await Support ---
+	case OpAwait:
+		return "OpAwait"
 
 	// --- Large Literal Support ---
 	case OpAllocArray:
@@ -674,6 +681,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterInstruction(builder, "OpYield", offset)
 	case OpResumeGenerator:
 		return c.simpleInstruction(builder, "OpResumeGenerator", offset)
+
+	// --- Async/Await Support ---
+	case OpAwait:
+		return c.registerRegisterInstruction(builder, "OpAwait", offset)
 
 	// --- Large Literal Support ---
 	case OpAllocArray:

@@ -77,6 +77,9 @@ type CallFrame struct {
 
 	// For generator functions
 	generatorObj *GeneratorObject // Reference to the generator object (if this is a generator frame)
+
+	// For async functions
+	promiseObj *PromiseObject // Reference to the promise object (if this is an async frame)
 }
 
 // BytecodeCall represents a request from a native function to call bytecode
@@ -4600,6 +4603,24 @@ startExecution:
 			// OpResumeGenerator is used internally to resume generator execution
 			// This should not be directly encountered in normal execution
 			status := vm.runtimeError("OpResumeGenerator is an internal opcode")
+			return status, Undefined
+
+		case OpAwait:
+			// OpAwait resultReg, promiseReg
+			// Suspend async function execution, await promise settlement, store result in resultReg
+			_ = code[ip]     // resultReg - will be used when implemented
+			_ = code[ip+1]   // promiseReg - will be used when implemented
+			ip += 2
+
+			// TODO: Implement proper async/await execution
+			// This requires:
+			// 1. Suspending the current frame (save state like OpYield)
+			// 2. Attaching promise settlement handlers
+			// 3. Scheduling resumption via async runtime microtasks
+			// 4. Restoring frame state when promise settles
+
+			// For now, return an error to indicate it's not yet implemented
+			status := vm.runtimeError("OpAwait not yet fully implemented - needs async frame suspension/resumption")
 			return status, Undefined
 
 		case OpDeleteProp:

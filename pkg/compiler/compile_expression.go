@@ -2090,6 +2090,33 @@ func (c *Compiler) compileYieldExpression(node *parser.YieldExpression, hint Reg
 	return hint, nil
 }
 
+// compileAwaitExpression compiles await expressions in async functions
+func (c *Compiler) compileAwaitExpression(node *parser.AwaitExpression, hint Register) (Register, errors.PaseratiError) {
+	// Manage temporary registers with automatic cleanup
+	var tempRegs []Register
+	defer func() {
+		for _, reg := range tempRegs {
+			c.regAlloc.Free(reg)
+		}
+	}()
+
+	// 1. Compile the promise being awaited
+	promiseReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, promiseReg)
+	_, err := c.compileNode(node.Argument, promiseReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 2. Emit OpAwait instruction
+	// The VM will suspend execution, wait for promise settlement, and store result in hint register
+	c.emitOpCode(vm.OpAwait, node.Token.Line)
+	c.emitByte(byte(hint))       // Register to store resolved value
+	c.emitByte(byte(promiseReg)) // Promise being awaited
+
+	return hint, nil
+}
+
 // compileYieldDelegation compiles yield* expressions which delegate to another iterator
 func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Register) (Register, errors.PaseratiError) {
 	// Manage temporary registers with automatic cleanup

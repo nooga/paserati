@@ -244,6 +244,9 @@ const (
 	FROM   TokenType = "FROM"
 	// Generator keyword
 	YIELD TokenType = "YIELD"
+	// Async/Await keywords
+	ASYNC TokenType = "ASYNC"
+	AWAIT TokenType = "AWAIT"
 )
 
 var keywords = map[string]TokenType{
@@ -304,6 +307,8 @@ var keywords = map[string]TokenType{
 	"export":     EXPORT,     // Added for export statements
 	"from":       FROM,       // Added for import from clauses
 	"yield":      YIELD,      // Added for generator yield expressions
+	"async":      ASYNC,      // Added for async functions
+	"await":      AWAIT,      // Added for await expressions
 }
 
 // LookupIdent checks the keywords table for an identifier.
