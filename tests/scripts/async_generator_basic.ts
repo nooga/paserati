@@ -1,4 +1,4 @@
-// Basic async generator test
+// Basic async generator test with top-level await
 // expect: 42
 
 async function* simpleAsyncGen() {

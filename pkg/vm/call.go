@@ -84,7 +84,8 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		}
 
 		// Check if this is an async function - wrap execution in a Promise
-		if calleeFunc.IsAsync {
+		// Skip this if we're executing a generator (including async generators)
+		if calleeFunc.IsAsync && !isGeneratorExecution {
 			// Create a Promise and start async execution
 			promiseVal := vm.executeAsyncFunction(calleeVal, thisValue, args)
 			callerRegisters[destReg] = promiseVal
