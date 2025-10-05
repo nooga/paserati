@@ -484,6 +484,22 @@ func objectGetPrototypeOfImpl(args []vm.Value) (vm.Value, error) {
 			return cl.Fn.Prototype, nil
 		}
 		return vm.Null, nil
+	case vm.TypeGenerator:
+		// For generators, return their custom prototype or GeneratorPrototype
+		genObj := obj.AsGenerator()
+		if genObj != nil && genObj.Prototype != nil {
+			return vm.NewValueFromPlainObject(genObj.Prototype), nil
+		}
+		// Return the default GeneratorPrototype
+		return vm.Null, nil // TODO: Return proper GeneratorPrototype
+	case vm.TypeAsyncGenerator:
+		// For async generators, return their custom prototype or AsyncGeneratorPrototype
+		asyncGenObj := obj.AsAsyncGenerator()
+		if asyncGenObj != nil && asyncGenObj.Prototype != nil {
+			return vm.NewValueFromPlainObject(asyncGenObj.Prototype), nil
+		}
+		// Return the default AsyncGeneratorPrototype
+		return vm.Null, nil // TODO: Return proper AsyncGeneratorPrototype
 	default:
 		// For primitive values, return null
 		return vm.Null, nil

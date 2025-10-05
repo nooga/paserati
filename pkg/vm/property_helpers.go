@@ -25,7 +25,7 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 
 	// Special handling for "prototype" property (not available on bound functions)
 	if fn != nil && propName == "prototype" {
-		return fn.getOrCreatePrototype(), true
+		return fn.getOrCreatePrototypeWithVM(vm), true
 	}
 
 	// Other function properties (if any) - not available on bound functions
@@ -227,11 +227,19 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			prototype = vm.SymbolPrototype.AsPlainObject()
 		}
 	case TypeGenerator:
-		if vm.GeneratorPrototype.Type() == TypeObject {
+		// Check if generator has a custom prototype, otherwise use default
+		genObj := objVal.AsGenerator()
+		if genObj.Prototype != nil {
+			prototype = genObj.Prototype
+		} else if vm.GeneratorPrototype.Type() == TypeObject {
 			prototype = vm.GeneratorPrototype.AsPlainObject()
 		}
 	case TypeAsyncGenerator:
-		if vm.AsyncGeneratorPrototype.Type() == TypeObject {
+		// Check if async generator has a custom prototype, otherwise use default
+		asyncGenObj := objVal.AsAsyncGenerator()
+		if asyncGenObj.Prototype != nil {
+			prototype = asyncGenObj.Prototype
+		} else if vm.AsyncGeneratorPrototype.Type() == TypeObject {
 			prototype = vm.AsyncGeneratorPrototype.AsPlainObject()
 		}
 	case TypePromise:

@@ -194,6 +194,7 @@ type GeneratorObject struct {
 	ReturnValue  Value           // Final return value (when completed)
 	Done         bool            // True when generator is exhausted
 	Args         []Value         // Arguments passed when the generator was created
+	Prototype    *PlainObject    // Custom prototype (if set via function.prototype)
 }
 
 type AsyncGeneratorObject struct {
@@ -205,6 +206,7 @@ type AsyncGeneratorObject struct {
 	ReturnValue  Value           // Final return value (when completed)
 	Done         bool            // True when generator is exhausted
 	Args         []Value         // Arguments passed when the generator was created
+	Prototype    *PlainObject    // Custom prototype (if set via function.prototype)
 }
 
 type MapObject struct {

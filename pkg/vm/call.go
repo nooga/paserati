@@ -60,6 +60,26 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			genVal := NewAsyncGenerator(calleeVal)
 			genObj := genVal.AsAsyncGenerator()
 
+			// Set the generator's prototype according to ECMAScript spec:
+			// Try to get the function's .prototype property
+			prototypeVal := Undefined
+			if calleeFunc.Properties != nil {
+				if calleeFunc.Properties.HasOwn("prototype") {
+					prototypeVal, _ = calleeFunc.Properties.GetOwn("prototype")
+				}
+			}
+
+			// If .prototype is an object, use it as the generator's prototype
+			// Otherwise, use the default AsyncGeneratorPrototype
+			if prototypeVal.IsObject() && prototypeVal.Type() == TypeObject {
+				genObj.Prototype = prototypeVal.AsPlainObject()
+			} else {
+				// Use default AsyncGeneratorPrototype
+				if vm.AsyncGeneratorPrototype.Type() == TypeObject {
+					genObj.Prototype = vm.AsyncGeneratorPrototype.AsPlainObject()
+				}
+			}
+
 			// Store the arguments for when the generator starts
 			genObj.Args = make([]Value, len(args))
 			copy(genObj.Args, args)
@@ -73,6 +93,26 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// Create a generator object instead of calling the function
 			genVal := NewGenerator(calleeVal)
 			genObj := genVal.AsGenerator()
+
+			// Set the generator's prototype according to ECMAScript spec:
+			// Try to get the function's .prototype property
+			prototypeVal := Undefined
+			if calleeFunc.Properties != nil {
+				if calleeFunc.Properties.HasOwn("prototype") {
+					prototypeVal, _ = calleeFunc.Properties.GetOwn("prototype")
+				}
+			}
+
+			// If .prototype is an object, use it as the generator's prototype
+			// Otherwise, use the default GeneratorPrototype
+			if prototypeVal.IsObject() && prototypeVal.Type() == TypeObject {
+				genObj.Prototype = prototypeVal.AsPlainObject()
+			} else {
+				// Use default GeneratorPrototype
+				if vm.GeneratorPrototype.Type() == TypeObject {
+					genObj.Prototype = vm.GeneratorPrototype.AsPlainObject()
+				}
+			}
 
 			// Store the arguments for when the generator starts
 			// We'll need to pass these when ExecuteGenerator is called

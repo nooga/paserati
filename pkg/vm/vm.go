@@ -1058,10 +1058,10 @@ startExecution:
 			var constructorPrototype Value = Undefined
 			if constructorVal.Type() == TypeFunction {
 				fn := AsFunction(constructorVal)
-				constructorPrototype = fn.getOrCreatePrototype()
+				constructorPrototype = fn.getOrCreatePrototypeWithVM(vm)
 			} else if constructorVal.Type() == TypeClosure {
 				closure := AsClosure(constructorVal)
-				constructorPrototype = closure.Fn.getOrCreatePrototype()
+				constructorPrototype = closure.Fn.getOrCreatePrototypeWithVM(vm)
 			} else if constructorVal.Type() == TypeNativeFunctionWithProps {
 				// Native functions (like Object, Array, etc.) have .prototype property
 				nativeFn := constructorVal.AsNativeFunctionWithProps()
@@ -3307,13 +3307,13 @@ startExecution:
 				if newTargetValue.Type() == TypeClosure {
 					newTargetClosure := AsClosure(newTargetValue)
 					newTargetFunc := newTargetClosure.Fn
-					instancePrototype = newTargetFunc.getOrCreatePrototype()
+					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
 				} else if newTargetValue.Type() == TypeFunction {
 					newTargetFunc := AsFunction(newTargetValue)
-					instancePrototype = newTargetFunc.getOrCreatePrototype()
+					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
 				} else {
 					// Fallback: use the constructor's prototype
-					instancePrototype = constructorFunc.getOrCreatePrototype()
+					instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
@@ -3448,13 +3448,13 @@ startExecution:
 				if newTargetValue.Type() == TypeClosure {
 					newTargetClosure := AsClosure(newTargetValue)
 					newTargetFunc := newTargetClosure.Fn
-					instancePrototype = newTargetFunc.getOrCreatePrototype()
+					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
 				} else if newTargetValue.Type() == TypeFunction {
 					newTargetFunc := AsFunction(newTargetValue)
-					instancePrototype = newTargetFunc.getOrCreatePrototype()
+					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
 				} else {
 					// Fallback: use the constructor's prototype
-					instancePrototype = constructorFunc.getOrCreatePrototype()
+					instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called

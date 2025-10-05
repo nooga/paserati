@@ -118,6 +118,10 @@ func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name stri
 
 // getOrCreatePrototype lazily creates and returns the function's prototype property
 func (fn *FunctionObject) getOrCreatePrototype() Value {
+	return fn.getOrCreatePrototypeWithVM(nil)
+}
+
+func (fn *FunctionObject) getOrCreatePrototypeWithVM(vm *VM) Value {
 	// Ensure Properties object exists
 	if fn.Properties == nil {
 		fn.Properties = NewObject(Undefined).AsPlainObject()
@@ -128,8 +132,22 @@ func (fn *FunctionObject) getOrCreatePrototype() Value {
 		return proto
 	}
 
-	// Create prototype lazily
-	prototypeObj := NewObject(DefaultObjectPrototype)
+	// Determine the correct prototype parent based on function type
+	var prototypeParent Value = DefaultObjectPrototype
+
+	// For generator and async generator functions, use their specific prototypes
+	if vm != nil {
+		if fn.IsAsync && fn.IsGenerator {
+			// Async generator function's .prototype should inherit from AsyncGeneratorPrototype
+			prototypeParent = vm.AsyncGeneratorPrototype
+		} else if fn.IsGenerator {
+			// Generator function's .prototype should inherit from GeneratorPrototype
+			prototypeParent = vm.GeneratorPrototype
+		}
+	}
+
+	// Create prototype lazily with the appropriate parent
+	prototypeObj := NewObject(prototypeParent)
 	fn.Properties.SetOwn("prototype", prototypeObj)
 
 	// Set constructor property on prototype (circular reference)

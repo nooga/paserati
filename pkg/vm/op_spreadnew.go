@@ -48,7 +48,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		}
 
 		// Get prototype
-		instancePrototype := constructorFunc.getOrCreatePrototype()
+		instancePrototype := constructorFunc.getOrCreatePrototypeWithVM(vm)
 
 		// Create instance (or leave undefined for derived constructors)
 		var newInstance Value
@@ -110,7 +110,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		}
 
 		// Get prototype
-		instancePrototype := constructorFunc.getOrCreatePrototype()
+		instancePrototype := constructorFunc.getOrCreatePrototypeWithVM(vm)
 
 		// Create instance (or leave undefined for derived constructors)
 		var newInstance Value
