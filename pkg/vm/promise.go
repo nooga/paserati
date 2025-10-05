@@ -298,3 +298,24 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 
 	return vm.NewPromiseFromExecutor(executor)
 }
+
+// IterableToArray converts an iterable value to an array
+// For now, supports arrays directly - can be extended for other iterables
+func (vm *VM) IterableToArray(value Value) (Value, error) {
+	// If it's already an array, return it
+	if value.Type() == TypeArray {
+		return value, nil
+	}
+
+	// For now, we only support arrays
+	// Future: add support for iterables via Symbol.iterator
+	return Undefined, fmt.Errorf("value is not iterable")
+}
+
+// NewArrayFromSlice creates a new array from a slice of values
+func (vm *VM) NewArrayFromSlice(elements []Value) Value {
+	arr := NewArray()
+	arrayObj := arr.AsArray()
+	arrayObj.SetElements(elements)
+	return arr
+}

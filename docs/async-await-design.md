@@ -871,7 +871,20 @@ console.log('End');  // Output: "End" then "Then: 42"
 - ✅ OpAwait VM execution with full suspension/resumption
 - ✅ Promise settlement handlers trigger async resumption
 - ✅ Multiple awaits in sequence working
-- ✅ Smoke tests passing (async_await_basic, async_await_multiple, async_await_pending)
+- ✅ Try/catch exception handling in async functions (**NEW**)
+- ✅ Type inference: async functions properly typed as `() => Promise<T>` (**NEW**)
+- ✅ Smoke tests passing (async_await_basic, async_await_multiple, async_await_pending, async_try_catch)
+
+**Recent Fixes**:
+1. **Type Inference Fix** (pkg/checker/checker.go, pkg/checker/function.go):
+   - Added `IsAsync` field to hoisting context
+   - Updated `createPromiseType()` to use `types.PromiseGeneric` instead of circular ObjectType
+   - Promise wrapping now happens in Pass 3 alongside generators
+
+2. **Try/Catch Fix** (pkg/vm/exceptions.go):
+   - Fixed `unwindException()` to check for exception handlers BEFORE checking `isDirectCall`
+   - Async functions and generators can now properly catch exceptions in try/catch blocks
+   - Also fixed try/catch in generators as a side effect
 
 **Verified Working**:
 ```typescript
@@ -901,27 +914,46 @@ testPending().then(console.log); // Will print 142 after resolve(42)
 resolve(42);
 ```
 
-### Phase 3: Await Expression (Week 4-5)
+### Phase 3: Advanced Await Expressions ✅ COMPLETED
 
 **Goals**: Full await expression support with error handling
 
-- [ ] Parse `await` expressions in async contexts
-- [ ] Implement `AwaitExpression` compilation
-- [ ] Handle promise rejection in await
-- [ ] Try/catch integration with async functions
-- [ ] Multiple awaits in sequence and parallel
-- [ ] Test: Error handling, nested awaits
+- [x] Parse `await` expressions in async contexts
+- [x] Implement `AwaitExpression` compilation
+- [x] Handle promise rejection in await
+- [x] Try/catch integration with async functions
+- [x] Multiple awaits in sequence
+- [x] Parallel await (Promise.all/race/allSettled)
+- [x] Test: Error handling, nested awaits
 
-**Deliverables**:
+**Current Status**: ✅ **FULLY WORKING**
+- ✅ Basic await expressions working
+- ✅ Sequential awaits working
+- ✅ Try/catch error handling working
+- ✅ Parallel patterns working (Promise.all/race/allSettled)
+
+**Verified Working**:
 ```typescript
+// Error handling
 async function fetchData() {
     try {
-        const x = await fetch(url1);
-        const y = await fetch(url2);
+        const x = await Promise.resolve("data1");
+        const y = await Promise.resolve("data2");
         return [x, y];
     } catch (e) {
         console.error(e);
+        return null;
     }
+}
+
+// Parallel patterns
+async function parallel() {
+    const results = await Promise.all([
+        Promise.resolve(1),
+        Promise.resolve(2),
+        Promise.resolve(3)
+    ]);
+    console.log(results); // [1, 2, 3]
 }
 ```
 
@@ -970,17 +1002,71 @@ for await (const x of asyncRange(5)) {
 }
 ```
 
-### Phase 6: Optimization & Polish (Week 9-10)
+### Phase 6: Optimization & Polish ⏳ IN PROGRESS
 
 **Goals**: Performance and ECMAScript compliance
 
 - [ ] Optimize promise creation (object pooling)
 - [ ] Microtask batching
 - [ ] Stack trace preservation across awaits
-- [ ] `Promise.all`, `Promise.race`, `Promise.allSettled`
+- [x] `Promise.all`, `Promise.race`, `Promise.allSettled` ✅ **COMPLETED**
 - [ ] Full ECMAScript Test262 compliance for Promises
 - [ ] Benchmark async overhead
 - [ ] Documentation and examples
+
+**Recent Completions**:
+
+**Promise Static Methods** (pkg/builtins/promise_init.go):
+- ✅ `Promise.all(iterable)`: Waits for all promises to resolve, rejects on first rejection
+- ✅ `Promise.race(iterable)`: Settles with first settled promise (fulfill or reject)
+- ✅ `Promise.allSettled(iterable)`: Waits for all promises to settle, returns array of result objects
+
+**Helper Methods** (pkg/vm/promise.go):
+- ✅ `IterableToArray()`: Converts iterables to arrays (currently supports arrays)
+- ✅ `NewArrayFromSlice()`: Creates arrays from Go slices
+
+**Type Definitions** (pkg/builtins/promise_init.go):
+- ✅ Added type signatures for all three static methods
+
+**Smoke Tests** (tests/scripts/):
+- ✅ `promise_all.ts`: Basic Promise.all with multiple promises
+- ✅ `promise_all_mixed.ts`: Promise.all with mixed promises and values
+- ✅ `promise_all_reject.ts`: Promise.all rejection behavior
+- ✅ `promise_all_empty.ts`: Promise.all with empty array
+- ✅ `promise_race.ts`: Basic Promise.race
+- ✅ `promise_race_reject.ts`: Promise.race rejection behavior
+- ✅ `promise_allsettled.ts`: Promise.allSettled with mixed results
+
+**Verified Working**:
+```typescript
+// Promise.all
+const results = await Promise.all([
+    Promise.resolve(1),
+    Promise.resolve(2),
+    Promise.resolve(3)
+]);
+console.log(results); // [1, 2, 3]
+
+// Promise.race
+const first = await Promise.race([
+    Promise.resolve('first'),
+    Promise.resolve('second')
+]);
+console.log(first); // 'first'
+
+// Promise.allSettled
+const settled = await Promise.allSettled([
+    Promise.resolve(1),
+    Promise.reject('error'),
+    Promise.resolve(3)
+]);
+console.log(settled);
+// [
+//   {status: "fulfilled", value: 1},
+//   {status: "rejected", reason: "error"},
+//   {status: "fulfilled", value: 3}
+// ]
+```
 
 ---
 

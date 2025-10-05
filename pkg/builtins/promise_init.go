@@ -42,6 +42,18 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("reject", types.NewSimpleFunction(
 			[]types.Type{types.Any},
 			types.Any,
+		)).
+		WithProperty("all", types.NewSimpleFunction(
+			[]types.Type{types.Any}, // iterable
+			types.Any,               // Promise<any[]>
+		)).
+		WithProperty("race", types.NewSimpleFunction(
+			[]types.Type{types.Any}, // iterable
+			types.Any,               // Promise<any>
+		)).
+		WithProperty("allSettled", types.NewSimpleFunction(
+			[]types.Type{types.Any}, // iterable
+			types.Any,               // Promise<PromiseSettledResult[]>
 		))
 
 	// Add call signature for Promise constructor
@@ -160,6 +172,271 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		return vmInstance.NewRejectedPromise(reason), nil
+	}))
+
+	// Promise.all(iterable)
+	props.SetOwn("all", vm.NewNativeFunction(1, false, "all", func(args []vm.Value) (vm.Value, error) {
+		iterable := vm.Undefined
+		if len(args) > 0 {
+			iterable = args[0]
+		}
+
+		// Convert iterable to array
+		arr, err := vmInstance.IterableToArray(iterable)
+		if err != nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.all requires an iterable")
+		}
+
+		arrayObj := arr.AsArray()
+		if arrayObj == nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.all requires an iterable")
+		}
+
+		length := arrayObj.Length()
+		if length == 0 {
+			// Empty array resolves immediately to empty array
+			return vmInstance.NewResolvedPromise(arr), nil
+		}
+
+		// Create a new promise that resolves when all promises resolve
+		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
+			resolve := execArgs[0]
+			reject := execArgs[1]
+
+			// Track results and completion count
+			results := make([]vm.Value, length)
+			remaining := length
+
+			// Attach handlers to each promise
+			for i := 0; i < length; i++ {
+				idx := i                        // Capture index for closure
+				promiseOrValue := arrayObj.Get(i)
+
+				// Convert non-promises to resolved promises
+				var promise vm.Value
+				if promiseOrValue.Type() == vm.TypePromise {
+					promise = promiseOrValue
+				} else {
+					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+				}
+
+				// Attach fulfillment handler
+				onFulfilled := vm.NewNativeFunction(1, false, "onFulfilled", func(valueArgs []vm.Value) (vm.Value, error) {
+					value := vm.Undefined
+					if len(valueArgs) > 0 {
+						value = valueArgs[0]
+					}
+
+					results[idx] = value
+					remaining--
+
+					if remaining == 0 {
+						// All promises resolved - create result array
+						resultArray := vmInstance.NewArrayFromSlice(results)
+						vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
+					}
+
+					return vm.Undefined, nil
+				})
+
+				// Attach rejection handler
+				onRejected := vm.NewNativeFunction(1, false, "onRejected", func(reasonArgs []vm.Value) (vm.Value, error) {
+					reason := vm.Undefined
+					if len(reasonArgs) > 0 {
+						reason = reasonArgs[0]
+					}
+
+					// Reject the entire Promise.all
+					vmInstance.Call(reject, vm.Undefined, []vm.Value{reason})
+					return vm.Undefined, nil
+				})
+
+				// Attach handlers
+				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+			}
+
+			return vm.Undefined, nil
+		})
+
+		return vmInstance.NewPromiseFromExecutor(executor)
+	}))
+
+	// Promise.race(iterable)
+	props.SetOwn("race", vm.NewNativeFunction(1, false, "race", func(args []vm.Value) (vm.Value, error) {
+		iterable := vm.Undefined
+		if len(args) > 0 {
+			iterable = args[0]
+		}
+
+		// Convert iterable to array
+		arr, err := vmInstance.IterableToArray(iterable)
+		if err != nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.race requires an iterable")
+		}
+
+		arrayObj := arr.AsArray()
+		if arrayObj == nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.race requires an iterable")
+		}
+
+		length := arrayObj.Length()
+
+		// Create a new promise that settles when the first promise settles
+		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
+			resolve := execArgs[0]
+			reject := execArgs[1]
+
+			if length == 0 {
+				// Empty array - promise never settles (per ECMAScript spec)
+				return vm.Undefined, nil
+			}
+
+			// Attach handlers to each promise
+			for i := 0; i < length; i++ {
+				promiseOrValue := arrayObj.Get(i)
+				// Convert non-promises to resolved promises
+				var promise vm.Value
+				if promiseOrValue.Type() == vm.TypePromise {
+					promise = promiseOrValue
+				} else {
+					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+				}
+
+				// Attach fulfillment handler
+				onFulfilled := vm.NewNativeFunction(1, false, "onFulfilled", func(valueArgs []vm.Value) (vm.Value, error) {
+					value := vm.Undefined
+					if len(valueArgs) > 0 {
+						value = valueArgs[0]
+					}
+
+					// Resolve with the first settled value
+					vmInstance.Call(resolve, vm.Undefined, []vm.Value{value})
+					return vm.Undefined, nil
+				})
+
+				// Attach rejection handler
+				onRejected := vm.NewNativeFunction(1, false, "onRejected", func(reasonArgs []vm.Value) (vm.Value, error) {
+					reason := vm.Undefined
+					if len(reasonArgs) > 0 {
+						reason = reasonArgs[0]
+					}
+
+					// Reject with the first rejection reason
+					vmInstance.Call(reject, vm.Undefined, []vm.Value{reason})
+					return vm.Undefined, nil
+				})
+
+				// Attach handlers
+				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+			}
+
+			return vm.Undefined, nil
+		})
+
+		return vmInstance.NewPromiseFromExecutor(executor)
+	}))
+
+	// Promise.allSettled(iterable)
+	props.SetOwn("allSettled", vm.NewNativeFunction(1, false, "allSettled", func(args []vm.Value) (vm.Value, error) {
+		iterable := vm.Undefined
+		if len(args) > 0 {
+			iterable = args[0]
+		}
+
+		// Convert iterable to array
+		arr, err := vmInstance.IterableToArray(iterable)
+		if err != nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.allSettled requires an iterable")
+		}
+
+		arrayObj := arr.AsArray()
+		if arrayObj == nil {
+			return vm.Undefined, fmt.Errorf("TypeError: Promise.allSettled requires an iterable")
+		}
+
+		length := arrayObj.Length()
+		if length == 0 {
+			// Empty array resolves immediately to empty array
+			return vmInstance.NewResolvedPromise(arr), nil
+		}
+
+		// Create a new promise that resolves when all promises settle
+		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
+			resolve := execArgs[0]
+
+			// Track results and completion count
+			results := make([]vm.Value, length)
+			remaining := length
+
+			// Attach handlers to each promise
+			for i := 0; i < length; i++ {
+				idx := i                        // Capture index for closure
+				promiseOrValue := arrayObj.Get(i)
+
+				// Convert non-promises to resolved promises
+				var promise vm.Value
+				if promiseOrValue.Type() == vm.TypePromise {
+					promise = promiseOrValue
+				} else {
+					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+				}
+
+				// Attach fulfillment handler
+				onFulfilled := vm.NewNativeFunction(1, false, "onFulfilled", func(valueArgs []vm.Value) (vm.Value, error) {
+					value := vm.Undefined
+					if len(valueArgs) > 0 {
+						value = valueArgs[0]
+					}
+
+					// Create { status: "fulfilled", value: ... } object
+					resultObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					resultObj.SetOwn("status", vm.NewString("fulfilled"))
+					resultObj.SetOwn("value", value)
+
+					results[idx] = vm.NewValueFromPlainObject(resultObj)
+					remaining--
+
+					if remaining == 0 {
+						// All promises settled - create result array
+						resultArray := vmInstance.NewArrayFromSlice(results)
+						vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
+					}
+
+					return vm.Undefined, nil
+				})
+
+				// Attach rejection handler
+				onRejected := vm.NewNativeFunction(1, false, "onRejected", func(reasonArgs []vm.Value) (vm.Value, error) {
+					reason := vm.Undefined
+					if len(reasonArgs) > 0 {
+						reason = reasonArgs[0]
+					}
+
+					// Create { status: "rejected", reason: ... } object
+					resultObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					resultObj.SetOwn("status", vm.NewString("rejected"))
+					resultObj.SetOwn("reason", reason)
+
+					results[idx] = vm.NewValueFromPlainObject(resultObj)
+					remaining--
+
+					if remaining == 0 {
+						// All promises settled - create result array
+						resultArray := vmInstance.NewArrayFromSlice(results)
+						vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
+					}
+
+					return vm.Undefined, nil
+				})
+
+				// Attach handlers
+				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+			}
+
+			return vm.Undefined, nil
+		})
+
+		return vmInstance.NewPromiseFromExecutor(executor)
 	}))
 
 	// Set constructor property on prototype
