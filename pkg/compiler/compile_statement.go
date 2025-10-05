@@ -9,12 +9,19 @@ import (
 )
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register) (Register, errors.PaseratiError) {
-	// debug disabled
-	var valueReg Register = nilRegister
-	var err errors.PaseratiError
-	isValueFunc := false // Flag to track if value is a function literal
+	// Process all variable declarations in the statement
+	for _, declarator := range node.Declarations {
+		// Set current declarator in legacy fields for backward compatibility
+		node.Name = declarator.Name
+		node.Value = declarator.Value
+		node.ComputedType = declarator.ComputedType
 
-	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
+		// debug disabled
+		var valueReg Register = nilRegister
+		var err errors.PaseratiError
+		isValueFunc := false // Flag to track if value is a function literal
+
+		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
 		isValueFunc = true
 		// --- Handle let f = function g() {} or let f = function() {} ---
 		// 1. Define the *variable name (f)* temporarily for potential recursion
@@ -113,6 +120,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			c.regAlloc.Pin(symbolRef.Register)
 		}
 	}
+	} // end for declarator
 
 	return BadRegister, nil
 }
@@ -231,15 +239,22 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 }
 
 func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Register) (Register, errors.PaseratiError) {
-	if node.Value == nil {
-		// Parser should prevent this, but defensive check
-		return BadRegister, NewCompileError(node.Name, "const declarations require an initializer")
-	}
-	var valueReg Register = nilRegister
-	var err errors.PaseratiError
-	isValueFunc := false // Flag
+	// Process all constant declarations in the statement
+	for _, declarator := range node.Declarations {
+		// Set current declarator in legacy fields for backward compatibility
+		node.Name = declarator.Name
+		node.Value = declarator.Value
+		node.ComputedType = declarator.ComputedType
 
-	if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
+		if node.Value == nil {
+			// Parser should prevent this, but defensive check
+			return BadRegister, NewCompileError(node.Name, "const declarations require an initializer")
+		}
+		var valueReg Register = nilRegister
+		var err errors.PaseratiError
+		isValueFunc := false // Flag
+
+		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
 		isValueFunc = true
 		// --- Handle const f = function g() {} or const f = function() {} ---
 		// 1. Define the *const name (f)* temporarily for recursion.
@@ -310,6 +325,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			c.regAlloc.Pin(symbolRef.Register)
 		}
 	}
+	} // end for declarator
 	return BadRegister, nil
 }
 

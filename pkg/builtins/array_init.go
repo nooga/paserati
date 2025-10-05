@@ -785,6 +785,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Native symbol key
 	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, nil, nil, nil)
 
+	// Add Symbol.asyncIterator implementation for arrays (for await...of support)
+	// This wraps the sync iterator in an async iterator (returns promises)
+	asyncIterFn := vm.NewNativeFunction(0, false, "[Symbol.asyncIterator]", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis().AsArray()
+		if thisArray == nil {
+			return vm.Undefined, nil
+		}
+
+		// Create an async array iterator object (wraps sync iterator)
+		return createAsyncArrayIterator(vmInstance, thisArray), nil
+	})
+	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolAsyncIterator), asyncIterFn, nil, nil, nil)
+
 	arrayCtor := ctorWithProps
 
 	// Set constructor property on Array.prototype to point to Array constructor
@@ -828,6 +841,40 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 		}
 
 		return vm.NewValueFromPlainObject(result), nil
+	}))
+
+	return vm.NewValueFromPlainObject(iterator)
+}
+
+// createAsyncArrayIterator creates an async iterator object for array iteration
+// This wraps array iteration to return promises (for await...of support)
+func createAsyncArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
+	// Create iterator object inheriting from Object.prototype
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Iterator state: current index
+	currentIndex := 0
+
+	// Add next() method to iterator - returns Promise<{value, done}>
+	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		// Create iterator result object {value, done}
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+		if currentIndex >= array.Length() {
+			// Iterator is exhausted
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+		} else {
+			// Return current element and advance
+			val := array.Get(currentIndex)
+			result.SetOwn("value", val)
+			result.SetOwn("done", vm.BooleanValue(false))
+			currentIndex++
+		}
+
+		// Wrap result in a resolved promise (async iterator protocol)
+		resultVal := vm.NewValueFromPlainObject(result)
+		return vmInstance.NewResolvedPromise(resultVal), nil
 	}))
 
 	return vm.NewValueFromPlainObject(iterator)

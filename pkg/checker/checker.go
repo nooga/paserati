@@ -555,78 +555,79 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			debugPrintf("// [Checker Pass 2] Skipping ExpressionStatement (not function signature)\n")
 
 		case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement:
-			var varName *parser.Identifier
-			var typeAnnotation parser.Expression
-			var initializer parser.Expression
+			// Process all declarations in the statement
+			var declarations []*parser.VarDeclarator
 			isConst := false
+			stmtType := ""
 
-			// Extract common fields
 			switch specificNode := node.(type) {
 			case *parser.LetStatement:
-				varName = specificNode.Name
-				typeAnnotation = specificNode.TypeAnnotation
-				initializer = specificNode.Value
-				debugPrintf("// [Checker Pass 2] Processing Let: %s\n", varName.Value)
+				declarations = specificNode.Declarations
+				stmtType = "Let"
 			case *parser.ConstStatement:
-				varName = specificNode.Name
-				typeAnnotation = specificNode.TypeAnnotation
-				initializer = specificNode.Value
+				declarations = specificNode.Declarations
 				isConst = true
-				debugPrintf("// [Checker Pass 2] Processing Const: %s\n", varName.Value)
+				stmtType = "Const"
 			case *parser.VarStatement:
-				varName = specificNode.Name
-				typeAnnotation = specificNode.TypeAnnotation
-				initializer = specificNode.Value
-				debugPrintf("// [Checker Pass 2] Processing Var: %s\n", varName.Value)
+				declarations = specificNode.Declarations
+				stmtType = "Var"
 			}
 
-			var declaredType types.Type
-			if typeAnnotation != nil {
-				declaredType = c.resolveTypeAnnotation(typeAnnotation) // Use globalEnv implicitly
-			}
+			for _, declarator := range declarations {
+				varName := declarator.Name
+				typeAnnotation := declarator.TypeAnnotation
+				initializer := declarator.Value
 
-			var preliminaryType types.Type = declaredType // Start with annotation type
+				debugPrintf("// [Checker Pass 2] Processing %s: %s\n", stmtType, varName.Value)
 
-			// Check initializer specifically for FunctionLiteral
-			if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok {
-				debugPrintf("// [Checker Pass 2] Variable '%s' initialized with FunctionLiteral\n", varName.Value)
-				initialFuncSignature := c.resolveFunctionLiteralSignature(funcLitInitializer, globalEnv)
-				if initialFuncSignature == nil { // Handle resolution error
-					initialFuncSignature = &types.Signature{ // Default to Any signature on error
-						ParameterTypes: make([]types.Type, len(funcLitInitializer.Parameters)),
-						ReturnType:     types.Any,
-					}
-					for i := range initialFuncSignature.ParameterTypes {
-						initialFuncSignature.ParameterTypes[i] = types.Any
-					}
+				var declaredType types.Type
+				if typeAnnotation != nil {
+					declaredType = c.resolveTypeAnnotation(typeAnnotation) // Use globalEnv implicitly
 				}
-				// Convert signature to ObjectType and use function signature type if no annotation, or check compatibility if annotation exists
-				initialFuncObjectType := types.NewFunctionType(initialFuncSignature)
+
+				var preliminaryType types.Type = declaredType // Start with annotation type
+
+				// Check initializer specifically for FunctionLiteral
+				if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok {
+					debugPrintf("// [Checker Pass 2] Variable '%s' initialized with FunctionLiteral\n", varName.Value)
+					initialFuncSignature := c.resolveFunctionLiteralSignature(funcLitInitializer, globalEnv)
+					if initialFuncSignature == nil { // Handle resolution error
+						initialFuncSignature = &types.Signature{ // Default to Any signature on error
+							ParameterTypes: make([]types.Type, len(funcLitInitializer.Parameters)),
+							ReturnType:     types.Any,
+						}
+						for i := range initialFuncSignature.ParameterTypes {
+							initialFuncSignature.ParameterTypes[i] = types.Any
+						}
+					}
+					// Convert signature to ObjectType and use function signature type if no annotation, or check compatibility if annotation exists
+					initialFuncObjectType := types.NewFunctionType(initialFuncSignature)
+					if preliminaryType == nil {
+						preliminaryType = initialFuncObjectType
+					} else {
+						// TODO: Check if initialFuncObjectType is assignable to declaredType?
+						// For now, declaredType takes precedence if both exist.
+					}
+					funcLitInitializer.SetComputedType(initialFuncObjectType) // Set initial type on the initializer node
+					functionsToVisitBody = append(functionsToVisitBody, funcLitInitializer)
+					nodesProcessedPass2[funcLitInitializer] = true // Mark initializer node if it's a func lit
+					debugPrintf("// [Checker Pass 2] Added initializer func for '%s' to visit list\n", varName.Value)
+				}
+
+				// Fallback type if still nil
 				if preliminaryType == nil {
-					preliminaryType = initialFuncObjectType
-				} else {
-					// TODO: Check if initialFuncObjectType is assignable to declaredType?
-					// For now, declaredType takes precedence if both exist.
+					preliminaryType = types.Any // Or Undefined if no initializer? Let's use Any for now.
 				}
-				funcLitInitializer.SetComputedType(initialFuncObjectType) // Set initial type on the initializer node
-				functionsToVisitBody = append(functionsToVisitBody, funcLitInitializer)
-				nodesProcessedPass2[funcLitInitializer] = true // Mark initializer node if it's a func lit
-				debugPrintf("// [Checker Pass 2] Added initializer func for '%s' to visit list\n", varName.Value)
-			}
 
-			// Fallback type if still nil
-			if preliminaryType == nil {
-				preliminaryType = types.Any // Or Undefined if no initializer? Let's use Any for now.
+				// Define variable in the environment
+				if !globalEnv.Define(varName.Value, preliminaryType, isConst) {
+					c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
+				} else {
+					debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
+				}
+				// Set type on the Name node itself
+				varName.SetComputedType(preliminaryType)
 			}
-
-			// Define variable in the environment
-			if !globalEnv.Define(varName.Value, preliminaryType, isConst) {
-				c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
-			} else {
-				debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
-			}
-			// Set type on the Name node itself
-			varName.SetComputedType(preliminaryType)
 			nodesProcessedPass2[stmt] = true // Mark the Let/Const/Var statement itself
 
 		default:
@@ -1239,265 +1240,251 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 	case *parser.LetStatement:
-		// <<< Capture pointers at entry >>>
-		letNodePtr := node
-		letNamePtr := node.Name
-		letValuePtr := node.Value
-		var nameValueStr string
-		if letNamePtr != nil {
-			nameValueStr = letNamePtr.Value
-		} else {
-			nameValueStr = "<nil_name>"
+		// Process all variable declarations in the statement
+		if node.Declarations == nil || len(node.Declarations) == 0 {
+			// Fallback to legacy fields if Declarations is not set
+			if node.Name != nil {
+				panic(fmt.Sprintf("PANIC: LetStatement has Name but no Declarations: %s", node.Name.Value))
+			}
+			return
 		}
-		debugPrintf("// [Checker LetStmt Entry] NodePtr: %p, NamePtr: %p (%s), ValuePtr: %p\n", letNodePtr, letNamePtr, nameValueStr, letValuePtr)
+		for i, declarator := range node.Declarations {
+			// Set current declarator in legacy fields for backward compatibility
+			node.Name = declarator.Name
+			node.TypeAnnotation = declarator.TypeAnnotation
+			node.Value = declarator.Value
+			node.ComputedType = declarator.ComputedType
 
-		// --- UPDATED: Handle LetStatement ---
-		// 1. Handle Type Annotation (if present)
-		var declaredType types.Type
-		if node.TypeAnnotation != nil {
-			declaredType = c.resolveTypeAnnotation(node.TypeAnnotation)
-		} else {
-			declaredType = nil // Indicates type inference is needed
-		}
+			var nameValueStr string
+			if declarator.Name != nil {
+				nameValueStr = declarator.Name.Value
+			} else {
+				nameValueStr = "<nil_name>"
+			}
+			debugPrintf("// [Checker LetStmt Entry %d] Name: %s\n", i, nameValueStr)
 
-		// --- FIX V2 for recursive functions assigned to variables (Needs review with new logic) ---
-		// Determine a preliminary type for the initializer if it's a function literal.
-		var preliminaryInitializerType types.Type = nil
-		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-			// Extract param types (default Any)
-			prelimParamTypes := []types.Type{}
-			for _, p := range funcLit.Parameters {
-				if p.TypeAnnotation != nil {
-					pt := c.resolveTypeAnnotation(p.TypeAnnotation)
-					if pt != nil {
-						prelimParamTypes = append(prelimParamTypes, pt)
+			// 1. Handle Type Annotation (if present)
+			var declaredType types.Type
+			if declarator.TypeAnnotation != nil {
+				declaredType = c.resolveTypeAnnotation(declarator.TypeAnnotation)
+			} else {
+				declaredType = nil // Indicates type inference is needed
+			}
+
+			// --- FIX V2 for recursive functions assigned to variables ---
+			// Determine a preliminary type for the initializer if it's a function literal.
+			var preliminaryInitializerType types.Type = nil
+			if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
+				// Extract param types (default Any)
+				prelimParamTypes := []types.Type{}
+				for _, p := range funcLit.Parameters {
+					if p.TypeAnnotation != nil {
+						pt := c.resolveTypeAnnotation(p.TypeAnnotation)
+						if pt != nil {
+							prelimParamTypes = append(prelimParamTypes, pt)
+						} else {
+							prelimParamTypes = append(prelimParamTypes, types.Any) // Error resolving, use Any
+						}
 					} else {
-						prelimParamTypes = append(prelimParamTypes, types.Any) // Error resolving, use Any
+						prelimParamTypes = append(prelimParamTypes, types.Any) // No annotation, use Any
+					}
+				}
+				// Extract return type annotation (can be nil)
+				prelimReturnType := c.resolveTypeAnnotation(funcLit.ReturnTypeAnnotation)
+				// Create unified ObjectType for preliminary function type
+				prelimSig := &types.Signature{
+					ParameterTypes: prelimParamTypes,
+					ReturnType:     prelimReturnType,
+				}
+				preliminaryInitializerType = types.NewFunctionType(prelimSig)
+			}
+
+			// Temporarily define the variable name in the current scope before visiting the value.
+			tempType := preliminaryInitializerType
+			if tempType == nil {
+				tempType = declaredType // Use annotation if no prelim func type
+			}
+			if tempType == nil {
+				tempType = types.Any // Fallback to Any
+			}
+			if !c.env.Define(declarator.Name.Value, tempType, false) {
+				// If Define fails here, it's a true redeclaration error.
+				c.addError(declarator.Name, fmt.Sprintf("variable '%s' already declared in this scope", declarator.Name.Value))
+			}
+			debugPrintf("// [Checker LetStmt] Temp Define '%s' as: %s\n", declarator.Name.Value, tempType.String())
+
+			// 2. Handle Initializer (if present)
+			var computedInitializerType types.Type
+			if declarator.Value != nil {
+				// Use contextual typing if we have a declared type
+				if declaredType != nil {
+					c.visitWithContext(declarator.Value, &ContextualType{
+						ExpectedType: declaredType,
+						IsContextual: true,
+					})
+				} else {
+					c.visit(declarator.Value) // Regular visit if no type annotation
+				}
+
+				computedInitializerType = declarator.Value.GetComputedType()
+				debugPrintf("// [Checker LetStmt] '%s': computedInitializerType from declarator.Value (%T): %T (%v)\n", nameValueStr, declarator.Value, computedInitializerType, computedInitializerType)
+			} else {
+				computedInitializerType = nil // No initializer
+			}
+
+			// 3. Determine the final type and check assignment errors
+			var finalVariableType types.Type
+
+			if declaredType != nil {
+				// --- If annotation exists, variable type IS the annotation ---
+				finalVariableType = declaredType
+
+				if computedInitializerType != nil {
+					// Check if initializer is assignable to the declared type for error reporting
+					assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
+
+					// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
+					isEmptyArrayAssignment := false
+					if _, isTargetArray := declaredType.(*types.ArrayType); isTargetArray {
+						if sourceArrayType, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
+							if sourceArrayType.ElementType == types.Unknown {
+								isEmptyArrayAssignment = true
+							}
+						}
+					}
+
+					if !assignable && !isEmptyArrayAssignment {
+						// Check if this is an enum assignment to use appropriate error format
+						if c.isEnumType(finalVariableType) {
+							// For enum assignments, use widened source type and no variable name
+							sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
+							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+						} else {
+							// For regular variable assignments, use literal types and include variable name
+							sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
+							variableName := nameValueStr
+							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
+						}
+					}
+				}
+			} else {
+				// --- No annotation: Infer type ---
+				if computedInitializerType != nil {
+					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
+						finalVariableType = types.GetWidenedType(computedInitializerType)
+						debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+					} else {
+						finalVariableType = computedInitializerType
+						debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					}
 				} else {
-					prelimParamTypes = append(prelimParamTypes, types.Any) // No annotation, use Any
+					finalVariableType = types.Undefined
+					debugPrintf("// [Checker LetStmt] '%s': Inferred final type (no initializer): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 				}
 			}
-			// Extract return type annotation (can be nil)
-			prelimReturnType := c.resolveTypeAnnotation(funcLit.ReturnTypeAnnotation)
-			// Create unified ObjectType for preliminary function type
-			prelimSig := &types.Signature{
-				ParameterTypes: prelimParamTypes,
-				ReturnType:     prelimReturnType,
+
+			// 4. UPDATE variable type in the current environment with the final type
+			currentType, _, _ := c.env.Resolve(declarator.Name.Value)
+			debugPrintf("// [Checker LetStmt] Updating '%s'. Current type: %s, Final type: %s\n", declarator.Name.Value, currentType.String(), finalVariableType.String())
+			if !c.env.Update(declarator.Name.Value, finalVariableType) {
+				debugPrintf("// [Checker LetStmt] WARNING: Update failed unexpectedly for '%s'\n", declarator.Name.Value)
 			}
-			preliminaryInitializerType = types.NewFunctionType(prelimSig)
-		} // TODO: Handle ArrowFunctionLiteral similarly if needed
+			updatedType, _, _ := c.env.Resolve(declarator.Name.Value)
+			debugPrintf("// [Checker LetStmt] Updated '%s'. Type after update: %s\n", declarator.Name.Value, updatedType.String())
 
-		// Temporarily define the variable name in the current scope before visiting the value.
-		// Use preliminary func type if available, then declared type, else Any.
-		tempType := preliminaryInitializerType
-		if tempType == nil {
-			tempType = declaredType // Use annotation if no prelim func type
+			// Set computed type on the Name Identifier node itself and the declarator
+			declarator.Name.SetComputedType(finalVariableType)
+			declarator.ComputedType = finalVariableType
 		}
-		if tempType == nil {
-			tempType = types.Any // Fallback to Any
-		}
-		if !c.env.Define(node.Name.Value, tempType, false) {
-			// If Define fails here, it's a true redeclaration error.
-			c.addError(node.Name, fmt.Sprintf("variable '%s' already declared in this scope", node.Name.Value))
-		}
-		debugPrintf("// [Checker LetStmt] Temp Define '%s' as: %s\n", node.Name.Value, tempType.String()) // DEBUG
-		// --- END FIX V2 ---
 
-		// 2. Handle Initializer (if present)
-		var computedInitializerType types.Type
-		if node.Value != nil { // Use node.Value directly
-			// Use contextual typing if we have a declared type
+	case *parser.ConstStatement:
+		// Process all constant declarations in the statement
+		for i, declarator := range node.Declarations {
+			// Set current declarator in legacy fields for backward compatibility
+			node.Name = declarator.Name
+			node.TypeAnnotation = declarator.TypeAnnotation
+			node.Value = declarator.Value
+			node.ComputedType = declarator.ComputedType
+
+			var nameValueStr string
+			if declarator.Name != nil {
+				nameValueStr = declarator.Name.Value
+			} else {
+				nameValueStr = "<nil_name>"
+			}
+			debugPrintf("// [Checker ConstStmt Entry %d] Name: %s\n", i, nameValueStr)
+
+			// 1. Handle Type Annotation (if present)
+			var declaredType types.Type
+			if declarator.TypeAnnotation != nil {
+				declaredType = c.resolveTypeAnnotation(declarator.TypeAnnotation)
+			} else {
+				declaredType = nil // Indicates type inference is needed
+			}
+
+			// 2. Handle Initializer (Must be present for const)
+			var computedInitializerType types.Type
+			if declarator.Value != nil {
+				// Use contextual typing if we have a declared type
+				if declaredType != nil {
+					c.visitWithContext(declarator.Value, &ContextualType{
+						ExpectedType: declaredType,
+						IsContextual: true,
+					})
+				} else {
+					c.visit(declarator.Value) // Regular visit if no type annotation
+				}
+				computedInitializerType = declarator.Value.GetComputedType()
+			} else {
+				// Constants MUST be initialized
+				c.addError(declarator.Name, fmt.Sprintf("const declaration '%s' must be initialized", declarator.Name.Value))
+				computedInitializerType = types.Any // Assign Any to prevent further cascading errors downstream
+			}
+
+			// 3. Determine the final type and check assignment errors
+			var finalType types.Type
+
 			if declaredType != nil {
-				c.visitWithContext(node.Value, &ContextualType{
-					ExpectedType: declaredType,
-					IsContextual: true,
-				})
-			} else {
-				c.visit(node.Value) // Regular visit if no type annotation
-			}
+				// --- If annotation exists, constant type IS the annotation ---
+				finalType = declaredType
 
-			// <<< IMMEDIATE CHECK AFTER RETURN >>>
-			if node.Name == nil {
-				// Use the name string captured at the START of the Let visit
-				panic(fmt.Sprintf("PANIC CHECKER: node.Name for LetStatement '%s' became nil IMMEDIATELY AFTER visiting the value node! NodePtr: %p", nameValueStr, node))
-			}
-			// <<< END IMMEDIATE CHECK >>>
-
-			// <<< Log pointers AFTER visit using captured letNodePtr >>>
-			currentNamePtr := letNodePtr.Name // Get current Name pointer
-			var currentNameValueStr string
-			if currentNamePtr != nil {
-				currentNameValueStr = currentNamePtr.Value
-			} else {
-				currentNameValueStr = "<nil_name>"
-			}
-			debugPrintf("// [Checker LetStmt Post-Visit] NodePtr: %p, NamePtr: %p (%s), ValuePtr: %p\n", letNodePtr, currentNamePtr, currentNameValueStr, letNodePtr.Value)
-
-			// Double check node.Value didn't become nil
-			if node.Value == nil {
-				// This panic shouldn't trigger if the one above didn't, but keep for safety
-				panic(fmt.Sprintf("PANIC CHECKER: node.Value for LetStatement '%s' became nil AFTER visiting the value node!", currentNameValueStr)) // Use currentNameValueStr
-			}
-
-			computedInitializerType = node.Value.GetComputedType()                                                                                                                        // Should be safe if we passed checks
-			debugPrintf("// [Checker LetStmt] '%s': computedInitializerType from node.Value (%T): %T (%v)\n", nameValueStr, node.Value, computedInitializerType, computedInitializerType) // ADDED DEBUG
-
-			// Use the SAFE nameValueStr (captured at entry) for logging
-			// debugPrintf("// [Checker LetStmt] '%s': Got computedInitializerType: %T\n", nameValueStr, computedInitializerType) // Keep commented
-		} else {
-			computedInitializerType = nil // No initializer
-		}
-
-		// 3. Determine the final type and check assignment errors
-		var finalVariableType types.Type
-
-		if declaredType != nil {
-			// --- If annotation exists, variable type IS the annotation ---
-			finalVariableType = declaredType
-
-			if computedInitializerType != nil {
 				// Check if initializer is assignable to the declared type for error reporting
-				// Use expansion to handle mapped types
 				assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
 
 				// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 				isEmptyArrayAssignment := false
-				if _, isTargetArray := declaredType.(*types.ArrayType); isTargetArray { // Use blank identifier
+				if _, isTargetArray := declaredType.(*types.ArrayType); isTargetArray {
 					if sourceArrayType, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
 						if sourceArrayType.ElementType == types.Unknown {
 							isEmptyArrayAssignment = true
 						}
 					}
 				}
-				// --- END SPECIAL CASE ---
 
-				if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
-					// Check if this is an enum assignment to use appropriate error format
-					if c.isEnumType(finalVariableType) {
-						// For enum assignments, use widened source type and no variable name
-						sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
-						c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
-					} else {
-						// For regular variable assignments, use literal types and include variable name
-						sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
-						variableName := nameValueStr
-						c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
-					}
+				if !assignable && !isEmptyArrayAssignment {
+					c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), declarator.Name.Value, finalType.String()))
 				}
-			} // else: No initializer, declaredType is fine
-		} else {
-			// --- No annotation: Infer type ---
-			if computedInitializerType != nil {
+			} else {
+				// --- No annotation: Infer type ---
+				// computedInitializerType should not be nil here due to const requirement check above
+
+				// Only widen literal types
 				if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
-					finalVariableType = types.GetWidenedType(computedInitializerType)
-					debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType) // Use nameValueStr
+					finalType = types.GetWidenedType(computedInitializerType)
 				} else {
-					finalVariableType = computedInitializerType                                                                                                                                // finalVariableType = () => undefined
-					debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType) // Use nameValueStr
-				}
-			} else {
-				finalVariableType = types.Undefined
-				debugPrintf("// [Checker LetStmt] '%s': Inferred final type (no initializer): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType) // Use nameValueStr
-			}
-		}
-
-		// 4. UPDATE variable type in the current environment with the final type
-		// We use Define again which will overwrite the temporary type.
-		// --- DEBUG: Check types before and after update ---
-		currentType, _, _ := c.env.Resolve(node.Name.Value)
-		debugPrintf("// [Checker LetStmt] Updating '%s'. Current type: %s, Final type: %s\n", node.Name.Value, currentType.String(), finalVariableType.String())
-		// --- END DEBUG ---
-		if !c.env.Update(node.Name.Value, finalVariableType) { // Use finalVariableType
-			debugPrintf("// [Checker LetStmt] WARNING: Update failed unexpectedly for '%s'\n", node.Name.Value)
-			// This might indicate the symbol wasn't found, which shouldn't happen here
-			// If it truly needs to be defined (e.g., recursive case refinement needed?),
-			// we might need more complex logic, but Update should work for simple inference.
-		}
-		// --- DEBUG: Check type after update ---
-		updatedType, _, _ := c.env.Resolve(node.Name.Value)
-		debugPrintf("// [Checker LetStmt] Updated '%s'. Type after update: %s\n", node.Name.Value, updatedType.String())
-		// --- END DEBUG ---
-
-		// Set computed type on the Name Identifier node itself
-		if node.Name == nil {
-			panic(fmt.Sprintf("PANIC CHECKER: node.Name is nil before final SetComputedType for %s", nameValueStr))
-		}
-		node.Name.SetComputedType(finalVariableType)
-
-	case *parser.ConstStatement:
-		// --- UPDATED: Handle ConstStatement ---
-		// 1. Handle Type Annotation (if present)
-		var declaredType types.Type
-		if node.TypeAnnotation != nil {
-			declaredType = c.resolveTypeAnnotation(node.TypeAnnotation)
-		} else {
-			declaredType = nil // Indicates type inference is needed
-		}
-
-		// 2. Handle Initializer (Must be present for const)
-		var computedInitializerType types.Type
-		if node.Value != nil {
-			// Use contextual typing if we have a declared type
-			if declaredType != nil {
-				c.visitWithContext(node.Value, &ContextualType{
-					ExpectedType: declaredType,
-					IsContextual: true,
-				})
-			} else {
-				c.visit(node.Value) // Regular visit if no type annotation
-			}
-			computedInitializerType = node.Value.GetComputedType() // <<< USE NODE METHOD
-		} else {
-			// Constants MUST be initialized
-			c.addError(node.Value, fmt.Sprintf("const declaration '%s' must be initialized", node.Name.Value))
-			computedInitializerType = types.Any // Assign Any to prevent further cascading errors downstream
-		}
-
-		// 3. Determine the final type and check assignment errors
-		var finalType types.Type // Renamed from finalVariableType for clarity
-
-		if declaredType != nil {
-			// --- If annotation exists, constant type IS the annotation ---
-			finalType = declaredType
-
-			// Check if initializer is assignable to the declared type for error reporting
-			// Use expansion to handle mapped types
-			assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
-
-			// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
-			isEmptyArrayAssignment := false
-			if _, isTargetArray := declaredType.(*types.ArrayType); isTargetArray { // Use blank identifier
-				if sourceArrayType, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
-					if sourceArrayType.ElementType == types.Unknown {
-						isEmptyArrayAssignment = true
-					}
+					// Use the computed type directly for non-literals (functions, arrays, etc.)
+					finalType = computedInitializerType
 				}
 			}
-			// --- END SPECIAL CASE ---
 
-			if !assignable && !isEmptyArrayAssignment { // Report error only if not normally assignable AND not the empty array case
-				c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), node.Name.Value, finalType.String()))
+			// 4. Define variable in the current environment
+			if !c.env.Define(declarator.Name.Value, finalType, true) {
+				c.addError(declarator.Name, fmt.Sprintf("constant '%s' already declared in this scope", declarator.Name.Value))
 			}
-		} else {
-			// --- No annotation: Infer type ---
-			// computedInitializerType should not be nil here due to const requirement check above
-
-			// <<< MODIFIED: Only widen literal types >>>
-			if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
-				finalType = types.GetWidenedType(computedInitializerType)
-			} else {
-				// Use the computed type directly for non-literals (functions, arrays, etc.)
-				finalType = computedInitializerType
-			}
+			// Set computed type on the Name Identifier node itself and the declarator
+			declarator.Name.SetComputedType(finalType)
+			declarator.ComputedType = finalType
 		}
-
-		// 4. Define variable in the current environment
-		if !c.env.Define(node.Name.Value, finalType, true) {
-			c.addError(node.Name, fmt.Sprintf("constant '%s' already declared in this scope", node.Name.Value))
-		}
-		// Set computed type on the Name Identifier node itself
-		node.Name.SetComputedType(finalType) // <<< USE NODE METHOD
 
 	case *parser.VarStatement:
 		// Process all variable declarations in the statement

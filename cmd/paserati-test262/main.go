@@ -486,9 +486,30 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 		// Execute the test with harness includes (if any)
 		sourceWithIncludes := string(content)
 		if hdr := extractFrontmatterHeader(sourceWithIncludes); hdr != "" {
+			var builder strings.Builder
+			includeFiles := []string{}
+
+			// Always include assert.js for all tests
+			includeFiles = append(includeFiles, "assert.js")
+
+			// Check for async flag and auto-include required harness
+			if flags := extractFlags(hdr); len(flags) > 0 {
+				for _, flag := range flags {
+					if flag == "async" {
+						includeFiles = append(includeFiles, "doneprintHandle.js")
+						break
+					}
+				}
+			}
+
+			// Add explicitly requested includes
 			if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
-				var builder strings.Builder
-				for _, inc := range includeNames {
+				includeFiles = append(includeFiles, includeNames...)
+			}
+
+			// Load and prepend all includes
+			if len(includeFiles) > 0 {
+				for _, inc := range includeFiles {
 					incPath := filepath.Join(testRoot, "harness", inc)
 					incBytes, err := os.ReadFile(incPath)
 					if err != nil {
@@ -636,6 +657,39 @@ func extractIncludes(header string) []string {
 		name = strings.TrimSuffix(name, "\"")
 		if name != "" {
 			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func extractFlags(header string) []string {
+	// Look for "flags:" and then capture everything inside the next [...] pair
+	idx := strings.Index(header, "flags:")
+	if idx == -1 {
+		return nil
+	}
+	rest := header[idx+len("flags:"):]
+	// find '[' and matching ']'
+	open := strings.Index(rest, "[")
+	if open == -1 {
+		return nil
+	}
+	close := strings.Index(rest[open+1:], "]")
+	if close == -1 {
+		return nil
+	}
+	inside := rest[open+1 : open+1+close]
+	// Split by commas
+	parts := strings.Split(inside, ",")
+	var out []string
+	for _, p := range parts {
+		flag := strings.TrimSpace(p)
+		flag = strings.TrimPrefix(flag, "'")
+		flag = strings.TrimSuffix(flag, "'")
+		flag = strings.TrimPrefix(flag, "\"")
+		flag = strings.TrimSuffix(flag, "\"")
+		if flag != "" {
+			out = append(out, flag)
 		}
 	}
 	return out

@@ -76,7 +76,9 @@ func (p *Program) String() string {
 // LetStatement represents a `let` variable declaration.
 // let <Name> : <TypeAnnotation> = <Value>;
 type LetStatement struct {
-	Token          lexer.Token // The lexer.LET token
+	Token        lexer.Token      // The lexer.LET token
+	Declarations []*VarDeclarator // List of variable declarations
+	// Legacy fields for backward compatibility (first declaration)
 	Name           *Identifier // The variable name
 	TypeAnnotation Expression  // Parsed type node (e.g., *Identifier)
 	Value          Expression  // The expression being assigned
@@ -160,7 +162,9 @@ func (vs *VarStatement) String() string {
 // const <Name> : <TypeAnnotation> = <Value>;
 // Note: Structurally identical to LetStatement for now, but semantically different.
 type ConstStatement struct {
-	Token          lexer.Token // The lexer.CONST token
+	Token        lexer.Token      // The lexer.CONST token
+	Declarations []*VarDeclarator // List of variable declarations
+	// Legacy fields for backward compatibility (first declaration)
 	Name           *Identifier // The variable name
 	TypeAnnotation Expression  // Parsed type node
 	Value          Expression  // The expression being assigned
