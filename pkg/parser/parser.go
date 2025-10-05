@@ -5563,8 +5563,95 @@ func (p *Parser) parseObjectLiteral() Expression {
 				})
 			}
 		} else {
-			// --- NEW: Check for generator methods (*foo() or *"foo"() or *[expr]()) ---
-			if p.curTokenIs(lexer.ASTERISK) {
+			// --- NEW: Check for async methods/generators (async foo() or async *foo()) ---
+			if p.curTokenIs(lexer.ASYNC) {
+				asyncToken := p.curToken
+				p.nextToken() // Consume 'async' to see what's next
+
+				// Check if this is an async generator (async *foo())
+				isAsyncGenerator := p.curTokenIs(lexer.ASTERISK)
+				if isAsyncGenerator {
+					p.nextToken() // Consume '*' to get to the name
+				}
+
+				var key Expression
+				var funcLit *FunctionLiteral
+
+				// Handle different name types
+				if p.curTokenIs(lexer.IDENT) {
+					key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+					funcLit = &FunctionLiteral{
+						Token:       asyncToken,
+						IsAsync:     true,
+						IsGenerator: isAsyncGenerator,
+					}
+				} else if p.curTokenIs(lexer.STRING) {
+					key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+					funcLit = &FunctionLiteral{
+						Token:       asyncToken,
+						IsAsync:     true,
+						IsGenerator: isAsyncGenerator,
+					}
+				} else if p.curTokenIs(lexer.LBRACKET) {
+					// async [Symbol.asyncIterator]() { ... }
+					p.nextToken() // Consume '['
+					keyExpr := p.parseExpression(COMMA)
+					if keyExpr == nil {
+						return nil
+					}
+					if !p.expectPeek(lexer.RBRACKET) {
+						return nil
+					}
+					key = &ComputedPropertyName{Expr: keyExpr}
+					funcLit = &FunctionLiteral{
+						Token:       asyncToken,
+						IsAsync:     true,
+						IsGenerator: isAsyncGenerator,
+					}
+				} else {
+					p.addError(p.curToken, "expected identifier, string literal, or computed property name after 'async' in async method")
+					return nil
+				}
+
+				// Expect '(' for parameters
+				if !p.expectPeek(lexer.LPAREN) {
+					return nil
+				}
+
+				// Parse parameters
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+					return nil
+				}
+
+				// Check for optional return type annotation
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ')'
+					p.nextToken() // Consume ':'
+					funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+					if funcLit.ReturnTypeAnnotation == nil {
+						return nil
+					}
+				}
+
+				// Expect '{' for method body
+				if !p.expectPeek(lexer.LBRACE) {
+					return nil
+				}
+
+				// Parse method body
+				funcLit.Body = p.parseBlockStatement()
+				if funcLit.Body == nil {
+					return nil
+				}
+
+				// Add the async method
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{
+					Key:   key,
+					Value: funcLit,
+				})
+			} else if p.curTokenIs(lexer.ASTERISK) {
+				// --- NEW: Check for generator methods (*foo() or *"foo"() or *[expr]()) ---
 				// This is a generator method
 				asteriskToken := p.curToken
 				p.nextToken() // Consume '*' to get to the name

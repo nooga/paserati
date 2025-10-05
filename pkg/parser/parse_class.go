@@ -192,6 +192,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isProtected := false
 		isAbstract := false
 		isOverride := false
+		isAsync := false
 		
 		// Parse all modifiers until we hit something that's not a modifier
 		for {
@@ -216,6 +217,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride {
 				isOverride = true
 				p.nextToken()
+			} else if p.curTokenIs(lexer.ASYNC) && !isAsync {
+				isAsync = true
+				p.nextToken()
 			} else {
 				break // No more modifiers
 			}
@@ -236,7 +240,18 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		} else if p.curTokenIs(lexer.ASTERISK) {
 			// Parse generator method: *methodName() { ... }
+			// Could be async generator if isAsync is true
 			method := p.parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+			if method != nil {
+				// Mark as async if we saw async keyword
+				if isAsync && method.Value != nil {
+					method.Value.IsAsync = true
+				}
+				methods = append(methods, method)
+			}
+		} else if isAsync {
+			// async method (without asterisk): async methodName() { ... }
+			method := p.parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 			if method != nil {
 				methods = append(methods, method)
 			}
@@ -543,6 +558,28 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		IsProtected: isProtected,
 		IsOverride:  isOverride,
 	}
+}
+
+// parseAsyncMethod parses an async method in a class
+// Reuses parseMethod logic but marks the result as async
+func (p *Parser) parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) *MethodDefinition {
+	result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+	if result == nil {
+		return nil
+	}
+
+	// parseMethod can return either MethodSignature or MethodDefinition
+	if method, ok := result.(*MethodDefinition); ok {
+		// Mark the function literal as async
+		if method.Value != nil {
+			method.Value.IsAsync = true
+		}
+		return method
+	}
+
+	// If it's a signature, we can't make it async (would need to return MethodSignature)
+	// For now, just treat as method definition
+	return nil
 }
 
 // parseProperty parses a property declaration
