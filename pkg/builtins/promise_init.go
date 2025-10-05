@@ -178,12 +178,44 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vmInstance.NewRejectedPromise(reason), nil
 	}))
 
+	// Promise[Symbol.species] - should be a getter that returns 'this'
+	// For now, just set it to Promise itself (simpler, covers most cases)
+	props.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolSpecies), promiseCtor, nil, nil, nil)
+
+	// Helper: Get the species constructor from 'this' or fall back to Promise
+	getSpeciesConstructor := func(thisVal vm.Value) vm.Value {
+		// Try to get this[Symbol.species]
+		if thisVal.IsObject() || thisVal.Type() == vm.TypeNativeFunctionWithProps {
+			var speciesVal vm.Value
+
+			// Try to get Symbol.species property
+			if thisVal.Type() == vm.TypeNativeFunctionWithProps {
+				nfp := thisVal.AsNativeFunctionWithProps()
+				if species, exists := nfp.Properties.GetOwnByKey(vm.NewSymbolKey(SymbolSpecies)); exists {
+					speciesVal = species
+				}
+			}
+
+			// If species is defined and not null/undefined, use it
+			if speciesVal.Type() != vm.TypeUndefined && speciesVal.Type() != vm.TypeNull {
+				return speciesVal
+			}
+		}
+
+		// Fall back to 'this' value (the constructor itself)
+		return thisVal
+	}
+
 	// Promise.all(iterable)
 	props.SetOwn("all", vm.NewNativeFunction(1, false, "all", func(args []vm.Value) (vm.Value, error) {
 		iterable := vm.Undefined
 		if len(args) > 0 {
 			iterable = args[0]
 		}
+
+		// Get the constructor to use (species or 'this')
+		thisVal := vmInstance.GetThis()
+		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -199,6 +231,16 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		length := arrayObj.Length()
 		if length == 0 {
 			// Empty array resolves immediately to empty array
+			// Use the species constructor to create the result promise
+			executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
+				resolve := execArgs[0]
+				vmInstance.Call(resolve, vm.Undefined, []vm.Value{arr})
+				return vm.Undefined, nil
+			})
+
+			if constructor.IsCallable() {
+				return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
+			}
 			return vmInstance.NewResolvedPromise(arr), nil
 		}
 
@@ -262,6 +304,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		})
 
+		// Use the species constructor to create the result promise
+		if constructor.IsCallable() {
+			return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
+		}
 		return vmInstance.NewPromiseFromExecutor(executor)
 	}))
 
@@ -271,6 +317,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 {
 			iterable = args[0]
 		}
+
+		// Get the constructor to use (species or 'this')
+		thisVal := vmInstance.GetThis()
+		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -337,6 +387,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		})
 
+		// Use the species constructor to create the result promise
+		if constructor.IsCallable() {
+			return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
+		}
 		return vmInstance.NewPromiseFromExecutor(executor)
 	}))
 
@@ -346,6 +400,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 {
 			iterable = args[0]
 		}
+
+		// Get the constructor to use (species or 'this')
+		thisVal := vmInstance.GetThis()
+		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -429,6 +487,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		})
 
+		// Use the species constructor to create the result promise
+		if constructor.IsCallable() {
+			return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
+		}
 		return vmInstance.NewPromiseFromExecutor(executor)
 	}))
 
@@ -438,6 +500,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 {
 			iterable = args[0]
 		}
+
+		// Get the constructor to use (species or 'this')
+		thisVal := vmInstance.GetThis()
+		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -532,6 +598,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		})
 
+		// Use the species constructor to create the result promise
+		if constructor.IsCallable() {
+			return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
+		}
 		return vmInstance.NewPromiseFromExecutor(executor)
 	}))
 
