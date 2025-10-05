@@ -67,6 +67,7 @@ const (
 	TypeArray
 	TypeArguments
 	TypeGenerator
+	TypePromise
 	TypeRegExp
 	TypeMap
 	TypeSet
@@ -110,6 +111,8 @@ func (vt ValueType) String() string {
 		return "arguments"
 	case TypeGenerator:
 		return "generator"
+	case TypePromise:
+		return "promise"
 	case TypeRegExp:
 		return "regexp"
 	case TypeMap:
@@ -417,7 +420,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy
 }
 
 func (v Value) IsDictObject() bool {
@@ -556,6 +559,13 @@ func (v Value) AsGenerator() *GeneratorObject {
 		panic("value is not a generator")
 	}
 	return (*GeneratorObject)(v.obj)
+}
+
+func (v Value) AsPromise() *PromiseObject {
+	if v.typ != TypePromise {
+		return nil
+	}
+	return (*PromiseObject)(v.obj)
 }
 
 func (v Value) AsMap() *MapObject {
@@ -712,6 +722,9 @@ func (v Value) ToString() string {
 	case TypeGenerator:
 		// Generator object toString -> [object Generator]
 		return "[object Generator]"
+	case TypePromise:
+		// Promise object toString -> [object Promise]
+		return "[object Promise]"
 	case TypeNull:
 		return "null"
 	case TypeUndefined:

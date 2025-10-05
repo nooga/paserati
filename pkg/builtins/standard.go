@@ -18,6 +18,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &ArrayInitializer{})
 	initializers = append(initializers, &ArgumentsInitializer{})
 	initializers = append(initializers, &GeneratorInitializer{})
+	initializers = append(initializers, &PromiseInitializer{})
 
 	// Iterator protocol types
 	initializers = append(initializers, &IteratorInitializer{})

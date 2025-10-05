@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"os"
 	"paserati/pkg/errors"
+	"paserati/pkg/runtime"
 	"strconv"
 	"unsafe"
 )
@@ -125,6 +126,7 @@ type VM struct {
 	MapPrototype            Value
 	SetPrototype            Value
 	GeneratorPrototype      Value
+	PromisePrototype        Value
 	ErrorPrototype          Value
 	TypeErrorPrototype      Value
 	ReferenceErrorPrototype Value
@@ -184,6 +186,9 @@ type VM struct {
 	moduleContexts    map[string]*ModuleContext // Cached module contexts by path
 	moduleLoader      ModuleLoader              // Reference to module loader for loading modules
 	currentModulePath string                    // Currently executing module path (for module-scoped globals)
+
+	// Async runtime (Phase 6 - Async/Await)
+	asyncRuntime runtime.AsyncRuntime
 
 	// Execution context stack for recursive module execution
 	executionContextStack []ExecutionContext

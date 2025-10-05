@@ -353,6 +353,10 @@ func (p *Paserati) RunString(sourceCode string) (vm.Value, []errors.PaseratiErro
 
 	// --- Execution Step (using persistent VM) ---
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
+
+	// Drain microtasks for async operations (Promises, etc.)
+	p.vmInstance.DrainMicrotasks()
+
 	// Interpret errors are already PaseratiError
 	return finalValue, runtimeErrs
 }
@@ -908,6 +912,9 @@ func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []e
 
 	// --- Execution Step (using persistent VM) ---
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
+
+	// Drain microtasks for async operations (Promises, etc.)
+	p.vmInstance.DrainMicrotasks()
 
 	// Show cache statistics if requested
 	if options.ShowCacheStats {
