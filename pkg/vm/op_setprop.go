@@ -31,7 +31,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set")
 		if ok {
 			// Validate trap is callable
-			if !setTrap.IsFunction() {
+			if !setTrap.IsCallable() {
 				var excVal Value
 				if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
 					if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("'set' on proxy: trap is not a function")}); callErr == nil {
@@ -361,7 +361,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 
 		// Check if handler has a set trap
 		setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set")
-		if ok && setTrap.IsFunction() {
+		if ok && setTrap.IsCallable() {
 			// Call the set trap: handler.set(target, propertyKey, value, receiver)
 			trapArgs := []Value{proxy.target, symKey, *valueToSet, *objVal}
 			result, err := vm.Call(setTrap, proxy.handler, trapArgs)

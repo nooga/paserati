@@ -412,7 +412,7 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
 		if ok {
 			// Validate trap is callable
-			if !getTrap.IsFunction() {
+			if !getTrap.IsCallable() {
 				var excVal Value
 				if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
 					if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString("'get' on proxy: trap is not a function")}); callErr == nil {

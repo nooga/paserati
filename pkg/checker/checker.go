@@ -2393,11 +2393,24 @@ func (c *Checker) visit(node parser.Node) {
 		// Restore original environment before checking alternative
 		c.env = originalEnv
 
-		// 4. Check Alternative block (if it exists)
+		// 4. Check Alternative block (if it exists) with inverted narrowing
 		if node.Alternative != nil {
-			// For compound conditions, inverted narrowing is complex, so skip for now
-			// TODO: Implement inverted narrowing for compound conditions
+			// Try to apply inverted narrowing for the else branch
+			typeGuard := c.detectTypeGuard(node.Condition)
+			var invertedEnv *Environment
+			if typeGuard != nil {
+				invertedEnv = c.applyInvertedTypeNarrowing(typeGuard)
+			}
+
+			if invertedEnv != nil {
+				debugPrintf("// [Checker IfStmt] Applying inverted type narrowing in alternative block\n")
+				c.env = invertedEnv // Use inverted narrowed environment for alternative
+			}
+
 			c.visit(node.Alternative)
+
+			// Restore original environment
+			c.env = originalEnv
 		}
 
 		// 5. Restore original environment after if statement

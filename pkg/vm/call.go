@@ -60,7 +60,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Check for apply trap
 		if applyTrap, ok := proxy.Handler().AsPlainObject().GetOwn("apply"); ok {
 			// Validate trap is callable
-			if !applyTrap.IsFunction() {
+			if !applyTrap.IsCallable() {
 				vm.runtimeError("'apply' on proxy: trap is not a function")
 				return false, nil
 			}
@@ -216,6 +216,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.thisValue = thisValue
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false
+		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
 		newFrame.argCount = argCount // Store actual argument count for arguments object
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs

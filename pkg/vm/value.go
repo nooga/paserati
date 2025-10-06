@@ -1230,8 +1230,8 @@ func (v Value) IsFalsey() bool {
 		return v.AsBigInt().Cmp(bigZero) == 0
 	case TypeString:
 		return v.AsString() == ""
-	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy, TypePromise:
-		// All object types (including symbols, regex, proxies, and promises) are truthy
+	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy, TypePromise, TypeMap, TypeSet, TypeDictObject, TypeBoundFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeGenerator, TypeAsyncGenerator, TypeArrayBuffer, TypeTypedArray:
+		// All object types (including symbols, regex, proxies, promises, maps, sets, etc.) are truthy
 		return false
 	default:
 		return true // Unknown types assumed truthy? Or panic? Let's assume truthy.

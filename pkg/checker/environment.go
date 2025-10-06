@@ -43,6 +43,10 @@ type Environment struct {
 
 	// --- With statement support ---
 	withObjects []WithObject // Stack of objects from enclosing with statements
+
+	// --- Type narrowing support for member expressions ---
+	// Maps member expression keys (e.g., "this.value", "obj.prop") to their narrowed types
+	narrowings map[string]types.Type
 }
 
 // NewEnvironment creates a new top-level type environment.
@@ -56,6 +60,7 @@ func NewEnvironment() *Environment {
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Only initialized for global environment
 		withObjects:         []WithObject{}, // Initialize empty with objects stack
+		narrowings:          make(map[string]types.Type), // Initialize narrowings map
 	}
 }
 
@@ -70,6 +75,7 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: nil, // Nested environments don't need primitive prototypes
 		withObjects:         []WithObject{}, // Initialize empty with objects stack
+		narrowings:          make(map[string]types.Type), // Initialize narrowings map
 	}
 }
 
@@ -85,6 +91,7 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: make(map[string]*types.ObjectType), // Initialize for global environment
 		withObjects:         []WithObject{}, // Initialize empty with objects stack
+		narrowings:          make(map[string]types.Type), // Initialize narrowings map
 	}
 
 	// Create type context for builtin initialization

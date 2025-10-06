@@ -740,6 +740,64 @@ func (c *Checker) checkTaggedTemplateExpression(node *parser.TaggedTemplateExpre
 
 // Helper function
 func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
+	// Check if there's a narrowed type for this member expression
+	memberKey := expressionToNarrowingKey(node)
+	if memberKey != "" {
+		if narrowedType, exists := c.env.narrowings[memberKey]; exists {
+			debugPrintf("// [MemberExpr] Using narrowed type for %s: %s\n", memberKey, narrowedType.String())
+			node.SetComputedType(narrowedType)
+			return
+		}
+		// Check for complement narrowing (from else branch)
+		if complementType, exists := c.env.narrowings[memberKey+"__complement"]; exists {
+			// Get the original type by visiting the expression
+			c.visit(node.Object)
+			objectType := node.Object.GetComputedType()
+			if objectType != nil {
+				propertyName := c.extractPropertyName(node.Property)
+				if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
+					if propType, found := objType.Properties[propertyName]; found {
+						if unionType, ok := propType.(*types.UnionType); ok {
+							// Compute complement: union minus the narrowed type
+							remainingType := unionType.RemoveType(complementType)
+							debugPrintf("// [MemberExpr] Using complement narrowing for %s: %s (removing %s)\n", memberKey, remainingType.String(), complementType.String())
+							node.SetComputedType(remainingType)
+							return
+						}
+					}
+				}
+			}
+		}
+		// Also check outer environments
+		for env := c.env.outer; env != nil; env = env.outer {
+			if env.narrowings != nil {
+				if narrowedType, exists := env.narrowings[memberKey]; exists {
+					debugPrintf("// [MemberExpr] Using narrowed type from outer env for %s: %s\n", memberKey, narrowedType.String())
+					node.SetComputedType(narrowedType)
+					return
+				}
+				// Check complement in outer envs too
+				if complementType, exists := env.narrowings[memberKey+"__complement"]; exists {
+					c.visit(node.Object)
+					objectType := node.Object.GetComputedType()
+					if objectType != nil {
+						propertyName := c.extractPropertyName(node.Property)
+						if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
+							if propType, found := objType.Properties[propertyName]; found {
+								if unionType, ok := propType.(*types.UnionType); ok {
+									remainingType := unionType.RemoveType(complementType)
+									debugPrintf("// [MemberExpr] Using complement narrowing from outer env for %s: %s\n", memberKey, remainingType.String())
+									node.SetComputedType(remainingType)
+									return
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// 1. Visit the object part
 	c.visit(node.Object)
 	objectType := node.Object.GetComputedType()

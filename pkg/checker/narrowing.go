@@ -9,9 +9,35 @@ import (
 
 // TypeGuard represents a detected type guard pattern
 type TypeGuard struct {
-	VariableName string     // The variable being narrowed (e.g., "x")
+	VariableName string     // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
 	NarrowedType types.Type // The type it's narrowed to (e.g., types.String)
 	IsNegated    bool       // true for !== checks, false for === checks
+}
+
+// expressionToNarrowingKey converts an expression to a string key for narrowing.
+// Supports identifiers (e.g., "x") and member expressions (e.g., "this.value", "obj.prop").
+func expressionToNarrowingKey(expr parser.Expression) string {
+	switch e := expr.(type) {
+	case *parser.Identifier:
+		return e.Value
+	case *parser.ThisExpression:
+		return "this"
+	case *parser.MemberExpression:
+		// Recursively build the key for nested member expressions
+		objectKey := expressionToNarrowingKey(e.Object)
+		debugPrintf("// [expressionToNarrowingKey] MemberExpr: objectKey=%s, objectType=%T\n", objectKey, e.Object)
+		if objectKey == "" {
+			return ""
+		}
+		// Only handle simple property access (not computed properties like obj[expr])
+		if propIdent, ok := e.Property.(*parser.Identifier); ok {
+			return objectKey + "." + propIdent.Value
+		}
+		return ""
+	default:
+		debugPrintf("// [expressionToNarrowingKey] Unsupported expression type: %T\n", expr)
+		return ""
+	}
 }
 
 // detectTypeGuard analyzes a condition expression to detect type guard patterns like:
@@ -56,9 +82,12 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 		
 		if isPositive || isNegative {
 
-			// Pattern 1: typeof identifier === "literal"
+			// Pattern 1: typeof <expression> === "literal"
+			// Now supports both identifiers (x) and member expressions (this.value, obj.prop)
 			if typeofExpr, ok := infix.Left.(*parser.TypeofExpression); ok {
-				if ident, ok := typeofExpr.Operand.(*parser.Identifier); ok {
+				narrowingKey := expressionToNarrowingKey(typeofExpr.Operand)
+				debugPrintf("// [detectTypeGuard] typeof check detected, operand type: %T, key: %s\n", typeofExpr.Operand, narrowingKey)
+				if narrowingKey != "" {
 					if stringLit, ok := infix.Right.(*parser.StringLiteral); ok {
 						// Map string literal to corresponding type
 						var narrowedType types.Type
@@ -92,7 +121,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						}
 
 						return &TypeGuard{
-							VariableName: ident.Value,
+							VariableName: narrowingKey,
 							NarrowedType: narrowedType,
 							IsNegated:    isNegative,
 						}
@@ -240,8 +269,46 @@ func (c *Checker) applyTypeNarrowingWithFallback(condition parser.Expression) *E
 
 // applyPositiveTypeNarrowing performs the actual positive type narrowing logic
 func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
-	// Check if the variable exists in the current environment
-	originalType, isConst, found := c.env.Resolve(guard.VariableName)
+	// Check if this is a member expression narrowing (contains a dot)
+	isMemberExpression := false
+	for _, ch := range guard.VariableName {
+		if ch == '.' {
+			isMemberExpression = true
+			break
+		}
+	}
+
+	var originalType types.Type
+	var isConst bool
+	var found bool
+
+	if isMemberExpression {
+		// For member expressions like "this.value" or "obj.prop", we store the narrowing
+		// in a separate map that will be consulted when checking member expressions
+		debugPrintf("// [TypeNarrowing] Member expression narrowing detected: %s -> %s\n", guard.VariableName, guard.NarrowedType.String())
+
+		// Create a new environment with the narrowing
+		newEnv := NewEnclosedEnvironment(c.env)
+		// Copy existing narrowings from the current environment
+		for k, v := range c.env.narrowings {
+			newEnv.narrowings[k] = v
+		}
+		// Also copy from outer environments if they have narrowings
+		if c.env.outer != nil && c.env.outer.narrowings != nil {
+			for k, v := range c.env.outer.narrowings {
+				if _, exists := newEnv.narrowings[k]; !exists {
+					newEnv.narrowings[k] = v
+				}
+			}
+		}
+		// Add the new narrowing
+		newEnv.narrowings[guard.VariableName] = guard.NarrowedType
+		debugPrintf("// [TypeNarrowing] Stored member narrowing in environment\n")
+		return newEnv
+	}
+
+	// Regular identifier narrowing
+	originalType, isConst, found = c.env.Resolve(guard.VariableName)
 	if !found {
 		debugPrintf("// [TypeNarrowing] Variable '%s' not found for narrowing\n", guard.VariableName)
 		return nil
@@ -398,10 +465,50 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 	if guard == nil {
 		return nil
 	}
-	
+
 	// If the guard is negated (e.g., !== check), apply positive narrowing instead
 	if guard.IsNegated {
 		return c.applyPositiveTypeNarrowing(guard)
+	}
+
+	// Check if this is a member expression narrowing
+	isMemberExpression := false
+	for _, ch := range guard.VariableName {
+		if ch == '.' {
+			isMemberExpression = true
+			break
+		}
+	}
+
+	if isMemberExpression {
+		// For member expressions, we need to apply complement narrowing
+		// We need to get the original type to compute the complement
+		// For typeof checks on union types, the complement is "union minus the narrowed type"
+		// Since we can't easily resolve the member expression's type here, we use a marker
+		debugPrintf("// [InvertedTypeNarrowing] Member expression complement narrowing: %s\n", guard.VariableName)
+
+		// Create a special marker indicating this is a complement narrowing
+		// The actual narrowing will be applied when checking the member expression
+		// For now, we store the guard with IsNegated=true to indicate complement
+		newEnv := NewEnclosedEnvironment(c.env)
+		// Copy existing narrowings
+		for k, v := range c.env.narrowings {
+			newEnv.narrowings[k] = v
+		}
+		// Also copy from outer environments
+		if c.env.outer != nil && c.env.outer.narrowings != nil {
+			for k, v := range c.env.outer.narrowings {
+				if _, exists := newEnv.narrowings[k]; !exists {
+					newEnv.narrowings[k] = v
+				}
+			}
+		}
+		// Store a complement narrowing marker (we'll handle this specially in checkMemberExpression)
+		// For typeof checks, we can create a complement marker
+		// This is a simplified approach: just mark it as "not the narrowed type"
+		newEnv.narrowings[guard.VariableName+"__complement"] = guard.NarrowedType
+		debugPrintf("// [InvertedTypeNarrowing] Stored complement marker for %s\n", guard.VariableName)
+		return newEnv
 	}
 
 	// Check if the variable exists in the current environment

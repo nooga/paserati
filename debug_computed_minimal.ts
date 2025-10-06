@@ -1,3 +1,0 @@
-const obj = {
-  [key]: "value"
-};

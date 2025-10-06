@@ -251,8 +251,8 @@ func dumpFrameStack(vm *VM, context string) {
 		if fr.closure != nil && fr.closure.Fn != nil {
 			gen = fr.closure.Fn.IsGenerator
 		}
-		fmt.Printf("  #%d name=%s ip=%d target=R%d regs=%d direct=%v ctor=%v gen=%v\n",
-			i, name, fr.ip, fr.targetRegister, regSize, fr.isDirectCall, fr.isConstructorCall, gen)
+		fmt.Printf("  #%d name=%s ip=%d target=R%d regs=%d direct=%v ctor=%v gen=%v sentinel=%v\n",
+			i, name, fr.ip, fr.targetRegister, regSize, fr.isDirectCall, fr.isConstructorCall, gen, fr.isSentinelFrame)
 	}
 }
 
@@ -1013,7 +1013,7 @@ startExecution:
 					// Check if handler has a 'has' trap
 					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
 						// Validate trap is callable
-						if !hasTrap.IsFunction() {
+						if !hasTrap.IsCallable() {
 							vm.runtimeError("'has' on proxy: trap is not a function")
 							return InterpretRuntimeError, Undefined
 						}
@@ -1623,19 +1623,39 @@ startExecution:
 
 			// No finally handler, proceed with normal return
 			// Close upvalues for the returning frame
+			if debugVM {
+				fmt.Printf("[DBG] About to closeUpvalues for frame with %d registers, openUpvalues=%d\n", len(frame.registers), len(vm.openUpvalues))
+			}
 			vm.closeUpvalues(frame.registers)
+			if debugVM {
+				fmt.Printf("[DBG] closeUpvalues completed\n")
+			}
 
 			// Pop the current frame
+			if debugVM {
+				fmt.Printf("[DBG] Popping frame...\n")
+			}
 			returningFrameRegSize := function.RegisterSize
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
 			isDirectCall := frame.isDirectCall // Save this BEFORE decrementing frameCount
 
+			if debugVM {
+				fmt.Printf("[DBG] Frame info: regSize=%d, target=R%d, isCtor=%t, isDirect=%t\n", returningFrameRegSize, callerTargetRegister, isConstructor, isDirectCall)
+			}
+
 			vm.frameCount--
 			vm.nextRegSlot -= returningFrameRegSize
 
+			if debugVM {
+				fmt.Printf("[DBG] After pop: frameCount=%d, nextRegSlot=%d\n", vm.frameCount, vm.nextRegSlot)
+			}
+
 			if vm.frameCount == 0 {
+				if debugVM {
+					fmt.Printf("[DBG] Returning from top-level\n")
+				}
 				// Returned undefined from top-level
 				if vm.unwinding {
 					vm.handleUncaughtException()
@@ -1646,28 +1666,60 @@ startExecution:
 
 			// Check if we hit a sentinel frame - if so, remove it and return immediately
 			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+				if debugVM {
+					fmt.Printf("[DBG] Hit sentinel frame, returning\n")
+					sentinelFrame := &vm.frames[vm.frameCount-1]
+					fmt.Printf("[DBG] Sentinel frame: regs=%v, target=R%d, regsLen=%d\n", sentinelFrame.registers != nil, sentinelFrame.targetRegister, len(sentinelFrame.registers))
+				}
 				// Place the result in the sentinel frame's target register
+				if debugVM {
+					fmt.Printf("[DBG] Checking condition...\n")
+				}
 				if vm.frames[vm.frameCount-1].registers != nil && int(vm.frames[vm.frameCount-1].targetRegister) < len(vm.frames[vm.frameCount-1].registers) {
+					if debugVM {
+						fmt.Printf("[DBG] Setting sentinel target register\n")
+					}
 					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = Undefined
+					if debugVM {
+						fmt.Printf("[DBG] Set complete\n")
+					}
+				}
+				if debugVM {
+					fmt.Printf("[DBG] Removing sentinel frame\n")
 				}
 				// Remove the sentinel frame
 				vm.frameCount--
+				if debugVM {
+					fmt.Printf("[DBG] Returning from sentinel\n")
+				}
 				// Return the result from the function that just returned
 				return InterpretOK, Undefined
 			}
 
 			// Check if this was a direct call frame and should return early
 			if isDirectCall {
+				if debugVM {
+					fmt.Printf("[DBG] Direct call return: isCtor=%t\n", isConstructor)
+				}
 				// Handle constructor return semantics for direct call
 				var finalResult Value
 				if isConstructor {
 					// Constructor returning undefined: return the instance (this)
 					finalResult = constructorThisValue
+					if debugVM {
+						fmt.Printf("[DBG] Returning constructor this: %v\n", finalResult)
+					}
 				} else {
 					// Regular function returning undefined
 					finalResult = Undefined
+					if debugVM {
+						fmt.Printf("[DBG] Returning undefined from direct call\n")
+					}
 				}
 				// Return the result immediately instead of continuing execution
+				if debugVM {
+					fmt.Printf("[DBG] About to return InterpretOK from direct call\n")
+				}
 				return InterpretOK, finalResult
 			}
 
@@ -2271,7 +2323,7 @@ startExecution:
 
 				// Check if handler has a get trap
 				getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
-				if ok && getTrap.IsFunction() {
+				if ok && getTrap.IsCallable() {
 					// Call the get trap: handler.get(target, propertyKey, receiver)
 					trapArgs := []Value{proxy.target, indexVal, baseVal}
 					result, err := vm.Call(getTrap, proxy.handler, trapArgs)
@@ -3317,7 +3369,7 @@ startExecution:
 				// Check for construct trap
 				if constructTrap, ok := proxy.Handler().AsPlainObject().GetOwn("construct"); ok {
 					// Validate trap is callable
-					if !constructTrap.IsFunction() {
+					if !constructTrap.IsCallable() {
 						frame.ip = callerIP
 						vm.runtimeError("'construct' on proxy: trap is not a function")
 						return InterpretRuntimeError, Undefined
@@ -3447,6 +3499,8 @@ startExecution:
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = newInstance       // Set the new instance as 'this' (or undefined for derived)
 				newFrame.isConstructorCall = true      // Mark this as a constructor call
+				newFrame.isDirectCall = false          // Not a direct call (normal OpNew)
+				newFrame.isSentinelFrame = false       // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
@@ -3588,6 +3642,8 @@ startExecution:
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = newInstance       // Set the new instance as 'this' (or undefined for derived)
 				newFrame.isConstructorCall = true      // Mark this as a constructor call
+				newFrame.isDirectCall = false          // Not a direct call (normal OpNew)
+				newFrame.isSentinelFrame = false       // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
@@ -4873,7 +4929,7 @@ startExecution:
 				deleteTrap, ok := proxy.handler.AsPlainObject().GetOwn("deleteProperty")
 				if ok {
 					// Validate trap is callable
-					if !deleteTrap.IsFunction() {
+					if !deleteTrap.IsCallable() {
 						vm.runtimeError("'deleteProperty' on proxy: trap is not a function")
 						return InterpretRuntimeError, Undefined
 					}
@@ -5180,7 +5236,13 @@ func (vm *VM) captureUpvalue(location *Value) *Upvalue {
 // frame's registers (which are about to become invalid).
 // It takes the slice representing the frame's registers as input.
 func (vm *VM) closeUpvalues(frameRegisters []Value) {
+	if debugVM {
+		fmt.Printf("[DBG closeUpvalues] ENTER: frameRegs=%d, openUpvalues=%d\n", len(frameRegisters), len(vm.openUpvalues))
+	}
 	if len(frameRegisters) == 0 || len(vm.openUpvalues) == 0 {
+		if debugVM {
+			fmt.Printf("[DBG closeUpvalues] EXIT early: nothing to close\n")
+		}
 		return // Nothing to close or no registers in frame
 	}
 
@@ -5191,27 +5253,46 @@ func (vm *VM) closeUpvalues(frameRegisters []Value) {
 	// Address of one past the last element
 	frameEndPtr := frameStartPtr + uintptr(len(frameRegisters))*unsafe.Sizeof(Value{})
 
+	if debugVM {
+		fmt.Printf("[DBG closeUpvalues] About to iterate %d upvalues\n", len(vm.openUpvalues))
+	}
+
 	// Iterate through openUpvalues and close those pointing into the frame.
 	// We also filter the openUpvalues list, removing the closed ones.
 	newOpenUpvalues := vm.openUpvalues[:0] // Reuse underlying array
-	for _, upvalue := range vm.openUpvalues {
+	for i, upvalue := range vm.openUpvalues {
+		if debugVM {
+			fmt.Printf("[DBG closeUpvalues] Processing upvalue %d/%d\n", i+1, len(vm.openUpvalues))
+		}
 		if upvalue.Location == nil { // Skip already closed upvalues
+			if debugVM {
+				fmt.Printf("[DBG closeUpvalues]   Skipping already-closed upvalue\n")
+			}
 			continue
 		}
 		upvaluePtr := uintptr(unsafe.Pointer(upvalue.Location))
 		// Check if the upvalue's location points within the memory range of frameRegisters
 		if upvaluePtr >= frameStartPtr && upvaluePtr < frameEndPtr {
 			// This upvalue points into the frame being popped, close it.
+			if debugVM {
+				fmt.Printf("[DBG closeUpvalues]   Closing upvalue (in frame range)\n")
+			}
 			closedValue := *upvalue.Location // Copy the value from the stack
 			upvalue.Closed = closedValue     // Store the value
 			upvalue.Location = nil           // Mark as closed
 			// Do NOT add it back to newOpenUpvalues
 		} else {
 			// This upvalue points elsewhere (e.g., higher up the stack), keep it open.
+			if debugVM {
+				fmt.Printf("[DBG closeUpvalues]   Keeping upvalue open (outside frame range)\n")
+			}
 			newOpenUpvalues = append(newOpenUpvalues, upvalue)
 		}
 	}
 	vm.openUpvalues = newOpenUpvalues
+	if debugVM {
+		fmt.Printf("[DBG closeUpvalues] EXIT: newOpenUpvalues=%d\n", len(vm.openUpvalues))
+	}
 }
 
 // runtimeError formats a runtime error message, appends it to the VM's error list,

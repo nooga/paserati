@@ -67,6 +67,8 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
 		newFrame.isConstructorCall = true
+		newFrame.isDirectCall = false       // Not a direct call (spread new)
+		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
 		newFrame.newTargetValue = constructorVal
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
@@ -129,6 +131,8 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
 		newFrame.isConstructorCall = true
+		newFrame.isDirectCall = false       // Not a direct call (spread new)
+		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
 		newFrame.newTargetValue = constructorVal
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs

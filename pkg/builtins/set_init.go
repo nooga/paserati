@@ -28,11 +28,15 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 	}
 
 	// Create Set instance type with methods (using type parameters directly)
+	// forEach callback: (value: T, value2: T, set: Set<T>) => void
+	forEachCallbackType := types.NewSimpleFunction([]types.Type{tType, tType, setType}, types.Void)
+
 	setInstanceType := types.NewObjectType().
 		WithProperty("add", types.NewSimpleFunction([]types.Type{tType}, setType)). // Return this for chaining
 		WithProperty("has", types.NewSimpleFunction([]types.Type{tType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{tType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
+		WithProperty("forEach", types.NewSimpleFunction([]types.Type{forEachCallbackType}, types.Void)).
 		WithProperty("size", types.Number)
 
 	// Now set the body of the generic type
@@ -44,6 +48,7 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("has", types.NewSimpleFunction([]types.Type{tType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{tType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
+		WithProperty("forEach", types.NewSimpleFunction([]types.Type{forEachCallbackType}, types.Void)).
 		WithProperty("size", types.Number)
 
 	// Register set primitive prototype
@@ -158,6 +163,38 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	if v, ok := setProto.GetOwn("clear"); ok {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("clear", v, &w, &e, &c)
+	}
+
+	// forEach(callback, thisArg)
+	setProto.SetOwn("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.forEach called on non-Set")
+		}
+
+		if len(args) < 1 || !args[0].IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.forEach requires a callable function")
+		}
+
+		callback := args[0]
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
+		setObj := thisSet.AsSet()
+		setObj.ForEach(func(val vm.Value) {
+			// forEach callback receives (value, value, set) - value is passed twice for consistency with Map
+			_, _ = vmInstance.Call(callback, thisArg, []vm.Value{val, val, thisSet})
+		})
+
+		return vm.Undefined, nil
+	}))
+	if v, ok := setProto.GetOwn("forEach"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("forEach", v, &w, &e, &c)
 	}
 
 	// Minimal iterator helpers: values(), keys(), entries(), and [Symbol.iterator]
