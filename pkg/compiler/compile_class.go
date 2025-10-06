@@ -782,8 +782,25 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
 
 	// Set constructor[methodName] = methodFunction
-	methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))
-	c.emitSetProp(constructorReg, methodReg, methodNameIdx, method.Token.Line)
+	// Handle computed property names dynamically
+	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+		// For computed properties, evaluate the key expression and use OpSetIndex
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+		// Use OpSetIndex for dynamic property access: constructor[keyReg] = methodReg
+		c.emitOpCode(vm.OpSetIndex, method.Token.Line)
+		c.emitByte(byte(constructorReg)) // Object register
+		c.emitByte(byte(keyReg))          // Key register (computed at runtime)
+		c.emitByte(byte(methodReg))       // Value register
+	} else {
+		// Use OpSetProp for static property names
+		methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))
+		c.emitSetProp(constructorReg, methodReg, methodNameIdx, method.Token.Line)
+	}
 
 	debugPrintf("// DEBUG addStaticMethod: Static method '%s' added to constructor\n", c.extractPropertyName(method.Key))
 	return nil

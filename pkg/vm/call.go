@@ -395,8 +395,6 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 
 	default:
 		currentFrame.ip = callerIP
-		// Immediately print stack frames for debugging
-		fmt.Printf("\n=== VM Stack (non-callable) ===\n%s\n===============================\n", vm.CaptureStackTrace())
 		// Throw a TypeError exception for non-callable values
 		vm.ThrowTypeError(fmt.Sprintf("%s is not a function", calleeVal.TypeName()))
 		// Return false to indicate we're not switching frames (exception was thrown)
