@@ -64,10 +64,14 @@ func (p *Paserati) SetIgnoreTypeErrors(ignore bool) {
 
 // Cleanup breaks circular references to allow garbage collection
 func (p *Paserati) Cleanup() {
-	// Break circular references between VM and module loader
+	// Reset VM state to clear all references to objects/closures/frames
+	// This is critical to prevent memory leaks in long-running processes
 	if p.vmInstance != nil {
+		p.vmInstance.Reset()
 		p.vmInstance.SetModuleLoader(nil)
 	}
+
+	// Break circular references between VM and module loader
 	if p.moduleLoader != nil {
 		p.moduleLoader.SetVMInstance(nil)
 	}

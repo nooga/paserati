@@ -339,6 +339,21 @@ func (vm *VM) GetHeap() *Heap {
 }
 
 func (vm *VM) Reset() {
+	// Nil out closure pointers in frames to allow garbage collection
+	// This is critical to prevent memory leaks in long-running processes
+	for i := 0; i < vm.frameCount; i++ {
+		vm.frames[i].closure = nil
+		vm.frames[i].registers = nil
+		vm.frames[i].thisValue = Undefined
+		vm.frames[i].newTargetValue = Undefined
+	}
+
+	// Clear register stack values to release references to objects
+	// This prevents memory leaks from retaining large objects/arrays/closures
+	for i := 0; i < vm.nextRegSlot; i++ {
+		vm.registerStack[i] = Undefined
+	}
+
 	vm.frameCount = 0
 	vm.nextRegSlot = 0
 	vm.openUpvalues = vm.openUpvalues[:0] // Clear slice while keeping capacity
@@ -356,7 +371,6 @@ func (vm *VM) Reset() {
 	vm.pendingAction = ActionNone
 	vm.pendingValue = Undefined
 	vm.finallyDepth = 0
-	// No need to clear registerStack explicitly, slots will be overwritten.
 }
 
 // Interpret starts executing the given chunk of bytecode.
