@@ -49,6 +49,50 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 	// fmt.Printf("DEBUG prepareCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
 	// 	calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
 
+	// Handle Proxy with apply trap
+	if calleeVal.Type() == TypeProxy {
+		proxy := calleeVal.AsProxy()
+		if proxy.Revoked {
+			vm.runtimeError("Cannot call revoked Proxy")
+			return false, nil
+		}
+
+		// Check for apply trap
+		if applyTrap, ok := proxy.Handler().AsPlainObject().GetOwn("apply"); ok {
+			// Validate trap is callable
+			if !applyTrap.IsFunction() {
+				vm.runtimeError("'apply' on proxy: trap is not a function")
+				return false, nil
+			}
+
+			// Convert args to array for trap call
+			argsArray := NewArray()
+			arrObj := argsArray.AsArray()
+			for _, arg := range args {
+				arrObj.Append(arg)
+			}
+
+			// Call handler.apply(target, thisArg, argumentsList)
+			trapArgs := []Value{proxy.Target(), thisValue, argsArray}
+			result, err := vm.Call(applyTrap, proxy.Handler(), trapArgs)
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+				} else {
+					vm.runtimeError(err.Error())
+				}
+				return false, nil
+			}
+
+			// Store result in destination register
+			callerRegisters[destReg] = result
+			return false, nil // Don't switch frames, we handled the call
+		}
+
+		// No apply trap, delegate to target (call the target as a function)
+		return vm.prepareCall(proxy.Target(), thisValue, args, destReg, callerRegisters, callerIP)
+	}
+
 	switch calleeVal.Type() {
 	case TypeClosure:
 		calleeClosure := AsClosure(calleeVal)

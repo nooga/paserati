@@ -3305,6 +3305,72 @@ startExecution:
 
 			constructorVal := callerRegisters[constructorReg]
 
+			// Handle Proxy with construct trap
+			if constructorVal.Type() == TypeProxy {
+				proxy := constructorVal.AsProxy()
+				if proxy.Revoked {
+					frame.ip = callerIP
+					vm.runtimeError("Cannot construct revoked Proxy")
+					return InterpretRuntimeError, Undefined
+				}
+
+				// Check for construct trap
+				if constructTrap, ok := proxy.Handler().AsPlainObject().GetOwn("construct"); ok {
+					// Validate trap is callable
+					if !constructTrap.IsFunction() {
+						frame.ip = callerIP
+						vm.runtimeError("'construct' on proxy: trap is not a function")
+						return InterpretRuntimeError, Undefined
+					}
+
+					// Convert args to array for trap call
+					args := make([]Value, argCount)
+					argStartRegInCaller := constructorReg + 1
+					for i := 0; i < argCount; i++ {
+						if int(argStartRegInCaller)+i < len(callerRegisters) {
+							args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+						} else {
+							args[i] = Undefined
+						}
+					}
+
+					argsArray := NewArray()
+					arrObj := argsArray.AsArray()
+					for _, arg := range args {
+						arrObj.Append(arg)
+					}
+
+					// Call handler.construct(target, argumentsList, newTarget)
+					// newTarget is the proxy itself (the constructor being called)
+					trapArgs := []Value{proxy.Target(), argsArray, constructorVal}
+					result, err := vm.Call(constructTrap, proxy.Handler(), trapArgs)
+					if err != nil {
+						frame.ip = callerIP
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.runtimeError(err.Error())
+						}
+						return InterpretRuntimeError, Undefined
+					}
+
+					// Result must be an object
+					if !result.IsObject() {
+						frame.ip = callerIP
+						vm.runtimeError("'construct' on proxy: trap result must be an object")
+						return InterpretRuntimeError, Undefined
+					}
+
+					// Store result in destination register
+					callerRegisters[destReg] = result
+					continue // Continue with next instruction
+				}
+
+				// No construct trap, delegate to target
+				// Replace constructorVal with target and continue with normal flow
+				constructorVal = proxy.Target()
+			}
+
 			switch constructorVal.Type() {
 			case TypeClosure:
 				// Constructor call on closure

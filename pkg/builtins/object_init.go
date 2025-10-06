@@ -49,6 +49,8 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("setPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("defineProperty", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol, types.Any}, types.Any)).
 		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol}, types.Any)).
+		WithProperty("isExtensible", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
+		WithProperty("preventExtensions", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("is", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Boolean)).
 		WithProperty("prototype", objectProtoType)
 
@@ -356,8 +358,18 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return objectSetPrototypeOfWithVM(vmInstance, args)
 		}))
 		// defineProperty delegates to the full implementation with symbol/accessor support
-		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", objectDefinePropertyImpl))
-		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", objectGetOwnPropertyDescriptorImpl))
+		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
+			return objectDefinePropertyWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
+			return objectGetOwnPropertyDescriptorWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("isExtensible", vm.NewNativeFunction(1, false, "isExtensible", func(args []vm.Value) (vm.Value, error) {
+			return objectIsExtensibleWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
+			return objectPreventExtensionsWithVM(vmInstance, args)
+		}))
 		// Object.is
 		ctorPropsObj.Properties.SetOwn("is", vm.NewNativeFunction(2, false, "is", func(args []vm.Value) (vm.Value, error) {
 			if len(args) < 2 {
@@ -987,10 +999,9 @@ func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
 	return result, nil
 }
 
-func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
+func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) < 3 {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined, nil
+		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty requires 3 arguments")
 	}
 
 	obj := args[0]
@@ -1006,10 +1017,50 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 	}
 	descriptor := args[2]
 
+	// Handle Proxy objects
+	if obj.Type() == vm.TypeProxy {
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot define property on revoked Proxy")
+		}
+
+		// Check for defineProperty trap
+		if defineTrap, ok := proxy.Handler().AsPlainObject().GetOwn("defineProperty"); ok {
+			// Validate trap is callable
+			if !defineTrap.IsFunction() {
+				return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap is not a function")
+			}
+
+			// Convert property key to appropriate value
+			var propKey vm.Value
+			if keyIsSymbol {
+				propKey = propSym
+			} else {
+				propKey = vm.NewString(propName)
+			}
+
+			// Call handler.defineProperty(target, property, descriptor)
+			trapArgs := []vm.Value{proxy.Target(), propKey, descriptor}
+			result, err := vmInstance.Call(defineTrap, proxy.Handler(), trapArgs)
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// Result should be truthy to indicate success
+			if result.IsFalsey() {
+				return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned falsish")
+			}
+
+			return obj, nil
+		}
+
+		// No trap, delegate to target
+		return objectDefinePropertyWithVM(vmInstance, []vm.Value{proxy.Target(), args[1], descriptor})
+	}
+
 	// First argument must be an object
 	if !obj.IsObject() {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined, nil
+		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty called on non-object")
 	}
 
 	// Parse descriptor object fields: value, writable, enumerable, configurable, get, set
@@ -1162,9 +1213,8 @@ func objectDefinePropertyImpl(args []vm.Value) (vm.Value, error) {
 	return obj, nil
 }
 
-func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
+func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) < 2 {
-		// TODO: Throw TypeError when error objects are implemented
 		return vm.Undefined, nil
 	}
 
@@ -1177,6 +1227,47 @@ func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
 		propSym = args[1]
 	} else {
 		propName = args[1].ToString()
+	}
+
+	// Handle Proxy objects
+	if obj.Type() == vm.TypeProxy {
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot get property descriptor on revoked Proxy")
+		}
+
+		// Check for getOwnPropertyDescriptor trap
+		if getTrap, ok := proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor"); ok {
+			// Validate trap is callable
+			if !getTrap.IsFunction() {
+				return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap is not a function")
+			}
+
+			// Convert property key to appropriate value
+			var propKey vm.Value
+			if keyIsSymbol {
+				propKey = propSym
+			} else {
+				propKey = vm.NewString(propName)
+			}
+
+			// Call handler.getOwnPropertyDescriptor(target, property)
+			trapArgs := []vm.Value{proxy.Target(), propKey}
+			result, err := vmInstance.Call(getTrap, proxy.Handler(), trapArgs)
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// Result must be undefined or an object
+			if result.Type() != vm.TypeUndefined && !result.IsObject() {
+				return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap result must be an object or undefined")
+			}
+
+			return result, nil
+		}
+
+		// No trap, delegate to target
+		return objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{proxy.Target(), args[1]})
 	}
 
 	// First argument must be object-like
@@ -1281,7 +1372,101 @@ func objectGetOwnPropertyDescriptorImpl(args []vm.Value) (vm.Value, error) {
 	return vm.Undefined, nil
 }
 
+func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.BooleanValue(false), nil
+	}
+
+	obj := args[0]
+
+	// Handle Proxy objects
+	if obj.Type() == vm.TypeProxy {
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot check extensibility of revoked Proxy")
+		}
+
+		// Check for isExtensible trap
+		if extTrap, ok := proxy.Handler().AsPlainObject().GetOwn("isExtensible"); ok {
+			// Validate trap is callable
+			if !extTrap.IsFunction() {
+				return vm.Undefined, vmInstance.NewTypeError("'isExtensible' on proxy: trap is not a function")
+			}
+
+			// Call handler.isExtensible(target)
+			trapArgs := []vm.Value{proxy.Target()}
+			result, err := vmInstance.Call(extTrap, proxy.Handler(), trapArgs)
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// Convert to boolean
+			return vm.BooleanValue(result.IsTruthy()), nil
+		}
+
+		// No trap, delegate to target
+		return objectIsExtensibleWithVM(vmInstance, []vm.Value{proxy.Target()})
+	}
+
+	// For now, all objects are extensible (simplified implementation)
+	// In a full implementation, we'd track extensibility per object
+	if obj.IsObject() {
+		return vm.BooleanValue(true), nil
+	}
+
+	return vm.BooleanValue(false), nil
+}
+
+func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.Undefined, vmInstance.NewTypeError("Object.preventExtensions requires an argument")
+	}
+
+	obj := args[0]
+
+	// Handle Proxy objects
+	if obj.Type() == vm.TypeProxy {
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot prevent extensions on revoked Proxy")
+		}
+
+		// Check for preventExtensions trap
+		if prevTrap, ok := proxy.Handler().AsPlainObject().GetOwn("preventExtensions"); ok {
+			// Validate trap is callable
+			if !prevTrap.IsFunction() {
+				return vm.Undefined, vmInstance.NewTypeError("'preventExtensions' on proxy: trap is not a function")
+			}
+
+			// Call handler.preventExtensions(target)
+			trapArgs := []vm.Value{proxy.Target()}
+			result, err := vmInstance.Call(prevTrap, proxy.Handler(), trapArgs)
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// If trap returns falsy, throw TypeError
+			if result.IsFalsey() {
+				return vm.Undefined, vmInstance.NewTypeError("'preventExtensions' on proxy: trap returned falsish")
+			}
+
+			return obj, nil
+		}
+
+		// No trap, delegate to target
+		return objectPreventExtensionsWithVM(vmInstance, []vm.Value{proxy.Target()})
+	}
+
+	// For now, just return the object (simplified implementation)
+	// In a full implementation, we'd mark the object as non-extensible
+	if !obj.IsObject() {
+		return vm.Undefined, vmInstance.NewTypeError("Object.preventExtensions called on non-object")
+	}
+
+	return obj, nil
+}
+
 // ObjectGetOwnPropertyDescriptorForHarness exposes a minimal descriptor getter for the test262 harness
 func ObjectGetOwnPropertyDescriptorForHarness(obj vm.Value, name vm.Value) (vm.Value, error) {
-	return objectGetOwnPropertyDescriptorImpl([]vm.Value{obj, name})
+	return objectGetOwnPropertyDescriptorWithVM(nil, []vm.Value{obj, name})
 }
