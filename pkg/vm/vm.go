@@ -137,10 +137,19 @@ type VM struct {
 	ReferenceErrorPrototype Value
 	SymbolPrototype         Value
 
-	// Well-known symbols
-	SymbolIterator    Value
-	SymbolToPrimitive Value
-	SymbolToStringTag Value
+	// Well-known symbols (stored as singletons)
+	SymbolIterator            Value
+	SymbolToPrimitive         Value
+	SymbolToStringTag         Value
+	SymbolHasInstance         Value
+	SymbolIsConcatSpreadable  Value
+	SymbolSpecies             Value
+	SymbolMatch               Value
+	SymbolReplace             Value
+	SymbolSearch              Value
+	SymbolSplit               Value
+	SymbolUnscopables         Value
+	SymbolAsyncIterator       Value
 
 	// Constructor call context for native functions
 	inConstructorCall bool // true when executing a native function via OpNew

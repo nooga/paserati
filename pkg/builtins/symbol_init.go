@@ -137,19 +137,37 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Symbol.prototype.constructor
 	symbolProto.SetOwn("constructor", ctorWithProps)
 
-	// Initialize well-known symbols
-	SymbolIterator = vm.NewSymbol("Symbol.iterator")
-	SymbolToStringTag = vm.NewSymbol("Symbol.toStringTag")
-	SymbolHasInstance = vm.NewSymbol("Symbol.hasInstance")
-	SymbolToPrimitive = vm.NewSymbol("Symbol.toPrimitive")
-	SymbolIsConcatSpreadable = vm.NewSymbol("Symbol.isConcatSpreadable")
-	SymbolSpecies = vm.NewSymbol("Symbol.species")
-	SymbolMatch = vm.NewSymbol("Symbol.match")
-	SymbolReplace = vm.NewSymbol("Symbol.replace")
-	SymbolSearch = vm.NewSymbol("Symbol.search")
-	SymbolSplit = vm.NewSymbol("Symbol.split")
-	SymbolUnscopables = vm.NewSymbol("Symbol.unscopables")
-	SymbolAsyncIterator = vm.NewSymbol("Symbol.asyncIterator")
+	// Initialize well-known symbols - reuse existing ones if already created
+	// This ensures symbols are true singletons across VM resets
+	if vmInstance.SymbolIterator.Type() != vm.TypeSymbol {
+		// First initialization - create new symbols
+		SymbolIterator = vm.NewSymbol("Symbol.iterator")
+		SymbolToStringTag = vm.NewSymbol("Symbol.toStringTag")
+		SymbolHasInstance = vm.NewSymbol("Symbol.hasInstance")
+		SymbolToPrimitive = vm.NewSymbol("Symbol.toPrimitive")
+		SymbolIsConcatSpreadable = vm.NewSymbol("Symbol.isConcatSpreadable")
+		SymbolSpecies = vm.NewSymbol("Symbol.species")
+		SymbolMatch = vm.NewSymbol("Symbol.match")
+		SymbolReplace = vm.NewSymbol("Symbol.replace")
+		SymbolSearch = vm.NewSymbol("Symbol.search")
+		SymbolSplit = vm.NewSymbol("Symbol.split")
+		SymbolUnscopables = vm.NewSymbol("Symbol.unscopables")
+		SymbolAsyncIterator = vm.NewSymbol("Symbol.asyncIterator")
+	} else {
+		// Reuse ALL existing symbols from VM (all are now stored as singletons)
+		SymbolIterator = vmInstance.SymbolIterator
+		SymbolToStringTag = vmInstance.SymbolToStringTag
+		SymbolToPrimitive = vmInstance.SymbolToPrimitive
+		SymbolHasInstance = vmInstance.SymbolHasInstance
+		SymbolIsConcatSpreadable = vmInstance.SymbolIsConcatSpreadable
+		SymbolSpecies = vmInstance.SymbolSpecies
+		SymbolMatch = vmInstance.SymbolMatch
+		SymbolReplace = vmInstance.SymbolReplace
+		SymbolSearch = vmInstance.SymbolSearch
+		SymbolSplit = vmInstance.SymbolSplit
+		SymbolUnscopables = vmInstance.SymbolUnscopables
+		SymbolAsyncIterator = vmInstance.SymbolAsyncIterator
+	}
 
 	// Add static methods
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("for", vm.NewNativeFunction(1, false, "for", func(args []vm.Value) (vm.Value, error) {
@@ -212,10 +230,19 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	symbolCtor := ctorWithProps
 
-	// Store well-known symbols on VM for fast access
+	// Store ALL well-known symbols on VM to ensure they are true singletons
 	vmInstance.SymbolIterator = SymbolIterator
 	vmInstance.SymbolToPrimitive = SymbolToPrimitive
 	vmInstance.SymbolToStringTag = SymbolToStringTag
+	vmInstance.SymbolHasInstance = SymbolHasInstance
+	vmInstance.SymbolIsConcatSpreadable = SymbolIsConcatSpreadable
+	vmInstance.SymbolSpecies = SymbolSpecies
+	vmInstance.SymbolMatch = SymbolMatch
+	vmInstance.SymbolReplace = SymbolReplace
+	vmInstance.SymbolSearch = SymbolSearch
+	vmInstance.SymbolSplit = SymbolSplit
+	vmInstance.SymbolUnscopables = SymbolUnscopables
+	vmInstance.SymbolAsyncIterator = SymbolAsyncIterator
 
 	// Register Symbol constructor as global
 	return ctx.DefineGlobal("Symbol", symbolCtor)

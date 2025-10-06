@@ -807,7 +807,6 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true // writable, not enumerable, configurable
 		arrayProto.DefineOwnProperty("constructor", v, &w, &e, &c)
 	}
-
 	// Set Array prototype in VM
 	vmInstance.ArrayPrototype = vm.NewValueFromPlainObject(arrayProto)
 
