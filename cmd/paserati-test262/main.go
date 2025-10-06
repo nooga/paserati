@@ -487,7 +487,9 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			var builder strings.Builder
 			includeFiles := []string{}
 
-			// Always include assert.js for all tests
+			// Always include sta.js first (defines Test262Error used by assert.js)
+			includeFiles = append(includeFiles, "sta.js")
+			// Then include assert.js for all tests
 			includeFiles = append(includeFiles, "assert.js")
 
 			// Check for async flag and auto-include required harness

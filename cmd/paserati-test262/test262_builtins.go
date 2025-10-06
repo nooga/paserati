@@ -1860,7 +1860,7 @@ func deepEqualObjects(x, y *vm.PlainObject, cache map[string]int) bool {
 func GetTest262Initializers() []builtins.BuiltinInitializer {
 	return []builtins.BuiltinInitializer{
 		&Test262Initializer{},
-		&AssertInitializer{},
-		&builtins.ProxyInitializer{},
+		// Note: assert is now loaded from harness files (sta.js, assert.js), not Go initializer
+		// Note: ProxyInitializer is already included in standard initializers, don't duplicate
 	}
 }
