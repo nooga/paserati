@@ -817,18 +817,29 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	functionCompiler.compilingFuncName = determinedFuncName
 	// --- End Set Name ---
 
-	// --- NEW: Define inner name in inner scope for recursion ---
-	var funcNameForLookup string // Name used for potential recursive lookup
+	// --- NEW: Handle function name binding for named function expressions ---
+	// For named function expressions like: let f = function g() { g(); }
+	// The name 'g' should be accessible only inside the function and refer to the function itself
+	//
+	// We need to distinguish:
+	// - Function expression: `let f = function g() {}` - g is inner binding
+	// - Function declaration: `function g() {}` - g is outer binding (passed as nameHint)
+	//
+	// If node.Name matches nameHint, it's a declaration (name already in outer scope)
+	// If node.Name differs from nameHint or nameHint is empty, it's a named expression
+	var funcNameForInnerBinding string
+	var needsInnerNameBinding bool
 	if node.Name != nil {
-		funcNameForLookup = node.Name.Value
-		// Define the function's own name within its scope temporarily
-		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
-	} else if nameHint != "" {
-		// If anonymous but assigned (e.g., let f = function() { f(); }),
-		// define it in the function's scope for recursion
-		funcNameForLookup = nameHint
-		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
+		// Check if this is a named function expression (not a declaration)
+		if nameHint == "" || nameHint != node.Name.Value {
+			// This is a named function expression - create inner binding
+			funcNameForInnerBinding = node.Name.Value
+			needsInnerNameBinding = true
+		}
+		// If nameHint == node.Name.Value, it's a declaration, no inner binding needed
 	}
+	// For recursive anonymous functions (let f = function() { f(); }), the name
+	// resolves from outer scope naturally, so we don't need special handling
 	// --- END NEW ---
 
 	debugPrintf("// [Compiling Function Literal] %s\n", determinedFuncName)
@@ -935,6 +946,21 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
 	}
 
+	// 4.5. Handle named function expression binding
+	// For named function expressions like: function g() { g(); }
+	// The name 'g' should be accessible inside and refer to the closure itself
+	if needsInnerNameBinding {
+		// Allocate a register for the function name binding
+		nameBindingReg := functionCompiler.regAlloc.Alloc()
+		functionCompiler.currentSymbolTable.Define(funcNameForInnerBinding, nameBindingReg)
+		functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
+
+		// No bytecode needs to be emitted here - the VM will initialize this register
+		// when the function is called (see call.go prepareCall)
+		debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
+			funcNameForInnerBinding, nameBindingReg)
+	}
+
 	// 5. Compile the body using the function compiler
 	bodyReg := functionCompiler.regAlloc.Alloc()
 	_, err := functionCompiler.compileNode(node.Body, bodyReg)
@@ -984,6 +1010,17 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		}
 	}
 	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false) // isArrowFunction = false for regular functions
+
+	// Set the name binding register if this is a named function expression
+	if needsInnerNameBinding {
+		// Find the register we allocated for the name binding
+		if symbol, _, found := functionCompiler.currentSymbolTable.Resolve(funcNameForInnerBinding); found {
+			funcObj := funcValue.AsFunction()
+			funcObj.NameBindingRegister = int(symbol.Register)
+			debugPrintf("// [Compiler] Function '%s' has name binding in R%d\n", funcName, symbol.Register)
+		}
+	}
+
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// <<< REMOVE OpClosure EMISSION FROM HERE (should already be removed) >>>

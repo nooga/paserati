@@ -261,6 +261,13 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			}
 		}
 
+		// Initialize named function expression binding if present
+		// For named function expressions like: let f = function g() { g(); }
+		// The name 'g' should be accessible inside and refer to the closure itself
+		if calleeFunc.NameBindingRegister >= 0 && calleeFunc.NameBindingRegister < len(newFrame.registers) {
+			newFrame.registers[calleeFunc.NameBindingRegister] = calleeVal
+		}
+
 		// Frame is ready, tell interpreter to switch to it
 		vm.frameCount++
 		return true, nil

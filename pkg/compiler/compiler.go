@@ -933,6 +933,16 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				debugPrintf("// DEBUG Identifier '%s': This is an imported name, generating runtime import resolution (non-local path)\n", node.Value)
 				// Generate code to resolve the import at runtime
 				c.emitImportResolve(hint, node.Value, node.Token.Line)
+			} else if symbolRef.IsGlobal {
+				// This is a global variable (already has a global index), use OpGetGlobal
+				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL but is GLOBAL, using OpGetGlobal\n", node.Value)
+				c.emitGetGlobal(hint, symbolRef.GlobalIndex, node.Token.Line)
+			} else if symbolRef.Register == nilRegister {
+				// This is a module-level variable that's being defined (let/const in module scope)
+				// It will become a global, so use OpGetGlobal
+				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, Register==nilRegister, treating as module-level global\n", node.Value)
+				globalIdx := c.GetOrAssignGlobalIndex(node.Value)
+				c.emitGetGlobal(hint, globalIdx, node.Token.Line)
 			} else {
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
 				// This is a regular free variable (defined in an outer scope that's not global)

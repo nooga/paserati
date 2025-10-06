@@ -19,6 +19,7 @@ type FunctionObject struct {
 	IsDerivedConstructor bool        // True for derived class constructors (must call super())
 	Properties          *PlainObject // For properties like .prototype (created lazily)
 	Prototype           Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
+	NameBindingRegister int          // For named function expressions: register to initialize with closure (-1 if not used)
 }
 
 type Upvalue struct {
@@ -111,6 +112,7 @@ func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name stri
 		IsGenerator:  isGenerator,
 		IsAsync:      isAsync,
 		IsArrowFunction: isArrowFunction,
+		NameBindingRegister: -1, // Default: no name binding
 		Properties:   nil, // Start with nil - create lazily
 	}
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}
