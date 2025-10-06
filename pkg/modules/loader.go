@@ -212,8 +212,18 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 				record.State = ModuleError
 				return record, nil
 			}
-			
+
 			record.CompiledChunk = vmChunk
+
+			// Store export indices for dynamic import support
+			// Convert map[string]int to map[string]uint16
+			exportGlobalIndices := moduleCompiler.GetExportGlobalIndices()
+			exportIndices := make(map[string]uint16, len(exportGlobalIndices))
+			for name, idx := range exportGlobalIndices {
+				exportIndices[name] = uint16(idx)
+			}
+			record.ExportIndices = exportIndices
+			debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(exportIndices), record.ResolvedPath)
 		}
 		record.State = ModuleCompiled
 	} else {
@@ -671,9 +681,18 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 				record.State = ModuleError
 				continue
 			}
-			
+
 			// Store the compiled chunk
 			record.CompiledChunk = vmChunk
+
+			// Store export indices for dynamic import support
+			exportGlobalIndices := moduleCompiler.GetExportGlobalIndices()
+			exportIndices := make(map[string]uint16, len(exportGlobalIndices))
+			for name, idx := range exportGlobalIndices {
+				exportIndices[name] = uint16(idx)
+			}
+			record.ExportIndices = exportIndices
+
 			debugPrintf("// [ModuleLoader] Module '%s' compiled successfully\n", modulePath)
 		}
 		

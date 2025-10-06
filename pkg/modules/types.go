@@ -73,8 +73,9 @@ type ModuleRecord struct {
 	// Type information
 	Exports      map[string]types.Type // Exported types
 	ExportValues map[string]vm.Value   // Exported runtime values
+	ExportIndices map[string]uint16    // Export name to global heap index mapping (for dynamic import)
 	Namespace    vm.Value              // Module namespace object
-	
+
 	// Compilation results
 	CompiledChunk *vm.Chunk       // Compiled bytecode chunk for execution
 	
@@ -260,6 +261,14 @@ func (mr *ModuleRecord) GetExportValues() map[string]vm.Value {
 		return make(map[string]vm.Value)
 	}
 	return mr.ExportValues
+}
+
+// GetExportIndices returns the export name to global index mapping
+func (mr *ModuleRecord) GetExportIndices() map[string]uint16 {
+	if mr.ExportIndices == nil {
+		return make(map[string]uint16)
+	}
+	return mr.ExportIndices
 }
 
 // IsNativeModule returns true if this is a native module

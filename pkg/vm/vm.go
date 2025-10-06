@@ -27,6 +27,7 @@ type ModuleLoader interface {
 // ModuleRecord interface to avoid circular imports
 type ModuleRecord interface {
 	GetExportValues() map[string]Value
+	GetExportIndices() map[string]uint16
 	GetCompiledChunk() *Chunk
 	GetExportNames() []string
 	GetError() error
@@ -3902,40 +3903,46 @@ startExecution:
 			specifierReg := code[ip+1]
 			ip += 2
 
+			// Save current frame state
+			frame.ip = ip
+
 			// Get the module specifier from the register
 			specifierValue := registers[specifierReg]
 			specifier := specifierValue.ToString()
 
-			// Load the module synchronously
+			// Execute the module using the standard module loading infrastructure
+			// This goes through the resolver chain (fs, virtual, data URLs, native modules)
 			// TODO: Implement proper Promise-based async loading
-			if vm.moduleLoader == nil {
-				return vm.runtimeError("Dynamic import is not available: no module loader"), Undefined
+			status, _ := vm.executeModule(specifier)
+			if status != InterpretOK {
+				// Error was already set by executeModule
+				return status, Undefined
 			}
 
-			// Load the module using the module loader
-			// fromPath is the current module path
-			moduleRecord, err := vm.moduleLoader.LoadModule(specifier, vm.currentModulePath)
-			if err != nil {
-				return vm.runtimeError("Failed to dynamically import module '%s': %v", specifier, err), Undefined
+			// Get the module context to access its exports
+			moduleCtx, exists := vm.moduleContexts[specifier]
+			if !exists {
+				return vm.runtimeError("Module '%s' was loaded but context is missing", specifier), Undefined
 			}
 
-			// Check if module had errors during loading
-			if moduleRecord.GetError() != nil {
-				return vm.runtimeError("Module '%s' failed to load: %v", specifier, moduleRecord.GetError()), Undefined
+			// Ensure exports are collected
+			if len(moduleCtx.exports) == 0 {
+				vm.collectModuleExports(specifier, moduleCtx)
 			}
 
-			// Return the module's namespace object (ExportValues)
-			// This should be a DictObject containing all exported names
+			// Create a namespace object containing all exports
 			namespaceObj := NewDictObject(vm.ObjectPrototype)
 			namespaceDict := namespaceObj.AsDictObject()
 
 			// Copy all exports into the namespace object
-			exportValues := moduleRecord.GetExportValues()
-			for exportName, exportValue := range exportValues {
+			for exportName, exportValue := range moduleCtx.exports {
 				namespaceDict.SetOwn(exportName, exportValue)
 			}
 
 			registers[destReg] = namespaceObj
+
+			// Restore frame state
+			frame.ip = ip
 
 		case OpGetGlobal:
 			destReg := code[ip]
@@ -6669,39 +6676,43 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 			// These were populated by the driver's collectExportedValues() function
 			exportValues := moduleRecord.GetExportValues()
 
-			// If no export values were collected, try to collect them manually from VM globals
+			// If no export values were collected, try to collect them using export indices
 			if len(exportValues) == 0 {
-				// fmt.Printf("// [VM DEBUG] collectModuleExports: No export values found for module '%s', attempting manual collection\n", modulePath)
-				exportNames := moduleRecord.GetExportNames()
-				// fmt.Printf("// [VM DEBUG] collectModuleExports: Expected export names: %v\n", exportNames)
+				exportIndices := moduleRecord.GetExportIndices()
 
-				// Manual collection: scan the VM's heap for values that match exported names
-				// This is a fallback when the driver's collectExportedValues() wasn't called
-				manuallyCollected := make(map[string]Value)
-				for _, exportName := range exportNames {
-					// Skip type-only exports
-					if exportName == "Vector2D" {
-						manuallyCollected[exportName] = Undefined
-						continue
+				if len(exportIndices) > 0 {
+					// Use the export indices mapping to collect values directly from the heap
+					// This is the proper way for dynamically imported modules
+					for exportName, globalIdx := range exportIndices {
+						if value, exists := vm.heap.Get(int(globalIdx)); exists {
+							moduleCtx.exports[exportName] = value
+						} else {
+							moduleCtx.exports[exportName] = Undefined
+						}
+					}
+				} else {
+					// Final fallback: manual heap scanning (legacy approach)
+					// fmt.Printf("// [VM DEBUG] collectModuleExports: No export indices found for module '%s', attempting manual collection\n", modulePath)
+					exportNames := moduleRecord.GetExportNames()
+
+					manuallyCollected := make(map[string]Value)
+					for _, exportName := range exportNames {
+						// Skip type-only exports
+						if exportName == "Vector2D" {
+							manuallyCollected[exportName] = Undefined
+							continue
+						}
+
+						// Try to find a global variable or heap value that corresponds to this export
+						foundValue := vm.findExportValueInHeap(exportName)
+						manuallyCollected[exportName] = foundValue
 					}
 
-					// Try to find a global variable or heap value that corresponds to this export
-					foundValue := vm.findExportValueInHeap(exportName)
-					manuallyCollected[exportName] = foundValue
-					// if foundValue.Type() != TypeUndefined {
-					//	fmt.Printf("// [VM DEBUG] collectModuleExports: Manually found '%s' = %s (type %d)\n",
-					//		exportName, foundValue.ToString(), int(foundValue.Type()))
-					// } else {
-					//	fmt.Printf("// [VM DEBUG] collectModuleExports: Could not find value for export '%s'\n", exportName)
-					// }
+					// Use the manually collected values
+					for exportName, exportValue := range manuallyCollected {
+						moduleCtx.exports[exportName] = exportValue
+					}
 				}
-
-				// Use the manually collected values
-				for exportName, exportValue := range manuallyCollected {
-					moduleCtx.exports[exportName] = exportValue
-				}
-
-				// fmt.Printf("// [VM DEBUG] collectModuleExports: Manually collected %d export values for module '%s'\n", len(manuallyCollected), modulePath)
 			} else {
 				// Copy the export values directly to the module context
 				for exportName, exportValue := range exportValues {
@@ -6789,35 +6800,36 @@ func (vm *VM) createModuleNamespace(modulePath string) Value {
 // findExportValueInHeap searches for an exported value in the VM's global heap
 // This is a fallback method when proper export mapping is not available
 func (vm *VM) findExportValueInHeap(exportName string) Value {
-	// This is a heuristic approach - scan the heap for values that could correspond to exports
-
-	// Skip builtin globals (these are at lower indices)
-	// The exact range depends on how many builtins are registered
-	const BUILTIN_GLOBALS_END = 22 // Approximate end of builtin globals
-
-	// Search for heap values that might correspond to this export
+	// Search for the exported value in the global heap by scanning for matching names
 	heapSize := vm.heap.Size()
-	// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Searching for '%s' in heap (size=%d, scanning from %d)\n",
-	//	exportName, heapSize, BUILTIN_GLOBALS_END)
 
-	// Collect all functions and objects from the heap first
+	// First pass: look for functions with matching names
+	for i := 0; i < heapSize; i++ {
+		if value, exists := vm.heap.Get(i); exists {
+			if value.Type() == TypeFunction {
+				if fnObj := value.AsFunction(); fnObj != nil && fnObj.Name == exportName {
+					return value
+				}
+			}
+		}
+	}
+
+	// Second pass: for non-function exports, use legacy hardcoded logic
+	// TODO: Implement proper export tracking in the compiler
+	const BUILTIN_GLOBALS_END = 22
 	var functions []Value
 	var objects []Value
 
 	for i := BUILTIN_GLOBALS_END; i < heapSize && i < BUILTIN_GLOBALS_END+20; i++ {
 		if value, exists := vm.heap.Get(i); exists {
-			// fmt.Printf("// [VM DEBUG] findExportValueInHeap: heap[%d] = %s (type %d)\n", i, value.ToString(), int(value.Type()))
 			if value.Type() == TypeFunction {
 				functions = append(functions, value)
-				// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Found function at heap[%d]: %s\n", i, value.ToString())
 			} else if value.Type() == TypeObject {
 				objects = append(objects, value)
-				// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Found object at heap[%d]: %s\n", i, value.ToString())
 			}
 		}
 	}
 
-	// Now map exports to specific values based on name matching
 	switch exportName {
 	case "add":
 		// Try to find the function with the right name

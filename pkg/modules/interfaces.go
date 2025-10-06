@@ -135,6 +135,7 @@ type Compiler interface {
 	EnableModuleMode(modulePath string, loader ModuleLoader)
 	SetChecker(checker TypeChecker)
 	Compile(node parser.Node) (interface{}, []errors.PaseratiError)
+	GetExportGlobalIndices() map[string]int
 }
 
 // DependencyAnalyzer tracks module dependencies during loading

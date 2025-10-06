@@ -267,9 +267,9 @@ func compileAndInitializeVMNew(scriptPath string) *TestResult {
 		setupManualTypeImports(paserati)
 	}
 
-	// Check if the script contains import statements - if so, use module system
+	// Check if the script contains import statements (static or dynamic) - if so, use module system
 	sourceCode := string(sourceBytes)
-	if strings.Contains(sourceCode, "import ") {
+	if strings.Contains(sourceCode, "import ") || strings.Contains(sourceCode, "import(") {
 		// Use module-aware compilation and execution
 		result, compileAndRunErrs := paserati.RunStringWithModules(sourceCode)
 		if len(compileAndRunErrs) > 0 {

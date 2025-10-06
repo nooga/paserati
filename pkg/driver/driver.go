@@ -573,6 +573,14 @@ func (p *Paserati) RunModule(filename string) bool {
 	if p.compiler.IsModuleMode() {
 		exportedValues := p.collectExportedValues()
 		moduleRecord.ExportValues = exportedValues
+		// Also store the export indices mapping for dynamic import support
+		// Convert map[string]int to map[string]uint16
+		exportGlobalIndices := p.compiler.GetExportGlobalIndices()
+		exportIndices := make(map[string]uint16, len(exportGlobalIndices))
+		for name, idx := range exportGlobalIndices {
+			exportIndices[name] = uint16(idx)
+		}
+		moduleRecord.ExportIndices = exportIndices
 		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 	}
 
@@ -686,6 +694,14 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 	if p.compiler.IsModuleMode() {
 		exportedValues := p.collectExportedValues()
 		moduleRecord.ExportValues = exportedValues
+		// Also store the export indices mapping for dynamic import support
+		// Convert map[string]int to map[string]uint16
+		exportGlobalIndices := p.compiler.GetExportGlobalIndices()
+		exportIndices := make(map[string]uint16, len(exportGlobalIndices))
+		for name, idx := range exportGlobalIndices {
+			exportIndices[name] = uint16(idx)
+		}
+		moduleRecord.ExportIndices = exportIndices
 		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 	}
 
