@@ -851,7 +851,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// Special handling for 'arguments' identifier - only available in non-arrow functions
 		if node.Value == "arguments" {
 			// Check if we're inside a function (not global scope)
-			if c.currentSymbolTable.Outer != nil {
+			hasOuter := c.currentSymbolTable.Outer != nil
+			if hasOuter {
 				// Emit OpGetArguments to create arguments object on demand
 				c.emitGetArguments(hint, node.Token.Line)
 				return hint, nil

@@ -1066,17 +1066,18 @@ func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint R
 	// Per ECMAScript spec, typeof is the only operator with this behavior
 	if ident, ok := node.Operand.(*parser.Identifier); ok {
 		// Check if identifier exists in symbol table
+		// Special handling: 'arguments' is available in function scope but not in symbol table
 		_, _, found := c.currentSymbolTable.Resolve(ident.Value)
 
-		if !found {
-			// Identifier doesn't exist - emit special OpTypeofIdentifier that returns "undefined"
+		if !found && ident.Value != "arguments" {
+			// Identifier doesn't exist (and it's not 'arguments') - emit special OpTypeofIdentifier that returns "undefined"
 			if hint == NoHint || hint == BadRegister {
 				hint = c.regAlloc.Alloc()
 			}
 			c.emitTypeofIdentifier(hint, ident.Value, node.Token.Line)
 			return hint, nil
 		}
-		// If identifier exists, fall through to normal compilation
+		// If identifier exists (or is 'arguments'), fall through to normal compilation
 	}
 
 	// For all other expressions, compile normally and then typeof

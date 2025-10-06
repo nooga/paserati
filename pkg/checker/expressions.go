@@ -1957,9 +1957,10 @@ func (c *Checker) checkTypeofExpression(node *parser.TypeofExpression) {
 	// Per ECMAScript spec, typeof is the only operator that doesn't throw ReferenceError for undefined variables
 	if ident, ok := node.Operand.(*parser.Identifier); ok {
 		// Check if identifier exists
+		// Special handling: 'arguments' is available in function scope but may not be in env yet
 		_, _, found := c.env.Resolve(ident.Value)
-		if !found {
-			// Identifier doesn't exist - typeof will return "undefined" string literal type
+		if !found && ident.Value != "arguments" {
+			// Identifier doesn't exist (and it's not 'arguments') - typeof will return "undefined" string literal type
 			node.SetComputedType(&types.LiteralType{Value: vm.String("undefined")})
 			node.Operand.SetComputedType(types.Any) // Set operand type to Any to avoid errors
 			return
