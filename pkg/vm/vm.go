@@ -3456,12 +3456,9 @@ startExecution:
 				}
 				// Allow fewer arguments for constructors with optional parameters
 				// The compiler handles padding with undefined for missing optional parameters
-				// For variadic functions, allow any number of arguments >= Arity
-				if !constructorFunc.Variadic && argCount > constructorFunc.Arity {
-					frame.ip = callerIP
-					status := vm.runtimeError("Constructor expected at most %d arguments but got %d.", constructorFunc.Arity, argCount)
-					return status, Undefined
-				}
+				// JavaScript allows passing more arguments than the function declares - they are
+				// simply ignored or can be accessed via the arguments object
+				// No arity checking needed for extra arguments
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow during constructor call.")
@@ -3599,12 +3596,9 @@ startExecution:
 
 				// Allow fewer arguments for constructors with optional parameters
 				// The compiler handles padding with undefined for missing optional parameters
-				// For variadic functions, allow any number of arguments >= Arity
-				if !constructorFunc.Variadic && argCount > constructorFunc.Arity {
-					frame.ip = callerIP
-					status := vm.runtimeError("Constructor expected at most %d arguments but got %d.", constructorFunc.Arity, argCount)
-					return status, Undefined
-				}
+				// JavaScript allows passing more arguments than the function declares - they are
+				// simply ignored or can be accessed via the arguments object
+				// No arity checking needed for extra arguments
 				if vm.frameCount == MaxFrames {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow during constructor call.")

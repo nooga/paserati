@@ -1043,20 +1043,14 @@ func (c *Checker) extractRestParameterType(fn *parser.FunctionLiteral) types.Typ
 func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superClassExpr parser.Expression) {
 	debugPrintf("// [Checker Class] === STARTING handleClassInheritance: %s extends %s ===\n", instanceType.GetClassName(), superClassExpr.String())
 
-	// Resolve the superclass type expression (supports both simple names and generic applications)
-	superType := c.resolveTypeAnnotation(superClassExpr)
-	if superType == nil {
-		c.addError(superClassExpr, "failed to resolve superclass type")
-		return
-	}
-
 	// Handle different superclass types
 	var constructorType types.Type
+	var superType types.Type
 	var exists bool
 
 	debugPrintf("// [Checker Class] Analyzing superclass expression type: %T\n", superClassExpr)
 
-	// If it's a simple identifier, try to resolve it as a variable (class constructor)
+	// If it's a simple identifier, try to resolve it as a variable (class constructor or function)
 	if ident, ok := superClassExpr.(*parser.Identifier); ok {
 		debugPrintf("// [Checker Class] Superclass is simple identifier: %s\n", ident.Value)
 		constructorType, _, exists = c.env.Resolve(ident.Value)
@@ -1064,6 +1058,8 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 			c.addError(superClassExpr, fmt.Sprintf("superclass '%s' is not defined", ident.Value))
 			return
 		}
+		// For identifiers, the constructor type is also the super type
+		superType = constructorType
 	} else if genRef, ok := superClassExpr.(*parser.GenericTypeRef); ok {
 		// For generic type applications like Container<T>, we need to:
 		// 1. Resolve the base type as a constructor
@@ -1097,10 +1093,16 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		}
 		exists = true
 		debugPrintf("// [Checker Class] Set constructorType and exists=true for GenericTypeRef\n")
+		// Also resolve superType via type annotation for generic refs
+		superType = c.resolveTypeAnnotation(superClassExpr)
 	} else {
-		// For other expressions, try to use the resolved type
-		// This might not work for all cases but provides a fallback
+		// For other expressions, try to resolve as type annotation
 		debugPrintf("// [Checker Class] Processing 'else' branch for superclass type\n")
+		superType = c.resolveTypeAnnotation(superClassExpr)
+		if superType == nil {
+			c.addError(superClassExpr, "failed to resolve superclass type")
+			return
+		}
 		constructorType = superType
 		exists = true
 	}
@@ -1113,11 +1115,11 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	}
 	debugPrintf("// [Checker Class] Constructor resolution successful, exists = true\n")
 
-	// Verify constructorType is a constructor (class)
+	// Verify constructorType is a constructor (class or function)
 	var superObjType *types.ObjectType
 	var ok bool
 
-	// Handle both ObjectType (regular classes) and GenericType (generic classes)
+	// Handle ObjectType (regular classes and functions) and GenericType (generic classes)
 	switch ct := constructorType.(type) {
 	case *types.ObjectType:
 		superObjType = ct
@@ -1135,17 +1137,23 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	}
 
 	if !ok {
-		c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassExpr.String()))
+		c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class or constructor function and cannot be extended", superClassExpr.String()))
 		return
 	}
 
-	// Check if it has constructor signatures (indicating it's a class constructor)
-	// Skip this check for generic types for now
+	// Check if it has constructor signatures or call signatures
+	// Classes have ConstructSignatures, functions have CallSignatures (and can be used as constructors in JS)
 	if constructorType, ok := constructorType.(*types.ObjectType); ok {
-		if len(constructorType.ConstructSignatures) == 0 {
-			c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class and cannot be extended", superClassExpr.String()))
+		hasConstructor := len(constructorType.ConstructSignatures) > 0
+		hasCallable := len(constructorType.CallSignatures) > 0
+
+		if !hasConstructor && !hasCallable {
+			c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class or constructor function and cannot be extended", superClassExpr.String()))
 			return
 		}
+
+		// Accept both class constructors and callable functions as valid superclasses
+		debugPrintf("// [Checker Class] Superclass is callable: hasConstructor=%t, hasCallable=%t\n", hasConstructor, hasCallable)
 	}
 
 	// For simple identifiers, we can get the instance type by name
@@ -1154,8 +1162,20 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	if ident, ok := superClassExpr.(*parser.Identifier); ok {
 		superInstanceType = c.getClassInstanceType(ident.Value)
 		if superInstanceType == nil {
-			c.addError(superClassExpr, fmt.Sprintf("could not find instance type for superclass '%s'", ident.Value))
-			return
+			// For function constructors (which have CallSignatures but no ConstructSignatures),
+			// there's no registered instance type. Use a placeholder ObjectType.
+			if objType, isObjType := constructorType.(*types.ObjectType); isObjType {
+				if len(objType.CallSignatures) > 0 && len(objType.ConstructSignatures) == 0 {
+					debugPrintf("// [Checker Class] Using placeholder instance type for function constructor '%s'\n", ident.Value)
+					superInstanceType = types.NewObjectType()
+				} else {
+					c.addError(superClassExpr, fmt.Sprintf("could not find instance type for superclass '%s'", ident.Value))
+					return
+				}
+			} else {
+				c.addError(superClassExpr, fmt.Sprintf("could not find instance type for superclass '%s'", ident.Value))
+				return
+			}
 		}
 	} else {
 		// For generic applications, use the resolved type as the instance type
