@@ -827,9 +827,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil
 
 	case *parser.ImportMetaExpression:
-		// Load import.meta value - for now, just load an empty object
-		// TODO: Implement proper import.meta support with module metadata
-		c.emitLoadUndefined(hint, node.Token.Line) // For now, use undefined
+		// Load import.meta value from module context
+		c.emitLoadImportMeta(hint, node.Token.Line)
 		return hint, nil
 
 	case *parser.Identifier:
@@ -895,11 +894,31 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 		if isRecursiveSelfCall {
 			debugPrintf("// DEBUG Identifier '%s': Identified as RECURSIVE SELF CALL\n", node.Value) // <<< ADDED
-			// Treat as a free variable that captures the closure itself.
-			freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-			c.emitOpCode(vm.OpLoadFree, node.Token.Line)
-			c.emitByte(byte(hint))
-			c.emitByte(byte(freeVarIndex))
+			// Check if the recursive call is actually to a global variable
+			// (happens in module mode where top-level let/const become globals)
+			// Find the root compiler (module level)
+			rootCompiler := c
+			for rootCompiler.enclosing != nil {
+				rootCompiler = rootCompiler.enclosing
+			}
+			// Check if symbol is being defined at module level (root has no enclosing)
+			isModuleLevelDef := (rootCompiler == c.enclosing) && symbolRef.Register == nilRegister
+
+			if symbolRef.IsGlobal || isModuleLevelDef {
+				// This is a global recursive call - module mode top-level function
+				// The variable will be stored as a global, so use OpGetGlobal
+				debugPrintf("// DEBUG Identifier '%s': Recursive call to GLOBAL (IsGlobal=%v, isModuleLevelDef=%v), using OpGetGlobal\n", node.Value, symbolRef.IsGlobal, isModuleLevelDef)
+				// Get or assign the global index
+				globalIdx := c.GetOrAssignGlobalIndex(node.Value)
+				c.emitGetGlobal(hint, globalIdx, node.Token.Line)
+			} else {
+				// True local recursive call - needs upvalue capture
+				debugPrintf("// DEBUG Identifier '%s': Recursive call to LOCAL, using upvalue\n", node.Value)
+				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
+				c.emitOpCode(vm.OpLoadFree, node.Token.Line)
+				c.emitByte(byte(hint))
+				c.emitByte(byte(freeVarIndex))
+			}
 		} else if symbolRef.IsGlobal {
 			// This is a global variable, use OpGetGlobal
 			debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED

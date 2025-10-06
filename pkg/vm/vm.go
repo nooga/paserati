@@ -304,6 +304,11 @@ func (vm *VM) SetModuleLoader(loader ModuleLoader) {
 	vm.moduleLoader = loader
 }
 
+// SetCurrentModulePath sets the current module path for module-specific features like import.meta
+func (vm *VM) SetCurrentModulePath(modulePath string) {
+	vm.currentModulePath = modulePath
+}
+
 // GetGlobal retrieves a global variable by name
 func (vm *VM) GetGlobal(name string) (Value, bool) {
 	// Attempt to resolve by a name->index map if the heap exposes one
@@ -3871,6 +3876,26 @@ startExecution:
 			} else {
 				registers[destReg] = Undefined
 			}
+
+		case OpLoadImportMeta:
+			destReg := code[ip]
+			ip++
+
+			// Create import.meta object with module metadata
+			// In ES modules, import.meta provides meta-information about the current module
+			importMetaValue := NewDictObject(vm.ObjectPrototype)
+			importMetaObj := importMetaValue.AsDictObject()
+
+			// Set import.meta.url property to the current module path
+			// In a real environment this would be a file:// URL, but we use the module path
+			if vm.currentModulePath != "" {
+				importMetaObj.SetOwn("url", NewString(vm.currentModulePath))
+			} else {
+				// If not in a module context, use undefined (though this shouldn't happen)
+				importMetaObj.SetOwn("url", Undefined)
+			}
+
+			registers[destReg] = importMetaValue
 
 		case OpGetGlobal:
 			destReg := code[ip]

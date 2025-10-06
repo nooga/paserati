@@ -450,10 +450,8 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 		return false, fmt.Errorf("failed to read test: %w", err)
 	}
 
-	// Skip tests with imports for now (until we have full module support)
-	if strings.Contains(string(content), "import ") || strings.Contains(string(content), "export ") {
-		return false, nil // Skipped
-	}
+	// Module mode is now default - no need to skip import/export tests
+	// All code runs as modules transparently
 
 	// Create context with timeout to properly cancel goroutines
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

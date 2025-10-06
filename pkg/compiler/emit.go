@@ -251,6 +251,12 @@ func (c *Compiler) emitLoadNewTarget(dest Register, line int) {
 	c.emitByte(byte(dest))
 }
 
+// emitLoadImportMeta emits OpLoadImportMeta to load import.meta object from current module context
+func (c *Compiler) emitLoadImportMeta(dest Register, line int) {
+	c.emitOpCode(vm.OpLoadImportMeta, line)
+	c.emitByte(byte(dest))
+}
+
 // emitGetArguments emits OpGetArguments to create arguments object from current function arguments
 func (c *Compiler) emitGetArguments(dest Register, line int) {
 	c.emitOpCode(vm.OpGetArguments, line)

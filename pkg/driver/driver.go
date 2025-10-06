@@ -311,54 +311,26 @@ func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiE
 // RunString compiles and executes the given source code in the current session.
 // It uses the persistent type checker environment.
 // Returns the result value and any errors that occurred.
+// RunString executes Paserati source code in module mode.
+// All code is executed as a module, which means:
+// - import statements work
+// - export statements work
+// - Top-level variables don't pollute global scope (they're module-scoped)
+// - Simple scripts still work transparently
+//
+// This is the new default behavior - module mode everywhere.
 func (p *Paserati) RunString(sourceCode string) (vm.Value, []errors.PaseratiError) {
+	// Parse the source code
 	sourceFile := source.NewEvalSource(sourceCode)
 	l := lexer.NewLexerWithSource(sourceFile)
 	parseInstance := parser.NewParser(l)
-	// Parse into a Program node, which the checker expects
 	program, parseErrs := parseInstance.ParseProgram()
 	if len(parseErrs) > 0 {
-		// Convert parser errors (which might not implement PaseratiError directly)
-		// TODO: Ensure parser errors conform to PaseratiError interface or wrap them.
-		// For now, we'll assume they are compatible or handle later.
-		// If ParseProgram already returns PaseratiError, this is fine.
-		// If not, we need a conversion step here.
-		// Let's assume parser.ParseProgram returns compatible errors for now.
 		return vm.Undefined, parseErrs
 	}
 
-	// Dump AST if enabled
-	parser.DumpAST(program, "RunString")
-
-	// --- Type Checking is now done inside Compiler.Compile using the persistent checker ---
-	// No need to call p.checker.Check(program) here directly.
-
-	// --- Compilation Step ---
-	// Set the compiler's ignore type errors flag based on our setting
-	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
-
-	chunk, compileAndTypeErrs := p.compiler.Compile(program)
-	if len(compileAndTypeErrs) > 0 {
-		return vm.Undefined, compileAndTypeErrs
-	}
-	if chunk == nil {
-		// Handle internal compiler error where no chunk is returned despite no errors
-		internalErr := &errors.RuntimeError{
-			Position: errors.Position{Line: 0, Column: 0}, // Placeholder position
-			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
-		}
-		return vm.Undefined, []errors.PaseratiError{internalErr}
-	}
-	// --- End Compilation ---
-
-	// --- Execution Step (using persistent VM) ---
-	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
-
-	// Drain microtasks for async operations (Promises, etc.)
-	p.vmInstance.DrainMicrotasks()
-
-	// Interpret errors are already PaseratiError
-	return finalValue, runtimeErrs
+	// Always run in module mode (module-first design)
+	return p.runAsModule(sourceCode, program, "__eval_module__")
 }
 
 // DisplayResult formats and prints the result value and any errors.
@@ -583,6 +555,9 @@ func (p *Paserati) RunModule(filename string) bool {
 		moduleRecord.CompiledChunk = chunk
 	}
 
+	// Set the module path in the VM so import.meta.url works correctly
+	p.vmInstance.SetCurrentModulePath(moduleRecord.ResolvedPath)
+
 	// Execute the module
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 	if len(runtimeErrs) > 0 {
@@ -701,6 +676,9 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		moduleRecord.CompiledChunk = chunk
 	}
 
+	// Set the module path in the VM so import.meta.url works correctly
+	p.vmInstance.SetCurrentModulePath(moduleRecord.ResolvedPath)
+
 	// Execute the module and return the final value
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 
@@ -717,26 +695,11 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 // RunStringWithModules runs TypeScript code that may contain import statements.
 // If imports are detected, it automatically enables module mode.
 // If no imports are found, it falls back to script mode like RunString.
+// RunStringWithModules executes Paserati source code in module mode.
+// DEPRECATED: Use RunString instead - all code now runs in module mode by default.
+// This method is kept for backward compatibility and simply calls RunString.
 func (p *Paserati) RunStringWithModules(sourceCode string) (vm.Value, []errors.PaseratiError) {
-	// First, parse to detect if there are any import statements
-	sourceFile := source.NewEvalSource(sourceCode)
-	l := lexer.NewLexerWithSource(sourceFile)
-	parseInstance := parser.NewParser(l)
-	program, parseErrs := parseInstance.ParseProgram()
-	if len(parseErrs) > 0 {
-		return vm.Undefined, parseErrs
-	}
-
-	// Check if the program contains import statements
-	hasImports := containsImports(program)
-
-	if hasImports {
-		// Use module mode - create a temporary module and run it
-		return p.runAsTemporaryModule(sourceCode, program)
-	} else {
-		// Use script mode like normal RunString
-		return p.RunString(sourceCode)
-	}
+	return p.RunString(sourceCode)
 }
 
 // containsImports checks if a program contains any import statements
@@ -749,11 +712,9 @@ func containsImports(program *parser.Program) bool {
 	return false
 }
 
-// runAsTemporaryModule runs code with imports as a temporary module
-func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Program) (vm.Value, []errors.PaseratiError) {
-	// Create a temporary module name
-	tempModuleName := "__temp_module__"
-
+// runAsModule runs code as a module with the given module name
+// This is the unified path for all module execution
+func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, moduleName string) (vm.Value, []errors.PaseratiError) {
 	// Preload all native modules that might be imported
 	// This ensures their exports are registered with HeapAlloc before compilation
 	if err := p.preloadNativeModules(program); err != nil {
@@ -761,11 +722,11 @@ func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Progr
 	}
 
 	// Enable module mode in checker and compiler
-	p.checker.EnableModuleMode(tempModuleName, p.moduleLoader)
-	p.compiler.EnableModuleMode(tempModuleName, p.moduleLoader)
+	p.checker.EnableModuleMode(moduleName, p.moduleLoader)
+	p.compiler.EnableModuleMode(moduleName, p.moduleLoader)
 
 	// Dump AST if enabled
-	parser.DumpAST(program, "RunStringWithModules")
+	parser.DumpAST(program, "runAsModule")
 
 	// Compile with module mode enabled
 	// Set the compiler's ignore type errors flag based on our setting
@@ -783,10 +744,22 @@ func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Progr
 		return vm.Undefined, []errors.PaseratiError{internalErr}
 	}
 
+	// Set the module path in the VM so import.meta.url works correctly
+	p.vmInstance.SetCurrentModulePath(moduleName)
+
 	// Execute the chunk
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 
+	// Drain microtasks for async operations (Promises, etc.)
+	p.vmInstance.DrainMicrotasks()
+
 	return finalValue, runtimeErrs
+}
+
+// runAsTemporaryModule runs code with imports as a temporary module
+// DEPRECATED: Use runAsModule instead
+func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Program) (vm.Value, []errors.PaseratiError) {
+	return p.runAsModule(sourceCode, program, "__temp_module__")
 }
 
 // EmitJavaScript parses TypeScript source and emits equivalent JavaScript code
@@ -871,10 +844,12 @@ type RunOptions struct {
 	ShowTokens     bool
 	ShowAST        bool
 	ShowBytecode   bool
-	ShowCacheStats bool // Show inline cache statistics
+	ShowCacheStats bool   // Show inline cache statistics
+	ModuleName     string // Module name to use (defaults to "__code_module__" if empty)
 }
 
-// RunCode runs source code with the given Paserati session and options
+// RunCode runs source code with the given Paserati session and options.
+// Now runs in module mode by default.
 func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []errors.PaseratiError) {
 	sourceFile := source.NewEvalSource(sourceCode)
 	l := lexer.NewLexerWithSource(sourceFile)
@@ -884,46 +859,40 @@ func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []e
 		return vm.Undefined, parseErrs
 	}
 
-	// Dump AST if enabled
-	parser.DumpAST(program, "RunCode")
-
-	// --- Compilation Step ---
-	// Set the compiler's ignore type errors flag based on our setting
-	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
-
-	chunk, compileAndTypeErrs := p.compiler.Compile(program)
-	if len(compileAndTypeErrs) > 0 {
-		return vm.Undefined, compileAndTypeErrs
+	// Determine module name - use provided name or default to "__code_module__"
+	moduleName := options.ModuleName
+	if moduleName == "" {
+		moduleName = "__code_module__"
 	}
-	if chunk == nil {
-		internalErr := &errors.RuntimeError{
-			Position: errors.Position{Line: 0, Column: 0},
-			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+
+	// Run in module mode
+	value, errs := p.runAsModule(sourceCode, program, moduleName)
+
+	// Get the compiled chunk for debugging output if needed
+	if options.ShowBytecode || options.ShowCacheStats {
+		// Re-compile to get chunk for display (the runAsModule already executed it)
+		// This is a bit wasteful but only happens when debugging flags are on
+		p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+		chunk, _ := p.compiler.Compile(program)
+
+		if chunk != nil {
+			// Show bytecode if requested
+			if options.ShowBytecode {
+				fmt.Println("\n=== Bytecode ===")
+				fmt.Print(chunk.DisassembleChunk("<module>"))
+				fmt.Println("================")
+			}
 		}
-		return vm.Undefined, []errors.PaseratiError{internalErr}
+
+		// Show cache statistics if requested
+		if options.ShowCacheStats {
+			fmt.Println("\n=== Inline Cache Statistics ===")
+			p.vmInstance.PrintCacheStats()
+			fmt.Println("===============================")
+		}
 	}
 
-	// Show bytecode if requested
-	if options.ShowBytecode {
-		fmt.Println("\n=== Bytecode ===")
-		fmt.Print(chunk.DisassembleChunk("<script>"))
-		fmt.Println("================")
-	}
-
-	// --- Execution Step (using persistent VM) ---
-	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
-
-	// Drain microtasks for async operations (Promises, etc.)
-	p.vmInstance.DrainMicrotasks()
-
-	// Show cache statistics if requested
-	if options.ShowCacheStats {
-		fmt.Println("\n=== Inline Cache Statistics ===")
-		p.vmInstance.PrintCacheStats()
-		fmt.Println("===============================")
-	}
-
-	return finalValue, runtimeErrs
+	return value, errs
 }
 
 // GetCacheStats returns extended cache statistics from the VM instance

@@ -123,7 +123,7 @@ func runFileWithTypes(filename string, showCacheStats bool, showBytecode bool, i
 	source := string(sourceBytes)
 	paserati := driver.NewPaserati()
 	paserati.SetIgnoreTypeErrors(ignoreTypes)
-	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
+	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, ModuleName: filename}
 	value, errs := paserati.RunCode(source, options)
 	ok := paserati.DisplayResult(source, value, errs)
 	if !ok {
