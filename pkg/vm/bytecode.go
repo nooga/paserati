@@ -184,8 +184,9 @@ const (
 	// --- Async/Await Support ---
 	OpAwait OpCode = 95 // Rx, PromiseReg: Await promise in PromiseReg, store result in Rx when resolved
 
-	// --- Import Meta Support ---
+	// --- Module Support ---
 	OpLoadImportMeta OpCode = 96 // Rx: Load 'import.meta' object from current module context into register Rx
+	OpDynamicImport  OpCode = 97 // Rx SpecifierReg: Dynamically import module at runtime (specifier in SpecifierReg), store namespace in Rx
 
 	// --- Large Literal Support ---
 	OpAllocArray OpCode = 77 // Rx Len(16bit): Preallocate array of length Len into Rx, filled with undefined
@@ -405,9 +406,11 @@ func (op OpCode) String() string {
 	case OpAwait:
 		return "OpAwait"
 
-	// --- Import Meta Support ---
+	// --- Module Support ---
 	case OpLoadImportMeta:
 		return "OpLoadImportMeta"
+	case OpDynamicImport:
+		return "OpDynamicImport"
 
 	// --- Large Literal Support ---
 	case OpAllocArray:
@@ -693,9 +696,11 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpAwait:
 		return c.registerRegisterInstruction(builder, "OpAwait", offset)
 
-	// --- Import Meta Support ---
+	// --- Module Support ---
 	case OpLoadImportMeta:
 		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis: one register operand
+	case OpDynamicImport:
+		return c.registerRegisterInstruction(builder, "OpDynamicImport", offset) // Rx SpecifierReg
 
 	// --- Large Literal Support ---
 	case OpAllocArray:

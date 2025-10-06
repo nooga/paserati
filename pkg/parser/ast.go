@@ -551,6 +551,20 @@ func (ime *ImportMetaExpression) expressionNode()      {}
 func (ime *ImportMetaExpression) TokenLiteral() string { return ime.Token.Literal }
 func (ime *ImportMetaExpression) String() string       { return "import.meta" }
 
+// DynamicImportExpression represents the dynamic import() expression
+// import(specifier) returns a Promise that resolves to a module namespace object
+type DynamicImportExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.IMPORT token
+	Source         Expression  // The module specifier expression
+}
+
+func (die *DynamicImportExpression) expressionNode()      {}
+func (die *DynamicImportExpression) TokenLiteral() string { return die.Token.Literal }
+func (die *DynamicImportExpression) String() string {
+	return fmt.Sprintf("import(%s)", die.Source.String())
+}
+
 // FunctionLiteral represents a function definition.
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }

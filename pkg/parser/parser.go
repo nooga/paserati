@@ -1901,8 +1901,34 @@ func (p *Parser) parseImportMetaExpression() Expression {
 		}
 	}
 
-	// If not import.meta, this should not have been called as a prefix expression
-	p.addError(p.curToken, "unexpected 'import' in expression context (expected import.meta)")
+	// Check if this is dynamic import: import(specifier)
+	if p.peekTokenIs(lexer.LPAREN) {
+		// Don't advance yet - let parseExpressionList handle it
+		// But we need to be positioned at LPAREN for parseExpressionList
+		// Since peekToken is LPAREN, we need to advance to make it curToken
+		p.nextToken() // Now curToken is LPAREN
+
+		// Parse the argument list (should be exactly one expression)
+		args := p.parseExpressionList(lexer.RPAREN)
+
+		// Dynamic import requires exactly one argument
+		if len(args) == 0 {
+			p.addError(importToken, "import() requires a module specifier argument")
+			return nil
+		}
+		if len(args) > 1 {
+			p.addError(importToken, "import() expects exactly one argument")
+			return nil
+		}
+
+		return &DynamicImportExpression{
+			Token:  importToken,
+			Source: args[0],
+		}
+	}
+
+	// If not import.meta or import(), this is an error
+	p.addError(p.curToken, "unexpected 'import' in expression context (expected import.meta or import())")
 	return nil
 }
 

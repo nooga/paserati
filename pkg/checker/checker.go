@@ -1836,6 +1836,21 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(types.Any)
 		debugPrintf("// [Checker ImportMetaExpr] Typed as any (TODO: implement proper ImportMeta type)\n")
 
+	case *parser.DynamicImportExpression:
+		// Dynamic import returns Promise<Module>
+		// Check that the source expression is a string (or can be coerced to string)
+		c.visit(node.Source)
+		sourceType := node.Source.GetComputedType()
+
+		// The specifier should be a string or any type that can be converted to string
+		// For simplicity, accept any type (JavaScript allows this)
+		_ = sourceType
+
+		// Return type is Promise<any> for now
+		// TODO: Create proper Promise<Module> type with module namespace exports
+		node.SetComputedType(types.Any) // Should be Promise<ModuleNamespace>
+		debugPrintf("// [Checker DynamicImportExpr] Typed as Promise<any> (TODO: implement proper Promise<Module> type)\n")
+
 	// --- Other Expressions ---
 	case *parser.Identifier:
 		// --- Check concrete pointer AFTER type switch ---

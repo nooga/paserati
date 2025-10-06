@@ -3897,6 +3897,46 @@ startExecution:
 
 			registers[destReg] = importMetaValue
 
+		case OpDynamicImport:
+			destReg := code[ip]
+			specifierReg := code[ip+1]
+			ip += 2
+
+			// Get the module specifier from the register
+			specifierValue := registers[specifierReg]
+			specifier := specifierValue.ToString()
+
+			// Load the module synchronously
+			// TODO: Implement proper Promise-based async loading
+			if vm.moduleLoader == nil {
+				return vm.runtimeError("Dynamic import is not available: no module loader"), Undefined
+			}
+
+			// Load the module using the module loader
+			// fromPath is the current module path
+			moduleRecord, err := vm.moduleLoader.LoadModule(specifier, vm.currentModulePath)
+			if err != nil {
+				return vm.runtimeError("Failed to dynamically import module '%s': %v", specifier, err), Undefined
+			}
+
+			// Check if module had errors during loading
+			if moduleRecord.GetError() != nil {
+				return vm.runtimeError("Module '%s' failed to load: %v", specifier, moduleRecord.GetError()), Undefined
+			}
+
+			// Return the module's namespace object (ExportValues)
+			// This should be a DictObject containing all exported names
+			namespaceObj := NewDictObject(vm.ObjectPrototype)
+			namespaceDict := namespaceObj.AsDictObject()
+
+			// Copy all exports into the namespace object
+			exportValues := moduleRecord.GetExportValues()
+			for exportName, exportValue := range exportValues {
+				namespaceDict.SetOwn(exportName, exportValue)
+			}
+
+			registers[destReg] = namespaceObj
+
 		case OpGetGlobal:
 			destReg := code[ip]
 			globalIdxHi := code[ip+1]

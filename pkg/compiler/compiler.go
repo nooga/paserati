@@ -831,6 +831,22 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		c.emitLoadImportMeta(hint, node.Token.Line)
 		return hint, nil
 
+	case *parser.DynamicImportExpression:
+		// Compile the module specifier expression
+		specifierReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(specifierReg)
+
+		specifierReg, err := c.compileNode(node.Source, specifierReg)
+		if err != nil {
+			return nilRegister, err
+		}
+
+		// Emit dynamic import instruction
+		// For now, this will load the module synchronously (simplified implementation)
+		// TODO: Implement proper Promise-based async loading
+		c.emitDynamicImport(hint, specifierReg, node.Token.Line)
+		return hint, nil
+
 	case *parser.Identifier:
 		// Special handling for 'arguments' identifier - only available in non-arrow functions
 		if node.Value == "arguments" {
