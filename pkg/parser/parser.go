@@ -3415,7 +3415,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 		startPeek := p.peekToken
 		startErrors := len(p.errors)
 
-		p.nextToken() // Consume '('
+		// parseParameterList expects curToken to be LPAREN
 		params, restParam, _ := p.parseParameterList()
 
 		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
