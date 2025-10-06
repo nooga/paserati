@@ -4887,12 +4887,33 @@ startExecution:
 				// This is the complex case: save state, attach handlers, schedule resumption
 
 				// Check if we're in an async function context
-				// Top-level await: if not in async context, we can't suspend - drain microtasks
+				// Top-level await: if not in async context, drain microtasks until settled
 				if frame.promiseObj == nil {
-					// Top-level await with pending promise - not supported yet
-					// For now, we can't suspend top-level execution
-					status := vm.runtimeError("Top-level await with pending promises is not yet supported")
-					return status, Undefined
+					// Top-level await with pending promise
+					// Drain microtasks repeatedly until the promise settles
+					rt := vm.GetAsyncRuntime()
+					for awaitedPromise.State == PromisePending {
+						// Drain all pending microtasks
+						if !rt.RunUntilIdle() {
+							// No more microtasks and promise still pending
+							// This means the promise will never resolve - error
+							frame.ip = ip
+							status := vm.runtimeError("Top-level await: promise remains pending with no microtasks to process")
+							return status, Undefined
+						}
+						// Check promise state again after draining
+					}
+
+					// Promise has settled - check if fulfilled or rejected
+					switch awaitedPromise.State {
+					case PromiseFulfilled:
+						registers[resultReg] = awaitedPromise.Result
+						continue
+					case PromiseRejected:
+						frame.ip = ip
+						status := vm.runtimeError("Uncaught (in promise): %s", awaitedPromise.Result.Inspect())
+						return status, Undefined
+					}
 				}
 
 				// Save the execution frame state (similar to OpYield)
