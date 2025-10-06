@@ -994,6 +994,7 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	// Set the heap allocator in the main compiler
 	comp.SetHeapAlloc(heapAlloc)
 
+
 	// Set up global variables in VM using the coordinated indices
 	indexMap := heapAlloc.GetNameToIndexMap()
 	if err := vmInstance.SetBuiltinGlobals(globalVariables, indexMap); err != nil {

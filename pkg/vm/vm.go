@@ -3971,6 +3971,7 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
+
 			// Store the retrieved value in the destination register
 			registers[destReg] = value
 

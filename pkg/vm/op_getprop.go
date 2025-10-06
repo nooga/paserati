@@ -3,7 +3,6 @@ package vm
 import "fmt"
 
 func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
-
 	// Generate cache key
 	propNameHash := 0
 	for _, b := range []byte(propName) {
@@ -37,6 +36,7 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 	// 3. NativeFunctionWithProps (like String.fromCharCode)
 	if objVal.Type() == TypeNativeFunctionWithProps {
 		nativeFnWithProps := objVal.AsNativeFunctionWithProps()
+
 		if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
 			if debugVM {
 				if propName == "name" || propName == "constructor" {
