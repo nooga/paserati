@@ -365,8 +365,11 @@ func (vm *VM) Reset() {
 	}
 	// Reset cache statistics
 	vm.cacheStats = ICacheStats{}
-	// Clear global heap
-	vm.heap = NewHeap(64)
+	// Clear user-defined globals from heap while preserving builtins
+	// This prevents memory leaks without destroying Object, Array, etc.
+	if vm.heap != nil {
+		vm.heap.ClearUserGlobals()
+	}
 	// Clear finally state
 	vm.pendingAction = ActionNone
 	vm.pendingValue = Undefined

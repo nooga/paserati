@@ -956,13 +956,40 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	}
 
 	// Get builtin names and preallocate indices in the heap allocator
-	var globalNames []string
-	for name := range globalVariables {
-		globalNames = append(globalNames, name)
-	}
-	heapAlloc.PreallocateBuiltins(globalNames)
+	// IMPORTANT: Separate standard builtins from custom ones to ensure stable indices
+	// Standard builtins (from GetStandardInitializers) must have consistent indices
+	// across all Paserati instances for bytecode compatibility
+	var standardNames []string
+	var customNames []string
 
-	// Debug disabled: PreallocateBuiltins report
+	standardGlobalSet := make(map[string]bool)
+	// Get list of standard builtin names by creating a temporary checker
+	stdInits := builtins.GetStandardInitializers()
+	for _, init := range stdInits {
+		// Create a mock context to collect names
+		mockCtx := &builtins.RuntimeContext{
+			VM: vmInstance,
+			DefineGlobal: func(name string, value vm.Value) error {
+				standardGlobalSet[name] = true
+				return nil
+			},
+		}
+		init.InitRuntime(mockCtx)
+	}
+
+	// Separate globals into standard vs custom
+	for name := range globalVariables {
+		if standardGlobalSet[name] {
+			standardNames = append(standardNames, name)
+		} else {
+			customNames = append(customNames, name)
+		}
+	}
+
+	// Preallocate standard builtins first (indices 0-N)
+	heapAlloc.PreallocateBuiltins(standardNames)
+	// Then preallocate custom builtins (indices N+1 onwards)
+	heapAlloc.PreallocateBuiltins(customNames)
 
 	// Set the heap allocator in the main compiler
 	comp.SetHeapAlloc(heapAlloc)
@@ -972,8 +999,6 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	if err := vmInstance.SetBuiltinGlobals(globalVariables, indexMap); err != nil {
 		return err
 	}
-
-	// Debug disabled: Post-SetBuiltinGlobals report
 
 	return nil
 }

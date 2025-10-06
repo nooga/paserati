@@ -13,6 +13,9 @@ type Heap struct {
 	size         int            // Current size of the heap
 	// optional name -> index map to enable VM.GetGlobal(name)
 	nameToIndex map[string]int
+	// builtinCount tracks how many globals are builtins (indices 0 to builtinCount-1)
+	// Used to preserve builtins during Reset() while clearing user-defined globals
+	builtinCount int
 }
 
 // NewHeap creates a new heap with the specified initial capacity
@@ -163,6 +166,10 @@ func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]i
 		for name, idx := range indexMap {
 			h.nameToIndex[name] = idx
 		}
+
+		// Track builtin count - all indices 0 to maxIndex are builtins
+		// This allows Reset() to preserve builtins while clearing user-defined globals
+		h.builtinCount = maxIndex + 1
 	}
 
 	return nil
@@ -171,4 +178,15 @@ func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]i
 // GetNameToIndex returns the current name->index mapping (if available)
 func (h *Heap) GetNameToIndex() map[string]int {
 	return h.nameToIndex
+}
+
+// ClearUserGlobals resets user-defined globals while preserving builtin globals
+// This is used by VM.Reset() to prevent memory leaks without destroying builtins
+func (h *Heap) ClearUserGlobals() {
+	// Clear all values beyond the builtin range
+	for i := h.builtinCount; i < h.size; i++ {
+		h.values[i] = Undefined
+	}
+	// Reset size to just the builtins
+	h.size = h.builtinCount
 }
