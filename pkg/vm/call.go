@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"os"
 	"unsafe"
 )
 
@@ -396,7 +397,33 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 	default:
 		currentFrame.ip = callerIP
 		// Throw a TypeError exception for non-callable values
-		vm.ThrowTypeError(fmt.Sprintf("%s is not a function", calleeVal.TypeName()))
+		errorMsg := fmt.Sprintf("%s is not a function", calleeVal.TypeName())
+
+		// DEBUG: Add extra context to help identify what's undefined
+		if calleeVal.Type() == TypeUndefined {
+			// Try to provide more context by checking recent bytecode
+			if debugCalls || true { // Temporarily always log undefined function calls
+				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Attempting to call undefined value\n")
+				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Frame count: %d\n", vm.frameCount)
+				// Show last 10 frames to see the recursion pattern
+				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Last 10 frames:\n")
+				start := vm.frameCount - 10
+				if start < 0 {
+					start = 0
+				}
+				for i := start; i < vm.frameCount; i++ {
+					frame := &vm.frames[i]
+					if frame.closure != nil && frame.closure.Fn != nil {
+						fmt.Fprintf(os.Stderr, "  [%d] %s\n", i, frame.closure.Fn.Name)
+					} else {
+						fmt.Fprintf(os.Stderr, "  [%d] <unknown>\n", i)
+					}
+				}
+				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Stack trace:\n%s\n", vm.CaptureStackTrace())
+			}
+		}
+
+		vm.ThrowTypeError(errorMsg)
 		// Return false to indicate we're not switching frames (exception was thrown)
 		return false, nil
 	}

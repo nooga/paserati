@@ -1271,6 +1271,16 @@ startExecution:
 			}
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
+			// DEBUG: Log what we're about to call
+			if calleeVal.Type() == TypeUndefined {
+				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCall] About to call undefined! funcReg=%d, IP=%d\n", funcReg, frame.ip)
+				// Try to see what was supposed to be in this register
+				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCall] Register dump:\n")
+				for i := byte(0); i < 10 && i < byte(len(callerRegisters)); i++ {
+					fmt.Fprintf(os.Stderr, "  R%d: %s (%s)\n", i, callerRegisters[i].Inspect(), callerRegisters[i].TypeName())
+				}
+			}
+
 			// Save the current frame index to detect if it gets popped by a direct-call boundary
 			currentFrameIndex := vm.frameCount - 1
 
@@ -3233,6 +3243,17 @@ startExecution:
 
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
+
+			// DEBUG: Log if calling undefined
+			if calleeVal.Type() == TypeUndefined {
+				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] About to call undefined! funcReg=%d, thisReg=%d, IP=%d\n", funcReg, thisReg, frame.ip)
+				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] thisVal: %s (%s)\n", thisVal.Inspect(), thisVal.TypeName())
+				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] Register dump:\n")
+				for i := byte(0); i < 10 && i < byte(len(callerRegisters)); i++ {
+					fmt.Fprintf(os.Stderr, "  R%d: %s (%s)\n", i, callerRegisters[i].Inspect(), callerRegisters[i].TypeName())
+				}
+			}
+
 			// Targeted debug for deepEqual recursion investigation
 			if false { // flip to true for local debugging
 				calleeName := ""
@@ -3980,6 +4001,20 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
+			// NUCLEAR DEBUG for fnGlobalObject
+			if value.IsFunction() {
+				name := ""
+				switch value.Type() {
+				case TypeFunction:
+					name = value.AsFunction().Name
+				case TypeClosure:
+					name = value.AsClosure().Fn.Name
+				case TypeNativeFunction:
+					name = value.AsNativeFunction().Name
+				}
+				if name == "fnGlobalObject" || name == "Test262Error" {
+				}
+			}
 
 			// Store the retrieved value in the destination register
 			registers[destReg] = value
@@ -3999,6 +4034,22 @@ startExecution:
 
 			// Use module-scoped global table
 			value := registers[srcReg]
+
+			// NUCLEAR DEBUG for fnGlobalObject
+			if value.IsFunction() {
+				name := ""
+				switch value.Type() {
+				case TypeFunction:
+					name = value.AsFunction().Name
+				case TypeClosure:
+					name = value.AsClosure().Fn.Name
+				case TypeNativeFunction:
+					name = value.AsNativeFunction().Name
+				}
+				if name == "fnGlobalObject" || name == "Test262Error" {
+				}
+			}
+
 			vm.setGlobalInTable(globalIdx, value)
 
 			// Debug output (disabled)
@@ -5487,7 +5538,7 @@ func getTypeofString(val Value) string {
 		return "string"
 	case TypeSymbol:
 		return "symbol"
-	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
+	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeBoundFunction:
 		return "function"
 	case TypeObject, TypeDictObject:
 		return "object"

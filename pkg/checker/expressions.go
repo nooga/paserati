@@ -2119,12 +2119,11 @@ func (c *Checker) isPrimitiveType(t types.Type) bool {
 
 // checkInOperator handles type checking for the 'in' operator ("prop" in obj)
 func (c *Checker) checkInOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
-	// Left operand (property name) should be string, number, or symbol
-	// For now, we'll focus on string and number (symbol support can be added later)
-	if leftType != types.Any && leftType != types.String && leftType != types.Number {
+	// Left operand (property name) should be string, number, or symbol (per ECMAScript spec)
+	if leftType != types.Any && leftType != types.String && leftType != types.Number && leftType != types.Symbol {
 		// Check if it's a literal string or number type
 		if !c.isStringOrNumberLiteralType(leftType) {
-			c.addError(node.Left, fmt.Sprintf("the left-hand side of 'in' must be of type 'string' or 'number', but got '%s'", leftType.String()))
+			c.addError(node.Left, fmt.Sprintf("the left-hand side of 'in' must be of type 'string', 'number', or 'symbol', but got '%s'", leftType.String()))
 		}
 	}
 

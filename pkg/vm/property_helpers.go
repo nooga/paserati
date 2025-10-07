@@ -10,6 +10,7 @@ import (
 func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool) {
 	var fn *FunctionObject
 
+
 	switch objVal.Type() {
 	case TypeFunction:
 		fn = AsFunction(objVal)
@@ -25,7 +26,8 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 
 	// Special handling for "prototype" property (not available on bound functions)
 	if fn != nil && propName == "prototype" {
-		return fn.getOrCreatePrototypeWithVM(vm), true
+		result := fn.getOrCreatePrototypeWithVM(vm)
+		return result, true
 	}
 
 	// Other function properties (if any) - not available on bound functions

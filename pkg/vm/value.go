@@ -518,7 +518,7 @@ func (v Value) TypeName() string {
 		return "string"
 	case TypeSymbol:
 		return "symbol"
-	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
+	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeBoundFunction:
 		return "function"
 	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray, TypeProxy:
 		return "object"
@@ -1061,6 +1061,12 @@ func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
 		asyncFn := (*AsyncNativeFunctionObject)(v.obj)
 		if asyncFn.Name != "" {
 			return fmt.Sprintf("[Function: %s]", asyncFn.Name)
+		}
+		return "[Function (anonymous)]"
+	case TypeBoundFunction:
+		boundFn := (*BoundFunctionObject)(v.obj)
+		if boundFn.Name != "" {
+			return fmt.Sprintf("[Function: %s]", boundFn.Name)
 		}
 		return "[Function (anonymous)]"
 	case TypeObject:

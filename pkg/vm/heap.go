@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"os"
 )
 
 // Heap represents a unified global variable storage for the VM.
@@ -127,6 +128,14 @@ func (h *Heap) Values() []Value {
 // SetBuiltinGlobals initializes the heap with builtin global variables
 // This replaces the old SetBuiltinGlobals method on VM
 func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]int) error {
+	// DEBUG: Log what globals are being set
+	fmt.Fprintf(os.Stderr, "[DEBUG heap.go] Setting %d builtin globals\n", len(globals))
+	if funcIndex, ok := indexMap["Function"]; ok {
+		fmt.Fprintf(os.Stderr, "[DEBUG heap.go] Function will be at heap index %d\n", funcIndex)
+	} else {
+		fmt.Fprintf(os.Stderr, "[DEBUG heap.go] WARNING: Function is NOT in indexMap!\n")
+	}
+
 	// List of non-configurable built-in globals per ECMAScript spec
 	nonConfigurableGlobals := map[string]bool{
 		"NaN":       true,

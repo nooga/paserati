@@ -940,16 +940,32 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	// Create runtime context for VM initialization
 	globalVariables := make(map[string]vm.Value)
 
+	// Track which initializer defined which global to separate standard vs custom
+	// Build a set of standard initializer names for lookup
+	standardInitSet := make(map[string]bool)
+	for _, init := range builtins.GetStandardInitializers() {
+		standardInitSet[init.Name()] = true
+	}
+
+	// Track globals defined by each initializer during the SINGLE initialization pass
+	globalsPerInitializer := make(map[string][]string)
+	currentInitializer := ""
+
 	runtimeCtx := &builtins.RuntimeContext{
 		VM: vmInstance,
 		DefineGlobal: func(name string, value vm.Value) error {
 			globalVariables[name] = value
+			// Track which initializer defined this global
+			if currentInitializer != "" {
+				globalsPerInitializer[currentInitializer] = append(globalsPerInitializer[currentInitializer], name)
+			}
 			return nil
 		},
 	}
 
-	// Initialize all builtins runtime values
+	// Initialize all builtins runtime values ONCE
 	for _, init := range initializers {
+		currentInitializer = init.Name()
 		if err := init.InitRuntime(runtimeCtx); err != nil {
 			return fmt.Errorf("failed to initialize %s runtime: %v", init.Name(), err)
 		}
@@ -962,27 +978,14 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	var standardNames []string
 	var customNames []string
 
-	standardGlobalSet := make(map[string]bool)
-	// Get list of standard builtin names by creating a temporary checker
-	stdInits := builtins.GetStandardInitializers()
-	for _, init := range stdInits {
-		// Create a mock context to collect names
-		mockCtx := &builtins.RuntimeContext{
-			VM: vmInstance,
-			DefineGlobal: func(name string, value vm.Value) error {
-				standardGlobalSet[name] = true
-				return nil
-			},
-		}
-		init.InitRuntime(mockCtx)
-	}
-
-	// Separate globals into standard vs custom
-	for name := range globalVariables {
-		if standardGlobalSet[name] {
-			standardNames = append(standardNames, name)
+	// Separate globals into standard vs custom based on which initializer defined them
+	// IMPORTANT: Iterate over initializers in their original order to ensure stable heap indices
+	for _, init := range initializers {
+		globals := globalsPerInitializer[init.Name()]
+		if standardInitSet[init.Name()] {
+			standardNames = append(standardNames, globals...)
 		} else {
-			customNames = append(customNames, name)
+			customNames = append(customNames, globals...)
 		}
 	}
 
