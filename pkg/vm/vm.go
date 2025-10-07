@@ -2071,7 +2071,14 @@ startExecution:
 				obj.DefineAccessorPropertyByKey(NewSymbolKey(nameVal), getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
 				continue
 			default:
-				propName = nameVal.ToString()
+				// For non-primitive values, call toPrimitive which may throw TypeError
+				primitiveVal := vm.toPrimitive(nameVal, "string")
+				// Check if an exception was thrown
+				if len(vm.errors) > 0 {
+					frame.ip = ip
+					return InterpretRuntimeError, Undefined
+				}
+				propName = primitiveVal.ToString()
 			}
 
 			var obj *PlainObject
@@ -2593,6 +2600,11 @@ startExecution:
 					// ToPropertyKey: convert to string, calling toString() method for objects
 					if indexVal.IsObject() {
 						primitiveVal := vm.toPrimitive(indexVal, "string")
+						// Check if an exception was thrown during toPrimitive
+						if len(vm.errors) > 0 {
+							frame.ip = ip
+							return InterpretRuntimeError, Undefined
+						}
 						key = primitiveVal.ToString()
 					} else {
 						// JavaScript allows any value as an object property key - convert to string
@@ -5936,8 +5948,10 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 		}
 	}
 
-	// If no method returned a primitive, fallback to string representation
-	return NewString(val.ToString())
+	// ECMAScript 7.1.1.1 OrdinaryToPrimitive step 6:
+	// If no method returned a primitive, throw a TypeError
+	vm.throwException(NewString("TypeError: Cannot convert object to primitive value"))
+	return Undefined
 }
 
 // abstractEqual implements ECMAScript Abstract Equality (==) with object-to-primitive conversion

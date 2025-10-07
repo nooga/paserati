@@ -331,6 +331,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		} else {
 			// Remove duplicate PRIVATE_IDENT check - now handled earlier in the chain
+			debugPrint("ERROR: Unrecognized token in class body: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 			p.addError(p.curToken, "expected identifier, 'get', 'set', or '[' in class body")
 			p.nextToken()
 		}
@@ -622,14 +623,21 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
-		initializer = p.parseExpression(COMMA)
+		// Use ASSIGNMENT precedence (like var statements) to allow bracket notation across lines
+		initializer = p.parseExpression(ASSIGNMENT)
 	}
-	
-	// Expect semicolon or end of class body
+
+	// Consume optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken() // Move to semicolon
+	}
+
+	// Advance past the current token to prepare for the next class member
+	// parseExpression leaves us AT the last token, so we need to advance
+	if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		p.nextToken()
 	}
-	
+
 	return &PropertyDefinition{
 		Token:          propertyToken,
 		Key:            propertyName,
@@ -679,14 +687,21 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
-		initializer = p.parseExpression(COMMA)
+		// Use ASSIGNMENT precedence (like var statements) to allow bracket notation across lines
+		initializer = p.parseExpression(ASSIGNMENT)
 	}
-	
-	// Expect semicolon or end of class body
+
+	// Consume optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken() // Move to semicolon
+	}
+
+	// Advance past the current token to prepare for the next class member
+	// parseExpression leaves us AT the last token, so we need to advance
+	if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		p.nextToken()
 	}
-	
+
 	return &PropertyDefinition{
 		Token:          propertyToken,
 		Key:            propertyName,
@@ -1057,14 +1072,21 @@ func (p *Parser) parseComputedProperty(bracketToken lexer.Token, keyExpr Express
 	if p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken() // Move to '='
 		p.nextToken() // Move past '=' to the initializer expression
-		initializer = p.parseExpression(COMMA)
+		// Use ASSIGNMENT precedence (like var statements) to allow bracket notation across lines
+		initializer = p.parseExpression(ASSIGNMENT)
 	}
 	
-	// Expect semicolon or end of class body
+	// Consume optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken() // Move to semicolon
+	}
+
+	// Advance past the current token to prepare for the next class member
+	// parseExpression leaves us AT the last token, so we need to advance
+	if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		p.nextToken()
 	}
-	
+
 	return &PropertyDefinition{
 		Token:          bracketToken,
 		Key:            &ComputedPropertyName{Expr: keyExpr}, // Use computed property name

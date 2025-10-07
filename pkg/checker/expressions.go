@@ -1207,6 +1207,10 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		indexType = types.Any
 	}
 
+	// Widen literal types to their base types before checking indexability
+	// This allows "lol"[1] to be treated as string[number]
+	leftType = types.GetWidenedType(leftType)
+
 	// 3. Check base type (allow Array for now)
 	// First handle the special case of 'any'
 	if leftType == types.Any {
