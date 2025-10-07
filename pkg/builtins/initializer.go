@@ -40,6 +40,9 @@ type RuntimeContext struct {
 	// The VM instance
 	VM *vm.VM
 
+	// The driver instance (for Function constructor)
+	Driver interface{}
+
 	// Define a global value
 	DefineGlobal func(name string, value vm.Value) error
 

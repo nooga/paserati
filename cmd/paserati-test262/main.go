@@ -554,6 +554,9 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			return
 		}
 
+		// Sync global names from compiler to VM so globalThis property access works
+		paserati.SyncGlobalNamesFromCompiler()
+
 		// Execute compiled chunk
 		_, runtimeErrs := paserati.InterpretChunk(chunk)
 		if len(runtimeErrs) > 0 {

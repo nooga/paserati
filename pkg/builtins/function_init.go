@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"fmt"
+	"paserati/pkg/errors"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
@@ -78,11 +79,7 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create Function constructor
 	functionCtor := vm.NewNativeFunction(-1, true, "Function", func(args []vm.Value) (vm.Value, error) {
-		// TODO: Implement Function constructor (creates functions from strings)
-		// For now, return a simple function
-		return vm.NewNativeFunction(0, false, "anonymous", func([]vm.Value) (vm.Value, error) {
-			return vm.Undefined, nil
-		}), nil
+		return functionConstructorImpl(vmInstance, ctx.Driver, args)
 	})
 
 	// Make it a proper constructor with static methods
@@ -263,4 +260,76 @@ func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	default:
 		return vm.NewString("function() { [unknown] }"), nil
 	}
+}
+
+func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value) (vm.Value, error) {
+	// The Function constructor has signature:
+	// Function(param1, param2, ..., paramN, body)
+	// Where all arguments are strings
+
+	var params []string
+	var body string
+
+	if len(args) == 0 {
+		// Function() - no parameters, empty body
+		body = ""
+	} else if len(args) == 1 {
+		// Function(body) - no parameters, just body
+		body = args[0].ToString()
+	} else {
+		// Function(param1, ..., paramN, body) - last arg is body, rest are parameters
+		for i := 0; i < len(args)-1; i++ {
+			params = append(params, args[i].ToString())
+		}
+		body = args[len(args)-1].ToString()
+	}
+
+	// Construct the function source code as an IIFE that returns the function
+	// This ensures it's evaluated as an expression
+	var source string
+	if len(params) == 0 {
+		source = fmt.Sprintf("return (function() { %s });", body)
+	} else {
+		// Join parameters with commas
+		paramStr := ""
+		for i, param := range params {
+			if i > 0 {
+				paramStr += ", "
+			}
+			paramStr += param
+		}
+		source = fmt.Sprintf("return (function(%s) { %s });", paramStr, body)
+	}
+
+	// We need access to the driver to compile this source code
+	// The driver is passed via RuntimeContext but we need to type assert it
+	if driver == nil {
+		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver is nil")
+	}
+
+	// Try to get the Paserati driver interface
+	// We'll use RunString to compile and evaluate the function expression
+	type driverInterface interface {
+		RunString(string) (vm.Value, []errors.PaseratiError)
+	}
+
+	d, ok := driver.(driverInterface)
+	if !ok {
+		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver doesn't implement RunString (got type %T)", driver)
+	}
+
+	// Compile and evaluate the function expression
+	result, errs := d.RunString(source)
+	if len(errs) > 0 {
+		// Return the first error as a SyntaxError
+		errMsg := errs[0].Error()
+		return vm.Undefined, fmt.Errorf("SyntaxError: %s", errMsg)
+	}
+
+	// Check if result is undefined - might indicate a problem
+	if result.IsUndefined() {
+		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor returned undefined for source: %s", source)
+	}
+
+	return result, nil
 }

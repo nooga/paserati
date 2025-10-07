@@ -256,6 +256,12 @@ func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.
 	return p.compiler.Compile(program)
 }
 
+// SyncGlobalNamesFromCompiler syncs the compiler's global name mappings to the VM
+// This should be called after CompileProgram to ensure globalThis property access works
+func (p *Paserati) SyncGlobalNamesFromCompiler() {
+	p.vmInstance.SyncGlobalNames(p.compiler.GetHeapAlloc().GetNameToIndexMap())
+}
+
 // GetVM returns the VM instance for direct access (used by test framework)
 func (p *Paserati) GetVM() *vm.VM {
 	return p.vmInstance
@@ -955,7 +961,8 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	currentInitializer := ""
 
 	runtimeCtx := &builtins.RuntimeContext{
-		VM: vmInstance,
+		VM:     vmInstance,
+		Driver: paserati, // Pass driver for Function constructor
 		DefineGlobal: func(name string, value vm.Value) error {
 			globalVariables[name] = value
 			// Track which initializer defined this global
