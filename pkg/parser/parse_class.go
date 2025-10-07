@@ -194,30 +194,37 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isOverride := false
 		isAsync := false
 		
+		// Helper to check if current token is likely a field name (not a modifier)
+		// A keyword is a field name if followed by ;, =, :, or ?
+		isFieldName := func() bool {
+			return p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.ASSIGN) ||
+			       p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION)
+		}
+
 		// Parse all modifiers until we hit something that's not a modifier
 		for {
-			if p.curTokenIs(lexer.READONLY) && !isReadonly {
+			if p.curTokenIs(lexer.READONLY) && !isReadonly && !isFieldName() {
 				isReadonly = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.STATIC) && !isStatic {
+			} else if p.curTokenIs(lexer.STATIC) && !isStatic && !isFieldName() {
 				isStatic = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.PUBLIC) && !isPublic && !isPrivate && !isProtected {
+			} else if p.curTokenIs(lexer.PUBLIC) && !isPublic && !isPrivate && !isProtected && !isFieldName() {
 				isPublic = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.PRIVATE) && !isPublic && !isPrivate && !isProtected {
+			} else if p.curTokenIs(lexer.PRIVATE) && !isPublic && !isPrivate && !isProtected && !isFieldName() {
 				isPrivate = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.PROTECTED) && !isPublic && !isPrivate && !isProtected {
+			} else if p.curTokenIs(lexer.PROTECTED) && !isPublic && !isPrivate && !isProtected && !isFieldName() {
 				isProtected = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.ABSTRACT) && !isAbstract {
+			} else if p.curTokenIs(lexer.ABSTRACT) && !isAbstract && !isFieldName() {
 				isAbstract = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride {
+			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride && !isFieldName() {
 				isOverride = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.ASYNC) && !isAsync {
+			} else if p.curTokenIs(lexer.ASYNC) && !isAsync && !isFieldName() {
 				isAsync = true
 				p.nextToken()
 			} else {
@@ -594,48 +601,61 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		// Identifier property name
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
-	
-	p.nextToken() // move past property name
-	
-	// Check for optional marker '?' first
+
+	// At this point: cur=fieldName, peek=next token
+	// We need to check what comes after the field name
+
+	// Check for optional marker '?' in peek position
 	var isOptional bool
-	if p.curTokenIs(lexer.QUESTION) {
+	if p.peekTokenIs(lexer.QUESTION) {
+		p.nextToken() // Move to '?'
 		isOptional = true
-		p.nextToken() // Consume '?'
 	}
-	
-	// Parse optional type annotation using interface pattern
+
+	// Now we're either still at fieldName or at '?'
+	// Advance past it
+	p.nextToken()
+
+	// Parse optional type annotation
 	var typeAnnotation Expression
 	if p.curTokenIs(lexer.COLON) {
-		// Already at ':' token, move to type expression
-		p.nextToken() // Move to the start of the type expression
-		
+		p.nextToken() // Move past ':'
+
 		// Parse type
 		typeAnnotation = p.parseTypeExpression()
 		if typeAnnotation == nil {
 			return nil
 		}
-		
+
 		// After parsing type, advance to next token
 		p.nextToken()
 	}
-	
+
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
-		// Use ASSIGNMENT precedence (like var statements) to allow bracket notation across lines
-		initializer = p.parseExpression(ASSIGNMENT)
-	}
+		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
+		// This allows chained assignments like: x = obj['lol'] = 42
+		initializer = p.parseExpression(COMMA)
 
-	// Consume optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken() // Move to semicolon
-	}
+		// Consume optional semicolon after initializer
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Move to semicolon
+		}
 
-	// Advance past the current token to prepare for the next class member
-	// parseExpression leaves us AT the last token, so we need to advance
-	if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
-		p.nextToken()
+		// Advance past the current token to prepare for the next class member
+		// parseExpression leaves us AT the last token, so we need to advance
+		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken()
+		}
+	} else {
+		// No initializer
+		// Check for optional semicolon and skip it
+		if p.curTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Move past semicolon
+		}
+		// Now curToken should be at the next member or '}'
+		// No additional advancement needed
 	}
 
 	return &PropertyDefinition{
@@ -658,48 +678,57 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 	propertyToken := p.curToken
 	// Create identifier from PRIVATE_IDENT token (includes the '#')
 	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	
-	p.nextToken() // move past private field name
-	
-	// Check for optional marker '?' first
+
+	// Check for optional marker '?' in peek position
 	var isOptional bool
-	if p.curTokenIs(lexer.QUESTION) {
+	if p.peekTokenIs(lexer.QUESTION) {
+		p.nextToken() // Move to '?'
 		isOptional = true
-		p.nextToken() // Consume '?'
 	}
-	
+
+	// Advance past field name or '?'
+	p.nextToken()
+
 	// Parse optional type annotation
 	var typeAnnotation Expression
 	if p.curTokenIs(lexer.COLON) {
-		// Already at ':' token, move to type expression
-		p.nextToken() // Move to the start of the type expression
-		
+		p.nextToken() // Move past ':'
+
 		// Parse type
 		typeAnnotation = p.parseTypeExpression()
 		if typeAnnotation == nil {
 			return nil
 		}
-		
+
 		// After parsing type, advance to next token
 		p.nextToken()
 	}
-	
+
 	var initializer Expression
 	if p.curTokenIs(lexer.ASSIGN) {
 		p.nextToken() // move past '='
-		// Use ASSIGNMENT precedence (like var statements) to allow bracket notation across lines
-		initializer = p.parseExpression(ASSIGNMENT)
-	}
+		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
+		// This allows chained assignments like: x = obj['lol'] = 42
+		initializer = p.parseExpression(COMMA)
 
-	// Consume optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken() // Move to semicolon
-	}
+		// Consume optional semicolon after initializer
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Move to semicolon
+		}
 
-	// Advance past the current token to prepare for the next class member
-	// parseExpression leaves us AT the last token, so we need to advance
-	if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
-		p.nextToken()
+		// Advance past the current token to prepare for the next class member
+		// parseExpression leaves us AT the last token, so we need to advance
+		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken()
+		}
+	} else {
+		// No initializer
+		// Check for optional semicolon and skip it
+		if p.curTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Move past semicolon
+		}
+		// Now curToken should be at the next member or '}'
+		// No additional advancement needed
 	}
 
 	return &PropertyDefinition{
@@ -1072,19 +1101,30 @@ func (p *Parser) parseComputedProperty(bracketToken lexer.Token, keyExpr Express
 	if p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken() // Move to '='
 		p.nextToken() // Move past '=' to the initializer expression
-		// Use ASSIGNMENT precedence (like var statements) to allow bracket notation across lines
-		initializer = p.parseExpression(ASSIGNMENT)
-	}
-	
-	// Consume optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken() // Move to semicolon
-	}
+		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
+		// This allows chained assignments like: x = obj['lol'] = 42
+		initializer = p.parseExpression(COMMA)
 
-	// Advance past the current token to prepare for the next class member
-	// parseExpression leaves us AT the last token, so we need to advance
-	if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
-		p.nextToken()
+		// Consume optional semicolon after initializer
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Move to semicolon
+		}
+
+		// Advance past the current token to prepare for the next class member
+		// parseExpression leaves us AT the last token, so we need to advance
+		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken()
+		}
+	} else {
+		// No initializer - we're still at the ']' token from parseComputedClassMember
+		// We need to advance to the next token
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Move to semicolon
+		}
+		// Advance past current token (either ']' or ';') to next member
+		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken()
+		}
 	}
 
 	return &PropertyDefinition{
