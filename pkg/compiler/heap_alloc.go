@@ -77,15 +77,17 @@ func (ha *HeapAlloc) GetAllocatedSize() int {
 
 // PreallocateBuiltins sets up indices for builtin globals in alphabetical order
 // This ensures consistent ordering across all compilers
+// Assigns indices starting from the current nextIndex
 func (ha *HeapAlloc) PreallocateBuiltins(builtinNames []string) {
 	// Sort to ensure consistent ordering
 	sortedNames := make([]string, len(builtinNames))
 	copy(sortedNames, builtinNames)
 	sort.Strings(sortedNames)
-	
-	// Assign indices starting from 0
+
+	// Assign indices starting from current nextIndex (not from 0!)
+	startIndex := ha.nextIndex
 	for i, name := range sortedNames {
-		ha.SetIndex(name, i)
+		ha.SetIndex(name, startIndex+i)
 	}
 }
 

@@ -3,6 +3,8 @@ package builtins
 import (
 	"fmt"
 	"paserati/pkg/errors"
+	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
@@ -302,33 +304,44 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	}
 
 	// We need access to the driver to compile this source code
-	// The driver is passed via RuntimeContext but we need to type assert it
+	// IMPORTANT: We use CompileProgram instead of RunString to avoid corrupting
+	// the parent compilation's state (EnableModuleMode, etc.)
 	if driver == nil {
 		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver is nil")
 	}
 
-	// Try to get the Paserati driver interface
-	// We'll use RunString to compile and evaluate the function expression
+	// Define interface for accessing compiler without state modification
 	type driverInterface interface {
-		RunString(string) (vm.Value, []errors.PaseratiError)
+		CompileProgram(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
 	}
 
 	d, ok := driver.(driverInterface)
 	if !ok {
-		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver doesn't implement RunString (got type %T)", driver)
+		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver doesn't implement CompileProgram (got type %T)", driver)
 	}
 
-	// Compile and evaluate the function expression
-	result, errs := d.RunString(source)
-	if len(errs) > 0 {
-		// Return the first error as a SyntaxError
-		errMsg := errs[0].Error()
-		return vm.Undefined, fmt.Errorf("SyntaxError: %s", errMsg)
+	// Parse the source code
+	lx := lexer.NewLexer(source)
+	p := parser.NewParser(lx)
+	prog, parseErrs := p.ParseProgram()
+	if len(parseErrs) > 0 {
+		return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
 	}
 
-	// Check if result is undefined - might indicate a problem
-	if result.IsUndefined() {
-		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor returned undefined for source: %s", source)
+	// Compile the program (this uses the existing compiler without modifying its state)
+	chunk, compileErrs := d.CompileProgram(prog)
+	if len(compileErrs) > 0 {
+		return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
+	}
+
+	if chunk == nil {
+		return vm.Undefined, fmt.Errorf("SyntaxError: compilation returned nil chunk")
+	}
+
+	// Execute the chunk in the current VM to get the function value
+	result, runtimeErrs := vmInstance.Interpret(chunk)
+	if len(runtimeErrs) > 0 {
+		return vm.Undefined, fmt.Errorf("Error: %v", runtimeErrs[0])
 	}
 
 	return result, nil
