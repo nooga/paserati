@@ -746,7 +746,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 		}
 
-		funcEnv := NewEnclosedEnvironment(typeParamEnv)
+		funcEnv := NewFunctionEnvironment(typeParamEnv)
 		c.env = funcEnv
 		// Define parameters using the initial signature
 		for i, paramNode := range funcLit.Parameters {
@@ -1547,11 +1547,20 @@ func (c *Checker) visit(node parser.Node) {
 			if tempType == nil {
 				tempType = types.Any // Fallback to Any
 			}
-			if !c.env.Define(declarator.Name.Value, tempType, false) {
-				// If Define fails here, it's a true redeclaration error.
-				c.addError(declarator.Name, fmt.Sprintf("variable '%s' already declared in this scope", declarator.Name.Value))
+			// var declarations should be defined in function scope, not block scope (var hoisting)
+			funcScope := c.env.GetFunctionScope()
+			if !funcScope.Define(declarator.Name.Value, tempType, false) {
+				// For var, redeclaration in the same scope is allowed (it just reassigns)
+				// So if Define fails, check if it already exists - if so, that's OK for var
+				_, _, exists := funcScope.Resolve(declarator.Name.Value)
+				if !exists {
+					// Variable doesn't exist but Define failed - this shouldn't happen
+					c.addError(declarator.Name, fmt.Sprintf("variable '%s' already declared in this scope", declarator.Name.Value))
+				}
+				// If exists, silently allow redeclaration (JavaScript var semantics)
+			} else {
+				debugPrintf("// [Checker VarStmt] Temp Define '%s' as: %s in function scope\n", declarator.Name.Value, tempType.String())
 			}
-			debugPrintf("// [Checker VarStmt] Temp Define '%s' as: %s\n", declarator.Name.Value, tempType.String())
 
 			// 2. Handle Initializer (if present)
 			var computedInitializerType types.Type
@@ -1623,13 +1632,13 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			}
 
-			// 4. UPDATE variable type in the current environment with the final type
-			currentType, _, _ := c.env.Resolve(declarator.Name.Value)
+			// 4. UPDATE variable type in function scope with the final type
+			currentType, _, _ := funcScope.Resolve(declarator.Name.Value)
 			debugPrintf("// [Checker VarStmt] Updating '%s'. Current type: %s, Final type: %s\n", declarator.Name.Value, currentType.String(), finalVariableType.String())
-			if !c.env.Update(declarator.Name.Value, finalVariableType) {
+			if !funcScope.Update(declarator.Name.Value, finalVariableType) {
 				debugPrintf("// [Checker VarStmt] WARNING: Update failed unexpectedly for '%s'\n", declarator.Name.Value)
 			}
-			updatedType, _, _ := c.env.Resolve(declarator.Name.Value)
+			updatedType, _, _ := funcScope.Resolve(declarator.Name.Value)
 			debugPrintf("// [Checker VarStmt] Updated '%s'. Type after update: %s\n", declarator.Name.Value, updatedType.String())
 
 			// Set computed type on the Name Identifier node itself and the declarator
@@ -2712,7 +2721,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 		debugPrintf("// [Checker Visit ShorthandMethod] Creating scope for method '%s'. Current Env: %p\n", methodNameForLog, c.env)
 		originalEnv := c.env
-		funcEnv := NewEnclosedEnvironment(originalEnv)
+		funcEnv := NewFunctionEnvironment(originalEnv)
 		c.env = funcEnv
 
 		// Define parameters in the method scope using resolved types

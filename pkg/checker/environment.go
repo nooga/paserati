@@ -29,6 +29,9 @@ type Environment struct {
 	typeAliases map[string]types.Type // Stores resolved types for type aliases
 	outer       *Environment          // Pointer to the enclosing environment
 
+	// --- Scope type tracking for var hoisting ---
+	isFunctionScope bool // True if this is a function scope (for var hoisting)
+
 	// --- Generic type parameter support ---
 	typeParameters map[string]*types.TypeParameter // Maps type parameter names to their definitions
 
@@ -70,6 +73,7 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases:         make(map[string]types.Type), // Initialize
 		outer:               outer,
+		isFunctionScope:     false, // Default to block scope
 		typeParameters:      make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
@@ -77,6 +81,27 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		withObjects:         []WithObject{}, // Initialize empty with objects stack
 		narrowings:          make(map[string]types.Type), // Initialize narrowings map
 	}
+}
+
+// NewFunctionEnvironment creates a new function-scoped environment
+func NewFunctionEnvironment(outer *Environment) *Environment {
+	env := NewEnclosedEnvironment(outer)
+	env.isFunctionScope = true
+	return env
+}
+
+// GetFunctionScope returns the nearest function scope (or global scope)
+// Used for var hoisting - var declarations should be added to function scope, not block scope
+func (e *Environment) GetFunctionScope() *Environment {
+	current := e
+	for current != nil {
+		// Global scope (outer == nil) acts as function scope
+		if current.outer == nil || current.isFunctionScope {
+			return current
+		}
+		current = current.outer
+	}
+	return e // Fallback to current if no function scope found
 }
 
 // NewGlobalEnvironment creates a new top-level global environment.

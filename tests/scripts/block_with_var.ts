@@ -1,8 +1,9 @@
-// var declarations with block scoping (TypeScript semantics)
+// var declarations are function-scoped (JavaScript semantics)
+// At global level, var becomes a global variable
+// expect: block
 
 {
     var x = "block";
 }
-// In our implementation, var has block scoping like let
+// var is function-scoped, so x is accessible at global level
 x;
-// expect_compile_error: undefined variable: x

@@ -85,6 +85,17 @@ func (h *Heap) Size() int {
 	return h.size
 }
 
+// GetNameByIndex returns the name of a global variable by its heap index
+// Returns empty string if the index doesn't have a name mapping
+func (h *Heap) GetNameByIndex(index int) string {
+	for name, idx := range h.nameToIndex {
+		if idx == index {
+			return name
+		}
+	}
+	return ""
+}
+
 // SetConfigurable sets whether a global variable at the specified index can be deleted
 func (h *Heap) SetConfigurable(index int, configurable bool) error {
 	if index < 0 || index >= h.size {

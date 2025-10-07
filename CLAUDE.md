@@ -35,7 +35,12 @@ go build -o paserati cmd/paserati/main.go
 
 # Show inline cache statistics
 ./paserati -cache-stats script.ts
+
+# Disable type checking (for testing JavaScript semantics)
+./paserati --no-typecheck script.js
 ```
+
+**Note**: Test262 runs without type checking enabled (using `SetIgnoreTypeErrors(true)` in the driver).
 
 ### Testing
 

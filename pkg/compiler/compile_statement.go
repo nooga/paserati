@@ -216,9 +216,19 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 			} else {
 				// Function scope: use local symbol table
-				c.currentSymbolTable.Define(node.Name.Value, valueReg)
-				// Pin the register since local variables can be captured by upvalues
-				c.regAlloc.Pin(valueReg)
+				// Check if variable was already pre-defined during var hoisting
+				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+					// Variable was pre-defined, reuse the register and emit move
+					debugPrintf("// [VarStmt] Variable '%s' was pre-defined in R%d, emitting move from R%d\n", node.Name.Value, sym.Register, valueReg)
+					c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+				} else {
+					// Variable not pre-defined, define it now
+					debugPrintf("// [VarStmt] Defining '%s' in local symbol table with register R%d\n", node.Name.Value, valueReg)
+					c.currentSymbolTable.Define(node.Name.Value, valueReg)
+					// Pin the register since local variables can be captured by upvalues
+					c.regAlloc.Pin(valueReg)
+					debugPrintf("// [VarStmt] Successfully defined '%s', register pinned\n", node.Name.Value)
+				}
 			}
 		} else if c.enclosing == nil {
 			// Top-level function: also set as global

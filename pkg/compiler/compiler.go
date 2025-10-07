@@ -522,7 +522,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
-		// 0) Predefine block-scoped let/const so inner closures can capture stable locations
+		// 0) Predefine block-scoped let/const and function-scoped var so inner closures can capture stable locations
 		if len(node.Statements) > 0 {
 			for _, stmt := range node.Statements {
 				switch s := stmt.(type) {
@@ -540,6 +540,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 							reg := c.regAlloc.Alloc()
 							c.currentSymbolTable.Define(s.Name.Value, reg)
 							c.regAlloc.Pin(reg)
+						}
+					}
+				case *parser.VarStatement:
+					// Pre-define var declarations so they can be captured by hoisted functions
+					for _, declarator := range s.Declarations {
+						if declarator.Name != nil {
+							if sym, _, found := c.currentSymbolTable.Resolve(declarator.Name.Value); !found || sym.Register == nilRegister {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(declarator.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+								debugPrintf("// [BlockPredefine] Pre-defined var '%s' in register R%d for hoisting\n", declarator.Name.Value, reg)
+							}
 						}
 					}
 				}

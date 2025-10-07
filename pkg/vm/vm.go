@@ -3995,9 +3995,13 @@ startExecution:
 			// Use unified global heap
 			value, exists := vm.heap.Get(int(globalIdx))
 			if !exists {
-				// Throw ReferenceError for unresolvable global
+				// Throw ReferenceError for unresolvable global with variable name
 				frame.ip = ip
-				vm.ThrowReferenceError("is not defined")
+				varName := vm.heap.GetNameByIndex(int(globalIdx))
+				if varName == "" {
+					varName = fmt.Sprintf("<index %d>", globalIdx)
+				}
+				vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", varName))
 				return InterpretRuntimeError, Undefined
 			}
 
