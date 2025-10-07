@@ -11,6 +11,7 @@ import (
 	errorsPkg "paserati/pkg/errors"
 	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
+	"paserati/pkg/vm"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -286,6 +287,15 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 	}
 
 	for i, testFile := range testFiles {
+		// Force GC every 100 tests to prevent excessive memory accumulation
+		// Also clear the global RootShape transitions which accumulate across all tests
+		if i > 0 && i%100 == 0 {
+			// Clear RootShape transitions to prevent shape tree bloat
+			// This is safe because each test creates fresh objects
+			vm.ClearShapeCache()
+			runtime.GC()
+		}
+
 		// Apply legacy filtering if enabled
 		if filterMode && shouldFilterTest(testFile) {
 			if verbose {
@@ -464,7 +474,7 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 	}
 	resultChan := make(chan testResult, 1)
 
-	// Create Test262-enabled Paserati instance outside goroutine so we can clean it up on timeout
+	// Create fresh Paserati instance for each test
 	paserati := createTest262Paserati()
 
 	// IMPORTANT: This goroutine can leak if paserati.RunString gets stuck in an infinite loop.
@@ -477,7 +487,7 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			if r := recover(); r != nil {
 				resultChan <- testResult{passed: false, err: fmt.Errorf("test panicked: %v", r)}
 			}
-			// Clean up in goroutine too in case of normal completion
+			// Clean up to release memory
 			paserati.Cleanup()
 		}()
 
@@ -581,8 +591,8 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 	case result := <-resultChan:
 		return result.passed, result.err
 	case <-ctx.Done():
-		// Context timeout - clean up Paserati instance to reduce memory leak
-		// Note: The goroutine will continue running but at least we free some memory
+		// Context timeout - clean up to release memory
+		// Note: The goroutine may continue running (VM doesn't support cancellation yet)
 		paserati.Cleanup()
 		return false, fmt.Errorf("test timed out after %v", timeout)
 	}

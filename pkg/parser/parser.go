@@ -487,9 +487,13 @@ func (p *Parser) parseStatement() Statement {
 	case lexer.THROW:
 		return p.parseThrowStatement()
 	case lexer.IMPORT:
-		// Check if this is import.meta (meta-property) or import declaration
+		// Check if this is import.meta, import(), or import declaration
 		if p.peekTokenIs(lexer.DOT) {
 			// This is import.meta, parse as expression statement
+			return p.parseExpressionStatement()
+		}
+		if p.peekTokenIs(lexer.LPAREN) {
+			// This is import(), parse as expression statement (dynamic import)
 			return p.parseExpressionStatement()
 		}
 		return p.parseImportDeclaration()

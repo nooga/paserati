@@ -793,6 +793,17 @@ func init() {
 	DefaultObjectPrototype = Value{typ: TypeObject, obj: unsafe.Pointer(protoObj)}
 }
 
+// ClearShapeCache clears the global RootShape transition map to prevent memory bloat
+// This should be called periodically in test runners that create many short-lived VM instances
+func ClearShapeCache() {
+	if RootShape != nil {
+		RootShape.mu.Lock()
+		// Clear all transitions to allow GC to free the shape tree
+		RootShape.transitions = make(map[string]*Shape)
+		RootShape.mu.Unlock()
+	}
+}
+
 func NewObject(proto Value) Value {
 	// Create a new PlainObject and set its prototype to the shared DefaultObjectPrototype
 	prototype := DefaultObjectPrototype
