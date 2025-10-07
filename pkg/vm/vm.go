@@ -2368,6 +2368,26 @@ startExecution:
 					continue
 				}
 
+			case TypeSet, TypeMap:
+				// Sets and Maps support property access via prototype chain (for methods like Symbol.iterator)
+				switch indexVal.Type() {
+				case TypeString:
+					key := AsString(indexVal)
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
+				case TypeSymbol:
+					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						return status, value
+					}
+				default:
+					// Convert to string for property access
+					key := indexVal.ToString()
+					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
+						return status, value
+					}
+				}
+
 			case TypeProxy:
 				proxy := baseVal.AsProxy()
 				if proxy.Revoked {

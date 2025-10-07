@@ -315,10 +315,12 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		mapProto.DefineOwnProperty("keys", v, &w, &e, &c)
 	}
-	// Map.prototype[Symbol.iterator] === Map.prototype.entries
+	// Map.prototype[Symbol.iterator] - calls entries() to return an iterator
 	wIter := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
 		if v, ok := mapProto.GetOwn("entries"); ok {
-			return v, nil
+			// Call entries() as a method on the current Map instance
+			thisMap := vmInstance.GetThis()
+			return vmInstance.Call(v, thisMap, []vm.Value{})
 		}
 		return vm.Undefined, nil
 	})

@@ -322,10 +322,12 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("entries", v, &w, &e, &c)
 	}
-	// Set.prototype[Symbol.iterator] === values
+	// Set.prototype[Symbol.iterator] - calls values() to return an iterator
 	wIter := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
 		if v, ok := setProto.GetOwn("values"); ok {
-			return v, nil
+			// Call values() as a method on the current Set instance
+			thisSet := vmInstance.GetThis()
+			return vmInstance.Call(v, thisSet, []vm.Value{})
 		}
 		return vm.Undefined, nil
 	})
