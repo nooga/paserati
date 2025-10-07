@@ -68,9 +68,8 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Use the VM's existing ObjectPrototype instead of creating a new one
-	// This ensures GlobalObject (created in NewVM) has the correct prototype chain
-	objectProto := vmInstance.ObjectPrototype.AsPlainObject()
+	// Create Object.prototype - this is the root prototype (no parent)
+	objectProto := vm.NewObject(vm.Null).AsPlainObject()
 
 	// Add prototype methods
 	objectProto.SetOwn("hasOwnProperty", vm.NewNativeFunction(1, false, "hasOwnProperty", func(args []vm.Value) (vm.Value, error) {
@@ -395,8 +394,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("constructor", v, &w, &e, &c)
 	}
 
-	// ObjectPrototype is already set in VM from NewVM
-	// Just store it in context for other initializers
+	// Store in VM
+	vmInstance.ObjectPrototype = vm.NewValueFromPlainObject(objectProto)
+
+	// Also store in context so other initializers can use it
 	ctx.ObjectPrototype = vmInstance.ObjectPrototype
 
 	// Define globally

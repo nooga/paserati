@@ -10,9 +10,6 @@ import (
 // Minimal Test262 builtins - only the essentials that harness files don't provide
 // Everything else is loaded from harness JS files (sta.js, assert.js, and includes)
 
-// Share the constructed Test262Error constructor for $ERROR to use
-var sharedTest262ErrorCtor vm.Value = vm.Undefined
-
 // test262ExceptionError adapts a VM Value into an ExceptionError for throwing from builtins
 type test262ExceptionError struct{ v vm.Value }
 
@@ -37,17 +34,8 @@ func (t *Test262Initializer) InitTypes(ctx *builtins.TypeContext) error {
 		return err
 	}
 
-	// Test262Error constructor - takes optional message string
-	test262ErrorType := types.NewSimpleFunction([]types.Type{types.String}, types.Any)
-	if err := ctx.DefineGlobal("Test262Error", test262ErrorType); err != nil {
-		return err
-	}
-
-	// $ERROR function - takes message string
-	errorType := types.NewSimpleFunction([]types.Type{types.String}, types.Undefined)
-	if err := ctx.DefineGlobal("$ERROR", errorType); err != nil {
-		return err
-	}
+	// NOTE: Test262Error is defined in sta.js, not here
+	// NOTE: $ERROR is defined in sta.js, not here
 
 	// getWellKnownIntrinsicObject(name: string): any
 	getIntrinsicType := types.NewSimpleFunction([]types.Type{types.String}, types.Any)
@@ -80,50 +68,7 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		return err
 	}
 
-	// Test262Error constructor - creates proper error objects
-	test262ErrorProto := vm.NewObject(ctx.VM.ErrorPrototype).AsPlainObject()
-	test262ErrorProto.SetOwn("name", vm.NewString("Test262Error"))
-	test262ErrorProto.SetOwn("message", vm.NewString(""))
-
-	var test262ErrorCtor vm.Value
-	test262ErrorCtor = vm.NewNativeFunctionWithProps(1, true, "Test262Error", func(args []vm.Value) (vm.Value, error) {
-		message := "Test262Error"
-		if len(args) > 0 {
-			message = args[0].ToString()
-		}
-
-		inst := vm.NewObject(vm.NewValueFromPlainObject(test262ErrorProto)).AsPlainObject()
-		inst.SetOwn("name", vm.NewString("Test262Error"))
-		inst.SetOwn("message", vm.NewString(message))
-		inst.SetOwn("constructor", test262ErrorCtor)
-		stack := ctx.VM.CaptureStackTrace()
-		inst.SetOwn("stack", vm.NewString(stack))
-		return vm.NewValueFromPlainObject(inst), nil
-	})
-
-	if ctorProps := test262ErrorCtor.AsNativeFunctionWithProps(); ctorProps != nil {
-		ctorProps.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(test262ErrorProto))
-		test262ErrorProto.SetOwn("constructor", test262ErrorCtor)
-	}
-
-	sharedTest262ErrorCtor = test262ErrorCtor
-
-	if err := ctx.DefineGlobal("Test262Error", test262ErrorCtor); err != nil {
-		return err
-	}
-
-	// $ERROR function (legacy Test262 function)
-	errorFn := vm.NewNativeFunctionWithProps(1, false, "$ERROR", func(args []vm.Value) (vm.Value, error) {
-		message := "Test failed"
-		if len(args) > 0 {
-			message = args[0].ToString()
-		}
-		errVal, _ := ctx.VM.Call(test262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString(message)})
-		return vm.Undefined, test262ExceptionError{v: errVal}
-	})
-	if err := ctx.DefineGlobal("$ERROR", errorFn); err != nil {
-		return err
-	}
+	// NOTE: Test262Error and $ERROR are defined in sta.js, not here
 
 	// Minimal $262 harness object with createRealm and detachArrayBuffer
 	harness262 := vm.NewObject(vm.Null).AsPlainObject()
@@ -220,9 +165,15 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 
 	// getWellKnownIntrinsicObject harness helper
 	getIntrinsic := vm.NewNativeFunctionWithProps(1, false, "getWellKnownIntrinsicObject", func(args []vm.Value) (vm.Value, error) {
+		throwError := func(msg string) error {
+			if errorCtor, ok := ctx.VM.GetGlobal("Test262Error"); ok && errorCtor.IsCallable() {
+				errVal, _ := ctx.VM.Call(errorCtor, vm.Undefined, []vm.Value{vm.NewString(msg)})
+				return test262ExceptionError{v: errVal}
+			}
+			return fmt.Errorf("%s", msg)
+		}
 		if len(args) < 1 {
-			errVal, _ := ctx.VM.Call(sharedTest262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString("getWellKnownIntrinsicObject requires 1 argument")})
-			return vm.Undefined, test262ExceptionError{v: errVal}
+			return vm.Undefined, throwError("getWellKnownIntrinsicObject requires 1 argument")
 		}
 		name := args[0].ToString()
 		// Accessible intrinsics
@@ -291,12 +242,10 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 			"%StringIteratorPrototype%",
 			"%MapIteratorPrototype%",
 			"%SetIteratorPrototype%":
-			errVal, _ := ctx.VM.Call(sharedTest262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString("intrinsic not accessible")})
-			return vm.Undefined, test262ExceptionError{v: errVal}
+			return vm.Undefined, throwError("intrinsic not accessible")
 		}
 		// Unknown intrinsic
-		errVal, _ := ctx.VM.Call(sharedTest262ErrorCtor, vm.Undefined, []vm.Value{vm.NewString("intrinsic not found")})
-		return vm.Undefined, test262ExceptionError{v: errVal}
+		return vm.Undefined, throwError("intrinsic not found")
 	})
 	if err := ctx.DefineGlobal("getWellKnownIntrinsicObject", getIntrinsic); err != nil {
 		return err

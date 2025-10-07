@@ -42,7 +42,15 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			} else if debugVM {
 				fmt.Printf("[DEBUG opGetProp globalThis] Property '%s' NOT found in heap\n", propName)
 			}
-			// If not in heap, fall through to normal property access
+			// If not in heap, check Object.prototype for standard methods
+			// GlobalObject has Null prototype to avoid issues, but should inherit Object.prototype methods
+			if objProto := vm.ObjectPrototype.AsPlainObject(); objProto != nil {
+				if value, exists := objProto.GetOwn(propName); exists {
+					*dest = value
+					return true, InterpretOK, *dest
+				}
+			}
+			// If not in Object.prototype either, fall through to normal property access
 		}
 	}
 

@@ -225,24 +225,33 @@ func (vm *VM) handleUncaughtException() {
 		if vm.currentException.Type() == TypeObject {
 			obj := vm.currentException.AsPlainObject()
 
-			// Check if this looks like an Error object (has name and message properties)
-			if nameVal, hasName := obj.GetOwn("name"); hasName {
-				if messageVal, hasMessage := obj.GetOwn("message"); hasMessage {
-					name := nameVal.ToString()
-					message := messageVal.ToString()
-					// Format like Error.prototype.toString() would
-					if message == "" {
-						displayStr = name
-					} else {
-						displayStr = name + ": " + message
-					}
+			// Check if this looks like an Error object (has name or message properties)
+			// First try to get name and message
+			nameVal, hasName := obj.GetOwn("name")
+			messageVal, hasMessage := obj.GetOwn("message")
 
-					// Try to get stack trace from Error object
-					if stackVal, hasStack := obj.GetOwn("stack"); hasStack {
-						stackTrace = stackVal.ToString()
-					}
+			if hasName || hasMessage {
+				// If we have name and/or message, format like Error.prototype.toString()
+				var name, message string
+				if hasName {
+					name = nameVal.ToString()
 				} else {
-					displayStr = vm.currentException.ToString()
+					name = "Error" // Default if no name property
+				}
+				if hasMessage {
+					message = messageVal.ToString()
+				}
+
+				// Format the error
+				if message == "" {
+					displayStr = name
+				} else {
+					displayStr = name + ": " + message
+				}
+
+				// Try to get stack trace from Error object
+				if stackVal, hasStack := obj.GetOwn("stack"); hasStack {
+					stackTrace = stackVal.ToString()
 				}
 			} else {
 				displayStr = vm.currentException.ToString()
