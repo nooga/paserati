@@ -2,7 +2,6 @@ package vm
 
 import (
 	"fmt"
-	"os"
 )
 
 // Heap represents a unified global variable storage for the VM.
@@ -139,14 +138,6 @@ func (h *Heap) Values() []Value {
 // SetBuiltinGlobals initializes the heap with builtin global variables
 // This replaces the old SetBuiltinGlobals method on VM
 func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]int) error {
-	// DEBUG: Log what globals are being set
-	fmt.Fprintf(os.Stderr, "[DEBUG heap.go] Setting %d builtin globals\n", len(globals))
-	if funcIndex, ok := indexMap["Function"]; ok {
-		fmt.Fprintf(os.Stderr, "[DEBUG heap.go] Function will be at heap index %d\n", funcIndex)
-	} else {
-		fmt.Fprintf(os.Stderr, "[DEBUG heap.go] WARNING: Function is NOT in indexMap!\n")
-	}
-
 	// List of non-configurable built-in globals per ECMAScript spec
 	nonConfigurableGlobals := map[string]bool{
 		"NaN":       true,
@@ -198,6 +189,17 @@ func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]i
 // GetNameToIndex returns the current name->index mapping (if available)
 func (h *Heap) GetNameToIndex() map[string]int {
 	return h.nameToIndex
+}
+
+// UpdateNameToIndex merges new name->index mappings into the heap's mapping
+// This is called after compilation to sync user-defined global names from the compiler
+func (h *Heap) UpdateNameToIndex(newMappings map[string]int) {
+	if h.nameToIndex == nil {
+		h.nameToIndex = make(map[string]int, len(newMappings))
+	}
+	for name, idx := range newMappings {
+		h.nameToIndex[name] = idx
+	}
 }
 
 // ClearUserGlobals resets user-defined globals while preserving builtin globals

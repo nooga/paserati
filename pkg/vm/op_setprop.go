@@ -127,6 +127,22 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 	}
 
+	// GlobalThis special case: transparently write to globals in heap
+	// This makes globalThis.propertyName = value work for top-level var/function declarations
+	if objVal.Type() == TypeObject {
+		po := AsPlainObject(*objVal)
+		if po == vm.GlobalObject {
+			// Check if this property exists as a global in the heap
+			if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
+				// Update existing global in heap
+				vm.heap.Set(globalIdx, *valueToSet)
+				return true, InterpretOK, *valueToSet
+			}
+			// If not in heap, we could allocate a new global slot here
+			// For now, fall through to normal property setting for new properties on globalThis
+		}
+	}
+
 	// FIX: Use hash-based cache key to avoid collisions
 	// Combine instruction pointer with property name hash
 	propNameHash := 0

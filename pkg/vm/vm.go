@@ -114,6 +114,11 @@ type VM struct {
 	// Unified global heap for all modules and main program
 	heap *Heap
 
+	// Global object - the object that globalThis refers to
+	// Top-level var/function declarations become properties of this object
+	// This matches ECMAScript spec behavior
+	GlobalObject *PlainObject
+
 	// Singleton empty array for rest parameters optimization
 	// Used when variadic functions are called with no extra arguments
 	emptyRestArray Value
@@ -283,6 +288,10 @@ func NewVM() *VM {
 	// Initialize built-in prototypes first
 	vm.initializePrototypes()
 
+	// Create the global object with Object.prototype in its prototype chain
+	// This ensures globalThis has access to Object.prototype methods like hasOwnProperty
+	vm.GlobalObject = NewObject(vm.ObjectPrototype).AsPlainObject()
+
 	// Run initialization callbacks
 	// if err := vm.initializeVM(); err != nil {
 	// 	// For now, just continue - we could add error handling later
@@ -339,7 +348,23 @@ func (vm *VM) GetGlobalByIndex(index int) (Value, bool) {
 
 func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]int) error {
 	// Use the heap's SetBuiltinGlobals method
-	return vm.heap.SetBuiltinGlobals(globals, indexMap)
+	if err := vm.heap.SetBuiltinGlobals(globals, indexMap); err != nil {
+		return err
+	}
+
+	// Also add all builtins as properties of the global object
+	// This makes them accessible via globalThis.propertyName
+	for name, value := range globals {
+		vm.GlobalObject.SetOwn(name, value)
+	}
+
+	return nil
+}
+
+// SyncGlobalNames syncs the compiler's global name mappings to the VM's heap
+// This should be called after each compilation to ensure globalThis property access works
+func (vm *VM) SyncGlobalNames(nameToIndex map[string]int) {
+	vm.heap.UpdateNameToIndex(nameToIndex)
 }
 
 // GetHeap returns the VM's global heap for direct access

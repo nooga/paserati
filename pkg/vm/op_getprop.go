@@ -21,6 +21,31 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 		fmt.Printf("[opGetProp] ip=%d obj=%s(%s) prop=%q\n", ip, objVal.Inspect(), objVal.TypeName(), propName)
 	}
 
+	// 0. GlobalThis special case: transparently access globals from heap
+	// This makes globalThis.propertyName work for top-level var/function declarations
+	if objVal.Type() == TypeObject {
+		po := AsPlainObject(*objVal)
+		if po == vm.GlobalObject {
+			if debugVM {
+				fmt.Printf("[DEBUG opGetProp globalThis] Looking for property '%s' in heap\n", propName)
+				fmt.Printf("[DEBUG opGetProp globalThis] nameToIndex has %d entries\n", len(vm.heap.nameToIndex))
+			}
+			// Check if this property exists as a global in the heap
+			if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
+				if debugVM {
+					fmt.Printf("[DEBUG opGetProp globalThis] Found '%s' at heap index %d\n", propName, globalIdx)
+				}
+				if value, ok := vm.heap.Get(globalIdx); ok {
+					*dest = value
+					return true, InterpretOK, *dest
+				}
+			} else if debugVM {
+				fmt.Printf("[DEBUG opGetProp globalThis] Property '%s' NOT found in heap\n", propName)
+			}
+			// If not in heap, fall through to normal property access
+		}
+	}
+
 	// 1. Special properties (.length, etc.)
 	if result, handled := vm.handleSpecialProperties(*objVal, propName); handled {
 		*dest = result

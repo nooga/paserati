@@ -764,6 +764,9 @@ func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, modul
 		return vm.Undefined, []errors.PaseratiError{internalErr}
 	}
 
+	// Sync global names from compiler to VM heap so globalThis property access works
+	p.vmInstance.SyncGlobalNames(p.compiler.GetHeapAlloc().GetNameToIndexMap())
+
 	// Set the module path in the VM so import.meta.url works correctly
 	p.vmInstance.SetCurrentModulePath(moduleName)
 

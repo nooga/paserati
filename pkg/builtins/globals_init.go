@@ -325,7 +325,6 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Add globalThis as a reference to the global object
-	// For now, create an empty object - in a real implementation this would be the global scope
-	globalThisObj := vm.NewObject(vm.Null)
-	return ctx.DefineGlobal("globalThis", vm.NewValueFromPlainObject(globalThisObj.AsPlainObject()))
+	// globalThis refers to the VM's GlobalObject which contains all global properties
+	return ctx.DefineGlobal("globalThis", vm.NewValueFromPlainObject(ctx.VM.GlobalObject))
 }
