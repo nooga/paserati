@@ -338,11 +338,24 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 		return vm.Undefined, fmt.Errorf("SyntaxError: compilation returned nil chunk")
 	}
 
-	// Execute the chunk in the current VM to get the function value
-	result, runtimeErrs := vmInstance.Interpret(chunk)
-	if len(runtimeErrs) > 0 {
-		return vm.Undefined, fmt.Errorf("Error: %v", runtimeErrs[0])
+	// IMPORTANT: Don't execute the chunk! The compiled code is:
+	//   return (function(...) { body });
+	// This generates bytecode:
+	//   OpLoadConst R1, Constant[0]  // Constant[0] is the function object
+	//   OpReturn R1
+	// We can skip execution and just return constants[0] directly.
+
+	if len(chunk.Constants) == 0 {
+		return vm.Undefined, fmt.Errorf("Internal Error: compiled Function() code has no constants")
 	}
 
-	return result, nil
+	// The first constant is the function object we created
+	functionValue := chunk.Constants[0]
+
+	// Verify it's actually a function
+	if !functionValue.IsCallable() {
+		return vm.Undefined, fmt.Errorf("Internal Error: Function() constant is not callable (got %s)", functionValue.TypeName())
+	}
+
+	return functionValue, nil
 }
