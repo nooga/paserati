@@ -5182,11 +5182,32 @@ func (p *Parser) parseArrayLiteral() Expression {
 			p.nextToken()
 			continue
 		}
-		// Parse a normal element with COMMA precedence so ',' acts as a separator, not an operator
-		elem := p.parseExpression(COMMA)
+		// Parse element at ASSIGNMENT precedence to exclude assignment expressions
+		// This prevents: [x = 10, y = 20] from parsing comma as operator in assignment RHS
+		// We manually handle `=` for default values (cover grammar)
+		elem := p.parseExpression(ASSIGNMENT)
 		if elem == nil {
 			return nil
 		}
+
+		// Check for default value syntax in array patterns: identifier = defaultExpr
+		// This is for cover grammar: [x = 10] can be both array literal and destructuring pattern
+		if p.peekTokenIs(lexer.ASSIGN) {
+			p.nextToken() // Consume '='
+			p.nextToken() // Move to default value expression
+			defaultExpr := p.parseExpression(ASSIGNMENT)
+			if defaultExpr == nil {
+				return nil
+			}
+			// Create AssignmentExpression to represent the default
+			elem = &AssignmentExpression{
+				Token:    p.curToken,
+				Operator: "=",
+				Left:     elem,
+				Value:    defaultExpr,
+			}
+		}
+
 		elements = append(elements, elem)
 		debugPrint("parseArrayLiteral: appended element=%T ('%s')", elem, elem.String())
 		// Optional comma between elements

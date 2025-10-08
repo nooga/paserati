@@ -1,11 +1,9 @@
-// FIXME: Array destructuring assignment with defaults - comma expression bug
-// The parser currently treats `[x = 10, y = 20]` as array literal with comma expression
-// This is a cover grammar issue that needs proper implementation
-// Workaround: use destructuring declarations or parentheses: [(x = 10), (y = 20)]
+// Comprehensive destructuring defaults test
 
 // Test array destructuring - second element gets default
-let x = 10;
-let y = 20;
+let x;
+let y;
+[x = 10, y = 20] = [1];
 
 // Second element should get default value
 y;
