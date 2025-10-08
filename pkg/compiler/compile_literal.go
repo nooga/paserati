@@ -679,17 +679,27 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			}
 			debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
 
+			// Detect if this is shorthand property syntax ({x} instead of {x: value})
+			isShorthand := false
+			if keyIdent, keyOk := prop.Key.(*parser.Identifier); keyOk {
+				if valIdent, valOk := prop.Value.(*parser.Identifier); valOk {
+					// Shorthand if same identifier (by reference) or same name
+					isShorthand = (keyIdent == valIdent || keyIdent.Value == valIdent.Value)
+				}
+			}
+
 			// Check for __proto__ special property (non-computed only)
-			if !isComputedKey && keyConstIdx != 0xFFFF {
+			// Per Annex B.3.1, only colon syntax sets prototype; shorthand creates own property
+			if !isComputedKey && !isShorthand && keyConstIdx != 0xFFFF {
 				// Get the property name from constants to check if it's __proto__
 				if int(keyConstIdx) < len(c.chunk.Constants) {
 					keyVal := c.chunk.Constants[keyConstIdx]
 					if keyVal.Type() == vm.TypeString && vm.AsString(keyVal) == "__proto__" {
-						// Special handling for __proto__: set object's prototype
+						// Special handling for __proto__: value sets object's prototype
 						c.emitOpCode(vm.OpSetPrototype, line)
 						c.emitByte(byte(hint))     // Object register
 						c.emitByte(byte(valueReg)) // Prototype value register
-						debugPrintf("--- OL: Emitted OpSetPrototype for __proto__\n")
+						debugPrintf("--- OL: Emitted OpSetPrototype for __proto__: value\n")
 						continue
 					}
 				}

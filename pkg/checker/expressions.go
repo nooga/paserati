@@ -208,6 +208,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	fields := make(map[string]types.Type)
 	seenKeys := make(map[string]bool)
+	seenProtoColon := false // Track if we've seen __proto__: value (colon syntax)
 
 	// --- NEW: Create preliminary object type for 'this' context ---
 	// We need to construct the object type first so function methods can reference it
@@ -310,9 +311,22 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			keyName = "__UNKNOWN_KEY__"
 		}
 
+		// Detect if this is shorthand property syntax ({x} instead of {x: value})
+		isShorthand := false
+		if keyIdent, keyOk := prop.Key.(*parser.Identifier); keyOk {
+			if valIdent, valOk := prop.Value.(*parser.Identifier); valOk {
+				// Shorthand if same identifier (by reference) or same name
+				isShorthand = (keyIdent == valIdent || keyIdent.Value == valIdent.Value)
+			}
+		}
+
 		// Check for duplicate keys (but skip for computed keys since they can be dynamic)
 		// Allow getters/setters to share the same key by checking if the value is a MethodDefinition
 		if keyName != "__COMPUTED_PROPERTY__" && keyName != "__UNKNOWN_KEY__" {
+			// Per Annex B.3.1: duplicate __proto__ is only an error when both use colon syntax
+			// Shorthand {__proto__} creates a regular property and can be duplicated
+			isProtoColon := (keyName == "__proto__" && !isShorthand)
+
 			// Check if this is a getter/setter MethodDefinition
 			if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
 				if methodDef.Kind == "getter" || methodDef.Kind == "setter" {
@@ -321,15 +335,27 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					// For now, be lenient and allow it - JavaScript allows redefining getters/setters
 				} else {
 					// Regular method - check for conflicts
-					if seenKeys[keyName] {
+					if seenKeys[keyName] && keyName != "__proto__" {
 						c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+					}
+					if isProtoColon && seenProtoColon {
+						c.addError(prop.Key, "duplicate __proto__ fields are not allowed")
+					}
+					if isProtoColon {
+						seenProtoColon = true
 					}
 					seenKeys[keyName] = true
 				}
 			} else {
 				// Regular property - check for conflicts
-				if seenKeys[keyName] {
+				if seenKeys[keyName] && keyName != "__proto__" {
 					c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+				}
+				if isProtoColon && seenProtoColon {
+					c.addError(prop.Key, "duplicate __proto__ fields are not allowed")
+				}
+				if isProtoColon {
+					seenProtoColon = true
 				}
 				seenKeys[keyName] = true
 			}
@@ -349,9 +375,11 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 							valueType = types.Any
 						}
 
-						// Special handling for __proto__: merge prototype properties
-						if keyName == "__proto__" {
-							// __proto__ sets the prototype, so merge its properties into the object type
+						// Special handling for __proto__: only colon syntax sets prototype
+						// Per Annex B.3.1, shorthand {__proto__} creates a regular own property
+						// (isShorthand was detected earlier in the loop)
+						if keyName == "__proto__" && !isShorthand {
+							// __proto__: value sets the prototype, so merge its properties into the object type
 							widenedProtoType := types.GetWidenedType(valueType)
 							if protoObjType, ok := widenedProtoType.(*types.ObjectType); ok {
 								// Merge prototype properties into our object
