@@ -2021,21 +2021,29 @@ func (p *Parser) parseFunctionLiteral() Expression {
 		return nil
 	}
 
-	// Track generator context when parsing body
+	// Save and manage generator context when parsing body
+	// Non-generator functions reset the context (even if nested in generators)
+	// Generator functions increment the context
+	savedGeneratorContext := p.inGenerator
 	if lit.IsGenerator {
 		p.inGenerator++
 		if debugParser {
 			fmt.Printf("[PARSER] Entering generator context, inGenerator=%d\n", p.inGenerator)
 		}
+	} else {
+		// Non-generator function resets generator context (per ECMAScript spec)
+		p.inGenerator = 0
+		if debugParser && savedGeneratorContext > 0 {
+			fmt.Printf("[PARSER] Resetting generator context for non-generator function (was %d)\n", savedGeneratorContext)
+		}
 	}
 
 	lit.Body = p.parseBlockStatement() // Includes consuming RBRACE
 
-	if lit.IsGenerator {
-		p.inGenerator--
-		if debugParser {
-			fmt.Printf("[PARSER] Exiting generator context, inGenerator=%d\n", p.inGenerator)
-		}
+	// Restore the saved generator context
+	p.inGenerator = savedGeneratorContext
+	if debugParser {
+		fmt.Printf("[PARSER] Restored generator context to %d\n", p.inGenerator)
 	}
 
 	// Transform function if it has destructuring parameters
@@ -3097,7 +3105,9 @@ func (p *Parser) parseSpreadElement() Expression {
 
 	// Parse the expression after '...'
 	p.nextToken() // Move to the expression
-	spreadElement.Argument = p.parseExpression(COMMA)
+	// Use ASSIGNMENT precedence to prevent comma from being parsed as operator
+	// This fixes: {...yield yield, ...yield} where comma should be property separator
+	spreadElement.Argument = p.parseExpression(ASSIGNMENT)
 	if spreadElement.Argument == nil {
 		p.addError(p.curToken, "expected expression after '...' in spread syntax")
 		return nil
@@ -5995,10 +6005,31 @@ func (p *Parser) parseObjectLiteral() Expression {
 					return nil
 				}
 
+				// Save and manage generator context (same as parseFunctionLiteral)
+				savedGeneratorContext := p.inGenerator
+				if funcLit.IsGenerator {
+					p.inGenerator++
+					if debugParser {
+						fmt.Printf("[PARSER] Entering generator context (object method), inGenerator=%d\n", p.inGenerator)
+					}
+				} else {
+					// Non-generator method resets generator context
+					p.inGenerator = 0
+					if debugParser && savedGeneratorContext > 0 {
+						fmt.Printf("[PARSER] Resetting generator context for non-generator method (was %d)\n", savedGeneratorContext)
+					}
+				}
+
 				// Parse method body
 				funcLit.Body = p.parseBlockStatement()
 				if funcLit.Body == nil {
 					return nil // Error parsing method body
+				}
+
+				// Restore the saved generator context
+				p.inGenerator = savedGeneratorContext
+				if debugParser {
+					fmt.Printf("[PARSER] Restored generator context to %d (object method)\n", p.inGenerator)
 				}
 
 				// Add the generator method
