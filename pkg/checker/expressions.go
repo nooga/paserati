@@ -252,8 +252,11 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				// For simplicity, we'll allow this but not add specific properties
 				debugPrintf("// [Checker ObjectLit Spread] Spreading array type (no properties added)\n")
 			default:
-				if widenedType != types.Any {
+				// Allow undefined (from yield without argument) and any (can't verify statically)
+				if widenedType != types.Any && widenedType != types.Undefined {
 					c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))
+				} else {
+					debugPrintf("// [Checker ObjectLit Spread] Spreading any/undefined type (no properties added)\n")
 				}
 			}
 			// Skip the rest of the property processing for spread elements

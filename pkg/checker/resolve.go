@@ -765,8 +765,12 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 			if defaultValueType != nil {
 				// Widen literal types for parameter inference (like let/const inference)
 				resolvedParamType = types.GetWidenedType(defaultValueType)
+				paramName := "<destructuring>"
+				if paramNode.Name != nil {
+					paramName = paramNode.Name.Value
+				}
 				debugPrintf("// [Checker resolveFuncLitType] Inferred parameter '%s' type from default value: %s -> %s\n",
-					paramNode.Name.Value, defaultValueType.String(), resolvedParamType.String())
+					paramName, defaultValueType.String(), resolvedParamType.String())
 			}
 		}
 

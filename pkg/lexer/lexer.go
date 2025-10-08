@@ -1686,31 +1686,36 @@ func (l *Lexer) readNumber() string {
 
 	// 3. Read fractional part (only for base 10)
 	if base == 10 && l.ch == '.' {
-		// Check if the character *after* the dot is a digit or separator
+		// Check if the character *after* the dot is a digit, separator, or 'e'/'E' (for cases like "1.e10")
 		peek := l.peekChar()
-		if isDigit(peek) || peek == '_' {
+		if isDigit(peek) || peek == '_' || peek == 'e' || peek == 'E' {
 			l.readChar()             // Consume '.'
 			lastCharWasDigit = false // Reset for fraction part validation
-			for {
-				if isDigit(l.ch) {
-					l.readChar()
-					lastCharWasDigit = true
-				} else if l.ch == '_' {
-					if !lastCharWasDigit { // Separator must follow a digit
-						return l.input[startPos:l.position]
+
+			// Only read fractional digits if the next char is not 'e'/'E'
+			// (handles "1.e10" where there are no fractional digits)
+			if l.ch != 'e' && l.ch != 'E' {
+				for {
+					if isDigit(l.ch) {
+						l.readChar()
+						lastCharWasDigit = true
+					} else if l.ch == '_' {
+						if !lastCharWasDigit { // Separator must follow a digit
+							return l.input[startPos:l.position]
+						}
+						l.readChar()        // Consume '_'
+						if !isDigit(l.ch) { // Separator must be followed by a digit
+							return l.input[startPos : l.position-1]
+						}
+						lastCharWasDigit = false // Reset
+					} else {
+						break // End of fractional part
 					}
-					l.readChar()        // Consume '_'
-					if !isDigit(l.ch) { // Separator must be followed by a digit
-						return l.input[startPos : l.position-1]
-					}
-					lastCharWasDigit = false // Reset
-				} else {
-					break // End of fractional part
 				}
-			}
-			// Must end fraction with a digit
-			if l.input[l.position-1] == '_' {
-				return l.input[startPos : l.position-1]
+				// Must end fraction with a digit
+				if l.input[l.position-1] == '_' {
+					return l.input[startPos : l.position-1]
+				}
 			}
 		}
 	}

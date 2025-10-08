@@ -2141,7 +2141,9 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 	}
 
 	// Parse the parameter (could be 'this' parameter or destructuring pattern)
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
+	// Allow YIELD as parameter name in non-generator functions (non-strict mode)
+	isYieldParam := p.curTokenIs(lexer.YIELD) && p.inGenerator == 0
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam {
 		msg := fmt.Sprintf("expected identifier, 'this', or destructuring pattern for parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
@@ -2294,7 +2296,9 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 			param.Token = p.curToken
 		}
 
-		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
+		// Allow YIELD as parameter name in non-generator functions (non-strict mode)
+		isYieldParam := p.curTokenIs(lexer.YIELD) && p.inGenerator == 0
+		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam {
 			msg := fmt.Sprintf("expected identifier or destructuring pattern for parameter after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
@@ -3947,7 +3951,9 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 	}
 
 	// Parse regular parameter (identifier or destructuring pattern)
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) {
+	// Allow YIELD as parameter name in non-generator functions (non-strict mode)
+	isYieldParam := p.curTokenIs(lexer.YIELD) && p.inGenerator == 0
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam {
 		msg := fmt.Sprintf("expected identifier or destructuring pattern as parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
@@ -4128,7 +4134,11 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 
 		params = append(params, param)
 		if param.IsDestructuring {
-			debugPrint("parseParameterList: Parsed destructuring param (pattern: %s) (type: %v)", param.Pattern.String(), param.TypeAnnotation)
+			patternStr := "<nil>"
+			if param.Pattern != nil {
+				patternStr = param.Pattern.String()
+			}
+			debugPrint("parseParameterList: Parsed destructuring param (pattern: %s) (type: %v)", patternStr, param.TypeAnnotation)
 		} else {
 			debugPrint("parseParameterList: Parsed param '%s' (type: %v)", param.Name.Value, param.TypeAnnotation)
 		}
@@ -4216,7 +4226,9 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		return nil
 	}
 
-	precedence := p.curPrecedence()
+	// For right-associativity of assignment, parse RHS with LOWEST precedence
+	// This allows: a = b = c to parse as a = (b = c) and handles [x,y] = vals
+	precedence := LOWEST
 	p.nextToken() // Consume assignment operator
 
 	debugPrint("parseAssignmentExpression parsing right side...")
