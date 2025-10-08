@@ -1962,18 +1962,14 @@ func (p *Parser) parseFunctionLiteral() Expression {
 		lit.IsGenerator = true
 	}
 
-	// Optional Function Name
-	if p.peekTokenIs(lexer.IDENT) {
-		p.nextToken() // Consume name identifier
-		// Assuming parseIdentifier correctly returns an *Identifier here
-		nameIdentExpr := p.parseIdentifier()
-		nameIdent, ok := nameIdentExpr.(*Identifier)
-		if !ok {
-			msg := fmt.Sprintf("expected identifier for function name, got %s", p.curToken.Type)
-			p.addError(p.curToken, msg)
-			return nil
-		}
-		lit.Name = nameIdent
+	// Optional Function Name (can be IDENT or contextual keywords like yield, get, etc.)
+	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.YIELD) ||
+		p.peekTokenIs(lexer.GET) || p.peekTokenIs(lexer.SET) ||
+		p.peekTokenIs(lexer.THROW) || p.peekTokenIs(lexer.RETURN) ||
+		p.peekTokenIs(lexer.LET) || p.peekTokenIs(lexer.AWAIT) {
+		p.nextToken() // Consume name identifier/keyword
+		// Create identifier from token (works for both IDENT and keywords)
+		lit.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 
 	// Try to parse type parameters: function name<T, U>() or function<T, U>()
@@ -2397,13 +2393,31 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 func (p *Parser) parseRestParameter() *RestParameter {
 	restParam := &RestParameter{Token: p.curToken} // The '...' token
 
-	// Expect identifier after '...'
-	if !p.expectPeek(lexer.IDENT) {
-		p.addError(p.peekToken, "expected identifier after '...' in rest parameter")
+	// Expect identifier or destructuring pattern after '...'
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.LBRACKET) && !p.peekTokenIs(lexer.LBRACE) {
+		p.addError(p.peekToken, "expected identifier or destructuring pattern after '...' in rest parameter")
 		return nil
 	}
 
-	restParam.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	p.nextToken() // Move to the identifier or pattern
+
+	// Check if it's a destructuring pattern
+	if p.curTokenIs(lexer.LBRACKET) {
+		// Array destructuring: ...[x, y]
+		restParam.Pattern = p.parseArrayParameterPattern()
+		if restParam.Pattern == nil {
+			return nil
+		}
+	} else if p.curTokenIs(lexer.LBRACE) {
+		// Object destructuring: ...{x, y}
+		restParam.Pattern = p.parseObjectParameterPattern()
+		if restParam.Pattern == nil {
+			return nil
+		}
+	} else {
+		// Regular identifier
+		restParam.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
 
 	// Check for type annotation
 	if p.peekTokenIs(lexer.COLON) {
@@ -5859,7 +5873,10 @@ func (p *Parser) parseObjectLiteral() Expression {
 				var funcLit *FunctionLiteral
 
 				// Handle different name types
-				if p.curTokenIs(lexer.IDENT) {
+				if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.YIELD) ||
+					p.curTokenIs(lexer.GET) || p.curTokenIs(lexer.SET) ||
+					p.curTokenIs(lexer.THROW) || p.curTokenIs(lexer.RETURN) ||
+					p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.AWAIT) {
 					key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 					funcLit = &FunctionLiteral{
 						Token:       asyncToken,
@@ -5941,8 +5958,11 @@ func (p *Parser) parseObjectLiteral() Expression {
 				var funcLit *FunctionLiteral
 
 				// Handle different name types for generator methods
-				if p.curTokenIs(lexer.IDENT) {
-					// *foo() { ... }
+				if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.YIELD) ||
+					p.curTokenIs(lexer.GET) || p.curTokenIs(lexer.SET) ||
+					p.curTokenIs(lexer.THROW) || p.curTokenIs(lexer.RETURN) ||
+					p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.AWAIT) {
+					// *foo() or *yield() or other contextual keywords
 					key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 					funcLit = &FunctionLiteral{
 						Token:       asteriskToken,

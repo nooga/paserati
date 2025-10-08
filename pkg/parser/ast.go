@@ -313,6 +313,7 @@ type RestParameter struct {
 	BaseExpression             // Embed base for ComputedType
 	Token          lexer.Token // The '...' token
 	Name           *Identifier // The parameter name (e.g., 'args' in ...args)
+	Pattern        Expression  // Optional destructuring pattern (e.g., ...[x, y] or ...{a, b})
 	TypeAnnotation Expression  // Optional type annotation (e.g., 'string[]' in ...args: string[])
 	ComputedType   types.Type  // Stores the resolved type (should be array type)
 }
