@@ -1199,7 +1199,9 @@ func (p *Parser) parseLetStatement() Statement {
 		if p.peekTokenIs(lexer.ASSIGN) {
 			p.nextToken() // Consume '='
 			p.nextToken() // Consume token starting the expression
-			firstDeclarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
+			// Use COMMA precedence to allow assignment expressions but stop at commas
+			// This enables: var result = [x, y] = [1, 2] while stopping at: var a = 1, b = 2
+			firstDeclarator.Value = p.parseExpression(COMMA)
 		}
 
 		stmt.Declarations = []*VarDeclarator{firstDeclarator}
@@ -1229,7 +1231,8 @@ func (p *Parser) parseLetStatement() Statement {
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken() // Consume '='
 				p.nextToken() // Consume token starting the expression
-				declarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
+				// Use COMMA precedence to allow assignment expressions but stop at commas
+				declarator.Value = p.parseExpression(COMMA)
 			}
 
 			stmt.Declarations = append(stmt.Declarations, declarator)
@@ -1382,7 +1385,9 @@ func (p *Parser) parseVarStatement() Statement {
 		if p.peekTokenIs(lexer.ASSIGN) {
 			p.nextToken() // Consume '='
 			p.nextToken() // Consume token starting the expression
-			firstDeclarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
+			// Use COMMA precedence to allow assignment expressions but stop at commas
+			// This enables: var result = [x, y] = [1, 2] while stopping at: var a = 1, b = 2
+			firstDeclarator.Value = p.parseExpression(COMMA)
 		}
 
 		stmt.Declarations = []*VarDeclarator{firstDeclarator}
@@ -1412,7 +1417,8 @@ func (p *Parser) parseVarStatement() Statement {
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken() // Consume '='
 				p.nextToken() // Consume token starting the expression
-				declarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
+				// Use COMMA precedence to allow assignment expressions but stop at commas
+				declarator.Value = p.parseExpression(COMMA)
 			}
 
 			stmt.Declarations = append(stmt.Declarations, declarator)
@@ -4447,8 +4453,28 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 				elements = append(elements, element)
 				// Don't consume comma - let the loop iteration handle it
 			} else {
-				// Parse actual element
-				element = p.parseExpression(COMMA)
+				// Parse actual element - use ASSIGNMENT precedence to exclude assignment expressions
+				// This prevents type checking of `b = 10` as an assignment to undeclared `b`
+				element = p.parseExpression(ASSIGNMENT)
+
+				// Check for default value syntax: identifier = defaultExpr
+				if p.peekTokenIs(lexer.ASSIGN) {
+					p.nextToken() // Consume '='
+					p.nextToken() // Move to default value expression
+					defaultExpr := p.parseExpression(ASSIGNMENT)
+					if defaultExpr == nil {
+						return nil
+					}
+					// Create an AssignmentExpression to represent the default value
+					// This won't trigger type checking because we're building it manually
+					element = &AssignmentExpression{
+						Token:    p.curToken,
+						Operator: "=",
+						Left:     element,
+						Value:    defaultExpr,
+					}
+				}
+
 				elements = append(elements, element)
 
 				// After parsing element, check what's next
@@ -7528,7 +7554,8 @@ func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken()
 				p.nextToken()
-				declarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
+				// Use COMMA precedence to allow assignment expressions but stop at commas
+				declarator.Value = p.parseExpression(COMMA)
 			}
 			letStmt.Declarations = []*VarDeclarator{declarator}
 			// Set legacy fields for backward compatibility
@@ -7551,7 +7578,8 @@ func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken()
 				p.nextToken()
-				declarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
+				// Use COMMA precedence to allow assignment expressions but stop at commas
+				declarator.Value = p.parseExpression(COMMA)
 			}
 			constStmt.Declarations = []*VarDeclarator{declarator}
 			constStmt.Name = declarator.Name
@@ -7573,7 +7601,8 @@ func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken()
 				p.nextToken()
-				declarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
+				// Use COMMA precedence to allow assignment expressions but stop at commas
+				declarator.Value = p.parseExpression(COMMA)
 			}
 			varStmt.Declarations = []*VarDeclarator{declarator}
 			varStmt.Name = declarator.Name
