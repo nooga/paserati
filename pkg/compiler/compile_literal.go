@@ -550,6 +550,9 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 		case *parser.NumberLiteral: // Allow number literal keys, convert to string
 			keyStr := keyNode.TokenLiteral()
 			keyConstIdx = c.chunk.AddConstant(vm.String(keyStr))
+		case *parser.BigIntLiteral: // Allow bigint literal keys, convert to string
+			keyStr := keyNode.Value // BigIntLiteral.Value is already string (numeric part without 'n')
+			keyConstIdx = c.chunk.AddConstant(vm.String(keyStr))
 		case *parser.ComputedPropertyName:
 			// Handle computed keys: [expr]
 			// Per ECMAScript spec, we must evaluate the key and convert to property key

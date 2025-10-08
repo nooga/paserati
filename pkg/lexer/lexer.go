@@ -414,8 +414,13 @@ func (l *Lexer) SetPosition(pos int) {
 
 // NewLexer creates a new Lexer.
 func NewLexer(input string) *Lexer {
-	// Preprocess Unicode escapes, but preserve them in strings and comments
-	input = PreprocessUnicodeEscapesContextAware(input)
+	// NOTE: Do NOT preprocess Unicode escapes here!
+	// According to ECMAScript spec, identifiers with escape sequences should NOT be treated as keywords.
+	// For example, `privat\u0065` should be the identifier "private", not the keyword PRIVATE.
+	// Preprocessing would decode the escapes before we can detect them, defeating keyword detection.
+	// The lexer's readIdentifierWithUnicode() handles Unicode escapes correctly and tracks whether
+	// an identifier contained escapes.
+	// input = PreprocessUnicodeEscapesContextAware(input)
 
 	// Create a default source file for backward compatibility
 	sourceFile := source.NewEvalSource(input)
@@ -1385,8 +1390,12 @@ func (l *Lexer) NextToken() Token {
 		tok = Token{Type: EOF, Literal: "", Line: startLine, Column: startCol, StartPos: startPos, EndPos: startPos}
 	default:
 		if l.canStartIdentifier() {
-			literal := l.readIdentifierWithUnicode() // Consumes letters/digits/_/$/unicode escapes/unicode chars
-			tokType := LookupIdent(literal)
+			literal, hasEscape := l.readIdentifierWithUnicode() // Consumes letters/digits/_/$/unicode escapes/unicode chars
+			// If identifier contains escape sequences, it should NOT be treated as a keyword
+			tokType := IDENT
+			if !hasEscape {
+				tokType = LookupIdent(literal)
+			}
 			// readIdentifierWithUnicode leaves l.position *after* the last char of the identifier
 			tok = Token{Type: tokType, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			//return tok // Return early, readIdentifierWithUnicode already called readChar()
@@ -1422,7 +1431,7 @@ func (l *Lexer) NextToken() Token {
 				savedCh := l.ch
 
 				// Try to read an identifier (including Unicode escapes)
-				identifierPart := l.readIdentifierWithUnicode()
+				identifierPart, _ := l.readIdentifierWithUnicode()
 
 				if identifierPart != "" {
 					// Successfully read an identifier part
@@ -1465,11 +1474,13 @@ func (l *Lexer) readIdentifier() string {
 
 // readIdentifierWithUnicode reads an identifier that may contain unicode escape sequences
 // or Unicode characters, and returns the resolved identifier string (e.g., "\u0064o" becomes "do")
-func (l *Lexer) readIdentifierWithUnicode() string {
+func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 	var result strings.Builder
+	hasEscape := false
 
 	for l.ch != 0 {
 		if l.ch == '\\' && l.peekChar() == 'u' {
+			hasEscape = true
 			// Parse unicode escape sequence \uXXXX or \u{...}
 			l.readChar() // consume '\'
 			l.readChar() // consume 'u'
@@ -1607,7 +1618,7 @@ func (l *Lexer) readIdentifierWithUnicode() string {
 		}
 	}
 
-	return result.String()
+	return result.String(), hasEscape
 }
 
 // readNumber reads a number literal (integer or float, various bases) and advances the lexer's position.

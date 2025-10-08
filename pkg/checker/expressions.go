@@ -225,6 +225,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		case *parser.NumberLiteral: // Allow number literals as keys, convert to string
 			// Note: JavaScript converts number keys to strings internally
 			keyName = fmt.Sprintf("%v", key.Value) // Simple conversion
+		case *parser.BigIntLiteral: // Allow bigint literals as keys, convert to string
+			// Note: JavaScript converts bigint keys to strings internally
+			keyName = key.Value // BigIntLiteral.Value is already a string
 		case *parser.SpreadElement:
 			// Handle spread syntax: {...obj}
 			// Check that the argument is an object type
@@ -268,6 +271,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
 				keyName = fmt.Sprintf("%v", literal.Value)
+			} else if literal, ok := key.Expr.(*parser.BigIntLiteral); ok {
+				keyName = literal.Value
 			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
 				// Check for Symbol.iterator access
 				if objectIdent, ok := memberExpr.Object.(*parser.Identifier); ok {
@@ -377,6 +382,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			keyName = key.Value
 		case *parser.NumberLiteral:
 			keyName = fmt.Sprintf("%v", key.Value)
+		case *parser.BigIntLiteral:
+			keyName = key.Value
 		case *parser.SpreadElement:
 			continue // Skip spread elements
 		case *parser.ComputedPropertyName:
@@ -385,6 +392,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				keyName = literal.Value
 			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
 				keyName = fmt.Sprintf("%v", literal.Value)
+			} else if literal, ok := key.Expr.(*parser.BigIntLiteral); ok {
+				keyName = literal.Value
 			} else if memberExpr, ok := key.Expr.(*parser.MemberExpression); ok {
 				// Check for Symbol.iterator access
 				if objectIdent, ok := memberExpr.Object.(*parser.Identifier); ok {

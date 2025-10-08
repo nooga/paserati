@@ -3229,11 +3229,12 @@ func (ce *ClassExpression) String() string {
 
 // ClassBody represents the body of a class containing methods and properties
 type ClassBody struct {
-	Token           lexer.Token             // The '{' token
-	Methods         []*MethodDefinition     // Class method implementations
-	Properties      []*PropertyDefinition   // Class properties
-	ConstructorSigs []*ConstructorSignature // Constructor overload signatures
-	MethodSigs      []*MethodSignature      // Method overload signatures
+	Token              lexer.Token             // The '{' token
+	Methods            []*MethodDefinition     // Class method implementations
+	Properties         []*PropertyDefinition   // Class properties
+	ConstructorSigs    []*ConstructorSignature // Constructor overload signatures
+	MethodSigs         []*MethodSignature      // Method overload signatures
+	StaticInitializers []*BlockStatement       // Static initializer blocks: static { ... }
 }
 
 func (cb *ClassBody) TokenLiteral() string { return cb.Token.Literal }

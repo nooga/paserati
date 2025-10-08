@@ -213,8 +213,10 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.NEW, p.parseNewExpression)           // Added for new keyword
 	p.registerPrefix(lexer.IMPORT, p.parseImportMetaExpression) // Added for import.meta
 	p.registerPrefix(lexer.GET, p.parseIdentifier)              // GET can be used as identifier in object literals
+	p.registerPrefix(lexer.SET, p.parseIdentifier)              // SET can be used as identifier in object literals
 	p.registerPrefix(lexer.THROW, p.parseIdentifier)            // THROW can be used as identifier in object literals
 	p.registerPrefix(lexer.RETURN, p.parseIdentifier)           // RETURN can be used as identifier in object literals
+	p.registerPrefix(lexer.LET, p.parseIdentifier)              // LET can be used as identifier in non-strict mode
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
@@ -443,7 +445,16 @@ func (p *Parser) parseStatement() Statement {
 	debugPrint("parseStatement: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 	switch p.curToken.Type {
 	case lexer.LET:
-		return p.parseLetStatement()
+		// Check if this is actually a let declaration or just 'let' as an identifier
+		// If followed by [, {, or identifier, it's a declaration
+		// Otherwise (e.g., followed by ;, ), }, etc.), treat as identifier
+		if p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.IDENT) ||
+			p.isKeywordThatCanBeIdentifier(p.peekToken.Type) {
+			return p.parseLetStatement()
+		} else {
+			// Treat 'let' as an identifier in an expression statement
+			return p.parseExpressionStatement()
+		}
 	case lexer.CONST:
 		return p.parseConstStatement()
 	case lexer.VAR: // Added case
@@ -1168,8 +1179,8 @@ func (p *Parser) parseLetStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: let {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(letToken, false, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.THROW, lexer.RETURN:
-		// Regular identifier: let x = ... or let x = ..., y = ...
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
+		// Regular identifier: let x = ... or let x = ..., y = ... (including contextual keywords)
 		stmt := &LetStatement{Token: letToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1260,8 +1271,8 @@ func (p *Parser) parseConstStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: const {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(constToken, true, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.THROW, lexer.RETURN:
-		// Regular identifier: const x = ... or const x = ..., y = ...
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
+		// Regular identifier: const x = ... or const x = ..., y = ... (including contextual keywords)
 		stmt := &ConstStatement{Token: constToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1351,8 +1362,8 @@ func (p *Parser) parseVarStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: var {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.THROW, lexer.RETURN:
-		// Regular identifier case - original logic
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
+		// Regular identifier case (including contextual keywords in non-strict mode)
 		stmt := &VarStatement{Token: varToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -3222,6 +3233,16 @@ func (p *Parser) expectPeek(t lexer.TokenType) bool {
 	}
 }
 
+// isKeywordThatCanBeIdentifier checks if a token type is a keyword that can be used as an identifier
+func (p *Parser) isKeywordThatCanBeIdentifier(tokenType lexer.TokenType) bool {
+	switch tokenType {
+	case lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
+		return true
+	default:
+		return false
+	}
+}
+
 // expectPeekIdentifierOrKeyword accepts IDENT or contextual keywords that can be used as identifiers.
 // Returns true if peek is IDENT, YIELD, GET, THROW, or RETURN and advances.
 func (p *Parser) expectPeekIdentifierOrKeyword() bool {
@@ -4614,9 +4635,15 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 			propertyKey = &ComputedPropertyName{
 				Expr: propertyKey,
 			}
-		} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.STRING) || p.curTokenIs(lexer.NUMBER) {
-			// Regular property name
-			propertyKey = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.STRING) || p.curTokenIs(lexer.NUMBER) || p.curTokenIs(lexer.BIGINT) {
+			// Regular property name (identifier, string, number, or bigint)
+			if p.curTokenIs(lexer.NUMBER) {
+				propertyKey = p.parseNumberLiteral()
+			} else if p.curTokenIs(lexer.BIGINT) {
+				propertyKey = p.parseBigIntLiteral()
+			} else {
+				propertyKey = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			}
 		} else {
 			p.addError(p.curToken, fmt.Sprintf("expected property name, got %s", p.curToken.Type))
 			return nil, nil
@@ -5504,19 +5531,19 @@ func (p *Parser) parseObjectLiteral() Expression {
 					return nil
 				}
 				key = &ComputedPropertyName{Expr: keyExpr}
-			} else if p.curTokenIs(lexer.IDENT) {
-				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 			} else if p.curTokenIs(lexer.STRING) {
 				key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 			} else if p.curTokenIs(lexer.NUMBER) {
 				key = p.parseNumberLiteral()
-			} else if p.curTokenIs(lexer.THROW) {
-				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			} else if p.curTokenIs(lexer.RETURN) {
-				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.BIGINT) {
+				key = p.parseBigIntLiteral()
 			} else {
-				p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'get'")
-				return nil
+				// Try to parse as property name (handles IDENT and all keywords)
+				key = p.parsePropertyName()
+				if key == nil {
+					p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'get'")
+					return nil
+				}
 			}
 
 			// Expect '(' for getter function
@@ -5594,19 +5621,19 @@ func (p *Parser) parseObjectLiteral() Expression {
 					return nil
 				}
 				key = &ComputedPropertyName{Expr: keyExpr}
-			} else if p.curTokenIs(lexer.IDENT) {
-				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 			} else if p.curTokenIs(lexer.STRING) {
 				key = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 			} else if p.curTokenIs(lexer.NUMBER) {
 				key = p.parseNumberLiteral()
-			} else if p.curTokenIs(lexer.THROW) {
-				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			} else if p.curTokenIs(lexer.RETURN) {
-				key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			} else if p.curTokenIs(lexer.BIGINT) {
+				key = p.parseBigIntLiteral()
 			} else {
-				p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'set'")
-				return nil
+				// Try to parse as property name (handles IDENT and all keywords)
+				key = p.parsePropertyName()
+				if key == nil {
+					p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'set'")
+					return nil
+				}
 			}
 
 			// Expect '(' for setter function
@@ -5963,6 +5990,92 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 				// Create an ObjectProperty with the string literal as key and the function literal as value
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: stringKey, Value: funcLit})
+			} else if p.curTokenIs(lexer.NUMBER) && p.peekTokenIs(lexer.LPAREN) {
+				// This is a number literal shorthand method like 1() { ... }
+				numberKey := p.parseNumberLiteral()
+
+				// Create a function literal for the method implementation
+				funcLit := &FunctionLiteral{
+					Token: p.curToken, // The number literal token
+				}
+
+				// Expect '(' for parameters
+				if !p.expectPeek(lexer.LPAREN) {
+					return nil
+				}
+
+				// Parse parameters
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+					return nil // Error parsing parameters
+				}
+
+				// Check for optional return type annotation
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ')'
+					p.nextToken() // Consume ':'
+					funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+					if funcLit.ReturnTypeAnnotation == nil {
+						return nil // Error parsing return type
+					}
+				}
+
+				// Expect '{' for method body
+				if !p.expectPeek(lexer.LBRACE) {
+					return nil
+				}
+
+				// Parse method body
+				funcLit.Body = p.parseBlockStatement()
+				if funcLit.Body == nil {
+					return nil // Error parsing method body
+				}
+
+				// Create an ObjectProperty with the number literal as key and the function literal as value
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: numberKey, Value: funcLit})
+			} else if p.curTokenIs(lexer.BIGINT) && p.peekTokenIs(lexer.LPAREN) {
+				// This is a bigint literal shorthand method like 1n() { ... }
+				bigintKey := p.parseBigIntLiteral()
+
+				// Create a function literal for the method implementation
+				funcLit := &FunctionLiteral{
+					Token: p.curToken, // The bigint literal token
+				}
+
+				// Expect '(' for parameters
+				if !p.expectPeek(lexer.LPAREN) {
+					return nil
+				}
+
+				// Parse parameters
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
+					return nil // Error parsing parameters
+				}
+
+				// Check for optional return type annotation
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ')'
+					p.nextToken() // Consume ':'
+					funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+					if funcLit.ReturnTypeAnnotation == nil {
+						return nil // Error parsing return type
+					}
+				}
+
+				// Expect '{' for method body
+				if !p.expectPeek(lexer.LBRACE) {
+					return nil
+				}
+
+				// Parse method body
+				funcLit.Body = p.parseBlockStatement()
+				if funcLit.Body == nil {
+					return nil // Error parsing method body
+				}
+
+				// Create an ObjectProperty with the bigint literal as key and the function literal as value
+				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: bigintKey, Value: funcLit})
 			} else {
 				// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
 				propName := p.parsePropertyName()
@@ -6021,11 +6134,12 @@ func (p *Parser) parseObjectLiteral() Expression {
 						key = propName
 					} else if p.curTokenIs(lexer.STRING) {
 						key = p.parseStringLiteral()
-					} else if p.curTokenIs(lexer.NUMBER) { // <<< ADD NUMBER CASE
+					} else if p.curTokenIs(lexer.NUMBER) {
 						key = p.parseNumberLiteral()
+					} else if p.curTokenIs(lexer.BIGINT) {
+						key = p.parseBigIntLiteral()
 					} else {
-						// <<< UPDATE ERROR MESSAGE >>>
-						msg := fmt.Sprintf("invalid object literal key: expected identifier, string, number, or '[', got %s", p.curToken.Type)
+						msg := fmt.Sprintf("invalid object literal key: expected identifier, string, number, bigint, or '[', got %s", p.curToken.Type)
 						p.addError(p.curToken, msg)
 						return nil
 					}
@@ -6736,7 +6850,7 @@ func (p *Parser) parsePropertyName() *Identifier {
 		lexer.IN, lexer.INSTANCEOF, lexer.DO, lexer.ENUM, lexer.FROM, lexer.CATCH, lexer.FINALLY,
 		lexer.TRY, lexer.SWITCH, lexer.CASE, lexer.DEFAULT, lexer.BREAK, lexer.CONTINUE, lexer.CLASS,
 		lexer.STATIC, lexer.READONLY, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT,
-		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.VAR, lexer.TYPE, lexer.KEYOF,
+		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.AWAIT, lexer.VAR, lexer.TYPE, lexer.KEYOF,
 		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER:
 		// Allow keywords as property names
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -9288,7 +9402,8 @@ func (p *Parser) isGetterMethod() bool {
 	}
 	// get identifier(...) or get [computed](...) or get keywordAsIdentifier(...) - this is a getter method
 	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
-		p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.THROW) || p.peekTokenIs(lexer.RETURN)
+		p.peekTokenIs(lexer.BIGINT) || p.peekTokenIs(lexer.LBRACKET) ||
+		p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
 }
 
 // isSetterMethod checks if the current 'set' token is part of a setter method
@@ -9302,5 +9417,6 @@ func (p *Parser) isSetterMethod() bool {
 	}
 	// set identifier(...) or set [computed](...) or set keywordAsIdentifier(...) - this is a setter method
 	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
-		p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.THROW) || p.peekTokenIs(lexer.RETURN)
+		p.peekTokenIs(lexer.BIGINT) || p.peekTokenIs(lexer.LBRACKET) ||
+		p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
 }

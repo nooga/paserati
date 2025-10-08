@@ -15,6 +15,8 @@ func (p *Parser) isValidMethodName() bool {
 		return true
 	case lexer.NUMBER:  // Allow numeric method names like 42()
 		return true
+	case lexer.BIGINT:  // Allow bigint method names like 1n()
+		return true
 	case lexer.PRIVATE_IDENT:  // Allow private identifiers like #privateName()
 		return true
 	// Allow keywords as method names
@@ -174,16 +176,17 @@ func (p *Parser) parseClassBody() *ClassBody {
 	var properties []*PropertyDefinition
 	var constructorSigs []*ConstructorSignature
 	var methodSigs []*MethodSignature
-	
+	var staticInitializers []*BlockStatement
+
 	p.nextToken() // move past '{'
-	
+
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		// Skip semicolons
 		if p.curTokenIs(lexer.SEMICOLON) {
 			p.nextToken()
 			continue
 		}
-		
+
 		// Parse modifiers in any order
 		isReadonly := false
 		isStatic := false
@@ -193,12 +196,23 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isAbstract := false
 		isOverride := false
 		isAsync := false
-		
+
 		// Helper to check if current token is likely a field name (not a modifier)
 		// A keyword is a field name if followed by ;, =, :, or ?
 		isFieldName := func() bool {
 			return p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.ASSIGN) ||
 			       p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION)
+		}
+
+		// Check for static initializer block before parsing modifiers: static { ... }
+		if p.curTokenIs(lexer.STATIC) && p.peekTokenIs(lexer.LBRACE) {
+			p.nextToken() // move to '{'
+			block := p.parseBlockStatement()
+			if block != nil {
+				staticInitializers = append(staticInitializers, block)
+			}
+			p.nextToken() // move past '}'
+			continue      // Done with this class member, continue to next
 		}
 
 		// Parse all modifiers until we hit something that's not a modifier
@@ -349,15 +363,16 @@ func (p *Parser) parseClassBody() *ClassBody {
 		return nil
 	}
 	
-	// The class body parsing is complete. We don't advance past the '}' here 
+	// The class body parsing is complete. We don't advance past the '}' here
 	// to be consistent with other parsing functions like parseBlockStatement
-	
+
 	return &ClassBody{
-		Token:           bodyToken,
-		Methods:         methods,
-		Properties:      properties,
-		ConstructorSigs: constructorSigs,
-		MethodSigs:      methodSigs,
+		Token:              bodyToken,
+		Methods:            methods,
+		Properties:         properties,
+		ConstructorSigs:    constructorSigs,
+		MethodSigs:         methodSigs,
+		StaticInitializers: staticInitializers,
 	}
 }
 
@@ -463,6 +478,9 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 	} else if p.curToken.Type == lexer.NUMBER {
 		// Numeric literal method name: 42()
 		methodName = p.parseNumberLiteral()
+	} else if p.curToken.Type == lexer.BIGINT {
+		// Bigint literal method name: 1n()
+		methodName = p.parseBigIntLiteral()
 	} else {
 		// Identifier method name
 		methodName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}

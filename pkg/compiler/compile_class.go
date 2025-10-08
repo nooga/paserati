@@ -69,6 +69,9 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 		return k.Value
 	case *parser.NumberLiteral:
 		return numberToPropertyKey(k.Value)
+	case *parser.BigIntLiteral:
+		// BigInt keys are converted to their string representation (without 'n')
+		return k.Value
 	case *parser.ComputedPropertyName:
 		// Try to extract constant property name first
 		if constantName, isConstant := c.tryExtractConstantComputedPropertyName(k.Expr); isConstant {
@@ -83,6 +86,8 @@ func (c *Compiler) extractPropertyName(key parser.Expression) string {
 			return literal.Value
 		} else if literal, ok := k.Expr.(*parser.NumberLiteral); ok {
 			return numberToPropertyKey(literal.Value)
+		} else if literal, ok := k.Expr.(*parser.BigIntLiteral); ok {
+			return literal.Value
 		} else {
 			return fmt.Sprintf("__computed_%p", k.Expr)
 		}
@@ -686,6 +691,15 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 		}
 	}
 
+	// Execute static initializer blocks
+	// These run with `this` bound to the constructor function
+	for _, block := range node.Body.StaticInitializers {
+		err := c.executeStaticInitializer(block, constructorReg)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Add static methods (including getters/setters, but handle private methods specially)
 	for _, method := range node.Body.Methods {
 		if method.IsStatic && method.Kind != "constructor" {
@@ -719,6 +733,45 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 	}
 
 	debugPrintf("// DEBUG setupStaticMembers: Static members setup complete for class '%s'\n", node.Name.Value)
+	return nil
+}
+
+// executeStaticInitializer executes a static initializer block with `this` bound to the constructor
+func (c *Compiler) executeStaticInitializer(block *parser.BlockStatement, constructorReg Register) errors.PaseratiError {
+	debugPrintf("// DEBUG executeStaticInitializer: Executing static initializer block\n")
+
+	// Create a function literal wrapping the static initializer block
+	// This function will be called with the constructor as `this`
+	wrapperFunc := &parser.FunctionLiteral{
+		Token:      block.Token,
+		Name:       nil,
+		Parameters: []*parser.Parameter{},
+		Body:       block,
+	}
+
+	// Compile the wrapper function
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(wrapperFunc, "__static_init__")
+	if err != nil {
+		return err
+	}
+
+	// Allocate register for the function
+	funcReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(funcReg)
+
+	// Emit closure (handles both closures and simple functions)
+	c.emitClosure(funcReg, funcConstIndex, wrapperFunc, freeSymbols)
+
+	// Call the function with constructor as `this`
+	// Use OpCallMethod which binds `this` to constructorReg
+	resultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(resultReg)
+
+	// Call: funcReg.call(constructorReg) with 0 arguments
+	// OpCallMethod signature: emitCallMethod(dest, funcReg, thisReg, argCount, line)
+	c.emitCallMethod(resultReg, funcReg, constructorReg, 0, block.Token.Line)
+
+	debugPrintf("// DEBUG executeStaticInitializer: Static initializer block executed\n")
 	return nil
 }
 
