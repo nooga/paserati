@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"paserati/pkg/errors"
+	"paserati/pkg/lexer"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -556,11 +557,17 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 	// Add private methods as field initializers
 	// Private methods must be stored as private fields containing function values
 	// This allows them to be referenced (e.g., const fn = this.#method)
+	// NOTE: Private getters/setters are handled separately below
 	for _, method := range node.Body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic {
 			// Check if this is a private method (key starts with #)
 			methodName := c.extractPropertyName(method.Key)
 			if len(methodName) > 0 && methodName[0] == '#' {
+				// Skip private getters/setters - they need special handling
+				if method.Kind == "getter" || method.Kind == "setter" {
+					continue
+				}
+
 				// Create assignment: this.#method = function() {...}
 				assignment := &parser.AssignmentExpression{
 					Token:    method.Token,
@@ -582,6 +589,82 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 				debugPrintf("// DEBUG injectFieldInitializers: Added private method initializer for '%s'\n", methodName)
 			}
 		}
+	}
+
+	// Handle private getters/setters separately
+	// These need to be stored in the privateGetters/privateSetters maps
+	// We group them by property name and emit SetPrivateAccessor calls
+	type accessorInfo struct {
+		getter *parser.FunctionLiteral
+		setter *parser.FunctionLiteral
+		token  lexer.Token
+	}
+	privateAccessors := make(map[string]accessorInfo)
+
+	for _, method := range node.Body.Methods {
+		if method.Kind != "constructor" && !method.IsStatic {
+			methodName := c.extractPropertyName(method.Key)
+			if len(methodName) > 0 && methodName[0] == '#' {
+				if method.Kind == "getter" || method.Kind == "setter" {
+					// Strip the # prefix for the map key
+					fieldName := methodName[1:]
+					accessor := privateAccessors[fieldName]
+					accessor.token = method.Token
+					if method.Kind == "getter" {
+						accessor.getter = method.Value
+					} else {
+						accessor.setter = method.Value
+					}
+					privateAccessors[fieldName] = accessor
+					debugPrintf("// DEBUG injectFieldInitializers: Found private %s for '%s'\n", method.Kind, methodName)
+				}
+			}
+		}
+	}
+
+	// Now emit the accessor setup code
+	// We need to call: obj.SetPrivateAccessor(name, getter, setter)
+	// Since we're in bytecode, we'll emit this as a special private accessor initialization
+	for fieldName, accessor := range privateAccessors {
+		// For now, store these as special field initializers that will be handled
+		// during compilation. We'll create a synthetic call to SetPrivateAccessor.
+		// This is a bit of a hack, but it works within the current architecture.
+
+		// Create a call expression that represents: this.__setPrivateAccessor__(name, getter, setter)
+		// We'll handle this specially in the compiler
+
+		var getterExpr parser.Expression = &parser.Identifier{Token: accessor.token, Value: "undefined"}
+		if accessor.getter != nil {
+			getterExpr = accessor.getter
+		}
+
+		var setterExpr parser.Expression = &parser.Identifier{Token: accessor.token, Value: "undefined"}
+		if accessor.setter != nil {
+			setterExpr = accessor.setter
+		}
+
+		// Create a marker call that we'll recognize during compilation
+		callExpr := &parser.CallExpression{
+			Token: accessor.token,
+			Function: &parser.MemberExpression{
+				Token:    accessor.token,
+				Object:   &parser.ThisExpression{Token: accessor.token},
+				Property: &parser.Identifier{Token: accessor.token, Value: "__setPrivateAccessor__"},
+			},
+			Arguments: []parser.Expression{
+				&parser.StringLiteral{Token: accessor.token, Value: fieldName},
+				getterExpr,
+				setterExpr,
+			},
+		}
+
+		fieldInitStatement := &parser.ExpressionStatement{
+			Token:      accessor.token,
+			Expression: callExpr,
+		}
+
+		fieldInitializers = append(fieldInitializers, fieldInitStatement)
+		debugPrintf("// DEBUG injectFieldInitializers: Added private accessor initializer for '%s'\n", fieldName)
 	}
 
 	// ADDED: Extract parameter property assignments from constructor parameters

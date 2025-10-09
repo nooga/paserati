@@ -100,6 +100,10 @@ type PlainObject struct {
 	// Private field storage (ECMAScript # fields)
 	// Keyed by field name (without the # prefix)
 	privateFields map[string]Value
+	// Private accessor storage (ECMAScript # getters/setters)
+	// Keyed by field name (without the # prefix)
+	privateGetters map[string]Value
+	privateSetters map[string]Value
 }
 
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
@@ -672,6 +676,58 @@ func (o *PlainObject) HasPrivateField(name string) bool {
 	}
 	_, ok := o.privateFields[name]
 	return ok
+}
+
+// SetPrivateAccessor sets a private getter/setter pair (ECMAScript # accessor properties)
+// Pass Undefined for getter or setter if not defined
+func (o *PlainObject) SetPrivateAccessor(name string, getter Value, setter Value) {
+	if !getter.IsUndefined() {
+		if o.privateGetters == nil {
+			o.privateGetters = make(map[string]Value)
+		}
+		o.privateGetters[name] = getter
+	}
+	if !setter.IsUndefined() {
+		if o.privateSetters == nil {
+			o.privateSetters = make(map[string]Value)
+		}
+		o.privateSetters[name] = setter
+	}
+}
+
+// GetPrivateAccessor retrieves a private getter/setter pair
+// Returns (getter, setter, exists)
+func (o *PlainObject) GetPrivateAccessor(name string) (Value, Value, bool) {
+	var hasGetter, hasSetter bool
+	var getter, setter Value = Undefined, Undefined
+
+	if o.privateGetters != nil {
+		getter, hasGetter = o.privateGetters[name]
+	}
+	if o.privateSetters != nil {
+		setter, hasSetter = o.privateSetters[name]
+	}
+
+	if !hasGetter && !hasSetter {
+		return Undefined, Undefined, false
+	}
+
+	return getter, setter, true
+}
+
+// IsPrivateAccessor checks if a private field is an accessor (has getter or setter)
+func (o *PlainObject) IsPrivateAccessor(name string) bool {
+	if o.privateGetters != nil {
+		if _, hasGetter := o.privateGetters[name]; hasGetter {
+			return true
+		}
+	}
+	if o.privateSetters != nil {
+		if _, hasSetter := o.privateSetters[name]; hasSetter {
+			return true
+		}
+	}
+	return false
 }
 
 type DictObject struct {

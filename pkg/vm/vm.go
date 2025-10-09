@@ -3155,13 +3155,31 @@ startExecution:
 				return status, Undefined
 			}
 
-			value, exists := obj.GetPrivateField(fieldName)
-			if !exists {
+			// Check if this is a private accessor (getter/setter)
+			if obj.IsPrivateAccessor(fieldName) {
+				getter, _, exists := obj.GetPrivateAccessor(fieldName)
+				if !exists || getter.IsUndefined() {
+					frame.ip = ip
+					status := vm.runtimeError("Cannot read private accessor '%s': no getter defined", fieldName)
+					return status, Undefined
+				}
+				// Call the getter function with the object as 'this'
 				frame.ip = ip
-				status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
-				return status, Undefined
+				result, err := vm.Call(getter, objVal, nil)
+				if err != nil {
+					return InterpretRuntimeError, Undefined
+				}
+				registers[destReg] = result
+			} else {
+				// Regular private data field
+				value, exists := obj.GetPrivateField(fieldName)
+				if !exists {
+					frame.ip = ip
+					status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
+					return status, Undefined
+				}
+				registers[destReg] = value
 			}
-			registers[destReg] = value
 
 		case OpTypeGuardIterable:
 			// Save IP of the opcode itself (before reading operands) for exception handling
@@ -3267,7 +3285,71 @@ startExecution:
 				return status, Undefined
 			}
 
-			obj.SetPrivateField(fieldName, registers[valReg])
+			// Check if this is a private accessor (getter/setter)
+			if obj.IsPrivateAccessor(fieldName) {
+				_, setter, exists := obj.GetPrivateAccessor(fieldName)
+				if !exists || setter.IsUndefined() {
+					frame.ip = ip
+					status := vm.runtimeError("Cannot write private accessor '%s': no setter defined", fieldName)
+					return status, Undefined
+				}
+				// Call the setter function with the object as 'this'
+				frame.ip = ip
+				args := []Value{registers[valReg]}
+				_, err := vm.Call(setter, objVal, args)
+				if err != nil {
+					return InterpretRuntimeError, Undefined
+				}
+			} else {
+				// Regular private data field
+				obj.SetPrivateField(fieldName, registers[valReg])
+			}
+
+		case OpSetPrivateAccessor:
+			objReg := code[ip]
+			getterReg := code[ip+1]
+			setterReg := code[ip+2]
+			nameConstIdxHi := code[ip+3]
+			nameConstIdxLo := code[ip+4]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 5
+
+			// Get field name from constants (stored without # prefix)
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for private accessor name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Private accessor name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			fieldName := AsString(nameVal)
+
+			objVal := registers[objReg]
+			getterVal := registers[getterReg]
+			setterVal := registers[setterReg]
+
+			// Private accessors can be set on objects or functions
+			var obj *PlainObject
+			if objVal.Type() == TypeObject {
+				obj = objVal.AsPlainObject()
+			} else if objVal.Type() == TypeFunction {
+				fn := objVal.AsFunction()
+				if fn.Properties == nil {
+					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = fn.Properties
+			} else {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot set private accessor '%s' on %s", fieldName, objVal.TypeName())
+				return status, Undefined
+			}
+
+			// Set up the private accessor using the SetPrivateAccessor method
+			obj.SetPrivateAccessor(fieldName, getterVal, setterVal)
 
 		case OpDefineMethod:
 			frame.ip = ip

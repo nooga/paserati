@@ -101,8 +101,9 @@ const (
 	OpTypeofIdentifier OpCode = 88 // Rx NameIdx(16bit): Rx = typeof identifier - returns "undefined" if identifier doesn't exist (no ReferenceError)
 
 	// --- Private Field Operations (ECMAScript # fields) ---
-	OpGetPrivateField OpCode = 91 // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
-	OpSetPrivateField OpCode = 92 // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
+	OpGetPrivateField     OpCode = 91 // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
+	OpSetPrivateField     OpCode = 92 // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
+	OpSetPrivateAccessor OpCode = 106 // Rx GetterReg SetterReg NameIdx(16bit): Set up private getter/setter on Rx
 
 	// --- Type Guards for Runtime Validation ---
 	OpTypeGuardIterable      OpCode = 93 // Rx: Throw TypeError if Rx is not iterable
@@ -317,6 +318,8 @@ func (op OpCode) String() string {
 		return "OpGetPrivateField"
 	case OpSetPrivateField:
 		return "OpSetPrivateField"
+	case OpSetPrivateAccessor:
+		return "OpSetPrivateAccessor"
 	case OpCallMethod:
 		return "OpCallMethod"
 	case OpLoadThis:
@@ -626,6 +629,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateField:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpSetPrivateAccessor:
+		return c.registerRegisterRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpTypeGuardIterable:
 		return c.registerInstruction(builder, instruction.String(), offset)
 	case OpTypeGuardIteratorReturn:
@@ -1149,6 +1154,48 @@ func (c *Chunk) registerRegisterConstantInstruction(builder *strings.Builder, na
 
 	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constIdx, constValue))
 	return offset + 5 // Opcode + Rx + Ry + ConstIdx(2 bytes)
+}
+
+// registerRegisterRegisterConstantInstruction handles OpCode Rx Ry Rz ConstIdx(16bit)
+func (c *Chunk) registerRegisterRegisterConstantInstruction(builder *strings.Builder, name string, offset int, constName string) int {
+	// Need Rx + Ry + Rz + ConstIdx(2 bytes) = 5 bytes total operands
+	if offset+5 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		if offset+4 < len(c.Code) {
+			return offset + 5
+		}
+		if offset+3 < len(c.Code) {
+			return offset + 4
+		}
+		if offset+2 < len(c.Code) {
+			return offset + 3
+		}
+		if offset+1 < len(c.Code) {
+			return offset + 2
+		}
+		return offset + 1
+	}
+
+	regX := c.Code[offset+1]
+	regY := c.Code[offset+2]
+	regZ := c.Code[offset+3]
+	constIdx := uint16(c.Code[offset+4])<<8 | uint16(c.Code[offset+5])
+
+	// Try to get the constant value for prettier display
+	constValue := "invalid"
+	if int(constIdx) < len(c.Constants) {
+		v := c.Constants[constIdx]
+		if v.IsString() {
+			constValue = fmt.Sprintf("\"%s\"", v.AsString())
+		} else if v.IsNumber() {
+			constValue = fmt.Sprintf("%g", v.ToFloat())
+		} else {
+			constValue = v.ToString()
+		}
+	}
+
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d, %s %d (%s)\n", name, regX, regY, regZ, constName, constIdx, constValue))
+	return offset + 6 // Opcode + Rx + Ry + Rz + ConstIdx(2 bytes)
 }
 
 // constantRegisterInstruction handles OpCode ConstIdx(16bit), Ry
