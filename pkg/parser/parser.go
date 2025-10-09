@@ -2770,8 +2770,8 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 				Name:            &Identifier{Token: param.Token, Value: newParamName},
 				TypeAnnotation:  param.TypeAnnotation,
 				ComputedType:    param.ComputedType,
-				Optional:        false, // Destructuring params can't be optional
-				DefaultValue:    nil,   // Destructuring params can't have top-level defaults
+				Optional:        false,              // Destructuring params can't be optional
+				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
 			}
@@ -2880,7 +2880,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 				TypeAnnotation:  param.TypeAnnotation,
 				ComputedType:    param.ComputedType,
 				Optional:        false,
-				DefaultValue:    nil,
+				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
 			}
@@ -3023,7 +3023,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 				TypeAnnotation:  param.TypeAnnotation,
 				ComputedType:    param.ComputedType,
 				Optional:        false,
-				DefaultValue:    nil,
+				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
 			}
@@ -5668,6 +5668,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 				return nil
 			}
 
+			// Transform function if it has destructuring parameters
+			funcLit = p.transformFunctionWithDestructuring(funcLit)
+
 			// Create MethodDefinition for getter
 			getter := &MethodDefinition{
 				Token:       getToken,
@@ -5758,6 +5761,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 				return nil
 			}
 
+			// Transform function if it has destructuring parameters
+			funcLit = p.transformFunctionWithDestructuring(funcLit)
+
 			// Create MethodDefinition for setter
 			setter := &MethodDefinition{
 				Token:       setToken,
@@ -5831,6 +5837,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 				if funcLit.Body == nil {
 					return nil
 				}
+
+				// Transform function if it has destructuring parameters
+				funcLit = p.transformFunctionWithDestructuring(funcLit)
 
 				// Add the computed method
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{
@@ -5943,6 +5952,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 					return nil
 				}
 
+				// Transform function if it has destructuring parameters
+				funcLit = p.transformFunctionWithDestructuring(funcLit)
+
 				// Add the async method
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{
 					Key:   key,
@@ -6052,6 +6064,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 					fmt.Printf("[PARSER] Restored generator context to %d (object method)\n", p.inGenerator)
 				}
 
+				// Transform function if it has destructuring parameters
+				funcLit = p.transformFunctionWithDestructuring(funcLit)
+
 				// Add the generator method
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{
 					Key:   key,
@@ -6098,6 +6113,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 					return nil // Error parsing method body
 				}
 
+				// Transform function if it has destructuring parameters
+				funcLit = p.transformFunctionWithDestructuring(funcLit)
+
 				// Create an ObjectProperty with the string literal as key and the function literal as value
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: stringKey, Value: funcLit})
 			} else if p.curTokenIs(lexer.NUMBER) && p.peekTokenIs(lexer.LPAREN) {
@@ -6141,6 +6159,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 					return nil // Error parsing method body
 				}
 
+				// Transform function if it has destructuring parameters
+				funcLit = p.transformFunctionWithDestructuring(funcLit)
+
 				// Create an ObjectProperty with the number literal as key and the function literal as value
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: numberKey, Value: funcLit})
 			} else if p.curTokenIs(lexer.BIGINT) && p.peekTokenIs(lexer.LPAREN) {
@@ -6183,6 +6204,9 @@ func (p *Parser) parseObjectLiteral() Expression {
 				if funcLit.Body == nil {
 					return nil // Error parsing method body
 				}
+
+				// Transform function if it has destructuring parameters
+				funcLit = p.transformFunctionWithDestructuring(funcLit)
 
 				// Create an ObjectProperty with the bigint literal as key and the function literal as value
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: bigintKey, Value: funcLit})
