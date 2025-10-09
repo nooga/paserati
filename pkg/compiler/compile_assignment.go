@@ -253,63 +253,91 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 	// --- Logical Assignment Operators (&&=, ||=, ??=) ---
 	if node.Operator == "&&=" || node.Operator == "||=" || node.Operator == "??=" {
-		evaluatedRhs := false
 		var rhsValueReg Register
 
 		var jumpToEvalRhs int = -1
+		var jumpToShortCircuit int = -1
 
 		switch node.Operator {
 		case "&&=":
-			// If FALSEY -> jumpToEnd (skip RHS eval AND store)
-			jumpToEnd = c.emitPlaceholderJump(vm.OpJumpIfFalse, currentValueReg, line)
+			// If FALSEY -> jumpToShortCircuit (skip RHS eval AND store)
+			jumpToShortCircuit = c.emitPlaceholderJump(vm.OpJumpIfFalse, currentValueReg, line)
 		case "||=":
 			// If FALSEY -> jumpToEvalRhs
 			jumpToEvalRhs = c.emitPlaceholderJump(vm.OpJumpIfFalse, currentValueReg, line)
-			// If TRUTHY -> jumpToEnd (skip RHS eval AND store)
-			jumpToEnd = c.emitPlaceholderJump(vm.OpJump, 0, line)
+			// If TRUTHY -> jumpToShortCircuit (skip RHS eval AND store)
+			jumpToShortCircuit = c.emitPlaceholderJump(vm.OpJump, 0, line)
 		case "??=":
 			// Use efficient nullish check opcode
 			isNullishReg := c.regAlloc.Alloc()
 			operationTempRegs = append(operationTempRegs, isNullishReg)
 			c.emitIsNullish(isNullishReg, currentValueReg, line)
-			// If NOT nullish -> jumpToEnd (skip RHS eval AND store)
-			jumpToEnd = c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
+			// If NOT nullish -> jumpToShortCircuit (skip RHS eval AND store)
+			jumpToShortCircuit = c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
 		}
 
 		// --- Evaluate RHS Path ---
 		if jumpToEvalRhs != -1 {
 			c.patchJump(jumpToEvalRhs)
 		}
-		// This block is only reached if short-circuit didn't happen
+		// This block is reached if short-circuit didn't happen
 		rhsValueReg = c.regAlloc.Alloc()
 		operationTempRegs = append(operationTempRegs, rhsValueReg)
 		_, err := c.compileNode(node.Value, rhsValueReg)
 		if err != nil {
 			return BadRegister, err
 		}
-		evaluatedRhs = true
-		needsStore = true
-		debugPrintf("// DEBUG Assign Logical RHS: Evaluated RHS. rhsValueReg=R%d, needsStore=%v\n", rhsValueReg, needsStore)
+		debugPrintf("// DEBUG Assign Logical RHS: Evaluated RHS. rhsValueReg=R%d\n", rhsValueReg)
 
 		// Move RHS result to hint register for final result
 		if rhsValueReg != hint {
 			c.emitMove(hint, rhsValueReg, line)
 		}
 
-		// Jump past merge logic
-		jumpPastMerge := c.emitPlaceholderJump(vm.OpJump, 0, line)
-
-		// --- Merge logic ---
-		c.patchJump(jumpPastMerge)
-		if !evaluatedRhs {
-			needsStore = false
-			// Move current value to hint register for final result
-			if currentValueReg != hint {
-				c.emitMove(hint, currentValueReg, line)
+		// Store hint to LHS (inline the store logic for RHS path)
+		switch lhsType {
+		case lhsIsIdentifier:
+			if identInfo.isGlobal {
+				c.emitSetGlobal(identInfo.globalIdx, hint, line)
+			} else if identInfo.isUpvalue {
+				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
+			} else {
+				if hint != identInfo.targetReg {
+					c.emitMove(identInfo.targetReg, hint, line)
+				}
 			}
-			debugPrintf("// DEBUG Assign Logical ShortCircuit: needsStore=%v\n", needsStore)
-			jumpPastStore = c.emitPlaceholderJump(vm.OpJump, 0, line)
+		case lhsIsIndexExpr:
+			c.emitOpCode(vm.OpSetIndex, line)
+			c.emitByte(byte(indexInfo.arrayReg))
+			c.emitByte(byte(indexInfo.indexReg))
+			c.emitByte(byte(hint))
+		case lhsIsMemberExpr:
+			if memberInfo.isComputed {
+				c.emitOpCode(vm.OpSetIndex, line)
+				c.emitByte(byte(memberInfo.objectReg))
+				c.emitByte(byte(memberInfo.keyReg))
+				c.emitByte(byte(hint))
+			} else if memberInfo.isPrivateField {
+				c.emitSetPrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+			} else {
+				c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+			}
 		}
+
+		// Jump past short-circuit path
+		jumpToEnd = c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+		// --- Short-circuit path (currentValue is already the result) ---
+		c.patchJump(jumpToShortCircuit)
+		// Move current value to hint register for final result
+		if currentValueReg != hint {
+			c.emitMove(hint, currentValueReg, line)
+		}
+		debugPrintf("// DEBUG Assign Logical ShortCircuit: skipped store\n")
+		// Short-circuit path doesn't store, just returns current value in hint
+		// needsStore will be set to false below to skip the store logic
+
+		needsStore = false // Skip the store logic below (we already handled both paths)
 
 	} else { // --- Non-Logical Assignment ---
 		// Compile RHS
@@ -1667,6 +1695,22 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				c.emitByte(byte(tempReg))    // object register
 				c.emitUint16(propNameIdx)    // property name constant index
 			}
+		} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
+			// Number literal key: convert to string property name
+			propName := numLit.Token.Literal
+			propNameIdx := c.chunk.AddConstant(vm.String(propName))
+			c.emitOpCode(vm.OpGetProp, line)
+			c.emitByte(byte(valueReg))   // destination register
+			c.emitByte(byte(tempReg))    // object register
+			c.emitUint16(propNameIdx)    // property name constant index
+		} else if bigIntLit, ok := prop.Key.(*parser.BigIntLiteral); ok {
+			// BigInt literal key: convert to string property name (numeric part without 'n')
+			propName := bigIntLit.Value
+			propNameIdx := c.chunk.AddConstant(vm.String(propName))
+			c.emitOpCode(vm.OpGetProp, line)
+			c.emitByte(byte(valueReg))   // destination register
+			c.emitByte(byte(tempReg))    // object register
+			c.emitUint16(propNameIdx)    // property name constant index
 		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
 			keyReg := c.regAlloc.Alloc()
 			_, err := c.compileNode(computed.Expr, keyReg)

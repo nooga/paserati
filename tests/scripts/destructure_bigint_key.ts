@@ -1,3 +1,4 @@
-// expect: FIXME bigint key destructuring needs compiler work
+// BigInt keys in destructuring should be converted to strings
 let { 1n: a } = { "1": "foo" };
 a;
+// expect: foo
