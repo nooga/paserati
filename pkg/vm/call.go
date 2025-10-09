@@ -218,23 +218,30 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false
 		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
-		newFrame.argCount = argCount // Store actual argument count for arguments object
+		newFrame.argCount = argCount     // Store actual argument count for arguments object
+		// Copy arguments for arguments object (before registers get mutated by function execution)
+		newFrame.args = make([]Value, argCount)
+		copy(newFrame.args, args)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 
-		// Copy fixed arguments and initialize missing ones with undefined
-		for i := 0; i < calleeFunc.Arity; i++ {
-			if i < len(newFrame.registers) {
-				if i < argCount {
-					newFrame.registers[i] = args[i]
-				} else {
-					newFrame.registers[i] = Undefined
-				}
+		// Copy arguments to registers
+		// We need to copy ALL passed arguments (up to argCount), not just up to Arity,
+		// so that the arguments object can access them via OpGetArguments.
+		// However, we can only copy as many as fit in the allocated registers.
+		maxArgsToCopy := argCount
+		if calleeFunc.Arity > maxArgsToCopy {
+			maxArgsToCopy = calleeFunc.Arity
+		}
+		if maxArgsToCopy > len(newFrame.registers) {
+			maxArgsToCopy = len(newFrame.registers)
+		}
+
+		for i := 0; i < maxArgsToCopy; i++ {
+			if i < argCount {
+				newFrame.registers[i] = args[i]
 			} else {
-				// Rollback and error
-				vm.nextRegSlot -= requiredRegs
-				currentFrame.ip = callerIP
-				return false, fmt.Errorf("Internal Error: Argument register index out of bounds")
+				newFrame.registers[i] = Undefined
 			}
 		}
 

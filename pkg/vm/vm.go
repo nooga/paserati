@@ -66,9 +66,10 @@ type CallFrame struct {
 	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
 	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
 	newTargetValue    Value // The constructor that was invoked with 'new' (for new.target)
-	isDirectCall      bool  // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
-	isSentinelFrame   bool  // Whether this frame is a sentinel that should cause vm.run() to return immediately
-	argCount          int   // Actual number of arguments passed to this function (for arguments object)
+	isDirectCall      bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
+	isSentinelFrame   bool    // Whether this frame is a sentinel that should cause vm.run() to return immediately
+	argCount          int     // Actual number of arguments passed to this function (for arguments object)
+	args              []Value // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
 
 	// For async native functions that can call bytecode
 	isNativeFrame    bool
@@ -4848,36 +4849,21 @@ startExecution:
 			// (stored in frame.argCount during function call setup)
 			argCount := frame.argCount
 
-			// Collect the arguments that were passed to this function
-			args := make([]Value, argCount)
+			if debugVM {
+				fmt.Printf("[OpGetArguments] argCount=%d\n", argCount)
+				for i := 0; i < argCount && i < 5; i++ {
+					if i < len(frame.args) {
+						fmt.Printf("  frame.args[%d] = %v (%s)\n", i, frame.args[i], frame.args[i].Type())
+					}
+				}
+			}
 
-			// Special handling for variadic functions
-			if frame.closure.Fn.Variadic && argCount > 0 {
-				// For variadic functions, all arguments are packed into an array in register 0
-				if frame.registers[0].Type() == TypeArray {
-					arr := frame.registers[0].AsArray()
-					for i := 0; i < argCount && i < arr.Length(); i++ {
-						args[i] = arr.Get(i)
-					}
-				} else {
-					// Fallback to regular method
-					for i := 0; i < argCount; i++ {
-						if i < len(frame.registers) {
-							args[i] = frame.registers[i]
-						} else {
-							args[i] = Undefined
-						}
-					}
-				}
-			} else {
-				// Regular function - arguments are in separate registers
-				for i := 0; i < argCount; i++ {
-					if i < len(frame.registers) {
-						args[i] = frame.registers[i]
-					} else {
-						args[i] = Undefined
-					}
-				}
+			// Get the arguments from the frame's saved args (not from registers, which get mutated)
+			// The args were copied when the frame was created in prepareCall
+			args := frame.args
+			if args == nil {
+				// Fallback for frames created without args (shouldn't happen in normal execution)
+				args = make([]Value, 0)
 			}
 
 			// Create arguments object with callee reference
