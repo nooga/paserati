@@ -2833,6 +2833,8 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 		BaseExpression:       fn.BaseExpression,
 		Token:                fn.Token,
 		Name:                 fn.Name,
+		IsGenerator:          fn.IsGenerator, // Preserve generator flag
+		IsAsync:              fn.IsAsync,     // Preserve async flag
 		Parameters:           newParams,
 		RestParameter:        fn.RestParameter, // Rest parameter stays the same
 		ReturnTypeAnnotation: fn.ReturnTypeAnnotation,
