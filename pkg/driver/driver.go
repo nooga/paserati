@@ -787,6 +787,10 @@ func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, modul
 	// Sync global names from compiler to VM heap so globalThis property access works
 	p.vmInstance.SyncGlobalNames(p.compiler.GetHeapAlloc().GetNameToIndexMap())
 
+	// Resize heap to accommodate all global indices assigned during compilation
+	// This ensures that OpGetGlobal can properly detect uninitialized variables
+	p.vmInstance.ResizeHeapForGlobals(p.compiler.GetHeapAlloc().GetAllocatedSize())
+
 	// Set the module path in the VM so import.meta.url works correctly
 	p.vmInstance.SetCurrentModulePath(moduleName)
 

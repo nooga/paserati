@@ -10,6 +10,7 @@ import (
 type Heap struct {
 	values       []Value        // The actual global values
 	configurable []bool         // Whether each global can be deleted (defaults to true for user vars)
+	initialized  []bool         // Whether each slot has been explicitly set (for ReferenceError detection)
 	size         int            // Current size of the heap
 	// optional name -> index map to enable VM.GetGlobal(name)
 	nameToIndex map[string]int
@@ -23,6 +24,7 @@ func NewHeap(initialCapacity int) *Heap {
 	return &Heap{
 		values:       make([]Value, initialCapacity),
 		configurable: make([]bool, initialCapacity),
+		initialized:  make([]bool, initialCapacity),
 		size:         0,
 	}
 }
@@ -47,6 +49,12 @@ func (h *Heap) Resize(newSize int) {
 			newConfigurable[i] = true
 		}
 		h.configurable = newConfigurable
+
+		// Grow the initialized slice, preserving existing flags
+		newInitialized := make([]bool, newSize)
+		copy(newInitialized, h.initialized)
+		// New slots default to false (not initialized)
+		h.initialized = newInitialized
 	}
 	if newSize > h.size {
 		h.size = newSize
@@ -54,8 +62,14 @@ func (h *Heap) Resize(newSize int) {
 }
 
 // Get retrieves a value from the heap at the specified index
+// Returns (value, true) if the slot exists AND has been initialized
+// Returns (Undefined, false) if the slot doesn't exist OR hasn't been initialized
 func (h *Heap) Get(index int) (Value, bool) {
 	if index < 0 || index >= h.size {
+		return Undefined, false
+	}
+	// Check if this slot has been explicitly initialized
+	if !h.initialized[index] {
 		return Undefined, false
 	}
 	return h.values[index], true
@@ -73,6 +87,7 @@ func (h *Heap) Set(index int, value Value) error {
 	}
 
 	h.values[index] = value
+	h.initialized[index] = true // Mark as initialized
 	if index >= h.size {
 		h.size = index + 1
 	}
@@ -123,8 +138,9 @@ func (h *Heap) Delete(index int) bool {
 		// Cannot delete non-configurable global
 		return false
 	}
-	// Set to undefined (we don't actually remove it from the array to preserve indices)
+	// Set to undefined and mark as uninitialized (we don't actually remove it from the array to preserve indices)
 	h.values[index] = Undefined
+	h.initialized[index] = false
 	return true
 }
 
@@ -208,6 +224,7 @@ func (h *Heap) ClearUserGlobals() {
 	// Clear all values beyond the builtin range
 	for i := h.builtinCount; i < h.size; i++ {
 		h.values[i] = Undefined
+		h.initialized[i] = false
 	}
 	// Reset size to just the builtins
 	h.size = h.builtinCount

@@ -184,6 +184,9 @@ type VM struct {
 	// Flag to track if we're in a builtin calling a user function
 	inBuiltinCall bool
 
+	// Flag to prevent infinite recursion when throwing ReferenceError
+	throwingReferenceError bool
+
 	// Instance-specific initialization callbacks
 	//initCallbacks []VMInitCallback
 
@@ -366,6 +369,13 @@ func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]in
 // This should be called after each compilation to ensure globalThis property access works
 func (vm *VM) SyncGlobalNames(nameToIndex map[string]int) {
 	vm.heap.UpdateNameToIndex(nameToIndex)
+}
+
+// ResizeHeapForGlobals resizes the heap to accommodate all global indices
+// This must be called after compilation and before execution to ensure
+// that OpGetGlobal can properly detect uninitialized/undefined variables
+func (vm *VM) ResizeHeapForGlobals(allocatedSize int) {
+	vm.heap.Resize(allocatedSize)
 }
 
 // GetHeap returns the VM's global heap for direct access
@@ -4142,7 +4152,14 @@ startExecution:
 					varName = fmt.Sprintf("<index %d>", globalIdx)
 				}
 				vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", varName))
-				return InterpretRuntimeError, Undefined
+				// If exception was caught by a handler, continue execution at the catch block
+				// Otherwise return to terminate
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				// Handler found, reload IP from frame and continue the VM loop to execute the catch block
+				ip = frame.ip
+				continue
 			}
 
 			// NUCLEAR DEBUG for fnGlobalObject
@@ -7154,6 +7171,21 @@ func (vm *VM) ThrowTypeError(message string) {
 
 // ThrowReferenceError creates and throws a proper ReferenceError instance
 func (vm *VM) ThrowReferenceError(message string) {
+	// Guard against infinite recursion when throwing ReferenceError for uninitialized globals
+	// This can happen if accessing ReferenceError constructor or its dependencies triggers another ReferenceError
+	if vm.throwingReferenceError {
+		// Already in the process of throwing a ReferenceError, create minimal error to avoid recursion
+		// Use Undefined as prototype to avoid any potential issues with prototype access
+		errObj := NewObject(Undefined).AsPlainObject()
+		errObj.SetOwn("name", NewString("ReferenceError"))
+		errObj.SetOwn("message", NewString(message))
+		vm.throwException(NewValueFromPlainObject(errObj))
+		return
+	}
+
+	vm.throwingReferenceError = true
+	defer func() { vm.throwingReferenceError = false }()
+
 	// Get the ReferenceError constructor from globals
 	refErrorCtor, exists := vm.GetGlobal("ReferenceError")
 	if !exists || refErrorCtor.Type() == TypeUndefined {
