@@ -2584,7 +2584,10 @@ startExecution:
 					if excErr, ok := err.(exceptionError); ok {
 						vm.throwException(excErr.GetExceptionValue())
 					}
-					return InterpretRuntimeError, Undefined
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					goto reloadFrame
 				}
 
 				// Temporary debug to track invalid OpGetIndex bases in iterator paths
