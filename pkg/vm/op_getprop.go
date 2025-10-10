@@ -2,7 +2,11 @@ package vm
 
 import "fmt"
 
-func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
+func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
+	// If frame is nil (called from outside VM loop), use current frame
+	if frame == nil && vm.frameCount > 0 {
+		frame = &vm.frames[vm.frameCount-1]
+	}
 	// Generate cache key
 	propNameHash := 0
 	for _, b := range []byte(propName) {
@@ -131,7 +135,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot read property '%s' of %s", propName, objVal.TypeName())))
 				excVal = NewValueFromPlainObject(eo)
 			}
+			if frame != nil {
+				frame.ip = ip - 4
+			}
 			vm.throwException(excVal)
+			if !vm.unwinding {
+				return false, InterpretOK, Undefined
+			}
 			return false, InterpretRuntimeError, Undefined
 		default:
 			// Generic error for other non-object types -> TypeError
@@ -164,7 +174,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())))
 				excVal = NewValueFromPlainObject(eo)
 			}
+			if frame != nil {
+				frame.ip = ip - 4
+			}
 			vm.throwException(excVal)
+			if !vm.unwinding {
+				return false, InterpretOK, Undefined
+			}
 			return false, InterpretRuntimeError, Undefined
 		}
 	}
@@ -208,7 +224,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 						res, err := vm.Call(g, *objVal, nil)
 						if err != nil {
 							if ee, ok := err.(ExceptionError); ok {
+								if frame != nil {
+									frame.ip = ip - 4
+								}
 								vm.throwException(ee.GetExceptionValue())
+								if !vm.unwinding {
+									return false, InterpretOK, Undefined
+								}
 								return false, InterpretRuntimeError, Undefined
 							}
 							// Wrap non-exception Go error into a proper JS Error instance and throw
@@ -228,7 +250,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 								eo.SetOwn("message", NewString(err.Error()))
 								excVal = NewValueFromPlainObject(eo)
 							}
+							if frame != nil {
+								frame.ip = ip - 4
+							}
 							vm.throwException(excVal)
+							if !vm.unwinding {
+								return false, InterpretOK, Undefined
+							}
 							return false, InterpretRuntimeError, Undefined
 						}
 						*dest = res
@@ -261,7 +289,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 							res, err := vm.Call(g, *objVal, nil)
 							if err != nil {
 								if ee, ok := err.(ExceptionError); ok {
+									if frame != nil {
+										frame.ip = ip - 4
+									}
 									vm.throwException(ee.GetExceptionValue())
+									if !vm.unwinding {
+										return false, InterpretOK, Undefined
+									}
 									return false, InterpretRuntimeError, Undefined
 								}
 								var excVal Value
@@ -280,7 +314,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 									eo.SetOwn("message", NewString(err.Error()))
 									excVal = NewValueFromPlainObject(eo)
 								}
+								if frame != nil {
+									frame.ip = ip - 4
+								}
 								vm.throwException(excVal)
+								if !vm.unwinding {
+									return false, InterpretOK, Undefined
+								}
 								return false, InterpretRuntimeError, Undefined
 							}
 							*dest = res
@@ -310,7 +350,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 					res, err := vm.Call(g, *objVal, nil)
 					if err != nil {
 						if ee, ok := err.(ExceptionError); ok {
+							if frame != nil {
+								frame.ip = ip - 4
+							}
 							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								return false, InterpretOK, Undefined
+							}
 							return false, InterpretRuntimeError, Undefined
 						}
 						var excVal Value
@@ -329,7 +375,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 							eo.SetOwn("message", NewString(err.Error()))
 							excVal = NewValueFromPlainObject(eo)
 						}
+						if frame != nil {
+							frame.ip = ip - 4
+						}
 						vm.throwException(excVal)
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
 						return false, InterpretRuntimeError, Undefined
 					}
 					*dest = res
@@ -437,7 +489,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 				eo.SetOwn("message", NewString("Cannot perform property access on a revoked Proxy"))
 				excVal = NewValueFromPlainObject(eo)
 			}
+			if frame != nil {
+				frame.ip = ip - 4
+			}
 			vm.throwException(excVal)
+			if !vm.unwinding {
+				return false, InterpretOK, Undefined
+			}
 			return false, InterpretRuntimeError, Undefined
 		}
 
@@ -458,7 +516,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 					eo.SetOwn("message", NewString("'get' on proxy: trap is not a function"))
 					excVal = NewValueFromPlainObject(eo)
 				}
+				if frame != nil {
+					frame.ip = ip - 4
+				}
 				vm.throwException(excVal)
+				if !vm.unwinding {
+					return false, InterpretOK, Undefined
+				}
 				return false, InterpretRuntimeError, Undefined
 			}
 
@@ -467,7 +531,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
 			if err != nil {
 				if ee, ok := err.(ExceptionError); ok {
+					if frame != nil {
+						frame.ip = ip - 4
+					}
 					vm.throwException(ee.GetExceptionValue())
+					if !vm.unwinding {
+						return false, InterpretOK, Undefined
+					}
 					return false, InterpretRuntimeError, Undefined
 				}
 				// Wrap non-exception Go error
@@ -487,7 +557,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 					eo.SetOwn("message", NewString(err.Error()))
 					excVal = NewValueFromPlainObject(eo)
 				}
+				if frame != nil {
+					frame.ip = ip - 4
+				}
 				vm.throwException(excVal)
+				if !vm.unwinding {
+					return false, InterpretOK, Undefined
+				}
 				return false, InterpretRuntimeError, Undefined
 			}
 			*dest = result
@@ -511,7 +587,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 							res, err := vm.Call(g, target, nil)
 							if err != nil {
 								if ee, ok := err.(ExceptionError); ok {
+									if frame != nil {
+										frame.ip = ip - 4
+									}
 									vm.throwException(ee.GetExceptionValue())
+									if !vm.unwinding {
+										return false, InterpretOK, Undefined
+									}
 									return false, InterpretRuntimeError, Undefined
 								}
 								var excVal Value
@@ -530,7 +612,13 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 									eo.SetOwn("message", NewString(err.Error()))
 									excVal = NewValueFromPlainObject(eo)
 								}
+								if frame != nil {
+									frame.ip = ip - 4
+								}
 								vm.throwException(excVal)
+								if !vm.unwinding {
+									return false, InterpretOK, Undefined
+								}
 								return false, InterpretRuntimeError, Undefined
 							}
 							*dest = res
@@ -563,7 +651,11 @@ func (vm *VM) opGetProp(ip int, objVal *Value, propName string, dest *Value) (bo
 }
 
 // opGetPropSymbol handles property get where the key is a symbol Value.
-func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) (bool, InterpretResult, Value) {
+func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Value, dest *Value) (bool, InterpretResult, Value) {
+	// If frame is nil (called from outside VM loop), use current frame
+	if frame == nil && vm.frameCount > 0 {
+		frame = &vm.frames[vm.frameCount-1]
+	}
 	// Prepare a per-site cache key for symbol lookups (future use)
 	_ = generateSymbolCacheKey // reference to avoid unused warning if not used yet
 	// cacheKey := generateSymbolCacheKey(ip, symKey)
@@ -836,7 +928,13 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 				res, err := vm.Call(g, base, nil)
 				if err != nil {
 					if ee, ok := err.(ExceptionError); ok {
+						if frame != nil {
+							frame.ip = ip - 4
+						}
 						vm.throwException(ee.GetExceptionValue())
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
 						return false, InterpretRuntimeError, Undefined
 					}
 					// Wrap non-exception Go error
@@ -856,7 +954,13 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 						eo.SetOwn("message", NewString(err.Error()))
 						excVal = NewValueFromPlainObject(eo)
 					}
+					if frame != nil {
+						frame.ip = ip - 4
+					}
 					vm.throwException(excVal)
+					if !vm.unwinding {
+						return false, InterpretOK, Undefined
+					}
 					return false, InterpretRuntimeError, Undefined
 				}
 				*dest = res
@@ -882,7 +986,13 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 						res, err := vm.Call(g, base, nil)
 						if err != nil {
 							if ee, ok := err.(ExceptionError); ok {
+								if frame != nil {
+									frame.ip = ip - 4
+								}
 								vm.throwException(ee.GetExceptionValue())
+								if !vm.unwinding {
+									return false, InterpretOK, Undefined
+								}
 								return false, InterpretRuntimeError, Undefined
 							}
 							var excVal Value
@@ -901,7 +1011,13 @@ func (vm *VM) opGetPropSymbol(ip int, objVal *Value, symKey Value, dest *Value) 
 								eo.SetOwn("message", NewString(err.Error()))
 								excVal = NewValueFromPlainObject(eo)
 							}
+							if frame != nil {
+								frame.ip = ip - 4
+							}
 							vm.throwException(excVal)
+							if !vm.unwinding {
+								return false, InterpretOK, Undefined
+							}
 							return false, InterpretRuntimeError, Undefined
 						}
 						*dest = res

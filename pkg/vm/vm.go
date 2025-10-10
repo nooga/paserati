@@ -62,10 +62,10 @@ type CallFrame struct {
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
 	registers         []Value
-	targetRegister    byte  // Which register in the CALLER the result should go into
-	thisValue         Value // The 'this' value for method calls (undefined for regular function calls)
-	isConstructorCall bool  // Whether this frame was created by a constructor call (new expression)
-	newTargetValue    Value // The constructor that was invoked with 'new' (for new.target)
+	targetRegister    byte    // Which register in the CALLER the result should go into
+	thisValue         Value   // The 'this' value for method calls (undefined for regular function calls)
+	isConstructorCall bool    // Whether this frame was created by a constructor call (new expression)
+	newTargetValue    Value   // The constructor that was invoked with 'new' (for new.target)
 	isDirectCall      bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
 	isSentinelFrame   bool    // Whether this frame is a sentinel that should cause vm.run() to return immediately
 	argCount          int     // Actual number of arguments passed to this function (for arguments object)
@@ -144,18 +144,18 @@ type VM struct {
 	SymbolPrototype         Value
 
 	// Well-known symbols (stored as singletons)
-	SymbolIterator            Value
-	SymbolToPrimitive         Value
-	SymbolToStringTag         Value
-	SymbolHasInstance         Value
-	SymbolIsConcatSpreadable  Value
-	SymbolSpecies             Value
-	SymbolMatch               Value
-	SymbolReplace             Value
-	SymbolSearch              Value
-	SymbolSplit               Value
-	SymbolUnscopables         Value
-	SymbolAsyncIterator       Value
+	SymbolIterator           Value
+	SymbolToPrimitive        Value
+	SymbolToStringTag        Value
+	SymbolHasInstance        Value
+	SymbolIsConcatSpreadable Value
+	SymbolSpecies            Value
+	SymbolMatch              Value
+	SymbolReplace            Value
+	SymbolSearch             Value
+	SymbolSplit              Value
+	SymbolUnscopables        Value
+	SymbolAsyncIterator      Value
 
 	// Constructor call context for native functions
 	inConstructorCall bool // true when executing a native function via OpNew
@@ -1186,7 +1186,7 @@ startExecution:
 			} else if constructorVal.Type() == TypeNativeFunction {
 				// Some native functions might also be constructors
 				// Try to get their prototype via opGetProp
-				if ok, _, _ := vm.opGetProp(0, &constructorVal, "prototype", &constructorPrototype); !ok {
+				if ok, _, _ := vm.opGetProp(nil, 0, &constructorVal, "prototype", &constructorPrototype); !ok {
 					constructorPrototype = Undefined
 				}
 			}
@@ -1218,10 +1218,10 @@ startExecution:
 					current = vm.ObjectPrototype // Arguments objects inherit from Object.prototype
 				case TypePromise:
 					current = vm.PromisePrototype
-			case TypeFunction:
-				current = vm.FunctionPrototype
-			case TypeClosure:
-				current = vm.FunctionPrototype
+				case TypeFunction:
+					current = vm.FunctionPrototype
+				case TypeClosure:
+					current = vm.FunctionPrototype
 				default:
 					current = Undefined
 				}
@@ -2194,8 +2194,11 @@ startExecution:
 						key = AsString(indexVal)
 					case TypeSymbol:
 						// Use symbol key path
-						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
-							return status, value
+						if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+							if status != InterpretOK {
+								return status, value
+							}
+							goto reloadFrame
 						}
 						// Trace iterator symbol resolution in for-of
 						// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
@@ -2209,8 +2212,11 @@ startExecution:
 					}
 
 					// Use opGetProp to access array properties (handles prototype chain)
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				}
 
@@ -2237,8 +2243,11 @@ startExecution:
 					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
 					// Or: key = fmt.Sprintf("%v", AsNumber(indexVal))
 				case TypeSymbol:
-					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 					// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
 					// fmt.Printf("[DBG OpGetIndex:Object] [Symbol.iterator] -> %s (%s) base=%s\n", registers[destReg].Inspect(), registers[destReg].TypeName(), baseVal.Inspect())
@@ -2246,8 +2255,11 @@ startExecution:
 					continue
 				default:
 					// For arbitrary base objects, support computed property by routing through opGetProp/Boxing rules
-					if ok, status, value := vm.opGetProp(ip, &baseVal, indexVal.ToString(), &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, indexVal.ToString(), &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 					continue
 				}
@@ -2263,8 +2275,11 @@ startExecution:
 					}
 				} else {
 					// PlainObject: Use opGetProp to handle prototype chain
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				}
 
@@ -2286,8 +2301,11 @@ startExecution:
 					case TypeString:
 						key = AsString(indexVal)
 					case TypeSymbol:
-						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
-							return status, value
+						if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+							if status != InterpretOK {
+								return status, value
+							}
+							goto reloadFrame
 						}
 						// (debug-only tracing removed; keep runtime lean)
 						continue
@@ -2297,8 +2315,11 @@ startExecution:
 					}
 
 					// Use opGetProp to access string properties (handles prototype chain)
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				}
 
@@ -2312,19 +2333,28 @@ startExecution:
 					// Non-numeric index (Symbol, string, etc.) - access properties via prototype chain
 					switch indexVal.Type() {
 					case TypeSymbol:
-						if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
-							return status, value
+						if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+							if status != InterpretOK {
+								return status, value
+							}
+							goto reloadFrame
 						}
 					case TypeString:
 						key := AsString(indexVal)
-						if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-							return status, value
+						if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+							if status != InterpretOK {
+								return status, value
+							}
+							goto reloadFrame
 						}
 					default:
 						// Convert to string for property access
 						key := indexVal.ToString()
-						if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-							return status, value
+						if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+							if status != InterpretOK {
+								return status, value
+							}
+							goto reloadFrame
 						}
 					}
 				}
@@ -2334,18 +2364,27 @@ startExecution:
 				switch indexVal.Type() {
 				case TypeString:
 					key := AsString(indexVal)
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				case TypeSymbol:
-					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				case TypeIntegerNumber, TypeFloatNumber:
 					// Convert number to string for property access (JavaScript behavior)
 					key := indexVal.ToString()
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				default:
 					frame.ip = ip
@@ -2358,13 +2397,19 @@ startExecution:
 				switch indexVal.Type() {
 				case TypeString:
 					key := AsString(indexVal)
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 					continue
 				case TypeSymbol:
-					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 					// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
 					// fmt.Printf("[DBG OpGetIndex:Generator] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
@@ -2373,15 +2418,21 @@ startExecution:
 				case TypeIntegerNumber, TypeFloatNumber:
 					// Convert number to string for property access (JavaScript behavior)
 					key := indexVal.ToString()
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 					continue
 				default:
 					// JavaScript allows any value as property key - convert to string
 					key := indexVal.ToString()
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 					continue
 				}
@@ -2391,18 +2442,27 @@ startExecution:
 				switch indexVal.Type() {
 				case TypeString:
 					key := AsString(indexVal)
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				case TypeSymbol:
-					if ok, status, value := vm.opGetPropSymbol(ip, &baseVal, indexVal, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				default:
 					// Convert to string for property access
 					key := indexVal.ToString()
-					if ok, status, value := vm.opGetProp(ip, &baseVal, key, &registers[destReg]); !ok {
-						return status, value
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				}
 
@@ -2482,8 +2542,11 @@ startExecution:
 								registers[destReg] = Undefined
 							}
 							if key != "" {
-								if ok, status, value := vm.opGetProp(ip, &targetBase, key, &registers[destReg]); !ok {
-									return status, value
+								if ok, status, value := vm.opGetProp(frame, ip, &targetBase, key, &registers[destReg]); !ok {
+									if status != InterpretOK {
+										return status, value
+									}
+									goto reloadFrame
 								}
 							}
 						}
@@ -2499,8 +2562,11 @@ startExecution:
 							registers[destReg] = Undefined
 						}
 						if key != "" {
-							if ok, status, value := vm.opGetProp(ip, &targetBase, key, &registers[destReg]); !ok {
-								return status, value
+							if ok, status, value := vm.opGetProp(frame, ip, &targetBase, key, &registers[destReg]); !ok {
+								if status != InterpretOK {
+									return status, value
+								}
+								goto reloadFrame
 							}
 						} else {
 							registers[destReg] = Undefined
@@ -2628,11 +2694,11 @@ startExecution:
 				if baseVal.Type() == TypeDictObject {
 					dict := AsDictObject(baseVal)
 					dict.SetOwn(key, valueVal)
-			} else if baseVal.Type() == TypeFunction {
-				// For functions, set property on the function's Properties object
-				if status, res := vm.setFunctionProperty(baseVal, key, valueVal, ip); status != InterpretOK {
-					return status, res
-				}
+				} else if baseVal.Type() == TypeFunction {
+					// For functions, set property on the function's Properties object
+					if status, res := vm.setFunctionProperty(baseVal, key, valueVal, ip); status != InterpretOK {
+						return status, res
+					}
 				} else {
 					obj := AsPlainObject(baseVal)
 					// Check if this is an accessor property with a setter
@@ -3091,8 +3157,11 @@ startExecution:
 			}
 			propName := AsString(nameVal)
 
-			if ok, status, value := vm.opGetProp(ip, &registers[objReg], propName, &registers[destReg]); !ok {
-				return status, value
+			if ok, status, value := vm.opGetProp(frame, ip, &registers[objReg], propName, &registers[destReg]); !ok {
+				if status != InterpretOK {
+					return status, value
+				}
+				goto reloadFrame
 			}
 
 		case OpSetProp:
@@ -3193,7 +3262,7 @@ startExecution:
 
 		case OpTypeGuardIterable:
 			// Save IP of the opcode itself (before reading operands) for exception handling
-			guardIP := ip - 1  // ip was already incremented past the opcode
+			guardIP := ip - 1 // ip was already incremented past the opcode
 			frame.ip = guardIP
 
 			srcReg := int(code[ip])
@@ -3224,7 +3293,7 @@ startExecution:
 
 		case OpTypeGuardIteratorReturn:
 			// Save IP of the opcode itself (before reading operands) for exception handling
-			guardIP := ip - 1  // ip was already incremented past the opcode
+			guardIP := ip - 1 // ip was already incremented past the opcode
 			frame.ip = guardIP
 
 			srcReg := int(code[ip])
@@ -3697,10 +3766,10 @@ startExecution:
 				newFrame.closure = constructorClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
-				newFrame.thisValue = newInstance       // Set the new instance as 'this' (or undefined for derived)
-				newFrame.isConstructorCall = true      // Mark this as a constructor call
-				newFrame.isDirectCall = false          // Not a direct call (normal OpNew)
-				newFrame.isSentinelFrame = false       // Clear sentinel flag when reusing frame
+				newFrame.thisValue = newInstance         // Set the new instance as 'this' (or undefined for derived)
+				newFrame.isConstructorCall = true        // Mark this as a constructor call
+				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
+				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
@@ -3837,10 +3906,10 @@ startExecution:
 				newFrame.closure = constructorClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
-				newFrame.thisValue = newInstance       // Set the new instance as 'this' (or undefined for derived)
-				newFrame.isConstructorCall = true      // Mark this as a constructor call
-				newFrame.isDirectCall = false          // Not a direct call (normal OpNew)
-				newFrame.isSentinelFrame = false       // Clear sentinel flag when reusing frame
+				newFrame.thisValue = newInstance         // Set the new instance as 'this' (or undefined for derived)
+				newFrame.isConstructorCall = true        // Mark this as a constructor call
+				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
+				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
@@ -4020,19 +4089,19 @@ startExecution:
 				return status, Undefined
 			}
 
-	case OpSpreadNew:
-		status, _ := vm.handleOpSpreadNew(code, &ip, frame, registers)
-		if status == InterpretOK && vm.frameCount > 0 {
-			frame = &vm.frames[vm.frameCount-1]
-			closure = frame.closure
-			function = closure.Fn
-			code = function.Chunk.Code
-			constants = function.Chunk.Constants
-			registers = frame.registers
-			ip = frame.ip
-		} else if status != InterpretOK {
-			return status, Undefined
-		}
+		case OpSpreadNew:
+			status, _ := vm.handleOpSpreadNew(code, &ip, frame, registers)
+			if status == InterpretOK && vm.frameCount > 0 {
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+			} else if status != InterpretOK {
+				return status, Undefined
+			}
 
 		case OpLoadThis:
 			destReg := code[ip]
@@ -4158,8 +4227,7 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 				// Handler found, reload IP from frame and continue the VM loop to execute the catch block
-				ip = frame.ip
-				continue
+				goto reloadFrame
 			}
 
 			// NUCLEAR DEBUG for fnGlobalObject
@@ -5041,7 +5109,7 @@ startExecution:
 					registers: make([]Value, len(registers)),
 					locals:    make([]Value, 0), // TODO: implement locals if needed
 					stackBase: 0,
-					suspendPC:   ip - 2,    // IP was advanced by 2 for two-register instruction
+					suspendPC: ip - 2,    // IP was advanced by 2 for two-register instruction
 					outputReg: outputReg, // Store where to put sent value on resume
 				}
 			} else {
@@ -5137,7 +5205,7 @@ startExecution:
 				// Save the execution frame state (similar to OpYield)
 				if frame.promiseObj.Frame == nil {
 					frame.promiseObj.Frame = &SuspendedFrame{
-						pc:        ip,        // Resume after this await instruction
+						pc:        ip, // Resume after this await instruction
 						registers: make([]Value, len(registers)),
 						locals:    make([]Value, 0),
 						stackBase: 0,
@@ -5334,7 +5402,7 @@ startExecution:
 		case OpDeleteGlobal:
 			// OpDeleteGlobal: Rx HeapIdx(16bit): Rx = delete global[HeapIdx]
 			destReg := code[ip]
-			heapIdx := (uint16(code[ip+1]) << 8) | uint16(code[ip+2])  // Big-endian
+			heapIdx := (uint16(code[ip+1]) << 8) | uint16(code[ip+2]) // Big-endian
 			ip += 3
 
 			// Try to delete from heap - returns false if non-configurable
@@ -5504,7 +5572,7 @@ startExecution:
 	// 		return InterpretOK, Undefined
 	// 	}
 	// }
-
+reloadFrame:
 	// Update cached variables for the current frame and continue execution
 	frame = &vm.frames[vm.frameCount-1]
 	closure = frame.closure
@@ -5942,7 +6010,7 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	if hint == "default" {
 		// Check if this is a Date object by looking for getTime method
 		var getTimeMethod Value
-		if ok, _, _ := vm.opGetProp(0, &val, "getTime", &getTimeMethod); ok {
+		if ok, _, _ := vm.opGetProp(nil, 0, &val, "getTime", &getTimeMethod); ok {
 			if getTimeMethod.Type() == TypeNativeFunction || getTimeMethod.Type() == TypeNativeFunctionWithProps {
 				// This looks like a Date object - use "string" hint
 				hint = "string"
@@ -5954,7 +6022,7 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	// This takes precedence over valueOf/toString
 	var toPrimMethod Value
 	if vm.SymbolToPrimitive.Type() != TypeUndefined {
-		ok, status, _ := vm.opGetPropSymbol(0, &val, vm.SymbolToPrimitive, &toPrimMethod)
+		ok, status, _ := vm.opGetPropSymbol(nil, 0, &val, vm.SymbolToPrimitive, &toPrimMethod)
 		// If getter threw an error, return undefined (exception is already set)
 		if status == InterpretRuntimeError {
 			return Undefined
@@ -6006,7 +6074,7 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	for _, methodName := range methods {
 		// Try to get the method
 		var methodVal Value
-		if ok, _, _ := vm.opGetProp(0, &val, methodName, &methodVal); ok {
+		if ok, _, _ := vm.opGetProp(nil, 0, &val, methodName, &methodVal); ok {
 			// Check if it's a function
 			if methodVal.Type() == TypeFunction || methodVal.Type() == TypeClosure ||
 				methodVal.Type() == TypeNativeFunction || methodVal.Type() == TypeNativeFunctionWithProps {
@@ -6486,7 +6554,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	frame.targetRegister = destReg         // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue // Restore original this value
 	frame.isConstructorCall = false
-	frame.isDirectCall = true    // Mark as direct call for proper return handling
+	frame.isDirectCall = true // Mark as direct call for proper return handling
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 
@@ -6581,7 +6649,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	frame.targetRegister = destReg         // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue // Restore original this value
 	frame.isConstructorCall = false
-	frame.isDirectCall = true    // Mark as direct call for proper return handling
+	frame.isDirectCall = true // Mark as direct call for proper return handling
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 
