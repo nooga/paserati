@@ -454,13 +454,67 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 	// 11. Generator objects
 	if objVal.Type() == TypeGenerator {
-		// Generator objects don't have additional own properties beyond special ones
+		// Generator objects: consult Generator.prototype chain for regular properties
+		proto := vm.GeneratorPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwn(propName); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
 
 	if objVal.Type() == TypeAsyncGenerator {
-		// AsyncGenerator objects don't have additional own properties beyond special ones
+		// AsyncGenerator objects: consult AsyncGenerator.prototype chain for regular properties
+		proto := vm.AsyncGeneratorPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwn(propName); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
