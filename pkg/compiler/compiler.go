@@ -2629,7 +2629,10 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 	// 4. For named classes (including class declarations parsed as expressions),
 	// store them in the environment like compileClassDeclaration does
 	// For anonymous classes, skip this step
-	if !strings.HasPrefix(node.Name.Value, "__AnonymousClass_") {
+	// IMPORTANT: If a hint register is provided, the class is being used as an expression value
+	// (e.g., default parameter value), so don't define it in the symbol table - the variable
+	// is already defined and we're just assigning the class value to it.
+	if hint == BadRegister && !strings.HasPrefix(node.Name.Value, "__AnonymousClass_") {
 		if c.enclosing == nil {
 			// Top-level class - define as global
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)

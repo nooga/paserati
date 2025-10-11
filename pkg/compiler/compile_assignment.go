@@ -1040,7 +1040,8 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 
 	// Compile the default expression
 	defaultReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(defaultReg)
+	// NOTE: Don't use defer here! When called in a loop (array destructuring),
+	// defer would accumulate registers. We'll free it manually at the end.
 
 	// Check if we should apply function name inference
 	// Per ECMAScript spec: if target is an identifier and default is anonymous function, use target name
@@ -1056,6 +1057,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, nameHint)
 			if err != nil {
 				c.patchJump(jumpPastDefault)
+				c.regAlloc.Free(defaultReg)
 				return err
 			}
 			c.emitClosure(defaultReg, funcConstIndex, funcLit, freeSymbols)
@@ -1071,6 +1073,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			classExpr.Name = nil
 			if err != nil {
 				c.patchJump(jumpPastDefault)
+				c.regAlloc.Free(defaultReg)
 				return err
 			}
 		} else if arrowFunc, ok := defaultExpr.(*parser.ArrowFunctionLiteral); ok {
@@ -1078,6 +1081,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, nameHint)
 			if err != nil {
 				c.patchJump(jumpPastDefault)
+				c.regAlloc.Free(defaultReg)
 				return err
 			}
 			// Create a minimal FunctionLiteral for emitClosure
@@ -1096,6 +1100,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			_, err = c.compileNode(defaultExpr, defaultReg)
 			if err != nil {
 				c.patchJump(jumpPastDefault)
+				c.regAlloc.Free(defaultReg)
 				return err
 			}
 		}
@@ -1103,6 +1108,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 		_, err = c.compileNode(defaultExpr, defaultReg)
 		if err != nil {
 			c.patchJump(jumpPastDefault)
+			c.regAlloc.Free(defaultReg)
 			return err
 		}
 	}
@@ -1111,12 +1117,16 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 	err = c.compileSimpleAssignment(target, defaultReg, line)
 	if err != nil {
 		c.patchJump(jumpPastDefault)
+		c.regAlloc.Free(defaultReg)
 		return err
 	}
 	
 	// 5. Patch the jump past default
 	c.patchJump(jumpPastDefault)
-	
+
+	// Free the default register now that we're done with it
+	c.regAlloc.Free(defaultReg)
+
 	return nil
 }
 
@@ -1798,18 +1808,18 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 func (c *Compiler) defineDestructuredVariable(name string, isConst bool, valueType types.Type, line int) errors.PaseratiError {
 	undefReg := c.regAlloc.Alloc()
 	c.emitLoadUndefined(undefReg, line)
-	
+
 	err := c.defineDestructuredVariableWithValue(name, isConst, undefReg, line)
 	if err != nil {
 		c.regAlloc.Free(undefReg)
 		return err
 	}
-	
+
 	// Pin the register for local variables
 	if c.enclosing != nil {
 		c.regAlloc.Pin(undefReg)
 	}
-	
+
 	return nil
 }
 
