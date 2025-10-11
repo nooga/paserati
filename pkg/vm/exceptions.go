@@ -44,7 +44,8 @@ func (vm *VM) findAllExceptionHandlers(pc int) []*ExceptionHandler {
 // throwException initiates exception unwinding with the given value
 func (vm *VM) throwException(value Value) {
 	if debugExceptions {
-		fmt.Printf("[DEBUG exceptions.go] throwException called, exception=%s, frameCount=%d\n", value.ToString(), vm.frameCount)
+		fmt.Printf("[DEBUG exceptions.go] throwException called, exception=%s, frameCount=%d, unwinding=%v, crossedNative=%v\n",
+			value.ToString(), vm.frameCount, vm.unwinding, vm.unwindingCrossedNative)
 	}
 	// Avoid double-throwing the same value in a single unwinding sequence
 	if vm.unwinding && vm.currentException.Is(value) {
@@ -53,6 +54,12 @@ func (vm *VM) throwException(value Value) {
 		}
 		return
 	}
+
+	// If we're not already unwinding, this is a fresh throw - reset the flag
+	if !vm.unwinding {
+		vm.unwindingCrossedNative = false
+	}
+	// If already unwinding, keep the flag (we're re-throwing after native propagation)
 
 	vm.currentException = value
 	vm.unwinding = true
@@ -84,7 +91,8 @@ func getCallerInfo() string {
 // Returns true if a handler was found, false if exception should terminate execution
 func (vm *VM) unwindException() bool {
 	if debugExceptions {
-		fmt.Printf("[DEBUG unwindException] Starting unwind with frameCount=%d\n", vm.frameCount)
+		fmt.Printf("[DEBUG unwindException] Starting unwind with frameCount=%d, crossedNative=%v\n",
+			vm.frameCount, vm.unwindingCrossedNative)
 	}
 	for vm.frameCount > 0 {
 		frame := &vm.frames[vm.frameCount-1]
@@ -134,16 +142,21 @@ func (vm *VM) unwindException() bool {
 		// No handler found in this frame
 		// Check if this is a direct call frame (native function boundary)
 		// Direct call frames are created by CallFunctionDirectly or executeUserFunctionSafe
-		// When we hit this boundary WITHOUT finding a handler, we must STOP unwinding
-		// and return control to the native caller so builtins (like assert.throws) can observe the exception.
 		if frame.isDirectCall {
-			if debugExceptions {
-				fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d with no handler; stopping and returning error to native caller\n", vm.frameCount-1)
+			// Only stop on FIRST PASS (haven't crossed native yet)
+			if !vm.unwindingCrossedNative {
+				if debugExceptions {
+					fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d on FIRST PASS; marking crossed and stopping\n", vm.frameCount-1)
+				}
+				// Mark that we're crossing into native code
+				vm.unwindingCrossedNative = true
+				return true // Stop here, let native code handle it
+			} else {
+				if debugExceptions {
+					fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d on RE-THROW PASS; continuing unwinding\n", vm.frameCount-1)
+				}
+				// On RE-THROW (already crossed native), don't stop - continue unwinding
 			}
-			// DON'T pop the frame here - let the VM loop or executeUserFunctionSafe handle it
-			// Popping the frame here would cause issues because we're still executing code in this frame
-			// Just return true to indicate we hit a boundary
-			return true
 		}
 
 		// fmt.Printf("[DEBUG] unwindException: No handler in frame %d, unwinding to caller\n", vm.frameCount-1)
@@ -162,8 +175,8 @@ func (vm *VM) unwindException() bool {
 func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	frame := &vm.frames[vm.frameCount-1]
 	if debugExceptions {
-		fmt.Printf("[DEBUG handleCatchBlock] CatchReg=%d, HandlerPC=%d, exception=%s\n",
-			handler.CatchReg, handler.HandlerPC, vm.currentException.ToString())
+		fmt.Printf("[DEBUG handleCatchBlock] CatchReg=%d, HandlerPC=%d, exception=%s, crossedNative=%v\n",
+			handler.CatchReg, handler.HandlerPC, vm.currentException.ToString(), vm.unwindingCrossedNative)
 	}
 
 	// Store exception in catch register if specified
@@ -183,6 +196,7 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	// Clear exception state
 	vm.currentException = Null
 	vm.unwinding = false
+	vm.unwindingCrossedNative = false // NEW: Reset flag
 }
 
 // handleFinallyBlock transfers control to a finally block

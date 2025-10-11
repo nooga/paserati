@@ -197,8 +197,9 @@ type VM struct {
 	errors []errors.PaseratiError
 
 	// Exception handling state
-	currentException Value // Current thrown exception
-	unwinding        bool  // True during exception unwinding
+	currentException       Value // Current thrown exception
+	unwinding              bool  // True during exception unwinding
+	unwindingCrossedNative bool  // True if we've crossed a native boundary during unwinding
 
 	// Finally block state (Phase 3)
 	pendingAction PendingAction // Action to perform after finally blocks complete

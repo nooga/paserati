@@ -336,6 +336,19 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 // executeUserFunctionSafe executes a user function from a native function using sentinel frames
 // This allows proper nested calls without infinite recursion
 func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (Value, error) {
+	// If unwinding flags are set but currentException is Null, it means the exception was
+	// already handed off to native code as a Go error. Native code either:
+	// 1. Handled it and is making a new call (not re-throwing) - clear the flags
+	// 2. Is about to re-throw it - but then it will call throwException() which will set them again
+	// So we can safely clear stale unwinding state here at the start of a new bytecode execution.
+	if vm.unwinding && vm.currentException == Null {
+		if debugExceptions {
+			fmt.Println("[DEBUG executeUserFunctionSafe] Clearing stale unwinding state (exception was handed to native)")
+		}
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+	}
+
 	// Set up the caller context first
 	callerRegisters := make([]Value, 1)
 	destReg := byte(0)
@@ -376,10 +389,12 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		// If the VM is unwinding an exception, surface it as an ExceptionError
 		if vm.unwinding && vm.currentException != Null {
 			ex := vm.currentException
-			// Clear VM exception state before returning to native caller, since
-			// we are handing the exception over as a Go error for the native to handle.
+			// ⚠️ CRITICAL CHANGE: Don't clear vm.unwinding or vm.unwindingCrossedNative!
+			// These flags need to persist for re-throw detection
+			// Only clear currentException since we're passing it as a Go error
 			vm.currentException = Null
-			vm.unwinding = false
+			// vm.unwinding = false         // OLD: Don't clear this!
+			// vm.unwindingCrossedNative... // OLD: Don't clear this either!
 			return Undefined, exceptionError{exception: ex}
 		}
 		return Undefined, fmt.Errorf("runtime error during user function execution")
@@ -389,7 +404,8 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	if vm.unwinding && vm.currentException != Null {
 		ex := vm.currentException
 		vm.currentException = Null
-		vm.unwinding = false
+		// vm.unwinding = false         // OLD: Don't clear this!
+		// vm.unwindingCrossedNative... // OLD: Don't clear this either!
 		return Undefined, exceptionError{exception: ex}
 	}
 
