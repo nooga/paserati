@@ -1,14 +1,24 @@
 # Destructuring Implementation Audit & Analysis
 
 **Date**: 2025-10-12
-**Status**: Critical Bug Identified
+**Status**: PARTIALLY FIXED - Remaining issues with nested defaults
 **Impact**: 12+ Test262 failures in object expression tests
 
 ## Executive Summary
 
-This document provides a comprehensive audit of destructuring implementation across Paserati's parser, type checker, and compiler. A **critical bug** has been identified: **destructuring function parameters with default values are completely unimplemented**, causing all extracted variables to be `null` or contain garbage values.
+This document provides a comprehensive audit of destructuring implementation across Paserati's parser, type checker, and compiler. A **critical bug** was identified and PARTIALLY FIXED: **nested destructuring in function parameters was using wrong parser functions and missing compiler support**.
+
+**Root Causes Found**:
+1. ❌ Parser used `parseArrayLiteral()` for nested patterns instead of `parseArrayParameterPattern()` → **FIXED**
+2. ❌ Type checker didn't recognize `ArrayParameterPattern`/`ObjectParameterPattern` as valid targets → **FIXED**
+3. ❌ Compiler didn't handle parameter pattern types in nested destructuring → **FIXED**
+4. ⚠️ Compiler doesn't correctly handle defaults on nested parameter pattern elements → **REMAINING ISSUE**
 
 **Test262 Impact**: At least 12 tests failing with pattern `Expected SameValue(«null», «7»)` are directly caused by this bug.
+
+**Current Status**:
+- ✅ Simple nested patterns work: `function f([[x]]) { }` → extracts correctly
+- ⚠️ Nested patterns with defaults: `function f([[x] = [99]]) { }` → returns wrong value
 
 ---
 
@@ -609,23 +619,155 @@ The VM's `prepareCall()` function (pkg/vm/call.go) handles parameter passing:
 
 ---
 
-## 10. Conclusion
+## 10. Fixes Implemented
 
-**Critical Bug Identified**: Destructuring function parameters with patterns and defaults are completely unimplemented due to missing transformation between parser and compiler.
+### 10.1 Parser Fix (pkg/parser/parser.go)
 
-**Severity**: HIGH - Breaks ECMAScript compliance, fails 12+ Test262 tests, affects user code
+**Problem**: `parseParameterDestructuringElement()` at line 2611 was calling `parseArrayLiteral()` for nested patterns, which doesn't support defaults.
 
-**Recommended Action**: Implement Strategy A (Parser/Checker transformation) immediately
+**Fix**: Changed to recursively call `parseArrayParameterPattern()` and `parseObjectParameterPattern()`:
 
-**Expected Outcome**:
+```go
+// Lines 2609-2624
+} else if p.curTokenIs(lexer.LBRACKET) {
+    // Nested array destructuring: function f([a, [b, c]]) or function f([...[x, y]])
+    // IMPORTANT: Must use parseArrayParameterPattern, not parseArrayLiteral
+    // because nested patterns can have defaults: [[x] = [99]]
+    element.Target = p.parseArrayParameterPattern()
+    if element.Target == nil {
+        return nil
+    }
+} else if p.curTokenIs(lexer.LBRACE) {
+    // Nested object destructuring: function f({user: {name, age}}) or function f([...{a, b}])
+    // IMPORTANT: Must use parseObjectParameterPattern, not parseObjectLiteral
+    // because nested patterns can have defaults: [{x} = {}]
+    element.Target = p.parseObjectParameterPattern()
+    if element.Target == nil {
+        return nil
+    }
+}
+```
+
+**Result**: Parser now correctly captures nested patterns with their defaults.
+
+### 10.2 Type Checker Fix (pkg/checker/destructuring_nested.go)
+
+**Problem**: Checker only handled `ArrayLiteral` and `ObjectLiteral` as destructuring targets, not parameter patterns.
+
+**Fix**: Added cases for `ArrayParameterPattern` and `ObjectParameterPattern` in all destructuring target checking functions:
+
+```go
+// Lines 18-23
+case *parser.ArrayParameterPattern:
+    // Handle nested array parameter patterns (from function parameters)
+    c.checkNestedArrayParameterPattern(targetNode, expectedType, context)
+case *parser.ObjectParameterPattern:
+    // Handle nested object parameter patterns (from function parameters)
+    c.checkNestedObjectParameterPattern(targetNode, expectedType, context)
+```
+
+**New functions added** (lines 370-519):
+- `checkNestedArrayParameterPattern()`
+- `checkNestedObjectParameterPattern()`
+- `checkNestedArrayParameterPatternForDeclaration()`
+- `checkNestedObjectParameterPatternForDeclaration()`
+
+**Result**: Type checker now recognizes parameter patterns as valid targets.
+
+### 10.3 Compiler Fix (pkg/compiler/compile_nested_declarations.go)
+
+**Problem**: Compiler didn't handle `ArrayParameterPattern`/`ObjectParameterPattern` types in nested destructuring compilation.
+
+**Fix**: Added cases and handler functions:
+
+```go
+// Lines 20-25
+case *parser.ArrayParameterPattern:
+    // Handle ArrayParameterPattern from transformed function parameters
+    return c.compileNestedArrayParameterPattern(targetNode, valueReg, isConst, line)
+case *parser.ObjectParameterPattern:
+    // Handle ObjectParameterPattern from transformed function parameters
+    return c.compileNestedObjectParameterPattern(targetNode, valueReg, isConst, line)
+```
+
+**New functions added** (lines 420-447):
+- `compileNestedArrayParameterPattern()`: Converts pattern to declaration and compiles
+- `compileNestedObjectParameterPattern()`: Converts pattern to declaration and compiles
+
+**Result**: Compiler can now compile nested parameter patterns.
+
+### 10.4 Test Results
+
+**Before fixes**:
+```bash
+./paserati -e 'function f([[x]]) { console.log("x:", x); } f([[42]]);'
+# Silent failure - no output
+```
+
+**After fixes**:
+```bash
+./paserati -e 'function f([[x]]) { console.log("x:", x); } f([[42]]);'
+# x: 42  ✅ WORKS!
+```
+
+**With defaults** (still broken):
+```bash
+./paserati -e 'function f([[x] = [99]]) { console.log("x:", x); } f([[42]]);'
+# x: true  ❌ Wrong value (should be 42)
+
+./paserati -e 'function f([[x] = [99]]) { console.log("x:", x); } f([]);'
+# x: true  ❌ Wrong value (should be 99 from default)
+```
+
+---
+
+## 11. Remaining Issue: Default Value Handling
+
+### 11.1 Problem Analysis
+
+The issue with nested defaults like `[[x] = [99]]`:
+
+**What happens**:
+1. Parser creates: `Parameter` with `Pattern` = `ArrayParameterPattern([element])`
+2. Element has: `Target` = `ArrayParameterPattern([x])`, `Default` = `[99]`
+3. Transformation creates: `let [[x] = [99]] = __destructured_param_0;`
+4. Compiler compiles this, but the default `[99]` on the nested element isn't being applied correctly
+
+**Root cause**: The compiler's `compileArrayDestructuringIteratorPath()` handles element defaults, but when the target is an `ArrayParameterPattern` (not a simple identifier), the default handling logic may not be triggered correctly.
+
+### 11.2 Next Steps
+
+To fully fix defaults in nested parameter patterns:
+
+1. **Investigate** `compileArrayDestructuringIteratorPath()` to see how it handles `element.Default`
+2. **Check** if the default is evaluated and applied before recursing into the nested pattern
+3. **Debug** with compiler debug output to trace the exact bytecode generated
+4. **Test** with the specific Test262 case: `test262/test/language/statements/function/dstr/dflt-ary-ptrn-elem-ary-elem-iter.js`
+
+**Expected behavior**:
+```javascript
+function f([[x] = [99]]) { ... }
+f([[42]])  // x should be 42 (extracted from argument)
+f([])      // x should be 99 (from default)
+f()        // outer array undefined, should use inner default
+```
+
+---
+
+## 12. Conclusion
+
+**Major Progress**: Three critical bugs fixed in parser, checker, and compiler
+
+**Current State**:
+- ✅ Simple nested destructuring works
+- ⚠️ Nested defaults partially work (wrong value)
+- 🔄 Test262 progress: Some tests now run that previously failed silently
+
+**Severity**: MEDIUM - Most destructuring works, defaults need refinement
+
+**Recommended Next Action**: Debug and fix default value evaluation in `compileArrayDestructuringIteratorPath()`
+
+**Expected Final Outcome**:
 - ✅ 12+ Test262 tests pass
-- ✅ Full ES6+ destructuring parameter support
+- ✅ Full ES6+ destructuring parameter support with nested patterns and defaults
 - ✅ Compliance with ECMAScript specification
-- ✅ No performance regression (acceptable overhead)
-
-**Next Steps**:
-1. Implement `transformDestructuringParameters()` in parser or checker
-2. Remove skip logic in compiler
-3. Add comprehensive test coverage
-4. Validate with Test262 suite
-5. Document transformation behavior
