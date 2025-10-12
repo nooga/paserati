@@ -457,10 +457,16 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	// Only PlainObject supports symbol keys for now
 	if objVal.Type() != TypeObject {
 		// DictObject or others: ignore symbol set (non-strict semantics)
+		if debugVM {
+			fmt.Printf("[DBG opSetPropSymbol] Ignoring symbol set on non-PlainObject type=%s\n", objVal.TypeName())
+		}
 		return true, InterpretOK, *valueToSet
 	}
 
 	po := AsPlainObject(*objVal)
+	if debugVM {
+		fmt.Printf("[DBG opSetPropSymbol] Setting symbol on obj=%p, symbol=%s\n", po, symKey.AsSymbol())
+	}
 
 	// Per-site cache keyed by symbol identity
 	cacheKey := generateSymbolCacheKey(ip, symKey)
@@ -564,6 +570,9 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	updated := false
 	for _, f := range po.shape.fields {
 		if f.keyKind == KeyKindSymbol && f.symbolVal.obj == symKey.obj {
+			if debugVM {
+				fmt.Printf("[DBG opSetPropSymbol] Updating existing symbol property on obj=%p, symbol=%s, offset=%d, writable=%v, value=%s\n", po, symKey.AsSymbol(), f.offset, f.writable, valueToSet.Inspect())
+			}
 			if f.writable && f.offset < len(po.properties) {
 				po.properties[f.offset] = *valueToSet
 			}
@@ -578,6 +587,9 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	}
 
 	// Define new data property by symbol key (defaults false unless specified elsewhere)
+	if debugVM {
+		fmt.Printf("[DBG opSetPropSymbol] Defining new symbol property on obj=%p, symbol=%s, value=%s\n", po, symKey.AsSymbol(), valueToSet.Inspect())
+	}
 	po.DefineOwnPropertyByKey(NewSymbolKey(symKey), *valueToSet, nil, nil, nil)
 	// Find new field to cache
 	for _, f := range po.shape.fields {

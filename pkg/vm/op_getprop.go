@@ -759,6 +759,9 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		proto := vm.ArrayPrototype
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
+			if debugVM {
+				fmt.Printf("[DBG opGetPropSymbol] Looking up Array.prototype=%p for symbol %s\n", po, symKey.AsSymbol())
+			}
 			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
 				*dest = v
 				if debugVM {

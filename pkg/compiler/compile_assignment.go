@@ -1446,6 +1446,8 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 
 // compileArrayDestructuringIteratorPath compiles array destructuring using iterator protocol
 func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestructuringDeclaration, iterableReg Register, line int) errors.PaseratiError {
+	// fmt.Printf("// [COMPILE-ITER] Starting iterator path compilation, iterableReg=R%d\n", iterableReg)
+
 	// Get Symbol.iterator via computed index
 	iteratorMethodReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(iteratorMethodReg)
@@ -1454,21 +1456,25 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 	symbolObjReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(symbolObjReg)
 	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	// fmt.Printf("// [COMPILE-ITER] Getting global Symbol (idx=%d) into R%d\n", symIdx, symbolObjReg)
 	c.emitGetGlobal(symbolObjReg, symIdx, line)
 
 	// Get Symbol.iterator
 	propNameReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(propNameReg)
 	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
+	// fmt.Printf("// [COMPILE-ITER] Loading 'iterator' string into R%d\n", propNameReg)
 
 	iteratorKeyReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(iteratorKeyReg)
+	// fmt.Printf("// [COMPILE-ITER] Getting Symbol.iterator (Symbol[R%d]) into R%d\n", propNameReg, iteratorKeyReg)
 	c.emitOpCode(vm.OpGetIndex, line)
 	c.emitByte(byte(iteratorKeyReg))
 	c.emitByte(byte(symbolObjReg))
 	c.emitByte(byte(propNameReg))
 
 	// Get iterable[Symbol.iterator]
+	// fmt.Printf("// [COMPILE-ITER] Getting iterable[Symbol.iterator] (R%d[R%d]) into R%d\n", iterableReg, iteratorKeyReg, iteratorMethodReg)
 	c.emitOpCode(vm.OpGetIndex, line)
 	c.emitByte(byte(iteratorMethodReg))
 	c.emitByte(byte(iterableReg))
@@ -1477,6 +1483,7 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 	// Call the iterator method to get iterator object
 	iteratorObjReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(iteratorObjReg)
+	// fmt.Printf("// [COMPILE-ITER] Calling iterator method R%d on R%d, result in R%d\n", iteratorMethodReg, iterableReg, iteratorObjReg)
 	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, line)
 
 	// Allocate register to track iterator.done state
