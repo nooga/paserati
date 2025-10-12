@@ -687,15 +687,27 @@ func (c *Compiler) compileRecursiveAssignment(target parser.Expression, valueReg
 	case *parser.Identifier:
 		// Simple variable assignment: a = value
 		return c.compileIdentifierAssignment(targetNode, valueReg, line)
-		
+
+	case *parser.MemberExpression:
+		// Member expression assignment: obj.prop = value
+		return c.compileMemberExpressionAssignment(targetNode, valueReg, line)
+
+	case *parser.IndexExpression:
+		// Index expression assignment: arr[0] = value
+		return c.compileIndexExpressionAssignment(targetNode, valueReg, line)
+
 	case *parser.ArrayLiteral:
 		// Nested array destructuring: [a, b] = value
 		return c.compileNestedArrayDestructuring(targetNode, valueReg, line)
-		
+
 	case *parser.ObjectLiteral:
 		// Nested object destructuring: {a, b} = value
 		return c.compileNestedObjectDestructuring(targetNode, valueReg, line)
-		
+
+	case *parser.UndefinedLiteral:
+		// Elision/hole in destructuring pattern: [,] - skip assignment
+		return nil
+
 	default:
 		return NewCompileError(target, fmt.Sprintf("unsupported destructuring target type: %T", target))
 	}
@@ -728,6 +740,55 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 			c.emitMove(symbol.Register, valueReg, line)
 		}
 	}
+
+	return nil
+}
+
+// compileMemberExpressionAssignment handles assignment to object properties: obj.prop = value
+func (c *Compiler) compileMemberExpressionAssignment(memberExpr *parser.MemberExpression, valueReg Register, line int) errors.PaseratiError {
+	// Compile the object expression
+	objReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objReg)
+	_, err := c.compileNode(memberExpr.Object, objReg)
+	if err != nil {
+		return err
+	}
+
+	// MemberExpression is always non-computed (obj.prop), not obj[prop]
+	// For computed access, the parser creates an IndexExpression
+	propName, ok := memberExpr.Property.(*parser.Identifier)
+	if !ok {
+		return NewCompileError(memberExpr, "member expression property must be an identifier")
+	}
+	propIdx := c.chunk.AddConstant(vm.String(propName.Value))
+	c.emitSetProp(objReg, valueReg, propIdx, line)
+
+	return nil
+}
+
+// compileIndexExpressionAssignment handles assignment to indexed elements: arr[0] = value
+func (c *Compiler) compileIndexExpressionAssignment(indexExpr *parser.IndexExpression, valueReg Register, line int) errors.PaseratiError {
+	// Compile the left side (array/object)
+	leftReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(leftReg)
+	_, err := c.compileNode(indexExpr.Left, leftReg)
+	if err != nil {
+		return err
+	}
+
+	// Compile the index expression
+	indexReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(indexReg)
+	_, err = c.compileNode(indexExpr.Index, indexReg)
+	if err != nil {
+		return err
+	}
+
+	// Emit OpSetIndex: left[index] = value
+	c.emitOpCode(vm.OpSetIndex, line)
+	c.emitByte(byte(leftReg))
+	c.emitByte(byte(indexReg))
+	c.emitByte(byte(valueReg))
 
 	return nil
 }
