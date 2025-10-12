@@ -51,9 +51,10 @@ type (
 const (
 	_ int = iota
 	LOWEST
-	COMMA       // , (very low precedence, but higher than LOWEST)
-	ASSIGNMENT  // =, +=, -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>=, &&=, ||=, ??=
-	TERNARY     // ?:
+	COMMA          // , (very low precedence, but higher than LOWEST)
+	ARG_SEPARATOR  // Virtual precedence level for argument list parsing (between COMMA and ASSIGNMENT)
+	ASSIGNMENT     // =, +=, -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>=, &&=, ||=, ??=
+	TERNARY        // ?:
 	COALESCE    // ??
 	LOGICAL_OR  // ||
 	LOGICAL_AND // &&
@@ -3885,7 +3886,9 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 	}
 
 	p.nextToken() // Consume '(' or '[' to get to the first expression
-	expr := p.parseExpression(COMMA)
+	// Parse with ARG_SEPARATOR precedence - this allows assignment expressions
+	// but stops at comma operators (which have lower precedence)
+	expr := p.parseExpression(ARG_SEPARATOR)
 	if expr == nil {
 		return nil // Propagate error from parsing the first element
 	}
@@ -3902,7 +3905,9 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 		// --- End Trailing Comma Handling ---
 
 		p.nextToken() // Consume the token starting the next expression
-		expr = p.parseExpression(COMMA)
+		// Parse with ARG_SEPARATOR precedence - this allows assignment expressions
+		// but stops at comma operators (which have lower precedence)
+		expr = p.parseExpression(ARG_SEPARATOR)
 		if expr == nil {
 			return nil // Propagate error from parsing subsequent element
 		}
@@ -4261,9 +4266,10 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		return nil
 	}
 
-	// For right-associativity of assignment, parse RHS with LOWEST precedence
-	// This allows: a = b = c to parse as a = (b = c) and handles [x,y] = vals
-	precedence := LOWEST
+	// For right-associativity of assignment, parse RHS with ARG_SEPARATOR precedence
+	// This allows: a = b = c to parse as a = (b = c) but stops at comma operators
+	// ARG_SEPARATOR is between COMMA and ASSIGNMENT, so it excludes comma expressions
+	precedence := ARG_SEPARATOR
 	p.nextToken() // Consume assignment operator
 
 	debugPrint("parseAssignmentExpression parsing right side...")

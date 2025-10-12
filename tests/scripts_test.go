@@ -262,13 +262,18 @@ func compileAndInitializeVMNew(scriptPath string) *TestResult {
 	scriptDir := filepath.Dir(scriptPath)
 	paserati := driver.NewPaseratiWithBaseDir(scriptDir)
 
+	// Check for no-typecheck directive in the file
+	sourceCode := string(sourceBytes)
+	if strings.Contains(sourceCode, "// no-typecheck") {
+		paserati.SetIgnoreTypeErrors(true)
+	}
+
 	// Special handling for manual type import test
 	if filepath.Base(scriptPath) == "test_manual_type_import.ts" {
 		setupManualTypeImports(paserati)
 	}
 
 	// Check if the script contains import statements (static or dynamic) - if so, use module system
-	sourceCode := string(sourceBytes)
 	if strings.Contains(sourceCode, "import ") || strings.Contains(sourceCode, "import(") {
 		// Use module-aware compilation and execution
 		result, compileAndRunErrs := paserati.RunStringWithModules(sourceCode)
