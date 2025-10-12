@@ -868,7 +868,6 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		if param.IsDestructuring {
 			// Parser should have transformed these, but if not, skip them
 			// The destructuring pattern will be handled as statements in the function body
-			debugPrintf("// [Compiling Function Literal] %s: Skipping untransformed destructuring parameter\n", determinedFuncName)
 			continue
 		}
 		// param.Name should never be nil for non-destructuring parameters

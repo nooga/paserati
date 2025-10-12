@@ -2608,13 +2608,17 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 		element.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else if p.curTokenIs(lexer.LBRACKET) {
 		// Nested array destructuring: function f([a, [b, c]]) or function f([...[x, y]])
-		element.Target = p.parseArrayLiteral()
+		// IMPORTANT: Must use parseArrayParameterPattern, not parseArrayLiteral
+		// because nested patterns can have defaults: [[x] = [99]]
+		element.Target = p.parseArrayParameterPattern()
 		if element.Target == nil {
 			return nil
 		}
 	} else if p.curTokenIs(lexer.LBRACE) {
 		// Nested object destructuring: function f({user: {name, age}}) or function f([...{a, b}])
-		element.Target = p.parseObjectLiteral()
+		// IMPORTANT: Must use parseObjectParameterPattern, not parseObjectLiteral
+		// because nested patterns can have defaults: [{x} = {}]
+		element.Target = p.parseObjectParameterPattern()
 		if element.Target == nil {
 			return nil
 		}

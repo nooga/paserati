@@ -15,6 +15,12 @@ func (c *Checker) checkDestructuringTarget(target parser.Expression, expectedTyp
 		c.checkNestedArrayTarget(targetNode, expectedType, context)
 	case *parser.ObjectLiteral:
 		c.checkNestedObjectTarget(targetNode, expectedType, context)
+	case *parser.ArrayParameterPattern:
+		// Handle nested array parameter patterns (from function parameters)
+		c.checkNestedArrayParameterPattern(targetNode, expectedType, context)
+	case *parser.ObjectParameterPattern:
+		// Handle nested object parameter patterns (from function parameters)
+		c.checkNestedObjectParameterPattern(targetNode, expectedType, context)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -32,6 +38,10 @@ func (c *Checker) checkDestructuringTargetForProperty(target parser.Expression, 
 		c.checkNestedArrayTarget(targetNode, expectedType, propName)
 	case *parser.ObjectLiteral:
 		c.checkNestedObjectTarget(targetNode, expectedType, propName)
+	case *parser.ArrayParameterPattern:
+		c.checkNestedArrayParameterPattern(targetNode, expectedType, propName)
+	case *parser.ObjectParameterPattern:
+		c.checkNestedObjectParameterPattern(targetNode, expectedType, propName)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -217,6 +227,12 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 	case *parser.ObjectLiteral:
 		// Nested object destructuring declaration
 		c.checkNestedObjectTargetForDeclaration(targetNode, expectedType, isConst)
+	case *parser.ArrayParameterPattern:
+		// Parameter patterns in declarations (shouldn't happen normally, but handle for consistency)
+		c.checkNestedArrayParameterPatternForDeclaration(targetNode, expectedType, isConst)
+	case *parser.ObjectParameterPattern:
+		// Parameter patterns in declarations (shouldn't happen normally, but handle for consistency)
+		c.checkNestedObjectParameterPatternForDeclaration(targetNode, expectedType, isConst)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -347,6 +363,157 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 		// For Any type, all nested targets get Any type
 		for _, prop := range objectTarget.Properties {
 			c.checkDestructuringTargetForDeclaration(prop.Value, types.Any, isConst)
+		}
+	}
+}
+
+// checkNestedArrayParameterPattern handles type checking for nested array parameter patterns
+func (c *Checker) checkNestedArrayParameterPattern(pattern *parser.ArrayParameterPattern, expectedType types.Type, context interface{}) {
+	// ArrayParameterPattern has Elements field with DestructuringElement items
+	// Process each element similar to array literals
+	widenedType := types.GetWidenedType(expectedType)
+	var elementType types.Type
+
+	if arrayType, ok := widenedType.(*types.ArrayType); ok {
+		elementType = arrayType.ElementType
+	} else if widenedType == types.Any {
+		elementType = types.Any
+	} else {
+		c.addError(pattern, fmt.Sprintf("cannot destructure array pattern from non-array type '%s'", expectedType.String()))
+		elementType = types.Any
+	}
+
+	for _, elem := range pattern.Elements {
+		if elem == nil || elem.Target == nil {
+			// Elision
+			continue
+		}
+		// Recursively check the target
+		c.checkDestructuringTarget(elem.Target, elementType, context)
+	}
+}
+
+// checkNestedObjectParameterPattern handles type checking for nested object parameter patterns
+func (c *Checker) checkNestedObjectParameterPattern(pattern *parser.ObjectParameterPattern, expectedType types.Type, context interface{}) {
+	// ObjectParameterPattern has Properties field with DestructuringProperty items
+	widenedType := types.GetWidenedType(expectedType)
+
+	if widenedType != types.Any {
+		objType, ok := expectedType.(*types.ObjectType)
+		if !ok {
+			c.addError(pattern, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
+			return
+		}
+
+		for _, prop := range pattern.Properties {
+			if prop == nil {
+				continue
+			}
+
+			var propName string
+			if ident, ok := prop.Key.(*parser.Identifier); ok {
+				propName = ident.Value
+			}
+
+			var propType types.Type = types.Undefined
+			if t, exists := objType.Properties[propName]; exists {
+				propType = t
+			}
+
+			// Recursively check the target
+			if prop.Target != nil {
+				c.checkDestructuringTarget(prop.Target, propType, propName)
+			} else {
+				c.checkDestructuringTarget(prop.Key, propType, propName)
+			}
+		}
+	} else {
+		// For Any type, all nested targets get Any type
+		for _, prop := range pattern.Properties {
+			if prop == nil {
+				continue
+			}
+			if prop.Target != nil {
+				c.checkDestructuringTarget(prop.Target, types.Any, nil)
+			} else {
+				c.checkDestructuringTarget(prop.Key, types.Any, nil)
+			}
+		}
+	}
+}
+
+// checkNestedArrayParameterPatternForDeclaration handles type checking for nested array parameter patterns in declarations
+func (c *Checker) checkNestedArrayParameterPatternForDeclaration(pattern *parser.ArrayParameterPattern, expectedType types.Type, isConst bool) {
+	widenedType := types.GetWidenedType(expectedType)
+	var elementType types.Type
+
+	if arrayType, ok := widenedType.(*types.ArrayType); ok {
+		elementType = arrayType.ElementType
+	} else {
+		elementType = types.Any
+	}
+
+	for _, elem := range pattern.Elements {
+		if elem == nil || elem.Target == nil {
+			continue
+		}
+		c.checkDestructuringTargetForDeclaration(elem.Target, elementType, isConst)
+	}
+}
+
+// checkNestedObjectParameterPatternForDeclaration handles type checking for nested object parameter patterns in declarations
+func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parser.ObjectParameterPattern, expectedType types.Type, isConst bool) {
+	widenedType := types.GetWidenedType(expectedType)
+
+	if widenedType != types.Any {
+		objType, ok := expectedType.(*types.ObjectType);
+		if !ok {
+			// For non-object types, use Any for all properties
+			for _, prop := range pattern.Properties {
+				if prop == nil {
+					continue
+				}
+				if prop.Target != nil {
+					c.checkDestructuringTargetForDeclaration(prop.Target, types.Any, isConst)
+				} else {
+					c.checkDestructuringTargetForDeclaration(prop.Key, types.Any, isConst)
+				}
+			}
+			return
+		}
+
+		for _, prop := range pattern.Properties {
+			if prop == nil {
+				continue
+			}
+
+			var propName string
+			if ident, ok := prop.Key.(*parser.Identifier); ok {
+				propName = ident.Value
+			}
+
+			var propType types.Type = types.Undefined
+			if t, exists := objType.Properties[propName]; exists {
+				propType = t
+			}
+
+			if prop.Target != nil {
+				c.checkDestructuringTargetForDeclaration(prop.Target, propType, isConst)
+			} else {
+				c.checkDestructuringTargetForDeclaration(prop.Key, propType, isConst)
+			}
+		}
+	} else {
+		// For Any type, all nested targets get Any type
+		for _, prop := range pattern.Properties {
+			if prop == nil {
+				continue
+			}
+			if prop.Target != nil {
+				c.checkDestructuringTargetForDeclaration(prop.Target, types.Any, isConst)
+			} else {
+				c.checkDestructuringTargetForDeclaration(prop.Key, types.Any, isConst)
+			}
 		}
 	}
 }

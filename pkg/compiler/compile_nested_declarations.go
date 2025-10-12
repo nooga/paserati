@@ -17,6 +17,12 @@ func (c *Compiler) compileNestedPatternDeclaration(target parser.Expression, val
 	case *parser.ObjectLiteral:
 		// Convert to ObjectDestructuringDeclaration and compile
 		return c.compileNestedObjectDeclaration(targetNode, valueReg, isConst, line)
+	case *parser.ArrayParameterPattern:
+		// Handle ArrayParameterPattern from transformed function parameters
+		return c.compileNestedArrayParameterPattern(targetNode, valueReg, isConst, line)
+	case *parser.ObjectParameterPattern:
+		// Handle ObjectParameterPattern from transformed function parameters
+		return c.compileNestedObjectParameterPattern(targetNode, valueReg, isConst, line)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no code to generate, just skip this element
 		return nil
@@ -407,6 +413,35 @@ func (c *Compiler) compileConditionalAssignmentForDeclaration(target parser.Expr
 	
 	// 5. Patch the jump past default
 	c.patchJump(jumpPastDefault)
-	
+
 	return nil
+}
+
+// compileNestedArrayParameterPattern handles nested array parameter patterns from function parameters
+func (c *Compiler) compileNestedArrayParameterPattern(pattern *parser.ArrayParameterPattern, valueReg Register, isConst bool, line int) errors.PaseratiError {
+	// ArrayParameterPattern already has Elements as []*DestructuringElement
+	// Create a declaration and compile it
+	declaration := &parser.ArrayDestructuringDeclaration{
+		Token:   pattern.Token,
+		IsConst: isConst,
+		Elements: pattern.Elements,
+		Value:   nil, // We already have the value in valueReg
+	}
+
+	return c.compileArrayDestructuringIteratorPath(declaration, valueReg, line)
+}
+
+// compileNestedObjectParameterPattern handles nested object parameter patterns from function parameters
+func (c *Compiler) compileNestedObjectParameterPattern(pattern *parser.ObjectParameterPattern, valueReg Register, isConst bool, line int) errors.PaseratiError {
+	// ObjectParameterPattern already has Properties as []*DestructuringProperty
+	// Create a declaration and compile it
+	declaration := &parser.ObjectDestructuringDeclaration{
+		Token:        pattern.Token,
+		IsConst:      isConst,
+		Properties:   pattern.Properties,
+		RestProperty: pattern.RestProperty,
+		Value:        nil, // We already have the value in valueReg
+	}
+
+	return c.compileObjectDestructuringDeclarationWithValueReg(declaration, valueReg, line)
 }
