@@ -5118,6 +5118,10 @@ startExecution:
 					}
 					// Remove sentinel frame
 					vm.frameCount--
+					// Decrement finally depth since we exited the finally block
+					if vm.finallyDepth > 0 {
+						vm.finallyDepth--
+					}
 					// Return with the result (already wrapped as iterator result for generators)
 					return InterpretOK, result
 				}
