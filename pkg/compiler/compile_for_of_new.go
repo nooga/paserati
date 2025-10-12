@@ -94,6 +94,11 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		resultReg = awaitedReg // Use awaited result
 	}
 
+	// 8b. Validate that iterator result is an object (required by ECMAScript spec)
+	// If not an object, throw TypeError
+	c.emitOpCode(vm.OpTypeGuardIteratorReturn, node.Token.Line)
+	c.emitByte(byte(resultReg))
+
 	// 9. Get result.done
 	doneReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, doneReg)
