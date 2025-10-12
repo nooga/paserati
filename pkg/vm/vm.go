@@ -1673,21 +1673,21 @@ startExecution:
 				return InterpretOK, Undefined
 			}
 
-			// Check if this is a generator function completion
+			// Define result for generator wrapping
+			result := Undefined
+
+			// Check if this is a generator function returning (not yielding)
 			if frame.generatorObj != nil {
-				genObj := frame.generatorObj
-				// Mark generator as completed
-				genObj.State = GeneratorCompleted
-				genObj.Done = true
-				genObj.Frame = nil // Clean up execution frame
-
-				// Create iterator result { value: undefined, done: true }
-				result := NewObject(vm.ObjectPrototype).AsPlainObject()
-				result.SetOwn("value", Undefined)
-				result.SetOwn("done", BooleanValue(true))
-
-				// Return the iterator result from generator execution
-				return InterpretOK, NewValueFromPlainObject(result)
+				// Generator function completed with implicit undefined return
+				// Update generator state and create iterator result
+				frame.generatorObj.State = GeneratorCompleted
+				frame.generatorObj.Done = true
+				frame.generatorObj.Frame = nil // Clean up execution frame
+				iterResult := NewObject(vm.ObjectPrototype).AsPlainObject()
+				iterResult.SetOwn("value", Undefined)
+				iterResult.SetOwn("done", BooleanValue(true))
+				result = NewValueFromPlainObject(iterResult)
+				// Don't return early - continue to pop the frame below
 			}
 
 			// Check if there are finally handlers that should execute
@@ -1743,12 +1743,12 @@ startExecution:
 				if debugVM {
 					fmt.Printf("[DBG] Returning from top-level\n")
 				}
-				// Returned undefined from top-level
+				// Returned undefined from top-level (or generator result if generator)
 				if vm.unwinding {
 					vm.handleUncaughtException()
 					return InterpretRuntimeError, vm.currentException
 				}
-				return InterpretOK, Undefined
+				return InterpretOK, result
 			}
 
 			// Check if we hit a sentinel frame - if so, remove it and return immediately
@@ -1766,7 +1766,7 @@ startExecution:
 					if debugVM {
 						fmt.Printf("[DBG] Setting sentinel target register\n")
 					}
-					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = Undefined
+					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = result
 					if debugVM {
 						fmt.Printf("[DBG] Set complete\n")
 					}
@@ -1779,8 +1779,8 @@ startExecution:
 				if debugVM {
 					fmt.Printf("[DBG] Returning from sentinel\n")
 				}
-				// Return the result from the function that just returned
-				return InterpretOK, Undefined
+				// Return the result from the function that just returned (or generator iterator result)
+				return InterpretOK, result
 			}
 
 			// Check if this was a direct call frame and should return early
@@ -1797,10 +1797,10 @@ startExecution:
 						fmt.Printf("[DBG] Returning constructor this: %v\n", finalResult)
 					}
 				} else {
-					// Regular function returning undefined
-					finalResult = Undefined
+					// Regular function returning undefined (or generator result)
+					finalResult = result
 					if debugVM {
-						fmt.Printf("[DBG] Returning undefined from direct call\n")
+						fmt.Printf("[DBG] Returning result from direct call\n")
 					}
 				}
 				// Return the result immediately instead of continuing execution
@@ -1819,8 +1819,8 @@ startExecution:
 				// Constructor returning undefined: return the instance (this)
 				finalResult = constructorThisValue
 			} else {
-				// Regular function returning undefined
-				finalResult = Undefined
+				// Regular function returning undefined (or generator result)
+				finalResult = result
 			}
 
 			// Place the final result into the caller's target register
@@ -6588,19 +6588,21 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	}
 
 	// After vm.run() returns, we need to clean up the frames
-	// The generator frame and sentinel frame are still on the stack
+	// If the generator yielded, both the generator frame and sentinel frame are still on the stack
+	// If the generator completed, OpReturn already popped both frames
 
-	// Pop the generator frame (if it yielded, not if it completed)
+	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield && regSize > 0 {
-		// Generator yielded - frame is still active, need to pop it
-		vm.frameCount--
+		// Generator yielded - frames are still active, need to pop them
+		vm.frameCount--                // Pop generator frame
 		vm.nextRegSlot -= regSize
-	}
 
-	// Pop the sentinel frame
-	if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
-		vm.frameCount--
+		// Pop the sentinel frame
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+		}
 	}
+	// If generator completed, OpReturn already popped both frames, so nothing to do
 
 	return result, nil
 }
@@ -6704,19 +6706,27 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	}
 
 	// After vm.run() returns, we need to clean up the frames
-	// The generator frame and sentinel frame are still on the stack
+	// If the generator yielded, both the generator frame and sentinel frame are still on the stack
+	// If the generator completed, OpReturn already popped both frames
 
-	// Pop the generator frame (if it yielded, not if it completed)
+	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield {
-		// Generator yielded - frame is still active, need to pop it
-		vm.frameCount--
+		// Generator yielded - frames are still active, need to pop them
+		vm.frameCount--                // Pop generator frame
 		vm.nextRegSlot -= regSize
-	}
+		// Clear the popped frame to avoid stale references
+		vm.frames[vm.frameCount].generatorObj = nil
+		vm.frames[vm.frameCount].closure = nil
 
-	// Pop the sentinel frame
-	if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
-		vm.frameCount--
+		// Pop the sentinel frame
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+			// Clear the popped sentinel frame
+			vm.frames[vm.frameCount].isSentinelFrame = false
+			vm.frames[vm.frameCount].registers = nil
+		}
 	}
+	// If generator completed, OpReturn already popped both frames, so nothing to do
 
 	return result, nil
 }
@@ -6822,19 +6832,27 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	}
 
 	// After vm.run() returns, we need to clean up the frames
-	// The generator frame and sentinel frame are still on the stack
+	// If the generator yielded, both the generator frame and sentinel frame are still on the stack
+	// If the generator completed, OpReturn already popped both frames
 
-	// Pop the generator frame (if it yielded, not if it completed)
+	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield {
-		// Generator yielded - frame is still active, need to pop it
-		vm.frameCount--
+		// Generator yielded - frames are still active, need to pop them
+		vm.frameCount--                // Pop generator frame
 		vm.nextRegSlot -= regSize
-	}
+		// Clear the popped frame to avoid stale references
+		vm.frames[vm.frameCount].generatorObj = nil
+		vm.frames[vm.frameCount].closure = nil
 
-	// Pop the sentinel frame
-	if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
-		vm.frameCount--
+		// Pop the sentinel frame
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+			// Clear the popped sentinel frame
+			vm.frames[vm.frameCount].isSentinelFrame = false
+			vm.frames[vm.frameCount].registers = nil
+		}
 	}
+	// If generator completed, OpReturn already popped both frames, so nothing to do
 
 	return result, nil
 }
