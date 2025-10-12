@@ -5415,6 +5415,53 @@ startExecution:
 			// Return from generator execution
 			return InterpretOK, NewValueFromPlainObject(result)
 
+		case OpYieldDelegated:
+			// OpYieldDelegated resultReg, outputReg
+			// Suspend generator execution, yield iterator result object as-is from resultReg, store sent value in outputReg
+			// This is used for yield* delegation to preserve the exact iterator result from the delegated iterator
+			resultReg := code[ip]
+			outputReg := code[ip+1]
+			ip += 2
+
+			// Get the iterator result object
+			iterResult := registers[resultReg]
+
+			// Find the generator object associated with this frame
+			if frame.generatorObj == nil {
+				status := vm.runtimeError("YieldDelegated can only be used inside generator functions")
+				return status, Undefined
+			}
+
+			genObj := frame.generatorObj
+
+			// Suspend the generator and save its state
+			genObj.State = GeneratorSuspendedYield
+			genObj.YieldedValue = iterResult
+
+			// Save the execution frame state
+			if genObj.Frame == nil {
+				genObj.Frame = &GeneratorFrame{
+					pc:        ip,
+					registers: make([]Value, len(registers)),
+					locals:    make([]Value, 0),
+					stackBase: 0,
+					suspendPC: ip - 2,
+					outputReg: outputReg,
+					thisValue: frame.thisValue,
+				}
+			} else {
+				genObj.Frame.pc = ip
+				genObj.Frame.suspendPC = ip - 2
+				genObj.Frame.outputReg = outputReg
+				genObj.Frame.thisValue = frame.thisValue
+			}
+
+			// Copy register state to generator frame
+			copy(genObj.Frame.registers, registers)
+
+			// Return the iterator result as-is (don't wrap it)
+			return InterpretOK, iterResult
+
 		case OpResumeGenerator:
 			// OpResumeGenerator is used internally to resume generator execution
 			// This should not be directly encountered in normal execution

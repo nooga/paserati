@@ -2314,15 +2314,10 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	// Now jump if notDone is false (i.e., done was true)
 	exitLoopJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
 
-	// Get result.value
-	valueReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, valueReg)
-	valueConstIdx := c.chunk.AddConstant(vm.String("value"))
-	c.emitGetProp(valueReg, resultReg, valueConstIdx, node.Token.Line)
-
-	// Yield the value and store the sent value
-	c.emitOpCode(vm.OpYield, node.Token.Line)
-	c.emitByte(byte(valueReg))     // Value being yielded
+	// Yield the entire iterator result object as-is (preserving all properties including done)
+	// Use OpYieldDelegated to avoid wrapping the result again
+	c.emitOpCode(vm.OpYieldDelegated, node.Token.Line)
+	c.emitByte(byte(resultReg))    // Iterator result object being yielded as-is
 	c.emitByte(byte(sentValueReg)) // Register to store sent value when resuming
 
 	// Jump back to loop start
@@ -2336,6 +2331,7 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	c.patchJump(exitLoopJump)
 
 	// Return the final value in hint register
+	valueConstIdx := c.chunk.AddConstant(vm.String("value"))
 	c.emitGetProp(hint, resultReg, valueConstIdx, node.Token.Line)
 
 	return hint, nil
