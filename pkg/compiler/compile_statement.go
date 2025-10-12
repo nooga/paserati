@@ -676,11 +676,43 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 		c.emitIteratorCleanup(targetContext.IteratorCleanup.IteratorReg, node.Token.Line)
 	}
 
-	// Emit placeholder jump (OpJump) - Pass 0 for srcReg as it's ignored
-	placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+	// Check if we're inside a try-finally block AND the break targets a loop outside it
+	if len(c.finallyContextStack) > 0 {
+		finallyCtx := c.finallyContextStack[len(c.finallyContextStack)-1]
 
-	// Add placeholder position to the target context's list for later patching
-	targetContext.BreakPlaceholderPosList = append(targetContext.BreakPlaceholderPosList, placeholderPos)
+		// Find the index of the target loop in the stack
+		targetLoopIndex := -1
+		for i, ctx := range c.loopContextStack {
+			if ctx == targetContext {
+				targetLoopIndex = i
+				break
+			}
+		}
+
+		// Only jump to finally if the target loop was on the stack BEFORE the finally context was created
+		// This means the break would exit the try-finally block
+		if targetLoopIndex >= 0 && targetLoopIndex < finallyCtx.LoopStackDepthAtCreation {
+			// Break targets a loop outside try-finally: push completion and jump to finally
+			opcodePos := len(c.chunk.Code)
+			c.emitOpCode(vm.OpPushBreak, node.Token.Line)
+			c.emitUint16(0xFFFF) // Placeholder for target PC offset
+
+			// Add opcode position to loop's break list (will be patched when loop finishes)
+			targetContext.BreakPlaceholderPosList = append(targetContext.BreakPlaceholderPosList, opcodePos)
+
+			// Emit jump to finally block
+			jumpPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+			finallyCtx.JumpToFinallyPlaceholders = append(finallyCtx.JumpToFinallyPlaceholders, jumpPos)
+		} else {
+			// Break targets a loop inside try block: emit normal break jump
+			placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+			targetContext.BreakPlaceholderPosList = append(targetContext.BreakPlaceholderPosList, placeholderPos)
+		}
+	} else {
+		// Not in try-finally: emit normal break jump
+		placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+		targetContext.BreakPlaceholderPosList = append(targetContext.BreakPlaceholderPosList, placeholderPos)
+	}
 
 	return BadRegister, nil
 }
@@ -732,11 +764,45 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 		targetContext = c.loopContextStack[len(c.loopContextStack)-1]
 	}
 
-	// Emit placeholder jump (OpJump) - Pass 0 for srcReg as it's ignored
-	placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+	// Check if we're inside a try-finally block
+	if len(c.finallyContextStack) > 0 {
+		finallyCtx := c.finallyContextStack[len(c.finallyContextStack)-1]
 
-	// Add placeholder position to the target context's list for later patching
-	targetContext.ContinuePlaceholderPosList = append(targetContext.ContinuePlaceholderPosList, placeholderPos)
+		// Find which loop index the target context is at
+		targetLoopIndex := -1
+		for i, ctx := range c.loopContextStack {
+			if ctx == targetContext {
+				targetLoopIndex = i
+				break
+			}
+		}
+
+		// Only route through finally if the target loop existed BEFORE the try-finally context
+		// This means the continue exits the try-finally block
+		if targetLoopIndex >= 0 && targetLoopIndex < finallyCtx.LoopStackDepthAtCreation {
+			// Continue exits try-finally: push completion and jump to finally
+			// Emit: OpPushContinue <placeholder>
+			opcodePos := len(c.chunk.Code)
+			c.emitOpCode(vm.OpPushContinue, node.Token.Line)
+			c.emitUint16(0xFFFF) // Placeholder for target PC offset
+
+			// Add opcode position to loop's continue list (will be patched when loop finishes)
+			targetContext.ContinuePlaceholderPosList = append(targetContext.ContinuePlaceholderPosList, opcodePos)
+
+			// Emit jump to finally block
+			jumpPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+			finallyCtx.JumpToFinallyPlaceholders = append(finallyCtx.JumpToFinallyPlaceholders, jumpPos)
+		} else {
+			// Continue is for a loop inside try block, doesn't exit try-finally
+			// Emit normal continue jump (no finally routing needed)
+			placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+			targetContext.ContinuePlaceholderPosList = append(targetContext.ContinuePlaceholderPosList, placeholderPos)
+		}
+	} else {
+		// Not in try-finally: emit normal continue jump
+		placeholderPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+		targetContext.ContinuePlaceholderPosList = append(targetContext.ContinuePlaceholderPosList, placeholderPos)
+	}
 
 	return BadRegister, nil
 }

@@ -44,6 +44,18 @@ type IteratorCleanupInfo struct {
 	UsesIteratorProtocol bool
 }
 
+// FinallyContext tracks try-finally blocks for proper control flow handling
+type FinallyContext struct {
+	// PC of the finally block (where to jump when break/continue/return occurs)
+	FinallyPC int
+	// List of placeholder jump positions that need patching to point to finally
+	// These are jumps FROM break/continue/return statements TO the finally block
+	JumpToFinallyPlaceholders []int
+	// Loop stack depth when this finally context was created
+	// Used to determine if a break/continue targets a loop outside the try-finally
+	LoopStackDepthAtCreation int
+}
+
 const debugCompiler = false // Set to true to trace compiler output
 const debugCompilerStats = false
 const debugCompiledCode = false // Enable disassembly output
@@ -89,8 +101,9 @@ type Compiler struct {
 	constantCache map[uint16]Register
 
 	// --- Phase 4a: Finally Context Tracking ---
-	inFinallyBlock  bool // Track if we're compiling inside finally block
-	tryFinallyDepth int  // Number of enclosing try-with-finally blocks
+	inFinallyBlock     bool              // Track if we're compiling inside finally block
+	tryFinallyDepth    int               // Number of enclosing try-with-finally blocks
+	finallyContextStack []*FinallyContext // Stack of active finally contexts
 
 	// --- Phase 5: Module Bindings ---
 	moduleBindings *ModuleBindings      // Module-aware binding resolver
@@ -109,21 +122,22 @@ type Compiler struct {
 // NewCompiler creates a new *top-level* Compiler.
 func NewCompiler() *Compiler {
 	return &Compiler{
-		chunk:              vm.NewChunk(),
-		regAlloc:           NewRegisterAllocator(),
-		currentSymbolTable: NewSymbolTable(),
-		enclosing:          nil,
-		freeSymbols:        []*Symbol{},
-		errors:             []errors.PaseratiError{},
-		loopContextStack:   make([]*LoopContext, 0),
-		compilingFuncName:  "<script>",
-		typeChecker:        nil, // Initialized to nil, can be set externally
-		stats:              &CompilerStats{},
-		globalIndices:      make(map[string]int),
-		globalCount:        0,
-		line:               -1,
-		constantCache:      make(map[uint16]Register),
-		processedModules:   make(map[string]bool),
+		chunk:               vm.NewChunk(),
+		regAlloc:            NewRegisterAllocator(),
+		currentSymbolTable:  NewSymbolTable(),
+		enclosing:           nil,
+		freeSymbols:         []*Symbol{},
+		errors:              []errors.PaseratiError{},
+		loopContextStack:    make([]*LoopContext, 0),
+		compilingFuncName:   "<script>",
+		typeChecker:         nil, // Initialized to nil, can be set externally
+		stats:               &CompilerStats{},
+		globalIndices:       make(map[string]int),
+		globalCount:         0,
+		line:                -1,
+		constantCache:       make(map[uint16]Register),
+		processedModules:    make(map[string]bool),
+		finallyContextStack: make([]*FinallyContext, 0),
 	}
 }
 
@@ -234,10 +248,11 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		compilingFuncName:       "",
 		typeChecker:             enclosingCompiler.typeChecker, // Inherit checker from enclosing
 		stats:                   enclosingCompiler.stats,
-		constantCache:           make(map[uint16]Register),        // Each function has its own constant cache
-		moduleBindings:          enclosingCompiler.moduleBindings, // Inherit module bindings
-		moduleLoader:            enclosingCompiler.moduleLoader,   // Inherit module loader
+		constantCache:           make(map[uint16]Register),         // Each function has its own constant cache
+		moduleBindings:          enclosingCompiler.moduleBindings,  // Inherit module bindings
+		moduleLoader:            enclosingCompiler.moduleLoader,    // Inherit module loader
 		compilingSuperClassName: enclosingCompiler.compilingSuperClassName, // Inherit super class context
+		finallyContextStack:     make([]*FinallyContext, 0),        // Each function has its own finally context stack
 	}
 }
 
@@ -1405,6 +1420,7 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
 		operandStartPos = placeholderPos + 2 // Skip register byte
 	}
+	// OpPushBreak and OpPushContinue have no register operand, just the offset
 
 	// Calculate offset from the position *after* the jump instruction
 	jumpInstructionEndPos := operandStartPos + 2
@@ -1418,6 +1434,32 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	if offset > math.MaxInt16 || offset < math.MinInt16 { // Use math constants
 		// Handle error: jump offset too large
 		// TODO: Add proper error handling instead of panic
+		panic(fmt.Sprintf("Compiler error: jump offset %d exceeds 16-bit limit", offset))
+	}
+
+	// Write the 16-bit offset back into the placeholder bytes (Big Endian)
+	c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)     // High byte
+	c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF) // Low byte
+}
+
+// patchJumpToTarget patches a jump to a specific target PC
+func (c *Compiler) patchJumpToTarget(placeholderPos int, targetPC int) {
+	op := vm.OpCode(c.chunk.Code[placeholderPos])
+	operandStartPos := placeholderPos + 1
+	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
+		operandStartPos = placeholderPos + 2 // Skip register byte
+	}
+
+	// Calculate offset from the position *after* the jump instruction to the target
+	jumpInstructionEndPos := operandStartPos + 2
+	offset := targetPC - jumpInstructionEndPos
+
+	if debugCompiler {
+		fmt.Printf("[PATCH JUMP TO TARGET] pos=%d op=%v offset=%d (from %d to %d)\n",
+			placeholderPos, op, offset, jumpInstructionEndPos, targetPC)
+	}
+
+	if offset > math.MaxInt16 || offset < math.MinInt16 {
 		panic(fmt.Sprintf("Compiler error: jump offset %d exceeds 16-bit limit", offset))
 	}
 

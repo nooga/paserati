@@ -168,7 +168,9 @@ const (
 	// --- END Phase 4a ---
 
 	// --- Phase 4a: Handle Pending Actions ---
-	OpHandlePending OpCode = 67 // Handle pending actions after finally block
+	OpHandlePending  OpCode = 67  // Handle pending actions after finally block
+	OpPushBreak      OpCode = 107 // TargetPC(16): Push break completion for try-finally
+	OpPushContinue   OpCode = 108 // TargetPC(16): Push continue completion for try-finally
 	// --- END Phase 4a ---
 
 	// --- Module System ---
@@ -389,6 +391,10 @@ func (op OpCode) String() string {
 	// --- Phase 4a: Handle Pending Actions ---
 	case OpHandlePending:
 		return "OpHandlePending"
+	case OpPushBreak:
+		return "OpPushBreak"
+	case OpPushContinue:
+		return "OpPushContinue"
 	// --- END Phase 4a ---
 
 	// --- Module System ---
@@ -685,6 +691,9 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	// --- Phase 4a: Handle Pending Actions Disassembly ---
 	case OpHandlePending:
 		return c.simpleInstruction(builder, instruction.String(), offset) // No operands
+	case OpPushBreak, OpPushContinue:
+		// Format: OpPushBreak/Continue(1) + TargetOffset(2 bytes, 16-bit signed)
+		return c.constantInstruction16(builder, instruction.String(), offset)
 	// --- END Phase 4a ---
 
 	// --- Module System ---

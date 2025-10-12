@@ -50,9 +50,16 @@ const (
 	ActionNone PendingAction = iota
 	ActionReturn
 	ActionThrow
-	ActionBreak    // Future: for break in loops
-	ActionContinue // Future: for continue in loops
+	ActionBreak    // For break in try-finally blocks
+	ActionContinue // For continue in try-finally blocks
 )
+
+// Completion represents a deferred control flow action (break/continue)
+// that needs to execute after a finally block
+type Completion struct {
+	Type     PendingAction // ActionBreak or ActionContinue
+	TargetPC int           // Absolute PC to jump to after finally
+}
 
 // CallFrame represents a single active function call.
 type CallFrame struct {
@@ -202,9 +209,10 @@ type VM struct {
 	unwindingCrossedNative bool  // True if we've crossed a native boundary during unwinding
 
 	// Finally block state (Phase 3)
-	pendingAction PendingAction // Action to perform after finally blocks complete
-	pendingValue  Value         // Value associated with pending action (e.g., return value)
-	finallyDepth  int           // Track nested finally blocks
+	pendingAction   PendingAction // Action to perform after finally blocks complete
+	pendingValue    Value         // Value associated with pending action (e.g., return value)
+	finallyDepth    int           // Track nested finally blocks
+	completionStack []Completion  // Stack of deferred break/continue actions
 
 	// Module system (Phase 5)
 	moduleContexts    map[string]*ModuleContext // Cached module contexts by path
@@ -280,14 +288,14 @@ func dumpFrameStack(vm *VM, context string) {
 func NewVM() *VM {
 	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues:   make([]*Upvalue, 0, 16),        // Pre-allocate slightly
-		propCache:      make(map[int]*PropInlineCache), // Initialize inline cache
-		cacheStats:     ICacheStats{},                  // Initialize cache statistics
-		heap:           NewHeap(64),                    // Initialize unified global heap
-		emptyRestArray: NewArray(),                     // Initialize singleton empty array for rest params
-		//initCallbacks:  make([]VMInitCallback, 0),       // Initialize callback list
-		errors:         make([]errors.PaseratiError, 0), // Initialize error list
-		moduleContexts: make(map[string]*ModuleContext), // Initialize module context cache
+		openUpvalues:    make([]*Upvalue, 0, 16),        // Pre-allocate slightly
+		propCache:       make(map[int]*PropInlineCache), // Initialize inline cache
+		cacheStats:      ICacheStats{},                  // Initialize cache statistics
+		heap:            NewHeap(64),                    // Initialize unified global heap
+		emptyRestArray:  NewArray(),                     // Initialize singleton empty array for rest params
+		errors:          make([]errors.PaseratiError, 0), // Initialize error list
+		moduleContexts:  make(map[string]*ModuleContext), // Initialize module context cache
+		completionStack: make([]Completion, 0, 4),       // Initialize completion stack
 	}
 
 	// Initialize built-in prototypes first
@@ -4996,14 +5004,73 @@ startExecution:
 			registers = frame.registers
 			ip = frame.ip // Restore caller's IP
 
+		// --- Phase 4a: Push Completion Records ---
+		case OpPushBreak:
+			// Format: OpPushBreak(1) + TargetOffset(2 bytes, 16-bit signed)
+			targetPCHi := code[ip]
+			targetPCLo := code[ip+1]
+			ip += 2
+
+			// Calculate absolute target PC from relative offset
+			offsetFrom := ip // Position after the operand
+			offset := int16(uint16(targetPCHi)<<8 | uint16(targetPCLo))
+			targetPC := offsetFrom + int(offset)
+
+			// Push break completion onto stack
+			vm.completionStack = append(vm.completionStack, Completion{
+				Type:     ActionBreak,
+				TargetPC: targetPC,
+			})
+
+			frame.ip = ip
+			continue
+
+		case OpPushContinue:
+			// Format: OpPushContinue(1) + TargetOffset(2 bytes, 16-bit signed)
+			targetPCHi := code[ip]
+			targetPCLo := code[ip+1]
+			ip += 2
+
+			// Calculate absolute target PC from relative offset
+			offsetFrom := ip // Position after the operand
+			offset := int16(uint16(targetPCHi)<<8 | uint16(targetPCLo))
+			targetPC := offsetFrom + int(offset)
+
+			// Push continue completion onto stack
+			vm.completionStack = append(vm.completionStack, Completion{
+				Type:     ActionContinue,
+				TargetPC: targetPC,
+			})
+
+			frame.ip = ip
+			continue
+
 		// --- Phase 4a: Handle Pending Actions ---
 		case OpHandlePending:
 			// This instruction is emitted at the end of finally blocks
-			// to execute any pending actions (return or throw)
+			// to execute any pending actions (return, throw, break, continue)
 			frame.ip = ip // Save current position
 
-			// fmt.Printf("[DEBUG] OpHandlePending: pendingAction=%d, pendingValue=%s\n", vm.pendingAction, vm.pendingValue.ToString())
+			// Check completion stack first (for break/continue in try-finally)
+			if len(vm.completionStack) > 0 {
+				completion := vm.completionStack[len(vm.completionStack)-1]
+				vm.completionStack = vm.completionStack[:len(vm.completionStack)-1]
 
+				switch completion.Type {
+				case ActionBreak, ActionContinue:
+					// Jump to the target PC stored in the completion
+					ip = completion.TargetPC
+					frame.ip = ip
+					continue startExecution
+
+				default:
+					// Shouldn't happen - completions are only for break/continue
+					status := vm.runtimeError("Internal Error: Invalid completion type %d", completion.Type)
+					return status, Undefined
+				}
+			}
+
+			// Check legacy pending action (for return/throw)
 			switch vm.pendingAction {
 			case ActionReturn:
 				// Execute the pending return

@@ -14,10 +14,21 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 	tryStart := len(c.chunk.Code)
 
 	// Track finally depth for return statement handling
+	// Also push a FinallyContext so break/continue/return know where to jump
+	var finallyCtx *FinallyContext
 	if node.FinallyBlock != nil {
 		c.tryFinallyDepth++
+		// Push finally context with placeholder PC (will be filled in later)
+		finallyCtx = &FinallyContext{
+			FinallyPC:                 -1, // Placeholder, will be set when compiling finally block
+			JumpToFinallyPlaceholders: make([]int, 0),
+			LoopStackDepthAtCreation:  len(c.loopContextStack), // Record current loop depth
+		}
+		c.finallyContextStack = append(c.finallyContextStack, finallyCtx)
 		defer func() {
 			c.tryFinallyDepth--
+			// Pop finally context
+			c.finallyContextStack = c.finallyContextStack[:len(c.finallyContextStack)-1]
 		}()
 	}
 
@@ -109,6 +120,17 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 
 		// Compile finally block
 		finallyPC = len(c.chunk.Code)
+
+		// Update the FinallyContext with the actual finally block PC
+		if finallyCtx != nil {
+			finallyCtx.FinallyPC = finallyPC
+			// Patch all jumps from break/continue/return statements to point to finally
+			for _, placeholderPos := range finallyCtx.JumpToFinallyPlaceholders {
+				// Use the existing patch logic which calculates the offset
+				// to patch the jump to the finallyPC
+				c.patchJumpToTarget(placeholderPos, finallyPC)
+			}
+		}
 
 		// Patch jumps to finally BEFORE compiling the finally block
 		c.patchJump(normalExitJump)
