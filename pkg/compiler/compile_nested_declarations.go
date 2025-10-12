@@ -375,44 +375,40 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 // compileConditionalAssignmentForDeclaration handles conditional assignment for nested patterns in declarations
 func (c *Compiler) compileConditionalAssignmentForDeclaration(target parser.Expression, valueReg Register, defaultExpr parser.Expression, isConst bool, line int) errors.PaseratiError {
 	// This implements: target = (valueReg !== undefined) ? valueReg : defaultExpr
-	// But for declarations, we need to ensure all variables are defined
-	
-	// 1. Conditional jump: if undefined, jump to default value assignment
-	jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
-	
-	// 3. Path 1: Value is not undefined, declare variables with valueReg
-	err := c.compileNestedPatternDeclaration(target, valueReg, isConst, line)
-	if err != nil {
-		// CRITICAL: Must patch jump before returning on error!
-		c.patchJump(jumpToDefault)
-		return err
-	}
+	// IMPORTANT: We must only declare variables ONCE, not in both branches!
+	// Solution: Select the value at runtime, store in a single register, then declare once
 
-	// Jump past the default assignment
+	// Allocate a result register that will hold either valueReg or defaultReg
+	resultReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(resultReg)
+
+	// 1. Conditional jump: if undefined, jump to default value evaluation
+	jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+
+	// 2. Path 1: Value is not undefined, copy it to resultReg
+	c.emitMove(resultReg, valueReg, line)
+
+	// Jump past the default evaluation
 	jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
 
-	// 4. Path 2: Value is undefined, evaluate and declare with default
+	// 3. Path 2: Value is undefined, evaluate default into resultReg
 	c.patchJump(jumpToDefault)
 
-	// Compile the default expression
-	defaultReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(defaultReg)
-
-	_, err = c.compileNode(defaultExpr, defaultReg)
+	_, err := c.compileNode(defaultExpr, resultReg)
 	if err != nil {
 		c.patchJump(jumpPastDefault)
 		return err
 	}
 
-	// Declare variables with default value
-	err = c.compileNestedPatternDeclaration(target, defaultReg, isConst, line)
-	if err != nil {
-		c.patchJump(jumpPastDefault)
-		return err
-	}
-	
-	// 5. Patch the jump past default
+	// 4. Patch the jump past default
 	c.patchJump(jumpPastDefault)
+
+	// 5. Now resultReg contains the correct value (either from valueReg or default)
+	// Declare variables once using resultReg
+	err = c.compileNestedPatternDeclaration(target, resultReg, isConst, line)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
