@@ -177,6 +177,37 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		c.emitByte(byte(indexInfo.indexReg))
 
 	case *parser.MemberExpression:
+		// Check for super property assignment (super.prop = value)
+		if _, isSuper := lhsNode.Object.(*parser.SuperExpression); isSuper {
+			// Super property assignment requires special handling
+			// We'll handle this separately at the end, not as a regular member expression
+			// For now, just note that this is a super assignment and continue
+			// We'll emit OpSetSuper directly instead of going through the normal member assignment flow
+
+			// Get property name
+			propName := c.extractPropertyName(lhsNode.Property)
+			nameConstIdx := c.chunk.AddConstant(vm.String(propName))
+
+			// Compile the RHS value
+			valueReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, valueReg)
+			_, err := c.compileNode(node.Value, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Emit OpSetSuper
+			c.chunk.WriteOpCode(vm.OpSetSuper, line)
+			c.chunk.WriteUint16(nameConstIdx)
+			c.chunk.WriteByte(byte(valueReg))
+
+			// Result of assignment is the assigned value
+			if valueReg != hint {
+				c.emitMove(hint, valueReg, line)
+			}
+			return hint, nil
+		}
+
 		lhsType = lhsIsMemberExpr
 		// Compile the object expression
 		objectReg := c.regAlloc.Alloc()

@@ -116,6 +116,7 @@ const (
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
 	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
 	OpGetSuper      OpCode = 98 // Rx NameIdx(16bit): Get property from super (prototype of this), store in Rx
+	OpSetSuper      OpCode = 99 // NameIdx(16bit) ValueReg: Set property on super (prototype of this) from ValueReg
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Operations ---
@@ -331,6 +332,8 @@ func (op OpCode) String() string {
 		return "OpLoadNewTarget"
 	case OpGetSuper:
 		return "OpGetSuper"
+	case OpSetSuper:
+		return "OpSetSuper"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -652,6 +655,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis
 	case OpGetSuper:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx NameIdx(16bit)
+	case OpSetSuper:
+		return c.constantRegisterInstruction(builder, instruction.String(), offset, "property") // NameIdx(16bit) ValueReg
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:

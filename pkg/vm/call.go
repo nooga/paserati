@@ -218,6 +218,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false
 		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
+		newFrame.generatorObj = nil      // Clear generator object when reusing frame
 		newFrame.argCount = argCount     // Store actual argument count for arguments object
 		// Copy arguments for arguments object (before registers get mutated by function execution)
 		newFrame.args = make([]Value, argCount)

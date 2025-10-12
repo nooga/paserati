@@ -15,8 +15,8 @@ const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
 // Debug flags - set these to control debug output
-const debugVM = false         // VM execution tracing
-const debugCalls = false      // Function call tracing
+const debugVM = false          // VM execution tracing
+const debugCalls = false       // Function call tracing
 const debugExceptions = false // Exception handling tracing
 
 // ModuleLoader interface for loading modules without circular imports
@@ -4183,7 +4183,46 @@ startExecution:
 			// Get the property from the prototype
 			if protoValue.Type() == TypeObject {
 				protoObj := protoValue.AsPlainObject()
-				if propValue, ok := protoObj.GetOwn(propertyName); ok {
+
+				// Check if the property is an accessor (getter/setter)
+				if getter, _, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
+					// Call the getter with 'this' bound to the original object (not the prototype)
+					result, err := vm.Call(getter, thisValue, nil)
+					if err != nil {
+						frame.ip = ip
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+					registers[destReg] = result
+				} else if propValue, ok := protoObj.GetOwn(propertyName); ok {
+					// Regular property (not an accessor)
 					registers[destReg] = propValue
 				} else {
 					// Property not found on prototype, return undefined
@@ -4192,6 +4231,97 @@ startExecution:
 			} else {
 				// Prototype is not an object, return undefined
 				registers[destReg] = Undefined
+			}
+
+		case OpSetSuper:
+			nameIdx := uint16(code[ip])<<8 | uint16(code[ip+1])
+			ip += 2
+			valueReg := code[ip]
+			ip++
+
+			// Get the property name from constants
+			propertyName := constants[nameIdx].ToString()
+
+			// Get 'this' value
+			thisValue := frame.thisValue
+			if thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("super property assignment before super() call in constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the prototype of 'this'
+			var protoValue Value
+			if thisValue.Type() == TypeObject {
+				obj := thisValue.AsPlainObject()
+				protoValue = obj.prototype
+			} else if thisValue.Type() == TypeArray {
+				protoValue = vm.ArrayPrototype
+			} else if thisValue.Type() == TypeFunction {
+				protoValue = vm.FunctionPrototype
+			} else {
+				frame.ip = ip
+				vm.runtimeError("Cannot assign super property on non-object value")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Set the property on the prototype (or call setter if it exists)
+			if protoValue.Type() == TypeObject {
+				protoObj := protoValue.AsPlainObject()
+				value := registers[valueReg]
+
+				// Check if the property is an accessor (getter/setter)
+				if _, setter, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && setter.Type() != TypeUndefined {
+					// Call the setter with 'this' bound to the original object (not the prototype)
+					_, err := vm.Call(setter, thisValue, []Value{value})
+					if err != nil {
+						frame.ip = ip
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+				} else {
+					// Regular property (not an accessor) - set it on 'this', not the prototype
+					// This is important: super.x = v should set x on 'this', not on the prototype
+					if thisValue.Type() == TypeObject {
+						thisObj := thisValue.AsPlainObject()
+						thisObj.SetOwn(propertyName, value)
+					} else {
+						frame.ip = ip
+						vm.runtimeError("Cannot set property on non-object 'this'")
+						return InterpretRuntimeError, Undefined
+					}
+				}
+			} else {
+				frame.ip = ip
+				vm.runtimeError("Cannot assign super property: prototype is not an object")
+				return InterpretRuntimeError, Undefined
 			}
 
 		case OpLoadImportMeta:
