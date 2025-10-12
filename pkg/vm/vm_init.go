@@ -422,6 +422,11 @@ func (vm *VM) ExecuteGeneratorWithException(genObj *GeneratorObject, exception V
 	return vm.executeGeneratorWithException(genObj, exception)
 }
 
+// ExecuteGeneratorWithReturn is the public interface for generator execution with return completion
+func (vm *VM) ExecuteGeneratorWithReturn(genObj *GeneratorObject, returnValue Value) (Value, error) {
+	return vm.resumeGeneratorWithReturn(genObj, returnValue)
+}
+
 // NewExceptionError creates an ExceptionError from a VM Value for use in builtins.
 func (vm *VM) NewExceptionError(value Value) error {
 	return exceptionError{exception: value}

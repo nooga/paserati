@@ -5081,6 +5081,20 @@ startExecution:
 				// Close upvalues for the returning frame
 				vm.closeUpvalues(frame.registers)
 
+				// Check if this is a generator function returning
+				if frame.generatorObj != nil {
+					// Generator function completed with return
+					// Update generator state and create iterator result
+					frame.generatorObj.State = GeneratorCompleted
+					frame.generatorObj.Done = true
+					frame.generatorObj.ReturnValue = result
+					frame.generatorObj.Frame = nil
+					iterResult := NewObject(vm.ObjectPrototype).AsPlainObject()
+					iterResult.SetOwn("value", result)
+					iterResult.SetOwn("done", BooleanValue(true))
+					result = NewValueFromPlainObject(iterResult)
+				}
+
 				// Pop the current frame
 				returningFrameRegSize := function.RegisterSize
 				callerTargetRegister := frame.targetRegister
@@ -5092,6 +5106,19 @@ startExecution:
 
 				if vm.frameCount == 0 {
 					// Returned from the top-level script frame
+					return InterpretOK, result
+				}
+
+				// Check if we hit a sentinel frame - if so, return immediately with the result
+				if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+					// Place the result in the sentinel frame's target register
+					sentinelFrame := &vm.frames[vm.frameCount-1]
+					if sentinelFrame.registers != nil && int(callerTargetRegister) < len(sentinelFrame.registers) {
+						sentinelFrame.registers[callerTargetRegister] = result
+					}
+					// Remove sentinel frame
+					vm.frameCount--
+					// Return with the result (already wrapped as iterator result for generators)
 					return InterpretOK, result
 				}
 
@@ -6755,6 +6782,144 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	}
 
 	return result, nil
+}
+
+// resumeGeneratorWithReturn resumes a generator with a return completion
+// This allows finally blocks to execute before the generator completes
+func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Value) (Value, error) {
+	// Check if generator has saved state
+	if genObj.Frame == nil {
+		// Generator has no saved frame - it's already completed
+		// Just return the value immediately
+		result := NewObject(vm.ObjectPrototype).AsPlainObject()
+		result.SetOwn("value", returnValue)
+		result.SetOwn("done", BooleanValue(true))
+		return NewValueFromPlainObject(result), nil
+	}
+
+	// Get the generator function
+	funcVal := genObj.Function
+
+	var funcObj *FunctionObject
+	var closureObj *ClosureObject
+
+	// Extract function object from Value
+	if funcVal.Type() == TypeFunction {
+		funcObj = funcVal.AsFunction()
+	} else if funcVal.Type() == TypeClosure {
+		closureObj = funcVal.AsClosure()
+		funcObj = closureObj.Fn
+	} else {
+		return Undefined, fmt.Errorf("Invalid generator function type")
+	}
+
+	// Set up caller context for sentinel frame approach
+	callerRegisters := make([]Value, 1)
+	destReg := byte(0)
+
+	// Add a sentinel frame that will cause vm.run() to return when generator yields/returns
+	sentinelFrame := &vm.frames[vm.frameCount]
+	sentinelFrame.isSentinelFrame = true
+	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.targetRegister = destReg    // Target register in caller
+	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
+	vm.frameCount++
+
+	// Check if we have space for the generator frame
+	if vm.frameCount >= MaxFrames {
+		vm.frameCount-- // Remove sentinel frame
+		return Undefined, fmt.Errorf("Stack overflow")
+	}
+
+	// Allocate registers for the generator function
+	regSize := funcObj.RegisterSize
+	if vm.nextRegSlot+regSize > len(vm.registerStack) {
+		vm.frameCount-- // Remove sentinel frame
+		return Undefined, fmt.Errorf("Out of registers")
+	}
+
+	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
+	frame := &vm.frames[vm.frameCount]
+	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.ip = genObj.Frame.pc              // Resume from saved PC
+	frame.targetRegister = destReg          // Target in sentinel frame
+	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
+	frame.isConstructorCall = false
+	frame.isDirectCall = false
+	frame.argCount = 0
+	frame.generatorObj = genObj // Link frame to generator object
+
+	if closureObj != nil {
+		frame.closure = closureObj
+	} else {
+		// Create a temporary closure for the function
+		closureVal := NewClosure(funcObj, nil)
+		frame.closure = closureVal.AsClosure()
+	}
+
+	// Restore register state from saved frame
+	copy(frame.registers, genObj.Frame.registers)
+
+	// Update VM state
+	vm.frameCount++
+	vm.nextRegSlot += regSize
+
+	// Update generator state
+	genObj.State = GeneratorExecuting
+
+	// Check if the generator's current position is covered by finally handlers
+	handlers := vm.findAllExceptionHandlers(genObj.Frame.pc)
+	hasFinallyHandler := false
+	var finallyHandler *ExceptionHandler
+	for _, handler := range handlers {
+		if handler.IsFinally {
+			hasFinallyHandler = true
+			finallyHandler = handler
+			break
+		}
+	}
+
+	if hasFinallyHandler {
+		// Set pending return action and jump to finally handler
+		vm.pendingAction = ActionReturn
+		vm.pendingValue = returnValue
+		// Increment finally depth so the pending action isn't cleared prematurely
+		vm.finallyDepth++
+
+		// Update the frame's IP to jump to the finally block
+		frame.ip = finallyHandler.HandlerPC
+
+		// Execute the VM run loop - it will execute finally blocks and complete the generator
+		status, result := vm.run()
+
+		if status == InterpretRuntimeError {
+			if vm.currentException != Null {
+				return Undefined, exceptionError{exception: vm.currentException}
+			}
+			return Undefined, exceptionError{exception: NewString("runtime error during generator return handling")}
+		}
+
+		return result, nil
+	} else {
+		// No finally handler - complete the generator immediately
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		genObj.ReturnValue = returnValue
+		genObj.Frame = nil
+
+		// Pop the generator frame
+		vm.frameCount--
+		vm.nextRegSlot -= regSize
+
+		// Pop the sentinel frame
+		vm.frameCount--
+
+		// Create and return the completion result
+		result := NewObject(vm.ObjectPrototype).AsPlainObject()
+		result.SetOwn("value", returnValue)
+		result.SetOwn("done", BooleanValue(true))
+		return NewValueFromPlainObject(result), nil
+	}
 }
 
 // resumeAsyncFunction resumes execution of an async function from an await point

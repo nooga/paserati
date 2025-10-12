@@ -123,20 +123,28 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		thisGen := thisValue.AsGenerator()
 
-		// Set return value and mark as completed
+		// Get the return value
 		returnValue := vm.Undefined
 		if len(args) > 0 {
 			returnValue = args[0]
 		}
-		thisGen.ReturnValue = returnValue
-		thisGen.State = vm.GeneratorCompleted
-		thisGen.Done = true
-		thisGen.Frame = nil // Clean up execution frame
 
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		result.SetOwn("value", returnValue)
-		result.SetOwn("done", vm.BooleanValue(true))
-		return vm.NewValueFromPlainObject(result), nil
+		// If generator is already completed or hasn't started, return immediately
+		if thisGen.Done || thisGen.State == vm.GeneratorCompleted || thisGen.State == vm.GeneratorSuspendedStart {
+			thisGen.ReturnValue = returnValue
+			thisGen.State = vm.GeneratorCompleted
+			thisGen.Done = true
+			thisGen.Frame = nil
+
+			result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			result.SetOwn("value", returnValue)
+			result.SetOwn("done", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(result), nil
+		}
+
+		// Generator is suspended at a yield - resume with return completion
+		// This will allow finally blocks to execute before completing
+		return vmInstance.ExecuteGeneratorWithReturn(thisGen, returnValue)
 	}))
 
 	// throw(exception?) - Throw an exception into the generator
