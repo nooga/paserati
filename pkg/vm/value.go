@@ -188,15 +188,16 @@ type GeneratorFrame = SuspendedFrame
 // Based on the design from generators-implementation-plan.md
 type GeneratorObject struct {
 	Object
-	Function     Value           // The generator function
-	State        GeneratorState  // Current state (suspended/completed/executing)
-	Frame        *SuspendedFrame // Execution frame (nil if completed)
-	YieldedValue Value           // Last yielded value
-	ReturnValue  Value           // Final return value (when completed)
-	Done         bool            // True when generator is exhausted
-	Args         []Value         // Arguments passed when the generator was created
-	This         Value           // The 'this' value for the generator context
-	Prototype    *PlainObject    // Custom prototype (if set via function.prototype)
+	Function          Value           // The generator function
+	State             GeneratorState  // Current state (suspended/completed/executing)
+	Frame             *SuspendedFrame // Execution frame (nil if completed)
+	YieldedValue      Value           // Last yielded value
+	ReturnValue       Value           // Final return value (when completed)
+	Done              bool            // True when generator is exhausted
+	Args              []Value         // Arguments passed when the generator was created
+	This              Value           // The 'this' value for the generator context
+	Prototype         *PlainObject    // Custom prototype (if set via function.prototype)
+	DelegatedIterator Value           // Iterator being delegated to (for yield* forwarding of .return()/.throw())
 }
 
 type AsyncGeneratorObject struct {

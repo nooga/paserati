@@ -2319,6 +2319,7 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	c.emitOpCode(vm.OpYieldDelegated, node.Token.Line)
 	c.emitByte(byte(resultReg))    // Iterator result object being yielded as-is
 	c.emitByte(byte(sentValueReg)) // Register to store sent value when resuming
+	c.emitByte(byte(iteratorReg))  // Delegated iterator for .return()/.throw() forwarding
 
 	// Jump back to loop start
 	c.emitOpCode(vm.OpJump, node.Token.Line)

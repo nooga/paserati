@@ -5416,15 +5416,18 @@ startExecution:
 			return InterpretOK, NewValueFromPlainObject(result)
 
 		case OpYieldDelegated:
-			// OpYieldDelegated resultReg, outputReg
+			// OpYieldDelegated resultReg, outputReg, iteratorReg
 			// Suspend generator execution, yield iterator result object as-is from resultReg, store sent value in outputReg
+			// Save the delegated iterator from iteratorReg for .return()/.throw() forwarding
 			// This is used for yield* delegation to preserve the exact iterator result from the delegated iterator
 			resultReg := code[ip]
 			outputReg := code[ip+1]
-			ip += 2
+			iteratorReg := code[ip+2]
+			ip += 3
 
-			// Get the iterator result object
+			// Get the iterator result object and the delegated iterator
 			iterResult := registers[resultReg]
+			delegatedIter := registers[iteratorReg]
 
 			// Find the generator object associated with this frame
 			if frame.generatorObj == nil {
@@ -5437,6 +5440,8 @@ startExecution:
 			// Suspend the generator and save its state
 			genObj.State = GeneratorSuspendedYield
 			genObj.YieldedValue = iterResult
+			// Save the delegated iterator so .return()/.throw() can forward to it
+			genObj.DelegatedIterator = delegatedIter
 
 			// Save the execution frame state
 			if genObj.Frame == nil {
@@ -5445,13 +5450,13 @@ startExecution:
 					registers: make([]Value, len(registers)),
 					locals:    make([]Value, 0),
 					stackBase: 0,
-					suspendPC: ip - 2,
+					suspendPC: ip - 3,
 					outputReg: outputReg,
 					thisValue: frame.thisValue,
 				}
 			} else {
 				genObj.Frame.pc = ip
-				genObj.Frame.suspendPC = ip - 2
+				genObj.Frame.suspendPC = ip - 3
 				genObj.Frame.outputReg = outputReg
 				genObj.Frame.thisValue = frame.thisValue
 			}

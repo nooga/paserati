@@ -129,6 +129,47 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			returnValue = args[0]
 		}
 
+		// If generator is currently delegating (yield*), forward .return() to delegated iterator
+		if !thisGen.DelegatedIterator.IsUndefined() && thisGen.DelegatedIterator.Type() != vm.TypeNull {
+			delegatedIter := thisGen.DelegatedIterator
+
+			// Try to get the .return() method from the delegated iterator
+			var returnMethod vm.Value
+			if delegatedIter.IsObject() {
+				returnMethod, _ = delegatedIter.AsPlainObject().GetOwn("return")
+			}
+
+			// If the delegated iterator has a .return() method, call it
+			if !returnMethod.IsUndefined() && returnMethod.Type() != vm.TypeNull && returnMethod.IsCallable() {
+				// Call delegatedIter.return(returnValue) via VM
+				result, err := vmInstance.Call(returnMethod, delegatedIter, []vm.Value{returnValue})
+				if err != nil {
+					// Clear delegation before propagating error
+					thisGen.DelegatedIterator = vm.Undefined
+					return vm.Undefined, err
+				}
+
+				// Clear the delegation state
+				thisGen.DelegatedIterator = vm.Undefined
+
+				// If the delegated iterator returned done:true, complete this generator
+				if result.IsObject() {
+					doneVal, _ := result.AsPlainObject().GetOwn("done")
+					if doneVal.IsTruthy() {
+						thisGen.ReturnValue = returnValue
+						thisGen.State = vm.GeneratorCompleted
+						thisGen.Done = true
+						thisGen.Frame = nil
+					}
+				}
+
+				return result, nil
+			}
+
+			// If the delegated iterator doesn't have a .return() method, clear delegation and continue
+			thisGen.DelegatedIterator = vm.Undefined
+		}
+
 		// If generator is already completed or hasn't started, return immediately
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted || thisGen.State == vm.GeneratorSuspendedStart {
 			thisGen.ReturnValue = returnValue
@@ -155,23 +196,72 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		thisGen := thisValue.AsGenerator()
 
+		// Get the exception value (argument to .throw())
+		exception := vm.Undefined
+		if len(args) > 0 {
+			exception = args[0]
+		}
+
+		// If generator is currently delegating (yield*), forward .throw() to delegated iterator
+		if !thisGen.DelegatedIterator.IsUndefined() && thisGen.DelegatedIterator.Type() != vm.TypeNull {
+			delegatedIter := thisGen.DelegatedIterator
+
+			// Try to get the .throw() method from the delegated iterator
+			var throwMethod vm.Value
+			if delegatedIter.IsObject() {
+				throwMethod, _ = delegatedIter.AsPlainObject().GetOwn("throw")
+			}
+
+			// If the delegated iterator has a .throw() method, call it
+			if !throwMethod.IsUndefined() && throwMethod.Type() != vm.TypeNull && throwMethod.IsCallable() {
+				// Call delegatedIter.throw(exception) via VM
+				result, err := vmInstance.Call(throwMethod, delegatedIter, []vm.Value{exception})
+				if err != nil {
+					// If the delegated iterator's throw() threw an exception, propagate it
+					// Clear delegation first
+					thisGen.DelegatedIterator = vm.Undefined
+					return vm.Undefined, err
+				}
+
+				// Clear the delegation state
+				thisGen.DelegatedIterator = vm.Undefined
+
+				// If the delegated iterator returned done:true, the exception was handled
+				if result.IsObject() {
+					doneVal, _ := result.AsPlainObject().GetOwn("done")
+					if doneVal.IsTruthy() {
+						// The delegated iterator handled the exception and completed
+						// Continue generator execution after the yield*
+						thisGen.State = vm.GeneratorSuspendedYield
+					}
+				}
+
+				return result, nil
+			}
+
+			// If the delegated iterator doesn't have a .throw() method, close it and throw
+			// Try to close the iterator by calling .return() if available
+			var returnMethod vm.Value
+			if delegatedIter.IsObject() {
+				returnMethod, _ = delegatedIter.AsPlainObject().GetOwn("return")
+			}
+			if !returnMethod.IsUndefined() && returnMethod.Type() != vm.TypeNull && returnMethod.IsCallable() {
+				// Call delegatedIter.return() to close it (ignore result/errors)
+				vmInstance.Call(returnMethod, delegatedIter, []vm.Value{})
+			}
+
+			// Clear delegation and propagate the exception to this generator
+			thisGen.DelegatedIterator = vm.Undefined
+			// Fall through to throw the exception into this generator
+		}
+
 		// If generator is completed, throw the exception (as an Error object for clearer runtime message)
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
-			exception := vm.Undefined
-			if len(args) > 0 {
-				exception = args[0]
-			}
 			// Wrap into Error object to match expected test messages
 			errObj := vm.NewObject(vm.Null).AsPlainObject()
 			errObj.SetOwn("name", vm.NewString("Error"))
 			errObj.SetOwn("message", vm.NewString("exception thrown: "+exception.ToString()))
 			return vm.Undefined, vmInstance.NewExceptionError(vm.NewValueFromPlainObject(errObj))
-		}
-
-		// Get the exception value (argument to .throw())
-		exception := vm.Undefined
-		if len(args) > 0 {
-			exception = args[0]
 		}
 
 		// Inject the original exception value into the generator so user catch(e) sees the same value
