@@ -59,6 +59,11 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	tempRegs = append(tempRegs, iteratorObjReg)
 	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, node.Token.Line)
 
+	// 5a. Validate that the iterator object is actually an object (not null/undefined/primitive)
+	// ECMAScript spec requires iterator to be an object
+	c.emitOpCode(vm.OpTypeGuardIteratorReturn, node.Token.Line)
+	c.emitByte(byte(iteratorObjReg))
+
 	// 6. Get iterator.next method (once, outside loop)
 	nextMethodReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, nextMethodReg)

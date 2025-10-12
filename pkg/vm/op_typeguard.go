@@ -56,7 +56,8 @@ func (vm *VM) opTypeGuardIteratorReturn(srcReg int, registers []Value) bool {
 	// According to ECMAScript, "Object" means any object (including arrays, functions, etc.)
 	// but NOT primitives (null, undefined, number, string, boolean, symbol, bigint)
 	switch value.Type() {
-	case TypeObject, TypeDictObject, TypeArray, TypeTypedArray, TypeFunction, TypeRegExp:
+	case TypeObject, TypeDictObject, TypeArray, TypeTypedArray, TypeFunction, TypeRegExp,
+		TypeGenerator, TypeAsyncGenerator, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps:
 		// These are all object types - valid
 		return true
 	default:
