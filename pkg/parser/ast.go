@@ -2998,6 +2998,9 @@ type ArrayParameterPattern struct {
 func (app *ArrayParameterPattern) expressionNode()      {}
 func (app *ArrayParameterPattern) TokenLiteral() string { return app.Token.Literal }
 func (app *ArrayParameterPattern) String() string {
+	if app == nil {
+		return "[nil]"
+	}
 	var out bytes.Buffer
 	elements := []string{}
 	for _, el := range app.Elements {

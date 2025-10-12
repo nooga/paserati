@@ -2437,7 +2437,10 @@ func (p *Parser) parseRestParameter() *RestParameter {
 // parseArrayParameterPattern parses array destructuring in function parameters
 // Examples: [a, b], [a = 1, b], [first, ...rest]
 func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
-	pattern := &ArrayParameterPattern{Token: p.curToken} // The '[' token
+	pattern := &ArrayParameterPattern{
+		Token:    p.curToken, // The '[' token
+		Elements: []*DestructuringElement{}, // Initialize to empty slice to prevent nil pointer
+	}
 
 	// Parse elements using existing destructuring logic but adapted for parameters
 	elements := []*DestructuringElement{}
