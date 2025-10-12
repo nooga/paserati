@@ -782,8 +782,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create an array iterator object
 		return createArrayIterator(vmInstance, thisArray), nil
 	})
-	// Native symbol key
-	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, nil, nil, nil)
+	// Native symbol key - make it writable and configurable like standard JavaScript
+	w, e, c := true, false, true // writable, not enumerable, configurable
+	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, &w, &e, &c)
 
 	// Add Symbol.asyncIterator implementation for arrays (for await...of support)
 	// This wraps the sync iterator in an async iterator (returns promises)
@@ -796,7 +797,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create an async array iterator object (wraps sync iterator)
 		return createAsyncArrayIterator(vmInstance, thisArray), nil
 	})
-	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolAsyncIterator), asyncIterFn, nil, nil, nil)
+	// Make it writable and configurable like standard JavaScript
+	w2, e2, c2 := true, false, true
+	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolAsyncIterator), asyncIterFn, &w2, &e2, &c2)
 
 	arrayCtor := ctorWithProps
 

@@ -125,9 +125,10 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 				}
 			}
 
-			// Store the arguments for when the generator starts
+			// Store the arguments and 'this' value for when the generator starts
 			genObj.Args = make([]Value, len(args))
 			copy(genObj.Args, args)
+			genObj.This = thisValue
 
 			callerRegisters[destReg] = genVal
 			return false, nil // Don't switch frames
@@ -159,10 +160,11 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 				}
 			}
 
-			// Store the arguments for when the generator starts
+			// Store the arguments and 'this' value for when the generator starts
 			// We'll need to pass these when ExecuteGenerator is called
 			genObj.Args = make([]Value, len(args))
 			copy(genObj.Args, args)
+			genObj.This = thisValue
 
 			callerRegisters[destReg] = genVal
 			return false, nil // Don't switch frames

@@ -15,7 +15,7 @@ const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
 // Debug flags - set these to control debug output
-const debugVM = false          // VM execution tracing
+const debugVM = false           // VM execution tracing
 const debugCalls = false       // Function call tracing
 const debugExceptions = false // Exception handling tracing
 
@@ -5297,11 +5297,13 @@ startExecution:
 					stackBase: 0,
 					suspendPC: ip - 2,    // IP was advanced by 2 for two-register instruction
 					outputReg: outputReg, // Store where to put sent value on resume
+					thisValue: frame.thisValue, // Preserve 'this' across suspension
 				}
 			} else {
 				genObj.Frame.pc = ip
 				genObj.Frame.suspendPC = ip - 2
 				genObj.Frame.outputReg = outputReg
+				genObj.Frame.thisValue = frame.thisValue // Update 'this' (should be same but be explicit)
 			}
 
 			// Copy register state to generator frame
@@ -6437,12 +6439,17 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
 
-	// Use prepareCall to set up the generator function call with the stored arguments
+	// Use prepareCall to set up the generator function call with the stored arguments and 'this' value
 	args := genObj.Args
 	if args == nil {
 		args = []Value{}
 	}
-	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)}, args, destReg, callerRegisters, callerIP, true)
+	// Use the stored 'this' value for the generator context
+	thisValue := genObj.This
+	if thisValue.Type() == 0 {
+		thisValue = Undefined
+	}
+	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, thisValue, args, destReg, callerRegisters, callerIP, true)
 	if err != nil {
 		// Remove sentinel frame on error
 		vm.frameCount--
@@ -6536,9 +6543,9 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.ip = genObj.Frame.pc                                               // Resume from saved PC
-	frame.targetRegister = destReg                                           // Target in sentinel frame
-	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
+	frame.ip = genObj.Frame.pc              // Resume from saved PC
+	frame.targetRegister = destReg          // Target in sentinel frame
+	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
 	frame.isDirectCall = true // Mark as direct call for proper return handling
 	frame.argCount = 0
@@ -6634,9 +6641,9 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.ip = genObj.Frame.pc                                               // Resume from saved PC
-	frame.targetRegister = destReg                                           // Target in sentinel frame
-	frame.thisValue = Value{typ: TypeGenerator, obj: unsafe.Pointer(genObj)} // Set this to the generator object
+	frame.ip = genObj.Frame.pc              // Resume from saved PC
+	frame.targetRegister = destReg          // Target in sentinel frame
+	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
 	frame.isDirectCall = false // Don't mark as direct call so exceptions can be caught
 	frame.argCount = 0

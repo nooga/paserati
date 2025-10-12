@@ -178,6 +178,7 @@ type SuspendedFrame struct {
 	stackBase int     // Base of this frame's stack
 	suspendPC int     // PC of the suspend instruction (yield/await) for resumption
 	outputReg byte    // Register where sent/resolved value should be stored on resumption
+	thisValue Value   // The 'this' value for this frame (must be preserved across suspensions)
 }
 
 // GeneratorFrame is an alias for backwards compatibility
@@ -194,6 +195,7 @@ type GeneratorObject struct {
 	ReturnValue  Value           // Final return value (when completed)
 	Done         bool            // True when generator is exhausted
 	Args         []Value         // Arguments passed when the generator was created
+	This         Value           // The 'this' value for the generator context
 	Prototype    *PlainObject    // Custom prototype (if set via function.prototype)
 }
 
@@ -206,6 +208,7 @@ type AsyncGeneratorObject struct {
 	ReturnValue  Value           // Final return value (when completed)
 	Done         bool            // True when generator is exhausted
 	Args         []Value         // Arguments passed when the generator was created
+	This         Value           // The 'this' value for the generator context
 	Prototype    *PlainObject    // Custom prototype (if set via function.prototype)
 }
 
