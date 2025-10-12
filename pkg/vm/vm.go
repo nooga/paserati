@@ -6571,6 +6571,12 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	// Initialize generator state
 	genObj.State = GeneratorExecuting
 
+	// Get register size for cleanup
+	regSize := 0
+	if vm.frameCount > 1 {
+		regSize = len(vm.frames[vm.frameCount-1].registers)
+	}
+
 	// Execute the VM run loop - it will return when the generator yields or the sentinel frame is hit
 	status, result := vm.run()
 
@@ -6579,6 +6585,21 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
 		return Undefined, fmt.Errorf("runtime error during generator execution")
+	}
+
+	// After vm.run() returns, we need to clean up the frames
+	// The generator frame and sentinel frame are still on the stack
+
+	// Pop the generator frame (if it yielded, not if it completed)
+	if genObj.State == GeneratorSuspendedYield && regSize > 0 {
+		// Generator yielded - frame is still active, need to pop it
+		vm.frameCount--
+		vm.nextRegSlot -= regSize
+	}
+
+	// Pop the sentinel frame
+	if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+		vm.frameCount--
 	}
 
 	return result, nil
@@ -6682,6 +6703,21 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 		return Undefined, exceptionError{exception: NewString("runtime error during generator resumption")}
 	}
 
+	// After vm.run() returns, we need to clean up the frames
+	// The generator frame and sentinel frame are still on the stack
+
+	// Pop the generator frame (if it yielded, not if it completed)
+	if genObj.State == GeneratorSuspendedYield {
+		// Generator yielded - frame is still active, need to pop it
+		vm.frameCount--
+		vm.nextRegSlot -= regSize
+	}
+
+	// Pop the sentinel frame
+	if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+		vm.frameCount--
+	}
+
 	return result, nil
 }
 
@@ -6783,6 +6819,21 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
 		return Undefined, exceptionError{exception: NewString("runtime error during generator exception handling")}
+	}
+
+	// After vm.run() returns, we need to clean up the frames
+	// The generator frame and sentinel frame are still on the stack
+
+	// Pop the generator frame (if it yielded, not if it completed)
+	if genObj.State == GeneratorSuspendedYield {
+		// Generator yielded - frame is still active, need to pop it
+		vm.frameCount--
+		vm.nextRegSlot -= regSize
+	}
+
+	// Pop the sentinel frame
+	if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+		vm.frameCount--
 	}
 
 	return result, nil
@@ -6902,6 +6953,9 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 			}
 			return Undefined, exceptionError{exception: NewString("runtime error during generator return handling")}
 		}
+
+		// After vm.run() returns, we need to clean up the frames
+		// The generator frame and sentinel frame are still on the stack (they're cleaned up by OpHandlePending)
 
 		return result, nil
 	} else {
