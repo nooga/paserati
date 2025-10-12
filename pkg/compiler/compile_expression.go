@@ -1249,7 +1249,46 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 	// Check if this is a method call (function is a member expression like obj.method() or obj[key]())
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
-		// Method call: obj.method(args...)
+		// Check if this is a super method call (super.method())
+		if _, isSuperMethod := memberExpr.Object.(*parser.SuperExpression); isSuperMethod {
+			// Super method call: super.method(args...)
+			// This requires special handling:
+			// 1. Load 'this' (for the this binding when calling the super method)
+			// 2. Use OpGetSuper to get the method from the prototype
+			// 3. Call the method with 'this' as the this value
+
+			thisReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, thisReg)
+			c.emitLoadThis(thisReg, memberExpr.Token.Line)
+
+			// Allocate contiguous block for function + all arguments
+			totalArgCount := c.determineTotalArgCount(node)
+			blockSize := 1 + totalArgCount
+			funcReg := c.regAlloc.AllocContiguous(blockSize)
+			for i := 0; i < blockSize; i++ {
+				tempRegs = append(tempRegs, funcReg+Register(i))
+			}
+
+			// Get the method from super using OpGetSuper
+			propertyName := c.extractPropertyName(memberExpr.Property)
+			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+			c.chunk.WriteOpCode(vm.OpGetSuper, memberExpr.Token.Line)
+			c.chunk.WriteByte(byte(funcReg))
+			c.chunk.WriteUint16(nameConstIdx)
+
+			// Compile arguments
+			_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Call the super method with 'this' binding
+			c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+
+			return hint, nil
+		}
+
+		// Regular method call: obj.method(args...)
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, thisReg)
@@ -2103,24 +2142,20 @@ func (c *Compiler) compileSpreadNewExpression(node *parser.NewExpression, hint R
 
 // compileSuperMemberExpression compiles super.property access
 func (c *Compiler) compileSuperMemberExpression(node *parser.MemberExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// For now, implement super.method as this.method
-	// This is a simplified approach - a full implementation would need to:
-	// 1. Look up the method in the parent class prototype
-	// 2. Bind it to the current 'this' context
+	// Use the special OpGetSuper opcode to get the property from the prototype of 'this'
+	// This opcode:
+	// 1. Gets 'this' value
+	// 2. Gets the prototype of 'this'
+	// 3. Accesses the property from the prototype
+	// 4. Stores result in hint register
 
-	// Load 'this' as the object
-	thisReg := c.regAlloc.Alloc()
-	*tempRegs = append(*tempRegs, thisReg)
-	c.emitLoadThis(thisReg, node.Token.Line)
-
-	// Get the property name
 	propertyName := c.extractPropertyName(node.Property)
-
-	// Add property name as constant
 	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 
-	// Emit property access on 'this' instead of 'super'
-	c.emitGetProp(hint, thisReg, nameConstIdx, node.Token.Line)
+	// Emit OpGetSuper: hint register, property name index
+	c.chunk.WriteOpCode(vm.OpGetSuper, node.Token.Line)
+	c.chunk.WriteByte(byte(hint))
+	c.chunk.WriteUint16(nameConstIdx)
 
 	return hint, nil
 }

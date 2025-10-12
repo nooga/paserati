@@ -4142,6 +4142,58 @@ startExecution:
 				registers[destReg] = Undefined
 			}
 
+		case OpGetSuper:
+			destReg := code[ip]
+			ip++
+			nameIdx := uint16(code[ip])<<8 | uint16(code[ip+1])
+			ip += 2
+
+			// Get the property name from constants
+			propertyName := constants[nameIdx].ToString()
+
+			// Get 'this' value
+			thisValue := frame.thisValue
+			if thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("super property access before super() call in constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the prototype of 'this'
+			// For PlainObject, we use the internal prototype field
+			// For other types, we get their prototype from the built-in prototypes
+			var protoValue Value
+			if thisValue.Type() == TypeObject {
+				obj := thisValue.AsPlainObject()
+				// Get the object's prototype from its internal prototype field
+				protoValue = obj.prototype
+			} else if thisValue.Type() == TypeArray {
+				// For arrays, get Array.prototype
+				protoValue = vm.ArrayPrototype
+			} else if thisValue.Type() == TypeFunction {
+				// For functions, get Function.prototype
+				protoValue = vm.FunctionPrototype
+			} else {
+				// For other types, we can't get super properties
+				frame.ip = ip
+				vm.runtimeError("Cannot access super property on non-object value")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the property from the prototype
+			if protoValue.Type() == TypeObject {
+				protoObj := protoValue.AsPlainObject()
+				if propValue, ok := protoObj.GetOwn(propertyName); ok {
+					registers[destReg] = propValue
+				} else {
+					// Property not found on prototype, return undefined
+					registers[destReg] = Undefined
+				}
+			} else {
+				// Prototype is not an object, return undefined
+				registers[destReg] = Undefined
+			}
+
 		case OpLoadImportMeta:
 			destReg := code[ip]
 			ip++
