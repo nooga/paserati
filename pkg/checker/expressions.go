@@ -551,7 +551,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	// Third pass: visit function properties with 'this' context set to the complete preliminary type
 	outerThisType := c.currentThisType     // Save outer this context
+	outerInObjectMethod := c.inObjectMethod // Save outer object method context
 	c.currentThisType = preliminaryObjType // Set this context to the object being constructed
+	c.inObjectMethod = true                 // Mark that we're in an object method (for super support)
 	debugPrintf("// [Checker ObjectLit] Set this context to: %s\n", preliminaryObjType.String())
 
 	for _, prop := range node.Properties {
@@ -682,6 +684,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	// Restore outer this context
 	c.currentThisType = outerThisType
+	c.inObjectMethod = outerInObjectMethod
 	debugPrintf("// [Checker ObjectLit] Restored this context to: %v\n", outerThisType)
 
 	// Handle computed properties by creating index signatures

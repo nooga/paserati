@@ -222,6 +222,10 @@ type Checker struct {
 	inAsyncFunction     bool
 	inGeneratorFunction bool
 
+	// --- NEW: Object method context ---
+	// Track if we're currently inside an object method (for super support)
+	inObjectMethod bool
+
 	// --- NEW: Recursive type alias tracking ---
 	// Track type aliases being resolved to prevent infinite recursion
 	resolvingTypeAliases map[string]bool

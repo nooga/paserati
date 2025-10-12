@@ -1272,10 +1272,22 @@ func (c *Checker) getClassInstanceType(className string) *types.ObjectType {
 func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	debugPrintf("// [Checker SuperExpr] Checking super expression\n")
 
-	// Super is only valid within a class context
-	if c.currentClassContext == nil {
-		c.addError(node, "super expression can only be used within a class")
+	// Super is valid in two contexts:
+	// 1. Within a class (for accessing parent class members)
+	// 2. Within an object method (for accessing prototype chain)
+	if c.currentClassContext == nil && !c.inObjectMethod {
+		c.addError(node, "super expression can only be used within a class or object method")
 		node.SetComputedType(types.Any)
+		return
+	}
+
+	// If we're in an object method (not a class), super refers to the prototype
+	// For type checking purposes, we'll use 'any' since the prototype is dynamic
+	if c.inObjectMethod && c.currentClassContext == nil {
+		// In object methods, super accesses the prototype chain dynamically
+		// We can't statically determine the type, so use 'any'
+		node.SetComputedType(types.Any)
+		debugPrintf("// [Checker SuperExpr] Super in object method: using 'any' type\n")
 		return
 	}
 
