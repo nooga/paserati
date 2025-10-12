@@ -2291,11 +2291,19 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
 	c.emitGetProp(nextMethodReg, iteratorReg, nextConstIdx, node.Token.Line)
 
-	// Call iterator.next() (preserve 'this' = iterator)
+	// Allocate argument register for the call (must be nextMethodReg+1 per calling convention)
+	argReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, argReg)
+	// Copy sentValue into the argument register
+	c.emitOpCode(vm.OpMove, node.Token.Line)
+	c.emitByte(byte(argReg))
+	c.emitByte(byte(sentValueReg))
+
+	// Call iterator.next(sentValue) (preserve 'this' = iterator)
+	// sentValueReg contains the value sent from the previous yield, or undefined on first call
 	resultReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, resultReg)
-	// For now, we do not pass the sent value yet.
-	c.emitCallMethod(resultReg, nextMethodReg, iteratorReg, 0, node.Token.Line)
+	c.emitCallMethod(resultReg, nextMethodReg, iteratorReg, 1, node.Token.Line)
 
 	// Get result.done
 	doneReg := c.regAlloc.Alloc()
