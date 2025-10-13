@@ -1543,6 +1543,30 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// Check if the property exists
 	var value vm.Value
 
+	// Check arrays first before plainObj (arrays can also be AsPlainObject but their indices are stored separately)
+	if arrObj := obj.AsArray(); arrObj != nil {
+		// For arrays, check if it's a valid index or 'length'
+		if propName == "length" {
+			value = vm.NumberValue(float64(arrObj.Length()))
+			// length is non-enumerable, non-configurable, writable per JS spec for Array.length
+			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor.SetOwn("value", value)
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(false))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		} else if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < arrObj.Length() {
+			value = arrObj.Get(index)
+			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor.SetOwn("value", value)
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// Fall through for non-index properties on arrays (methods, custom props)
+	}
+
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
 			if keyIsSymbol {
@@ -1612,26 +1636,6 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 		// not found
-	} else if arrObj := obj.AsArray(); arrObj != nil {
-		// For arrays, check if it's a valid index or 'length'
-		if propName == "length" {
-			value = vm.NumberValue(float64(arrObj.Length()))
-			// length is non-enumerable, non-configurable, writable per JS spec for Array.length
-			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
-			descriptor.SetOwn("value", value)
-			descriptor.SetOwn("writable", vm.BooleanValue(true))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
-			descriptor.SetOwn("configurable", vm.BooleanValue(false))
-			return vm.NewValueFromPlainObject(descriptor), nil
-		} else if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < arrObj.Length() {
-			value = arrObj.Get(index)
-			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
-			descriptor.SetOwn("value", value)
-			descriptor.SetOwn("writable", vm.BooleanValue(true))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
-			descriptor.SetOwn("configurable", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(descriptor), nil
-		}
 	}
 
 	return vm.Undefined, nil
@@ -1725,10 +1729,14 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 		return objectPreventExtensionsWithVM(vmInstance, []vm.Value{proxy.Target()})
 	}
 
-	// For now, just return the object (simplified implementation)
-	// In a full implementation, we'd mark the object as non-extensible
+	// Per ECMAScript spec, primitives are returned unchanged
 	if !obj.IsObject() {
-		return vm.Undefined, vmInstance.NewTypeError("Object.preventExtensions called on non-object")
+		return obj, nil
+	}
+
+	// Mark the object as non-extensible
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		plainObj.SetExtensible(false)
 	}
 
 	return obj, nil
