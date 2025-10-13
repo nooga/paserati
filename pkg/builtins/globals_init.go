@@ -68,8 +68,18 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 	}
 
 	// Add parseInt function (second parameter is optional)
-	parseIntFunctionType := types.NewSimpleFunction([]types.Type{types.String}, types.Number)
+	parseIntFunctionType := types.NewOptionalFunction(
+		[]types.Type{types.String, types.Number},
+		types.Number,
+		[]bool{false, true}, // radix is optional
+	)
 	if err := ctx.DefineGlobal("parseInt", parseIntFunctionType); err != nil {
+		return err
+	}
+
+	// Add parseFloat function
+	parseFloatFunctionType := types.NewSimpleFunction([]types.Type{types.String}, types.Number)
+	if err := ctx.DefineGlobal("parseFloat", parseFloatFunctionType); err != nil {
 		return err
 	}
 
@@ -118,26 +128,148 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NumberValue(math.NaN()), nil
 		}
 
-		str := args[0].ToString()
-		var radix int64 = 10
+		// Convert argument to string (applies ToPrimitive with hint "string")
+		inputVal := args[0]
 
-		if len(args) > 1 && args[1].IsNumber() {
-			radix = int64(args[1].ToFloat())
-			if radix < 2 || radix > 36 {
-				return vm.NumberValue(math.NaN()), nil
+		// Handle boxed primitives (Number, String objects) by extracting primitive value
+		if inputVal.IsObject() {
+			obj := inputVal.AsPlainObject()
+			if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
+				inputVal = primVal
 			}
 		}
 
-		// Try to parse the string as an integer with the given radix
-		if result, err := strconv.ParseInt(str, int(radix), 64); err == nil {
-			return vm.NumberValue(float64(result)), nil
+		str := inputVal.ToString()
+
+		// Trim leading whitespace (including Unicode whitespace)
+		// ECMAScript whitespace: \t \n \v \f \r space \u00A0 \u1680 \u2000-\u200A \u2028 \u2029 \u202F \u205F \u3000 \uFEFF
+		str = strings.TrimLeft(str, " \t\n\r\v\f\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF")
+
+		// Determine the sign
+		sign := int64(1)
+		if strings.HasPrefix(str, "-") {
+			sign = -1
+			str = str[1:]
+		} else if strings.HasPrefix(str, "+") {
+			str = str[1:]
 		}
 
-		// If parsing fails, return NaN
-		return vm.NumberValue(math.NaN()), nil
+		// Convert radix to int32 using ToNumber
+		var radix int64 = 0
+		if len(args) > 1 {
+			radixArg := args[1]
+
+			// Handle boxed primitives for radix
+			if radixArg.IsObject() {
+				obj := radixArg.AsPlainObject()
+				if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
+					radixArg = primVal
+				}
+			}
+
+			radixVal := radixArg.ToFloat()
+			// ToInt32: Convert to integer with wrapping
+			if !math.IsNaN(radixVal) && !math.IsInf(radixVal, 0) {
+				// ToInt32 wraps to 32-bit signed integer range
+				int32Val := int32(int64(radixVal))
+				radix = int64(int32Val)
+			}
+		}
+
+		// If radix is 0, undefined, or NaN, use 10 (unless string starts with 0x/0X)
+		stripPrefix := false
+		if radix == 0 {
+			radix = 10
+			stripPrefix = true
+		} else if radix < 2 || radix > 36 {
+			return vm.NumberValue(math.NaN()), nil
+		} else if radix == 16 {
+			stripPrefix = true
+		}
+
+		// Strip 0x or 0X prefix for radix 16 (or radix 0 which becomes 16)
+		if stripPrefix && (strings.HasPrefix(str, "0x") || strings.HasPrefix(str, "0X")) {
+			str = str[2:]
+			radix = 16
+		}
+
+		// Check for empty string after trimming/processing
+		if str == "" {
+			return vm.NumberValue(math.NaN()), nil
+		}
+
+		// Parse the longest valid prefix for the given radix
+		var result int64
+		parsed := false
+		for i := 1; i <= len(str); i++ {
+			prefix := str[:i]
+			if val, err := strconv.ParseInt(prefix, int(radix), 64); err == nil {
+				result = val
+				parsed = true
+			} else {
+				break
+			}
+		}
+
+		if !parsed {
+			return vm.NumberValue(math.NaN()), nil
+		}
+
+		return vm.NumberValue(float64(sign * result)), nil
 	})
 
 	if err := ctx.DefineGlobal("parseInt", parseIntFunc); err != nil {
+		return err
+	}
+
+	// Add parseFloat function implementation
+	parseFloatFunc := vm.NewNativeFunction(1, false, "parseFloat", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 {
+			return vm.NumberValue(math.NaN()), nil
+		}
+
+		// Convert argument to string (applies ToPrimitive with hint "string")
+		inputVal := args[0]
+		str := inputVal.ToString()
+
+		// Trim leading whitespace (including Unicode whitespace)
+		// ECMAScript whitespace: \t \n \v \f \r space \u00A0 \u1680 \u2000-\u200A \u2028 \u2029 \u202F \u205F \u3000 \uFEFF
+		str = strings.TrimLeft(str, " \t\n\r\v\f\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF")
+
+		// Check for empty string after trimming
+		if str == "" {
+			return vm.NumberValue(math.NaN()), nil
+		}
+
+		// Check for Infinity/-Infinity
+		if strings.HasPrefix(str, "Infinity") {
+			return vm.NumberValue(math.Inf(1)), nil
+		}
+		if strings.HasPrefix(str, "+Infinity") {
+			return vm.NumberValue(math.Inf(1)), nil
+		}
+		if strings.HasPrefix(str, "-Infinity") {
+			return vm.NumberValue(math.Inf(-1)), nil
+		}
+
+		// Find the longest valid float prefix
+		// Try parsing progressively shorter prefixes until one works
+		for i := len(str); i > 0; i-- {
+			prefix := str[:i]
+			if result, err := strconv.ParseFloat(prefix, 64); err == nil {
+				// Special case: convert -0 to +0 as per spec
+				if result == 0 && math.Signbit(result) {
+					return vm.NumberValue(0), nil
+				}
+				return vm.NumberValue(result), nil
+			}
+		}
+
+		// If no valid prefix found, return NaN
+		return vm.NumberValue(math.NaN()), nil
+	})
+
+	if err := ctx.DefineGlobal("parseFloat", parseFloatFunc); err != nil {
 		return err
 	}
 
