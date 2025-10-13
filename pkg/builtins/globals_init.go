@@ -1,8 +1,11 @@
 package builtins
 
 import (
+	"fmt"
 	"math"
+	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
+	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strconv"
@@ -470,8 +473,59 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// For other expressions, return undefined for compatibility
-		return vm.Undefined, nil
+		// For other code, compile and execute it (similar to Function constructor)
+		if ctx.Driver == nil {
+			return vm.Undefined, fmt.Errorf("eval: driver is nil")
+		}
+
+		// Define interface for accessing compiler
+		type driverInterface interface {
+			CompileProgram(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
+		}
+
+		driver, ok := ctx.Driver.(driverInterface)
+		if !ok {
+			return vm.Undefined, fmt.Errorf("eval: driver doesn't implement CompileProgram")
+		}
+
+		// Parse the source code
+		lx := lexer.NewLexer(codeStr)
+		p := parser.NewParser(lx)
+		prog, parseErrs := p.ParseProgram()
+		if len(parseErrs) > 0 {
+			// Throw SyntaxError
+			if ctor, ok := ctx.VM.GetGlobal("SyntaxError"); ok {
+				msg := vm.NewString(parseErrs[0].Error())
+				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{msg})
+				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
+			}
+			return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
+		}
+
+		// Compile the program
+		chunk, compileErrs := driver.CompileProgram(prog)
+		if len(compileErrs) > 0 {
+			// Throw SyntaxError
+			if ctor, ok := ctx.VM.GetGlobal("SyntaxError"); ok {
+				msg := vm.NewString(compileErrs[0].Error())
+				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{msg})
+				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
+			}
+			return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
+		}
+
+		if chunk == nil {
+			return vm.Undefined, fmt.Errorf("eval: compilation returned nil chunk")
+		}
+
+		// Execute the chunk in the current VM and return the completion value
+		result, runtimeErrs := ctx.VM.Interpret(chunk)
+		if len(runtimeErrs) > 0 {
+			// Runtime error - convert to exception
+			return vm.Undefined, fmt.Errorf("%v", runtimeErrs[0])
+		}
+
+		return result, nil
 	})
 
 	if err := ctx.DefineGlobal("eval", evalFunc); err != nil {
