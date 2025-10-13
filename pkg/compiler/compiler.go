@@ -117,6 +117,9 @@ type Compiler struct {
 
 	// --- NEW: Class Context for super() support ---
 	compilingSuperClassName string // Name of parent class when compiling derived class constructor
+
+	// --- Tail Call Optimization ---
+	inTailPosition bool // True when compiling tail-positioned expression
 }
 
 // NewCompiler creates a new *top-level* Compiler.

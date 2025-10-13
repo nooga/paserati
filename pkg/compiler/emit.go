@@ -191,6 +191,21 @@ func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
 	c.emitByte(argCount)
 }
 
+func (c *Compiler) emitTailCall(dest, funcReg Register, argCount byte, line int) {
+	c.emitOpCode(vm.OpTailCall, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(funcReg))
+	c.emitByte(argCount)
+}
+
+func (c *Compiler) emitTailCallMethod(dest, funcReg, thisReg Register, argCount byte, line int) {
+	c.emitOpCode(vm.OpTailCallMethod, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(funcReg))
+	c.emitByte(byte(thisReg))
+	c.emitByte(argCount)
+}
+
 // emitCallMethod emits OpCallMethod with method call convention (this as implicit first parameter)
 func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte, line int) {
 	c.emitOpCode(vm.OpCallMethod, line)

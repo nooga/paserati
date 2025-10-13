@@ -339,8 +339,35 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 	return BadRegister, nil
 }
 
+// isExpressionInTailPosition checks if an expression is in tail position
+// Only direct calls, ternary conditionals (with tail branches), and short-circuit operators (with tail RHS) can be in tail position
+func (c *Compiler) isExpressionInTailPosition(expr parser.Expression) bool {
+	switch e := expr.(type) {
+	case *parser.CallExpression:
+		return true
+	case *parser.TernaryExpression:
+		// Both branches must be in tail position
+		return c.isExpressionInTailPosition(e.Consequence) && c.isExpressionInTailPosition(e.Alternative)
+	case *parser.InfixExpression:
+		// Only for short-circuit operators (&& || ??), and RHS must be in tail position
+		if e.Operator == "&&" || e.Operator == "||" || e.Operator == "??" {
+			return c.isExpressionInTailPosition(e.Right)
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Register) (Register, errors.PaseratiError) {
 	if node.ReturnValue != nil {
+		// Enable tail position only if the return value can be in tail position
+		if c.isExpressionInTailPosition(node.ReturnValue) {
+			oldTailPos := c.inTailPosition
+			c.inTailPosition = true
+			defer func() { c.inTailPosition = oldTailPos }()
+		}
+
 		var err errors.PaseratiError
 		var returnReg Register
 		// Check if the return value is a function literal itself

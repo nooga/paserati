@@ -55,10 +55,12 @@ const (
 	OpExponent  OpCode = 32 // Rx Ry Rz: Rx = Ry ** Rz (Assuming next available number)
 
 	// Function/Call related
-	OpCall   OpCode = 19 // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
-	OpReturn OpCode = 20 // Rx: Return value from register Rx.
-	OpNew    OpCode = 45 // Rx ConstructorReg ArgCount: Create new instance using ConstructorReg with ArgCount args, result in Rx
-	OpSpreadNew OpCode = 83 // Rx ConstructorReg SpreadArgReg: Create new instance using ConstructorReg with spread array as args, result in Rx
+	OpCall      OpCode = 19  // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
+	OpReturn    OpCode = 20  // Rx: Return value from register Rx.
+	OpNew       OpCode = 45  // Rx ConstructorReg ArgCount: Create new instance using ConstructorReg with ArgCount args, result in Rx
+	OpSpreadNew OpCode = 83  // Rx ConstructorReg SpreadArgReg: Create new instance using ConstructorReg with spread array as args, result in Rx
+	OpTailCall       OpCode = 109 // Rx FuncReg ArgCount: Tail call (frame reuse)
+	OpTailCallMethod OpCode = 110 // Rx FuncReg ThisReg ArgCount: Tail call method (frame reuse with this)
 
 	// Closure related
 	OpClosure         OpCode = 21 // Rx FuncConstIdx UpvalueCount [IsLocal1 Index1 IsLocal2 Index2 ...]: Create closure for function Const[FuncConstIdx] with UpvalueCount upvalues, store in Rx.
@@ -253,6 +255,10 @@ func (op OpCode) String() string {
 		return "OpLess"
 	case OpCall:
 		return "OpCall"
+	case OpTailCall:
+		return "OpTailCall"
+	case OpTailCallMethod:
+		return "OpTailCallMethod"
 	case OpReturn:
 		return "OpReturn"
 	case OpClosure:
@@ -591,8 +597,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight:
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz
 
-	case OpCall:
-		return c.callInstruction(builder, instruction.String(), offset) // Rx, FuncReg, ArgCount
+	case OpCall, OpTailCall:
+		return c.callInstruction(builder, instruction.String(), offset)
+	case OpCallMethod, OpTailCallMethod:
+		return c.callMethodInstruction(builder, instruction.String(), offset) // Rx, FuncReg, ArgCount
 
 	// Closure instructions
 	case OpLoadFree:
@@ -650,8 +658,6 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerInstruction(builder, instruction.String(), offset)
 	case OpTypeGuardIteratorReturn:
 		return c.registerInstruction(builder, instruction.String(), offset)
-	case OpCallMethod:
-		return c.callMethodInstruction(builder, instruction.String(), offset)
 	case OpSpreadCall:
 		return c.spreadCallInstruction(builder, instruction.String(), offset)
 	case OpSpreadCallMethod:

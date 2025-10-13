@@ -573,10 +573,13 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 		}
 	}()
 
-	// 1. Compile condition
+	// 1. Compile condition (not in tail position)
 	conditionReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, conditionReg)
+	oldTailPos := c.inTailPosition
+	c.inTailPosition = false
 	_, err := c.compileNode(node.Condition, conditionReg)
+	c.inTailPosition = oldTailPos
 	if err != nil {
 		return BadRegister, err
 	}
@@ -585,7 +588,7 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 	jumpFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
 
 	// --- Consequence Path ---
-	// 3. Compile consequence directly to hint
+	// 3. Compile consequence directly to hint (may be in tail position)
 	_, err = c.compileNode(node.Consequence, hint)
 	if err != nil {
 		return BadRegister, err
@@ -598,7 +601,7 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 	// 5. Patch jumpFalse
 	c.patchJump(jumpFalsePos)
 
-	// 6. Compile alternative directly to hint (overwrites consequence result)
+	// 6. Compile alternative directly to hint (may be in tail position)
 	_, err = c.compileNode(node.Alternative, hint)
 	if err != nil {
 		return BadRegister, err
@@ -792,7 +795,11 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		}()
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
+		// Left operand is not in tail position
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
 		_, err := c.compileNode(node.Left, leftReg)
+		c.inTailPosition = oldTailPos
 		if err != nil {
 			return BadRegister, err
 		}
@@ -808,7 +815,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		c.patchJump(jumpToRightPlaceholder)
 		patchedRight = true
 
-		// Compile right operand directly to hint (only executed if left was falsey)
+		// Compile right operand directly to hint (right may be in tail position)
 		_, err = c.compileNode(node.Right, hint)
 		if err != nil {
 			return BadRegister, err
@@ -849,7 +856,11 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		}()
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
+		// Left operand is not in tail position
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
 		_, err := c.compileNode(node.Left, leftReg)
+		c.inTailPosition = oldTailPos
 		if err != nil {
 			return BadRegister, err
 		}
@@ -857,7 +868,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		// If left is FALSEY, jump to end, result is left
 		jumpToEndPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, leftReg, line)
 
-		// If left was TRUTHY (didn't jump), compile right operand directly to hint
+		// If left was TRUTHY (didn't jump), compile right operand directly to hint (right may be in tail position)
 		_, err = c.compileNode(node.Right, hint)
 		if err != nil {
 			return BadRegister, err
@@ -906,7 +917,11 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		}()
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
+		// Left operand is not in tail position
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
 		_, err := c.compileNode(node.Left, leftReg)
+		c.inTailPosition = oldTailPos
 		if err != nil {
 			return BadRegister, err
 		}
@@ -920,7 +935,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		jumpSkipRightPlaceholder = c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, line)
 
 		// --- Eval Right Path ---
-		// Compile right operand directly to hint (only executed if left was nullish)
+		// Compile right operand directly to hint (right may be in tail position)
 		_, err = c.compileNode(node.Right, hint)
 		if err != nil {
 			return BadRegister, err
@@ -1282,8 +1297,12 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 				return BadRegister, err
 			}
 
-			// Call the super method with 'this' binding
-			c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+			// Call the super method with 'this' binding (check if in tail position)
+			if c.inTailPosition {
+				c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+			} else {
+				c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+			}
 
 			return hint, nil
 		}
@@ -1343,9 +1362,13 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			return BadRegister, err
 		}
 
-		// 5. Emit OpCallMethod using hint as result register
+		// 5. Emit method call (check if in tail position)
 		// fmt.Printf("// [COMPILE DEBUG] Method call: emitCallMethod(hint=R%d, funcReg=R%d, thisReg=R%d, argCount=%d)\n", hint, funcReg, thisReg, actualArgCount)
-		c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		if c.inTailPosition {
+			c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		} else {
+			c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		}
 
 		return hint, nil
 	}
@@ -1387,8 +1410,12 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			return BadRegister, err
 		}
 
-		// 5. Emit OpCallMethod to preserve 'this' binding
-		c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		// 5. Emit method call to preserve 'this' binding (check if in tail position)
+		if c.inTailPosition {
+			c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		} else {
+			c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		}
 
 		return hint, nil
 	}
@@ -1477,8 +1504,12 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		// Note: argCount is not used for generator creation, but let's keep it for consistency
 		c.emitByte(byte(actualArgCount)) // Argument count
 	} else {
-		// Regular function call
-		c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+		// Regular function call - check if in tail position
+		if c.inTailPosition {
+			c.emitTailCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+		} else {
+			c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+		}
 	}
 
 	return hint, nil

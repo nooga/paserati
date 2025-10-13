@@ -1296,6 +1296,271 @@ startExecution:
 				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
 			}
 
+		case OpTailCall:
+			// Tail Call Optimization - reuse current frame
+			_ = code[ip] // destReg - not used, we keep caller's targetRegister
+			funcReg := code[ip+1]
+			argCount := int(code[ip+2])
+			ip += 3
+
+			// 1. Read function and arguments from current frame's registers
+			calleeVal := registers[funcReg]
+			args := make([]Value, argCount)
+			for i := 0; i < argCount; i++ {
+				args[i] = registers[funcReg+1+byte(i)]
+			}
+
+			// 2. Type check - handle both closures and bare functions
+			// Check if we can perform TCO
+			canPerformTCO := false
+			var calleeClosure *ClosureObject
+			var calleeFunc *FunctionObject
+
+			if calleeVal.Type() == TypeClosure {
+				calleeClosure = calleeVal.AsClosure()
+				calleeFunc = calleeClosure.Fn
+				canPerformTCO = true
+			} else if calleeVal.Type() == TypeFunction {
+				// Convert bare function to closure (like prepareCall does)
+				funcToCall := AsFunction(calleeVal)
+				calleeClosure = &ClosureObject{
+					Fn:       funcToCall,
+					Upvalues: []*Upvalue{},
+				}
+				calleeFunc = funcToCall
+				canPerformTCO = true
+			}
+
+			// 3. Check if new function needs more registers than current frame
+			if canPerformTCO && calleeFunc.RegisterSize <= len(registers) {
+				// We can perform TCO!
+
+				// 4. Close upvalues for current frame BEFORE overwriting
+				vm.closeUpvalues(registers)
+
+				// 5. Reuse current frame
+				frame.closure = calleeClosure
+				frame.ip = 0
+				// Keep targetRegister unchanged (return to same caller location)
+				frame.thisValue = Undefined // Regular call has undefined 'this'
+				frame.isConstructorCall = false
+				frame.isDirectCall = false
+				frame.isSentinelFrame = false
+				frame.generatorObj = nil
+				frame.promiseObj = nil
+				frame.argCount = argCount
+				frame.args = args // Already copied above
+
+				// 6. Clear registers and copy arguments
+				for i := 0; i < len(registers); i++ {
+					registers[i] = Undefined
+				}
+				for i := 0; i < argCount && i < len(registers); i++ {
+					registers[i] = args[i]
+				}
+				// Pad with undefined for optional parameters
+				for i := argCount; i < calleeFunc.Arity && i < len(registers); i++ {
+					registers[i] = Undefined
+				}
+
+				// Handle rest parameters if variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+					if extraArgCount <= 0 {
+						restArray = vm.emptyRestArray
+					} else {
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if argIndex < len(args) {
+								restArrayObj.Append(args[argIndex])
+							}
+						}
+					}
+					if calleeFunc.Arity < len(registers) {
+						registers[calleeFunc.Arity] = restArray
+					}
+				}
+
+				// Handle named function expression binding
+				if calleeFunc.NameBindingRegister >= 0 && calleeFunc.NameBindingRegister < len(registers) {
+					registers[calleeFunc.NameBindingRegister] = calleeVal
+				}
+
+				// 7. Switch to new function's code
+				closure = calleeClosure
+				function = calleeFunc
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				// registers already points to frame.registers
+				ip = 0
+
+				continue
+			}
+
+			// Fall back to regular call if TCO not possible
+			ip -= 3 // Rewind
+			// Fallthrough to OpCall
+			fallthrough
+
+		case OpTailCallMethod:
+			// Tail Call Optimization for method calls - reuse current frame with this binding
+			_ = code[ip] // destReg - not used, we keep caller's targetRegister
+			funcReg := code[ip+1]
+			thisReg := code[ip+2]
+			argCount := int(code[ip+3])
+			ip += 4
+
+			// 1. Read function, this, and arguments from current frame's registers
+			calleeVal := registers[funcReg]
+			thisVal := registers[thisReg]
+			args := make([]Value, argCount)
+			for i := 0; i < argCount; i++ {
+				args[i] = registers[funcReg+1+byte(i)]
+			}
+
+			// 2. Type check - handle both closures and bare functions
+			canPerformTCO := false
+			var calleeClosure *ClosureObject
+			var calleeFunc *FunctionObject
+
+			if calleeVal.Type() == TypeClosure {
+				calleeClosure = calleeVal.AsClosure()
+				calleeFunc = calleeClosure.Fn
+				canPerformTCO = true
+			} else if calleeVal.Type() == TypeFunction {
+				// Convert bare function to closure (like prepareCall does)
+				funcToCall := AsFunction(calleeVal)
+				calleeClosure = &ClosureObject{
+					Fn:       funcToCall,
+					Upvalues: []*Upvalue{},
+				}
+				calleeFunc = funcToCall
+				canPerformTCO = true
+			}
+
+			// 3. Check if new function needs more registers than current frame
+			if canPerformTCO && calleeFunc.RegisterSize <= len(registers) {
+				// We can perform TCO!
+
+				// 4. Close upvalues for current frame BEFORE overwriting
+				vm.closeUpvalues(registers)
+
+				// 5. Reuse current frame
+				frame.closure = calleeClosure
+				frame.ip = 0
+				// Keep targetRegister unchanged (return to same caller location)
+				frame.thisValue = thisVal // Method call: preserve 'this'
+				frame.isConstructorCall = false
+				frame.isDirectCall = false
+				frame.isSentinelFrame = false
+				frame.generatorObj = nil
+				frame.promiseObj = nil
+				frame.argCount = argCount
+				frame.args = args
+
+				// 6. Clear registers and copy arguments
+				for i := 0; i < len(registers); i++ {
+					registers[i] = Undefined
+				}
+				for i := 0; i < argCount && i < len(registers); i++ {
+					registers[i] = args[i]
+				}
+				// Pad with undefined for optional parameters
+				for i := argCount; i < calleeFunc.Arity && i < len(registers); i++ {
+					registers[i] = Undefined
+				}
+
+				// Handle rest parameters if variadic
+				if calleeFunc.Variadic {
+					extraArgCount := argCount - calleeFunc.Arity
+					var restArray Value
+					if extraArgCount <= 0 {
+						restArray = vm.emptyRestArray
+					} else {
+						restArray = NewArray()
+						restArrayObj := restArray.AsArray()
+						for i := 0; i < extraArgCount; i++ {
+							argIndex := calleeFunc.Arity + i
+							if argIndex < len(args) {
+								restArrayObj.Append(args[argIndex])
+							}
+						}
+					}
+					if calleeFunc.Arity < len(registers) {
+						registers[calleeFunc.Arity] = restArray
+					}
+				}
+
+				// Handle named function expression binding
+				if calleeFunc.NameBindingRegister >= 0 && calleeFunc.NameBindingRegister < len(registers) {
+					registers[calleeFunc.NameBindingRegister] = calleeVal
+				}
+
+				// 7. Switch to new function's code
+				closure = calleeClosure
+				function = calleeFunc
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				// registers already points to frame.registers
+				ip = 0
+
+				continue
+			}
+
+			// Fall back to regular method call if TCO not possible
+			// Cannot fallthrough to OpCallMethod (too far), so handle inline
+			destReg := code[ip]
+			callerRegisters := registers
+			callerIP := ip
+
+			callSiteIP := ip - 5 // IP where OpTailCallMethod instruction started (5 bytes)
+			frame.ip = callSiteIP
+
+			shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, args, destReg, callerRegisters, callerIP)
+
+			if frame.ip == callSiteIP {
+				frame.ip = callerIP
+			}
+
+			if err != nil {
+				var excVal Value
+				if exceptionErr, ok := err.(ExceptionError); ok {
+					excVal = exceptionErr.GetExceptionValue()
+				} else {
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+							errObj.SetOwn("name", NewString("Error"))
+							errObj.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(errObj)
+						}
+					} else {
+						errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+						errObj.SetOwn("name", NewString("Error"))
+						errObj.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(errObj)
+					}
+				}
+				vm.throwException(excVal)
+				continue
+			}
+
+			if shouldSwitch {
+				// Refresh frame, registers, closure, function, etc.
+				frame = &vm.frames[vm.frameCount-1]
+				registers = frame.registers
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				ip = frame.ip
+			}
+
 		case OpCall:
 			// Refactored to use centralized prepareCall
 			destReg := code[ip]
