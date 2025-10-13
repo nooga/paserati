@@ -37,7 +37,11 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithSimpleCallSignature([]types.Type{}, types.Any).
 		WithSimpleCallSignature([]types.Type{types.Any}, types.Any).
 		// Static methods
-		WithProperty("create", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("create", types.NewOptionalFunction(
+			[]types.Type{types.Any, types.Any},
+			types.Any,
+			[]bool{false, true}, // First param required, second optional
+		)).
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.String})).
 		WithProperty("values", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: &types.TupleType{ElementTypes: []types.Type{types.String, types.Any}}})).
@@ -49,6 +53,7 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("getPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("setPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("defineProperty", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol, types.Any}, types.Any)).
+		WithProperty("defineProperties", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol}, types.Any)).
 		WithProperty("isExtensible", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("preventExtensions", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
@@ -362,7 +367,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Add static methods
-		ctorPropsObj.Properties.SetOwn("create", vm.NewNativeFunction(1, false, "create", objectCreateImpl))
+		ctorPropsObj.Properties.SetOwn("create", vm.NewNativeFunction(2, false, "create", func(args []vm.Value) (vm.Value, error) {
+		return objectCreateWithVM(vmInstance, args)
+	}))
 		ctorPropsObj.Properties.SetOwn("keys", vm.NewNativeFunction(1, false, "keys", func(args []vm.Value) (vm.Value, error) {
 			return objectKeysWithVM(vmInstance, args)
 		}))
@@ -386,6 +393,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// defineProperty delegates to the full implementation with symbol/accessor support
 		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
 			return objectDefinePropertyWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("defineProperties", vm.NewNativeFunction(2, false, "defineProperties", func(args []vm.Value) (vm.Value, error) {
+			return objectDefinePropertiesWithVM(vmInstance, args)
 		}))
 		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
 			return objectGetOwnPropertyDescriptorWithVM(vmInstance, args)
@@ -438,32 +448,234 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // Static method implementations
 
-func objectCreateImpl(args []vm.Value) (vm.Value, error) {
+func objectCreateWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined, nil
+		return vm.Undefined, vmInstance.NewTypeError("Object prototype may only be an Object or null: undefined")
 	}
 
 	proto := args[0]
 
-	// Check if proto is null or an object
+	// undefined and other non-object, non-null values throw TypeError
+	if proto.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Object prototype may only be an Object or null: undefined")
+	}
 	if proto.Type() != vm.TypeNull && proto.Type() != vm.TypeObject {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined, nil
+		return vm.Undefined, vmInstance.NewTypeError("Object prototype may only be an Object or null")
 	}
 
 	// Create a new object with the specified prototype
+	var obj vm.Value
 	if proto.Type() == vm.TypeNull {
 		// For null prototype, create object and set prototype to null
-		obj := vm.NewObject(vm.Null)
+		obj = vm.NewObject(vm.Null)
 		if plainObj := obj.AsPlainObject(); plainObj != nil {
 			plainObj.SetPrototype(vm.Null)
 		}
-		return obj, nil
 	} else {
 		// For object prototype, NewObject handles it correctly
-		return vm.NewObject(proto), nil
+		obj = vm.NewObject(proto)
 	}
+
+	// If properties descriptor is provided, define properties
+	if len(args) >= 2 && !args[1].IsUndefined() {
+		propertiesDesc := args[1]
+		if !propertiesDesc.IsObject() {
+			return vm.Undefined, vmInstance.NewTypeError("Properties must be an object")
+		}
+
+		// Iterate over own enumerable properties of the descriptor object
+		plainObj := obj.AsPlainObject()
+		if plainObj == nil {
+			return vm.Undefined, vmInstance.NewTypeError("Created object is not a plain object")
+		}
+
+		descObj := propertiesDesc.AsPlainObject()
+		if descObj != nil {
+			for _, key := range descObj.OwnKeys() {
+				propDesc, _, enumerable, _, ok := descObj.GetOwnDescriptor(key)
+				if !ok || !enumerable {
+					continue // Only process own enumerable properties
+				}
+
+				// propDesc should be an object containing property descriptor
+				if !propDesc.IsObject() {
+					continue
+				}
+
+				propDescObj := propDesc.AsPlainObject()
+				if propDescObj == nil {
+					continue
+				}
+
+				// Extract descriptor properties
+				var value vm.Value
+				var writable, enumFlag, configurable bool
+				var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
+
+				// Check for 'value' property
+				if v, ok := propDescObj.GetOwn("value"); ok {
+					value = v
+					hasValue = true
+				}
+
+				// Check for 'writable' property
+				if v, ok := propDescObj.GetOwn("writable"); ok {
+					writable = v.AsBoolean()
+					hasWritable = true
+				}
+
+				// Check for 'enumerable' property
+				if v, ok := propDescObj.GetOwn("enumerable"); ok {
+					enumFlag = v.AsBoolean()
+					hasEnumerable = true
+				}
+
+				// Check for 'configurable' property
+				if v, ok := propDescObj.GetOwn("configurable"); ok {
+					configurable = v.AsBoolean()
+					hasConfigurable = true
+				}
+
+				// Apply defaults: if not specified, writable/enumerable/configurable default to false
+				if !hasValue {
+					value = vm.Undefined
+				}
+
+				// Use pointers for DefineOwnProperty
+				var wPtr, ePtr, cPtr *bool
+				if hasWritable {
+					wPtr = &writable
+				} else {
+					// Default to false
+					f := false
+					wPtr = &f
+				}
+				if hasEnumerable {
+					ePtr = &enumFlag
+				} else {
+					// Default to false
+					f := false
+					ePtr = &f
+				}
+				if hasConfigurable {
+					cPtr = &configurable
+				} else {
+					// Default to false
+					f := false
+					cPtr = &f
+				}
+
+				plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
+			}
+		}
+	}
+
+	return obj, nil
+}
+
+func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) < 2 {
+		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperties requires at least 2 arguments")
+	}
+
+	obj := args[0]
+	if !obj.IsObject() {
+		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperties called on non-object")
+	}
+
+	propertiesDesc := args[1]
+	if !propertiesDesc.IsObject() {
+		return vm.Undefined, vmInstance.NewTypeError("Properties must be an object")
+	}
+
+	// Get the plain object to define properties on
+	plainObj := obj.AsPlainObject()
+	if plainObj == nil {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot define properties on non-plain object")
+	}
+
+	// Iterate over own enumerable properties of the descriptor object
+	descObj := propertiesDesc.AsPlainObject()
+	if descObj != nil {
+		for _, key := range descObj.OwnKeys() {
+			propDesc, _, enumerable, _, ok := descObj.GetOwnDescriptor(key)
+			if !ok || !enumerable {
+				continue // Only process own enumerable properties
+			}
+
+			// propDesc should be an object containing property descriptor
+			if !propDesc.IsObject() {
+				continue
+			}
+
+			propDescObj := propDesc.AsPlainObject()
+			if propDescObj == nil {
+				continue
+			}
+
+			// Extract descriptor properties
+			var value vm.Value
+			var writable, enumFlag, configurable bool
+			var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
+
+			// Check for 'value' property
+			if v, ok := propDescObj.GetOwn("value"); ok {
+				value = v
+				hasValue = true
+			}
+
+			// Check for 'writable' property
+			if v, ok := propDescObj.GetOwn("writable"); ok {
+				writable = v.AsBoolean()
+				hasWritable = true
+			}
+
+			// Check for 'enumerable' property
+			if v, ok := propDescObj.GetOwn("enumerable"); ok {
+				enumFlag = v.AsBoolean()
+				hasEnumerable = true
+			}
+
+			// Check for 'configurable' property
+			if v, ok := propDescObj.GetOwn("configurable"); ok {
+				configurable = v.AsBoolean()
+				hasConfigurable = true
+			}
+
+			// Apply defaults: if not specified, writable/enumerable/configurable default to false
+			if !hasValue {
+				value = vm.Undefined
+			}
+
+			// Use pointers for DefineOwnProperty
+			var wPtr, ePtr, cPtr *bool
+			if hasWritable {
+				wPtr = &writable
+			} else {
+				// Default to false
+				f := false
+				wPtr = &f
+			}
+			if hasEnumerable {
+				ePtr = &enumFlag
+			} else {
+				// Default to false
+				f := false
+				ePtr = &f
+			}
+			if hasConfigurable {
+				cPtr = &configurable
+			} else {
+				// Default to false
+				f := false
+				cPtr = &f
+			}
+
+			plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
+		}
+	}
+
+	return obj, nil
 }
 
 func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
@@ -1461,9 +1673,12 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 		return objectIsExtensibleWithVM(vmInstance, []vm.Value{proxy.Target()})
 	}
 
-	// For now, all objects are extensible (simplified implementation)
-	// In a full implementation, we'd track extensibility per object
+	// Check if object is extensible
 	if obj.IsObject() {
+		if plainObj := obj.AsPlainObject(); plainObj != nil {
+			return vm.BooleanValue(plainObj.IsExtensible()), nil
+		}
+		// Other object types (DictObject, etc.) are extensible by default for now
 		return vm.BooleanValue(true), nil
 	}
 
@@ -1531,9 +1746,9 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		return obj, nil
 	}
 
-	// TODO: Implement actual freezing by making properties non-configurable and non-writable
-	// For now, just return the object (partial implementation)
+	// Freeze: make object non-extensible and all properties non-configurable and non-writable
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		plainObj.SetExtensible(false)
 		// Mark all properties as non-configurable and non-writable
 		for _, key := range plainObj.OwnKeys() {
 			value, _, enumerable, _, ok := plainObj.GetOwnDescriptor(key)
@@ -1560,9 +1775,9 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		return obj, nil
 	}
 
-	// TODO: Implement actual sealing
-	// For now, make all properties non-configurable (but leave writable as-is)
+	// Seal: make object non-extensible and all properties non-configurable (but leave writable as-is)
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		plainObj.SetExtensible(false)
 		for _, key := range plainObj.OwnKeys() {
 			value, writable, enumerable, _, ok := plainObj.GetOwnDescriptor(key)
 			if ok {
@@ -1587,9 +1802,12 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		return vm.BooleanValue(true), nil
 	}
 
-	// Check all properties are non-configurable and non-writable
+	// Check if extensible - frozen objects must not be extensible
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		// TODO: Check extensible when we track it
+		if plainObj.IsExtensible() {
+			return vm.BooleanValue(false), nil
+		}
+		// Check all properties are non-configurable and non-writable
 		for _, key := range plainObj.OwnKeys() {
 			_, writable, _, configurable, ok := plainObj.GetOwnDescriptor(key)
 			if ok {
@@ -1616,9 +1834,12 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		return vm.BooleanValue(true), nil
 	}
 
-	// Check all properties are non-configurable
+	// Check if extensible - sealed objects must not be extensible
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		// TODO: Check extensible when we track it
+		if plainObj.IsExtensible() {
+			return vm.BooleanValue(false), nil
+		}
+		// Check all properties are non-configurable
 		for _, key := range plainObj.OwnKeys() {
 			_, _, _, configurable, ok := plainObj.GetOwnDescriptor(key)
 			if ok {

@@ -104,6 +104,8 @@ type PlainObject struct {
 	// Keyed by field name (without the # prefix)
 	privateGetters map[string]Value
 	privateSetters map[string]Value
+	// Extensible flag - when false, no new properties can be added
+	extensible bool
 }
 
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
@@ -730,6 +732,20 @@ func (o *PlainObject) IsPrivateAccessor(name string) bool {
 	return false
 }
 
+// IsExtensible returns whether new properties can be added to this object
+func (o *PlainObject) IsExtensible() bool {
+	return o.extensible
+}
+
+// SetExtensible sets the extensible flag for this object
+// Per ECMAScript spec, once set to false, it cannot be set back to true
+func (o *PlainObject) SetExtensible(extensible bool) {
+	if !extensible {
+		o.extensible = false
+	}
+	// Silently ignore attempts to set extensible back to true
+}
+
 type DictObject struct {
 	Object
 	prototype  Value
@@ -866,7 +882,7 @@ func NewObject(proto Value) Value {
 	if proto.IsObject() {
 		prototype = proto
 	}
-	plainObj := &PlainObject{prototype: prototype, shape: RootShape}
+	plainObj := &PlainObject{prototype: prototype, shape: RootShape, extensible: true}
 	return Value{typ: TypeObject, obj: unsafe.Pointer(plainObj)}
 }
 
