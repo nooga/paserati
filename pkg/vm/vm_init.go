@@ -292,6 +292,25 @@ func (vm *VM) GetFrameCount() int {
 	return vm.frameCount
 }
 
+// GetProperty gets a property from an object value, properly handling getters and prototype chain
+// This is safe to call from native functions and will trigger property getters/throw exceptions
+func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
+	var result Value
+	// Call opGetProp with nil frame (it will use current frame if available)
+	ok, status, val := vm.opGetProp(nil, 0, &obj, propName, &result)
+	if !ok {
+		// Property access triggered an exception or error
+		if status == InterpretRuntimeError {
+			if vm.currentException != Null {
+				return Undefined, exceptionError{exception: vm.currentException}
+			}
+			return Undefined, fmt.Errorf("runtime error during property access")
+		}
+		return Undefined, fmt.Errorf("property access failed")
+	}
+	return val, nil
+}
+
 // Call is a unified function calling interface that handles all function types properly
 // This replaces the complex web of CallFunctionDirectly, CallUserFunction, etc.
 func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
