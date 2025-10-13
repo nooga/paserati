@@ -295,20 +295,29 @@ func (vm *VM) GetFrameCount() int {
 // GetProperty gets a property from an object value, properly handling getters and prototype chain
 // This is safe to call from native functions and will trigger property getters/throw exceptions
 func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
-	var result Value
-	// Call opGetProp with nil frame (it will use current frame if available)
-	ok, status, val := vm.opGetProp(nil, 0, &obj, propName, &result)
-	if !ok {
-		// Property access triggered an exception or error
-		if status == InterpretRuntimeError {
-			if vm.currentException != Null {
-				return Undefined, exceptionError{exception: vm.currentException}
+	// Simple implementation that doesn't use opGetProp to avoid unwinding issues
+	// Just check for getter and call it, or return the property value
+
+	if obj.Type() == TypeObject {
+		po := obj.AsPlainObject()
+		// Check if it's an accessor (getter)
+		if g, _, _, _, ok := po.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+			// Call the getter with this=obj
+			result, err := vm.Call(g, obj, nil)
+			if err != nil {
+				return Undefined, err
 			}
-			return Undefined, fmt.Errorf("runtime error during property access")
+			return result, nil
 		}
-		return Undefined, fmt.Errorf("property access failed")
+		// Not an accessor, check for regular property including prototype chain
+		if value, exists := po.Get(propName); exists {
+			return value, nil
+		}
+		return Undefined, nil
 	}
-	return val, nil
+
+	// For non-objects, just return undefined
+	return Undefined, nil
 }
 
 // Call is a unified function calling interface that handles all function types properly

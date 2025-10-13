@@ -265,15 +265,28 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 	// Step 1: Handle toJSON method if present (only for objects, not arrays for now)
 	if value.Type() == vm.TypeObject || value.Type() == vm.TypeDictObject {
 		var toJSON vm.Value
-		var ok bool
+		var err error
 
-		if value.Type() == vm.TypeObject {
-			toJSON, ok = value.AsPlainObject().GetOwn("toJSON")
-		} else if value.Type() == vm.TypeDictObject {
-			toJSON, ok = value.AsDictObject().GetOwn("toJSON")
+		// Use GetProperty to properly invoke getters (which may throw)
+		if vmInstance != nil {
+			toJSON, err = vmInstance.GetProperty(value, "toJSON")
+			if err != nil {
+				return "", err
+			}
+		} else {
+			// Fallback if no VM instance
+			var ok bool
+			if value.Type() == vm.TypeObject {
+				toJSON, ok = value.AsPlainObject().GetOwn("toJSON")
+			} else if value.Type() == vm.TypeDictObject {
+				toJSON, ok = value.AsDictObject().GetOwn("toJSON")
+			}
+			if !ok {
+				toJSON = vm.Undefined
+			}
 		}
 
-		if ok && toJSON.Type() == vm.TypeFunction {
+		if toJSON != vm.Undefined && toJSON.Type() == vm.TypeFunction {
 			// Call toJSON method with key as argument
 			if vmInstance != nil {
 				result, err := vmInstance.Call(toJSON, value, []vm.Value{vm.NewString(key)})
@@ -455,7 +468,22 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 			result := "{"
 			first := true
 			for _, key := range keys {
-				if prop, ok := obj.GetOwn(key); ok {
+				// Use vm.GetProperty to properly invoke getters
+				var prop vm.Value
+				var ok bool
+				if vmInstance != nil {
+					var err error
+					prop, err = vmInstance.GetProperty(value, key)
+					if err != nil {
+						return "", err
+					}
+					ok = (prop != vm.Undefined)
+				} else {
+					// Fallback if no VM instance
+					prop, ok = obj.GetOwn(key)
+				}
+
+				if ok {
 					propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, stepIndent, key, value, replacerFunc, propertyList)
 					if err != nil {
 						return "", err
@@ -482,7 +510,22 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		result := "{"
 		first := true
 		for _, key := range keys {
-			if prop, ok := obj.GetOwn(key); ok {
+			// Use vm.GetProperty to properly invoke getters
+			var prop vm.Value
+			var ok bool
+			if vmInstance != nil {
+				var err error
+				prop, err = vmInstance.GetProperty(value, key)
+				if err != nil {
+					return "", err
+				}
+				ok = (prop != vm.Undefined)
+			} else {
+				// Fallback if no VM instance
+				prop, ok = obj.GetOwn(key)
+			}
+
+			if ok {
 				propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, indent, key, value, replacerFunc, propertyList)
 				if err != nil {
 					return "", err

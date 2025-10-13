@@ -1001,6 +1001,15 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	// Push a context to handle break statements within the switch
 	c.pushLoopContext(-1, -1) // -1 indicates no target for continue/loop start
 
+	// Track completion value (last evaluated expression in switch)
+	completionReg := hint
+	if completionReg == BadRegister {
+		completionReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, completionReg)
+	}
+	// Initialize to undefined
+	c.emitLoadUndefined(completionReg, 0)
+
 	// --- Iterate through cases to emit comparison and body code ---
 	caseBodyStartPositions := make([]int, len(node.Cases))
 
@@ -1035,12 +1044,21 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 			// Record the start position of the body for potential jumps
 			caseBodyStartPositions[i] = c.currentPosition()
 
-			// Compile the case body
-			caseBodyReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, caseBodyReg)
-			_, err = c.compileNode(caseClause.Body, caseBodyReg)
-			if err != nil {
-				return BadRegister, err
+			// Compile the case body statements, tracking completion value
+			// According to ECMAScript spec, completion value is the last non-empty statement value
+			if caseClause.Body != nil && len(caseClause.Body.Statements) > 0 {
+				for _, stmt := range caseClause.Body.Statements {
+					stmtReg, err := c.compileNode(stmt, completionReg)
+					if err != nil {
+						return BadRegister, err
+					}
+					// If statement returned a value (not BadRegister), update completion
+					if stmtReg != BadRegister {
+						if stmtReg != completionReg {
+							c.emitMove(completionReg, stmtReg, caseLine)
+						}
+					}
+				}
 			}
 			// Implicit fallthrough *to the end* unless break exists.
 			// Add a jump to the end, break will have already added its own.
@@ -1053,12 +1071,20 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 			// Record the start position of the default body
 			caseBodyStartPositions[i] = c.currentPosition()
 
-			// Compile the default case body
-			defaultBodyReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, defaultBodyReg)
-			_, err = c.compileNode(caseClause.Body, defaultBodyReg)
-			if err != nil {
-				return BadRegister, err
+			// Compile the default case body statements, tracking completion value
+			if caseClause.Body != nil && len(caseClause.Body.Statements) > 0 {
+				for _, stmt := range caseClause.Body.Statements {
+					stmtReg, err := c.compileNode(stmt, completionReg)
+					if err != nil {
+						return BadRegister, err
+					}
+					// If statement returned a value (not BadRegister), update completion
+					if stmtReg != BadRegister {
+						if stmtReg != completionReg {
+							c.emitMove(completionReg, stmtReg, caseLine)
+						}
+					}
+				}
 			}
 			// Add jump to end (optional, could just fall out if it's last)
 			endCaseJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, caseLine) // 0 = unused reg for OpJump
@@ -1085,7 +1111,8 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	// Pop the break context
 	c.popLoopContext()
 
-	return BadRegister, nil
+	// Return the completion value register
+	return completionReg, nil
 }
 
 func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Register) (Register, errors.PaseratiError) {

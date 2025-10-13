@@ -13,12 +13,24 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		propNameHash = propNameHash*31 + int(b)
 	}
 	cacheKey := (ip-5)*100000 + (propNameHash & 0xFFFF) // Use ip-5 since ip was advanced by 4
+
+	// Access cache with read lock first
+	vm.propCacheMutex.RLock()
 	cache, exists := vm.propCache[cacheKey]
+	vm.propCacheMutex.RUnlock()
+
 	if !exists {
-		cache = &PropInlineCache{
-			state: CacheStateUninitialized,
+		// Need to create cache entry - use write lock
+		vm.propCacheMutex.Lock()
+		// Double-check after acquiring write lock (another goroutine might have created it)
+		cache, exists = vm.propCache[cacheKey]
+		if !exists {
+			cache = &PropInlineCache{
+				state: CacheStateUninitialized,
+			}
+			vm.propCache[cacheKey] = cache
 		}
-		vm.propCache[cacheKey] = cache
+		vm.propCacheMutex.Unlock()
 	}
 
 	if debugVM {

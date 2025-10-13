@@ -591,8 +591,11 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 	case result := <-resultChan:
 		return result.passed, result.err
 	case <-ctx.Done():
-		// Context timeout - clean up to release memory
-		// Note: The goroutine may continue running (VM doesn't support cancellation yet)
+		// Context timeout - cancel VM execution to stop the goroutine
+		paserati.CancelVM()
+		// Give the goroutine a moment to exit gracefully
+		time.Sleep(10 * time.Millisecond)
+		// Clean up to release memory
 		paserati.Cleanup()
 		return false, fmt.Errorf("test timed out after %v", timeout)
 	}

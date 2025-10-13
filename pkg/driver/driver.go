@@ -63,6 +63,13 @@ func (p *Paserati) SetIgnoreTypeErrors(ignore bool) {
 }
 
 // Cleanup breaks circular references to allow garbage collection
+// CancelVM signals the VM to stop execution at the next safe point
+func (p *Paserati) CancelVM() {
+	if p.vmInstance != nil {
+		p.vmInstance.Cancel()
+	}
+}
+
 func (p *Paserati) Cleanup() {
 	// Reset VM state to clear all references to objects/closures/frames
 	// This is critical to prevent memory leaks in long-running processes

@@ -8,6 +8,7 @@ import (
 	"paserati/pkg/errors"
 	"paserati/pkg/runtime"
 	"strconv"
+	"sync"
 	"unsafe"
 )
 
@@ -114,7 +115,11 @@ type VM struct {
 	openUpvalues []*Upvalue
 
 	// Enhanced inline cache for property access (maps instruction pointer to cache)
-	propCache map[int]*PropInlineCache
+	propCache      map[int]*PropInlineCache
+	propCacheMutex sync.RWMutex // Protects propCache from concurrent access
+
+	// Cancellation support
+	cancelled bool // Set to true when VM should stop execution
 
 	// Cache statistics for debugging/profiling
 	cacheStats ICacheStats
@@ -392,6 +397,7 @@ func (vm *VM) GetHeap() *Heap {
 	return vm.heap
 }
 
+
 func (vm *VM) Reset() {
 	// Nil out closure pointers in frames to allow garbage collection
 	// This is critical to prevent memory leaks in long-running processes
@@ -413,10 +419,12 @@ func (vm *VM) Reset() {
 	vm.openUpvalues = vm.openUpvalues[:0] // Clear slice while keeping capacity
 	vm.errors = vm.errors[:0]             // Clear errors slice
 	vm.callDepth = 0                      // Reset call depth counter
-	// Clear inline cache
+	// Clear inline cache (with lock to prevent concurrent access)
+	vm.propCacheMutex.Lock()
 	for k := range vm.propCache {
 		delete(vm.propCache, k)
 	}
+	vm.propCacheMutex.Unlock()
 	// Reset cache statistics
 	vm.cacheStats = ICacheStats{}
 	// Clear user-defined globals from heap while preserving builtins
@@ -428,6 +436,13 @@ func (vm *VM) Reset() {
 	vm.pendingAction = ActionNone
 	vm.pendingValue = Undefined
 	vm.finallyDepth = 0
+	// Reset cancellation flag
+	vm.cancelled = false
+}
+
+// Cancel signals the VM to stop execution at the next safe point
+func (vm *VM) Cancel() {
+	vm.cancelled = true
 }
 
 // Interpret starts executing the given chunk of bytecode.
@@ -595,6 +610,13 @@ startExecution:
 		if ip >= len(code) {
 			frame.ip = ip
 			status := vm.runtimeError("IP %d beyond code length %d", ip, len(code))
+			return status, Undefined
+		}
+
+		// Check for cancellation request
+		if vm.cancelled {
+			frame.ip = ip
+			status := vm.runtimeError("VM execution cancelled")
 			return status, Undefined
 		}
 
