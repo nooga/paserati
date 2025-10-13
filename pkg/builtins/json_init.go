@@ -6,6 +6,7 @@ import (
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"sort"
 	"strconv"
 	"unsafe"
 )
@@ -72,7 +73,45 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		value := args[0]
-		// TODO: Handle replacer (args[1]) parameter
+
+		// Process replacer parameter (args[1])
+		var replacerFunc vm.Value
+		var propertyList []string
+		if len(args) >= 2 && args[1] != vm.Undefined && args[1] != vm.Null {
+			replacer := args[1]
+
+			if replacer.Type() == vm.TypeFunction {
+				// Replacer is a function
+				replacerFunc = replacer
+			} else if replacer.Type() == vm.TypeArray {
+				// Replacer is an array - build property whitelist
+				arr := replacer.AsArray()
+				seen := make(map[string]bool)
+				for i := 0; i < arr.Length(); i++ {
+					elem := arr.Get(i)
+					var item string
+
+					// Handle String/Number objects
+					if elem.Type() == vm.TypeObject {
+						if pv, ok := elem.AsPlainObject().GetOwn("[[PrimitiveValue]]"); ok {
+							elem = pv
+						}
+					}
+
+					if elem.Type() == vm.TypeString {
+						item = elem.ToString()
+					} else if elem.Type() == vm.TypeFloatNumber || elem.Type() == vm.TypeIntegerNumber {
+						item = strconv.FormatFloat(elem.ToFloat(), 'f', -1, 64)
+					}
+
+					// Only add if not already in list (deduplication)
+					if item != "" && !seen[item] {
+						propertyList = append(propertyList, item)
+						seen[item] = true
+					}
+				}
+			}
+		}
 
 		// Process space parameter (args[2])
 		var gap string
@@ -110,8 +149,12 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
+		// Wrap the value in a wrapper object for initial call
+		wrapper := vm.NewObject(vm.Null)
+		wrapper.AsPlainObject().SetOwn("", value)
+
 		visited := make(map[uintptr]bool)
-		result, err := stringifyValueToJSONWithVisited(ctx.VM, value, visited, gap, "", "")
+		result, err := stringifyValueToJSONWithVisited(ctx.VM, value, visited, gap, "", "", wrapper, replacerFunc, propertyList)
 		if err != nil {
 			return vm.Undefined, err
 		}
@@ -166,17 +209,64 @@ func convertJSONValue(value interface{}) vm.Value {
 	}
 }
 
+// sortJSONKeys sorts keys per ECMAScript spec: array indices first (sorted numerically), then strings (original order)
+func sortJSONKeys(keys []string) []string {
+	var numericKeys []string
+	var stringKeys []string
+
+	for _, key := range keys {
+		// Check if key is a valid array index (non-negative integer)
+		if num, err := strconv.ParseUint(key, 10, 32); err == nil && strconv.FormatUint(num, 10) == key {
+			numericKeys = append(numericKeys, key)
+		} else {
+			stringKeys = append(stringKeys, key)
+		}
+	}
+
+	// Sort numeric keys numerically
+	sort.Slice(numericKeys, func(i, j int) bool {
+		a, _ := strconv.ParseUint(numericKeys[i], 10, 32)
+		b, _ := strconv.ParseUint(numericKeys[j], 10, 32)
+		return a < b
+	})
+
+	// Combine: numeric keys first, then string keys (preserve original order)
+	return append(numericKeys, stringKeys...)
+}
+
 // stringifyValueToJSON converts a VM Value to a JSON string (legacy, no circular check)
 func stringifyValueToJSON(value vm.Value) string {
 	visited := make(map[uintptr]bool)
-	result, _ := stringifyValueToJSONWithVisited(nil, value, visited, "", "", "")
+	wrapper := vm.NewObject(vm.Null)
+	result, _ := stringifyValueToJSONWithVisited(nil, value, visited, "", "", "", wrapper, vm.Undefined, nil)
 	return result
 }
 
 // stringifyValueToJSONWithVisited converts a VM Value to a JSON string with circular reference detection
 // gap is the indentation string (e.g., "  " for 2 spaces), indent is the current indentation level
 // key is the property key (for toJSON method calls)
-func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited map[uintptr]bool, gap string, indent string, key string) (string, error) {
+// holder is the parent object containing this value
+// replacerFunc is the replacer function (if any)
+// propertyList is the property whitelist (if replacer is an array)
+func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited map[uintptr]bool, gap string, indent string, key string, holder vm.Value, replacerFunc vm.Value, propertyList []string) (string, error) {
+	// Apply replacer function if present
+	if replacerFunc != vm.Undefined && replacerFunc.Type() == vm.TypeFunction && vmInstance != nil {
+		result, err := vmInstance.Call(replacerFunc, holder, []vm.Value{vm.NewString(key), value})
+		if err != nil {
+			return "", err
+		}
+		value = result
+	}
+
+	// Handle boxed primitives (Boolean, Number, String objects) - extract [[PrimitiveValue]]
+	if value.Type() == vm.TypeObject {
+		obj := value.AsPlainObject()
+		if pv, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
+			// This is a boxed primitive - use the primitive value instead
+			value = pv
+		}
+	}
+
 	// Handle toJSON method if present (only for objects, not arrays for now)
 	if value.Type() == vm.TypeObject || value.Type() == vm.TypeDictObject {
 		var toJSON vm.Value
@@ -206,6 +296,8 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		return "null", nil
 	case vm.TypeUndefined:
 		return "", nil // JSON.stringify(undefined) returns undefined (empty string here)
+	case vm.TypeFunction, vm.TypeSymbol:
+		return "", nil // Functions and Symbols are not serializable
 	case vm.TypeBoolean:
 		if value.IsTruthy() {
 			return "true", nil
@@ -219,6 +311,10 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		}
 		if math.IsInf(num, 0) { // Infinity
 			return "null", nil
+		}
+		// Handle negative zero - should serialize as "0" not "-0"
+		if num == 0 {
+			return "0", nil
 		}
 		return strconv.FormatFloat(num, 'f', -1, 64), nil
 	case vm.TypeString:
@@ -256,7 +352,7 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 				result += "\n" + stepIndent
 				elem := arr.Get(i)
 				elemKey := strconv.Itoa(i)
-				elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, elem, visited, gap, stepIndent, elemKey)
+				elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, elem, visited, gap, stepIndent, elemKey, value, replacerFunc, propertyList)
 				if err != nil {
 					return "", err
 				}
@@ -277,7 +373,7 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 			}
 			elem := arr.Get(i)
 			elemKey := strconv.Itoa(i)
-			elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, elem, visited, gap, indent, elemKey)
+			elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, elem, visited, gap, indent, elemKey, value, replacerFunc, propertyList)
 			if err != nil {
 				return "", err
 			}
@@ -323,14 +419,32 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 			obj = value.AsDictObject()
 		}
 
+		// Sort keys per ECMAScript spec: numeric indices first (sorted numerically), then strings (insertion order)
+		keys := sortJSONKeys(obj.OwnKeys())
+
+		// Filter keys by propertyList if present
+		if propertyList != nil {
+			allowedKeys := make(map[string]bool)
+			for _, k := range propertyList {
+				allowedKeys[k] = true
+			}
+			filteredKeys := []string{}
+			for _, k := range keys {
+				if allowedKeys[k] {
+					filteredKeys = append(filteredKeys, k)
+				}
+			}
+			keys = filteredKeys
+		}
+
 		// Pretty printing with gap
 		if gap != "" {
 			stepIndent := indent + gap
 			result := "{"
 			first := true
-			for _, key := range obj.OwnKeys() {
+			for _, key := range keys {
 				if prop, ok := obj.GetOwn(key); ok {
-					propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, stepIndent, key)
+					propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, stepIndent, key, value, replacerFunc, propertyList)
 					if err != nil {
 						return "", err
 					}
@@ -355,9 +469,9 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		// Compact formatting (no gap)
 		result := "{"
 		first := true
-		for _, key := range obj.OwnKeys() {
+		for _, key := range keys {
 			if prop, ok := obj.GetOwn(key); ok {
-				propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, indent, key)
+				propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, indent, key, value, replacerFunc, propertyList)
 				if err != nil {
 					return "", err
 				}
