@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 )
 
 // Cache configuration flags - can be set via environment variables
@@ -73,7 +74,10 @@ type PrototypeCache struct {
 }
 
 // VM extension for prototype caching (stored separately from main propCache)
-var prototypeCache map[int]*PrototypeCache
+var (
+	prototypeCache      map[int]*PrototypeCache
+	prototypeCacheMutex sync.RWMutex
+)
 
 func init() {
 	if EnablePrototypeCache {
@@ -89,15 +93,33 @@ func GetOrCreatePrototypeCache(cacheKey int) *PrototypeCache {
 
 	// Initialize the map if it's nil
 	if prototypeCache == nil {
-		prototypeCache = make(map[int]*PrototypeCache)
+		prototypeCacheMutex.Lock()
+		if prototypeCache == nil {
+			prototypeCache = make(map[int]*PrototypeCache)
+		}
+		prototypeCacheMutex.Unlock()
 	}
 
-	if cache, exists := prototypeCache[cacheKey]; exists {
+	// Try read lock first for fast path
+	prototypeCacheMutex.RLock()
+	cache, exists := prototypeCache[cacheKey]
+	prototypeCacheMutex.RUnlock()
+
+	if exists {
 		return cache
 	}
 
-	cache := &PrototypeCache{}
+	// Need to create new entry - use write lock
+	prototypeCacheMutex.Lock()
+	// Double-check after acquiring write lock (another goroutine might have created it)
+	if cache, exists := prototypeCache[cacheKey]; exists {
+		prototypeCacheMutex.Unlock()
+		return cache
+	}
+
+	cache = &PrototypeCache{}
 	prototypeCache[cacheKey] = cache
+	prototypeCacheMutex.Unlock()
 	return cache
 }
 
@@ -242,7 +264,10 @@ func PrintExtendedStats(vm *VM) {
 			fmt.Printf("  No prototype chain cache activity\n")
 		}
 
-		fmt.Printf("  Cache sites: %d\n", len(prototypeCache))
+		prototypeCacheMutex.RLock()
+		cacheSize := len(prototypeCache)
+		prototypeCacheMutex.RUnlock()
+		fmt.Printf("  Cache sites: %d\n", cacheSize)
 	}
 
 	// Print detailed stats if enabled
@@ -264,7 +289,9 @@ func PrintExtendedStats(vm *VM) {
 func ResetExtendedStats() {
 	extendedStats = ExtendedCacheStats{}
 	if EnablePrototypeCache {
+		prototypeCacheMutex.Lock()
 		prototypeCache = make(map[int]*PrototypeCache)
+		prototypeCacheMutex.Unlock()
 	}
 }
 

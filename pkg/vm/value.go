@@ -1642,12 +1642,9 @@ func (a *ArrayObject) SetLength(newLength int) {
 	if newLength < len(a.elements) {
 		// Truncate array
 		a.elements = a.elements[:newLength]
-	} else if newLength > len(a.elements) {
-		// Expand array with undefined values
-		for i := len(a.elements); i < newLength; i++ {
-			a.elements = append(a.elements, Undefined)
-		}
 	}
+	// Don't expand elements slice - JavaScript arrays are sparse
+	// Elements beyond len(a.elements) will return undefined when accessed
 	a.length = newLength
 }
 

@@ -713,10 +713,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.NewArray(), nil // Should throw RangeError in real JS
 				}
 				result := vm.NewArray()
-				// Set length but don't populate with elements
-				for i := 0; i < length; i++ {
-					result.AsArray().Append(vm.Undefined)
-				}
+				// Set length without allocating elements - JavaScript arrays are sparse
+				result.AsArray().SetLength(length)
 				return result, nil
 			}
 		}

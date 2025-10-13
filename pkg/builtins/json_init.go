@@ -7,6 +7,7 @@ import (
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strconv"
+	"unsafe"
 )
 
 type JSONInitializer struct{}
@@ -71,8 +72,49 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		value := args[0]
-		// TODO: Handle replacer (args[1]) and space (args[2]) parameters
-		result := stringifyValueToJSON(value)
+		// TODO: Handle replacer (args[1]) parameter
+
+		// Process space parameter (args[2])
+		var gap string
+		if len(args) >= 3 && args[2] != vm.Undefined && args[2] != vm.Null {
+			space := args[2]
+
+			// Handle Number/String objects: ToNumber/ToString per spec
+			// Check if it's a Number object (has [[NumberData]] internal slot)
+			if space.Type() == vm.TypeObject {
+				obj := space.AsPlainObject()
+				// Check if it has [[PrimitiveValue]] property (our representation of boxed primitives)
+				if pv, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
+					space = pv
+				}
+			}
+
+			if space.Type() == vm.TypeFloatNumber || space.Type() == vm.TypeIntegerNumber {
+				// Number space: create string of that many spaces (max 10)
+				numSpaces := int(space.ToFloat())
+				if numSpaces < 0 {
+					numSpaces = 0
+				}
+				if numSpaces > 10 {
+					numSpaces = 10
+				}
+				for i := 0; i < numSpaces; i++ {
+					gap += " "
+				}
+			} else if space.Type() == vm.TypeString {
+				// String space: use first 10 characters
+				gap = space.ToString()
+				if len(gap) > 10 {
+					gap = gap[:10]
+				}
+			}
+		}
+
+		visited := make(map[uintptr]bool)
+		result, err := stringifyValueToJSONWithVisited(ctx.VM, value, visited, gap, "", "")
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if result == "" {
 			return vm.Undefined, nil
 		}
@@ -124,50 +166,152 @@ func convertJSONValue(value interface{}) vm.Value {
 	}
 }
 
-// stringifyValueToJSON converts a VM Value to a JSON string
+// stringifyValueToJSON converts a VM Value to a JSON string (legacy, no circular check)
 func stringifyValueToJSON(value vm.Value) string {
+	visited := make(map[uintptr]bool)
+	result, _ := stringifyValueToJSONWithVisited(nil, value, visited, "", "", "")
+	return result
+}
+
+// stringifyValueToJSONWithVisited converts a VM Value to a JSON string with circular reference detection
+// gap is the indentation string (e.g., "  " for 2 spaces), indent is the current indentation level
+// key is the property key (for toJSON method calls)
+func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited map[uintptr]bool, gap string, indent string, key string) (string, error) {
+	// Handle toJSON method if present (only for objects, not arrays for now)
+	if value.Type() == vm.TypeObject || value.Type() == vm.TypeDictObject {
+		var toJSON vm.Value
+		var ok bool
+
+		if value.Type() == vm.TypeObject {
+			toJSON, ok = value.AsPlainObject().GetOwn("toJSON")
+		} else if value.Type() == vm.TypeDictObject {
+			toJSON, ok = value.AsDictObject().GetOwn("toJSON")
+		}
+
+		if ok && toJSON.Type() == vm.TypeFunction {
+			// Call toJSON method with key as argument
+			if vmInstance != nil {
+				result, err := vmInstance.Call(toJSON, value, []vm.Value{vm.NewString(key)})
+				if err != nil {
+					return "", err
+				}
+				// Recursively stringify the result (but without calling toJSON again)
+				value = result
+			}
+		}
+	}
+
 	switch value.Type() {
 	case vm.TypeNull:
-		return "null"
+		return "null", nil
 	case vm.TypeUndefined:
-		return "" // JSON.stringify(undefined) returns undefined (empty string here)
+		return "", nil // JSON.stringify(undefined) returns undefined (empty string here)
 	case vm.TypeBoolean:
 		if value.IsTruthy() {
-			return "true"
+			return "true", nil
 		}
-		return "false"
+		return "false", nil
 	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 		num := value.ToFloat()
 		// Handle special cases
 		if math.IsNaN(num) { // NaN
-			return "null"
+			return "null", nil
 		}
 		if math.IsInf(num, 0) { // Infinity
-			return "null"
+			return "null", nil
 		}
-		return strconv.FormatFloat(num, 'f', -1, 64)
+		return strconv.FormatFloat(num, 'f', -1, 64), nil
 	case vm.TypeString:
 		bytes, _ := json.Marshal(value.ToString()) // Proper JSON string escaping
-		return string(bytes)
+		return string(bytes), nil
 	case vm.TypeArray:
 		arr := value.AsArray()
 		if arr.Length() == 0 {
-			return "[]"
+			return "[]", nil
 		}
+
+		// Check for circular reference
+		ptr := uintptr(unsafe.Pointer(arr))
+		if visited[ptr] {
+			// Throw TypeError for circular reference
+			if vmInstance != nil {
+				ctor, _ := vmInstance.GetGlobal("TypeError")
+				if ctor != vm.Undefined {
+					errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString("Converting circular structure to JSON")})
+					return "", vmInstance.NewExceptionError(errObj)
+				}
+			}
+			return "", fmt.Errorf("TypeError: Converting circular structure to JSON")
+		}
+
+		// Mark as visited
+		visited[ptr] = true
+		defer delete(visited, ptr) // Remove after processing to allow same object in different branches
+
+		// Pretty printing with gap
+		if gap != "" {
+			stepIndent := indent + gap
+			result := "["
+			for i := 0; i < arr.Length(); i++ {
+				result += "\n" + stepIndent
+				elem := arr.Get(i)
+				elemKey := strconv.Itoa(i)
+				elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, elem, visited, gap, stepIndent, elemKey)
+				if err != nil {
+					return "", err
+				}
+				result += elemJSON
+				if i < arr.Length()-1 {
+					result += ","
+				}
+			}
+			result += "\n" + indent + "]"
+			return result, nil
+		}
+
+		// Compact formatting (no gap)
 		result := "["
 		for i := 0; i < arr.Length(); i++ {
 			if i > 0 {
 				result += ","
 			}
 			elem := arr.Get(i)
-			result += stringifyValueToJSON(elem)
+			elemKey := strconv.Itoa(i)
+			elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, elem, visited, gap, indent, elemKey)
+			if err != nil {
+				return "", err
+			}
+			result += elemJSON
 		}
 		result += "]"
-		return result
+		return result, nil
 	case vm.TypeObject, vm.TypeDictObject:
-		// Handle objects
-		result := "{"
-		first := true
+		// Get object pointer for circular reference check
+		var ptr uintptr
+		if value.Type() == vm.TypeObject {
+			ptr = uintptr(unsafe.Pointer(value.AsPlainObject()))
+		} else {
+			ptr = uintptr(unsafe.Pointer(value.AsDictObject()))
+		}
+
+		// Check for circular reference
+		if visited[ptr] {
+			// Throw TypeError for circular reference
+			if vmInstance != nil {
+				ctor, _ := vmInstance.GetGlobal("TypeError")
+				if ctor != vm.Undefined {
+					errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString("Converting circular structure to JSON")})
+					return "", vmInstance.NewExceptionError(errObj)
+				}
+			}
+			return "", fmt.Errorf("TypeError: Converting circular structure to JSON")
+		}
+
+		// Mark as visited
+		visited[ptr] = true
+		defer delete(visited, ptr) // Remove after processing to allow same object in different branches
+
+		// Get object interface
 		var obj interface {
 			OwnKeys() []string
 			GetOwn(string) (vm.Value, bool)
@@ -179,9 +323,44 @@ func stringifyValueToJSON(value vm.Value) string {
 			obj = value.AsDictObject()
 		}
 
+		// Pretty printing with gap
+		if gap != "" {
+			stepIndent := indent + gap
+			result := "{"
+			first := true
+			for _, key := range obj.OwnKeys() {
+				if prop, ok := obj.GetOwn(key); ok {
+					propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, stepIndent, key)
+					if err != nil {
+						return "", err
+					}
+					if propJSON != "" { // Skip undefined properties
+						if !first {
+							result += ","
+						}
+						first = false
+						result += "\n" + stepIndent
+						keyBytes, _ := json.Marshal(key)
+						result += string(keyBytes) + ": " + propJSON
+					}
+				}
+			}
+			if !first {
+				result += "\n" + indent
+			}
+			result += "}"
+			return result, nil
+		}
+
+		// Compact formatting (no gap)
+		result := "{"
+		first := true
 		for _, key := range obj.OwnKeys() {
 			if prop, ok := obj.GetOwn(key); ok {
-				propJSON := stringifyValueToJSON(prop)
+				propJSON, err := stringifyValueToJSONWithVisited(vmInstance, prop, visited, gap, indent, key)
+				if err != nil {
+					return "", err
+				}
 				if propJSON != "" { // Skip undefined properties
 					if !first {
 						result += ","
@@ -193,8 +372,8 @@ func stringifyValueToJSON(value vm.Value) string {
 			}
 		}
 		result += "}"
-		return result
+		return result, nil
 	default:
-		return "null"
+		return "null", nil
 	}
 }
