@@ -701,6 +701,20 @@ func (v Value) ToString() string {
 	case TypeFloatNumber:
 		f := v.AsFloat()
 		// ECMAScript ToString specification (7.1.12.1):
+		// Handle special cases first
+		if math.IsNaN(f) {
+			return "NaN"
+		}
+		if math.IsInf(f, 1) {
+			return "Infinity"
+		}
+		if math.IsInf(f, -1) {
+			return "-Infinity"
+		}
+		// Handle -0 (convert to 0)
+		if f == 0 && math.Signbit(f) {
+			return "0"
+		}
 		// Use exponential notation for very small or very large numbers
 		absF := f
 		if absF < 0 {

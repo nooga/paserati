@@ -89,6 +89,12 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 		return err
 	}
 
+	// Add isFinite function
+	isFiniteFunctionType := types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)
+	if err := ctx.DefineGlobal("isFinite", isFiniteFunctionType); err != nil {
+		return err
+	}
+
 	// Add eval function
 	evalFunctionType := types.NewSimpleFunction([]types.Type{types.String}, types.Any)
 	if err := ctx.DefineGlobal("eval", evalFunctionType); err != nil {
@@ -286,6 +292,22 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	if err := ctx.DefineGlobal("isNaN", isNaNFunc); err != nil {
+		return err
+	}
+
+	// Add isFinite function implementation
+	isFiniteFunc := vm.NewNativeFunction(1, false, "isFinite", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 {
+			return vm.BooleanValue(false), nil // isFinite(undefined) is false (NaN is not finite)
+		}
+
+		val := args[0]
+		// Convert to number first (like JavaScript does)
+		numVal := val.ToFloat()
+		return vm.BooleanValue(!math.IsNaN(numVal) && !math.IsInf(numVal, 0)), nil
+	})
+
+	if err := ctx.DefineGlobal("isFinite", isFiniteFunc); err != nil {
 		return err
 	}
 

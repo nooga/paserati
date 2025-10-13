@@ -6331,6 +6331,8 @@ func (vm *VM) NewNumberObject(primitiveValue float64) Value {
 func (vm *VM) NewStringObject(primitiveValue string) Value {
 	obj := NewObject(vm.StringPrototype).AsPlainObject()
 	obj.SetOwn("[[PrimitiveValue]]", NewString(primitiveValue))
+	// Add length property (number of UTF-16 code units, which for ASCII/UTF-8 is the string length)
+	obj.SetOwn("length", IntegerValue(int32(len(primitiveValue))))
 	return NewValueFromPlainObject(obj)
 }
 

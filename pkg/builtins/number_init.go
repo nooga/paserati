@@ -6,6 +6,7 @@ import (
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strconv"
+	"strings"
 )
 
 type NumberInitializer struct{}
@@ -69,15 +70,23 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Add Number prototype methods
 	numberProto.SetOwn("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
-		
+
+		// Extract primitive value from Number wrapper object
+		if thisNum.IsObject() {
+			obj := thisNum.AsPlainObject()
+			if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
+				thisNum = primVal
+			}
+		}
+
 		// Check if this is a number
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
 			// Try to convert or throw error
 			if thisNum.Type() == vm.TypeBigInt {
 				return vm.NewString(thisNum.ToString()), nil
 			}
-			// For non-numbers, we could throw a TypeError but for now return string conversion
-			return vm.NewString(thisNum.ToString()), nil
+			// For non-numbers, throw a TypeError
+			return vm.Undefined, fmt.Errorf("Number.prototype.toString requires that 'this' be a Number")
 		}
 
 		var radix int = 10
@@ -228,13 +237,37 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 			primitiveValue = 0
 		} else {
 			arg := args[0]
+
+			// Handle boxed primitives by extracting primitive value
+			if arg.IsObject() {
+				obj := arg.AsPlainObject()
+				if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
+					arg = primVal
+				}
+			}
+
 			switch arg.Type() {
 			case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 				primitiveValue = arg.ToFloat()
 			case vm.TypeString:
 				str := arg.ToString()
+				// Trim whitespace (ECMAScript whitespace)
+				str = strings.TrimSpace(str)
+				str = strings.Trim(str, "\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF")
+
 				if str == "" {
 					primitiveValue = 0
+				} else if strings.EqualFold(str, "infinity") || strings.EqualFold(str, "+infinity") {
+					primitiveValue = math.Inf(1)
+				} else if strings.EqualFold(str, "-infinity") {
+					primitiveValue = math.Inf(-1)
+				} else if strings.HasPrefix(strings.ToLower(str), "0x") {
+					// Parse hex string
+					if val, err := strconv.ParseInt(str[2:], 16, 64); err == nil {
+						primitiveValue = float64(val)
+					} else {
+						primitiveValue = math.NaN()
+					}
 				} else if val, err := strconv.ParseFloat(str, 64); err == nil {
 					primitiveValue = val
 				} else {

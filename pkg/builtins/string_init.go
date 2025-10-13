@@ -567,13 +567,46 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Make it a proper constructor with static methods
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "String", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewNativeFunctionWithProps(1, true, "String", func(args []vm.Value) (vm.Value, error) {
 		// Determine the primitive string value
 		var primitiveValue string
 		if len(args) == 0 {
 			primitiveValue = ""
 		} else {
-			primitiveValue = args[0].ToString()
+			arg := args[0]
+			// For objects, use ToPrimitive with hint "string"
+			if arg.IsObject() {
+				// Try calling toString() first, then valueOf()
+				if toStringMethod, err := vmInstance.GetProperty(arg, "toString"); err == nil && toStringMethod.IsCallable() {
+					if result, err := vmInstance.Call(toStringMethod, arg, []vm.Value{}); err == nil {
+						if !result.IsObject() {
+							primitiveValue = result.ToString()
+						} else {
+							// toString() returned an object, try valueOf()
+							if valueOfMethod, err := vmInstance.GetProperty(arg, "valueOf"); err == nil && valueOfMethod.IsCallable() {
+								if result, err := vmInstance.Call(valueOfMethod, arg, []vm.Value{}); err == nil {
+									if !result.IsObject() {
+										primitiveValue = result.ToString()
+									} else {
+										// Both returned objects, fall back to default
+										primitiveValue = arg.ToString()
+									}
+								} else {
+									primitiveValue = arg.ToString()
+								}
+							} else {
+								primitiveValue = arg.ToString()
+							}
+						}
+					} else {
+						primitiveValue = arg.ToString()
+					}
+				} else {
+					primitiveValue = arg.ToString()
+				}
+			} else {
+				primitiveValue = arg.ToString()
+			}
 		}
 
 		// If called with 'new', return a String wrapper object

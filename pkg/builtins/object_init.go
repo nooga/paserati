@@ -27,6 +27,7 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("hasOwnProperty", types.NewSimpleFunction([]types.Type{keyStringOrSymbol}, types.Boolean)).
 		WithProperty("propertyIsEnumerable", types.NewSimpleFunction([]types.Type{keyStringOrSymbol}, types.Boolean)).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toLocaleString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("isPrototypeOf", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean))
 
@@ -51,6 +52,10 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol}, types.Any)).
 		WithProperty("isExtensible", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("preventExtensions", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("freeze", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("seal", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("isFrozen", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
+		WithProperty("isSealed", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("is", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Boolean)).
 		WithProperty("prototype", objectProtoType)
 
@@ -217,6 +222,19 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("valueOf", v, &w, &e, &c)
 	}
 
+	objectProto.SetOwn("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+		// Default implementation: call toString()
+		thisValue := vmInstance.GetThis()
+		if toStringMethod, err := vmInstance.GetProperty(thisValue, "toString"); err == nil && toStringMethod.IsCallable() {
+			return vmInstance.Call(toStringMethod, thisValue, []vm.Value{})
+		}
+		return vm.NewString("[object Object]"), nil
+	}))
+	if v, ok := objectProto.GetOwn("toLocaleString"); ok {
+		w, e, c := true, false, true
+		objectProto.DefineOwnProperty("toLocaleString", v, &w, &e, &c)
+	}
+
 	objectProto.SetOwn("isPrototypeOf", vm.NewNativeFunction(1, false, "isPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
@@ -354,7 +372,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwn("getOwnPropertySymbols", vm.NewNativeFunction(1, false, "getOwnPropertySymbols", objectGetOwnPropertySymbolsImpl))
 		// Reflect-like ownKeys: strings first, then symbols
 		ctorPropsObj.Properties.SetOwn("__ownKeys", vm.NewNativeFunction(1, false, "__ownKeys", reflectOwnKeysImpl))
-		ctorPropsObj.Properties.SetOwn("assign", vm.NewNativeFunction(1, true, "assign", objectAssignImpl))
+		ctorPropsObj.Properties.SetOwn("assign", vm.NewNativeFunction(1, true, "assign", func(args []vm.Value) (vm.Value, error) {
+			return objectAssignWithVM(vmInstance, args)
+		}))
 		ctorPropsObj.Properties.SetOwn("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", objectHasOwnImpl))
 		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
 		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
@@ -375,6 +395,18 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}))
 		ctorPropsObj.Properties.SetOwn("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
 			return objectPreventExtensionsWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("freeze", vm.NewNativeFunction(1, false, "freeze", func(args []vm.Value) (vm.Value, error) {
+			return objectFreezeWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("seal", vm.NewNativeFunction(1, false, "seal", func(args []vm.Value) (vm.Value, error) {
+			return objectSealWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("isFrozen", vm.NewNativeFunction(1, false, "isFrozen", func(args []vm.Value) (vm.Value, error) {
+			return objectIsFrozenWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwn("isSealed", vm.NewNativeFunction(1, false, "isSealed", func(args []vm.Value) (vm.Value, error) {
+			return objectIsSealedWithVM(vmInstance, args)
 		}))
 		// Object.is
 		ctorPropsObj.Properties.SetOwn("is", vm.NewNativeFunction(2, false, "is", func(args []vm.Value) (vm.Value, error) {
@@ -857,25 +889,40 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 	return out, nil
 }
 
-func objectAssignImpl(args []vm.Value) (vm.Value, error) {
+func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined, nil
+		return vm.Undefined, fmt.Errorf("TypeError: Cannot convert undefined or null to object")
 	}
 
 	// First argument is the target
 	target := args[0]
 
-	// Convert primitives to objects (except null/undefined)
+	// Convert primitives to objects (except null/undefined which throw)
 	if target.Type() == vm.TypeNull || target.Type() == vm.TypeUndefined {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.Undefined, nil
+		return vm.Undefined, fmt.Errorf("TypeError: Cannot convert undefined or null to object")
 	}
 
-	// If target is not an object, box it
+	// Box primitive targets to objects
 	if !target.IsObject() {
-		// TODO: Implement primitive boxing
-		return target, nil
+		// Box primitives: Number, String, Boolean, Symbol
+		switch target.Type() {
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			// Box to Number object - but Object.assign returns the boxed object
+			target = vmInstance.NewNumberObject(target.ToFloat())
+		case vm.TypeString:
+			target = vmInstance.NewStringObject(target.ToString())
+		case vm.TypeBoolean:
+			// Box to Boolean object (we'd need to add NewBooleanObject)
+			// For now, create a plain object with [[PrimitiveValue]]
+			obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			obj.SetOwn("[[PrimitiveValue]]", target)
+			target = vm.NewValueFromPlainObject(obj)
+		case vm.TypeSymbol:
+			// Box to Symbol object
+			obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			obj.SetOwn("[[PrimitiveValue]]", target)
+			target = vm.NewValueFromPlainObject(obj)
+		}
 	}
 
 	// Copy properties from all source objects
@@ -1470,6 +1517,120 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	}
 
 	return obj, nil
+}
+
+func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.Undefined, nil
+	}
+
+	obj := args[0]
+
+	// If not an object, return as-is (primitives are already immutable)
+	if !obj.IsObject() {
+		return obj, nil
+	}
+
+	// TODO: Implement actual freezing by making properties non-configurable and non-writable
+	// For now, just return the object (partial implementation)
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		// Mark all properties as non-configurable and non-writable
+		for _, key := range plainObj.OwnKeys() {
+			value, _, enumerable, _, ok := plainObj.GetOwnDescriptor(key)
+			if ok {
+				w := false
+				c := false
+				plainObj.DefineOwnProperty(key, value, &w, &enumerable, &c)
+			}
+		}
+	}
+
+	return obj, nil
+}
+
+func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.Undefined, nil
+	}
+
+	obj := args[0]
+
+	// If not an object, return as-is
+	if !obj.IsObject() {
+		return obj, nil
+	}
+
+	// TODO: Implement actual sealing
+	// For now, make all properties non-configurable (but leave writable as-is)
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		for _, key := range plainObj.OwnKeys() {
+			value, writable, enumerable, _, ok := plainObj.GetOwnDescriptor(key)
+			if ok {
+				c := false
+				plainObj.DefineOwnProperty(key, value, &writable, &enumerable, &c)
+			}
+		}
+	}
+
+	return obj, nil
+}
+
+func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.BooleanValue(true), nil
+	}
+
+	obj := args[0]
+
+	// Primitives are frozen
+	if !obj.IsObject() {
+		return vm.BooleanValue(true), nil
+	}
+
+	// Check all properties are non-configurable and non-writable
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		// TODO: Check extensible when we track it
+		for _, key := range plainObj.OwnKeys() {
+			_, writable, _, configurable, ok := plainObj.GetOwnDescriptor(key)
+			if ok {
+				if configurable || writable {
+					return vm.BooleanValue(false), nil
+				}
+			}
+		}
+		return vm.BooleanValue(true), nil
+	}
+
+	return vm.BooleanValue(false), nil
+}
+
+func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.BooleanValue(true), nil
+	}
+
+	obj := args[0]
+
+	// Primitives are sealed
+	if !obj.IsObject() {
+		return vm.BooleanValue(true), nil
+	}
+
+	// Check all properties are non-configurable
+	if plainObj := obj.AsPlainObject(); plainObj != nil {
+		// TODO: Check extensible when we track it
+		for _, key := range plainObj.OwnKeys() {
+			_, _, _, configurable, ok := plainObj.GetOwnDescriptor(key)
+			if ok {
+				if configurable {
+					return vm.BooleanValue(false), nil
+				}
+			}
+		}
+		return vm.BooleanValue(true), nil
+	}
+
+	return vm.BooleanValue(false), nil
 }
 
 // ObjectGetOwnPropertyDescriptorForHarness exposes a minimal descriptor getter for the test262 harness
