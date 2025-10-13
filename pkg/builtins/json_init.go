@@ -76,7 +76,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Process replacer parameter (args[1])
 		var replacerFunc vm.Value
-		var propertyList []string
+		var propertyList []string // nil means no filtering, empty slice means filter all
 		if len(args) >= 2 && args[1] != vm.Undefined && args[1] != vm.Null {
 			replacer := args[1]
 
@@ -84,7 +84,8 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Replacer is a function
 				replacerFunc = replacer
 			} else if replacer.Type() == vm.TypeArray {
-				// Replacer is an array - build property whitelist
+				// Replacer is an array - build property whitelist (even if empty)
+				propertyList = []string{} // Initialize as empty slice, not nil
 				arr := replacer.AsArray()
 				seen := make(map[string]bool)
 				for i := 0; i < arr.Length(); i++ {
@@ -101,7 +102,19 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 					if elem.Type() == vm.TypeString {
 						item = elem.ToString()
 					} else if elem.Type() == vm.TypeFloatNumber || elem.Type() == vm.TypeIntegerNumber {
-						item = strconv.FormatFloat(elem.ToFloat(), 'f', -1, 64)
+						num := elem.ToFloat()
+						if math.IsNaN(num) {
+							item = "NaN"
+						} else if math.IsInf(num, 1) {
+							item = "Infinity"
+						} else if math.IsInf(num, -1) {
+							item = "-Infinity"
+						} else if num == 0 && math.Signbit(num) {
+							// Negative zero should be "0" not "-0"
+							item = "0"
+						} else {
+							item = strconv.FormatFloat(num, 'f', -1, 64)
+						}
 					}
 
 					// Only add if not already in list (deduplication)
@@ -249,25 +262,7 @@ func stringifyValueToJSON(value vm.Value) string {
 // replacerFunc is the replacer function (if any)
 // propertyList is the property whitelist (if replacer is an array)
 func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited map[uintptr]bool, gap string, indent string, key string, holder vm.Value, replacerFunc vm.Value, propertyList []string) (string, error) {
-	// Apply replacer function if present
-	if replacerFunc != vm.Undefined && replacerFunc.Type() == vm.TypeFunction && vmInstance != nil {
-		result, err := vmInstance.Call(replacerFunc, holder, []vm.Value{vm.NewString(key), value})
-		if err != nil {
-			return "", err
-		}
-		value = result
-	}
-
-	// Handle boxed primitives (Boolean, Number, String objects) - extract [[PrimitiveValue]]
-	if value.Type() == vm.TypeObject {
-		obj := value.AsPlainObject()
-		if pv, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
-			// This is a boxed primitive - use the primitive value instead
-			value = pv
-		}
-	}
-
-	// Handle toJSON method if present (only for objects, not arrays for now)
+	// Step 1: Handle toJSON method if present (only for objects, not arrays for now)
 	if value.Type() == vm.TypeObject || value.Type() == vm.TypeDictObject {
 		var toJSON vm.Value
 		var ok bool
@@ -285,9 +280,26 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 				if err != nil {
 					return "", err
 				}
-				// Recursively stringify the result (but without calling toJSON again)
 				value = result
 			}
+		}
+	}
+
+	// Step 2: Apply replacer function if present
+	if replacerFunc != vm.Undefined && replacerFunc.Type() == vm.TypeFunction && vmInstance != nil {
+		result, err := vmInstance.Call(replacerFunc, holder, []vm.Value{vm.NewString(key), value})
+		if err != nil {
+			return "", err
+		}
+		value = result
+	}
+
+	// Step 3: Handle boxed primitives (Boolean, Number, String objects) - extract [[PrimitiveValue]]
+	if value.Type() == vm.TypeObject {
+		obj := value.AsPlainObject()
+		if pv, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
+			// This is a boxed primitive - use the primitive value instead
+			value = pv
 		}
 	}
 
@@ -356,6 +368,10 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 				if err != nil {
 					return "", err
 				}
+				// In arrays, undefined/functions/symbols become "null"
+				if elemJSON == "" {
+					elemJSON = "null"
+				}
 				result += elemJSON
 				if i < arr.Length()-1 {
 					result += ","
@@ -376,6 +392,10 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 			elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, elem, visited, gap, indent, elemKey, value, replacerFunc, propertyList)
 			if err != nil {
 				return "", err
+			}
+			// In arrays, undefined/functions/symbols become "null"
+			if elemJSON == "" {
+				elemJSON = "null"
 			}
 			result += elemJSON
 		}
@@ -419,22 +439,14 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 			obj = value.AsDictObject()
 		}
 
-		// Sort keys per ECMAScript spec: numeric indices first (sorted numerically), then strings (insertion order)
-		keys := sortJSONKeys(obj.OwnKeys())
-
-		// Filter keys by propertyList if present
+		// Determine key order
+		var keys []string
 		if propertyList != nil {
-			allowedKeys := make(map[string]bool)
-			for _, k := range propertyList {
-				allowedKeys[k] = true
-			}
-			filteredKeys := []string{}
-			for _, k := range keys {
-				if allowedKeys[k] {
-					filteredKeys = append(filteredKeys, k)
-				}
-			}
-			keys = filteredKeys
+			// If replacer array provided, use its order and only include those keys
+			keys = propertyList
+		} else {
+			// Sort keys per ECMAScript spec: numeric indices first (sorted numerically), then strings (insertion order)
+			keys = sortJSONKeys(obj.OwnKeys())
 		}
 
 		// Pretty printing with gap
