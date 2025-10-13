@@ -137,8 +137,12 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Use GetProperty to properly trigger getters and handle exceptions
 			returnMethod, err := vmInstance.GetProperty(delegatedIter, "return")
 			if err != nil {
-				// Property access threw an exception - clear delegation and propagate
+				// Property access threw an exception
+				// Clear delegation and resume generator with exception so try-catch can handle it
 				thisGen.DelegatedIterator = vm.Undefined
+				if ee, ok := err.(vm.ExceptionError); ok {
+					return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+				}
 				return vm.Undefined, err
 			}
 
@@ -147,8 +151,12 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Call delegatedIter.return(returnValue) via VM
 				result, err := vmInstance.Call(returnMethod, delegatedIter, []vm.Value{returnValue})
 				if err != nil {
-					// Clear delegation before propagating error
+					// Call threw an exception
+					// Clear delegation and resume generator with exception so try-catch can handle it
 					thisGen.DelegatedIterator = vm.Undefined
+					if ee, ok := err.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
 					return vm.Undefined, err
 				}
 
@@ -160,7 +168,10 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if result.IsObject() {
 					doneVal, err := vmInstance.GetProperty(result, "done")
 					if err != nil {
-						// done getter threw - propagate the exception
+						// done getter threw - resume generator with exception so try-catch can handle it
+						if ee, ok := err.(vm.ExceptionError); ok {
+							return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+						}
 						return vm.Undefined, err
 					}
 					if doneVal.IsTruthy() {
@@ -218,8 +229,12 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Use GetProperty to properly trigger getters and handle exceptions
 			throwMethod, err := vmInstance.GetProperty(delegatedIter, "throw")
 			if err != nil {
-				// Property access threw an exception - clear delegation and propagate
+				// Property access threw an exception
+				// Clear delegation and resume generator with that exception (not the original one)
 				thisGen.DelegatedIterator = vm.Undefined
+				if ee, ok := err.(vm.ExceptionError); ok {
+					return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+				}
 				return vm.Undefined, err
 			}
 
@@ -228,9 +243,12 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Call delegatedIter.throw(exception) via VM
 				result, err := vmInstance.Call(throwMethod, delegatedIter, []vm.Value{exception})
 				if err != nil {
-					// If the delegated iterator's throw() threw an exception, propagate it
+					// If the delegated iterator's throw() threw an exception, inject it into generator
 					// Clear delegation first
 					thisGen.DelegatedIterator = vm.Undefined
+					if ee, ok := err.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
 					return vm.Undefined, err
 				}
 
@@ -242,7 +260,10 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if result.IsObject() {
 					doneVal, err := vmInstance.GetProperty(result, "done")
 					if err != nil {
-						// done getter threw - propagate the exception
+						// done getter threw - inject that exception into generator
+						if ee, ok := err.(vm.ExceptionError); ok {
+							return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+						}
 						return vm.Undefined, err
 					}
 					if doneVal.IsTruthy() {
@@ -259,9 +280,12 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Try to close the iterator by calling .return() if available
 			returnMethod, err := vmInstance.GetProperty(delegatedIter, "return")
 			if err != nil {
-				// Getting .return threw - clear delegation and propagate original exception
+				// Getting .return threw - clear delegation and inject that exception into generator
 				thisGen.DelegatedIterator = vm.Undefined
-				// Fall through to throw the original exception into this generator
+				if ee, ok := err.(vm.ExceptionError); ok {
+					return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+				}
+				return vm.Undefined, err
 			} else if !returnMethod.IsUndefined() && returnMethod.Type() != vm.TypeNull && returnMethod.IsCallable() {
 				// Call delegatedIter.return() to close it (ignore result/errors)
 				vmInstance.Call(returnMethod, delegatedIter, []vm.Value{})
