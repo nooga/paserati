@@ -1604,15 +1604,22 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 
 // compileSpreadCallExpression handles function calls that contain spread syntax
 func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// For now, only support calls with a single spread argument (the most common case)
-	if len(node.Arguments) != 1 {
-		return BadRegister, NewCompileError(node, "spread calls currently only support a single spread argument")
+	// Check if this is the simple case: single spread argument with no regular args
+	isSingleSpread := len(node.Arguments) == 1
+	if isSingleSpread {
+		if spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement); isSpread {
+			// Fast path for single spread: func(...arr)
+			return c.compileSingleSpreadCall(node, spreadElement, hint, tempRegs)
+		}
 	}
 
-	spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement)
-	if !isSpread {
-		return BadRegister, NewCompileError(node, "expected spread argument")
-	}
+	// Complex case: multiple spreads or mixed regular/spread arguments
+	// Strategy: build an array at runtime containing all arguments, then use OpSpreadCall
+	return c.compileMultiSpreadCall(node, hint, tempRegs)
+}
+
+// compileSingleSpreadCall handles the simple case: func(...arr) with a single spread
+func (c *Compiler) compileSingleSpreadCall(node *parser.CallExpression, spreadElement *parser.SpreadElement, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
 
 	// Check if this is a method call
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
@@ -1673,6 +1680,71 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 
 		return hint, nil
 	}
+}
+
+// compileMultiSpreadCall handles multiple spreads or mixed regular/spread arguments
+// Example: func(1, 2, ...arr1, ...arr2, 5)
+// Strategy: Build an array at runtime: [1, 2, ...arr1, ...arr2, 5], then use OpSpreadCall
+func (c *Compiler) compileMultiSpreadCall(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+
+	// 1. Compile the function
+	oldTailPos := c.inTailPosition
+	c.inTailPosition = false
+	funcReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, funcReg)
+
+	// Check if this is a method call
+	var thisReg Register = BadRegister
+	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
+		// Method call: obj.method(args)
+		// Compile the object (this value)
+		thisReg = c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, thisReg)
+		_, err := c.compileNode(memberExpr.Object, thisReg)
+		if err != nil {
+			return BadRegister, err
+		}
+
+		// Compile the method function
+		propertyName := c.extractPropertyName(memberExpr.Property)
+		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitGetProp(funcReg, thisReg, nameConstIdx, line)
+	} else {
+		// Regular function call
+		_, err := c.compileNode(node.Function, funcReg)
+		if err != nil {
+			return BadRegister, err
+		}
+	}
+	c.inTailPosition = oldTailPos
+
+	// 2. Build an array containing all arguments (regular and spread)
+	// We'll use array literal syntax with spread elements
+	arrayReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, arrayReg)
+
+	// Create an array literal node to compile
+	arrayLiteral := &parser.ArrayLiteral{
+		Elements: node.Arguments, // Already contains spread elements
+		Token:    node.Token,
+	}
+
+	_, err := c.compileArrayLiteral(arrayLiteral, arrayReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// 3. Emit the appropriate spread call opcode
+	if thisReg != BadRegister {
+		// Method call with spread
+		c.emitSpreadCallMethod(hint, funcReg, thisReg, arrayReg, line)
+	} else {
+		// Regular function call with spread
+		c.emitSpreadCall(hint, funcReg, arrayReg, line)
+	}
+
+	return hint, nil
 }
 
 func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register) (Register, errors.PaseratiError) {
@@ -2100,16 +2172,6 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 
 // compileSpreadSuperCall compiles super(...args) with spread arguments
 func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// For now, only support calls with a single spread argument (the most common case)
-	if len(node.Arguments) != 1 {
-		return BadRegister, NewCompileError(node, "super() with spread currently only supports a single spread argument")
-	}
-
-	spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement)
-	if !isSpread {
-		return BadRegister, NewCompileError(node, "expected spread argument")
-	}
-
 	// Load the parent constructor by name
 	superConstructorReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, superConstructorReg)
@@ -2128,12 +2190,38 @@ func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Regi
 		c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
 	}
 
-	// Compile the spread argument (array to spread)
-	spreadArgReg := c.regAlloc.Alloc()
-	*tempRegs = append(*tempRegs, spreadArgReg)
-	_, err := c.compileNode(spreadElement.Argument, spreadArgReg)
-	if err != nil {
-		return BadRegister, err
+	// Check if this is the simple case: single spread argument
+	isSingleSpread := len(node.Arguments) == 1
+	var spreadArgReg Register
+
+	if isSingleSpread {
+		if spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement); isSpread {
+			// Fast path: super(...arr) with single spread
+			spreadArgReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, spreadArgReg)
+			_, err := c.compileNode(spreadElement.Argument, spreadArgReg)
+			if err != nil {
+				return BadRegister, err
+			}
+		} else {
+			// Single non-spread arg shouldn't come here, but handle gracefully
+			return BadRegister, NewCompileError(node, "internal error: compileSpreadSuperCall called without spread")
+		}
+	} else {
+		// Complex case: multiple spreads or mixed regular/spread arguments
+		// Build an array at runtime containing all arguments
+		spreadArgReg = c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, spreadArgReg)
+
+		arrayLiteral := &parser.ArrayLiteral{
+			Elements: node.Arguments,
+			Token:    node.Token,
+		}
+
+		_, err := c.compileArrayLiteral(arrayLiteral, spreadArgReg)
+		if err != nil {
+			return BadRegister, err
+		}
 	}
 
 	// Use OpSpreadNew to create the instance with spread arguments
@@ -2152,16 +2240,6 @@ func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Regi
 
 // compileSpreadNewExpression compiles new Foo(...args) with spread arguments
 func (c *Compiler) compileSpreadNewExpression(node *parser.NewExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// For now, only support calls with a single spread argument (the most common case)
-	if len(node.Arguments) != 1 {
-		return BadRegister, NewCompileError(node, "new expression with spread currently only supports a single spread argument")
-	}
-
-	spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement)
-	if !isSpread {
-		return BadRegister, NewCompileError(node, "expected spread argument")
-	}
-
 	// Compile the constructor expression
 	constructorReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, constructorReg)
@@ -2170,12 +2248,38 @@ func (c *Compiler) compileSpreadNewExpression(node *parser.NewExpression, hint R
 		return BadRegister, err
 	}
 
-	// Compile the spread argument (array to spread)
-	spreadArgReg := c.regAlloc.Alloc()
-	*tempRegs = append(*tempRegs, spreadArgReg)
-	_, err = c.compileNode(spreadElement.Argument, spreadArgReg)
-	if err != nil {
-		return BadRegister, err
+	// Check if this is the simple case: single spread argument
+	isSingleSpread := len(node.Arguments) == 1
+	var spreadArgReg Register
+
+	if isSingleSpread {
+		if spreadElement, isSpread := node.Arguments[0].(*parser.SpreadElement); isSpread {
+			// Fast path: new Foo(...arr) with single spread
+			spreadArgReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, spreadArgReg)
+			_, err = c.compileNode(spreadElement.Argument, spreadArgReg)
+			if err != nil {
+				return BadRegister, err
+			}
+		} else {
+			// Single non-spread arg shouldn't come here
+			return BadRegister, NewCompileError(node, "internal error: compileSpreadNewExpression called without spread")
+		}
+	} else {
+		// Complex case: multiple spreads or mixed regular/spread arguments
+		// Build an array at runtime containing all arguments
+		spreadArgReg = c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, spreadArgReg)
+
+		arrayLiteral := &parser.ArrayLiteral{
+			Elements: node.Arguments,
+			Token:    node.Token,
+		}
+
+		_, err = c.compileArrayLiteral(arrayLiteral, spreadArgReg)
+		if err != nil {
+			return BadRegister, err
+		}
 	}
 
 	// Use OpSpreadNew to create the instance with spread arguments

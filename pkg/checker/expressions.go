@@ -1846,6 +1846,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			if !hasSpreadErrors {
 				// Calculate effective argument count, expanding spread elements
 				actualArgCount := c.calculateEffectiveArgCount(node.Arguments)
+				skipArityCheck := actualArgCount == -1 // -1 signals unknown length arrays in spreads
 
 				if constructorSig.IsVariadic {
 					debugPrintf("// [Checker NewExpression] Taking VARIADIC branch\n")
@@ -1861,7 +1862,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 						}
 					}
 
-					if actualArgCount < minExpectedArgs {
+					if !skipArityCheck && actualArgCount < minExpectedArgs {
 						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minExpectedArgs, actualArgCount))
 					} else {
 						// Check fixed arguments
@@ -1929,9 +1930,9 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 						}
 					}
 
-					if actualArgCount < minRequiredArgs {
+					if !skipArityCheck && actualArgCount < minRequiredArgs {
 						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
-					} else if actualArgCount > expectedArgCount {
+					} else if !skipArityCheck && actualArgCount > expectedArgCount {
 						c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
 					} else {
 						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)

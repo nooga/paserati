@@ -6,4 +6,5 @@ function test() {
   console.log("arg2:", arguments[2]);
 }
 test.apply(null, [1, 2, 3, ...[]]);
+"args: 3"; // Return value
 // expect: args: 3

@@ -33,10 +33,10 @@ func (c *Checker) calculateEffectiveArgCount(arguments []parser.Expression) int 
 						debugPrintf("// [Checker EffectiveArgCount] Array literal with %d elements (treated as tuple)\n", elemCount)
 						count += elemCount
 					} else {
-						// For array variables/expressions, this should be an error
-						// But for counting purposes, we can't determine length
-						debugPrintf("// [Checker EffectiveArgCount] Array type (not tuple) - will error later\n")
-						count += 1 // Conservative estimate for error checking
+						// For array variables/expressions, we can't determine length at compile time
+						// Return -1 to signal that arity checking should be skipped
+						debugPrintf("// [Checker EffectiveArgCount] Array type (not tuple) - unknown length, skipping arity check\n")
+						return -1 // Signal: arity check should be skipped
 					}
 				} else {
 					// Spread on non-array/tuple type - error
@@ -124,14 +124,15 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 			return true
 		}
 	}
-	
-	// Otherwise, this is an error - spread must have tuple type or be passed to rest parameter
+
+	// Arrays can be spread into fixed parameters - JavaScript allows this
+	// The runtime will use as many elements as there are parameters
 	if _, isArray := argType.(*types.ArrayType); isArray {
-		c.addError(spreadElement, "A spread argument must either have a tuple type or be passed to a rest parameter")
-	} else {
-		c.addError(spreadElement, fmt.Sprintf("spread syntax can only be applied to arrays or tuples, got '%s'", argType.String()))
+		return true // Allow spreading arrays into fixed parameters
 	}
-	
+
+	// Only reject if it's not an array or tuple at all
+	c.addError(spreadElement, fmt.Sprintf("spread syntax can only be applied to arrays or tuples, got '%s'", argType.String()))
 	return false
 }
 
@@ -338,6 +339,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 		if !hasSpreadErrors {
 			// Calculate effective argument count, expanding spread elements
 			actualArgCount := c.calculateEffectiveArgCount(node.Arguments)
+			skipArityCheck := actualArgCount == -1 // -1 signals unknown length arrays in spreads
 
 			if constructorSig.IsVariadic {
 				// Variadic constructor - check minimum required args
@@ -352,7 +354,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 					}
 				}
 
-				if actualArgCount < minExpectedArgs {
+				if !skipArityCheck && actualArgCount < minExpectedArgs {
 					c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minExpectedArgs, actualArgCount))
 				} else {
 					// Check fixed arguments
@@ -419,9 +421,9 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 					}
 				}
 
-				if actualArgCount < minRequiredArgs {
+				if !skipArityCheck && actualArgCount < minRequiredArgs {
 					c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
-				} else if actualArgCount > expectedArgCount {
+				} else if !skipArityCheck && actualArgCount > expectedArgCount {
 					c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
 				} else {
 					c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
@@ -573,7 +575,12 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	
 	// Calculate effective argument count, expanding spread elements
 	actualArgCount := c.calculateEffectiveArgCount(node.Arguments)
-	debugPrintf("// [Checker CallExpr] actualArgCount after spread expansion: %d (from %d raw arguments)\n", actualArgCount, len(node.Arguments))
+	skipArityCheck := actualArgCount == -1 // -1 signals unknown length arrays in spreads
+	if skipArityCheck {
+		debugPrintf("// [Checker CallExpr] Skipping arity check due to unknown-length array spreads\n")
+	} else {
+		debugPrintf("// [Checker CallExpr] actualArgCount after spread expansion: %d (from %d raw arguments)\n", actualArgCount, len(node.Arguments))
+	}
 
 	if funcSignature.IsVariadic {
 		// --- Variadic Function Check ---
@@ -597,7 +604,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			}
 		}
 
-		if actualArgCount < minExpectedArgs {
+		if !skipArityCheck && actualArgCount < minExpectedArgs {
 			c.addError(node, fmt.Sprintf("expected at least %d arguments for variadic function, but got %d", minExpectedArgs, actualArgCount))
 			// Don't check args if minimum count isn't met.
 		} else {
@@ -675,10 +682,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			}
 		}
 
-		if actualArgCount < minRequiredArgs {
+		if !skipArityCheck && actualArgCount < minRequiredArgs {
 			c.addError(node, fmt.Sprintf("expected at least %d arguments, but got %d", minRequiredArgs, actualArgCount))
 			// Continue checking assignable args anyway? Let's stop if arity wrong.
-		} else if actualArgCount > expectedArgCount {
+		} else if !skipArityCheck && actualArgCount > expectedArgCount {
 			c.addError(node, fmt.Sprintf("expected at most %d arguments, but got %d", expectedArgCount, actualArgCount))
 		} else {
 			// Check argument types with spread expansion support

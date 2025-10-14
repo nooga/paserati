@@ -1,6 +1,5 @@
-// FIXME: spread with mixed arguments not yet supported
-// expect: undefined
-// Test spread operator
+// Test spread operator with super call
+// expect: Test completed
 class TestParent {
   static source = [3, 4, 5];
   constructor(a: number, b: number, c: number, d: number, e: number) {
@@ -15,4 +14,4 @@ class TestChild extends TestParent {
 }
 
 const instance = new TestChild();
-console.log("Test completed");
+"Test completed";
