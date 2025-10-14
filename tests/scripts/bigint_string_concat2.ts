@@ -2,6 +2,6 @@
 
 let bigVal = 123n;
 
-// BigInt + String  
+// BigInt + String
 bigVal + " is the answer";
-// expect: 123n is the answer
+// expect: 123 is the answer

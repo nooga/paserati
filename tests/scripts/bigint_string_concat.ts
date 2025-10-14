@@ -5,4 +5,4 @@ let str = "Value: ";
 
 // String + BigInt
 str + bigVal;
-// expect: Value: 123n
+// expect: Value: 123

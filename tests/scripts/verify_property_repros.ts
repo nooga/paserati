@@ -1,6 +1,7 @@
 // expect: true
 // Minimal engine-level repros (no harness dependencies)
 
+console.log("Starting tests");
 // 1) restore accessor on symbol-keyed property
 var s = Symbol("x");
 var obj = {};
@@ -31,6 +32,7 @@ ok1 =
   (d2 as any).get === (desc as any).get &&
   (d2 as any).set === (desc as any).set;
 
+console.log("1) done");
 // 2) getOwnPropertyDescriptor for undefined data and accessor properties
 var sample: any = { bar: undefined };
 Object.defineProperty(sample, "baz", {
@@ -44,5 +46,7 @@ var ok2 =
   dBar !== undefined &&
   dBaz !== undefined &&
   typeof (dBaz as any).get === "function";
+
+console.log(ok1, ok2);
 
 ok1 && ok2;
