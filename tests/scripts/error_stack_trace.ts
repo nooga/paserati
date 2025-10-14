@@ -15,10 +15,11 @@ function deep() {
 let err = outer();
 
 // Test that Error objects have stack property and contains function names
+// Note: With TCO enabled, intermediate tail calls (inner, outer) won't appear in stack
+// because their frames are reused - this is correct optimization behavior
 let hasStackProperty = typeof err.stack === "string";
 let hasDeepInStack = err.stack.includes("deep");
-let hasInnerInStack = err.stack.includes("inner");
-let hasOuterInStack = err.stack.includes("outer");
+// TCO optimizes away inner and outer frames since they're tail calls
 
 // Test with thrown errors
 let thrownErrorStackWorks = false;
@@ -32,6 +33,6 @@ try {
     thrownErrorStackWorks = typeof e.stack === "string" && e.stack.includes("throwingFunction");
 }
 
-// Return overall result
+// Return overall result - with TCO, only check stack property, deep function, and thrown error
 // expect: true
-hasStackProperty && hasDeepInStack && hasInnerInStack && hasOuterInStack && thrownErrorStackWorks;
+hasStackProperty && hasDeepInStack && thrownErrorStackWorks;

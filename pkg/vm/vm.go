@@ -18,7 +18,7 @@ const MaxFrames = 64    // Max call stack depth
 // Debug flags - set these to control debug output
 const debugVM = false           // VM execution tracing
 const debugCalls = false       // Function call tracing
-const debugExceptions = false // Exception handling tracing
+const debugExceptions = false  // Exception handling tracing
 
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
@@ -1298,7 +1298,7 @@ startExecution:
 
 		case OpTailCall:
 			// Tail Call Optimization - reuse current frame
-			_ = code[ip] // destReg - not used, fallback rewinds ip
+			destReg := code[ip] // Save for fallback
 			funcReg := code[ip+1]
 			argCount := int(code[ip+2])
 			ip += 3
@@ -1319,27 +1319,41 @@ startExecution:
 			if calleeVal.Type() == TypeClosure {
 				calleeClosure = calleeVal.AsClosure()
 				calleeFunc = calleeClosure.Fn
-				canPerformTCO = true
+				// Generator functions cannot use TCO
+				// Native functions are TypeNativeFunction, not TypeClosure, so they're already excluded
+				if !calleeFunc.IsGenerator {
+					canPerformTCO = true
+				}
 			} else if calleeVal.Type() == TypeFunction {
 				// Convert bare function to closure (like prepareCall does)
 				funcToCall := AsFunction(calleeVal)
-				calleeClosure = &ClosureObject{
-					Fn:       funcToCall,
-					Upvalues: []*Upvalue{},
+				// Generator functions cannot use TCO
+				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
+				if !funcToCall.IsGenerator {
+					calleeClosure = &ClosureObject{
+						Fn:       funcToCall,
+						Upvalues: []*Upvalue{},
+					}
+					calleeFunc = funcToCall
+					canPerformTCO = true
 				}
-				calleeFunc = funcToCall
-				canPerformTCO = true
 			}
 
-			// 3. Check if new function can fit in register stack
-			totalNeeded := calleeFunc.RegisterSize
-			availableInStack := len(vm.registerStack) - vm.nextRegSlot + len(registers)
+			// 3. Check if we can perform TCO
+			var totalNeeded, availableInStack int
+			if canPerformTCO {
+				totalNeeded = calleeFunc.RegisterSize
+				availableInStack = len(vm.registerStack) - vm.nextRegSlot + len(registers)
 
-			if canPerformTCO && totalNeeded <= availableInStack {
-				// We can perform TCO!
+				if totalNeeded <= availableInStack {
+					// We can perform TCO!
+					if debugCalls {
+						fmt.Printf("[TCO] OpTailCall performing TCO, reusing frame, old func=%s, new func=%s\n",
+							function.Name, calleeFunc.Name)
+					}
 
-				// 4. Close upvalues for current frame BEFORE overwriting
-				vm.closeUpvalues(registers)
+					// 4. Close upvalues for current frame BEFORE overwriting
+					vm.closeUpvalues(registers)
 
 				// 5. Expand register window if needed (but never shrink)
 				oldRegSize := len(registers)
@@ -1412,12 +1426,72 @@ startExecution:
 				ip = 0
 
 				continue
+				}
+
+				// Fall back to regular call if TCO not possible (not enough register space)
+				// Don't rewind - fall through to inline handler
 			}
 
-			// Fall back to regular call if TCO not possible
-			ip -= 3 // Rewind
-			// Fallthrough to OpCall
-			fallthrough
+			// If we didn't perform TCO, handle as regular call using prepareCall
+			if !canPerformTCO || totalNeeded > availableInStack {
+				if debugCalls {
+					fmt.Printf("[TCO FALLBACK] OpTailCall falling back to prepareCall, canPerformTCO=%v\n", canPerformTCO)
+				}
+				callerRegisters := registers
+				callerIP := ip
+
+				shouldSwitch, err := vm.prepareCall(calleeVal, Undefined, args, destReg, callerRegisters, callerIP)
+
+				if err != nil {
+					if debugExceptions {
+						fmt.Printf("[TCO FALLBACK] prepareCall returned error: %v\n", err)
+					}
+					var excVal Value
+					if exceptionErr, ok := err.(ExceptionError); ok {
+						excVal = exceptionErr.GetExceptionValue()
+					} else {
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+								errObj.SetOwn("name", NewString("Error"))
+								errObj.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(errObj)
+							}
+						} else {
+							errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+							errObj.SetOwn("name", NewString("Error"))
+							errObj.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(errObj)
+						}
+					}
+					vm.throwException(excVal)
+					// After exception unwinding, we need to reload frame state
+					// because frames may have been popped
+					if vm.frameCount > 0 {
+						frame = &vm.frames[vm.frameCount-1]
+						registers = frame.registers
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						ip = frame.ip
+					}
+					continue
+				}
+
+				if shouldSwitch {
+					// Refresh frame, registers, closure, function, etc.
+					frame = &vm.frames[vm.frameCount-1]
+					registers = frame.registers
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					ip = frame.ip
+				}
+			}
 
 		case OpTailCallMethod:
 			// Tail Call Optimization for method calls - reuse current frame with this binding
@@ -1443,29 +1517,40 @@ startExecution:
 			if calleeVal.Type() == TypeClosure {
 				calleeClosure = calleeVal.AsClosure()
 				calleeFunc = calleeClosure.Fn
-				canPerformTCO = true
+				// Generator functions cannot use TCO
+				// Native functions are TypeNativeFunction, not TypeClosure, so they're already excluded
+				if !calleeFunc.IsGenerator {
+					canPerformTCO = true
+				}
 			} else if calleeVal.Type() == TypeFunction {
 				// Convert bare function to closure (like prepareCall does)
 				funcToCall := AsFunction(calleeVal)
-				calleeClosure = &ClosureObject{
-					Fn:       funcToCall,
-					Upvalues: []*Upvalue{},
+				// Generator functions cannot use TCO
+				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
+				if !funcToCall.IsGenerator {
+					calleeClosure = &ClosureObject{
+						Fn:       funcToCall,
+						Upvalues: []*Upvalue{},
+					}
+					calleeFunc = funcToCall
+					canPerformTCO = true
 				}
-				calleeFunc = funcToCall
-				canPerformTCO = true
 			}
 
-			// 3. Check if new function can fit in register stack
-			totalNeeded := calleeFunc.RegisterSize
-			availableInStack := len(vm.registerStack) - vm.nextRegSlot + len(registers)
+			// 3. Check if we can perform TCO (not generator, not native)
+			var totalNeeded, availableInStack int
+			if canPerformTCO {
+				// 4. Check if new function can fit in register stack
+				totalNeeded = calleeFunc.RegisterSize
+				availableInStack = len(vm.registerStack) - vm.nextRegSlot + len(registers)
 
-			if canPerformTCO && totalNeeded <= availableInStack {
+				if totalNeeded <= availableInStack {
 				// We can perform TCO!
 
-				// 4. Close upvalues for current frame BEFORE overwriting
+				// 5. Close upvalues for current frame BEFORE overwriting
 				vm.closeUpvalues(registers)
 
-				// 5. Expand register window if needed (but never shrink)
+				// 6. Expand register window if needed (but never shrink)
 				oldRegSize := len(registers)
 				if calleeFunc.RegisterSize > oldRegSize {
 					// Need more registers - expand the slice into registerStack
@@ -1476,7 +1561,7 @@ startExecution:
 				}
 				// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
 
-				// 6. Reuse current frame
+				// 7. Reuse current frame
 				frame.closure = calleeClosure
 				frame.ip = 0
 				// Keep targetRegister unchanged (return to same caller location)
@@ -1489,7 +1574,7 @@ startExecution:
 				frame.argCount = argCount
 				frame.args = args
 
-				// 6. Clear registers and copy arguments
+				// 8. Clear registers and copy arguments
 				for i := 0; i < len(registers); i++ {
 					registers[i] = Undefined
 				}
@@ -1527,7 +1612,7 @@ startExecution:
 					registers[calleeFunc.NameBindingRegister] = calleeVal
 				}
 
-				// 7. Switch to new function's code
+				// 9. Switch to new function's code
 				closure = calleeClosure
 				function = calleeFunc
 				code = function.Chunk.Code
@@ -1535,58 +1620,74 @@ startExecution:
 				// registers already points to frame.registers
 				ip = 0
 
-				continue
-			}
+					continue
+				}
 
-			// Fall back to regular method call if TCO not possible
-			// Cannot fallthrough to OpCallMethod (too far), so handle inline
-			// destReg was already saved before ip was advanced
-			callerRegisters := registers
-			callerIP := ip
+					// Fall back to regular method call if TCO not possible (not enough register space)
+					// Fall through to inline handler below
+				}
 
-			callSiteIP := ip - 5 // IP where OpTailCallMethod instruction started (5 bytes)
-			frame.ip = callSiteIP
+			// If we didn't perform TCO (generator, not enough space, etc.), handle inline
+			if !canPerformTCO || totalNeeded > availableInStack {
+				// destReg was already saved before ip was advanced
+				callerRegisters := registers
+				callerIP := ip
 
-			shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, args, destReg, callerRegisters, callerIP)
+				callSiteIP := ip - 5 // IP where OpTailCallMethod instruction started (5 bytes)
+				frame.ip = callSiteIP
 
-			if frame.ip == callSiteIP {
-				frame.ip = callerIP
-			}
+				shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, args, destReg, callerRegisters, callerIP)
 
-			if err != nil {
-				var excVal Value
-				if exceptionErr, ok := err.(ExceptionError); ok {
-					excVal = exceptionErr.GetExceptionValue()
-				} else {
-					if errCtor, ok := vm.GetGlobal("Error"); ok {
-						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-							excVal = res
+				if frame.ip == callSiteIP {
+					frame.ip = callerIP
+				}
+
+				if err != nil {
+					var excVal Value
+					if exceptionErr, ok := err.(ExceptionError); ok {
+						excVal = exceptionErr.GetExceptionValue()
+					} else {
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+								errObj.SetOwn("name", NewString("Error"))
+								errObj.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(errObj)
+							}
 						} else {
 							errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
 							errObj.SetOwn("name", NewString("Error"))
 							errObj.SetOwn("message", NewString(err.Error()))
 							excVal = NewValueFromPlainObject(errObj)
 						}
-					} else {
-						errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
-						errObj.SetOwn("name", NewString("Error"))
-						errObj.SetOwn("message", NewString(err.Error()))
-						excVal = NewValueFromPlainObject(errObj)
 					}
+					vm.throwException(excVal)
+					// After exception unwinding, we need to reload frame state
+					// because frames may have been popped
+					if vm.frameCount > 0 {
+						frame = &vm.frames[vm.frameCount-1]
+						registers = frame.registers
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						ip = frame.ip
+					}
+					continue
 				}
-				vm.throwException(excVal)
-				continue
-			}
 
-			if shouldSwitch {
-				// Refresh frame, registers, closure, function, etc.
-				frame = &vm.frames[vm.frameCount-1]
-				registers = frame.registers
-				closure = frame.closure
-				function = closure.Fn
-				code = function.Chunk.Code
-				constants = function.Chunk.Constants
-				ip = frame.ip
+				if shouldSwitch {
+					// Refresh frame, registers, closure, function, etc.
+					frame = &vm.frames[vm.frameCount-1]
+					registers = frame.registers
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					ip = frame.ip
+				}
 			}
 
 		case OpCall:
