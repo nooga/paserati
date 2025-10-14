@@ -2551,11 +2551,11 @@ func (c *Checker) visit(node parser.Node) {
 
 		// JavaScript allows ++/-- on any type that can be coerced to number
 		// This includes: number, boolean, null, undefined, string
-		// BigInt is NOT allowed (TypeError: Cannot convert a BigInt value to a number)
+		// BigInt is special: ++/-- on bigint stays bigint (no conversion to number)
 		// Objects/Arrays will coerce via ToPrimitive at runtime
 		if widenedArgType == types.BigInt {
-			c.addError(node.Argument, fmt.Sprintf("operator '%s' cannot be applied to type 'bigint' (cannot convert BigInt to number)", node.Operator))
-			resultType = types.Any
+			// BigInt increment/decrement stays as BigInt
+			resultType = types.BigInt
 		}
 		// For all other types (including boolean, string, null, undefined, any, objects),
 		// allow them - they will be coerced to number at runtime

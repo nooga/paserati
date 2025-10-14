@@ -3038,6 +3038,27 @@ startExecution:
 
 			// --- MODIFIED: Handle Array and Object ---
 			switch baseVal.Type() {
+			case TypeArguments:
+				// Arguments object supports numeric indices only (args array)
+				// For now, treat it like a simple array-like object
+				argObj := baseVal.AsArguments()
+				if !IsNumber(indexVal) {
+					frame.ip = ip
+					status := vm.runtimeError("Arguments object only supports numeric indices, got '%v'", indexVal.Type())
+					return status, Undefined
+				}
+				idx := int(AsNumber(indexVal))
+				if idx < 0 {
+					frame.ip = ip
+					status := vm.runtimeError("Arguments index cannot be negative, got %d", idx)
+					return status, Undefined
+				}
+				// Expand args array if needed (similar to array behavior)
+				for len(argObj.args) <= idx {
+					argObj.args = append(argObj.args, Undefined)
+				}
+				argObj.args[idx] = valueVal
+
 			case TypeArray:
 				if !IsNumber(indexVal) {
 					frame.ip = ip

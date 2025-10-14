@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"math/big"
 	"paserati/pkg/errors"
 	"paserati/pkg/parser"
 	"paserati/pkg/types"
@@ -429,10 +430,17 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		// Resolve identifier and determine if local or upvalue
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(argNode.Value)
 		if !found {
-			return BadRegister, NewCompileError(node, fmt.Sprintf("applying %s to undeclared variable '%s'", node.Operator, argNode.Value))
-		}
-
-		if symbolRef.IsGlobal {
+			// Variable not found in symbol table
+			// In JavaScript mode, treat as potential global variable (will throw ReferenceError at runtime if doesn't exist)
+			// In TypeScript mode, this is a compile error
+			// For now, treat as global and let runtime handle it
+			globalIdx := c.GetOrAssignGlobalIndex(argNode.Value)
+			identInfo.isGlobal = true
+			identInfo.globalIndex = globalIdx
+			currentValueReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, currentValueReg)
+			c.emitGetGlobal(currentValueReg, globalIdx, line)
+		} else if symbolRef.IsGlobal {
 			// Global variable: Load current value with OpGetGlobal
 			identInfo.isGlobal = true
 			identInfo.globalIndex = symbolRef.GlobalIndex
@@ -523,19 +531,37 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		return BadRegister, NewCompileError(node, fmt.Sprintf("invalid target for %s: expected identifier, member expression, or index expression, got %T", node.Operator, node.Argument))
 	}
 
-	// 2. Convert current value to number (JavaScript coercion semantics)
-	// ++/-- operators require numeric operands, so we convert first
-	// This handles boolean, null, undefined, string -> number conversion
-	numericValueReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, numericValueReg)
-	c.emitOpCode(vm.OpToNumber, line)
-	c.emitByte(byte(numericValueReg))       // destination: numeric value
-	c.emitByte(byte(currentValueReg))       // source: original value
+	// 2. Check if operand is BigInt (needs special handling)
+	// For BigInt, we don't convert to number - we use BigInt arithmetic
+	// For other types, convert to number via ToNumber
+	argType := node.Argument.GetComputedType()
+	isBigInt := argType != nil && argType == types.BigInt
 
-	// 3. Load constant 1
+	var numericValueReg Register
+	if isBigInt {
+		// BigInt: use current value as-is (no conversion)
+		numericValueReg = currentValueReg
+	} else {
+		// Non-BigInt: convert to number (handles boolean, null, undefined, string)
+		numericValueReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, numericValueReg)
+		c.emitOpCode(vm.OpToNumber, line)
+		c.emitByte(byte(numericValueReg))       // destination: numeric value
+		c.emitByte(byte(currentValueReg))       // source: original value
+	}
+
+	// 3. Load constant 1 (or 1n for BigInt)
 	constOneReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, constOneReg)
-	constOneIdx := c.chunk.AddConstant(vm.Number(1))
+	var constOneIdx uint16
+	if isBigInt {
+		// Use BigInt(1) for bigint operands
+		bigIntOne := big.NewInt(1)
+		constOneIdx = c.chunk.AddConstant(vm.NewBigInt(bigIntOne))
+	} else {
+		// Use Number(1) for numeric operands
+		constOneIdx = c.chunk.AddConstant(vm.Number(1))
+	}
 	c.emitLoadConstant(constOneReg, constOneIdx, line)
 
 	// 4. Perform Pre/Post logic using hint as result register
