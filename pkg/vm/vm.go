@@ -4574,9 +4574,15 @@ startExecution:
 
 			// Get the property name from constants
 			propertyName := constants[nameIdx].ToString()
+			if debugVM {
+				fmt.Printf("[DEBUG OpGetSuper] Getting property '%s'\n", propertyName)
+			}
 
 			// Get 'this' value
 			thisValue := frame.thisValue
+			if debugVM {
+				fmt.Printf("[DEBUG OpGetSuper] thisValue type=%d, value=%s\n", thisValue.Type(), thisValue.Inspect())
+			}
 			if thisValue.Type() == TypeUndefined {
 				frame.ip = ip
 				vm.ThrowReferenceError("super property access before super() call in constructor")
@@ -4584,13 +4590,28 @@ startExecution:
 			}
 
 			// Get the prototype of 'this'
-			// For PlainObject, we use the internal prototype field
-			// For other types, we get their prototype from the built-in prototypes
+			// For super.property access, we need the prototype of the current class's prototype
+			// i.e., if 'this' is an instance of B (which extends A), we need A.prototype
 			var protoValue Value
 			if thisValue.Type() == TypeObject {
 				obj := thisValue.AsPlainObject()
-				// Get the object's prototype from its internal prototype field
-				protoValue = obj.prototype
+				// Get the object's prototype (e.g., B.prototype)
+				currentProto := obj.prototype
+				if debugVM {
+					fmt.Printf("[DEBUG OpGetSuper] Got instance prototype: type=%d, value=%s\n", currentProto.Type(), currentProto.Inspect())
+				}
+
+				// Now get the prototype of the current class's prototype (e.g., A.prototype)
+				if currentProto.Type() == TypeObject {
+					currentProtoObj := currentProto.AsPlainObject()
+					protoValue = currentProtoObj.prototype
+					if debugVM {
+						fmt.Printf("[DEBUG OpGetSuper] Got super prototype: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
+					}
+				} else {
+					// Current prototype is not an object, can't get super
+					protoValue = Undefined
+				}
 			} else if thisValue.Type() == TypeArray {
 				// For arrays, get Array.prototype
 				protoValue = vm.ArrayPrototype
@@ -4607,9 +4628,15 @@ startExecution:
 			// Get the property from the prototype
 			if protoValue.Type() == TypeObject {
 				protoObj := protoValue.AsPlainObject()
+				if debugVM {
+					fmt.Printf("[DEBUG OpGetSuper] Prototype is object, looking for property '%s'\n", propertyName)
+				}
 
 				// Check if the property is an accessor (getter/setter)
 				if getter, _, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
+					if debugVM {
+						fmt.Printf("[DEBUG OpGetSuper] Found accessor for '%s'\n", propertyName)
+					}
 					// Call the getter with 'this' bound to the original object (not the prototype)
 					result, err := vm.Call(getter, thisValue, nil)
 					if err != nil {
@@ -4647,9 +4674,15 @@ startExecution:
 					registers[destReg] = result
 				} else if propValue, ok := protoObj.GetOwn(propertyName); ok {
 					// Regular property (not an accessor)
+					if debugVM {
+						fmt.Printf("[DEBUG OpGetSuper] Found property '%s': type=%d, value=%s\n", propertyName, propValue.Type(), propValue.Inspect())
+					}
 					registers[destReg] = propValue
 				} else {
 					// Property not found on prototype, return undefined
+					if debugVM {
+						fmt.Printf("[DEBUG OpGetSuper] Property '%s' NOT found on prototype, returning undefined\n", propertyName)
+					}
 					registers[destReg] = Undefined
 				}
 			} else {

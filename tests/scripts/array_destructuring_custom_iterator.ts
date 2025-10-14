@@ -1,5 +1,5 @@
 // Test that array destructuring uses Symbol.iterator
-// expect: x: 1 y: 2 z: 42, called:true
+// expect: x:1 y:2 z:42, called:true
 let called = false;
 Array.prototype[Symbol.iterator] = function* () {
   called = true;
