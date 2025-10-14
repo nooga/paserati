@@ -61,6 +61,9 @@ const debugCompilerStats = false
 const debugCompiledCode = false // Enable disassembly output
 const debugPrint = false // Enable debug output
 
+// Feature flag: Enable Tail Call Optimization
+const enableTCO = true // Set to false to disable TCO for baseline testing
+
 func debugPrintf(format string, args ...interface{}) {
 	if debugCompiler {
 		fmt.Printf(format, args...)
@@ -103,6 +106,7 @@ type Compiler struct {
 	// --- Phase 4a: Finally Context Tracking ---
 	inFinallyBlock     bool              // Track if we're compiling inside finally block
 	tryFinallyDepth    int               // Number of enclosing try-with-finally blocks
+	tryDepth           int               // Number of enclosing try blocks (any kind: try-catch, try-finally, try-catch-finally)
 	finallyContextStack []*FinallyContext // Stack of active finally contexts
 
 	// --- Phase 5: Module Bindings ---

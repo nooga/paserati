@@ -1298,7 +1298,8 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			}
 
 			// Call the super method with 'this' binding (check if in tail position)
-			if c.inTailPosition {
+			// NOTE: Tail calls are disabled inside try blocks because exception handlers need the frame intact
+			if enableTCO && c.inTailPosition && c.tryDepth == 0 {
 				c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
 			} else {
 				c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
@@ -1363,8 +1364,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		}
 
 		// 5. Emit method call (check if in tail position)
+		// NOTE: Tail calls are disabled inside try blocks because exception handlers need the frame intact
 		// fmt.Printf("// [COMPILE DEBUG] Method call: emitCallMethod(hint=R%d, funcReg=R%d, thisReg=R%d, argCount=%d)\n", hint, funcReg, thisReg, actualArgCount)
-		if c.inTailPosition {
+		if enableTCO && c.inTailPosition && c.tryDepth == 0 {
 			c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
 		} else {
 			c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
@@ -1411,7 +1413,8 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		}
 
 		// 5. Emit method call to preserve 'this' binding (check if in tail position)
-		if c.inTailPosition {
+		// NOTE: Tail calls are disabled inside try blocks because exception handlers need the frame intact
+		if enableTCO && c.inTailPosition && c.tryDepth == 0 {
 			c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
 		} else {
 			c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
@@ -1431,7 +1434,12 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	}
 
 	// 2. Compile the expression being called (e.g., function name)
+	// NOTE: Clear tail position when compiling the callee, as the callee itself is NOT in tail position
+	// Only the result of THIS call can be in tail position
+	oldTailPos := c.inTailPosition
+	c.inTailPosition = false
 	_, err := c.compileNode(node.Function, funcReg)
+	c.inTailPosition = oldTailPos
 	if err != nil {
 		return BadRegister, err
 	}
@@ -1505,7 +1513,8 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		c.emitByte(byte(actualArgCount)) // Argument count
 	} else {
 		// Regular function call - check if in tail position
-		if c.inTailPosition {
+		// NOTE: Tail calls are disabled inside try blocks because exception handlers need the frame intact
+		if enableTCO && c.inTailPosition && c.tryDepth == 0 {
 			c.emitTailCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
 		} else {
 			c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
@@ -1640,9 +1649,13 @@ func (c *Compiler) compileSpreadCallExpression(node *parser.CallExpression, hint
 		// Regular function call with spread: func(...args)
 
 		// 1. Compile the function
+		// NOTE: Clear tail position when compiling the callee
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
 		funcReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, funcReg)
 		_, err := c.compileNode(node.Function, funcReg)
+		c.inTailPosition = oldTailPos
 		if err != nil {
 			return BadRegister, err
 		}
@@ -2444,9 +2457,13 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 	}()
 
 	// 1. Compile the function part
+	// NOTE: Clear tail position when compiling the callee
+	oldTailPos := c.inTailPosition
+	c.inTailPosition = false
 	functionReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, functionReg)
 	_, err := c.compileNode(node.Function, functionReg)
+	c.inTailPosition = oldTailPos
 	if err != nil {
 		return BadRegister, NewCompileError(node.Function, "error compiling function part of optional call expression").CausedBy(err)
 	}

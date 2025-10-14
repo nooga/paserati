@@ -13,6 +13,10 @@ import (
 func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register) (Register, errors.PaseratiError) {
 	tryStart := len(c.chunk.Code)
 
+	// Track try depth (used to disable tail calls inside try blocks)
+	c.tryDepth++
+	defer func() { c.tryDepth-- }()
+
 	// Track finally depth for return statement handling
 	// Also push a FinallyContext so break/continue/return know where to jump
 	var finallyCtx *FinallyContext

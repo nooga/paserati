@@ -1298,7 +1298,7 @@ startExecution:
 
 		case OpTailCall:
 			// Tail Call Optimization - reuse current frame
-			_ = code[ip] // destReg - not used, we keep caller's targetRegister
+			_ = code[ip] // destReg - not used, fallback rewinds ip
 			funcReg := code[ip+1]
 			argCount := int(code[ip+2])
 			ip += 3
@@ -1331,14 +1331,28 @@ startExecution:
 				canPerformTCO = true
 			}
 
-			// 3. Check if new function needs more registers than current frame
-			if canPerformTCO && calleeFunc.RegisterSize <= len(registers) {
+			// 3. Check if new function can fit in register stack
+			totalNeeded := calleeFunc.RegisterSize
+			availableInStack := len(vm.registerStack) - vm.nextRegSlot + len(registers)
+
+			if canPerformTCO && totalNeeded <= availableInStack {
 				// We can perform TCO!
 
 				// 4. Close upvalues for current frame BEFORE overwriting
 				vm.closeUpvalues(registers)
 
-				// 5. Reuse current frame
+				// 5. Expand register window if needed (but never shrink)
+				oldRegSize := len(registers)
+				if calleeFunc.RegisterSize > oldRegSize {
+					// Need more registers - expand the slice into registerStack
+					baseOffset := vm.nextRegSlot - oldRegSize
+					frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
+					registers = frame.registers
+					vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
+				}
+				// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
+
+				// 6. Reuse current frame
 				frame.closure = calleeClosure
 				frame.ip = 0
 				// Keep targetRegister unchanged (return to same caller location)
@@ -1407,7 +1421,7 @@ startExecution:
 
 		case OpTailCallMethod:
 			// Tail Call Optimization for method calls - reuse current frame with this binding
-			_ = code[ip] // destReg - not used, we keep caller's targetRegister
+			destReg := code[ip] // Save destReg for potential fallback
 			funcReg := code[ip+1]
 			thisReg := code[ip+2]
 			argCount := int(code[ip+3])
@@ -1441,14 +1455,28 @@ startExecution:
 				canPerformTCO = true
 			}
 
-			// 3. Check if new function needs more registers than current frame
-			if canPerformTCO && calleeFunc.RegisterSize <= len(registers) {
+			// 3. Check if new function can fit in register stack
+			totalNeeded := calleeFunc.RegisterSize
+			availableInStack := len(vm.registerStack) - vm.nextRegSlot + len(registers)
+
+			if canPerformTCO && totalNeeded <= availableInStack {
 				// We can perform TCO!
 
 				// 4. Close upvalues for current frame BEFORE overwriting
 				vm.closeUpvalues(registers)
 
-				// 5. Reuse current frame
+				// 5. Expand register window if needed (but never shrink)
+				oldRegSize := len(registers)
+				if calleeFunc.RegisterSize > oldRegSize {
+					// Need more registers - expand the slice into registerStack
+					baseOffset := vm.nextRegSlot - oldRegSize
+					frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
+					registers = frame.registers
+					vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
+				}
+				// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
+
+				// 6. Reuse current frame
 				frame.closure = calleeClosure
 				frame.ip = 0
 				// Keep targetRegister unchanged (return to same caller location)
@@ -1512,7 +1540,7 @@ startExecution:
 
 			// Fall back to regular method call if TCO not possible
 			// Cannot fallthrough to OpCallMethod (too far), so handle inline
-			destReg := code[ip]
+			// destReg was already saved before ip was advanced
 			callerRegisters := registers
 			callerIP := ip
 
