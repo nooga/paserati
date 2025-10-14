@@ -2139,12 +2139,11 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 		c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
 	}
 
-	// Calculate effective argument count, expanding spread elements
-	effectiveArgCount := c.calculateEffectiveArgCount(node.Arguments)
+	// Determine total argument count including optional parameters
+	totalArgCount := c.determineTotalArgCount(node)
 
 	// Allocate contiguous registers for the call: [function, arg1, arg2, ...]
-	totalRegs := 1 + effectiveArgCount // function + arguments
-
+	totalRegs := 1 + totalArgCount // function + arguments
 	functionReg := c.regAlloc.AllocContiguous(totalRegs)
 	for i := 0; i < totalRegs; i++ {
 		*tempRegs = append(*tempRegs, functionReg+Register(i))
@@ -2153,48 +2152,18 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 	// Move parent constructor to function register
 	c.emitMove(functionReg, superConstructorReg, node.Token.Line)
 
-	// Compile arguments, handling spread elements
-	argIndex := 0
-	for _, arg := range node.Arguments {
-		if spreadElement, isSpread := arg.(*parser.SpreadElement); isSpread {
-			// Handle spread element - expand the array
-			if arrayLit, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
-				// Expand array literal elements
-				for _, elem := range arrayLit.Elements {
-					if elem != nil { // Skip holes
-						argReg := functionReg + Register(1+argIndex)
-						_, err := c.compileNode(elem, argReg)
-						if err != nil {
-							return BadRegister, err
-						}
-						argIndex++
-					}
-				}
-			} else {
-				// For non-literal arrays, compile the expression
-				argReg := functionReg + Register(1+argIndex)
-				_, err := c.compileNode(spreadElement.Argument, argReg)
-				if err != nil {
-					return BadRegister, err
-				}
-				argIndex++
-			}
-		} else {
-			// Regular argument
-			argReg := functionReg + Register(1+argIndex)
-			_, err := c.compileNode(arg, argReg)
-			if err != nil {
-				return BadRegister, err
-			}
-			argIndex++
-		}
+	// Use the standard argument compilation routine - this properly handles
+	// all argument types including object literals with spread properties
+	_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, functionReg+1)
+	if err != nil {
+		return BadRegister, err
 	}
 
 	// super() creates the instance by calling the parent constructor
 	// Use OpNew to create the instance (not OpCallMethod)
 	resultReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, resultReg)
-	c.emitNew(resultReg, functionReg, byte(effectiveArgCount), node.Token.Line)
+	c.emitNew(resultReg, functionReg, byte(actualArgCount), node.Token.Line)
 
 	// Update 'this' to be the newly created instance
 	c.emitSetThis(resultReg, node.Token.Line)
