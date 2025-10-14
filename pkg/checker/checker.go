@@ -2549,11 +2549,16 @@ func (c *Checker) visit(node parser.Node) {
 
 		widenedArgType := types.GetWidenedType(argType)
 
-		if widenedArgType != types.Number && widenedArgType != types.Any {
-			// Allow 'any' for now, but error on other non-numbers
-			c.addError(node.Argument, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedArgType.String()))
-			resultType = types.Any // Result is Any if operand is invalid
+		// JavaScript allows ++/-- on any type that can be coerced to number
+		// This includes: number, boolean, null, undefined, string
+		// BigInt is NOT allowed (TypeError: Cannot convert a BigInt value to a number)
+		// Objects/Arrays will coerce via ToPrimitive at runtime
+		if widenedArgType == types.BigInt {
+			c.addError(node.Argument, fmt.Sprintf("operator '%s' cannot be applied to type 'bigint' (cannot convert BigInt to number)", node.Operator))
+			resultType = types.Any
 		}
+		// For all other types (including boolean, string, null, undefined, any, objects),
+		// allow them - they will be coerced to number at runtime
 
 		// TODO: Check if the argument is assignable (e.g., not a literal 5++)
 		// This might belong in a later compilation/resolution stage or require LHS checks here.

@@ -523,41 +523,50 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		return BadRegister, NewCompileError(node, fmt.Sprintf("invalid target for %s: expected identifier, member expression, or index expression, got %T", node.Operator, node.Argument))
 	}
 
-	// 2. Load constant 1
+	// 2. Convert current value to number (JavaScript coercion semantics)
+	// ++/-- operators require numeric operands, so we convert first
+	// This handles boolean, null, undefined, string -> number conversion
+	numericValueReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, numericValueReg)
+	c.emitOpCode(vm.OpToNumber, line)
+	c.emitByte(byte(numericValueReg))       // destination: numeric value
+	c.emitByte(byte(currentValueReg))       // source: original value
+
+	// 3. Load constant 1
 	constOneReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, constOneReg)
 	constOneIdx := c.chunk.AddConstant(vm.Number(1))
 	c.emitLoadConstant(constOneReg, constOneIdx, line)
 
-	// 3. Perform Pre/Post logic using hint as result register
+	// 4. Perform Pre/Post logic using hint as result register
 	if node.Prefix {
 		// Prefix (++x or --x):
-		// a. Operate: currentValueReg = currentValueReg +/- constOneReg
+		// a. Operate: numericValueReg = numericValueReg +/- constOneReg
 		switch node.Operator {
 		case "++":
-			c.emitAdd(currentValueReg, currentValueReg, constOneReg, line)
+			c.emitAdd(numericValueReg, numericValueReg, constOneReg, line)
 		case "--":
-			c.emitSubtract(currentValueReg, currentValueReg, constOneReg, line)
+			c.emitSubtract(numericValueReg, numericValueReg, constOneReg, line)
 		}
-		// b. Store back to lvalue
-		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, currentValueReg, line)
+		// b. Store back to lvalue (now holds incremented number)
+		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, numericValueReg, line)
 		// c. Result of expression is the *new* value - move to hint
-		c.emitMove(hint, currentValueReg, line)
+		c.emitMove(hint, numericValueReg, line)
 
 	} else {
 		// Postfix (x++ or x--):
-		// a. Save original value: hint = currentValueReg
-		c.emitMove(hint, currentValueReg, line)
-		// b. Operate: currentValueReg = currentValueReg +/- constOneReg
+		// a. Save original numeric value: hint = numericValueReg (NOT currentValueReg!)
+		c.emitMove(hint, numericValueReg, line)
+		// b. Operate: numericValueReg = numericValueReg +/- constOneReg
 		switch node.Operator {
 		case "++":
-			c.emitAdd(currentValueReg, currentValueReg, constOneReg, line)
+			c.emitAdd(numericValueReg, numericValueReg, constOneReg, line)
 		case "--":
-			c.emitSubtract(currentValueReg, currentValueReg, constOneReg, line)
+			c.emitSubtract(numericValueReg, numericValueReg, constOneReg, line)
 		}
-		// c. Store back to lvalue
-		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, currentValueReg, line)
-		// d. Result of expression is the *original* value (already in hint)
+		// c. Store back to lvalue (now holds incremented number)
+		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, numericValueReg, line)
+		// d. Result of expression is the *original* numeric value (already in hint)
 	}
 
 	return hint, nil
