@@ -4635,28 +4635,16 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Get the prototype of 'this'
-			// For super.property access, we need the prototype of the current class's prototype
-			// i.e., if 'this' is an instance of B (which extends A), we need A.prototype
+			// Get the home object's prototype to start the super property search
+			// For super.property access in object methods, we search the prototype chain
+			// starting from the home object's prototype
 			var protoValue Value
 			if thisValue.Type() == TypeObject {
 				obj := thisValue.AsPlainObject()
-				// Get the object's prototype (e.g., B.prototype)
-				currentProto := obj.prototype
+				// Get the object's prototype - this is where we start searching
+				protoValue = obj.prototype
 				if debugVM {
-					fmt.Printf("[DEBUG OpGetSuper] Got instance prototype: type=%d, value=%s\n", currentProto.Type(), currentProto.Inspect())
-				}
-
-				// Now get the prototype of the current class's prototype (e.g., A.prototype)
-				if currentProto.Type() == TypeObject {
-					currentProtoObj := currentProto.AsPlainObject()
-					protoValue = currentProtoObj.prototype
-					if debugVM {
-						fmt.Printf("[DEBUG OpGetSuper] Got super prototype: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
-					}
-				} else {
-					// Current prototype is not an object, can't get super
-					protoValue = Undefined
+					fmt.Printf("[DEBUG OpGetSuper] Got object's prototype for super search: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
 				}
 			} else if thisValue.Type() == TypeArray {
 				// For arrays, get Array.prototype
@@ -4671,63 +4659,81 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Get the property from the prototype
+			// Get the property from the prototype, walking the prototype chain
 			if protoValue.Type() == TypeObject {
-				protoObj := protoValue.AsPlainObject()
 				if debugVM {
-					fmt.Printf("[DEBUG OpGetSuper] Prototype is object, looking for property '%s'\n", propertyName)
+					fmt.Printf("[DEBUG OpGetSuper] Starting prototype chain search for property '%s'\n", propertyName)
 				}
 
-				// Check if the property is an accessor (getter/setter)
-				if getter, _, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
+				// Walk the prototype chain starting from protoValue
+				currentProto := protoValue
+				found := false
+				for currentProto.Type() == TypeObject {
+					protoObj := currentProto.AsPlainObject()
 					if debugVM {
-						fmt.Printf("[DEBUG OpGetSuper] Found accessor for '%s'\n", propertyName)
+						fmt.Printf("[DEBUG OpGetSuper] Checking prototype level for '%s'\n", propertyName)
 					}
-					// Call the getter with 'this' bound to the original object (not the prototype)
-					result, err := vm.Call(getter, thisValue, nil)
-					if err != nil {
-						frame.ip = ip
-						if ee, ok := err.(ExceptionError); ok {
-							vm.throwException(ee.GetExceptionValue())
-							if !vm.unwinding {
-								continue
-							}
-							return InterpretRuntimeError, Undefined
+
+					// Check if the property is an accessor (getter/setter) at this level
+					if getter, _, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
+						if debugVM {
+							fmt.Printf("[DEBUG OpGetSuper] Found accessor for '%s'\n", propertyName)
 						}
-						// Wrap non-exception Go error
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res
+						// Call the getter with 'this' bound to the original object (not the prototype)
+						result, err := vm.Call(getter, thisValue, nil)
+						if err != nil {
+							frame.ip = ip
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								if !vm.unwinding {
+									continue
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							// Wrap non-exception Go error
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
 							} else {
 								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
 								eo.SetOwn("name", NewString("Error"))
 								eo.SetOwn("message", NewString(err.Error()))
 								excVal = NewValueFromPlainObject(eo)
 							}
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
+							vm.throwException(excVal)
+							if !vm.unwinding {
+								continue
+							}
+							return InterpretRuntimeError, Undefined
 						}
-						vm.throwException(excVal)
-						if !vm.unwinding {
-							continue
+						registers[destReg] = result
+						found = true
+						break
+					} else if propValue, ok := protoObj.GetOwn(propertyName); ok {
+						// Regular property (not an accessor) found at this level
+						if debugVM {
+							fmt.Printf("[DEBUG OpGetSuper] Found property '%s': type=%d, value=%s\n", propertyName, propValue.Type(), propValue.Inspect())
 						}
-						return InterpretRuntimeError, Undefined
+						registers[destReg] = propValue
+						found = true
+						break
 					}
-					registers[destReg] = result
-				} else if propValue, ok := protoObj.GetOwn(propertyName); ok {
-					// Regular property (not an accessor)
+
+					// Move to the next prototype in the chain
+					currentProto = protoObj.prototype
+				}
+
+				if !found {
+					// Property not found in entire prototype chain, return undefined
 					if debugVM {
-						fmt.Printf("[DEBUG OpGetSuper] Found property '%s': type=%d, value=%s\n", propertyName, propValue.Type(), propValue.Inspect())
-					}
-					registers[destReg] = propValue
-				} else {
-					// Property not found on prototype, return undefined
-					if debugVM {
-						fmt.Printf("[DEBUG OpGetSuper] Property '%s' NOT found on prototype, returning undefined\n", propertyName)
+						fmt.Printf("[DEBUG OpGetSuper] Property '%s' NOT found in prototype chain, returning undefined\n", propertyName)
 					}
 					registers[destReg] = Undefined
 				}
