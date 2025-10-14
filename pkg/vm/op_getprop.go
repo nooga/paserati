@@ -114,9 +114,15 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		}
 	}
 
-	// 5. Arguments object property lookup (delegate to Object.prototype)
+	// 5. Arguments object property lookup
 	if objVal.Type() == TypeArguments {
-		// Arguments objects should inherit from Object.prototype
+		argObj := AsArguments(*objVal)
+		// Handle special arguments object properties
+		if propName == "length" {
+			*dest = Number(float64(argObj.Length()))
+			return true, InterpretOK, *dest
+		}
+		// Delegate to Object.prototype for inherited methods
 		if vm.ObjectPrototype.Type() == TypeObject {
 			objProto := vm.ObjectPrototype.AsPlainObject()
 			if method, exists := objProto.GetOwn(propName); exists {

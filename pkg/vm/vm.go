@@ -78,6 +78,7 @@ type CallFrame struct {
 	isSentinelFrame   bool    // Whether this frame is a sentinel that should cause vm.run() to return immediately
 	argCount          int     // Actual number of arguments passed to this function (for arguments object)
 	args              []Value // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
+	argumentsObject   Value   // Cached arguments object (created on first access to 'arguments')
 
 	// For async native functions that can call bytecode
 	isNativeFrame    bool
@@ -2656,7 +2657,8 @@ startExecution:
 				if idx < 0 || idx >= args.Length() {
 					registers[destReg] = Undefined // Out of bounds -> undefined
 				} else {
-					registers[destReg] = args.Get(idx)
+					resultVal := args.Get(idx)
+					registers[destReg] = resultVal
 				}
 
 			case TypeObject, TypeDictObject: // <<< NEW
@@ -3035,6 +3037,7 @@ startExecution:
 			baseVal := registers[baseReg]
 			indexVal := registers[indexReg]
 			valueVal := registers[valueReg]
+
 
 			// --- MODIFIED: Handle Array and Object ---
 			switch baseVal.Type() {
@@ -4220,11 +4223,22 @@ startExecution:
 				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
 				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
+				newFrame.argCount = argCount             // Store actual argument count for arguments object
+				// Copy arguments for arguments object (before registers get mutated by function execution)
+				argStartRegInCaller := constructorReg + 1
+				newFrame.args = make([]Value, argCount)
+				for i := 0; i < argCount; i++ {
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						newFrame.args[i] = Undefined
+					}
+				}
+				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
 				// Copy fixed arguments and handle rest parameters
-				argStartRegInCaller := constructorReg + 1
 
 				// Copy fixed arguments (up to Arity)
 				for i := 0; i < constructorFunc.Arity; i++ {
@@ -4360,11 +4374,22 @@ startExecution:
 				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
 				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
+				newFrame.argCount = argCount             // Store actual argument count for arguments object
+				// Copy arguments for arguments object (before registers get mutated by function execution)
+				argStartRegInCaller := constructorReg + 1
+				newFrame.args = make([]Value, argCount)
+				for i := 0; i < argCount; i++ {
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						newFrame.args[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						newFrame.args[i] = Undefined
+					}
+				}
+				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
 				// Copy fixed arguments and handle rest parameters
-				argStartRegInCaller := constructorReg + 1
 
 				// Copy fixed arguments (up to Arity)
 				for i := 0; i < constructorFunc.Arity; i++ {
@@ -5779,23 +5804,31 @@ startExecution:
 				}
 			}
 
-			// Get the arguments from the frame's saved args (not from registers, which get mutated)
-			// The args were copied when the frame was created in prepareCall
-			args := frame.args
-			if args == nil {
-				// Fallback for frames created without args (shouldn't happen in normal execution)
-				args = make([]Value, 0)
-			}
-
-			// Create arguments object with callee reference
-			var calleeValue Value
-			if frame.closure != nil {
-				calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
+			// Check if we already created an arguments object for this frame
+			// If so, reuse it (to preserve mutations like arguments[1] = 7)
+			if frame.argumentsObject.Type() != TypeUndefined {
+				// Reuse cached arguments object
+				frame.registers[destReg] = frame.argumentsObject
 			} else {
-				calleeValue = Undefined
+				// First access to arguments - create and cache it
+				// The args were copied when the frame was created in prepareCall
+				args := frame.args
+				if args == nil {
+					// Fallback for frames created without args (shouldn't happen in normal execution)
+					args = make([]Value, 0)
+				}
+	
+				// Create arguments object with callee reference
+				var calleeValue Value
+				if frame.closure != nil {
+					calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
+				} else {
+					calleeValue = Undefined
+				}
+				argsObj := NewArguments(args, calleeValue)
+				frame.argumentsObject = argsObj // Cache it for future accesses
+				frame.registers[destReg] = argsObj
 			}
-			argsObj := NewArguments(args, calleeValue)
-			frame.registers[destReg] = argsObj
 
 		// --- Generator Support ---
 		case OpCreateGenerator:

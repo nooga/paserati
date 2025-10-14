@@ -225,6 +225,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Copy arguments for arguments object (before registers get mutated by function execution)
 		newFrame.args = make([]Value, argCount)
 		copy(newFrame.args, args)
+		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 

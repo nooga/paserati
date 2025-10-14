@@ -70,6 +70,11 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.isDirectCall = false       // Not a direct call (spread new)
 		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
 		newFrame.newTargetValue = constructorVal
+		newFrame.argCount = argCount        // Store actual argument count for arguments object
+		// Copy arguments for arguments object (before registers get mutated by function execution)
+		newFrame.args = make([]Value, argCount)
+		copy(newFrame.args, spreadArgs)
+		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 
@@ -134,6 +139,11 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.isDirectCall = false       // Not a direct call (spread new)
 		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
 		newFrame.newTargetValue = constructorVal
+		newFrame.argCount = argCount        // Store actual argument count for arguments object
+		// Copy arguments for arguments object (before registers get mutated by function execution)
+		newFrame.args = make([]Value, argCount)
+		copy(newFrame.args, spreadArgs)
+		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 
