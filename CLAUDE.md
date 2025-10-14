@@ -257,12 +257,86 @@ Break it down:
 
 # Find tests by error keyword
 ./paserati-test262 -path ./test262 -subpath "language/expressions" -filter 2>&1 | grep "instanceof"
+```
 
-# Compare before/after (save results to files)
-./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter > before.txt
-# ... make fixes ...
-./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter > after.txt
-diff before.txt after.txt
+### Baseline-Driven Development Workflow
+
+Paserati uses an automated baseline system to track Test262 compliance progress. A post-commit hook automatically generates `baseline.txt` after each commit, capturing a snapshot of all test results.
+
+**How It Works**:
+
+- **baseline.txt format**: Each line is `+test-path` (passing) or `-test-path` (failing)
+- **Post-commit hook**: Automatically runs after `git commit` and generates fresh `baseline.txt`
+- **Diff tool**: Compare current work against committed baseline to see impact of changes
+
+**Development Workflow**:
+
+```bash
+# 1. Make your changes to the codebase
+# ... edit files ...
+
+# 2. Run smoke tests to ensure no regressions
+go test ./tests -run TestScripts
+
+# 3. Compare your changes against the committed baseline
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
+
+# Example output:
+# +language/expressions/super/method-call.js        <- Now passing! (was failing)
+# -language/statements/class/name-binding.js        <- Now failing (was passing)
+#
+# === Diff Summary ===
+# New passes:   5
+# New failures: 1
+# Net change:   +4
+
+# 4. Communicate success to the user, allow them to review and approve the commit
+git add <files>
+git commit -m "Fix super method calls in expressions"
+# Hook automatically generates new baseline.txt for next iteration
+
+# 5. Continue development against new baseline
+# ... make more changes ...
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
+```
+
+**Key Flags**:
+
+- `-diff <file>`: Compare current results against baseline file
+
+  - Shows `+path` for tests that started passing
+  - Shows `-path` for tests that started failing
+  - Prints summary statistics (net change, new passes, new failures)
+
+- `-dump <file>`: Save current test results to file
+
+  - Format: `+path` (passing) or `-path` (failing)
+  - Useful for manual baseline creation or debugging
+
+- Combine them: `-diff baseline.txt -dump current.txt`
+  - Compare against baseline AND save current state
+
+**Benefits**:
+
+- **Fast feedback**: See exactly which tests your changes affected
+- **No regressions**: Quickly catch when fixes break other tests
+- **Progress tracking**: Each commit captures test state for historical comparison
+- **Focused debugging**: Diff output highlights specific test paths to investigate
+
+**Example Session**:
+
+```bash
+# Working on instanceof operator fix
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
+# Net change: -3 (broke some tests)
+# Fix the regression...
+
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
+# Net change: +5 (fixed instanceof AND no regressions!)
+
+# Communicate success to the user, allow them to review and approve the commit
+git commit -m "Fix instanceof for built-in types"
+# Hook generates new baseline.txt automatically
 ```
 
 ### Adding New Language Features
