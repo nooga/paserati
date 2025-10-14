@@ -527,6 +527,8 @@ func (c *Checker) createInstanceType(className string, body *parser.ClassBody, s
 	}
 
 	// FINAL PASS: Check method bodies now that all properties and methods are in the instance type
+	// Note: This may report errors for forward references to variables declared after the class.
+	// TypeScript allows these at runtime since variables are only accessed when methods are called.
 	c.checkMethodBodiesInInstance(className, body, instanceType)
 
 	// VALIDATE INTERFACES: Now that all properties and methods are added, validate interface implementations
@@ -583,6 +585,11 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 	savedThisType := c.currentThisType
 	savedInstanceType := c.currentClassInstanceType
 	savedEnv := c.env
+	savedAllowForwardReferences := c.allowForwardReferences
+
+	// Enable lenient mode for forward references in method bodies
+	// This allows methods to reference variables declared after the class
+	c.allowForwardReferences = true
 
 	// Create a new environment scope for the method body
 	c.env = NewEnclosedEnvironment(c.env)
@@ -615,6 +622,7 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 		c.currentClassContext = savedClassContext
 		c.currentThisType = savedThisType
 		c.currentClassInstanceType = savedInstanceType
+		c.allowForwardReferences = savedAllowForwardReferences
 	}()
 
 	// Check the function literal

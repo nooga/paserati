@@ -213,6 +213,11 @@ type Checker struct {
 	currentGenericClass *types.GenericType
 	currentForwardRef   *types.ForwardReferenceType
 
+	// --- NEW: Lenient mode for forward references ---
+	// When true, undefined variables are treated as 'any' instead of errors
+	// This allows checking method bodies that reference variables declared later
+	allowForwardReferences bool
+
 	// --- NEW: Generator function tracking ---
 	// Track generator function names for yield* validation
 	generatorFunctions map[string]bool
@@ -1922,6 +1927,11 @@ func (c *Checker) visit(node parser.Node) {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' resolved as built-in type: %s\n", node.Value, builtinType.String())
 				node.SetComputedType(builtinType)
 				node.IsConstant = true // Built-ins are effectively constants
+			} else if c.allowForwardReferences {
+				// In lenient mode, treat undefined variables as 'any' instead of errors
+				// This allows checking method bodies that reference variables declared later
+				debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found (forward reference allowed)\n", node.Value)
+				node.SetComputedType(types.Any)
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
 				c.addError(node, fmt.Sprintf("undefined variable: %s", node.Value))
