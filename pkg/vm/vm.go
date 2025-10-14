@@ -3196,7 +3196,7 @@ startExecution:
 			switch srcVal.Type() {
 			case TypeArray:
 				arr := AsArray(srcVal)
-				length = float64(len(arr.elements))
+				length = float64(arr.Length())
 			case TypeString:
 				str := AsString(srcVal)
 				// Use rune count for string length to handle multi-byte chars correctly

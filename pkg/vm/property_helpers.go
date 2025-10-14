@@ -365,7 +365,7 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 		switch objVal.Type() {
 		case TypeArray:
 			arr := AsArray(objVal)
-			return Number(float64(len(arr.elements))), true
+			return Number(float64(arr.Length())), true
 		case TypeArguments:
 			args := AsArguments(objVal)
 			return Number(float64(args.Length())), true

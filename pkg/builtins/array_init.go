@@ -714,7 +714,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 				result := vm.NewArray()
 				// Set length without allocating elements - JavaScript arrays are sparse
-				result.AsArray().SetLength(length)
+				arr := result.AsArray()
+				arr.SetLength(length)
+				// DEBUG: verify length was set
+				// fmt.Printf("[DEBUG Array constructor] Set length to %d, arr.Length() = %d, result.Type() = %d (TypeArray=%d)\n", length, arr.Length(), result.Type(), vm.TypeArray)
 				return result, nil
 			}
 		}
