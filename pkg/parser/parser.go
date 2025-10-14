@@ -3392,8 +3392,9 @@ func (p *Parser) parseYieldExpression() Expression {
 			!p.peekTokenIs(lexer.COLON) { // for switch cases and object properties
 			// Advance to the value expression
 			p.nextToken()
-			// Parse the value to yield with LOWEST precedence to consume the entire right-hand side
-			expression.Value = p.parseExpression(LOWEST)
+			// Parse the value to yield with ASSIGNMENT precedence (stops at commas)
+			// This prevents yield from consuming comma operators in contexts like object literals
+			expression.Value = p.parseExpression(ASSIGNMENT)
 			if expression.Value == nil {
 				// If parsing failed, treat as yield with no value
 				expression.Value = nil
@@ -5578,10 +5579,15 @@ func (p *Parser) parseObjectLiteral() Expression {
 		if p.curTokenIs(lexer.SPREAD) {
 			// Parse spread element: ...expression
 			spreadToken := p.curToken
+			debugPrint("Object spread: starting at token %s, peek is %s", p.curToken.Type, p.peekToken.Type)
 			p.nextToken() // Consume '...' to get to the expression
+			debugPrint("Object spread: after consuming '...', cur=%s(%s), peek=%s(%s)",
+				p.curToken.Type, p.curToken.Literal, p.peekToken.Type, p.peekToken.Literal)
 
 			// Parse the expression being spread
 			spreadExpr := p.parseExpression(COMMA)
+			debugPrint("Object spread: after parseExpression(COMMA), cur=%s(%s), peek=%s(%s)",
+				p.curToken.Type, p.curToken.Literal, p.peekToken.Type, p.peekToken.Literal)
 			if spreadExpr == nil {
 				p.addError(p.curToken, "expected expression after '...' in object literal")
 				return nil
@@ -5600,12 +5606,16 @@ func (p *Parser) parseObjectLiteral() Expression {
 			})
 
 			// Check for comma or closing brace
+			debugPrint("Object spread: checking next token - peek=%s(%s)", p.peekToken.Type, p.peekToken.Literal)
 			if p.peekTokenIs(lexer.COMMA) {
+				debugPrint("Object spread: found comma, consuming it")
 				p.nextToken() // Consume comma
 				continue
 			} else if p.peekTokenIs(lexer.RBRACE) {
+				debugPrint("Object spread: found rbrace, breaking")
 				break // End of object
 			} else {
+				debugPrint("Object spread: ERROR - expected comma or rbrace but got %s(%s)", p.peekToken.Type, p.peekToken.Literal)
 				p.addError(p.curToken, "expected ',' or '}' after spread element")
 				return nil
 			}
