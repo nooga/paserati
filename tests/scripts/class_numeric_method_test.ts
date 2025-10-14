@@ -1,5 +1,5 @@
 // Test numeric property names in classes
-// expect: function function hello getter
+// expect: function, function, hello, getter
 
 class C {
   42() {

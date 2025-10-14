@@ -624,7 +624,7 @@ func (p *Parser) parseClassDeclarationStatement() Statement {
 	return p.parseClassDeclaration()
 }
 
-func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
+func (p *Parser) parseAbstractClassDeclarationStatement() Statement {
 	// We're at the 'abstract' token, peek should be 'class'
 	if !p.expectPeek(lexer.CLASS) {
 		return &ExpressionStatement{
@@ -633,9 +633,9 @@ func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
 		}
 	}
 
-	// Parse the class as an expression (ClassExpression)
-	classExpr := p.parseClassExpression()
-	if classExpr == nil {
+	// Parse the class as a declaration (ClassDeclaration)
+	classDeclStmt := p.parseClassDeclaration()
+	if classDeclStmt == nil {
 		return &ExpressionStatement{
 			Token:      p.curToken,
 			Expression: nil,
@@ -643,14 +643,8 @@ func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
 	}
 
 	// Mark the class as abstract
-	if classDecl, ok := classExpr.(*ClassExpression); ok {
+	if classDecl, ok := classDeclStmt.(*ClassDeclaration); ok {
 		classDecl.IsAbstract = true
-	}
-
-	// Wrap it in an ExpressionStatement
-	stmt := &ExpressionStatement{
-		Token:      p.curToken,
-		Expression: classExpr,
 	}
 
 	// Optional semicolon
@@ -658,7 +652,7 @@ func (p *Parser) parseAbstractClassDeclarationStatement() *ExpressionStatement {
 		p.nextToken()
 	}
 
-	return stmt
+	return classDeclStmt
 }
 
 // --- NEW: Type Alias Statement Parsing ---

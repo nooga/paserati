@@ -36,6 +36,8 @@ func main() {
 		suiteMode  = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
 		filterMode = flag.Bool("filter", false, "Filter out legacy JS patterns not relevant for modern TS runtime")
 		disasm     = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
+		dumpFile   = flag.String("dump", "", "Dump all test results to file (format: +test-path or -test-path)")
+		diffFile   = flag.String("diff", "", "Compare current results against baseline file and show differences")
 	)
 
 	flag.Parse()
@@ -93,13 +95,20 @@ func main() {
 	// Run tests
 	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *filterMode, *disasm)
 
-	// Print summary, tree, or suite
-	if *suiteMode {
-		printSuiteSummary(fileResults, testDir, testPath)
-	} else if *treeMode {
-		printTreeSummary(fileResults, testDir)
+	// Handle diff/dump modes
+	if *diffFile != "" {
+		handleDiffMode(fileResults, testDir, *diffFile, *dumpFile)
+	} else if *dumpFile != "" {
+		handleDumpMode(fileResults, testDir, *dumpFile)
 	} else {
-		printSummary(&stats)
+		// Print summary, tree, or suite
+		if *suiteMode {
+			printSuiteSummary(fileResults, testDir, testPath)
+		} else if *treeMode {
+			printTreeSummary(fileResults, testDir)
+		} else {
+			printSummary(&stats)
+		}
 	}
 
 	// Memory profiling and GC stats
@@ -1179,4 +1188,155 @@ func printColoredTreeNode(node *TreeNode, indent string, isLast bool, showDurati
 		newIndent := indent + "  "
 		printColoredTreeNode(child, newIndent, false, showDuration)
 	}
+}
+
+// handleDumpMode writes all test results to a file in +/- format
+func handleDumpMode(results []TestResult, testDir string, dumpFile string) {
+	f, err := os.Create(dumpFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating dump file: %v\n", err)
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	// Sort results by path for deterministic output
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Path < results[j].Path
+	})
+
+	// Write each result as + (passed) or - (failed/timeout/skipped)
+	passCount := 0
+	failCount := 0
+	for _, result := range results {
+		// Get relative path from testDir
+		relPath, err := filepath.Rel(testDir, result.Path)
+		if err != nil {
+			relPath = result.Path
+		}
+
+		if result.Passed {
+			fmt.Fprintf(f, "+%s\n", relPath)
+			passCount++
+		} else {
+			fmt.Fprintf(f, "-%s\n", relPath)
+			failCount++
+		}
+	}
+
+	fmt.Printf("Dumped %d test results to %s (%d passed, %d failed)\n", len(results), dumpFile, passCount, failCount)
+}
+
+// handleDiffMode compares current results against a baseline file
+func handleDiffMode(results []TestResult, testDir string, diffFile string, dumpFile string) {
+	// Load baseline
+	baseline, err := loadBaseline(diffFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading baseline file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Build current results map
+	current := make(map[string]bool) // path -> passed
+	for _, result := range results {
+		relPath, err := filepath.Rel(testDir, result.Path)
+		if err != nil {
+			relPath = result.Path
+		}
+		current[relPath] = result.Passed
+	}
+
+	// Compare and collect differences
+	var newPasses []string
+	var newFailures []string
+	var onlyInBaseline []string
+	var onlyInCurrent []string
+
+	// Check all tests in baseline
+	for path, baselinePassed := range baseline {
+		currentPassed, exists := current[path]
+		if !exists {
+			onlyInBaseline = append(onlyInBaseline, path)
+			continue
+		}
+
+		if !baselinePassed && currentPassed {
+			// Was failing, now passing
+			newPasses = append(newPasses, path)
+		} else if baselinePassed && !currentPassed {
+			// Was passing, now failing
+			newFailures = append(newFailures, path)
+		}
+	}
+
+	// Check for tests only in current
+	for path := range current {
+		if _, exists := baseline[path]; !exists {
+			onlyInCurrent = append(onlyInCurrent, path)
+		}
+	}
+
+	// Sort for deterministic output
+	sort.Strings(newPasses)
+	sort.Strings(newFailures)
+	sort.Strings(onlyInBaseline)
+	sort.Strings(onlyInCurrent)
+
+	// Print differences
+	for _, path := range newPasses {
+		fmt.Printf("+%s\n", path)
+	}
+	for _, path := range newFailures {
+		fmt.Printf("-%s\n", path)
+	}
+
+	// Print summary
+	fmt.Fprintf(os.Stderr, "\n")
+	fmt.Fprintf(os.Stderr, "=== Diff Summary ===\n")
+	fmt.Fprintf(os.Stderr, "New passes:   %d\n", len(newPasses))
+	fmt.Fprintf(os.Stderr, "New failures: %d\n", len(newFailures))
+	fmt.Fprintf(os.Stderr, "Net change:   %+d\n", len(newPasses)-len(newFailures))
+	if len(onlyInBaseline) > 0 {
+		fmt.Fprintf(os.Stderr, "Only in baseline: %d\n", len(onlyInBaseline))
+	}
+	if len(onlyInCurrent) > 0 {
+		fmt.Fprintf(os.Stderr, "Only in current:  %d\n", len(onlyInCurrent))
+	}
+
+	// Optionally dump current state
+	if dumpFile != "" {
+		handleDumpMode(results, testDir, dumpFile)
+	}
+}
+
+// loadBaseline reads a baseline file and returns a map of path -> passed
+func loadBaseline(filename string) (map[string]bool, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	baseline := make(map[string]bool)
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if len(line) < 2 {
+			continue
+		}
+
+		status := line[0]
+		path := line[1:]
+
+		switch status {
+		case '+':
+			baseline[path] = true
+		case '-':
+			baseline[path] = false
+		}
+	}
+
+	return baseline, nil
 }

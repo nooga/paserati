@@ -1066,7 +1066,9 @@ func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg 
 	var needToFree bool
 
 	// Try to resolve the parent class
+	debugPrintf("// DEBUG createInheritedPrototype: Attempting to resolve parent class '%s'\n", superClassName)
 	if symbol, _, exists := c.currentSymbolTable.Resolve(superClassName); exists {
+		debugPrintf("// DEBUG createInheritedPrototype: Successfully resolved '%s' (IsGlobal=%v)\n", superClassName, symbol.IsGlobal)
 		if symbol.IsGlobal {
 			// Global scope - load from global
 			parentConstructorReg = c.regAlloc.Alloc()
@@ -1078,6 +1080,7 @@ func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg 
 			needToFree = false
 		}
 	} else {
+		debugPrintf("// DEBUG createInheritedPrototype: Failed to resolve parent class '%s'\n", superClassName)
 		return NewCompileError(nil, fmt.Sprintf("parent class '%s' not found", superClassName))
 	}
 

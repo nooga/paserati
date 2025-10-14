@@ -41,3 +41,4 @@ scratch/
 test262/
 paserati-test262
 *.prof
+baseline.txt
