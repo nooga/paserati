@@ -12,4 +12,4 @@ class C {
 }
 
 const c = new C();
-console.log(typeof c[42], typeof c["42"], c[42](), c[100]);
+`${typeof c[42]}, ${typeof c["42"]}, ${c[42]()}, ${c[100]}`;
