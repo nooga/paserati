@@ -4,55 +4,93 @@
 
 ## _"Sir, it's no V8 but we're doing what we can"_
 
-Welcome to **PASERATI** - a _bootleg_ TypeScript runtime implementation written in Go. Unlike traditional TypeScript toolchains, Paserati runs TypeScript code directly without transpiling to JavaScript. And yes, that means it will also run _some version_ of JavaScript!
+Welcome to **PASERATI** - a spec-compliant ES2025 runtime with native TypeScript frontend, written entirely in Go. Unlike traditional TypeScript toolchains, Paserati type-checks and compiles TypeScript directly to bytecode without transpiling to JavaScript. And yes, that means it runs JavaScript too - by definition.
 
 ## What's Under The Hood
 
 _Pops the hood, looks around, slams the hood shut._
 
-Paserati aims to be performance-adjacent, like any other JavaScript engine written in Go, but with loftier ambitions to overtake all of them. It compiles TypeScript directly to bytecode for a register-based virtual machine, skipping the JavaScript middle-man entirely. For now, the main optimization is inline caches (ICs) for property access - no fancy optimization wizardry, yet.
+Paserati compiles TypeScript/JavaScript directly to bytecode for a register-based virtual machine. The architecture includes inline caching (ICs) for property access, shape-based object optimization, and pluggable async executors with microtask scheduling. Currently prioritizing correctness over performance - the foundation for type-driven optimizations (specialization, monomorphization, unchecked fast paths) is there, just not implemented yet.
 
 ## Goals
 
 _Lights a cigarette._
 
-- **Quality Entertainment**: Feel the rush of running TypeScript without a bulky V8.
-- **Education**: Testbed for solo large-scale software engineering with AI assistance.
-- **Utility**: Eventually become a useful embedded scripting language for Go applications.
-- **Decent Runtime Performance**: Beat the fastest existing JS engine implemented in Go.
+- **ECMAScript 2025 Compliance**: Currently at 74.2% Test262 language suite pass rate (17,548/23,634 tests), targeting 90%+ for production readiness.
+- **Native TypeScript Execution**: Full type checking and direct bytecode compilation - no transpilation, no tsc dependency.
+- **Safe Embedding**: Pluggable module resolution, execution quotas at VM level, Deno-like permission system for secure script execution in Go applications.
+- **Practical Performance**: Currently prioritizing correctness, but architecture supports type-driven optimizations (specialization, monomorphization, unchecked opcodes).
+- **Future Extensibility**: Once we hit 90% ES2025 compliance, building Deno/Node emulation layers on top - just for giggles.
 
 ## Non-goals
 
 _Tosses 2/3 of the cigarette out the window._
 
-- **Utility**: Don't expect this to ever replace your TypeScript toolchain. Go see [microsoft/typescript-go](https://github.com/microsoft/typescript-go) for that.
-- **Performance on par with real engines**: I'm not going to make a JIT in Go, I'll stop just short of that.
-- **Full feature parity with TypeScript or ECMAScript**: Keeping this in sync with all the quirks of the language is a full-time job in itself.
+- **Replacing TypeScript Toolchains**: Don't expect this to replace your build pipeline. Go see [microsoft/typescript-go](https://github.com/microsoft/typescript-go) for that.
+- **JIT Performance**: I'm not going to make a JIT in Go, I'll stop just short of that. But we'll beat the fastest pure Go JS engines.
+- **Legacy JavaScript Quirks**: Targeting modern ES2025 - we don't care about `with` statements or ancient ES3 edge cases.
 
 ## Example
 
 _Lights another cigarette, curses at the cigarette, throws it out the window._
 
-Here's some TypeScript that actually works:
+Here's a reactive data store:
 
 ```typescript
-type Cucumber = number;
+// Helper: Type-preserving reactive wrapper
+function reactive<T extends object>(target: T): T {
+  return new Proxy(target, {
+    set(obj, prop, value) {
+      const old = obj[prop as keyof T];
+      obj[prop as keyof T] = value;
+      if (old !== value) console.log(`${String(prop)}: ${old} → ${value}`);
+      return true;
+    },
+  });
+}
 
-const Y = <T>(f: any): any =>
-  ((x: any): any => f((y: T) => x(x)(y)))((x: any): any =>
-    f((y: T) => x(x)(y))
-  );
+// Generic reactive store with constraints and async methods
+class ReactiveStore<T extends { id: string }> {
+  private items: T[] = [];
 
-const factorial = Y(
-  (f: any) =>
-    (n: Cucumber): Cucumber =>
-      n <= 1 ? 1 : n * f(n - 1)
-);
+  add(item: T): T {
+    const reactiveItem = reactive(item);
+    this.items.push(reactiveItem);
+    return reactiveItem;
+  }
 
-console.time("factorial");
-console.log(factorial(10)); // 3628800
-console.timeEnd("factorial"); // factorial: 0.016ms
+  filter(predicate: (item: T) => boolean): T[] {
+    return this.items.filter(predicate);
+  }
+
+  async processAll(fn: (item: T) => Promise<void>): Promise<void> {
+    for (const item of this.items) await fn(item);
+  }
+}
+
+interface User {
+  id: string;
+  name: string;
+  score: number;
+}
+
+const store = new ReactiveStore<User>();
+const alice = store.add({ id: "1", name: "Alice", score: 100 });
+alice.score = 150; // score: 100 → 150
+
+const topUsers = store.filter((u) => u.score > 90);
+console.log(topUsers); // [{ id: "1", name: "Alice", score: 150 }]
+
+await store.processAll(async (user) => {
+  console.log(`Processed ${user.name}`);
+});
 ```
+
+See [examples/es2025_showcase.ts](examples/es2025_showcase.ts) for a comprehensive feature demo.
+
+Examples may or may not work at every commit, but they should work at least once in a while.
+
+_Wind blows the cigarette back into the car, it catches fire._
 
 ## Usage
 
@@ -73,31 +111,42 @@ go test ./tests/...
 
 _Scratches a nasty red spot on the roof._
 
-The engine's warmed up and running decent up until the first bend! I've got the core language fundamentals working - variables, functions, objects, basic types, control flow. But let's be real about what's still missing:
+**Test262 Compliance: 74.2%** (17,548/23,634 language suite tests passing)
 
-**Big Missing Pieces:**
+The engine's running hot and crawling with bugs! Most ES2025 features are implemented and mostly working:
 
-- **No async/await** - Don't have an event loop yet, so no async/await
+**✅ Complete:**
 
-**Also Missing:**
+- **Async/Await & Promises** - Full microtask scheduling, top-level await, async generators
+- **Modules** - ESM imports/exports, dynamic `import()`, pluggable module resolution
+- **Classes** - Full ES2025 class syntax including private fields (`#private`), static blocks, inheritance
+- **Generators** - `function*`, `yield`, `yield*` delegation
+- **Advanced Types** - Generics, conditional types, mapped types, template literals, `infer` keyword
+- **Modern Operators** - Optional chaining (`?.`), nullish coalescing (`??`), logical assignment
+- **Destructuring** - Arrays, objects, rest/spread in all contexts
+- **Built-ins** - Proxy, Reflect, Map, Set, TypedArrays, ArrayBuffer, RegExp, Symbol, BigInt
+- **Eval** - Direct and indirect eval with proper scoping (bugged)
 
-- WeakMap/WeakSet
-- Decorators
-- Namespaces
+Last time I checked it could run a pure TS library [date-fns](https://github.com/date-fns/date-fns) from source without any glaring issues. _Cough, not sure if it does so at every commit, but it did at the time of writing._
 
-I'm not targeting any specific TypeScript or ECMAScript version - I'm just vibing in the workshop, implementing whatever seems fun or necessary. Sometimes that means skipping the hard stuff and sometimes it means going deep on random features that caught my interest.
+**🚧 Known Gaps:**
 
-See [docs/bucketlist.md](docs/bucketlist.md) for the complete feature rundown.
+- WeakMap/WeakSet (planned)
+- Decorators (planned)
+- Some ASI edge cases (eh!)
+- Import attributes (experimental ES feature)
+
+See [docs/bucketlist.md](docs/bucketlist.md) for the exhaustive yet messy feature inventory.
 
 _Slaps the roof, it caves in._
 
 ## Performance and Footprint
 
-I think it's slow, around 20x slower than V8. Takes about 626.6ms ± 29.0ms to compute the factorial of 10, 1 million times, on M1 Pro. This includes parsing, type checking, and compilation.
+Currently prioritizing correctness over speed while we push toward 90%+ Test262 compliance. Once the semantics are nailed down, the architecture is ready for type-driven optimizations - specialization to unchecked fast paths, monomorphization, and other tricks enabled by having type information at compile time.
 
-For comparison, [goja](https://github.com/dop251/goja) takes about 1.007s ± 0.004s on the same machine running the same benchmark with types erased.
+**Footprint:** Static binary is 16MB (not stripped), includes everything - lexer, parser, type checker, compiler, VM, and full built-in library. No external dependencies.
 
-Stripped `paserati` binary is 4.2MB, it includes the runtime, the compiler, the type checker, and the virtual machine.
+**Architecture:** Register-based VM with inline caching for property access, shape-based object optimization (similar to V8's hidden classes), and pluggable async executor for embedding flexibility.
 
 ## Contributing
 
@@ -109,11 +158,11 @@ This project is licensed under the MIT License.
 
 ## AI Disclaimer
 
-This project is made with heavy use of AI. Google Gemini 2.5 Pro and Claude Sonnet 4 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
+This is a **one-man** project written in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI aimed at delivering a production-quality open source project.
+
+Google Gemini 2.5 Pro and Claude Sonnet 4/4.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
 
 That fun sticker at the top of the README? It's made with GPT-4o's image generation.
-
-While I understand that some people might have reservations about using AI to write code, or using AI to do anything, I would like to reserve the right to avoid having to justify my choices.
 
 ---
 
