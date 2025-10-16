@@ -413,18 +413,18 @@ func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototy
 
 	// Add method to prototype: prototype[methodName] = methodFunction
 	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
-		// For computed properties, evaluate the key expression and use OpSetIndex
+		// For computed properties, use OpDefineMethodComputed to set [[HomeObject]]
 		keyReg := c.regAlloc.Alloc()
 		defer c.regAlloc.Free(keyReg)
 		_, err := c.compileNode(computedKey.Expr, keyReg)
 		if err != nil {
 			return err
 		}
-		// Use OpSetIndex for dynamic property access: prototype[keyReg] = methodReg
-		c.emitOpCode(vm.OpSetIndex, method.Token.Line)
+		// Use OpDefineMethodComputed for dynamic property access with [[HomeObject]]
+		c.emitOpCode(vm.OpDefineMethodComputed, method.Token.Line)
 		c.emitByte(byte(prototypeReg)) // Object register
+		c.emitByte(byte(methodReg))    // Value register (method function)
 		c.emitByte(byte(keyReg))       // Key register (computed at runtime)
-		c.emitByte(byte(methodReg))    // Value register
 	} else {
 		// Use OpDefineMethod to create non-enumerable method
 		methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))
@@ -920,18 +920,18 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 	// Set constructor[methodName] = methodFunction
 	// Handle computed property names dynamically
 	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
-		// For computed properties, evaluate the key expression and use OpSetIndex
+		// For computed properties, use OpDefineMethodComputed to set [[HomeObject]]
 		keyReg := c.regAlloc.Alloc()
 		defer c.regAlloc.Free(keyReg)
 		_, err := c.compileNode(computedKey.Expr, keyReg)
 		if err != nil {
 			return err
 		}
-		// Use OpSetIndex for dynamic property access: constructor[keyReg] = methodReg
-		c.emitOpCode(vm.OpSetIndex, method.Token.Line)
+		// Use OpDefineMethodComputed for dynamic property access with [[HomeObject]]
+		c.emitOpCode(vm.OpDefineMethodComputed, method.Token.Line)
 		c.emitByte(byte(constructorReg)) // Object register
-		c.emitByte(byte(keyReg))          // Key register (computed at runtime)
-		c.emitByte(byte(methodReg))       // Value register
+		c.emitByte(byte(methodReg))      // Value register (method function)
+		c.emitByte(byte(keyReg))         // Key register (computed at runtime)
 	} else {
 		// Use OpSetProp for static property names
 		methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))

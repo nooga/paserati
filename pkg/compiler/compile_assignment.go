@@ -177,16 +177,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		c.emitByte(byte(indexInfo.indexReg))
 
 	case *parser.MemberExpression:
-		// Check for super property assignment (super.prop = value)
+		// Check for super property assignment (super.prop = value or super[expr] = value)
 		if _, isSuper := lhsNode.Object.(*parser.SuperExpression); isSuper {
-			// Super property assignment requires special handling
-			// We'll handle this separately at the end, not as a regular member expression
-			// For now, just note that this is a super assignment and continue
-			// We'll emit OpSetSuper directly instead of going through the normal member assignment flow
-
-			// Get property name
-			propName := c.extractPropertyName(lhsNode.Property)
-			nameConstIdx := c.chunk.AddConstant(vm.String(propName))
+			// Super property assignment requires special handling with dedicated opcodes
+			// This is because of dual-object semantics: property lookup on super base,
+			// but receiver binding uses original 'this' for setters
 
 			// Compile the RHS value
 			valueReg := c.regAlloc.Alloc()
@@ -196,10 +191,30 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				return BadRegister, err
 			}
 
-			// Emit OpSetSuper
-			c.chunk.WriteOpCode(vm.OpSetSuper, line)
-			c.chunk.WriteUint16(nameConstIdx)
-			c.chunk.WriteByte(byte(valueReg))
+			// Check if this is computed property: super[expr] = value
+			if computedKey, ok := lhsNode.Property.(*parser.ComputedPropertyName); ok {
+				// Compile the property expression
+				keyReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, keyReg)
+				_, err := c.compileNode(computedKey.Expr, keyReg)
+				if err != nil {
+					return BadRegister, err
+				}
+
+				// Emit OpSetSuperComputed
+				c.chunk.WriteOpCode(vm.OpSetSuperComputed, line)
+				c.chunk.WriteByte(byte(keyReg))
+				c.chunk.WriteByte(byte(valueReg))
+			} else {
+				// Static property: super.prop = value
+				propName := c.extractPropertyName(lhsNode.Property)
+				nameConstIdx := c.chunk.AddConstant(vm.String(propName))
+
+				// Emit OpSetSuper
+				c.chunk.WriteOpCode(vm.OpSetSuper, line)
+				c.chunk.WriteUint16(nameConstIdx)
+				c.chunk.WriteByte(byte(valueReg))
+			}
 
 			// Result of assignment is the assigned value
 			if valueReg != hint {

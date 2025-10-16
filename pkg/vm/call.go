@@ -217,6 +217,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = thisValue
+		newFrame.homeObject = calleeFunc.HomeObject // Set [[HomeObject]] for super property access
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false
 		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame

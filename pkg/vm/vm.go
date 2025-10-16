@@ -72,6 +72,7 @@ type CallFrame struct {
 	registers         []Value
 	targetRegister    byte    // Which register in the CALLER the result should go into
 	thisValue         Value   // The 'this' value for method calls (undefined for regular function calls)
+	homeObject        Value   // The [[HomeObject]] for super property access (object where method is defined)
 	isConstructorCall bool    // Whether this frame was created by a constructor call (new expression)
 	newTargetValue    Value   // The constructor that was invoked with 'new' (for new.target)
 	isDirectCall      bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
@@ -3889,6 +3890,13 @@ startExecution:
 				return status, value
 			}
 
+		case OpDefineMethodComputed:
+			frame.ip = ip
+			status, value := vm.handleOpDefineMethodComputed(code, &ip, registers)
+			if status != InterpretOK {
+				return status, value
+			}
+
 		// (OpDeleteProp handled later in switch)
 
 		case OpCallMethod:
@@ -4612,6 +4620,42 @@ startExecution:
 				registers[destReg] = Undefined
 			}
 
+		case OpLoadSuper:
+			destReg := code[ip]
+			ip++
+
+			// Load the super base (Object.getPrototypeOf([[HomeObject]])) into the destination register
+			// Per ECMAScript spec: super.prop looks up property in the prototype of the home object
+			// The home object is where the method was originally defined
+
+			homeObject := frame.homeObject
+			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
+				frame.ip = ip
+				vm.runtimeError("super keyword is only valid inside methods")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Check that we're in a valid context for super
+			// In constructors, super property access is only valid after super() call
+			if frame.isConstructorCall && frame.thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the super base: Object.getPrototypeOf([[HomeObject]])
+			var superBase Value
+			if homeObject.Type() == TypeObject {
+				obj := homeObject.AsPlainObject()
+				superBase = obj.prototype
+			} else {
+				frame.ip = ip
+				vm.runtimeError("Invalid [[HomeObject]] type: %s", homeObject.TypeName())
+				return InterpretRuntimeError, Undefined
+			}
+
+			registers[destReg] = superBase
+
 		case OpGetSuper:
 			destReg := code[ip]
 			ip++
@@ -4624,38 +4668,42 @@ startExecution:
 				fmt.Printf("[DEBUG OpGetSuper] Getting property '%s'\n", propertyName)
 			}
 
-			// Get 'this' value
+			// Get 'this' value for receiver binding
 			thisValue := frame.thisValue
 			if debugVM {
 				fmt.Printf("[DEBUG OpGetSuper] thisValue type=%d, value=%s\n", thisValue.Type(), thisValue.Inspect())
 			}
-			if thisValue.Type() == TypeUndefined {
+
+			// Get the home object to determine super base
+			// Per ECMAScript spec: super base = Object.getPrototypeOf([[HomeObject]])
+			homeObject := frame.homeObject
+			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
-				vm.ThrowReferenceError("super property access before super() call in constructor")
+				vm.runtimeError("super keyword is only valid inside methods")
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Get the home object's prototype to start the super property search
-			// For super.property access in object methods, we search the prototype chain
-			// starting from the home object's prototype
+			// Check that we're in a valid context for super property access
+			// In constructors, super property access is only valid after super() call
+			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the super base: Object.getPrototypeOf([[HomeObject]])
 			var protoValue Value
-			if thisValue.Type() == TypeObject {
-				obj := thisValue.AsPlainObject()
-				// Get the object's prototype - this is where we start searching
+			if homeObject.Type() == TypeObject {
+				obj := homeObject.AsPlainObject()
+				// Get the home object's prototype - this is where we start searching
 				protoValue = obj.prototype
 				if debugVM {
-					fmt.Printf("[DEBUG OpGetSuper] Got object's prototype for super search: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
+					fmt.Printf("[DEBUG OpGetSuper] Got homeObject's prototype for super search: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
 				}
-			} else if thisValue.Type() == TypeArray {
-				// For arrays, get Array.prototype
-				protoValue = vm.ArrayPrototype
-			} else if thisValue.Type() == TypeFunction {
-				// For functions, get Function.prototype
-				protoValue = vm.FunctionPrototype
 			} else {
-				// For other types, we can't get super properties
+				// homeObject must be an object
 				frame.ip = ip
-				vm.runtimeError("Cannot access super property on non-object value")
+				vm.runtimeError("Invalid [[HomeObject]] type: %s", homeObject.TypeName())
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -4751,26 +4799,38 @@ startExecution:
 			// Get the property name from constants
 			propertyName := constants[nameIdx].ToString()
 
-			// Get 'this' value
+			// Get 'this' value for receiver binding
 			thisValue := frame.thisValue
-			if thisValue.Type() == TypeUndefined {
+
+			// Get the home object to determine super base
+			// Per ECMAScript spec: super base = Object.getPrototypeOf([[HomeObject]])
+			homeObject := frame.homeObject
+			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
-				vm.ThrowReferenceError("super property assignment before super() call in constructor")
+				vm.runtimeError("super keyword is only valid inside methods")
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Get the prototype of 'this'
+			// Check that we're in a valid context for super property access
+			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the super base: Object.getPrototypeOf([[HomeObject]])
 			var protoValue Value
-			if thisValue.Type() == TypeObject {
-				obj := thisValue.AsPlainObject()
+			if homeObject.Type() == TypeObject {
+				obj := homeObject.AsPlainObject()
+				// Get the home object's prototype - this is where we start searching
 				protoValue = obj.prototype
-			} else if thisValue.Type() == TypeArray {
+			} else if homeObject.Type() == TypeArray {
 				protoValue = vm.ArrayPrototype
-			} else if thisValue.Type() == TypeFunction {
+			} else if homeObject.Type() == TypeFunction {
 				protoValue = vm.FunctionPrototype
 			} else {
 				frame.ip = ip
-				vm.runtimeError("Cannot assign super property on non-object value")
+				vm.runtimeError("Cannot assign super property: home object has no prototype")
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -4818,6 +4878,215 @@ startExecution:
 				} else {
 					// Regular property (not an accessor) - set it on 'this', not the prototype
 					// This is important: super.x = v should set x on 'this', not on the prototype
+					if thisValue.Type() == TypeObject {
+						thisObj := thisValue.AsPlainObject()
+						thisObj.SetOwn(propertyName, value)
+					} else {
+						frame.ip = ip
+						vm.runtimeError("Cannot set property on non-object 'this'")
+						return InterpretRuntimeError, Undefined
+					}
+				}
+			} else {
+				frame.ip = ip
+				vm.runtimeError("Cannot assign super property: prototype is not an object")
+				return InterpretRuntimeError, Undefined
+			}
+
+		case OpGetSuperComputed:
+			destReg := code[ip]
+			ip++
+			keyReg := code[ip]
+			ip++
+
+			// Get 'this' value for receiver binding
+			thisValue := frame.thisValue
+
+			// Get the home object to determine super base
+			homeObject := frame.homeObject
+			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
+				frame.ip = ip
+				vm.runtimeError("super keyword is only valid inside methods")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Check that we're in a valid context for super property access
+			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the property key and convert to string
+			keyValue := registers[keyReg]
+			propertyName := keyValue.ToString()
+
+			// Get the super base: Object.getPrototypeOf([[HomeObject]])
+			var protoValue Value
+			if homeObject.Type() == TypeObject {
+				obj := homeObject.AsPlainObject()
+				protoValue = obj.prototype
+			} else if homeObject.Type() == TypeArray {
+				protoValue = vm.ArrayPrototype
+			} else if homeObject.Type() == TypeFunction {
+				protoValue = vm.FunctionPrototype
+			} else {
+				frame.ip = ip
+				vm.runtimeError("Cannot access super property: home object has no prototype")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Look up the property in the super base
+			if protoValue.Type() == TypeObject {
+				protoObj := protoValue.AsPlainObject()
+
+				// Check if the property is an accessor (getter/setter)
+				if getter, _, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
+					// Call the getter with 'this' bound to the original object (not the prototype)
+					result, err := vm.Call(getter, thisValue, []Value{})
+					if err != nil {
+						frame.ip = ip
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+					registers[destReg] = result
+				} else {
+					// Regular property (not an accessor) - walk the prototype chain
+					currentProto := protoValue
+					found := false
+					for currentProto.Type() == TypeObject {
+						currentObj := currentProto.AsPlainObject()
+						if propValue, exists := currentObj.GetOwn(propertyName); exists {
+							registers[destReg] = propValue
+							found = true
+							break
+						}
+						// Move to the next prototype in the chain
+						currentProto = currentObj.prototype
+					}
+					if !found {
+						registers[destReg] = Undefined
+					}
+				}
+			} else {
+				// Prototype is not an object, return undefined
+				registers[destReg] = Undefined
+			}
+
+		case OpSetSuperComputed:
+			keyReg := code[ip]
+			ip++
+			valueReg := code[ip]
+			ip++
+
+			// Get 'this' value for receiver binding
+			thisValue := frame.thisValue
+
+			// Get the home object to determine super base
+			homeObject := frame.homeObject
+			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
+				frame.ip = ip
+				vm.runtimeError("super keyword is only valid inside methods")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Check that we're in a valid context for super property access
+			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the property key and convert to string
+			keyValue := registers[keyReg]
+			propertyName := keyValue.ToString()
+
+			// Get the super base: Object.getPrototypeOf([[HomeObject]])
+			var protoValue Value
+			if homeObject.Type() == TypeObject {
+				obj := homeObject.AsPlainObject()
+				protoValue = obj.prototype
+			} else if homeObject.Type() == TypeArray {
+				protoValue = vm.ArrayPrototype
+			} else if homeObject.Type() == TypeFunction {
+				protoValue = vm.FunctionPrototype
+			} else {
+				frame.ip = ip
+				vm.runtimeError("Cannot assign super property: home object has no prototype")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Set the property on the prototype (or call setter if it exists)
+			if protoValue.Type() == TypeObject {
+				protoObj := protoValue.AsPlainObject()
+				value := registers[valueReg]
+
+				// Check if the property is an accessor (getter/setter)
+				if _, setter, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && setter.Type() != TypeUndefined {
+					// Call the setter with 'this' bound to the original object (not the prototype)
+					_, err := vm.Call(setter, thisValue, []Value{value})
+					if err != nil {
+						frame.ip = ip
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+				} else {
+					// Regular property (not an accessor) - set it on 'this', not the prototype
+					// This is important: super[x] = v should set x on 'this', not on the prototype
 					if thisValue.Type() == TypeObject {
 						thisObj := thisValue.AsPlainObject()
 						thisObj.SetOwn(propertyName, value)

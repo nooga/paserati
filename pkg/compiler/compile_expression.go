@@ -2292,22 +2292,38 @@ func (c *Compiler) compileSpreadNewExpression(node *parser.NewExpression, hint R
 	return hint, nil
 }
 
-// compileSuperMemberExpression compiles super.property access
+// compileSuperMemberExpression compiles super.property and super[expr] access
 func (c *Compiler) compileSuperMemberExpression(node *parser.MemberExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// Use the special OpGetSuper opcode to get the property from the prototype of 'this'
-	// This opcode:
-	// 1. Gets 'this' value
-	// 2. Gets the prototype of 'this'
-	// 3. Accesses the property from the prototype
-	// 4. Stores result in hint register
+	// Per ECMAScript spec, super property access requires dedicated opcodes
+	// because of dual-object semantics:
+	// 1. Property lookup happens on super base (Object.getPrototypeOf([[HomeObject]]))
+	// 2. Receiver binding ('this') uses the original object for getters/setters
 
+	// Check if this is computed property access (super[expr])
+	if computedKey, ok := node.Property.(*parser.ComputedPropertyName); ok {
+		// Compile the property expression into a register
+		propertyReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, propertyReg)
+		_, err := c.compileNode(computedKey.Expr, propertyReg)
+		if err != nil {
+			return BadRegister, err
+		}
+
+		// Use OpGetSuperComputed for super[expr]
+		c.chunk.WriteOpCode(vm.OpGetSuperComputed, node.Token.Line)
+		c.chunk.WriteByte(byte(hint))        // Destination register
+		c.chunk.WriteByte(byte(propertyReg)) // Key register
+
+		return hint, nil
+	}
+
+	// Static property access: super.property
 	propertyName := c.extractPropertyName(node.Property)
 	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 
-	// Emit OpGetSuper: hint register, property name index
 	c.chunk.WriteOpCode(vm.OpGetSuper, node.Token.Line)
-	c.chunk.WriteByte(byte(hint))
-	c.chunk.WriteUint16(nameConstIdx)
+	c.chunk.WriteByte(byte(hint))     // Destination register
+	c.chunk.WriteUint16(nameConstIdx) // Property name constant index
 
 	return hint, nil
 }

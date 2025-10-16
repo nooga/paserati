@@ -28,6 +28,19 @@ func (vm *VM) handleOpDefineMethod(code []byte, ip *int, constants []Value, regi
 
 	if objVal.Type() == TypeObject {
 		plainObj := objVal.AsPlainObject()
+
+		// Set [[HomeObject]] on the method closure for super property access
+		// Per ECMAScript spec, methods defined with method syntax get a [[HomeObject]]
+		// pointing to the object where the method is defined
+		if methodVal.Type() == TypeClosure {
+			closure := methodVal.AsClosure()
+			closure.Fn.HomeObject = objVal
+		} else if methodVal.Type() == TypeFunction {
+			// Bare FunctionObject (not yet wrapped in closure)
+			funcObj := AsFunction(methodVal)
+			funcObj.HomeObject = objVal
+		}
+
 		writable := true
 		enumerable := false  // Methods are non-enumerable per ECMAScript spec
 		configurable := true

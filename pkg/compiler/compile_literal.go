@@ -622,7 +622,10 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 					continue
 				}
 			} else if isComputedKey {
-				// Computed regular method name: store as normal property
+				// Computed regular method name in object literal
+				// Note: Object literal methods are enumerable, so we use OpSetIndex
+				// This means object literal computed methods don't get [[HomeObject]]
+				// TODO: Add enumerable flag to OpDefineMethodComputed or use separate opcode
 				c.emitOpCode(vm.OpSetIndex, line)
 				c.emitByte(byte(hint))     // Object register
 				c.emitByte(byte(keyReg))   // Key register (computed at runtime)
@@ -664,10 +667,10 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				c.emitDefineAccessor(hint, getterReg, setterReg, nameIdx, line)
 				debugPrintf("--- OL MethodDefinition: Defined %s accessor for '%s'\n", methodDef.Kind, propName)
 			} else {
-				// Regular method
+				// Regular method - use OpDefineMethod to set [[HomeObject]]
 				storeNameIdx := c.chunk.AddConstant(vm.String(propName))
-				c.emitSetProp(hint, valueReg, storeNameIdx, line)
-				debugPrintf("--- OL MethodDefinition: Stored method '%s'\n", propName)
+				c.emitDefineMethod(hint, valueReg, storeNameIdx, line)
+				debugPrintf("--- OL MethodDefinition: Defined method '%s' with [[HomeObject]]\n", propName)
 			}
 		} else {
 			// Regular property value
@@ -713,7 +716,10 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				c.emitByte(byte(keyReg))   // Key register (computed at runtime)
 				c.emitByte(byte(valueReg)) // Value register
 			} else {
-				// Use OpSetProp for static keys: obj[keyConstIdx] = valueReg
+				// Use OpSetProp for all static keys (including methods)
+				// Note: Object literal methods are enumerable, unlike class methods
+				// This means object literal methods don't get [[HomeObject]]
+				// TODO: Add separate opcode for enumerable methods with [[HomeObject]]
 				c.emitSetProp(hint, valueReg, keyConstIdx, line)
 			}
 		}

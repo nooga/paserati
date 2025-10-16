@@ -849,10 +849,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		c.emitLoadThis(hint, node.Token.Line)
 		return hint, nil
 
-	case *parser.SuperExpression: // Added for super expressions
-		// Load 'super' value - for now, this is the same as 'this' since we use prototype-based inheritance
-		// TODO: Implement proper super method binding when needed
-		c.emitLoadThis(hint, node.Token.Line)
+	case *parser.SuperExpression:
+		// Super should only appear in member expressions or call expressions
+		// For now, keep the OpLoadSuper emission for edge cases
+		// TODO: Investigate if this code path is ever actually reached
+		c.chunk.WriteOpCode(vm.OpLoadSuper, node.Token.Line)
+		c.chunk.WriteByte(byte(hint))
 		return hint, nil
 
 	case *parser.NewTargetExpression:

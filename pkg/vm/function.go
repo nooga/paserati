@@ -19,6 +19,7 @@ type FunctionObject struct {
 	IsDerivedConstructor bool        // True for derived class constructors (must call super())
 	Properties          *PlainObject // For properties like .prototype (created lazily)
 	Prototype           Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
+	HomeObject          Value        // [[HomeObject]] - object where method is defined (for super property access)
 	NameBindingRegister int          // For named function expressions: register to initialize with closure (-1 if not used)
 }
 

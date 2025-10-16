@@ -115,10 +115,15 @@ const (
 	// --- NEW: Method Calls and This Context ---
 	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
 	OpLoadThis      OpCode = 44 // Rx: Load 'this' value from current call context into register Rx
+	OpLoadSuper     OpCode = 111 // Rx: Load super base (homeObject.prototype) into register Rx (for super property access)
+	OpGetSuper      OpCode = 112 // Rx NameIdx(16bit): Rx = super.propertyName (super property access with static name)
+	OpSetSuper      OpCode = 113 // NameIdx(16bit) ValueReg: super.propertyName = ValueReg (super property assignment with static name)
+	OpGetSuperComputed OpCode = 114 // Rx KeyReg: Rx = super[KeyReg] (super property access with computed key)
+	OpSetSuperComputed OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
+	OpDefineMethodComputed OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
+	OpDefineMethodEnumerable OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
 	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
-	OpGetSuper      OpCode = 98 // Rx NameIdx(16bit): Get property from super (prototype of this), store in Rx
-	OpSetSuper      OpCode = 99 // NameIdx(16bit) ValueReg: Set property on super (prototype of this) from ValueReg
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Operations ---
@@ -339,10 +344,20 @@ func (op OpCode) String() string {
 		return "OpSetThis"
 	case OpLoadNewTarget:
 		return "OpLoadNewTarget"
+	case OpLoadSuper:
+		return "OpLoadSuper"
 	case OpGetSuper:
 		return "OpGetSuper"
 	case OpSetSuper:
 		return "OpSetSuper"
+	case OpGetSuperComputed:
+		return "OpGetSuperComputed"
+	case OpSetSuperComputed:
+		return "OpSetSuperComputed"
+	case OpDefineMethodComputed:
+		return "OpDefineMethodComputed"
+	case OpDefineMethodEnumerable:
+		return "OpDefineMethodEnumerable"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -668,10 +683,22 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis: one register operand
 	case OpLoadNewTarget:
 		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis
+	case OpLoadSuper:
+		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis: one register operand
 	case OpGetSuper:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx NameIdx(16bit)
 	case OpSetSuper:
-		return c.constantRegisterInstruction(builder, instruction.String(), offset, "property") // NameIdx(16bit) ValueReg
+		return c.constantRegisterInstruction(builder, instruction.String(), offset, "NameIdx") // NameIdx(16bit) ValueReg
+	case OpGetSuperComputed:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx KeyReg
+	case OpSetSuperComputed:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset) // KeyReg ValueReg
+	case OpDefineMethod:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "method") // ObjReg ValueReg NameIdx(16bit)
+	case OpDefineMethodComputed:
+		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // ObjReg ValueReg KeyReg
+	case OpDefineMethodEnumerable:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "method") // ObjReg ValueReg NameIdx(16bit)
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:
