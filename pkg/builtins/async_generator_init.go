@@ -72,6 +72,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			ReturnValue:  thisGen.ReturnValue,
 			Done:         thisGen.Done,
 			Args:         thisGen.Args,
+			This:         thisGen.This, // BUGFIX: Copy the 'this' value so method context works
 		}
 
 		result, err := vmInstance.ExecuteGenerator(genObj, sentValue)
