@@ -1536,7 +1536,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	}
 
 	// First argument must be object-like
-	if !(obj.IsObject() || obj.AsArray() != nil) {
+	if !(obj.IsObject() || obj.Type() == vm.TypeArray) {
 		return vm.Undefined, nil
 	}
 
@@ -1544,7 +1544,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	var value vm.Value
 
 	// Check arrays first before plainObj (arrays can also be AsPlainObject but their indices are stored separately)
-	if arrObj := obj.AsArray(); arrObj != nil {
+	if obj.Type() == vm.TypeArray {
+		arrObj := obj.AsArray()
 		// For arrays, check if it's a valid index or 'length'
 		if propName == "length" {
 			value = vm.NumberValue(float64(arrObj.Length()))
