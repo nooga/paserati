@@ -448,6 +448,15 @@ func (c *Compiler) emitDefineMethod(obj, val Register, nameConstIdx uint16, line
 	c.emitUint16(nameConstIdx)
 }
 
+// emitDefineMethodEnumerable emits OpDefineMethodEnumerable ObjReg, ValueReg, NameConstIdx(Uint16)
+// Used for defining enumerable methods (e.g., object literal methods)
+func (c *Compiler) emitDefineMethodEnumerable(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpDefineMethodEnumerable, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
 // emitDefineAccessor emits OpDefineAccessor ObjReg, GetterReg, SetterReg, NameConstIdx(Uint16)
 func (c *Compiler) emitDefineAccessor(obj, getter, setter Register, nameConstIdx uint16, line int) {
 	c.emitOpCode(vm.OpDefineAccessor, line)

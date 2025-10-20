@@ -3890,6 +3890,13 @@ startExecution:
 				return status, value
 			}
 
+		case OpDefineMethodEnumerable:
+			frame.ip = ip
+			status, value := vm.handleOpDefineMethodEnumerable(code, &ip, constants, registers)
+			if status != InterpretOK {
+				return status, value
+			}
+
 		case OpDefineMethodComputed:
 			frame.ip = ip
 			status, value := vm.handleOpDefineMethodComputed(code, &ip, registers)

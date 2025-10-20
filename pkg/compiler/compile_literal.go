@@ -667,10 +667,11 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				c.emitDefineAccessor(hint, getterReg, setterReg, nameIdx, line)
 				debugPrintf("--- OL MethodDefinition: Defined %s accessor for '%s'\n", methodDef.Kind, propName)
 			} else {
-				// Regular method - use OpDefineMethod to set [[HomeObject]]
+				// Regular method - use OpDefineMethodEnumerable to set [[HomeObject]]
+				// Object literal methods are enumerable per ECMAScript spec
 				storeNameIdx := c.chunk.AddConstant(vm.String(propName))
-				c.emitDefineMethod(hint, valueReg, storeNameIdx, line)
-				debugPrintf("--- OL MethodDefinition: Defined method '%s' with [[HomeObject]]\n", propName)
+				c.emitDefineMethodEnumerable(hint, valueReg, storeNameIdx, line)
+				debugPrintf("--- OL MethodDefinition: Defined enumerable method '%s' with [[HomeObject]]\n", propName)
 			}
 		} else {
 			// Regular property value
