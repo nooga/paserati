@@ -6234,14 +6234,13 @@ func (p *Parser) parseObjectLiteral() Expression {
 				propName := p.parsePropertyName()
 				if propName != nil && p.peekTokenIs(lexer.LPAREN) {
 					// This is a shorthand method like methodName() { ... }
-					shorthandMethod := p.parseShorthandMethod()
-					if shorthandMethod == nil {
+					methodDef := p.parseShorthandMethod()
+					if methodDef == nil {
 						return nil // Error parsing shorthand method
 					}
 
-					// Create an ObjectProperty with the method name as key and the shorthand method as value
-					methodName := shorthandMethod.Name
-					objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodName, Value: shorthandMethod})
+					// Create an ObjectProperty with the method name as key and the MethodDefinition as value
+					objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: methodDef.Key, Value: methodDef})
 				} else if propName != nil && (p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.ASSIGN)) {
 					// --- NEW: Check for shorthand property syntax ---
 					// This handles:
@@ -6348,16 +6347,17 @@ func (p *Parser) parseObjectLiteral() Expression {
 }
 
 // parseShorthandMethod parses a shorthand method like methodName() { ... }
-func (p *Parser) parseShorthandMethod() *ShorthandMethod {
+func (p *Parser) parseShorthandMethod() *MethodDefinition {
+	methodToken := p.curToken
 	methodName := p.parsePropertyName()
 	if methodName == nil {
 		p.addError(p.curToken, "expected method name (identifier) for shorthand method")
 		return nil
 	}
 
-	method := &ShorthandMethod{
-		Token: p.curToken, // The method name token
-		Name:  methodName,
+	// Create a function literal for the method implementation
+	funcLit := &FunctionLiteral{
+		Token: methodToken,
 	}
 
 	// Expect '(' for parameters
@@ -6366,8 +6366,8 @@ func (p *Parser) parseShorthandMethod() *ShorthandMethod {
 	}
 
 	// Parse parameters
-	method.Parameters, method.RestParameter, _ = p.parseFunctionParameters(false) // No parameter properties in interface method signatures
-	if method.Parameters == nil && method.RestParameter == nil {
+	funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+	if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 		return nil // Error parsing parameters
 	}
 
@@ -6375,8 +6375,8 @@ func (p *Parser) parseShorthandMethod() *ShorthandMethod {
 	if p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ')'
 		p.nextToken() // Consume ':'
-		method.ReturnTypeAnnotation = p.parseTypeExpression()
-		if method.ReturnTypeAnnotation == nil {
+		funcLit.ReturnTypeAnnotation = p.parseTypeExpression()
+		if funcLit.ReturnTypeAnnotation == nil {
 			return nil // Error parsing return type
 		}
 	}
@@ -6387,13 +6387,26 @@ func (p *Parser) parseShorthandMethod() *ShorthandMethod {
 	}
 
 	// Parse method body
-	method.Body = p.parseBlockStatement()
-	if method.Body == nil {
+	funcLit.Body = p.parseBlockStatement()
+	if funcLit.Body == nil {
 		return nil // Error parsing method body
 	}
 
-	// Transform method if it has destructuring parameters
-	method = p.transformShorthandMethodWithDestructuring(method)
+	// Transform function if it has destructuring parameters
+	funcLit = p.transformFunctionWithDestructuring(funcLit)
+
+	// Create MethodDefinition for object literal method
+	method := &MethodDefinition{
+		Token:       methodToken,
+		Key:         methodName,
+		Value:       funcLit,
+		Kind:        "method",
+		IsStatic:    false,
+		IsPublic:    false,
+		IsPrivate:   false,
+		IsProtected: false,
+		IsOverride:  false,
+	}
 
 	return method
 }
