@@ -10,6 +10,7 @@ import (
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -93,6 +94,13 @@ func (ml *moduleLoader) LoadModuleParallel(specifier string, fromPath string) (v
 // loadModuleSequential implements sequential module loading
 func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) (vm.ModuleRecord, error) {
 	debugPrintf("// [ModuleLoader] loadModuleSequential START: %s from %s\n", specifier, fromPath)
+
+	// Check if this is a JSON module based on file extension
+	if strings.HasSuffix(specifier, ".json") {
+		debugPrintf("// [ModuleLoader] Detected .json extension, routing to loadJSONModule: %s\n", specifier)
+		return ml.loadJSONModule(specifier, fromPath)
+	}
+
 	// Check cache first
 	cachedRecord := ml.registry.Get(specifier)
 	debugPrintf("// [ModuleLoader] Cache check for %s: %v\n", specifier, cachedRecord != nil)
@@ -100,13 +108,13 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		debugPrintf("// [ModuleLoader] Returning cached module: %s (has error: %v)\n", specifier, cachedRecord.GetError() != nil)
 		return cachedRecord, nil
 	}
-	
+
 	// Resolve the module
 	resolved, err := ml.resolveModule(specifier, fromPath)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Create module record
 	record := &ModuleRecord{
 		Specifier:    specifier,
@@ -114,11 +122,11 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		State:        ModuleResolved,
 		LoadTime:     time.Now(),
 	}
-	
+
 	// Store in registry
 	debugPrintf("// [ModuleLoader] Storing in registry: specifier=%s, resolvedPath=%s\n", specifier, record.ResolvedPath)
 	ml.registry.Set(specifier, record)
-	
+
 	// Actually parse the module
 	err = ml.parseModuleSequential(record, resolved)
 	if err != nil {
@@ -137,12 +145,27 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	for _, importSpec := range importSpecs {
 		debugPrintf("// [ModuleLoader] Loading dependency: %s from %s\n", importSpec.ModulePath, record.ResolvedPath)
 		debugPrintf("// [ModuleLoader] About to make recursive call for dependency\n")
-		_, err := ml.loadModuleSequential(importSpec.ModulePath, record.ResolvedPath)
-		if err != nil {
-			debugPrintf("// [ModuleLoader] Failed to load dependency %s: %v\n", importSpec.ModulePath, err)
-			// Continue with other dependencies rather than failing completely
+
+		// Check if this is a JSON module import
+		isJSONModule := importSpec.Attributes != nil && importSpec.Attributes["type"] == "json"
+		if isJSONModule {
+			debugPrintf("// [ModuleLoader] Detected JSON module import: %s\n", importSpec.ModulePath)
+			// Load as JSON module
+			_, err := ml.loadJSONModule(importSpec.ModulePath, record.ResolvedPath)
+			if err != nil {
+				debugPrintf("// [ModuleLoader] Failed to load JSON module %s: %v\n", importSpec.ModulePath, err)
+			} else {
+				debugPrintf("// [ModuleLoader] Successfully loaded JSON module: %s\n", importSpec.ModulePath)
+			}
 		} else {
-			debugPrintf("// [ModuleLoader] Successfully loaded dependency: %s\n", importSpec.ModulePath)
+			// Load as regular JS/TS module
+			_, err := ml.loadModuleSequential(importSpec.ModulePath, record.ResolvedPath)
+			if err != nil {
+				debugPrintf("// [ModuleLoader] Failed to load dependency %s: %v\n", importSpec.ModulePath, err)
+				// Continue with other dependencies rather than failing completely
+			} else {
+				debugPrintf("// [ModuleLoader] Successfully loaded dependency: %s\n", importSpec.ModulePath)
+			}
 		}
 	}
 	
@@ -237,6 +260,68 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 }
 
 // parseModuleSequential parses a single module synchronously
+// loadJSONModule loads a JSON file as a module with a default export
+func (ml *moduleLoader) loadJSONModule(specifier string, fromPath string) (*ModuleRecord, error) {
+	debugPrintf("// [ModuleLoader] loadJSONModule START: %s from %s\n", specifier, fromPath)
+
+	// Check cache first
+	cachedRecord := ml.registry.Get(specifier)
+	if cachedRecord != nil {
+		debugPrintf("// [ModuleLoader] Returning cached JSON module: %s\n", specifier)
+		return cachedRecord, nil
+	}
+
+	// Resolve the module
+	resolved, err := ml.resolveModule(specifier, fromPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create module record
+	record := &ModuleRecord{
+		Specifier:    specifier,
+		ResolvedPath: resolved.ResolvedPath,
+		State:        ModuleResolved,
+		LoadTime:     time.Now(),
+		IsJSON:       true, // Mark as JSON module
+	}
+
+	// Store in registry
+	ml.registry.Set(specifier, record)
+
+	// Read JSON content
+	defer resolved.Source.Close()
+	content := make([]byte, 0, 1024)
+	buf := make([]byte, 512)
+	for {
+		n, err := resolved.Source.Read(buf)
+		if n > 0 {
+			content = append(content, buf[:n]...)
+		}
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			record.Error = fmt.Errorf("failed to read JSON source: %w", err)
+			record.State = ModuleError
+			return record, nil
+		}
+	}
+
+	// Store the source for reference
+	record.Source = &source.SourceFile{
+		Name:    resolved.ResolvedPath,
+		Path:    resolved.ResolvedPath,
+		Content: string(content),
+	}
+
+	// JSON modules are immediately ready - they don't need parsing/compilation
+	// The JSONData will be set when the module is imported in the compiler
+	record.State = ModuleCompiled
+	debugPrintf("// [ModuleLoader] JSON module loaded: %s\n", specifier)
+	return record, nil
+}
+
 func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *ResolvedModule) error {
 	debugPrintf("// [ModuleLoader] parseModuleSequential: %s\n", record.ResolvedPath)
 	

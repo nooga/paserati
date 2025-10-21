@@ -553,16 +553,20 @@ func (ime *ImportMetaExpression) TokenLiteral() string { return ime.Token.Litera
 func (ime *ImportMetaExpression) String() string       { return "import.meta" }
 
 // DynamicImportExpression represents the dynamic import() expression
-// import(specifier) returns a Promise that resolves to a module namespace object
+// import(specifier) or import(specifier, options) returns a Promise that resolves to a module namespace object
 type DynamicImportExpression struct {
 	BaseExpression             // Embed base for ComputedType
 	Token          lexer.Token // The lexer.IMPORT token
 	Source         Expression  // The module specifier expression
+	Options        Expression  // Optional import options expression (for import attributes)
 }
 
 func (die *DynamicImportExpression) expressionNode()      {}
 func (die *DynamicImportExpression) TokenLiteral() string { return die.Token.Literal }
 func (die *DynamicImportExpression) String() string {
+	if die.Options != nil {
+		return fmt.Sprintf("import(%s, %s)", die.Source.String(), die.Options.String())
+	}
 	return fmt.Sprintf("import(%s)", die.Source.String())
 }
 
@@ -1857,10 +1861,11 @@ func (ss *SwitchStatement) String() string {
 // import defaultImport, { export1, export2 } from "module"
 // import defaultImport, * as name from "module"
 type ImportDeclaration struct {
-	Token      lexer.Token       // The 'import' token
-	Specifiers []ImportSpecifier // What to import (default, named, namespace)
-	Source     *StringLiteral    // From where ("./module")
-	IsTypeOnly bool              // true for "import type" statements
+	Token      lexer.Token            // The 'import' token
+	Specifiers []ImportSpecifier      // What to import (default, named, namespace)
+	Source     *StringLiteral         // From where ("./module")
+	IsTypeOnly bool                   // true for "import type" statements
+	Attributes map[string]string      // Import attributes (e.g., { type: "json" })
 }
 
 func (id *ImportDeclaration) statementNode()       {}

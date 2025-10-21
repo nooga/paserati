@@ -1946,29 +1946,60 @@ func (p *Parser) parseImportMetaExpression() Expression {
 		}
 	}
 
-	// Check if this is dynamic import: import(specifier)
+	// Check if this is dynamic import: import(specifier) or import(specifier, options)
 	if p.peekTokenIs(lexer.LPAREN) {
-		// Don't advance yet - let parseExpressionList handle it
-		// But we need to be positioned at LPAREN for parseExpressionList
-		// Since peekToken is LPAREN, we need to advance to make it curToken
 		p.nextToken() // Now curToken is LPAREN
 
-		// Parse the argument list (should be exactly one expression)
-		args := p.parseExpressionList(lexer.RPAREN)
+		// Parse according to spec grammar:
+		// import ( AssignmentExpression ,opt )
+		// import ( AssignmentExpression , AssignmentExpression ,opt )
 
-		// Dynamic import requires exactly one argument
-		if len(args) == 0 {
+		// Check if we have an empty argument list: import()
+		if p.peekTokenIs(lexer.RPAREN) {
+			p.nextToken() // consume )
 			p.addError(importToken, "import() requires a module specifier argument")
 			return nil
 		}
-		if len(args) > 1 {
-			p.addError(importToken, "import() expects exactly one argument")
+
+		// Parse first argument (specifier) as AssignmentExpression
+		// Use ARG_SEPARATOR precedence to allow assignment but stop at commas
+		p.nextToken() // advance to first argument
+		specifier := p.parseExpression(ARG_SEPARATOR)
+		if specifier == nil {
+			p.addError(p.curToken, "import() requires a module specifier argument")
+			return nil
+		}
+
+		var options Expression
+
+		// Check for optional comma and second argument
+		if p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // consume comma
+
+			// Check if there's a second argument (not just trailing comma)
+			if !p.peekTokenIs(lexer.RPAREN) {
+				p.nextToken()
+				options = p.parseExpression(ARG_SEPARATOR)
+				if options == nil {
+					p.addError(p.curToken, "invalid import options expression")
+					return nil
+				}
+
+				// Allow optional trailing comma after second argument
+				if p.peekTokenIs(lexer.COMMA) {
+					p.nextToken()
+				}
+			}
+		}
+
+		if !p.expectPeek(lexer.RPAREN) {
 			return nil
 		}
 
 		return &DynamicImportExpression{
-			Token:  importToken,
-			Source: args[0],
+			Token:   importToken,
+			Source:  specifier,
+			Options: options,
 		}
 	}
 
@@ -9031,6 +9062,18 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 		}
 		stmt.Specifiers = []ImportSpecifier{} // Empty specifiers for bare import
 
+		// Parse import attributes for bare imports too
+		if p.peekToken.Type == lexer.WITH {
+			p.nextToken() // consume source string
+			p.nextToken() // consume 'with'
+
+			// parseImportAttributes expects current token to be before '{'
+			stmt.Attributes = p.parseImportAttributes()
+			if stmt.Attributes == nil {
+				return nil
+			}
+		}
+
 		// Optional semicolon
 		if p.peekToken.Type == lexer.SEMICOLON {
 			p.nextToken()
@@ -9090,12 +9133,88 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 		Value: p.curToken.Literal,
 	}
 
+	// Parse import attributes (import assertions): with { type: "json" }
+	if p.peekToken.Type == lexer.WITH {
+		p.nextToken() // consume source string
+		p.nextToken() // consume 'with'
+
+		// parseImportAttributes expects current token to be before '{'
+		stmt.Attributes = p.parseImportAttributes()
+		if stmt.Attributes == nil {
+			return nil
+		}
+	}
+
 	// Optional semicolon
 	if p.peekToken.Type == lexer.SEMICOLON {
 		p.nextToken()
 	}
 
 	return stmt
+}
+
+// parseImportAttributes parses import attributes: { type: "json", ... }
+// Called after consuming 'with', current token should be '{'
+func (p *Parser) parseImportAttributes() map[string]string {
+	attributes := make(map[string]string)
+
+	// Verify current token is '{'
+	if p.curToken.Type != lexer.LBRACE {
+		p.addError(p.curToken, fmt.Sprintf("Expected '{' to start import attributes, got %s", p.curToken.Type))
+		return nil
+	}
+
+	// Move to first key or '}'
+	p.nextToken()
+
+	for p.curToken.Type != lexer.RBRACE {
+		// Parse key (must be identifier, string, or certain keywords like 'type')
+		var key string
+		if p.curToken.Type == lexer.IDENT {
+			key = p.curToken.Literal
+		} else if p.curToken.Type == lexer.STRING {
+			key = p.curToken.Literal
+		} else if p.curToken.Type == lexer.TYPE {
+			// Allow 'type' keyword as attribute key
+			key = "type"
+		} else {
+			p.addError(p.curToken, fmt.Sprintf("Expected identifier or string for import attribute key, got %s", p.curToken.Type))
+			return nil
+		}
+
+		// Expect colon
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		}
+
+		// Parse value (must be string literal)
+		if !p.expectPeek(lexer.STRING) {
+			p.addError(p.curToken, "Import attribute value must be a string literal")
+			return nil
+		}
+		value := p.curToken.Literal
+
+		attributes[key] = value
+
+		// Check for comma or closing brace
+		if p.peekToken.Type == lexer.COMMA {
+			p.nextToken() // consume value
+			p.nextToken() // consume comma
+		} else if p.peekToken.Type == lexer.RBRACE {
+			p.nextToken() // consume value
+			break
+		} else {
+			p.addError(p.peekToken, fmt.Sprintf("Expected ',' or '}' in import attributes, got %s", p.peekToken.Type))
+			return nil
+		}
+	}
+
+	if p.curToken.Type != lexer.RBRACE {
+		p.addError(p.curToken, "Expected '}' to close import attributes")
+		return nil
+	}
+
+	return attributes
 }
 
 // parseImportSpecifierList parses { name1, name2 as alias } or * as namespace

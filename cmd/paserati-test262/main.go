@@ -14,6 +14,7 @@ import (
 	"paserati/pkg/vm"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"sort"
 	"strings"
@@ -181,7 +182,8 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 			return err
 		}
 
-		if matched {
+		// Skip FIXTURE files - they are not tests, just data/helper files
+		if matched && !strings.Contains(filepath.Base(path), "_FIXTURE") {
 			testFiles = append(testFiles, path)
 		}
 
@@ -430,8 +432,8 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 	}
 	resultChan := make(chan testResult, 1)
 
-	// Create fresh Paserati instance for each test
-	paserati := createTest262Paserati()
+	// Create fresh Paserati instance for each test with the test file's directory as base
+	paserati := createTest262PaseratiForTest(testFile)
 
 	// IMPORTANT: This goroutine can leak if paserati.RunString gets stuck in an infinite loop.
 	// Since paserati.RunString doesn't support context cancellation, we cannot interrupt it.
@@ -441,6 +443,7 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 		defer func() {
 			// Ensure we don't leak goroutines on panic
 			if r := recover(); r != nil {
+				debug.PrintStack()
 				resultChan <- testResult{passed: false, err: fmt.Errorf("test panicked: %v", r)}
 			}
 			// Clean up to release memory
@@ -507,6 +510,19 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			errorsPkg.DisplayErrors(parseErrs, sourceWithIncludes)
 			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", parseErrs[0])}
 			return
+		}
+
+		// Check if this is a module test and enable module mode if needed
+		if hdr := extractFrontmatterHeader(string(content)); hdr != "" {
+			if flags := extractFlags(hdr); len(flags) > 0 {
+				for _, flag := range flags {
+					if flag == "module" {
+						// Enable module mode in checker and compiler for module tests
+						paserati.EnableModuleMode(testFile)
+						break
+					}
+				}
+			}
 		}
 
 		chunk, compileErrs := paserati.CompileProgram(prog)
@@ -671,6 +687,18 @@ func extractFlags(header string) []string {
 func createTest262Paserati() *driver.Paserati {
 	// Create a custom Paserati instance with Test262 initializers
 	paserati := driver.NewPaseratiWithInitializers(getTest262EnabledInitializers())
+	// Disable type checking errors for test262 (JavaScript test suite)
+	paserati.SetIgnoreTypeErrors(true)
+	return paserati
+}
+
+// createTest262PaseratiForTest creates a Paserati instance with the base directory set to the test file's directory
+func createTest262PaseratiForTest(testFile string) *driver.Paserati {
+	// Get the directory of the test file for module resolution
+	testDir := filepath.Dir(testFile)
+
+	// Create a custom Paserati instance with Test262 initializers and the test's base directory
+	paserati := driver.NewPaseratiWithInitializersAndBaseDir(getTest262EnabledInitializers(), testDir)
 	// Disable type checking errors for test262 (JavaScript test suite)
 	paserati.SetIgnoreTypeErrors(true)
 	return paserati

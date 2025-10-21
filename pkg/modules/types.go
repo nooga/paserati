@@ -86,6 +86,10 @@ type ModuleRecord struct {
 	// Native module support
 	nativeModule NativeModuleInterface // Native module interface for lazy initialization
 	isNative     bool                   // Flag to indicate this is a native module
+
+	// JSON module support
+	IsJSON       bool                   // Flag to indicate this is a JSON module
+	JSONData     vm.Value               // Parsed JSON data (for JSON modules)
 	
 	// Error handling
 	Error        error     // Loading/parsing/checking error
@@ -116,12 +120,13 @@ type ResolvedModule struct {
 
 // ImportSpec represents an import declaration found during parsing
 type ImportSpec struct {
-	ModulePath   string    // Path to imported module
-	ImportType   ImportType // Type of import (default, named, namespace)
-	ImportNames  []string  // Names being imported (for named imports)
-	LocalNames   []string  // Local aliases for imports
-	IsDefault    bool      // Whether this imports the default export
-	IsNamespace  bool      // Whether this is a namespace import (import * as)
+	ModulePath   string            // Path to imported module
+	ImportType   ImportType        // Type of import (default, named, namespace)
+	ImportNames  []string          // Names being imported (for named imports)
+	LocalNames   []string          // Local aliases for imports
+	IsDefault    bool              // Whether this imports the default export
+	IsNamespace  bool              // Whether this is a namespace import (import * as)
+	Attributes   map[string]string // Import attributes (e.g., { type: "json" })
 }
 
 // ExportSpec represents an export declaration found during parsing
@@ -298,5 +303,18 @@ func (mr *ModuleRecord) GetExportNames() []string {
 // GetError returns the error associated with this module record
 func (mr *ModuleRecord) GetError() error {
 	return mr.Error
+}
+
+// IsJSONModule returns true if this is a JSON module
+func (mr *ModuleRecord) IsJSONModule() bool {
+	return mr.IsJSON
+}
+
+// GetSource returns the source content of the module
+func (mr *ModuleRecord) GetSource() string {
+	if mr.Source == nil {
+		return ""
+	}
+	return mr.Source.Content
 }
 

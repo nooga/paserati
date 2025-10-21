@@ -62,6 +62,12 @@ func (p *Paserati) SetIgnoreTypeErrors(ignore bool) {
 	p.ignoreTypeErrors = ignore
 }
 
+// EnableModuleMode enables module mode for the checker and compiler
+func (p *Paserati) EnableModuleMode(modulePath string) {
+	p.checker.EnableModuleMode(modulePath, p.moduleLoader)
+	p.compiler.EnableModuleMode(modulePath, p.moduleLoader)
+}
+
 // Cleanup breaks circular references to allow garbage collection
 // CancelVM signals the VM to stop execution at the next safe point
 func (p *Paserati) CancelVM() {

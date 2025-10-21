@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -32,6 +33,8 @@ type ModuleRecord interface {
 	GetCompiledChunk() *Chunk
 	GetExportNames() []string
 	GetError() error
+	IsJSONModule() bool
+	GetSource() string
 }
 
 // ModuleContext represents a cached module execution context
@@ -8047,6 +8050,44 @@ func (vm *VM) setGlobalInTable(globalIdx uint16, value Value) {
 // }
 
 // executeModule executes a module idempotently with context switching
+// parseJSONString parses a JSON string and converts it to a VM Value
+func (vm *VM) parseJSONString(jsonText string) (Value, error) {
+	var jsonData interface{}
+	err := json.Unmarshal([]byte(jsonText), &jsonData)
+	if err != nil {
+		return Undefined, err
+	}
+	return vm.convertJSONToValue(jsonData), nil
+}
+
+// convertJSONToValue converts a Go interface{} from json.Unmarshal to a VM Value
+func (vm *VM) convertJSONToValue(value interface{}) Value {
+	switch v := value.(type) {
+	case nil:
+		return Null
+	case bool:
+		return BooleanValue(v)
+	case float64:
+		return NumberValue(v)
+	case string:
+		return NewString(v)
+	case []interface{}:
+		elements := make([]Value, len(v))
+		for i, elem := range v {
+			elements[i] = vm.convertJSONToValue(elem)
+		}
+		return NewArrayWithArgs(elements)
+	case map[string]interface{}:
+		obj := NewObject(vm.ObjectPrototype).AsPlainObject()
+		for key, val := range v {
+			obj.SetOwn(key, vm.convertJSONToValue(val))
+		}
+		return NewValueFromPlainObject(obj)
+	default:
+		return Undefined
+	}
+}
+
 func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// fmt.Printf("// [VM] executeModule: CALLED for module '%s'\n", modulePath)
 	// Check if module is already cached and executed
@@ -8083,6 +8124,24 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		if moduleErr := moduleRecord.GetError(); moduleErr != nil {
 			// fmt.Printf("// [VM] executeModule: Module '%s' has error: %v\n", modulePath, moduleErr)
 			return vm.runtimeError("Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
+		}
+
+		// Handle JSON modules specially
+		if moduleRecord.IsJSONModule() {
+			// Parse JSON directly using Go's encoding/json
+			jsonSource := moduleRecord.GetSource()
+			jsonValue, parseErr := vm.parseJSONString(jsonSource)
+			if parseErr != nil {
+				return vm.runtimeError("Failed to parse JSON module '%s': %v", modulePath, parseErr), Undefined
+			}
+
+			// Create module context for JSON module with default export
+			vm.moduleContexts[modulePath] = &ModuleContext{
+				chunk:    nil, // JSON modules don't have chunks
+				exports:  map[string]Value{"default": jsonValue},
+				executed: true, // JSON modules are immediately "executed"
+			}
+			return InterpretOK, Undefined
 		}
 
 		// Get the compiled chunk from the module

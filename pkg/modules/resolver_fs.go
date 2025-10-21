@@ -36,7 +36,7 @@ func NewFileSystemResolver(filesystem fs.FS, baseDir string) *FileSystemResolver
 		name:        "FileSystem",
 		fs:          moduleFS,
 		priority:    100, // Lower priority than specialized resolvers
-		extensions:  []string{".ts", ".tsx", ".js", ".jsx", ".d.ts"},
+		extensions:  []string{".ts", ".tsx", ".js", ".jsx", ".d.ts", ".json"},
 		indexFiles:  []string{"index.ts", "index.tsx", "index.js", "index.jsx"},
 		baseDir:     baseDir,
 	}
@@ -53,7 +53,7 @@ func NewOSFileSystemResolver(baseDir string) *FileSystemResolver {
 		name:        "OSFileSystem",
 		fs:          &osFS{baseDir: absBaseDir},
 		priority:    100,
-		extensions:  []string{".ts", ".tsx", ".js", ".jsx", ".d.ts"},
+		extensions:  []string{".ts", ".tsx", ".js", ".jsx", ".d.ts", ".json"},
 		indexFiles:  []string{"index.ts", "index.tsx", "index.js", "index.jsx"},
 		baseDir:     absBaseDir,
 	}

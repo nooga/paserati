@@ -311,6 +311,7 @@ func extractImportSpecs(program *parser.Program) []*ImportSpec {
 			if node.Source != nil {
 				spec := &ImportSpec{
 					ModulePath: node.Source.Value,
+					Attributes: node.Attributes, // Capture import attributes (e.g., type: "json")
 				}
 				specs = append(specs, spec)
 			}

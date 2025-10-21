@@ -2129,6 +2129,13 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 	sourceModulePath := node.Source.Value
 	debugPrintf("// [Compiler] Processing import from: %s\n", sourceModulePath)
 
+	// Check if this is a JSON module import
+	isJSONModule := node.Attributes != nil && node.Attributes["type"] == "json"
+	if isJSONModule {
+		debugPrintf("// [Compiler] Detected JSON module import: %s\n", sourceModulePath)
+		return c.compileJSONImport(node, sourceModulePath)
+	}
+
 	// Generate OpEvalModule to ensure the module is loaded and executed
 	// Only emit if this module hasn't been processed yet
 	if !c.processedModules[sourceModulePath] {
@@ -2186,6 +2193,56 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 	return BadRegister, nil
 }
 
+// compileJSONImport handles compilation of JSON module imports
+// JSON modules have a synthetic default export containing the parsed JSON data
+func (c *Compiler) compileJSONImport(node *parser.ImportDeclaration, sourceModulePath string) (Register, errors.PaseratiError) {
+	// JSON modules can only have default imports
+	// Emit OpLoadJSONModule to load and parse the JSON file
+	c.emitLoadJSONModule(sourceModulePath, node.Token.Line)
+
+	// Mark as processed so we don't try to eval it as a regular module
+	c.processedModules[sourceModulePath] = true
+
+	// Check if we're in module mode
+	if !c.IsModuleMode() || c.moduleBindings == nil {
+		return BadRegister, NewCompileError(node, "JSON module imports require module mode")
+	}
+
+	// Process import specifiers - JSON modules only support default import
+	for _, spec := range node.Specifiers {
+		switch importSpec := spec.(type) {
+		case *parser.ImportDefaultSpecifier:
+			// Default import: import data from "./file.json" with { type: "json" }
+			if importSpec.Local == nil {
+				return BadRegister, NewCompileError(node, "import default specifier missing local name")
+			}
+
+			localName := importSpec.Local.Value
+			// For JSON modules, use module exports (OpGetModuleExport) not globals
+			// We manually define the import binding with GlobalIndex = -1
+			c.moduleBindings.DefineImport(localName, sourceModulePath, "default", ImportDefaultRef, -1)
+
+		case *parser.ImportNamedSpecifier:
+			return BadRegister, NewCompileError(node, "JSON modules do not have named exports, only default")
+
+		case *parser.ImportNamespaceSpecifier:
+			// Namespace import: import * as ns from "./file.json" with { type: "json" }
+			if importSpec.Local == nil {
+				return BadRegister, NewCompileError(node, "import namespace specifier missing local name")
+			}
+
+			localName := importSpec.Local.Value
+			// For JSON modules with namespace import, use module exports
+			c.moduleBindings.DefineImport(localName, sourceModulePath, "*", ImportNamespaceRef, -1)
+
+		default:
+			return BadRegister, NewCompileError(node, fmt.Sprintf("unknown import specifier type: %T", spec))
+		}
+	}
+
+	return BadRegister, nil
+}
+
 // processImportBinding handles the binding of an imported name
 // Parallels type checker's processImportBinding
 func (c *Compiler) processImportBinding(localName, sourceModule, sourceName string, importType ImportReferenceType) {
@@ -2208,9 +2265,9 @@ func (c *Compiler) processImportBinding(localName, sourceModule, sourceName stri
 			debugPrintf("// [Compiler] Imported %s: %s = undefined (unresolved)\n", localName, sourceName)
 		}
 
-		// Define the imported name in the symbol table
-		// This allows the rest of the code to reference it normally
-		c.currentSymbolTable.Define(localName, nilRegister) // Will be resolved at runtime
+		// Don't define imported names in the symbol table
+		// They will be resolved via emitImportResolve when referenced
+		// This ensures OpGetModuleExport is used instead of OpGetGlobal
 	} else {
 		// Fallback: just define the name in the symbol table
 		c.currentSymbolTable.Define(localName, nilRegister)
@@ -2594,6 +2651,14 @@ func (c *Compiler) emitEvalModule(modulePath string, line int) {
 	c.emitOpCode(vm.OpEvalModule, line)
 	c.emitByte(byte(constantIdx >> 8))   // High byte
 	c.emitByte(byte(constantIdx & 0xFF)) // Low byte
+}
+
+// emitLoadJSONModule emits bytecode to load a JSON module
+// JSON modules use the same OpEvalModule but are handled specially in the VM
+func (c *Compiler) emitLoadJSONModule(modulePath string, line int) {
+	// JSON modules use the same loading mechanism as regular modules
+	// The VM will detect that it's a JSON module and handle it appropriately
+	c.emitEvalModule(modulePath, line)
 }
 
 // emitCreateNamespace generates bytecode to create a namespace object from module exports

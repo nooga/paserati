@@ -771,9 +771,8 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 		return vm.Null, nil
 	case vm.TypeArray:
-		// For arrays, return Array.prototype if available
-		// This will be set up when ArrayInitializer runs
-		return vm.Null, nil // TODO: Return proper Array.prototype
+		// For arrays, return Array.prototype
+		return vmInstance.ArrayPrototype, nil
 	case vm.TypeString:
 		// For strings, return String.prototype if available
 		return vm.Null, nil // TODO: Return proper String.prototype
