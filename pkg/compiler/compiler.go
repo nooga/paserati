@@ -106,6 +106,9 @@ type Compiler struct {
 	// --- Phase 4a: Finally Context Tracking ---
 	inFinallyBlock     bool              // Track if we're compiling inside finally block
 	tryFinallyDepth    int               // Number of enclosing try-with-finally blocks
+
+	// --- Block Scope Tracking ---
+	isCompilingFunctionBody bool // Track if we're compiling the function body BlockStatement itself
 	tryDepth           int               // Number of enclosing try blocks (any kind: try-catch, try-finally, try-catch-finally)
 	finallyContextStack []*FinallyContext // Stack of active finally contexts
 
@@ -167,6 +170,24 @@ func (c *Compiler) SetHeapAlloc(heapAlloc *HeapAlloc) {
 // GetHeapAlloc returns the compiler's heap allocator
 func (c *Compiler) GetHeapAlloc() *HeapAlloc {
 	return c.heapAlloc
+}
+
+// isDefinedInEnclosingCompiler checks if a symbol table belongs to the enclosing compiler's scope chain.
+// This helps distinguish between:
+// - Variables from outer block scopes in the SAME function (return false) -> use direct register
+// - Variables from outer FUNCTION scopes (return true) -> use OpLoadFree (upvalue)
+func (c *Compiler) isDefinedInEnclosingCompiler(definingTable *SymbolTable) bool {
+	if c.enclosing == nil {
+		return false
+	}
+
+	// Walk the enclosing compiler's symbol table chain
+	for table := c.enclosing.currentSymbolTable; table != nil; table = table.Outer {
+		if table == definingTable {
+			return true
+		}
+	}
+	return false
 }
 
 // EnableModuleMode enables module-aware compilation with binding resolution
@@ -544,35 +565,73 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	// --- Block Statement (needed for function bodies) ---
 	case *parser.BlockStatement:
+		// Determine if this BlockStatement needs its own enclosed scope
+		// - Function bodies: already have their own scope from newFunctionCompiler (isCompilingFunctionBody=true)
+		// - All other blocks (top-level and inner): YES enclosed scope for proper let/const shadowing
+		//
+		// Rule: Create enclosed scope for all BlockStatements EXCEPT function body itself
+		needsEnclosedScope := !c.isCompilingFunctionBody
+
+		debugPrintf("// [BlockStatement] needsEnclosedScope=%v, enclosing=%v, isCompilingFunctionBody=%v\n",
+			needsEnclosedScope, c.enclosing != nil, c.isCompilingFunctionBody)
+
+		// Reset isCompilingFunctionBody after checking it, so inner BlockStatements are treated as regular blocks
+		if c.isCompilingFunctionBody {
+			c.isCompilingFunctionBody = false
+		}
+
+		// Create enclosed scope for inner blocks
+		var prevSymbolTable *SymbolTable
+		if needsEnclosedScope {
+			prevSymbolTable = c.currentSymbolTable
+			c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
+			debugPrintf("// [BlockStatement] Created enclosed scope\n")
+		}
+
 		// 0) Predefine block-scoped let/const and function-scoped var so inner closures can capture stable locations
 		if len(node.Statements) > 0 {
 			for _, stmt := range node.Statements {
 				switch s := stmt.(type) {
 				case *parser.LetStatement:
 					if s.Name != nil {
-						if sym, _, found := c.currentSymbolTable.Resolve(s.Name.Value); !found || sym.Register == nilRegister {
+						// Check if variable exists in CURRENT scope only (not outer scopes)
+						// to allow shadowing in enclosed block scopes
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
 							reg := c.regAlloc.Alloc()
 							c.currentSymbolTable.Define(s.Name.Value, reg)
 							c.regAlloc.Pin(reg)
+							debugPrintf("// [BlockPredefine] Pre-defined let '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
 						}
 					}
 				case *parser.ConstStatement:
 					if s.Name != nil {
-						if sym, _, found := c.currentSymbolTable.Resolve(s.Name.Value); !found || sym.Register == nilRegister {
+						// Check if variable exists in CURRENT scope only (not outer scopes)
+						// to allow shadowing in enclosed block scopes
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
 							reg := c.regAlloc.Alloc()
 							c.currentSymbolTable.Define(s.Name.Value, reg)
 							c.regAlloc.Pin(reg)
+							debugPrintf("// [BlockPredefine] Pre-defined const '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
 						}
 					}
 				case *parser.VarStatement:
-					// Pre-define var declarations so they can be captured by hoisted functions
+					// Pre-define var declarations in the function scope (not enclosed block scope)
+					// var is function-scoped, so if we're in an enclosed block scope, we need to
+					// walk up to find the function-level symbol table
 					for _, declarator := range s.Declarations {
 						if declarator.Name != nil {
-							if sym, _, found := c.currentSymbolTable.Resolve(declarator.Name.Value); !found || sym.Register == nilRegister {
+							// Find the function-level symbol table (the one with Outer == nil OR whose Outer is from enclosing compiler)
+							funcTable := c.currentSymbolTable
+							for funcTable.Outer != nil && c.enclosing != nil && !c.isDefinedInEnclosingCompiler(funcTable.Outer) {
+								funcTable = funcTable.Outer
+							}
+
+							// Check if var already defined in function scope
+							if sym, _, found := funcTable.Resolve(declarator.Name.Value); !found || sym.Register == nilRegister {
 								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(declarator.Name.Value, reg)
+								funcTable.Define(declarator.Name.Value, reg)
 								c.regAlloc.Pin(reg)
-								debugPrintf("// [BlockPredefine] Pre-defined var '%s' in register R%d for hoisting\n", declarator.Name.Value, reg)
+								debugPrintf("// [BlockPredefine] Pre-defined var '%s' in register R%d in function scope (funcTable=%p, currentTable=%p)\n", declarator.Name.Value, reg, funcTable, c.currentSymbolTable)
 							}
 						}
 					}
@@ -615,6 +674,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				return BadRegister, err
 			}
 		}
+
+		// Restore previous scope if we created an enclosed one
+		if needsEnclosedScope {
+			c.currentSymbolTable = prevSymbolTable
+			debugPrintf("// [BlockStatement] Restored previous scope\n")
+		}
+
 		return BadRegister, nil
 
 	// --- Statements ---
@@ -1012,13 +1078,24 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, Register==nilRegister, treating as module-level global\n", node.Value)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Value)
 				c.emitGetGlobal(hint, globalIdx, node.Token.Line)
-			} else {
-				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, treating as FREE VARIABLE\n", node.Value) // <<< ADDED
-				// This is a regular free variable (defined in an outer scope that's not global)
+			} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, defined in OUTER FUNCTION, treating as FREE VARIABLE\n", node.Value)
+				// Variable is defined in an outer function's scope (true closure/upvalue case)
+				// Use OpLoadFree to access it via closure mechanism
 				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
 				c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 				c.emitByte(byte(hint))
 				c.emitByte(byte(freeVarIndex))
+			} else {
+				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, but in outer block scope of SAME function, using direct register access R%d\n", node.Value, symbolRef.Register)
+				// Variable is defined in an outer block scope of the same function (or at top level)
+				// Access it directly via its register, no closure needed
+				srcReg := symbolRef.Register
+				if srcReg != hint {
+					debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, hint, srcReg)
+					c.emitMove(hint, srcReg, node.Token.Line)
+				}
+				// If srcReg == hint, no move needed
 			}
 		} else {
 			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED

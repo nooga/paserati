@@ -84,7 +84,10 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	switch bodyNode := node.Body.(type) {
 	case *parser.BlockStatement:
 		bodyResultReg := funcCompiler.regAlloc.Alloc()
+		// Mark that we're compiling the function body BlockStatement itself
+		funcCompiler.isCompilingFunctionBody = true
 		_, err := funcCompiler.compileNode(bodyNode, bodyResultReg)
+		funcCompiler.isCompilingFunctionBody = false
 		funcCompiler.regAlloc.Free(bodyResultReg)
 		if err != nil {
 			funcCompiler.errors = append(funcCompiler.errors, err)
@@ -251,7 +254,12 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 
 	// Compile body
 	bodyReg := funcCompiler.regAlloc.Alloc()
+	// Mark if compiling function body BlockStatement
+	if _, isBlock := node.Body.(*parser.BlockStatement); isBlock {
+		funcCompiler.isCompilingFunctionBody = true
+	}
 	_, bodyErr := funcCompiler.compileNode(node.Body, bodyReg)
+	funcCompiler.isCompilingFunctionBody = false
 	if bodyErr != nil {
 		funcCompiler.addError(node.Body, "error compiling arrow function body")
 	}
@@ -982,7 +990,10 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 	// 5. Compile the body using the function compiler
 	bodyReg := functionCompiler.regAlloc.Alloc()
+	// Mark that we're compiling the function body BlockStatement itself
+	functionCompiler.isCompilingFunctionBody = true
 	_, err := functionCompiler.compileNode(node.Body, bodyReg)
+	functionCompiler.isCompilingFunctionBody = false
 	functionCompiler.regAlloc.Free(bodyReg) // Free since function body doesn't return a value
 	if err != nil {
 		// Propagate errors (already appended to c.errors by sub-compiler)

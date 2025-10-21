@@ -75,13 +75,15 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		valueReg = undefReg
 		// Define symbol for the `let x;` case
 		// debug disabled
-		if c.enclosing == nil {
-			// Top-level: use global variable
+		// Check if we're in global scope: no enclosing compiler AND no outer symbol table
+		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+		if isGlobalScope {
+			// True global scope: use global variable
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
-			// Function scope: use local symbol table
+			// Local scope (function or enclosed block): use local symbol table
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
 			} else {
@@ -93,31 +95,39 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		// Define symbol ONLY for non-function values.
 		// Function assignments were handled above by UpdateRegister.
 		// debug disabled
-		if c.enclosing == nil {
-			// Top-level: use global variable
+		// Check if we're in global scope: no enclosing compiler AND no outer symbol table
+		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+		if isGlobalScope {
+			// True global scope: use global variable
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
-			// Function scope: use local symbol table
+			// Local scope (function or enclosed block): use local symbol table
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				debugPrintf("// [LetStatement] '%s' already predefined in R%d, moving from valueReg=R%d (symbolTable=%p)\n", node.Name.Value, sym.Register, valueReg, c.currentSymbolTable)
 				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
 			} else {
+				debugPrintf("// [LetStatement] '%s' not predefined, defining in R%d (symbolTable=%p)\n", node.Name.Value, valueReg, c.currentSymbolTable)
 				c.currentSymbolTable.Define(node.Name.Value, valueReg)
 				c.regAlloc.Pin(valueReg)
 			}
 		}
-	} else if c.enclosing == nil {
-		// Top-level function: also set as global
-		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-		// Get the closure register from the symbol table
-		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
-		if found && symbolRef.Register != nilRegister {
-			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
-			// Update the symbol to be global
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-			// Pin the register since function closures can be captured by upvalues
-			c.regAlloc.Pin(symbolRef.Register)
+	} else {
+		// Function value - check if it should be global
+		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+		if isGlobalScope {
+			// Top-level function: also set as global
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+			// Get the closure register from the symbol table
+			symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+			if found && symbolRef.Register != nilRegister {
+				c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+				// Update the symbol to be global
+				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				// Pin the register since function closures can be captured by upvalues
+				c.regAlloc.Pin(symbolRef.Register)
+			}
 		}
 	}
 	} // end for declarator
@@ -308,13 +318,15 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 	// Const function assignments were handled above by UpdateRegister.
 	if !isValueFunc {
 		// For non-functions, Define associates the name with the final value register.
-		if c.enclosing == nil {
-			// Top-level: use global variable
+		// Check if we're in global scope: no enclosing compiler AND no outer symbol table
+		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+		if isGlobalScope {
+			// True global scope: use global variable
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		} else {
-			// Function scope: use local symbol table
+			// Local scope (function or enclosed block): use local symbol table
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
 			} else {
@@ -322,17 +334,21 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 				c.regAlloc.Pin(valueReg)
 			}
 		}
-	} else if c.enclosing == nil {
-		// Top-level function: also set as global
-		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-		// Get the closure register from the symbol table
-		symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
-		if found && symbolRef.Register != nilRegister {
-			c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
-			// Update the symbol to be global
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-			// Pin the register since function closures can be captured by upvalues
-			c.regAlloc.Pin(symbolRef.Register)
+	} else {
+		// Function value - check if it should be global
+		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+		if isGlobalScope {
+			// Top-level function: also set as global
+			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+			// Get the closure register from the symbol table
+			symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+			if found && symbolRef.Register != nilRegister {
+				c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+				// Update the symbol to be global
+				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				// Pin the register since function closures can be captured by upvalues
+				c.regAlloc.Pin(symbolRef.Register)
+			}
 		}
 	}
 	} // end for declarator
@@ -556,23 +572,69 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 
 	// 1. Initializer
 	if node.Initializer != nil {
-		// If initializer is a var-declaration, predefine its bindings so Resolve() works in condition/update.
+		// If initializer is a var/let/const declaration, predefine its bindings so Resolve() works in condition/update.
 		if vs, ok := node.Initializer.(*parser.VarStatement); ok {
 			// Prefer explicit declarations if present; otherwise fall back to legacy Name field
 			if len(vs.Declarations) > 0 {
 				for _, d := range vs.Declarations {
-					if c.enclosing == nil {
-						// Top-level: predefine as global so identifier resolves as global in condition/update
+					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+					if isGlobalScope {
+						// True global scope: predefine as global so identifier resolves as global in condition/update
 						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
 						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
 					} else {
-						// Function scope: predefine local binding; register will be set by compileVarStatement
+						// Local scope: predefine local binding; register will be set by compileVarStatement
 						c.currentSymbolTable.Define(d.Name.Value, nilRegister)
 					}
 				}
 			} else if vs.Name != nil {
 				name := vs.Name.Value
-				if c.enclosing == nil {
+				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+				if isGlobalScope {
+					globalIdx := c.GetOrAssignGlobalIndex(name)
+					c.currentSymbolTable.DefineGlobal(name, globalIdx)
+				} else {
+					c.currentSymbolTable.Define(name, nilRegister)
+				}
+			}
+		} else if ls, ok := node.Initializer.(*parser.LetStatement); ok {
+			// Handle let declarations in for loop
+			if len(ls.Declarations) > 0 {
+				for _, d := range ls.Declarations {
+					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+					if isGlobalScope {
+						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
+						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
+					} else {
+						c.currentSymbolTable.Define(d.Name.Value, nilRegister)
+					}
+				}
+			} else if ls.Name != nil {
+				name := ls.Name.Value
+				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+				if isGlobalScope {
+					globalIdx := c.GetOrAssignGlobalIndex(name)
+					c.currentSymbolTable.DefineGlobal(name, globalIdx)
+				} else {
+					c.currentSymbolTable.Define(name, nilRegister)
+				}
+			}
+		} else if cs, ok := node.Initializer.(*parser.ConstStatement); ok {
+			// Handle const declarations in for loop
+			if len(cs.Declarations) > 0 {
+				for _, d := range cs.Declarations {
+					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+					if isGlobalScope {
+						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
+						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
+					} else {
+						c.currentSymbolTable.Define(d.Name.Value, nilRegister)
+					}
+				}
+			} else if cs.Name != nil {
+				name := cs.Name.Value
+				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+				if isGlobalScope {
 					globalIdx := c.GetOrAssignGlobalIndex(name)
 					c.currentSymbolTable.DefineGlobal(name, globalIdx)
 				} else {

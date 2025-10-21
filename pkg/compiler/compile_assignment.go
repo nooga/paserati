@@ -129,13 +129,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}
 			} else if definingTable == c.currentSymbolTable {
-				// Local variable (including variables from immediate parent scope in same function)
+				// Local variable in current scope
 				identInfo.targetReg = symbolRef.Register
 				identInfo.isUpvalue = false
 				identInfo.isGlobal = false
 				currentValueReg = identInfo.targetReg // Current value is already in targetReg
-			} else {
-				// Upvalue (either non-global outer scope OR we're in a closure accessing global scope)
+			} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+				// Variable defined in outer function: treat as upvalue
 				identInfo.isUpvalue = true
 				identInfo.isGlobal = false
 				identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
@@ -144,6 +144,12 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitOpCode(vm.OpLoadFree, line)
 				c.emitByte(byte(currentValueReg))  // Destination register
 				c.emitByte(identInfo.upvalueIndex) // Upvalue index
+			} else {
+				// Variable in outer block scope of same function (or at top level): access directly via register
+				identInfo.targetReg = symbolRef.Register
+				identInfo.isUpvalue = false
+				identInfo.isGlobal = false
+				currentValueReg = identInfo.targetReg // Current value is already in targetReg
 			}
 		}
 		}

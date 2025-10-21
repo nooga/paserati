@@ -448,13 +448,13 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			tempRegs = append(tempRegs, currentValueReg)
 			c.emitGetGlobal(currentValueReg, symbolRef.GlobalIndex, line)
 		} else if definingTable == c.currentSymbolTable {
-			// Local variable (including variables from immediate parent scope in same function)
+			// Local variable in current scope
 			identInfo.targetReg = symbolRef.Register
 			identInfo.isUpvalue = false
 			identInfo.isGlobal = false
 			currentValueReg = identInfo.targetReg // Current value is already in targetReg
-		} else {
-			// Upvalue: Get its index and load current value into a temporary register
+		} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+			// Variable defined in outer function: treat as upvalue
 			identInfo.isUpvalue = true
 			identInfo.isGlobal = false
 			identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
@@ -463,6 +463,12 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			c.emitOpCode(vm.OpLoadFree, line)
 			c.emitByte(byte(currentValueReg))
 			c.emitByte(identInfo.upvalueIndex)
+		} else {
+			// Variable in outer block scope of same function (or at top level): access directly via register
+			identInfo.targetReg = symbolRef.Register
+			identInfo.isUpvalue = false
+			identInfo.isGlobal = false
+			currentValueReg = identInfo.targetReg // Current value is already in targetReg
 		}
 
 	case *parser.MemberExpression:
