@@ -47,8 +47,32 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			return status, Undefined
 		}
 
-		// Get prototype
-		instancePrototype := constructorFunc.getOrCreatePrototypeWithVM(vm)
+		// Determine the new.target value for this constructor call
+		// If the caller is already a constructor (super() call), inherit its new.target
+		// Otherwise, new.target is the constructor being called
+		var newTargetValue Value
+		if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+			// This is a super() call from a derived constructor - inherit new.target
+			newTargetValue = frame.newTargetValue
+		} else {
+			// Direct new Constructor() call - new.target is the constructor
+			newTargetValue = constructorVal
+		}
+
+		// Get the prototype to use for the instance from new.target.prototype
+		// This ensures derived classes create instances with the correct prototype
+		var instancePrototype Value
+		if newTargetValue.Type() == TypeClosure {
+			newTargetClosure := AsClosure(newTargetValue)
+			newTargetFunc := newTargetClosure.Fn
+			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+		} else if newTargetValue.Type() == TypeFunction {
+			newTargetFunc := AsFunction(newTargetValue)
+			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+		} else {
+			// Fallback: use the constructor's prototype
+			instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
+		}
 
 		// Create instance (or leave undefined for derived constructors)
 		var newInstance Value
@@ -69,7 +93,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.isConstructorCall = true
 		newFrame.isDirectCall = false       // Not a direct call (spread new)
 		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
-		newFrame.newTargetValue = constructorVal
+		newFrame.newTargetValue = newTargetValue // Use propagated new.target
 		newFrame.argCount = argCount        // Store actual argument count for arguments object
 		// Copy arguments for arguments object (before registers get mutated by function execution)
 		newFrame.args = make([]Value, argCount)
@@ -116,8 +140,32 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			return status, Undefined
 		}
 
-		// Get prototype
-		instancePrototype := constructorFunc.getOrCreatePrototypeWithVM(vm)
+		// Determine the new.target value for this constructor call
+		// If the caller is already a constructor (super() call), inherit its new.target
+		// Otherwise, new.target is the constructor being called
+		var newTargetValue Value
+		if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+			// This is a super() call from a derived constructor - inherit new.target
+			newTargetValue = frame.newTargetValue
+		} else {
+			// Direct new Constructor() call - new.target is the constructor
+			newTargetValue = constructorVal
+		}
+
+		// Get the prototype to use for the instance from new.target.prototype
+		// This ensures derived classes create instances with the correct prototype
+		var instancePrototype Value
+		if newTargetValue.Type() == TypeClosure {
+			newTargetClosure := AsClosure(newTargetValue)
+			newTargetFunc := newTargetClosure.Fn
+			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+		} else if newTargetValue.Type() == TypeFunction {
+			newTargetFunc := AsFunction(newTargetValue)
+			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+		} else {
+			// Fallback: use the constructor's prototype
+			instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
+		}
 
 		// Create instance (or leave undefined for derived constructors)
 		var newInstance Value
@@ -138,7 +186,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.isConstructorCall = true
 		newFrame.isDirectCall = false       // Not a direct call (spread new)
 		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
-		newFrame.newTargetValue = constructorVal
+		newFrame.newTargetValue = newTargetValue // Use propagated new.target
 		newFrame.argCount = argCount        // Store actual argument count for arguments object
 		// Copy arguments for arguments object (before registers get mutated by function execution)
 		newFrame.args = make([]Value, argCount)

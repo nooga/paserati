@@ -106,7 +106,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 		node.Name.Value, instanceType.String())
 
 	// 4. Create constructor signature from constructor method
-	constructorSig := c.createConstructorSignature(node.Body, instanceType)
+	constructorSig := c.createConstructorSignature(node.Body, instanceType, node.SuperClass != nil)
 
 	// 5. Create constructor function type (ObjectType with construct signature)
 	// This represents the class constructor function, not a separate "class type"
@@ -229,7 +229,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
 	// 6. Create constructor signature from constructor method
-	constructorSig := c.createConstructorSignature(node.Body, instanceType)
+	constructorSig := c.createConstructorSignature(node.Body, instanceType, node.SuperClass != nil)
 
 	// 7. Create constructor type
 	constructorType := types.NewConstructorType(constructorSig)
@@ -719,7 +719,7 @@ func (c *Checker) validateOverrideMethodSignature(methodSig *parser.MethodSignat
 
 // createConstructorSignature creates a signature for the class constructor
 // Always uses the implementation signature for runtime, while overload signatures are for compile-time checking
-func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceType *types.ObjectType) *types.Signature {
+func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceType *types.ObjectType, isDerived bool) *types.Signature {
 	// Find the constructor method implementation first (this is what's used at runtime)
 	var constructor *parser.MethodDefinition
 	for _, method := range body.Methods {
@@ -764,7 +764,21 @@ func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceTyp
 		}
 	}
 
-	// Default constructor: no parameters, returns the instance type
+	// Default constructor
+	// Base class: constructor() {}
+	// Derived class: constructor(...args) { super(...args); }
+	if isDerived {
+		// Derived class default constructor accepts any arguments
+		return &types.Signature{
+			ParameterTypes:    []types.Type{},
+			ReturnType:        instanceType,
+			OptionalParams:    []bool{},
+			IsVariadic:        true,
+			RestParameterType: &types.ArrayType{ElementType: types.Any}, // Array of any
+		}
+	}
+
+	// Base class default constructor: no parameters
 	return &types.Signature{
 		ParameterTypes:    []types.Type{},
 		ReturnType:        instanceType,

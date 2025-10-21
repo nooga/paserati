@@ -281,24 +281,41 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 
 // createDefaultConstructor creates a default constructor function when none is provided
 func (c *Compiler) createDefaultConstructor(node *parser.ClassDeclaration) *parser.FunctionLiteral {
-	// Create empty parameter list
-	parameters := []*parser.Parameter{}
-
-	// Create body - for derived classes, must call super()
+	// Create parameter list and body
+	var parameters []*parser.Parameter
+	var restParameter *parser.RestParameter
 	var statements []parser.Statement
+
 	if node.SuperClass != nil {
-		// Derived class: default constructor calls super()
+		// Derived class: default constructor is constructor(...args) { super(...args); }
+		// Per ECMAScript spec, derived classes must forward all arguments to super
+		argsIdent := &parser.Identifier{
+			Token: node.Token,
+			Value: "args",
+		}
+		restParameter = &parser.RestParameter{
+			Token: node.Token,
+			Name:  argsIdent,
+		}
+
+		// Create super(...args) call with spread
 		superCall := &parser.ExpressionStatement{
 			Token: node.Token,
 			Expression: &parser.CallExpression{
-				Token:     node.Token,
-				Function:  &parser.SuperExpression{Token: node.Token},
-				Arguments: []parser.Expression{}, // No arguments
+				Token:    node.Token,
+				Function: &parser.SuperExpression{Token: node.Token},
+				Arguments: []parser.Expression{
+					&parser.SpreadElement{
+						Token:    node.Token,
+						Argument: argsIdent,
+					},
+				},
 			},
 		}
 		statements = []parser.Statement{superCall}
 	} else {
-		// Regular class: empty constructor
+		// Base class: empty constructor with no parameters
+		parameters = []*parser.Parameter{}
 		statements = []parser.Statement{}
 	}
 
@@ -309,10 +326,11 @@ func (c *Compiler) createDefaultConstructor(node *parser.ClassDeclaration) *pars
 
 	// Create function literal
 	return &parser.FunctionLiteral{
-		Token:      node.Token,
-		Name:       nil, // Anonymous constructor
-		Parameters: parameters,
-		Body:       body,
+		Token:         node.Token,
+		Name:          nil, // Anonymous constructor
+		Parameters:    parameters,
+		RestParameter: restParameter,
+		Body:          body,
 	}
 }
 
