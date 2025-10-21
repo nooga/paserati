@@ -566,6 +566,20 @@ func (die *DynamicImportExpression) String() string {
 	return fmt.Sprintf("import(%s)", die.Source.String())
 }
 
+// DeferredImportExpression represents the deferred import.defer() expression
+// import.defer(specifier) returns a Promise that resolves to a deferred module namespace object
+type DeferredImportExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The lexer.IMPORT token
+	Source         Expression  // The module specifier expression
+}
+
+func (die *DeferredImportExpression) expressionNode()      {}
+func (die *DeferredImportExpression) TokenLiteral() string { return die.Token.Literal }
+func (die *DeferredImportExpression) String() string {
+	return fmt.Sprintf("import.defer(%s)", die.Source.String())
+}
+
 // FunctionLiteral represents a function definition.
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }

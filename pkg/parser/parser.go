@@ -1904,15 +1904,44 @@ func (p *Parser) parseNewExpression() Expression {
 func (p *Parser) parseImportMetaExpression() Expression {
 	importToken := p.curToken // Save the 'import' token
 
-	// Check if this is import.meta
+	// Check if this is import.meta or import.defer(...)
 	if p.peekTokenIs(lexer.DOT) {
 		p.nextToken() // Move to '.'
 		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "meta" {
 			p.nextToken() // Move to 'meta'
 			return &ImportMetaExpression{Token: importToken}
+		} else if p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "defer" || p.peekToken.Literal == "source") {
+			importPhase := p.peekToken.Literal
+			p.nextToken() // Move to 'defer' or 'source'
+
+			// Expect LPAREN after defer/source
+			if !p.expectPeek(lexer.LPAREN) {
+				p.addError(p.curToken, "expected '(' after 'import."+importPhase+"'")
+				return nil
+			}
+
+			// Parse the argument list (should be exactly one expression)
+			args := p.parseExpressionList(lexer.RPAREN)
+
+			// import.defer() and import.source() require exactly one argument
+			if len(args) == 0 {
+				p.addError(importToken, "import."+importPhase+"() requires a module specifier argument")
+				return nil
+			}
+			if len(args) > 1 {
+				p.addError(importToken, "import."+importPhase+"() expects exactly one argument")
+				return nil
+			}
+
+			// Both defer and source use the same AST node for now (deferred import)
+			// They have similar semantics - loading modules in a deferred manner
+			return &DeferredImportExpression{
+				Token:  importToken,
+				Source: args[0],
+			}
 		} else {
-			// Error: import. followed by something other than 'meta'
-			p.addError(p.peekToken, "expected 'meta' after 'import.'")
+			// Error: import. followed by something other than 'meta', 'defer', or 'source'
+			p.addError(p.peekToken, "expected 'meta', 'defer', or 'source' after 'import.'")
 			return nil
 		}
 	}
@@ -1943,8 +1972,8 @@ func (p *Parser) parseImportMetaExpression() Expression {
 		}
 	}
 
-	// If not import.meta or import(), this is an error
-	p.addError(p.curToken, "unexpected 'import' in expression context (expected import.meta or import())")
+	// If not import.meta, import.defer(), or import(), this is an error
+	p.addError(p.curToken, "unexpected 'import' in expression context (expected import.meta, import.defer(), or import())")
 	return nil
 }
 
