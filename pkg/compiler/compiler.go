@@ -641,6 +641,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 		// 1) Hoist function declarations within this block (function-scoped hoisting)
 		if len(node.HoistedDeclarations) > 0 {
+			debugPrintf("// [BlockStatement] Processing %d hoisted declarations\n", len(node.HoistedDeclarations))
 			// Pre-allocate registers for all hoisted function names to enable mutual recursion with stable locations
 			for name := range node.HoistedDeclarations {
 				if sym, _, found := c.currentSymbolTable.Resolve(name); !found || sym.Register == nilRegister {
@@ -1730,20 +1731,23 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 			panic(fmt.Sprintf("compiler internal error: free variable '%s' not found in enclosing scope during closure emission", freeSym.Name))
 		}
 
-		if enclosingTable == c.currentSymbolTable {
-			// The free variable is local in the *direct* enclosing scope (c).
-			debugPrintf("// [emitClosure Upvalue] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register) // DEBUG
-			c.emitByte(1)                                                                                                                                    // isLocal = true
+		// Check if the variable is in the same function (not an outer function)
+		// Variables from outer block scopes in the same function should be treated as local (isLocal=1)
+		// Variables from outer functions should be treated as upvalues (isLocal=0)
+		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !c.isDefinedInEnclosingCompiler(enclosingTable)) {
+			// The free variable is local in the current function (either in direct scope or outer block scope of same function)
+			debugPrintf("// [emitClosure Upvalue] Free '%s' is Local in same function. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register)
+			c.emitByte(1) // isLocal = true
 			// Capture the value from the enclosing scope's actual register
 			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
 		} else {
-			// The free variable is also a free variable in the *enclosing* scope (c).
-			// It needs to be captured from the enclosing scope's upvalues.
-			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
-			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)                                                                             // Use the same helper
-			debugPrintf("// [emitClosure Upvalue] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex) // DEBUG
-			c.emitByte(0)                                                                                                                             // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex))                                                                                                      // Index = upvalue index in enclosing scope
+			// The free variable is from an outer function's scope
+			// It needs to be captured from the enclosing scope's upvalues
+			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list
+			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
+			debugPrintf("// [emitClosure Upvalue] Free '%s' is from Outer function. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex)
+			c.emitByte(0)                            // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex))     // Index = upvalue index in enclosing scope
 		}
 	}
 
@@ -1791,17 +1795,20 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 			panic(fmt.Sprintf("compiler internal error: free variable '%s' not found in enclosing scope during closure emission", freeSym.Name))
 		}
 
-		if enclosingTable == c.currentSymbolTable {
-			// The free variable is local in the direct enclosing scope
-			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register)
+		// Check if the variable is in the same function (not an outer function)
+		// Variables from outer block scopes in the same function should be treated as local (isLocal=1)
+		// Variables from outer functions should be treated as upvalues (isLocal=0)
+		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !c.isDefinedInEnclosingCompiler(enclosingTable)) {
+			// The free variable is local in the current function (either in direct scope or outer block scope of same function)
+			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is Local in same function. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register)
 			c.emitByte(1)                              // isLocal = true
 			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
 		} else {
-			// The free variable is also a free variable in the enclosing scope
+			// The free variable is from an outer function's scope
 			// Create a dummy node for addFreeSymbol (it only uses the node for error reporting)
 			dummyNode := &parser.Identifier{Token: lexer.Token{}, Value: freeSym.Name}
 			enclosingFreeIndex := c.addFreeSymbol(dummyNode, &enclosingSymbol)
-			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex)
+			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is from Outer function. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex)
 			c.emitByte(0)                        // isLocal = false
 			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
 		}
