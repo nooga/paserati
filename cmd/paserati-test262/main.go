@@ -32,10 +32,9 @@ func main() {
 		memprofile = flag.String("memprofile", "", "Write memory profile to file")
 		cpuprofile = flag.String("cpuprofile", "", "Write CPU profile to file")
 		gcstats    = flag.Bool("gcstats", false, "Print garbage collection statistics")
-		treeMode   = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
-		suiteMode  = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
-		filterMode = flag.Bool("filter", false, "Filter out legacy JS patterns not relevant for modern TS runtime")
-		disasm     = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
+		treeMode  = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
+		suiteMode = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
+		disasm    = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
 		dumpFile   = flag.String("dump", "", "Dump all test results to file (format: +test-path or -test-path)")
 		diffFile   = flag.String("diff", "", "Compare current results against baseline file and show differences")
 	)
@@ -93,7 +92,7 @@ func main() {
 	fmt.Printf("Found %d test files\n", len(testFiles))
 
 	// Run tests
-	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *filterMode, *disasm)
+	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *disasm)
 
 	// Handle diff/dump modes
 	if *diffFile != "" {
@@ -199,42 +198,8 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 	return testFiles, err
 }
 
-// shouldFilterTest determines if a test file should be filtered out due to legacy patterns
-func shouldFilterTest(testPath string) bool {
-	content, err := os.ReadFile(testPath)
-	if err != nil {
-		return false
-	}
-
-	contentStr := string(content)
-
-	// Filter out 'with' statement tests - deprecated feature not allowed in strict mode
-	if strings.Contains(contentStr, "with (") {
-		return true
-	}
-
-	// Filter out very old ES5 era patterns that are not relevant for modern TS
-	// Look for specific Sputnik-era test patterns that test legacy features
-	if strings.Contains(contentStr, "Sputnik") && strings.Contains(contentStr, "es5id") {
-		// Check for specific legacy patterns that we don't want to support
-		legacyPatterns := []string{
-			"arguments.callee", // Legacy arguments object usage
-			"__func__",         // Old function name patterns
-			"eval(",            // Direct eval calls in legacy contexts
-		}
-
-		for _, pattern := range legacyPatterns {
-			if strings.Contains(contentStr, pattern) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, filterMode bool, disasm bool) (TestStats, []TestResult) {
+func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool) (TestStats, []TestResult) {
 	var stats TestStats
 	var fileResults []TestResult
 	stats.Total = len(testFiles)
@@ -303,24 +268,6 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 			// This is safe because each test creates fresh objects
 			vm.ClearShapeCache()
 			runtime.GC()
-		}
-
-		// Apply legacy filtering if enabled
-		if filterMode && shouldFilterTest(testFile) {
-			if verbose {
-				fmt.Printf("FILTER %d/%d %s - legacy pattern filtered out\n", i+1, stats.Total, testFile)
-			}
-			result := TestResult{
-				Path:     testFile,
-				Passed:   false,
-				Failed:   false,
-				TimedOut: false,
-				Skipped:  true,
-				Duration: 0,
-			}
-			fileResults = append(fileResults, result)
-			stats.Skipped++
-			continue
 		}
 
 		testStart := time.Now()
