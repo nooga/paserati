@@ -7077,7 +7077,7 @@ func (p *Parser) parsePropertyName() *Identifier {
 		lexer.TRY, lexer.SWITCH, lexer.CASE, lexer.DEFAULT, lexer.BREAK, lexer.CONTINUE, lexer.CLASS,
 		lexer.STATIC, lexer.READONLY, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT,
 		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.AWAIT, lexer.VAR, lexer.TYPE, lexer.KEYOF,
-		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER:
+		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER, lexer.WITH:
 		// Allow keywords as property names
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	default:

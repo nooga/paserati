@@ -2223,7 +2223,23 @@ func (c *Compiler) compileJSONImport(node *parser.ImportDeclaration, sourceModul
 			c.moduleBindings.DefineImport(localName, sourceModulePath, "default", ImportDefaultRef, -1)
 
 		case *parser.ImportNamedSpecifier:
-			return BadRegister, NewCompileError(node, "JSON modules do not have named exports, only default")
+			// Named import: import { default as data } from "./file.json" with { type: "json" }
+			// JSON modules only have a "default" export, so only allow named import of "default"
+			if importSpec.Imported == nil {
+				return BadRegister, NewCompileError(node, "import named specifier missing imported name")
+			}
+			if importSpec.Local == nil {
+				return BadRegister, NewCompileError(node, "import named specifier missing local name")
+			}
+
+			// Only allow importing "default"
+			if importSpec.Imported.Value != "default" {
+				return BadRegister, NewCompileError(node, fmt.Sprintf("JSON modules only have a 'default' export, cannot import '%s'", importSpec.Imported.Value))
+			}
+
+			localName := importSpec.Local.Value
+			// Import the default export with the specified local name
+			c.moduleBindings.DefineImport(localName, sourceModulePath, "default", ImportDefaultRef, -1)
 
 		case *parser.ImportNamespaceSpecifier:
 			// Namespace import: import * as ns from "./file.json" with { type: "json" }
