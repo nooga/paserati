@@ -1688,13 +1688,15 @@ func (l *Lexer) readNumber() string {
 	if base == 10 && l.ch == '.' {
 		// Check if the character *after* the dot is a digit, separator, or 'e'/'E' (for cases like "1.e10")
 		peek := l.peekChar()
-		if isDigit(peek) || peek == '_' || peek == 'e' || peek == 'E' {
+		// Per ECMAScript: "1." is valid (trailing dot), so we consume the dot even if not followed by digits
+		// But we need to ensure it's not a property access (e.g., obj.property)
+		// The difference: after a number, any non-identifier-start character means it's a trailing dot
+		if isDigit(peek) || peek == '_' || peek == 'e' || peek == 'E' || !isLetter(peek) && peek != '$' && peek != '_' {
 			l.readChar()             // Consume '.'
 			lastCharWasDigit = false // Reset for fraction part validation
 
-			// Only read fractional digits if the next char is not 'e'/'E'
-			// (handles "1.e10" where there are no fractional digits)
-			if l.ch != 'e' && l.ch != 'E' {
+			// Only read fractional digits if the next char is a digit or separator
+			if isDigit(l.ch) || l.ch == '_' {
 				for {
 					if isDigit(l.ch) {
 						l.readChar()

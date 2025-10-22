@@ -2671,8 +2671,8 @@ startExecution:
 				case TypeString:
 					key = AsString(indexVal)
 				case TypeFloatNumber, TypeIntegerNumber:
-					key = strconv.FormatFloat(AsNumber(indexVal), 'f', -1, 64) // Consistent conversion
-					// Or: key = fmt.Sprintf("%v", AsNumber(indexVal))
+					// Use ToString() for ECMAScript-compliant conversion (handles Infinity, NaN, etc.)
+					key = indexVal.ToString()
 				case TypeSymbol:
 					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
 						if status != InterpretOK {
