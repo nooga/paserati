@@ -1243,9 +1243,21 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
-	
+
+	// Increment generator context before parsing body
+	p.inGenerator++
+	if debugParser {
+		fmt.Printf("[PARSER] Entering generator context (class generator method), inGenerator=%d\n", p.inGenerator)
+	}
+
 	body := p.parseBlockStatement()
-	
+
+	// Restore generator context
+	p.inGenerator--
+	if debugParser {
+		fmt.Printf("[PARSER] Leaving generator context (class generator method), inGenerator=%d\n", p.inGenerator)
+	}
+
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
 	
