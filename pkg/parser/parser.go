@@ -3183,9 +3183,10 @@ func (p *Parser) parseSpreadElement() Expression {
 
 	// Parse the expression after '...'
 	p.nextToken() // Move to the expression
-	// Use ASSIGNMENT precedence to prevent comma from being parsed as operator
-	// This fixes: {...yield yield, ...yield} where comma should be property separator
-	spreadElement.Argument = p.parseExpression(ASSIGNMENT)
+	// Per ECMAScript spec: SpreadElement evaluates AssignmentExpression
+	// Use ARG_SEPARATOR precedence to allow assignment but stop at commas
+	// This allows: [...x = [1, 2]] and test(...x = [1, 2])
+	spreadElement.Argument = p.parseExpression(ARG_SEPARATOR)
 	if spreadElement.Argument == nil {
 		p.addError(p.curToken, "expected expression after '...' in spread syntax")
 		return nil
