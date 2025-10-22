@@ -5289,7 +5289,9 @@ func (p *Parser) parseArrayLiteral() Expression {
 		if p.peekTokenIs(lexer.ASSIGN) {
 			p.nextToken() // Consume '='
 			p.nextToken() // Move to default value expression
-			defaultExpr := p.parseExpression(ASSIGNMENT)
+			// Parse default expression at ARG_SEPARATOR precedence to allow assignment expressions
+			// (e.g., [a = b = c] should parse b = c as the default value for a)
+			defaultExpr := p.parseExpression(ARG_SEPARATOR)
 			if defaultExpr == nil {
 				return nil
 			}
