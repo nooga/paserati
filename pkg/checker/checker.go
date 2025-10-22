@@ -2027,7 +2027,11 @@ func (c *Checker) visit(node parser.Node) {
 			case "delete":
 				// delete operator returns boolean indicating success
 				resultType = types.Boolean
-				// The operand must be a property access expression
+				// Per ECMAScript spec:
+				// - delete <property-access> returns true/false based on deletion success
+				// - delete <identifier> returns true (strict mode would throw, but we allow it)
+				// - delete <non-reference> (literal, expression) returns true
+				// Only check for readonly properties on member expressions
 				switch rightNode := node.Right.(type) {
 				case *parser.MemberExpression:
 					// Check if the property is readonly
@@ -2050,11 +2054,11 @@ func (c *Checker) visit(node parser.Node) {
 				case *parser.IndexExpression:
 					// Valid delete target (bracket notation)
 				case *parser.Identifier:
-					// In TypeScript, deleting a variable is not allowed
-					c.addError(node, "delete cannot be applied to variables")
+					// Allow delete on identifiers (returns true in non-strict mode, throws in strict)
+					// We're lenient here for JavaScript compatibility
 				default:
-					// Other expressions are not valid delete targets
-					c.addError(node, fmt.Sprintf("delete cannot be applied to %T", node.Right))
+					// All other expressions are allowed (literals, typeof, arithmetic, etc.)
+					// They all return true per ECMAScript spec
 				}
 			// --- END NEW ---
 			default:

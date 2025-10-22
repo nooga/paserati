@@ -1092,10 +1092,10 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 				c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
 			}
 
-		case *parser.CallExpression, *parser.PrefixExpression, *parser.InfixExpression:
-			// delete expression: For other expressions that are not property access,
-			// evaluate the expression and return true (per ECMAScript spec)
-			// We still need to evaluate the expression for potential side effects
+		default:
+			// delete <non-reference>: For any other expression (literals, typeof, etc.)
+			// Per ECMAScript spec, delete returns true for non-reference expressions
+			// We still evaluate the expression for potential side effects
 			exprReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, exprReg)
 			_, err := c.compileNode(node.Right, exprReg)
@@ -1104,10 +1104,6 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			}
 			// Always return true for non-property-access delete operations
 			c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
-			
-		default:
-			// For other expressions that we don't support yet
-			return BadRegister, NewCompileError(node, fmt.Sprintf("cannot delete %T", node.Right))
 		}
 	// --- END NEW ---
 	default:
