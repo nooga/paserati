@@ -872,11 +872,19 @@ func parseStringToNumber(s string) float64 {
 	}
 
 	// Handle decimal (including scientific notation, Infinity, -Infinity)
+	// Per ECMAScript spec, "Infinity" is case-sensitive (unlike Go's ParseFloat)
 	if str == "Infinity" || str == "+Infinity" {
 		return math.Inf(1)
 	}
 	if str == "-Infinity" {
 		return math.Inf(-1)
+	}
+
+	// Check for invalid case variations (e.g., "INFINITY", "infinity")
+	// Go's ParseFloat accepts these but ECMAScript does not
+	strLower := strings.ToLower(str)
+	if strLower == "infinity" || strLower == "+infinity" || strLower == "-infinity" {
+		return math.NaN()
 	}
 
 	// Try parsing as float
