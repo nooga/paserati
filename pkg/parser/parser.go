@@ -8432,6 +8432,12 @@ func (p *Parser) isValidDestructuringTarget(expr Expression) bool {
 	case *UndefinedLiteral:
 		// Elision in destructuring: [,] or [[,]]
 		return true
+	case *MemberExpression:
+		// Member access: [obj.prop] = [1] or [obj[key]] = [1]
+		return true
+	case *IndexExpression:
+		// Index access: [arr[0]] = [1]
+		return true
 	default:
 		return false
 	}

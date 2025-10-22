@@ -21,6 +21,14 @@ func (c *Checker) checkDestructuringTarget(target parser.Expression, expectedTyp
 	case *parser.ObjectParameterPattern:
 		// Handle nested object parameter patterns (from function parameters)
 		c.checkNestedObjectParameterPattern(targetNode, expectedType, context)
+	case *parser.MemberExpression:
+		// Member access as target: [obj.prop] = [value]
+		// Type check the member expression and ensure it's assignable
+		c.visit(targetNode)
+	case *parser.IndexExpression:
+		// Index access as target: [arr[0]] = [value]
+		// Type check the index expression and ensure it's assignable
+		c.visit(targetNode)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -42,6 +50,12 @@ func (c *Checker) checkDestructuringTargetForProperty(target parser.Expression, 
 		c.checkNestedArrayParameterPattern(targetNode, expectedType, propName)
 	case *parser.ObjectParameterPattern:
 		c.checkNestedObjectParameterPattern(targetNode, expectedType, propName)
+	case *parser.MemberExpression:
+		// Member access as target: {prop: obj.field} = {prop: value}
+		c.visit(targetNode)
+	case *parser.IndexExpression:
+		// Index access as target: {prop: arr[0]} = {prop: value}
+		c.visit(targetNode)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -236,6 +250,14 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
+	case *parser.MemberExpression:
+		// Member access as target: const [obj.prop] = [value]
+		// This is valid in JavaScript (though less common in declarations)
+		c.visit(targetNode)
+	case *parser.IndexExpression:
+		// Index access as target: const [arr[0]] = [value]
+		// This is valid in JavaScript (though less common in declarations)
+		c.visit(targetNode)
 	default:
 		c.addError(target, fmt.Sprintf("invalid destructuring target type: %T", target))
 	}
