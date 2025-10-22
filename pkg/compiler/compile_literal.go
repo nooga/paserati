@@ -845,6 +845,11 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	functionCompiler.compilingFuncName = determinedFuncName
 	// --- End Set Name ---
 
+	// --- Set function context flags ---
+	functionCompiler.isAsync = node.IsAsync
+	functionCompiler.isGenerator = node.IsGenerator
+	// --- End function context ---
+
 	// --- NEW: Handle function name binding for named function expressions ---
 	// For named function expressions like: let f = function g() { g(); }
 	// The name 'g' should be accessible only inside the function and refer to the function itself

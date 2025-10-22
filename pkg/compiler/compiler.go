@@ -127,6 +127,10 @@ type Compiler struct {
 
 	// --- Tail Call Optimization ---
 	inTailPosition bool // True when compiling tail-positioned expression
+
+	// --- Function Context Tracking ---
+	isAsync     bool // True when compiling async function
+	isGenerator bool // True when compiling generator function
 }
 
 // NewCompiler creates a new *top-level* Compiler.
