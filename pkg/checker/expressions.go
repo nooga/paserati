@@ -2287,6 +2287,12 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 
 		if node.Delegate {
 			// yield* delegation - the value must be iterable
+			// Per TypeScript: any is always accepted for yield*
+			if valueType == types.Any {
+				yieldedType = types.Any
+				goto setYieldedType
+			}
+
 			// Check if the value has Symbol.iterator method
 			// Check if the type has Symbol.iterator property
 			debugPrintf("// [Checker yield*] Checking if valueType %T (%s) is iterable\n", valueType, valueType.String())
