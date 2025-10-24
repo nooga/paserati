@@ -39,28 +39,36 @@ func (p *Parser) isValidMethodName() bool {
 // Syntax: class ClassName [extends SuperClass] { classBody }
 func (p *Parser) parseClassDeclaration() Statement {
 	classToken := p.curToken
-	
+
 	if !p.expectPeek(lexer.IDENT) {
 		return nil
 	}
-	
+
 	name := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	
+
 	// Parse type parameters if present (same pattern as interfaces)
 	typeParameters := p.tryParseTypeParameters()
-	
+
 	var superClass Expression
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
-		p.nextToken() // move to start of type expression
-		
-		// Parse full type expression (supports both simple identifiers and generic types)
-		superClass = p.parseTypeExpression()
+		p.nextToken() // move to start of expression
+
+		// Check if this is a runtime expression (function/class literal, call, parenthesized expr)
+		// or a type expression (identifier with optional generic args)
+		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) {
+			// Runtime expression: function() {}, class {}, (expr), etc.
+			superClass = p.parseExpression(LOWEST)
+		} else {
+			// Type expression: Container, Container<T>, etc.
+			superClass = p.parseTypeExpression()
+		}
+
 		if superClass == nil {
-			return nil // Failed to parse superclass type
+			return nil // Failed to parse superclass expression
 		}
 	}
-	
+
 	var implements []*Identifier
 	if p.peekTokenIs(lexer.IMPLEMENTS) {
 		p.nextToken() // consume 'implements'
@@ -119,15 +127,23 @@ func (p *Parser) parseClassExpression() Expression {
 	var superClass Expression
 	if p.peekTokenIs(lexer.EXTENDS) {
 		p.nextToken() // consume 'extends'
-		p.nextToken() // move to start of type expression
-		
-		// Parse full type expression (supports both simple identifiers and generic types)
-		superClass = p.parseTypeExpression()
+		p.nextToken() // move to start of expression
+
+		// Check if this is a runtime expression (function/class literal, call, parenthesized expr)
+		// or a type expression (identifier with optional generic args)
+		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) {
+			// Runtime expression: function() {}, class {}, (expr), etc.
+			superClass = p.parseExpression(LOWEST)
+		} else {
+			// Type expression: Container, Container<T>, etc.
+			superClass = p.parseTypeExpression()
+		}
+
 		if superClass == nil {
-			return nil // Failed to parse superclass type
+			return nil // Failed to parse superclass expression
 		}
 	}
-	
+
 	var implements []*Identifier
 	if p.peekTokenIs(lexer.IMPLEMENTS) {
 		p.nextToken() // consume 'implements'

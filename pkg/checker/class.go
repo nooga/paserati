@@ -1118,14 +1118,15 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		// Also resolve superType via type annotation for generic refs
 		superType = c.resolveTypeAnnotation(superClassExpr)
 	} else {
-		// For other expressions, try to resolve as type annotation
-		debugPrintf("// [Checker Class] Processing 'else' branch for superclass type\n")
-		superType = c.resolveTypeAnnotation(superClassExpr)
-		if superType == nil {
-			c.addError(superClassExpr, "failed to resolve superclass type")
-			return
+		// For other expressions (function literals, call expressions, etc.), visit as expression
+		debugPrintf("// [Checker Class] Processing 'else' branch for superclass expression: %T\n", superClassExpr)
+		c.visit(superClassExpr)
+		constructorType = superClassExpr.GetComputedType()
+		if constructorType == nil {
+			// If visiting didn't produce a type, it's likely an error already reported
+			constructorType = types.Any
 		}
-		constructorType = superType
+		superType = constructorType
 		exists = true
 	}
 

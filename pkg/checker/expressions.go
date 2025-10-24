@@ -1932,7 +1932,9 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 
 					if !skipArityCheck && actualArgCount < minRequiredArgs {
 						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
-					} else if !skipArityCheck && actualArgCount > expectedArgCount {
+					} else if !skipArityCheck && actualArgCount > expectedArgCount && expectedArgCount > 0 {
+						// Only enforce max args if constructor has declared parameters
+						// (allow extra args for constructors with no params - they may use 'arguments')
 						c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
 					} else {
 						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)

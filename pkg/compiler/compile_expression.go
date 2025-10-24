@@ -348,6 +348,27 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Reg
 		}
 	}()
 
+	// Check if this is super[expr] (not a call)
+	if _, isSuper := node.Left.(*parser.SuperExpression); isSuper {
+		// Super index access: super[expr]
+		// This handles property access including getters
+
+		// Compile the index expression
+		indexReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, indexReg)
+		_, err := c.compileNode(node.Index, indexReg)
+		if err != nil {
+			return BadRegister, NewCompileError(node.Index, "error compiling index part of super index expression").CausedBy(err)
+		}
+
+		// Use OpGetSuperComputed to get the property (handles getters correctly)
+		c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
+		c.chunk.WriteByte(byte(hint))
+		c.chunk.WriteByte(byte(indexReg))
+
+		return hint, nil
+	}
+
 	// 1. Compile the expression being indexed (the base: array/object/string)
 	// debug disabled
 	arrayReg := c.regAlloc.Alloc()
@@ -1301,12 +1322,12 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 	// Check if this is a method call (function is a member expression like obj.method() or obj[key]())
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
-		// Check if this is a super method call (super.method())
+		// Check if this is a super method call (super.method() or super['method']())
 		if _, isSuperMethod := memberExpr.Object.(*parser.SuperExpression); isSuperMethod {
-			// Super method call: super.method(args...)
+			// Super method call: super.method(args...) or super['method'](args...)
 			// This requires special handling:
 			// 1. Load 'this' (for the this binding when calling the super method)
-			// 2. Use OpGetSuper to get the method from the prototype
+			// 2. Use OpGetSuper/OpGetSuperComputed to get the method from the prototype
 			// 3. Call the method with 'this' as the this value
 
 			thisReg := c.regAlloc.Alloc()
@@ -1321,12 +1342,26 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 				tempRegs = append(tempRegs, funcReg+Register(i))
 			}
 
-			// Get the method from super using OpGetSuper
-			propertyName := c.extractPropertyName(memberExpr.Property)
-			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-			c.chunk.WriteOpCode(vm.OpGetSuper, memberExpr.Token.Line)
-			c.chunk.WriteByte(byte(funcReg))
-			c.chunk.WriteUint16(nameConstIdx)
+			// Get the method from super using OpGetSuper or OpGetSuperComputed
+			if computedKey, isComputed := memberExpr.Property.(*parser.ComputedPropertyName); isComputed {
+				// Computed property: super[expr]()
+				propertyReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, propertyReg)
+				_, err := c.compileNode(computedKey.Expr, propertyReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				c.chunk.WriteOpCode(vm.OpGetSuperComputed, memberExpr.Token.Line)
+				c.chunk.WriteByte(byte(funcReg))
+				c.chunk.WriteByte(byte(propertyReg))
+			} else {
+				// Static property: super.method()
+				propertyName := c.extractPropertyName(memberExpr.Property)
+				nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+				c.chunk.WriteOpCode(vm.OpGetSuper, memberExpr.Token.Line)
+				c.chunk.WriteByte(byte(funcReg))
+				c.chunk.WriteUint16(nameConstIdx)
+			}
 
 			// Compile arguments
 			_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
@@ -1345,6 +1380,58 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			return hint, nil
 		}
 
+		// Regular method call: obj.method(args...)
+	}
+
+	// Check if this is a super index call (super[expr]())
+	if indexExpr, isIndexCall := node.Function.(*parser.IndexExpression); isIndexCall {
+		if _, isSuperIndex := indexExpr.Left.(*parser.SuperExpression); isSuperIndex {
+			// Super index call: super[expr](args...)
+			// Similar handling to super.method() but with computed property
+
+			thisReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, thisReg)
+			c.emitLoadThis(thisReg, indexExpr.Token.Line)
+
+			// Allocate contiguous block for function + all arguments
+			totalArgCount := c.determineTotalArgCount(node)
+			blockSize := 1 + totalArgCount
+			funcReg := c.regAlloc.AllocContiguous(blockSize)
+			for i := 0; i < blockSize; i++ {
+				tempRegs = append(tempRegs, funcReg+Register(i))
+			}
+
+			// Compile the index expression (the key)
+			propertyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, propertyReg)
+			_, err := c.compileNode(indexExpr.Index, propertyReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Use OpGetSuperComputed to get the method
+			c.chunk.WriteOpCode(vm.OpGetSuperComputed, indexExpr.Token.Line)
+			c.chunk.WriteByte(byte(funcReg))
+			c.chunk.WriteByte(byte(propertyReg))
+
+			// Compile arguments
+			_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Call the super method with 'this' binding
+			if enableTCO && c.inTailPosition && c.tryDepth == 0 {
+				c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+			} else {
+				c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+			}
+
+			return hint, nil
+		}
+	}
+
+	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Regular method call: obj.method(args...)
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()

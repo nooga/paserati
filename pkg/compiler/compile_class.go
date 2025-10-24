@@ -1106,30 +1106,48 @@ func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg 
 		defer c.regAlloc.Free(parentConstructorReg)
 	}
 
-	// Determine parent constructor arity by looking up the parent class AST
-	argCount := c.getParentConstructorArity(superClassName)
-	debugPrintf("// DEBUG createInheritedPrototype: Parent constructor arity: %d\n", argCount)
+	// Modern JavaScript inheritance: use Object.create(Parent.prototype)
+	// This avoids calling the parent constructor during class setup
+	//
+	// Steps:
+	// 1. Get Parent.prototype
+	// 2. Call Object.create(Parent.prototype)
 
-	// Allocate registers for constructor call: [constructor, args...]
-	constructorAndArgRegs := c.regAlloc.AllocContiguous(1 + argCount)
+	// Get Parent.prototype
+	parentProtoReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(parentProtoReg)
+
+	prototypeNameIdx := c.chunk.AddConstant(vm.String("prototype"))
+	c.emitGetProp(parentProtoReg, parentConstructorReg, prototypeNameIdx, 0)
+
+	// Call Object.create(parentPrototype)
+	// Load Object.create function
+	objectCreateReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectCreateReg)
+
+	// Get global Object
+	objectGlobalIdx := c.GetOrAssignGlobalIndex("Object")
+	objectReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectReg)
+	c.emitGetGlobal(objectReg, objectGlobalIdx, 0)
+
+	// Get Object.create
+	createNameIdx := c.chunk.AddConstant(vm.String("create"))
+	c.emitGetProp(objectCreateReg, objectReg, createNameIdx, 0)
+
+	// Call Object.create(parentPrototype)
+	// Allocate contiguous registers: [function, arg]
+	callRegs := c.regAlloc.AllocContiguous(2)
 	defer func() {
-		for i := 0; i < 1+argCount; i++ {
-			c.regAlloc.Free(constructorAndArgRegs + Register(i))
-		}
+		c.regAlloc.Free(callRegs)
+		c.regAlloc.Free(callRegs + 1)
 	}()
 
-	// Move constructor to the first register
-	c.emitMove(constructorAndArgRegs, parentConstructorReg, 0)
+	c.emitMove(callRegs, objectCreateReg, 0)
+	c.emitMove(callRegs+1, parentProtoReg, 0)
+	c.emitCall(prototypeReg, callRegs, 1, 0)
 
-	// Provide the right number of dummy arguments
-	for i := 0; i < argCount; i++ {
-		c.emitLoadNewConstant(constructorAndArgRegs+Register(1+i), vm.String(""), 0)
-	}
-
-	// Call with the determined argument count
-	c.emitNew(prototypeReg, constructorAndArgRegs, byte(argCount), 0)
-
-	debugPrintf("// DEBUG createInheritedPrototype: Created inherited prototype from '%s'\n", superClassName)
+	debugPrintf("// DEBUG createInheritedPrototype: Created inherited prototype from '%s' using Object.create\n", superClassName)
 	return nil
 }
 

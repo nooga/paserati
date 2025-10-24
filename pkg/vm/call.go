@@ -217,7 +217,13 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = thisValue
-		newFrame.homeObject = calleeFunc.HomeObject // Set [[HomeObject]] for super property access
+		// Set [[HomeObject]] for super property access
+		// Arrow functions inherit homeObject from their enclosing scope
+		if calleeFunc.IsArrowFunction {
+			newFrame.homeObject = currentFrame.homeObject
+		} else {
+			newFrame.homeObject = calleeFunc.HomeObject
+		}
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false
 		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
