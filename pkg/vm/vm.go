@@ -4814,6 +4814,13 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
+			// Check if prototype is null or undefined (can't access properties)
+			if protoValue.Type() == TypeNull || protoValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowTypeError("Cannot read super property from " + protoValue.Type().String() + " prototype")
+				return InterpretRuntimeError, Undefined
+			}
+
 			// Get the property from the prototype, walking the prototype chain
 			if protoValue.Type() == TypeObject {
 				if debugVM {
@@ -5040,6 +5047,13 @@ startExecution:
 			} else {
 				frame.ip = ip
 				vm.runtimeError("Cannot access super property: home object has no prototype")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Check if prototype is null or undefined (can't access properties)
+			if protoValue.Type() == TypeNull || protoValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowTypeError("Cannot read super property from " + protoValue.Type().String() + " prototype")
 				return InterpretRuntimeError, Undefined
 			}
 

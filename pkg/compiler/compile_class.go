@@ -127,35 +127,43 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	var superConstructorReg Register
 	var needToFreeSuperReg bool
 	if node.SuperClass != nil {
-		// Get the superclass name
-		var superClassName string
-		if ident, ok := node.SuperClass.(*parser.Identifier); ok {
-			superClassName = ident.Value
-		} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
-			superClassName = genericTypeRef.Name.Value
+		// Check if extending null (class extends null)
+		if _, isNull := node.SuperClass.(*parser.NullLiteral); isNull {
+			// Extending null - no superclass constructor to load
+			debugPrintf("// DEBUG compileClassDeclaration: Class '%s' extends null\n", node.Name.Value)
+			superConstructorReg = BadRegister
+			needToFreeSuperReg = false
 		} else {
-			superClassName = node.SuperClass.String()
-		}
+			// Get the superclass name
+			var superClassName string
+			if ident, ok := node.SuperClass.(*parser.Identifier); ok {
+				superClassName = ident.Value
+			} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
+				superClassName = genericTypeRef.Name.Value
+			} else {
+				superClassName = node.SuperClass.String()
+			}
 
-		// Look up the parent class constructor
-		symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
-		if exists {
-			// Found in symbol table
-			if symbol.IsGlobal {
+			// Look up the parent class constructor
+			symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
+			if exists {
+				// Found in symbol table
+				if symbol.IsGlobal {
+					superConstructorReg = c.regAlloc.Alloc()
+					needToFreeSuperReg = true
+					c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+				} else {
+					superConstructorReg = symbol.Register
+					needToFreeSuperReg = false
+				}
+			} else {
+				// Not in symbol table - might be a built-in class (Object, Array, etc.)
+				// Emit code to look up the global variable at runtime
+				globalIdx := c.GetOrAssignGlobalIndex(superClassName)
 				superConstructorReg = c.regAlloc.Alloc()
 				needToFreeSuperReg = true
-				c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-			} else {
-				superConstructorReg = symbol.Register
-				needToFreeSuperReg = false
+				c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
 			}
-		} else {
-			// Not in symbol table - might be a built-in class (Object, Array, etc.)
-			// Emit code to look up the global variable at runtime
-			globalIdx := c.GetOrAssignGlobalIndex(superClassName)
-			superConstructorReg = c.regAlloc.Alloc()
-			needToFreeSuperReg = true
-			c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
 		}
 	}
 
@@ -343,27 +351,67 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 	defer c.regAlloc.Free(prototypeReg)
 
 	if node.SuperClass != nil {
-		// Get the superclass name for compilation
-		var superClassName string
-		if ident, ok := node.SuperClass.(*parser.Identifier); ok {
-			superClassName = ident.Value
-		} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
-			// For generic type references like Container<T>, extract just the base name
-			superClassName = genericTypeRef.Name.Value
-			debugPrintf("// DEBUG setupClassPrototype: Extracted base class name '%s' from generic type '%s'\n", superClassName, genericTypeRef.String())
-		} else {
-			// For other complex expressions, use string representation as fallback
-			// TODO: Implement proper generic class instantiation at runtime
-			superClassName = node.SuperClass.String()
-		}
-
-		debugPrintf("// DEBUG setupClassPrototype: Class '%s' extends '%s', calling createInheritedPrototype\n", node.Name.Value, superClassName)
-		// Create prototype as an instance of the parent class
-		err := c.createInheritedPrototype(superClassName, prototypeReg)
-		if err != nil {
-			debugPrintf("// DEBUG setupClassPrototype: Warning - could not set up inheritance from '%s': %v\n", superClassName, err)
-			// Fall back to empty object
+		// Check if superclass is null (class extends null)
+		if _, isNull := node.SuperClass.(*parser.NullLiteral); isNull {
+			// Extending null: create empty object, then set its [[Prototype]] to null
+			// This allows methods to be added to the object, but the prototype chain ends at null
+			debugPrintf("// DEBUG setupClassPrototype: Class '%s' extends null, creating object with null prototype\n", node.Name.Value)
 			c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
+
+			// Use Object.setPrototypeOf(prototypeObj, null) to set the prototype to null
+			// Load Object.setPrototypeOf
+			objectGlobalIdx := c.GetOrAssignGlobalIndex("Object")
+			objectReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(objectReg)
+			c.emitGetGlobal(objectReg, objectGlobalIdx, node.Token.Line)
+
+			setProtoNameIdx := c.chunk.AddConstant(vm.String("setPrototypeOf"))
+			setProtoReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(setProtoReg)
+			c.emitGetProp(setProtoReg, objectReg, setProtoNameIdx, node.Token.Line)
+
+			// Call Object.setPrototypeOf(prototypeReg, null)
+			nullConstIdx := c.chunk.AddConstant(vm.Null)
+			nullReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(nullReg)
+			c.emitLoadConstant(nullReg, nullConstIdx, node.Token.Line)
+
+			callRegs := c.regAlloc.AllocContiguous(3) // [function, arg1, arg2]
+			defer func() {
+				for i := 0; i < 3; i++ {
+					c.regAlloc.Free(callRegs + Register(i))
+				}
+			}()
+			c.emitMove(callRegs, setProtoReg, node.Token.Line)
+			c.emitMove(callRegs+1, prototypeReg, node.Token.Line)
+			c.emitMove(callRegs+2, nullReg, node.Token.Line)
+
+			resultReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(resultReg)
+			c.emitCall(resultReg, callRegs, 2, node.Token.Line)
+		} else {
+			// Get the superclass name for compilation
+			var superClassName string
+			if ident, ok := node.SuperClass.(*parser.Identifier); ok {
+				superClassName = ident.Value
+			} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
+				// For generic type references like Container<T>, extract just the base name
+				superClassName = genericTypeRef.Name.Value
+				debugPrintf("// DEBUG setupClassPrototype: Extracted base class name '%s' from generic type '%s'\n", superClassName, genericTypeRef.String())
+			} else {
+				// For other complex expressions, use string representation as fallback
+				// TODO: Implement proper generic class instantiation at runtime
+				superClassName = node.SuperClass.String()
+			}
+
+			debugPrintf("// DEBUG setupClassPrototype: Class '%s' extends '%s', calling createInheritedPrototype\n", node.Name.Value, superClassName)
+			// Create prototype as an instance of the parent class
+			err := c.createInheritedPrototype(superClassName, prototypeReg)
+			if err != nil {
+				debugPrintf("// DEBUG setupClassPrototype: Warning - could not set up inheritance from '%s': %v\n", superClassName, err)
+				// Fall back to empty object
+				c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
+			}
 		}
 	} else {
 		debugPrintf("// DEBUG setupClassPrototype: Class '%s' has no superclass, creating empty prototype\n", node.Name.Value)
@@ -406,8 +454,11 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 
 	// Set prototypeObject.constructor = constructor
 	// This is crucial for inheritance - it fixes the constructor reference
-	constructorNameIdx := c.chunk.AddConstant(vm.String("constructor"))
-	c.emitSetProp(prototypeReg, constructorReg, constructorNameIdx, node.Token.Line)
+	// Skip this if prototype is null (class extends null)
+	if _, isNull := node.SuperClass.(*parser.NullLiteral); !isNull {
+		constructorNameIdx := c.chunk.AddConstant(vm.String("constructor"))
+		c.emitSetProp(prototypeReg, constructorReg, constructorNameIdx, node.Token.Line)
+	}
 
 	debugPrintf("// DEBUG setupClassPrototype: Prototype setup complete for class '%s'\n", node.Name.Value)
 	return nil
