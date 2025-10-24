@@ -560,4 +560,31 @@ func (c *Compiler) emitJumpIfNullish(src Register, offset int16, line int) {
 	c.emitUint16(uint16(offset))
 }
 
+// --- With Statement Support ---
+
+// emitPushWithObject emits OpPushWithObject instruction
+func (c *Compiler) emitPushWithObject(objReg Register, line int) {
+	c.emitOpCode(vm.OpPushWithObject, line)
+	c.emitByte(byte(objReg))
+}
+
+// emitPopWithObject emits OpPopWithObject instruction
+func (c *Compiler) emitPopWithObject(line int) {
+	c.emitOpCode(vm.OpPopWithObject, line)
+}
+
+// emitGetWithProperty emits OpGetWithProperty instruction
+func (c *Compiler) emitGetWithProperty(destReg Register, nameIdx int, line int) {
+	c.emitOpCode(vm.OpGetWithProperty, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(uint16(nameIdx))
+}
+
+// emitSetWithProperty emits OpSetWithProperty instruction
+func (c *Compiler) emitSetWithProperty(nameIdx int, valueReg Register, line int) {
+	c.emitOpCode(vm.OpSetWithProperty, line)
+	c.emitUint16(uint16(nameIdx))
+	c.emitByte(byte(valueReg))
+}
+
 // --- END NEW ---

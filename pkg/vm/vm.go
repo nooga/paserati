@@ -129,6 +129,9 @@ type VM struct {
 	// Cache statistics for debugging/profiling
 	cacheStats ICacheStats
 
+	// With statement support - runtime stack of with objects
+	withObjectStack []Value
+
 	// Unified global heap for all modules and main program
 	heap *Heap
 
@@ -698,7 +701,6 @@ startExecution:
 					fn.Prototype = vm.FunctionPrototype
 				}
 			}
-
 			registers[reg] = cval
 
 		case OpLoadNull:
@@ -1905,6 +1907,101 @@ startExecution:
 				}
 			}
 			continue
+
+		case OpPushWithObject:
+			objReg := code[ip]
+			ip += 1
+			objVal := registers[objReg]
+			if objVal.Type() == TypeObject {
+				vm.withObjectStack = append(vm.withObjectStack, objVal)
+			}
+
+		case OpPopWithObject:
+			if len(vm.withObjectStack) > 0 {
+				vm.withObjectStack = vm.withObjectStack[:len(vm.withObjectStack)-1]
+			}
+
+		case OpGetWithProperty:
+			destReg := code[ip]
+			nameHi := code[ip+1]
+			nameLo := code[ip+2]
+			ip += 3
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+
+			found := false
+			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
+				withObj := vm.withObjectStack[i]
+				if withObj.Type() == TypeObject {
+					obj := withObj.AsPlainObject()
+					if obj.HasOwn(propName) {
+						// Check Symbol.unscopables
+						isUnscopable := false
+						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+							if unscopablesVal.Type() == TypeObject {
+								unscopablesObj := unscopablesVal.AsPlainObject()
+								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+									isUnscopable = excludeVal.IsTruthy()
+								}
+							}
+						}
+						if isUnscopable {
+							continue
+						}
+						// Use GetProperty to properly handle getters
+						propVal, err := vm.GetProperty(withObj, propName)
+						if err != nil {
+							frame.ip = ip
+							status := vm.runtimeError("Error getting property: %v", err)
+							return status, Undefined
+						}
+						registers[destReg] = propVal
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				if val, ok := vm.GlobalObject.GetOwn(propName); ok {
+					registers[destReg] = val
+				} else {
+					frame.ip = ip
+					status := vm.runtimeError("%s is not defined", propName)
+					return status, Undefined
+				}
+			}
+
+		case OpSetWithProperty:
+			nameHi := code[ip]
+			nameLo := code[ip+1]
+			valueReg := code[ip+2]
+			ip += 3
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+			value := registers[valueReg]
+
+			// For assignments, always use the INNERMOST with-object
+			// This matches ECMAScript semantics: assignments create/update properties on the innermost with-object
+			if len(vm.withObjectStack) > 0 {
+				innermostWithObj := vm.withObjectStack[len(vm.withObjectStack)-1]
+				if ok, status, val := vm.opSetProp(ip, &innermostWithObj, propName, &value); !ok {
+					if status != InterpretOK {
+						return status, val
+					}
+					goto reloadFrame
+				}
+			} else {
+				// No with-object on stack - fall back to global
+				globalVal := NewValueFromPlainObject(vm.GlobalObject)
+				if ok, status, val := vm.opSetProp(ip, &globalVal, propName, &value); !ok {
+					if status != InterpretOK {
+						return status, val
+					}
+					goto reloadFrame
+				}
+			}
 
 		case OpReturn:
 			srcReg := code[ip]

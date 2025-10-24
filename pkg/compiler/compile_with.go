@@ -41,8 +41,14 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 		properties = make(map[string]bool)
 	}
 
-	// Push with object info to symbol table
+	// Push with object info to symbol table (compile-time tracking)
 	c.currentSymbolTable.PushWithObject(objectReg, properties)
+
+	// Emit runtime opcode to push with object onto VM stack
+	c.emitPushWithObject(objectReg, node.Token.Line)
+
+	// Increment with block depth (this will be inherited by nested functions)
+	c.withBlockDepth++
 
 	// Compile the body with the with object in scope
 	var bodyResult Register = BadRegister
@@ -50,15 +56,23 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 		bodyResult, err = c.compileNode(node.Body, hint)
 		if err != nil {
 			// Clean up before returning error
+			c.withBlockDepth--
+			c.emitPopWithObject(node.Token.Line)
 			c.currentSymbolTable.PopWithObject()
 			c.regAlloc.Free(objectReg)
 			return BadRegister, err
 		}
 	}
 
-	// Pop the with object when done
+	// Decrement with block depth
+	c.withBlockDepth--
+
+	// Emit runtime opcode to pop with object from VM stack
+	c.emitPopWithObject(node.Token.Line)
+
+	// Pop the with object when done (compile-time cleanup)
 	c.currentSymbolTable.PopWithObject()
-	
+
 	// Now we can free the object register
 	c.regAlloc.Free(objectReg)
 

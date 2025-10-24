@@ -38,6 +38,7 @@ func main() {
 		disasm    = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
 		dumpFile   = flag.String("dump", "", "Dump all test results to file (format: +test-path or -test-path)")
 		diffFile   = flag.String("diff", "", "Compare current results against baseline file and show differences")
+		strictOnly = flag.Bool("strict-only", false, "Skip tests with 'noStrict' flag (only run strict mode tests)")
 	)
 
 	flag.Parse()
@@ -93,7 +94,7 @@ func main() {
 	fmt.Printf("Found %d test files\n", len(testFiles))
 
 	// Run tests
-	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *disasm)
+	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *disasm, *strictOnly)
 
 	// Handle diff/dump modes
 	if *diffFile != "" {
@@ -201,7 +202,7 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 }
 
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool) (TestStats, []TestResult) {
+func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool, strictOnly bool) (TestStats, []TestResult) {
 	var stats TestStats
 	var fileResults []TestResult
 	stats.Total = len(testFiles)
@@ -273,7 +274,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 		}
 
 		testStart := time.Now()
-		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm)
+		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm, strictOnly)
 		testDuration := time.Since(testStart)
 
 		result := TestResult{
@@ -411,11 +412,26 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 }
 
 // runSingleTest runs a single test file with timeout
-func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir string, testRoot string, disasm bool) (bool, error) {
+func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir string, testRoot string, disasm bool, strictOnly bool) (bool, error) {
 	// Read test file
 	content, err := os.ReadFile(testFile)
 	if err != nil {
 		return false, fmt.Errorf("failed to read test: %w", err)
+	}
+
+	// Check if strict-only mode is enabled and this test has noStrict flag
+	if strictOnly {
+		sourceStr := string(content)
+		if hdr := extractFrontmatterHeader(sourceStr); hdr != "" {
+			if flags := extractFlags(hdr); len(flags) > 0 {
+				for _, flag := range flags {
+					if flag == "noStrict" {
+						// Skip this test (return passed=false, err=nil to mark as skipped)
+						return false, nil
+					}
+				}
+			}
+		}
 	}
 
 	// Module mode is now default - no need to skip import/export tests

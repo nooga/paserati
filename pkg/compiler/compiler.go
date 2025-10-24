@@ -111,6 +111,7 @@ type Compiler struct {
 	isCompilingFunctionBody bool // Track if we're compiling the function body BlockStatement itself
 	tryDepth           int               // Number of enclosing try blocks (any kind: try-catch, try-finally, try-catch-finally)
 	finallyContextStack []*FinallyContext // Stack of active finally contexts
+	withBlockDepth     int               // Number of enclosing with blocks (inherited by nested functions)
 
 	// --- Phase 5: Module Bindings ---
 	moduleBindings *ModuleBindings      // Module-aware binding resolver
@@ -285,6 +286,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		moduleLoader:            enclosingCompiler.moduleLoader,    // Inherit module loader
 		compilingSuperClassName: enclosingCompiler.compilingSuperClassName, // Inherit super class context
 		finallyContextStack:     make([]*FinallyContext, 0),        // Each function has its own finally context stack
+		withBlockDepth:          enclosingCompiler.withBlockDepth,  // Inherit with block depth for nested functions
 	}
 }
 
@@ -995,11 +997,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, checking with objects\n", node.Value) // <<< ADDED
 
 			// Check if it's from a with object (flagged by type checker)
-			if objReg, isWithProperty := c.shouldUseWithProperty(node); isWithProperty {
-				debugPrintf("// DEBUG Identifier '%s': Found in with object, emitting property access\n", node.Value)
-				// Emit property access bytecode: hint = objReg[node.Value]
-				propName := c.chunk.AddConstant(vm.String(node.Value))
-				c.emitGetProp(hint, objReg, propName, node.Token.Line)
+			if _, isWithProperty := c.shouldUseWithProperty(node); isWithProperty {
+				debugPrintf("// DEBUG Identifier '%s': Found in with object, emitting OpGetWithProperty\n", node.Value)
+				// Emit OpGetWithProperty to check with-object stack at runtime
+				propNameIdx := c.chunk.AddConstant(vm.String(node.Value))
+				c.emitGetWithProperty(hint, int(propNameIdx), node.Token.Line)
 				return hint, nil
 			}
 

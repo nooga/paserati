@@ -15,26 +15,20 @@ const debugAssignment = false // Enable debug output for assignment compilation
 // shouldUseWithProperty checks if an identifier should be treated as a with property
 // This is an unobtrusive predicate that can be used throughout the compiler
 func (c *Compiler) shouldUseWithProperty(ident *parser.Identifier) (Register, bool) {
-	// Only check for with properties if we're actually inside a with statement
-	// This prevents unnecessary constant pool corruption when no with statements are active
-	if !c.currentSymbolTable.HasActiveWithObjects() {
+	// If we're inside a with block (tracked at compile-time), ALL free variables should use OpGetWithProperty
+	// This allows runtime resolution from the with-object stack
+	if c.withBlockDepth == 0 {
 		return BadRegister, false
 	}
-	
-	debugPrintf("// DEBUG shouldUseWithProperty: Has active with objects, checking '%s'\n", ident.Value)
-	
-	// Check if this identifier is flagged as coming from a with object (by type checker)
-	if ident.IsFromWith {
-		debugPrintf("// DEBUG shouldUseWithProperty: '%s' is flagged as from with, checking resolution\n", ident.Value)
-		if objReg, withFound := c.currentSymbolTable.ResolveWithProperty(ident.Value); withFound {
-			debugPrintf("// DEBUG shouldUseWithProperty: '%s' found in with object, returning true\n", ident.Value)
-			return objReg, true
-		}
-		debugPrintf("// DEBUG shouldUseWithProperty: '%s' not found in with object resolution\n", ident.Value)
-	} else {
-		debugPrintf("// DEBUG shouldUseWithProperty: '%s' not flagged as from with\n", ident.Value)
+
+	// Check if this identifier is a local variable (defined in current scope)
+	// If it's local, don't use with property resolution
+	if _, _, found := c.currentSymbolTable.Resolve(ident.Value); found {
+		return BadRegister, false // It's a local, use normal resolution
 	}
-	return BadRegister, false
+
+	// It's a free variable and we're in a with block - use OpGetWithProperty
+	return BadRegister, true
 }
 
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
@@ -68,6 +62,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		isComputed        bool    // True if this is a computed property
 		keyReg           Register // For computed properties
 		isPrivateField    bool    // True if this is a private field (#field)
+		isWithProperty    bool    // True if this is a with property (use OpGetWithProperty/OpSetWithProperty)
 	}
 
 	// Track temporary registers for cleanup
@@ -84,18 +79,18 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		lhsType = lhsIsIdentifier
 		
 		// First check if this is a with property (highest priority)
-		if objReg, isWithProperty := c.shouldUseWithProperty(lhsNode); isWithProperty {
+		if _, isWithProperty := c.shouldUseWithProperty(lhsNode); isWithProperty {
 			// This is a with property assignment - treat as member assignment
 			lhsType = lhsIsMemberExpr
-			memberInfo.objectReg = objReg
 			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
 			memberInfo.isComputed = false
-			
+			memberInfo.isWithProperty = true
+
 			// For compound assignments, we need the current property value
 			if node.Operator != "=" {
 				currentValueReg = c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, currentValueReg)
-				c.emitGetProp(currentValueReg, memberInfo.objectReg, memberInfo.nameConstIdx, line)
+				c.emitGetWithProperty(currentValueReg, int(memberInfo.nameConstIdx), line)
 			} else {
 				currentValueReg = nilRegister // Not needed for simple assignment
 			}
@@ -557,7 +552,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			c.emitByte(byte(hint))
 		case lhsIsMemberExpr:
 			// OpSetProp now properly handles accessor properties via OpDefineAccessor
-			if memberInfo.isComputed {
+			if memberInfo.isWithProperty {
+				// Use OpSetWithProperty for with properties
+				debugPrintf("// DEBUG Assign Store With Property: Emitting OpSetWithProperty[%d] = R%d\n", memberInfo.nameConstIdx, hint)
+				c.emitSetWithProperty(int(memberInfo.nameConstIdx), hint, line)
+			} else if memberInfo.isComputed {
 				// Use OpSetIndex for computed properties: objectReg[keyReg] = hint
 				debugPrintf("// DEBUG Assign Store Member: Emitting SetIndex R%d[R%d] = R%d\n", memberInfo.objectReg, memberInfo.keyReg, hint)
 				c.emitOpCode(vm.OpSetIndex, line)

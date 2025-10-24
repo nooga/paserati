@@ -45,8 +45,9 @@ func (uv *Upvalue) Resolve() *Value {
 
 type ClosureObject struct {
 	Object
-	Fn       *FunctionObject
-	Upvalues []*Upvalue
+	Fn          *FunctionObject
+	Upvalues    []*Upvalue
+	WithObjects []Value // Captured with-object stack from enclosing with statements
 }
 
 // NativeFunctionObject represents a native Go function callable from Paserati.

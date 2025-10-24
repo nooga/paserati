@@ -122,6 +122,14 @@ const (
 	OpSetSuperComputed OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
 	OpDefineMethodComputed OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
+
+	// --- With Statement Support ---
+	OpPushWithObject  OpCode = 118 // ObjReg: Push object onto VM's with-object stack
+	OpPopWithObject   OpCode = 119 // No operands: Pop object from VM's with-object stack
+	OpGetWithProperty OpCode = 120 // Rx NameIdx(16bit): Try to get property from with-object stack, fallback to normal lookup
+	OpSetWithProperty OpCode = 121 // NameIdx(16bit) ValueReg: Try to set property on with-object stack, fallback to normal assignment
+	// --- END With Statement ---
+
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
 	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
 	// --- END NEW ---
@@ -358,6 +366,14 @@ func (op OpCode) String() string {
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
 		return "OpDefineMethodEnumerable"
+	case OpPushWithObject:
+		return "OpPushWithObject"
+	case OpPopWithObject:
+		return "OpPopWithObject"
+	case OpGetWithProperty:
+		return "OpGetWithProperty"
+	case OpSetWithProperty:
+		return "OpSetWithProperty"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -699,6 +715,14 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // ObjReg ValueReg KeyReg
 	case OpDefineMethodEnumerable:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "method") // ObjReg ValueReg NameIdx(16bit)
+	case OpPushWithObject:
+		return c.registerInstruction(builder, instruction.String(), offset) // ObjReg
+	case OpPopWithObject:
+		return c.simpleInstruction(builder, instruction.String(), offset) // No operands
+	case OpGetWithProperty:
+		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx NameIdx(16bit)
+	case OpSetWithProperty:
+		return c.constantRegisterInstruction(builder, instruction.String(), offset, "property") // NameIdx(16bit) ValueReg
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:
