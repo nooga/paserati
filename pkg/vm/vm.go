@@ -586,7 +586,6 @@ func (vm *VM) run() (InterpretResult, Value) {
 	constants := function.Chunk.Constants
 	registers := frame.registers // This is the frame's register window
 	ip := frame.ip
-
 startExecution:
 	for {
 		// Debug: Show current instruction
@@ -1196,7 +1195,6 @@ startExecution:
 			}
 
 			registers[destReg] = BooleanValue(hasProperty)
-
 		case OpInstanceof:
 			// OpInstanceof: Rx Ry Rz - Rx = (Ry instanceof Rz) - instance check
 			destReg := code[ip]
@@ -1696,7 +1694,6 @@ startExecution:
 					ip = frame.ip
 				}
 			}
-
 		case OpCall:
 			// Refactored to use centralized prepareCall
 			destReg := code[ip]
@@ -2176,7 +2173,6 @@ startExecution:
 			// Debug: Show frame restoration
 			// fmt.Printf("// [VM DEBUG] OpReturn: Restored caller frame (frameCount: %d, newIP: %d, newChunk: %s, currentModule: %s)\n",
 			//	vm.frameCount, ip, function.Name, vm.currentModulePath)
-
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
 
@@ -2688,7 +2684,6 @@ startExecution:
 			if need > arrObj.length {
 				arrObj.length = need
 			}
-
 		case OpGetIndex:
 			destReg := code[ip]
 			baseReg := code[ip+1] // Renamed from arrayReg for clarity
@@ -3308,7 +3303,6 @@ startExecution:
 			// --- END MODIFICATION ---
 
 		// --- End Array Opcodes ---
-
 		// --- NEW: Get Length Opcode ---
 		case OpGetLength:
 			destReg := code[ip]
@@ -3506,7 +3500,147 @@ startExecution:
 				continue
 			}
 
-			// Only process actual objects
+			// Handle Proxy objects - need to call ownKeys and related traps
+			if sourceVal.Type() == TypeProxy {
+				proxy := sourceVal.AsProxy()
+				if proxy.Revoked {
+					frame.ip = ip
+					vm.runtimeError("Cannot spread a revoked Proxy")
+					return InterpretRuntimeError, Undefined
+				}
+
+				// Check if handler has ownKeys trap
+				ownKeysTrap, hasOwnKeysTrap := proxy.Handler().AsPlainObject().GetOwn("ownKeys")
+				if hasOwnKeysTrap && ownKeysTrap.IsCallable() {
+					// Call ownKeys trap: handler.ownKeys(target)
+					trapArgs := []Value{proxy.Target()}
+					keysResult, err := vm.Call(ownKeysTrap, proxy.Handler(), trapArgs)
+					if err != nil {
+						frame.ip = ip
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.runtimeError("ownKeys trap error: %v", err)
+						}
+						if !vm.unwinding {
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+
+					// Validate that result is an array
+					if keysResult.Type() != TypeArray {
+						frame.ip = ip
+						vm.runtimeError("ownKeys trap must return an array-like object")
+						return InterpretRuntimeError, Undefined
+					}
+
+					arr := keysResult.AsArray()
+
+					// Get traps from handler
+					getOwnPropDescTrap, hasGetOwnPropDescTrap := proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor")
+					getTrap, hasGetTrap := proxy.Handler().AsPlainObject().GetOwn("get")
+
+					// Process each key in order returned by ownKeys
+					for i := 0; i < arr.Length(); i++ {
+						keyVal := arr.Get(i)
+						var keyStr string
+						isSymbolKey := keyVal.Type() == TypeSymbol
+
+						if !isSymbolKey {
+							keyStr = keyVal.ToString()
+						}
+
+						isEnumerable := true // Default to true if no trap
+
+						// Check enumerability via getOwnPropertyDescriptor trap
+						if hasGetOwnPropDescTrap && getOwnPropDescTrap.IsCallable() {
+							trapArgs := []Value{proxy.Target(), keyVal}
+							descriptor, err := vm.Call(getOwnPropDescTrap, proxy.Handler(), trapArgs)
+							if err != nil {
+								frame.ip = ip
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("getOwnPropertyDescriptor trap error: %v", err)
+								}
+								if !vm.unwinding {
+									continue
+								}
+								return InterpretRuntimeError, Undefined
+							}
+
+							// If descriptor is undefined, property doesn't exist
+							if descriptor.Type() == TypeUndefined {
+								continue
+							}
+
+							// Check enumerable flag
+							if descriptor.Type() == TypeObject || descriptor.Type() == TypeDictObject {
+								var enumVal Value
+								var hasEnum bool
+								if descriptor.Type() == TypeObject {
+									enumVal, hasEnum = descriptor.AsPlainObject().GetOwn("enumerable")
+								} else {
+									enumVal, hasEnum = descriptor.AsDictObject().GetOwn("enumerable")
+								}
+								if hasEnum {
+									isEnumerable = !enumVal.IsFalsey()
+								}
+							}
+						}
+
+						if !isEnumerable {
+							continue
+						}
+
+						// Skip symbols for spreading (they're checked but not copied to result)
+						if isSymbolKey {
+							continue
+						}
+
+						// Get the value via get trap or directly from target
+						var value Value
+						if hasGetTrap && getTrap.IsCallable() {
+							trapArgs := []Value{proxy.Target(), keyVal, sourceVal}
+							var err error
+							value, err = vm.Call(getTrap, proxy.Handler(), trapArgs)
+							if err != nil {
+								frame.ip = ip
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("get trap error: %v", err)
+								}
+								if !vm.unwinding {
+									continue
+								}
+								return InterpretRuntimeError, Undefined
+							}
+						} else {
+							// No get trap - fallback to target
+							target := proxy.Target()
+							if target.Type() == TypeObject {
+								value, _ = target.AsPlainObject().GetOwn(keyStr)
+							} else if target.Type() == TypeDictObject {
+								value, _ = target.AsDictObject().GetOwn(keyStr)
+							} else {
+								value = Undefined
+							}
+						}
+
+						// Set the property on destination
+						if destVal.Type() == TypeDictObject {
+							destVal.AsDictObject().SetOwn(keyStr, value)
+						} else {
+							destVal.AsPlainObject().SetOwn(keyStr, value)
+						}
+					}
+				}
+				continue
+			}
+
+			// Only process actual objects (non-Proxy)
 			if sourceVal.Type() != TypeObject && sourceVal.Type() != TypeDictObject {
 				// For other primitive types, they should be converted to objects first
 				// But for now, skip them as they typically have no enumerable properties
@@ -3936,7 +4070,6 @@ startExecution:
 				// Regular private data field
 				obj.SetPrivateField(fieldName, registers[valReg])
 			}
-
 		case OpSetPrivateAccessor:
 			objReg := code[ip]
 			getterReg := code[ip+1]
@@ -4559,7 +4692,6 @@ startExecution:
 				constants = function.Chunk.Constants
 				registers = frame.registers
 				ip = frame.ip
-
 			case TypeNativeFunction:
 				// Constructor call on builtin function
 				builtin := AsNativeFunction(constructorVal)
@@ -5120,7 +5252,6 @@ startExecution:
 				// Prototype is not an object, return undefined
 				registers[destReg] = Undefined
 			}
-
 		case OpSetSuperComputed:
 			keyReg := code[ip]
 			ip++
@@ -5738,7 +5869,6 @@ startExecution:
 			}
 
 			registers[destReg] = resultObj
-
 		case OpThrow:
 			// Save IP BEFORE throwing for handler lookup
 			// Handler ranges are compiled to include the throw instruction
@@ -6213,7 +6343,7 @@ startExecution:
 					// Fallback for frames created without args (shouldn't happen in normal execution)
 					args = make([]Value, 0)
 				}
-	
+
 				// Create arguments object with callee reference
 				var calleeValue Value
 				if frame.closure != nil {
@@ -6371,7 +6501,6 @@ startExecution:
 			// This should not be directly encountered in normal execution
 			status := vm.runtimeError("OpResumeGenerator is an internal opcode")
 			return status, Undefined
-
 		case OpAwait:
 			// OpAwait resultReg, promiseReg
 			// Suspend async function execution, await promise settlement, store result in resultReg
@@ -7023,7 +7152,6 @@ func (vm *VM) printFrameStack() {
 	}
 	fmt.Fprintf(os.Stderr, "===================\n\n")
 }
-
 // printCurrentRegisters prints the current frame's registers for debugging
 func (vm *VM) printCurrentRegisters() {
 	fmt.Fprintf(os.Stderr, "\n=== Current Frame Registers ===\n")
@@ -7559,7 +7687,6 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 
 	return result, nil
 }
-
 // resumeGenerator resumes execution from a yield point using sentinel frame isolation
 func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
 	// Check if generator has saved state
@@ -8198,7 +8325,6 @@ func (vm *VM) convertJSONToValue(value interface{}) Value {
 		return Undefined
 	}
 }
-
 func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// fmt.Printf("// [VM] executeModule: CALLED for module '%s'\n", modulePath)
 	// Check if module is already cached and executed
