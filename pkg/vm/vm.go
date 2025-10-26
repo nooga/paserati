@@ -17,9 +17,9 @@ const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
 // Debug flags - set these to control debug output
-const debugVM = false           // VM execution tracing
-const debugCalls = false       // Function call tracing
-const debugExceptions = false  // Exception handling tracing
+const debugVM = false         // VM execution tracing
+const debugCalls = false      // Function call tracing
+const debugExceptions = false // Exception handling tracing
 
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
@@ -301,14 +301,14 @@ func dumpFrameStack(vm *VM, context string) {
 func NewVM() *VM {
 	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues:    make([]*Upvalue, 0, 16),        // Pre-allocate slightly
-		propCache:       make(map[int]*PropInlineCache), // Initialize inline cache
-		cacheStats:      ICacheStats{},                  // Initialize cache statistics
-		heap:            NewHeap(64),                    // Initialize unified global heap
-		emptyRestArray:  NewArray(),                     // Initialize singleton empty array for rest params
+		openUpvalues:    make([]*Upvalue, 0, 16),         // Pre-allocate slightly
+		propCache:       make(map[int]*PropInlineCache),  // Initialize inline cache
+		cacheStats:      ICacheStats{},                   // Initialize cache statistics
+		heap:            NewHeap(64),                     // Initialize unified global heap
+		emptyRestArray:  NewArray(),                      // Initialize singleton empty array for rest params
 		errors:          make([]errors.PaseratiError, 0), // Initialize error list
 		moduleContexts:  make(map[string]*ModuleContext), // Initialize module context cache
-		completionStack: make([]Completion, 0, 4),       // Initialize completion stack
+		completionStack: make([]Completion, 0, 4),        // Initialize completion stack
 	}
 
 	// Initialize built-in prototypes first
@@ -404,7 +404,6 @@ func (vm *VM) ResizeHeapForGlobals(allocatedSize int) {
 func (vm *VM) GetHeap() *Heap {
 	return vm.heap
 }
-
 
 func (vm *VM) Reset() {
 	// Nil out closure pointers in frames to allow garbage collection
@@ -1360,77 +1359,77 @@ startExecution:
 					// 4. Close upvalues for current frame BEFORE overwriting
 					vm.closeUpvalues(registers)
 
-				// 5. Expand register window if needed (but never shrink)
-				oldRegSize := len(registers)
-				if calleeFunc.RegisterSize > oldRegSize {
-					// Need more registers - expand the slice into registerStack
-					baseOffset := vm.nextRegSlot - oldRegSize
-					frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
-					registers = frame.registers
-					vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
-				}
-				// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
+					// 5. Expand register window if needed (but never shrink)
+					oldRegSize := len(registers)
+					if calleeFunc.RegisterSize > oldRegSize {
+						// Need more registers - expand the slice into registerStack
+						baseOffset := vm.nextRegSlot - oldRegSize
+						frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
+						registers = frame.registers
+						vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
+					}
+					// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
 
-				// 6. Reuse current frame
-				frame.closure = calleeClosure
-				frame.ip = 0
-				// Keep targetRegister unchanged (return to same caller location)
-				frame.thisValue = Undefined // Regular call has undefined 'this'
-				frame.isConstructorCall = false
-				frame.isDirectCall = false
-				frame.isSentinelFrame = false
-				frame.generatorObj = nil
-				frame.promiseObj = nil
-				frame.argCount = argCount
-				frame.args = args // Already copied above
+					// 6. Reuse current frame
+					frame.closure = calleeClosure
+					frame.ip = 0
+					// Keep targetRegister unchanged (return to same caller location)
+					frame.thisValue = Undefined // Regular call has undefined 'this'
+					frame.isConstructorCall = false
+					frame.isDirectCall = false
+					frame.isSentinelFrame = false
+					frame.generatorObj = nil
+					frame.promiseObj = nil
+					frame.argCount = argCount
+					frame.args = args // Already copied above
 
-				// 6. Clear registers and copy arguments
-				for i := 0; i < len(registers); i++ {
-					registers[i] = Undefined
-				}
-				for i := 0; i < argCount && i < len(registers); i++ {
-					registers[i] = args[i]
-				}
-				// Pad with undefined for optional parameters
-				for i := argCount; i < calleeFunc.Arity && i < len(registers); i++ {
-					registers[i] = Undefined
-				}
+					// 6. Clear registers and copy arguments
+					for i := 0; i < len(registers); i++ {
+						registers[i] = Undefined
+					}
+					for i := 0; i < argCount && i < len(registers); i++ {
+						registers[i] = args[i]
+					}
+					// Pad with undefined for optional parameters
+					for i := argCount; i < calleeFunc.Arity && i < len(registers); i++ {
+						registers[i] = Undefined
+					}
 
-				// Handle rest parameters if variadic
-				if calleeFunc.Variadic {
-					extraArgCount := argCount - calleeFunc.Arity
-					var restArray Value
-					if extraArgCount <= 0 {
-						restArray = vm.emptyRestArray
-					} else {
-						restArray = NewArray()
-						restArrayObj := restArray.AsArray()
-						for i := 0; i < extraArgCount; i++ {
-							argIndex := calleeFunc.Arity + i
-							if argIndex < len(args) {
-								restArrayObj.Append(args[argIndex])
+					// Handle rest parameters if variadic
+					if calleeFunc.Variadic {
+						extraArgCount := argCount - calleeFunc.Arity
+						var restArray Value
+						if extraArgCount <= 0 {
+							restArray = vm.emptyRestArray
+						} else {
+							restArray = NewArray()
+							restArrayObj := restArray.AsArray()
+							for i := 0; i < extraArgCount; i++ {
+								argIndex := calleeFunc.Arity + i
+								if argIndex < len(args) {
+									restArrayObj.Append(args[argIndex])
+								}
 							}
 						}
+						if calleeFunc.Arity < len(registers) {
+							registers[calleeFunc.Arity] = restArray
+						}
 					}
-					if calleeFunc.Arity < len(registers) {
-						registers[calleeFunc.Arity] = restArray
+
+					// Handle named function expression binding
+					if calleeFunc.NameBindingRegister >= 0 && calleeFunc.NameBindingRegister < len(registers) {
+						registers[calleeFunc.NameBindingRegister] = calleeVal
 					}
-				}
 
-				// Handle named function expression binding
-				if calleeFunc.NameBindingRegister >= 0 && calleeFunc.NameBindingRegister < len(registers) {
-					registers[calleeFunc.NameBindingRegister] = calleeVal
-				}
+					// 7. Switch to new function's code
+					closure = calleeClosure
+					function = calleeFunc
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					// registers already points to frame.registers
+					ip = 0
 
-				// 7. Switch to new function's code
-				closure = calleeClosure
-				function = calleeFunc
-				code = function.Chunk.Code
-				constants = function.Chunk.Constants
-				// registers already points to frame.registers
-				ip = 0
-
-				continue
+					continue
 				}
 
 				// Fall back to regular call if TCO not possible (not enough register space)
@@ -1550,87 +1549,87 @@ startExecution:
 				availableInStack = len(vm.registerStack) - vm.nextRegSlot + len(registers)
 
 				if totalNeeded <= availableInStack {
-				// We can perform TCO!
+					// We can perform TCO!
 
-				// 5. Close upvalues for current frame BEFORE overwriting
-				vm.closeUpvalues(registers)
+					// 5. Close upvalues for current frame BEFORE overwriting
+					vm.closeUpvalues(registers)
 
-				// 6. Expand register window if needed (but never shrink)
-				oldRegSize := len(registers)
-				if calleeFunc.RegisterSize > oldRegSize {
-					// Need more registers - expand the slice into registerStack
-					baseOffset := vm.nextRegSlot - oldRegSize
-					frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
-					registers = frame.registers
-					vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
-				}
-				// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
+					// 6. Expand register window if needed (but never shrink)
+					oldRegSize := len(registers)
+					if calleeFunc.RegisterSize > oldRegSize {
+						// Need more registers - expand the slice into registerStack
+						baseOffset := vm.nextRegSlot - oldRegSize
+						frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
+						registers = frame.registers
+						vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
+					}
+					// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
 
-				// 7. Reuse current frame
-				frame.closure = calleeClosure
-				frame.ip = 0
-				// Keep targetRegister unchanged (return to same caller location)
-				frame.thisValue = thisVal // Method call: preserve 'this'
-				frame.isConstructorCall = false
-				frame.isDirectCall = false
-				frame.isSentinelFrame = false
-				frame.generatorObj = nil
-				frame.promiseObj = nil
-				frame.argCount = argCount
-				frame.args = args
+					// 7. Reuse current frame
+					frame.closure = calleeClosure
+					frame.ip = 0
+					// Keep targetRegister unchanged (return to same caller location)
+					frame.thisValue = thisVal // Method call: preserve 'this'
+					frame.isConstructorCall = false
+					frame.isDirectCall = false
+					frame.isSentinelFrame = false
+					frame.generatorObj = nil
+					frame.promiseObj = nil
+					frame.argCount = argCount
+					frame.args = args
 
-				// 8. Clear registers and copy arguments
-				for i := 0; i < len(registers); i++ {
-					registers[i] = Undefined
-				}
-				for i := 0; i < argCount && i < len(registers); i++ {
-					registers[i] = args[i]
-				}
-				// Pad with undefined for optional parameters
-				for i := argCount; i < calleeFunc.Arity && i < len(registers); i++ {
-					registers[i] = Undefined
-				}
+					// 8. Clear registers and copy arguments
+					for i := 0; i < len(registers); i++ {
+						registers[i] = Undefined
+					}
+					for i := 0; i < argCount && i < len(registers); i++ {
+						registers[i] = args[i]
+					}
+					// Pad with undefined for optional parameters
+					for i := argCount; i < calleeFunc.Arity && i < len(registers); i++ {
+						registers[i] = Undefined
+					}
 
-				// Handle rest parameters if variadic
-				if calleeFunc.Variadic {
-					extraArgCount := argCount - calleeFunc.Arity
-					var restArray Value
-					if extraArgCount <= 0 {
-						restArray = vm.emptyRestArray
-					} else {
-						restArray = NewArray()
-						restArrayObj := restArray.AsArray()
-						for i := 0; i < extraArgCount; i++ {
-							argIndex := calleeFunc.Arity + i
-							if argIndex < len(args) {
-								restArrayObj.Append(args[argIndex])
+					// Handle rest parameters if variadic
+					if calleeFunc.Variadic {
+						extraArgCount := argCount - calleeFunc.Arity
+						var restArray Value
+						if extraArgCount <= 0 {
+							restArray = vm.emptyRestArray
+						} else {
+							restArray = NewArray()
+							restArrayObj := restArray.AsArray()
+							for i := 0; i < extraArgCount; i++ {
+								argIndex := calleeFunc.Arity + i
+								if argIndex < len(args) {
+									restArrayObj.Append(args[argIndex])
+								}
 							}
 						}
+						if calleeFunc.Arity < len(registers) {
+							registers[calleeFunc.Arity] = restArray
+						}
 					}
-					if calleeFunc.Arity < len(registers) {
-						registers[calleeFunc.Arity] = restArray
+
+					// Handle named function expression binding
+					if calleeFunc.NameBindingRegister >= 0 && calleeFunc.NameBindingRegister < len(registers) {
+						registers[calleeFunc.NameBindingRegister] = calleeVal
 					}
-				}
 
-				// Handle named function expression binding
-				if calleeFunc.NameBindingRegister >= 0 && calleeFunc.NameBindingRegister < len(registers) {
-					registers[calleeFunc.NameBindingRegister] = calleeVal
-				}
-
-				// 9. Switch to new function's code
-				closure = calleeClosure
-				function = calleeFunc
-				code = function.Chunk.Code
-				constants = function.Chunk.Constants
-				// registers already points to frame.registers
-				ip = 0
+					// 9. Switch to new function's code
+					closure = calleeClosure
+					function = calleeFunc
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					// registers already points to frame.registers
+					ip = 0
 
 					continue
 				}
 
-					// Fall back to regular method call if TCO not possible (not enough register space)
-					// Fall through to inline handler below
-				}
+				// Fall back to regular method call if TCO not possible (not enough register space)
+				// Fall through to inline handler below
+			}
 
 			// If we didn't perform TCO (generator, not enough space, etc.), handle inline
 			if !canPerformTCO || totalNeeded > availableInStack {
@@ -3133,7 +3132,6 @@ startExecution:
 			baseVal := registers[baseReg]
 			indexVal := registers[indexReg]
 			valueVal := registers[valueReg]
-
 
 			// --- MODIFIED: Handle Array and Object ---
 			switch baseVal.Type() {
@@ -6422,8 +6420,8 @@ startExecution:
 					registers: make([]Value, len(registers)),
 					locals:    make([]Value, 0), // TODO: implement locals if needed
 					stackBase: 0,
-					suspendPC: ip - 2,    // IP was advanced by 2 for two-register instruction
-					outputReg: outputReg, // Store where to put sent value on resume
+					suspendPC: ip - 2,          // IP was advanced by 2 for two-register instruction
+					outputReg: outputReg,       // Store where to put sent value on resume
 					thisValue: frame.thisValue, // Preserve 'this' across suspension
 				}
 			} else {
@@ -7152,6 +7150,7 @@ func (vm *VM) printFrameStack() {
 	}
 	fmt.Fprintf(os.Stderr, "===================\n\n")
 }
+
 // printCurrentRegisters prints the current frame's registers for debugging
 func (vm *VM) printCurrentRegisters() {
 	fmt.Fprintf(os.Stderr, "\n=== Current Frame Registers ===\n")
@@ -7675,7 +7674,7 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield && regSize > 0 {
 		// Generator yielded - frames are still active, need to pop them
-		vm.frameCount--                // Pop generator frame
+		vm.frameCount-- // Pop generator frame
 		vm.nextRegSlot -= regSize
 
 		// Pop the sentinel frame
@@ -7687,6 +7686,7 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 
 	return result, nil
 }
+
 // resumeGenerator resumes execution from a yield point using sentinel frame isolation
 func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
 	// Check if generator has saved state
@@ -7744,8 +7744,8 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.ip = genObj.Frame.pc              // Resume from saved PC
-	frame.targetRegister = destReg          // Target in sentinel frame
+	frame.ip = genObj.Frame.pc               // Resume from saved PC
+	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
 	frame.isDirectCall = true // Mark as direct call for proper return handling
@@ -7792,7 +7792,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield {
 		// Generator yielded - frames are still active, need to pop them
-		vm.frameCount--                // Pop generator frame
+		vm.frameCount-- // Pop generator frame
 		vm.nextRegSlot -= regSize
 		// Clear the popped frame to avoid stale references
 		vm.frames[vm.frameCount].generatorObj = nil
@@ -7865,8 +7865,8 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.ip = genObj.Frame.pc              // Resume from saved PC
-	frame.targetRegister = destReg          // Target in sentinel frame
+	frame.ip = genObj.Frame.pc               // Resume from saved PC
+	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
 	frame.isDirectCall = false // Don't mark as direct call so exceptions can be caught
@@ -7918,7 +7918,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield {
 		// Generator yielded - frames are still active, need to pop them
-		vm.frameCount--                // Pop generator frame
+		vm.frameCount-- // Pop generator frame
 		vm.nextRegSlot -= regSize
 		// Clear the popped frame to avoid stale references
 		vm.frames[vm.frameCount].generatorObj = nil
@@ -7994,8 +7994,8 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.ip = genObj.Frame.pc              // Resume from saved PC
-	frame.targetRegister = destReg          // Target in sentinel frame
+	frame.ip = genObj.Frame.pc               // Resume from saved PC
+	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
 	frame.isDirectCall = false
