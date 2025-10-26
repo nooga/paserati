@@ -38,7 +38,8 @@ type Parser struct {
 	typeInfixParseFns  map[lexer.TokenType]infixParseFn  // Handles type operators (e.g., |, &)
 
 	// Context tracking
-	inGenerator int // Counter for nested generator contexts (0 = not in generator)
+	inGenerator     int // Counter for nested generator contexts (0 = not in generator)
+	inAsyncFunction int // Counter for nested async function contexts (0 = not in async function)
 }
 
 // Parsing functions types for Pratt parser
@@ -51,28 +52,28 @@ type (
 const (
 	_ int = iota
 	LOWEST
-	COMMA          // , (very low precedence, but higher than LOWEST)
-	ARG_SEPARATOR  // Virtual precedence level for argument list parsing (between COMMA and ASSIGNMENT)
-	ASSIGNMENT     // =, +=, -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>=, &&=, ||=, ??=
-	TERNARY        // ?:
-	COALESCE    // ??
-	LOGICAL_OR  // ||
-	LOGICAL_AND // &&
-	BITWISE_OR  // |  (Lower than XOR)
-	BITWISE_XOR // ^  (Lower than AND)
-	BITWISE_AND // &  (Lower than Equality)
-	EQUALS      // ==, !=, ===, !==
-	LESSGREATER // >, <, >=, <=
-	SHIFT       // <<, >>, >>> (Lower than Add/Sub)
-	SUM         // + or -
-	PRODUCT     // * or / or %
-	POWER       // ** (Right-associative handled in parseInfix)
-	PREFIX      // -X or !X or ++X or --X or ~X
-	POSTFIX     // X++ or X--
-	ASSERTION   // value as Type
-	CALL        // myFunction(X)
-	INDEX       // array[index]
-	MEMBER      // object.property
+	COMMA         // , (very low precedence, but higher than LOWEST)
+	ARG_SEPARATOR // Virtual precedence level for argument list parsing (between COMMA and ASSIGNMENT)
+	ASSIGNMENT    // =, +=, -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>=, &&=, ||=, ??=
+	TERNARY       // ?:
+	COALESCE      // ??
+	LOGICAL_OR    // ||
+	LOGICAL_AND   // &&
+	BITWISE_OR    // |  (Lower than XOR)
+	BITWISE_XOR   // ^  (Lower than AND)
+	BITWISE_AND   // &  (Lower than Equality)
+	EQUALS        // ==, !=, ===, !==
+	LESSGREATER   // >, <, >=, <=
+	SHIFT         // <<, >>, >>> (Lower than Add/Sub)
+	SUM           // + or -
+	PRODUCT       // * or / or %
+	POWER         // ** (Right-associative handled in parseInfix)
+	PREFIX        // -X or !X or ++X or --X or ~X
+	POSTFIX       // X++ or X--
+	ASSERTION     // value as Type
+	CALL          // myFunction(X)
+	INDEX         // array[index]
+	MEMBER        // object.property
 )
 
 // --- NEW: Type Precedence ---
@@ -1290,7 +1291,7 @@ func (p *Parser) parseConstStatement() Statement {
 			return nil
 		}
 
-		p.nextToken() // Consume token starting the expression
+		p.nextToken()                                         // Consume token starting the expression
 		firstDeclarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
 
 		stmt.Declarations = []*VarDeclarator{firstDeclarator}
@@ -1321,7 +1322,7 @@ func (p *Parser) parseConstStatement() Statement {
 				return nil
 			}
 
-			p.nextToken() // Consume token starting the expression
+			p.nextToken()                                    // Consume token starting the expression
 			declarator.Value = p.parseExpression(ASSIGNMENT) // Use ASSIGNMENT precedence to stop at comma
 
 			stmt.Declarations = append(stmt.Declarations, declarator)
@@ -2089,12 +2090,33 @@ func (p *Parser) parseFunctionLiteral() Expression {
 		}
 	}
 
+	// Save and manage async function context when parsing body
+	// Async functions increment the context (nested async functions are allowed)
+	// Non-async functions do NOT reset the context (they inherit parent context)
+	// This allows top-level await to work while still disallowing await in non-async functions
+	savedAsyncContext := p.inAsyncFunction
+	if lit.IsAsync {
+		p.inAsyncFunction++
+		if debugParser {
+			fmt.Printf("[PARSER] Entering async function context, inAsyncFunction=%d\n", p.inAsyncFunction)
+		}
+	}
+	// Note: We do NOT reset inAsyncFunction for non-async functions
+	// This allows top-level await to work, while await in non-async function bodies
+	// will be caught by the type checker when type checking is enabled.
+
 	lit.Body = p.parseBlockStatement() // Includes consuming RBRACE
 
 	// Restore the saved generator context
 	p.inGenerator = savedGeneratorContext
 	if debugParser {
 		fmt.Printf("[PARSER] Restored generator context to %d\n", p.inGenerator)
+	}
+
+	// Restore the saved async function context
+	p.inAsyncFunction = savedAsyncContext
+	if debugParser {
+		fmt.Printf("[PARSER] Restored async function context to %d\n", p.inAsyncFunction)
 	}
 
 	// Transform function if it has destructuring parameters
@@ -2208,7 +2230,9 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 	// Parse the parameter (could be 'this' parameter or destructuring pattern)
 	// Allow YIELD as parameter name in non-generator functions (non-strict mode)
 	isYieldParam := p.curTokenIs(lexer.YIELD) && p.inGenerator == 0
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam {
+	// Allow AWAIT as parameter name in non-async functions
+	isAwaitParam := p.curTokenIs(lexer.AWAIT) && p.inAsyncFunction == 0
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam {
 		msg := fmt.Sprintf("expected identifier, 'this', or destructuring pattern for parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
@@ -2363,7 +2387,9 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 
 		// Allow YIELD as parameter name in non-generator functions (non-strict mode)
 		isYieldParam := p.curTokenIs(lexer.YIELD) && p.inGenerator == 0
-		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam {
+		// Allow AWAIT as parameter name in non-async functions
+		isAwaitParam := p.curTokenIs(lexer.AWAIT) && p.inAsyncFunction == 0
+		if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam {
 			msg := fmt.Sprintf("expected identifier or destructuring pattern for parameter after comma, got %s", p.curToken.Type)
 			p.addError(p.curToken, msg)
 			debugPrint("parseParameterList: Error - %s", msg)
@@ -2493,7 +2519,7 @@ func (p *Parser) parseRestParameter() *RestParameter {
 // Examples: [a, b], [a = 1, b], [first, ...rest]
 func (p *Parser) parseArrayParameterPattern() *ArrayParameterPattern {
 	pattern := &ArrayParameterPattern{
-		Token:    p.curToken, // The '[' token
+		Token:    p.curToken,                // The '[' token
 		Elements: []*DestructuringElement{}, // Initialize to empty slice to prevent nil pointer
 	}
 
@@ -3342,6 +3368,23 @@ func (p *Parser) isKeywordThatCanBeIdentifier(tokenType lexer.TokenType) bool {
 	}
 }
 
+// canStartExpression checks if a token can be the start of an expression
+// This is used to determine if 'await' should be parsed as an AwaitExpression or as an Identifier
+func (p *Parser) canStartExpression(t lexer.Token) bool {
+	switch t.Type {
+	case lexer.IDENT, lexer.NUMBER, lexer.BIGINT, lexer.STRING, lexer.REGEX_LITERAL,
+		lexer.TEMPLATE_START, lexer.TRUE, lexer.FALSE, lexer.NULL, lexer.UNDEFINED,
+		lexer.THIS, lexer.NEW, lexer.IMPORT, lexer.FUNCTION, lexer.ASYNC, lexer.CLASS,
+		lexer.BANG, lexer.MINUS, lexer.PLUS, lexer.BITWISE_NOT, lexer.TYPEOF, lexer.VOID,
+		lexer.DELETE, lexer.YIELD, lexer.AWAIT, lexer.INC, lexer.DEC,
+		lexer.LPAREN, lexer.LT, lexer.IF, lexer.LBRACKET, lexer.LBRACE, lexer.SPREAD,
+		lexer.SUPER, lexer.GET, lexer.SET, lexer.LET, lexer.THROW, lexer.RETURN:
+		return true
+	default:
+		return false
+	}
+}
+
 // expectPeekIdentifierOrKeyword accepts IDENT or contextual keywords that can be used as identifiers.
 // Returns true if peek is IDENT, YIELD, GET, THROW, or RETURN and advances.
 func (p *Parser) expectPeekIdentifierOrKeyword() bool {
@@ -3581,7 +3624,20 @@ func (p *Parser) parseAsyncExpression() Expression {
 
 // parseAwaitExpression handles await expressions
 // await <expression>
+// Note: We parse await expressions when await is followed by a valid expression start.
+// If await is not followed by a valid expression (e.g., `;`, `,`, `)`), we treat it as an identifier.
+// This allows `await` to be used as a variable/parameter name in non-async contexts.
 func (p *Parser) parseAwaitExpression() Expression {
+	// Check if the next token can start an expression
+	// If not, treat 'await' as an identifier instead of an expression keyword
+	if !p.canStartExpression(p.peekToken) {
+		// 'await' used as identifier in a context where no expression follows
+		return &Identifier{
+			Token: p.curToken,
+			Value: p.curToken.Literal, // "await"
+		}
+	}
+
 	expression := &AwaitExpression{
 		Token: p.curToken, // The 'await' token
 	}
@@ -3739,8 +3795,8 @@ func (p *Parser) parseIfExpression() Expression {
 	debugPrint("parseIfExpression parsing condition...")
 	expr.Condition = p.parseExpression(LOWEST)
 	if expr.Condition == nil {
-		return nil
-	} // <<< NIL CHECK
+		return nil // <<< NIL CHECK
+	}
 	debugPrint("parseIfExpression parsed condition: %s", expr.Condition.String())
 
 	if !p.expectPeek(lexer.RPAREN) {
@@ -3773,8 +3829,8 @@ func (p *Parser) parseIfExpression() Expression {
 	// --- END MODIFICATION ---
 
 	if expr.Consequence == nil {
-		return nil
-	} // <<< NIL CHECK
+		return nil // <<< NIL CHECK
+	}
 	debugPrint("parseIfExpression parsed consequence.")
 
 	// Check for optional 'else' block
@@ -3829,8 +3885,8 @@ func (p *Parser) parseIfExpression() Expression {
 			expr.Alternative = alternativeBlock // Assign the parsed block
 
 			if expr.Alternative == nil {
-				return nil
-			} // <<< NIL CHECK
+				return nil // <<< NIL CHECK
+			}
 			debugPrint("parseIfExpression parsed standard 'else' block.")
 		} else {
 			// --- NEW: Single statement case: else statement ---
@@ -4053,7 +4109,9 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 	// Parse regular parameter (identifier or destructuring pattern)
 	// Allow YIELD as parameter name in non-generator functions (non-strict mode)
 	isYieldParam := p.curTokenIs(lexer.YIELD) && p.inGenerator == 0
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam {
+	// Allow AWAIT as parameter name in non-async functions
+	isAwaitParam := p.curTokenIs(lexer.AWAIT) && p.inAsyncFunction == 0
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam {
 		msg := fmt.Sprintf("expected identifier or destructuring pattern as parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)
@@ -5204,7 +5262,6 @@ func (p *Parser) parseDoWhileStatement() *DoWhileStatement {
 }
 
 // --- New: Update Expression Parsing ---
-
 // isValidLValue checks if an expression can be used as an lvalue (left-hand side of assignment or update operations)
 func (p *Parser) isValidLValue(expr Expression) bool {
 	switch expr.(type) {
