@@ -775,12 +775,21 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// --- NEW: Define rest parameter if present ---
 		if funcLit.RestParameter != nil && funcSignature.RestParameterType != nil {
-			if !funcEnv.Define(funcLit.RestParameter.Name.Value, funcSignature.RestParameterType, false) {
-				c.addError(funcLit.RestParameter.Name, fmt.Sprintf("duplicate parameter name: %s", funcLit.RestParameter.Name.Value))
+			// Check if it's a simple identifier or destructuring pattern
+			if funcLit.RestParameter.Name != nil {
+				// Simple rest parameter like ...args
+				if !funcEnv.Define(funcLit.RestParameter.Name.Value, funcSignature.RestParameterType, false) {
+					c.addError(funcLit.RestParameter.Name, fmt.Sprintf("duplicate parameter name: %s", funcLit.RestParameter.Name.Value))
+				}
+				debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcSignature.RestParameterType.String())
+			} else if funcLit.RestParameter.Pattern != nil {
+				// Destructuring rest parameter like ...[x, y] or ...{a, b}
+				// The pattern variables should be defined as we process the pattern
+				// For now, we skip explicit definition here
+				debugPrintf("// [Checker Pass 3] Rest parameter with destructuring pattern (type: %s)\n", funcSignature.RestParameterType.String())
 			}
 			// Set computed type on the RestParameter node itself
 			funcLit.RestParameter.ComputedType = funcSignature.RestParameterType
-			debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcSignature.RestParameterType.String())
 		}
 		// --- END NEW ---
 

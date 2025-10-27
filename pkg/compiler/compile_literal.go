@@ -977,15 +977,25 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 	// 4. Handle rest parameter (if present)
 	if node.RestParameter != nil {
-		// Define the rest parameter in the symbol table
+		// Allocate register for the rest parameter array
 		restParamReg := functionCompiler.regAlloc.Alloc()
-		functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
-		// Pin the register since rest parameters can be captured by inner functions
-		functionCompiler.regAlloc.Pin(restParamReg)
 
-		// The rest parameter collection will be handled at runtime during function call
-		// We just need to ensure it has a register allocated here
-		debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+		// Check if it's a simple identifier or destructuring pattern
+		if node.RestParameter.Name != nil {
+			// Simple rest parameter like ...args
+			functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+			// Pin the register since rest parameters can be captured by inner functions
+			functionCompiler.regAlloc.Pin(restParamReg)
+			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+		} else if node.RestParameter.Pattern != nil {
+			// Destructuring rest parameter like ...[x, y] or ...{a, b}
+			// The rest array will be in restParamReg, then we destructure it
+			// This is handled at runtime in OpCall - the destructuring pattern variables
+			// should already be defined from the parameter list processing
+			debugPrintf("// [Compiler] Rest parameter with destructuring pattern in R%d\n", restParamReg)
+			// TODO: We may need to generate destructuring code here after the function prologue
+			// For now, this will be handled by the VM's parameter setup
+		}
 	}
 
 	// 4.5. Handle named function expression binding
