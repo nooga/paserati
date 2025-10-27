@@ -784,8 +784,39 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcSignature.RestParameterType.String())
 			} else if funcLit.RestParameter.Pattern != nil {
 				// Destructuring rest parameter like ...[x, y] or ...{a, b}
-				// The pattern variables should be defined as we process the pattern
-				// For now, we skip explicit definition here
+				// Extract element type from the rest array type (which is an array of T)
+				var elementType types.Type = types.Any
+				if arrayType, ok := funcSignature.RestParameterType.(*types.ArrayType); ok {
+					elementType = arrayType.ElementType
+				}
+
+				// Define the pattern variables with the element type
+				switch pattern := funcLit.RestParameter.Pattern.(type) {
+				case *parser.ArrayParameterPattern:
+					// Define each element in the array pattern
+					for _, elem := range pattern.Elements {
+						if elem != nil && elem.Target != nil {
+							if ident, ok := elem.Target.(*parser.Identifier); ok {
+								if !funcEnv.Define(ident.Value, elementType, false) {
+									c.addError(ident, fmt.Sprintf("duplicate parameter name: %s", ident.Value))
+								}
+								debugPrintf("// [Checker Pass 3] Defined rest destructured param '%s' with type: %s\n", ident.Value, elementType.String())
+							}
+						}
+					}
+				case *parser.ObjectParameterPattern:
+					// Define each property in the object pattern
+					for _, prop := range pattern.Properties {
+						if prop != nil && prop.Key != nil {
+							if ident, ok := prop.Key.(*parser.Identifier); ok {
+								if !funcEnv.Define(ident.Value, elementType, false) {
+									c.addError(ident, fmt.Sprintf("duplicate parameter name: %s", ident.Value))
+								}
+								debugPrintf("// [Checker Pass 3] Defined rest destructured prop '%s' with type: %s\n", ident.Value, elementType.String())
+							}
+						}
+					}
+				}
 				debugPrintf("// [Checker Pass 3] Rest parameter with destructuring pattern (type: %s)\n", funcSignature.RestParameterType.String())
 			}
 			// Set computed type on the RestParameter node itself

@@ -976,9 +976,12 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 
 	// 4. Handle rest parameter (if present)
+	var restParamReg Register
+	var restParamPattern parser.Expression // Save pattern for later destructuring
 	if node.RestParameter != nil {
 		// Allocate register for the rest parameter array
-		restParamReg := functionCompiler.regAlloc.Alloc()
+		// The VM will populate this register with the rest arguments array
+		restParamReg = functionCompiler.regAlloc.Alloc()
 
 		// Check if it's a simple identifier or destructuring pattern
 		if node.RestParameter.Name != nil {
@@ -989,12 +992,9 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
 		} else if node.RestParameter.Pattern != nil {
 			// Destructuring rest parameter like ...[x, y] or ...{a, b}
-			// The rest array will be in restParamReg, then we destructure it
-			// This is handled at runtime in OpCall - the destructuring pattern variables
-			// should already be defined from the parameter list processing
+			// Save the pattern for generating destructuring code after function prologue
+			restParamPattern = node.RestParameter.Pattern
 			debugPrintf("// [Compiler] Rest parameter with destructuring pattern in R%d\n", restParamReg)
-			// TODO: We may need to generate destructuring code here after the function prologue
-			// For now, this will be handled by the VM's parameter setup
 		}
 	}
 
@@ -1011,6 +1011,28 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		// when the function is called (see call.go prepareCall)
 		debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
 			funcNameForInnerBinding, nameBindingReg)
+	}
+
+	// 4.6. Generate destructuring code for rest parameter pattern (if needed)
+	// This must happen BEFORE compiling the function body so the destructured variables are available
+	if restParamPattern != nil {
+		// Generate destructuring code based on pattern type
+		switch pattern := restParamPattern.(type) {
+		case *parser.ArrayParameterPattern:
+			// Convert to destructuring and compile it
+			err := functionCompiler.compileNestedArrayParameterPattern(pattern, restParamReg, false, node.Token.Line)
+			if err != nil {
+				functionCompiler.addError(node.RestParameter, fmt.Sprintf("error compiling rest parameter destructuring: %v", err))
+			}
+		case *parser.ObjectParameterPattern:
+			// Convert to destructuring and compile it
+			err := functionCompiler.compileNestedObjectParameterPattern(pattern, restParamReg, false, node.Token.Line)
+			if err != nil {
+				functionCompiler.addError(node.RestParameter, fmt.Sprintf("error compiling rest parameter destructuring: %v", err))
+			}
+		default:
+			functionCompiler.addError(node.RestParameter, "unsupported rest parameter pattern type")
+		}
 	}
 
 	// 5. Compile the body using the function compiler
