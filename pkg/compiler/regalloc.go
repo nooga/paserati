@@ -14,22 +14,31 @@ const BadRegister Register = 254
 
 // RegisterAllocator manages the allocation of registers within a function scope.
 // This initial implementation uses a simple stack-like allocation.
+// Global counter for allocator IDs
+var allocatorIDCounter int32 = 0
+
 type RegisterAllocator struct {
-	nextReg Register // Index of the next register to allocate
-	maxReg  Register // Highest register index allocated so far
+	allocatorID int32    // Unique ID for debugging
+	nextReg     Register // Index of the next register to allocate
+	maxReg      Register // Highest register index allocated so far
 	// Could add a free list later for more complex allocation
 	freeRegs []Register // Stack of available registers to reuse
 	// Pinning mechanism to prevent important registers from being freed
 	pinnedRegs map[Register]bool // Set of pinned registers
+	// Debug context for tracing
+	functionName string
 }
 
 // NewRegisterAllocator creates a new allocator for a scope (e.g., a function).
 func NewRegisterAllocator() *RegisterAllocator {
+	id := allocatorIDCounter
+	allocatorIDCounter++
 	return &RegisterAllocator{
-		nextReg:    0,
-		maxReg:     0,
-		freeRegs:   make([]Register, 0, 16), // Initialize with some capacity
-		pinnedRegs: make(map[Register]bool), // Initialize pinned registers map
+		allocatorID: id,
+		nextReg:     0,
+		maxReg:      0,
+		freeRegs:    make([]Register, 0, 16), // Initialize with some capacity
+		pinnedRegs:  make(map[Register]bool), // Initialize pinned registers map
 	}
 }
 
@@ -47,7 +56,7 @@ func (ra *RegisterAllocator) Alloc() Register {
 			ra.maxReg = reg
 		}
 		if debugRegAlloc {
-			fmt.Printf("[REGALLOC] REUSE R%d (from free list, %d available, maxReg now %d)\n", reg, len(ra.freeRegs), ra.maxReg)
+			fmt.Printf("[REGALLOC %s] REUSE R%d (from free list, %d available, maxReg now %d)\n", ra.functionName, reg, len(ra.freeRegs), ra.maxReg)
 		}
 	} else {
 		// Allocate new register if free list is empty
@@ -68,7 +77,7 @@ func (ra *RegisterAllocator) Alloc() Register {
 			ra.maxReg = reg
 		}
 		if debugRegAlloc {
-			fmt.Printf("[REGALLOC] NEW R%d (nextReg now %d, maxReg %d, %d free)\n", reg, ra.nextReg, ra.maxReg, len(ra.freeRegs))
+			fmt.Printf("[REGALLOC %s] NEW R%d (nextReg now %d, maxReg %d, %d free)\n", ra.functionName, reg, ra.nextReg, ra.maxReg, len(ra.freeRegs))
 		}
 	}
 
@@ -327,7 +336,7 @@ func (ra *RegisterAllocator) MaxRegs() Register {
 	}
 	result := ra.maxReg + 1
 	if debugRegAlloc {
-		fmt.Printf("[REGALLOC] MaxRegs = %d (maxReg=%d + 1)\n", result, ra.maxReg)
+		fmt.Printf("[REGALLOC %s] MaxRegs = %d (maxReg=%d + 1)\n", ra.functionName, result, ra.maxReg)
 	}
 	return result
 }

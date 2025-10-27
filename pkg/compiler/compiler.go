@@ -59,7 +59,7 @@ type FinallyContext struct {
 const debugCompiler = false // Set to true to trace compiler output
 const debugCompilerStats = false
 const debugCompiledCode = false // Enable disassembly output
-const debugPrint = false // Enable debug output
+const debugPrint = false        // Enable debug output
 
 // Feature flag: Enable Tail Call Optimization
 const enableTCO = true // Set to false to disable TCO for baseline testing
@@ -104,14 +104,14 @@ type Compiler struct {
 	constantCache map[uint16]Register
 
 	// --- Phase 4a: Finally Context Tracking ---
-	inFinallyBlock     bool              // Track if we're compiling inside finally block
-	tryFinallyDepth    int               // Number of enclosing try-with-finally blocks
+	inFinallyBlock  bool // Track if we're compiling inside finally block
+	tryFinallyDepth int  // Number of enclosing try-with-finally blocks
 
 	// --- Block Scope Tracking ---
-	isCompilingFunctionBody bool // Track if we're compiling the function body BlockStatement itself
-	tryDepth           int               // Number of enclosing try blocks (any kind: try-catch, try-finally, try-catch-finally)
-	finallyContextStack []*FinallyContext // Stack of active finally contexts
-	withBlockDepth     int               // Number of enclosing with blocks (inherited by nested functions)
+	isCompilingFunctionBody bool              // Track if we're compiling the function body BlockStatement itself
+	tryDepth                int               // Number of enclosing try blocks (any kind: try-catch, try-finally, try-catch-finally)
+	finallyContextStack     []*FinallyContext // Stack of active finally contexts
+	withBlockDepth          int               // Number of enclosing with blocks (inherited by nested functions)
 
 	// --- Phase 5: Module Bindings ---
 	moduleBindings *ModuleBindings      // Module-aware binding resolver
@@ -281,12 +281,12 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		compilingFuncName:       "",
 		typeChecker:             enclosingCompiler.typeChecker, // Inherit checker from enclosing
 		stats:                   enclosingCompiler.stats,
-		constantCache:           make(map[uint16]Register),         // Each function has its own constant cache
-		moduleBindings:          enclosingCompiler.moduleBindings,  // Inherit module bindings
-		moduleLoader:            enclosingCompiler.moduleLoader,    // Inherit module loader
+		constantCache:           make(map[uint16]Register),                 // Each function has its own constant cache
+		moduleBindings:          enclosingCompiler.moduleBindings,          // Inherit module bindings
+		moduleLoader:            enclosingCompiler.moduleLoader,            // Inherit module loader
 		compilingSuperClassName: enclosingCompiler.compilingSuperClassName, // Inherit super class context
-		finallyContextStack:     make([]*FinallyContext, 0),        // Each function has its own finally context stack
-		withBlockDepth:          enclosingCompiler.withBlockDepth,  // Inherit with block depth for nested functions
+		finallyContextStack:     make([]*FinallyContext, 0),                // Each function has its own finally context stack
+		withBlockDepth:          enclosingCompiler.withBlockDepth,          // Inherit with block depth for nested functions
 	}
 }
 
@@ -1437,13 +1437,47 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 		}
 	}
 
-	// 2. Build register list for arguments without reserving them
-	// The hint-based compilation will handle register allocation correctly
+	// 2. Ensure argument registers exist and build register list
+	// CRITICAL: Arguments must be at funcReg+1, funcReg+2, ... (VM calling convention)
+	// But these registers may not be allocated yet! We must ensure they're within the function's register space.
 	var argRegs []Register
 	if finalArgCount > 0 {
+		beforeMaxReg := c.regAlloc.maxReg
+		// Ensure all argument registers are allocated by calling AllocContiguous
+		// This extends maxReg to cover all arguments
+		if firstTargetReg == c.regAlloc.nextReg {
+			// Perfect case: arguments start right at the allocation frontier
+			if debugRegAlloc {
+				fmt.Printf("[ARG_ALLOC] Perfect case: firstTarget=R%d == nextReg, allocating %d args\n", firstTargetReg, finalArgCount)
+			}
+			c.regAlloc.AllocContiguous(finalArgCount)
+		} else {
+			// Arguments start beyond current allocation - need to ensure they're allocated
+			// Calculate how many we need to allocate to reach firstTargetReg + finalArgCount
+			lastArgReg := firstTargetReg + Register(finalArgCount) - 1
+			if lastArgReg >= c.regAlloc.nextReg {
+				// Need to extend allocation to cover these registers
+				needed := int(lastArgReg - c.regAlloc.nextReg + 1)
+				if debugRegAlloc {
+					fmt.Printf("[ARG_ALLOC] Gap case: firstTarget=R%d, nextReg=R%d, lastArg=R%d, allocating %d more\n",
+						firstTargetReg, c.regAlloc.nextReg, lastArgReg, needed)
+				}
+				c.regAlloc.AllocContiguous(needed)
+			} else {
+				if debugRegAlloc {
+					fmt.Printf("[ARG_ALLOC] Already allocated: firstTarget=R%d, lastArg=R%d, nextReg=R%d\n",
+						firstTargetReg, lastArgReg, c.regAlloc.nextReg)
+				}
+			}
+		}
+		afterMaxReg := c.regAlloc.maxReg
+		if debugRegAlloc {
+			fmt.Printf("[ARG_ALLOC] maxReg: before=%d, after=%d (delta=%d)\n", beforeMaxReg, afterMaxReg, int(afterMaxReg)-int(beforeMaxReg))
+		}
+
+		// Now build the argRegs list
 		for i := 0; i < finalArgCount; i++ {
-			targetReg := firstTargetReg + Register(i)
-			argRegs = append(argRegs, targetReg)
+			argRegs = append(argRegs, firstTargetReg+Register(i))
 		}
 	}
 
@@ -1752,8 +1786,8 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list
 			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
 			debugPrintf("// [emitClosure Upvalue] Free '%s' is from Outer function. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex)
-			c.emitByte(0)                            // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex))     // Index = upvalue index in enclosing scope
+			c.emitByte(0)                        // isLocal = false
+			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
 		}
 	}
 

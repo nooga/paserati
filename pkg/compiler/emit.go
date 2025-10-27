@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"paserati/pkg/vm"
 )
 
@@ -185,6 +186,19 @@ func (c *Compiler) emitInstanceof(dest, left, right Register, line int) {
 }
 
 func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
+	// Validate that dest register is within allocated range
+	maxReg := c.regAlloc.MaxRegs()
+
+	// DEBUG: Print all OpCall emissions, especially those with small maxReg
+	if debugRegAlloc && maxReg <= 10 {
+		fmt.Printf("[EMIT_CALL] dest=R%d funcReg=R%d argCount=%d maxReg=%d line=%d func=%s\n",
+			dest, funcReg, argCount, maxReg, line, c.compilingFuncName)
+	}
+
+	if dest >= maxReg {
+		fmt.Printf("[EMIT CALL BUG] Emitting OpCall with dest=R%d but function only has %d registers! funcReg=R%d argCount=%d line=%d func=%s\n",
+			dest, maxReg, funcReg, argCount, line, c.compilingFuncName)
+	}
 	c.emitOpCode(vm.OpCall, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(funcReg))
@@ -208,6 +222,19 @@ func (c *Compiler) emitTailCallMethod(dest, funcReg, thisReg Register, argCount 
 
 // emitCallMethod emits OpCallMethod with method call convention (this as implicit first parameter)
 func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte, line int) {
+	// Validate that dest register is within allocated range
+	maxReg := c.regAlloc.MaxRegs()
+
+	// DEBUG: Print all OpCallMethod emissions, especially those with small maxReg
+	if debugRegAlloc && maxReg <= 10 {
+		fmt.Printf("[EMIT_CALLMETHOD] dest=R%d funcReg=R%d thisReg=R%d argCount=%d maxReg=%d line=%d func=%s\n",
+			dest, funcReg, thisReg, argCount, maxReg, line, c.compilingFuncName)
+	}
+
+	if dest >= maxReg {
+		fmt.Printf("[EMIT CALLMETHOD BUG] Emitting OpCallMethod with dest=R%d but function only has %d registers! funcReg=R%d thisReg=R%d argCount=%d line=%d func=%s\n",
+			dest, maxReg, funcReg, thisReg, argCount, line, c.compilingFuncName)
+	}
 	c.emitOpCode(vm.OpCallMethod, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(funcReg))

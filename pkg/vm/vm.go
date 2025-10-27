@@ -505,6 +505,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	// --- Push the new frame ---
 	frame := &vm.frames[vm.frameCount] // Get pointer to the frame slot
 	// Initialize the first frame to run the mainClosureObj
+	// IMPORTANT: Initialize ALL fields to avoid stale values from previous frame usage
 	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
@@ -517,6 +518,23 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	} else {
 		frame.thisValue = globalThisVal
 	}
+	frame.homeObject = Undefined
+	frame.isConstructorCall = false
+	frame.newTargetValue = Undefined
+	// IMPORTANT: Set isDirectCall=true for NESTED Interpret() calls (eval) so they return immediately
+	// This ensures eval()'s script execution returns its completion value back to the native function
+	// For top-level scripts (frameCount==0 before pushing), keep isDirectCall=false to allow normal completion
+	frame.isDirectCall = (vm.frameCount > 0)
+	frame.isSentinelFrame = false
+	frame.argCount = 0
+	frame.args = nil
+	frame.argumentsObject = Undefined
+	frame.isNativeFrame = false
+	frame.nativeReturnCh = nil
+	frame.nativeYieldCh = nil
+	frame.nativeCompleteCh = nil
+	frame.generatorObj = nil
+	frame.promiseObj = nil
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
@@ -597,6 +615,22 @@ startExecution:
 			frame.ip = ip
 			if vm.frameCount > 1 {
 				// If we run off the end of a function without OpReturn, that's an error
+				if debugVM {
+					fmt.Printf("[DBG IP-OUT-OF-BOUNDS] IP=%d >= codeLen=%d\n", ip, len(code))
+					dumpFrameStack(vm, "ip-overflow")
+					if frame.closure != nil && frame.closure.Fn != nil {
+						fmt.Printf("[DBG CHUNK] Function=%s IsGenerator=%v ChunkCodeLen=%d\n",
+							frame.closure.Fn.Name, frame.closure.Fn.IsGenerator, len(frame.closure.Fn.Chunk.Code))
+						fmt.Printf("[DBG BYTECODE] Last 20 bytes of chunk:\n")
+						start := 0
+						if len(frame.closure.Fn.Chunk.Code) > 20 {
+							start = len(frame.closure.Fn.Chunk.Code) - 20
+						}
+						for i := start; i < len(frame.closure.Fn.Chunk.Code); i++ {
+							fmt.Printf("  [%04d] %02x (%s)\n", i, frame.closure.Fn.Chunk.Code[i], OpCode(frame.closure.Fn.Chunk.Code[i]).String())
+						}
+					}
+				}
 				status := vm.runtimeError("Implicit return missing in function?")
 				return status, Undefined
 			} else {
@@ -1712,6 +1746,10 @@ startExecution:
 			// Set frame IP to call site for exception handling
 			frame.ip = callSiteIP // Set to call site for potential exception handling
 
+			// IMPORTANT: For native functions that might call vm.run() recursively (like eval),
+			// we need to update the IP to callerIP BEFORE the call, so nested OpReturns see the correct IP
+			frame.ip = callerIP
+
 			// Check if we're in an unwinding state before the call
 			wasUnwinding := vm.unwinding
 			// Save the frame IP before the call to detect if an exception handler changed it
@@ -1825,13 +1863,9 @@ startExecution:
 				}
 			*/
 
-			// Update caller frame IP only if it still points at the call site.
-			// If an exception was thrown and a handler redirected execution, handleCatchBlock
-			// will have set frame.ip to the handler PC. In that case, do NOT overwrite it.
-			if frame.ip == callSiteIP {
-				frame.ip = callerIP
-			}
-			// If unwinding is true, leave frame IP at call site for exception handling
+			// Frame IP was already updated to callerIP before the call (for nested vm.run() support)
+			// If an exception occurred, the IP might have been changed to a handler PC
+			// No need to update it again here
 
 			if err != nil {
 				// Convert ANY native error into a proper JS Error instance and throw it
@@ -2011,8 +2045,9 @@ startExecution:
 				dumpFrameStack(vm, "on-return")
 			}
 
-			// If returning from the top-level script frame, terminate immediately
-			if function != nil && function.Name == "<script>" {
+			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
+			// Don't do this for nested script frames (e.g., from eval()) which should continue normally
+			if function != nil && function.Name == "<script>" && vm.frameCount == 1 {
 				// If currently unwinding, this is an uncaught exception at top level
 				if vm.unwinding {
 					vm.handleUncaughtException()
@@ -2076,8 +2111,16 @@ startExecution:
 			constructorThisValue := frame.thisValue
 			isDirectCall := frame.isDirectCall // Save this BEFORE decrementing frameCount
 
+			if debugVM {
+				fmt.Printf("[DBG OpReturn] Before pop: frameCount=%d, Frame info: regSize=%d, target=R%d, isCtor=%t, isDirect=%t\n", vm.frameCount, returningFrameRegSize, callerTargetRegister, isConstructor, isDirectCall)
+			}
+
 			vm.frameCount--
 			vm.nextRegSlot -= returningFrameRegSize // Reclaim register space
+
+			if debugVM {
+				fmt.Printf("[DBG OpReturn] After pop: frameCount=%d, nextRegSlot=%d\n", vm.frameCount, vm.nextRegSlot)
+			}
 
 			if vm.frameCount == 0 {
 				// Returned from the top-level script frame.
@@ -2177,8 +2220,9 @@ startExecution:
 
 			// Trace any function return of undefined (kept minimal)
 
-			// If returning from the top-level script frame, terminate immediately
-			if function != nil && function.Name == "<script>" {
+			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
+			// Don't do this for nested script frames (e.g., from eval()) which should continue normally
+			if function != nil && function.Name == "<script>" && vm.frameCount == 1 {
 				if vm.unwinding {
 					vm.handleUncaughtException()
 					return InterpretRuntimeError, vm.currentException
@@ -2242,14 +2286,14 @@ startExecution:
 			isDirectCall := frame.isDirectCall // Save this BEFORE decrementing frameCount
 
 			if debugVM {
-				fmt.Printf("[DBG] Frame info: regSize=%d, target=R%d, isCtor=%t, isDirect=%t\n", returningFrameRegSize, callerTargetRegister, isConstructor, isDirectCall)
+				fmt.Printf("[DBG OpReturnUndefined] Before pop: frameCount=%d, Frame info: regSize=%d, target=R%d, isCtor=%t, isDirect=%t\n", vm.frameCount, returningFrameRegSize, callerTargetRegister, isConstructor, isDirectCall)
 			}
 
 			vm.frameCount--
 			vm.nextRegSlot -= returningFrameRegSize
 
 			if debugVM {
-				fmt.Printf("[DBG] After pop: frameCount=%d, nextRegSlot=%d\n", vm.frameCount, vm.nextRegSlot)
+				fmt.Printf("[DBG OpReturnUndefined] After pop: frameCount=%d, nextRegSlot=%d\n", vm.frameCount, vm.nextRegSlot)
 			}
 
 			if vm.frameCount == 0 {
@@ -2265,6 +2309,10 @@ startExecution:
 			}
 
 			// Check if we hit a sentinel frame - if so, remove it and return immediately
+			if debugVM {
+				fmt.Printf("[DBG OpReturnUndefined] Checking for sentinel: frameCount=%d, frames[%d].isSentinel=%v\n",
+					vm.frameCount, vm.frameCount-1, vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame)
+			}
 			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
 				if debugVM {
 					fmt.Printf("[DBG] Hit sentinel frame, returning\n")
@@ -7669,7 +7717,7 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 
 	// After vm.run() returns, we need to clean up the frames
 	// If the generator yielded, both the generator frame and sentinel frame are still on the stack
-	// If the generator completed, OpReturn already popped both frames
+	// If the generator completed, OpReturn popped the generator frame, but the sentinel frame remains
 
 	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield && regSize > 0 {
@@ -7681,8 +7729,23 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
 			vm.frameCount--
 		}
+	} else if genObj.State == GeneratorCompleted {
+		// Generator completed - OpReturn popped the generator frame via isDirectCall early return,
+		// but the sentinel frame is still on the stack. We need to pop it.
+		if debugVM {
+			fmt.Printf("[DBG startGenerator] Generator completed, cleaning up sentinel. frameCount=%d\n", vm.frameCount)
+		}
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+			if debugVM {
+				fmt.Printf("[DBG startGenerator] Popped sentinel, frameCount now=%d\n", vm.frameCount)
+			}
+		}
+	} else {
+		if debugVM {
+			fmt.Printf("[DBG startGenerator] Generator state=%d, not yielded or completed\n", genObj.State)
+		}
 	}
-	// If generator completed, OpReturn already popped both frames, so nothing to do
 
 	return result, nil
 }
@@ -7787,7 +7850,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 
 	// After vm.run() returns, we need to clean up the frames
 	// If the generator yielded, both the generator frame and sentinel frame are still on the stack
-	// If the generator completed, OpReturn already popped both frames
+	// If the generator completed, OpReturn popped the generator frame, but the sentinel frame remains
 
 	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield {
@@ -7805,8 +7868,13 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 			vm.frames[vm.frameCount].isSentinelFrame = false
 			vm.frames[vm.frameCount].registers = nil
 		}
+	} else if genObj.State == GeneratorCompleted {
+		// Generator completed - OpReturn popped the generator frame via isDirectCall early return,
+		// but the sentinel frame is still on the stack. We need to pop it.
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+		}
 	}
-	// If generator completed, OpReturn already popped both frames, so nothing to do
 
 	return result, nil
 }
@@ -7913,7 +7981,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 
 	// After vm.run() returns, we need to clean up the frames
 	// If the generator yielded, both the generator frame and sentinel frame are still on the stack
-	// If the generator completed, OpReturn already popped both frames
+	// If the generator completed, OpReturn popped the generator frame, but the sentinel frame remains
 
 	// Pop the generator frame and sentinel frame (only if generator yielded)
 	if genObj.State == GeneratorSuspendedYield {
@@ -7931,8 +7999,13 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 			vm.frames[vm.frameCount].isSentinelFrame = false
 			vm.frames[vm.frameCount].registers = nil
 		}
+	} else if genObj.State == GeneratorCompleted {
+		// Generator completed - OpReturn popped the generator frame via isDirectCall early return,
+		// but the sentinel frame is still on the stack. We need to pop it.
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+		}
 	}
-	// If generator completed, OpReturn already popped both frames, so nothing to do
 
 	return result, nil
 }

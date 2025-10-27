@@ -843,6 +843,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		determinedFuncName = "<anonymous>"
 	}
 	functionCompiler.compilingFuncName = determinedFuncName
+	functionCompiler.regAlloc.functionName = determinedFuncName
 	// --- End Set Name ---
 
 	// --- Set function context flags ---
@@ -947,7 +948,16 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 			// Compile the default value expression
 			defaultValueReg := functionCompiler.regAlloc.Alloc()
+			var beforeMaxReg Register
+			if debugRegAlloc {
+				beforeMaxReg = functionCompiler.regAlloc.maxReg
+				fmt.Printf("// [PARAM_DEBUG] Before compileNode for param %s: maxReg=%d\\n", param.Name.Value, beforeMaxReg)
+			}
 			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
+			if debugRegAlloc {
+				afterMaxReg := functionCompiler.regAlloc.maxReg
+				fmt.Printf("// [PARAM_DEBUG] After compileNode for param %s: maxReg was %d, now %d\\n", param.Name.Value, beforeMaxReg, afterMaxReg)
+			}
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
@@ -1034,6 +1044,18 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		funcName = node.Name.Value
 	} else {
 		funcName = "<anonymous>"
+	}
+
+	// DEBUG: Print RegisterSize for all functions
+	if debugRegAlloc {
+		fmt.Printf("[REGSIZE] Function '%s' (gen=%v) has RegisterSize=%d (maxReg=%d)\n", funcName, node.IsGenerator, regSize, functionCompiler.regAlloc.maxReg)
+	}
+
+	// DEBUG: Disassemble generator functions
+	if debugCompiledCode && node.IsGenerator {
+		fmt.Printf("\n=== GENERATOR BYTECODE: %s ===\n", funcName)
+		fmt.Print(functionChunk.DisassembleChunk(funcName))
+		fmt.Printf("=== END GENERATOR ===\n\n")
 	}
 
 	// 8. Add the function object to the *outer* compiler's constant pool.

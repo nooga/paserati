@@ -573,8 +573,8 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		numericValueReg = c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, numericValueReg)
 		c.emitOpCode(vm.OpToNumber, line)
-		c.emitByte(byte(numericValueReg))       // destination: numeric value
-		c.emitByte(byte(currentValueReg))       // source: original value
+		c.emitByte(byte(numericValueReg)) // destination: numeric value
+		c.emitByte(byte(currentValueReg)) // source: original value
 	}
 
 	// 3. Load constant 1 (or 1n for BigInt)
@@ -2099,6 +2099,20 @@ func (c *Compiler) compileArgumentsWithOptionalHandlingForNew(node *parser.NewEx
 				finalArgCount++
 			} else {
 				break // Stop at first required parameter
+			}
+		}
+	}
+
+	// Ensure argument registers exist (same fix as compileArgumentsWithOptionalHandling)
+	if finalArgCount > 0 {
+		// Ensure all argument registers are allocated
+		if firstArgReg == c.regAlloc.nextReg {
+			c.regAlloc.AllocContiguous(finalArgCount)
+		} else {
+			lastArgReg := firstArgReg + Register(finalArgCount) - 1
+			if lastArgReg >= c.regAlloc.nextReg {
+				needed := int(lastArgReg - c.regAlloc.nextReg + 1)
+				c.regAlloc.AllocContiguous(needed)
 			}
 		}
 	}
