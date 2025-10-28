@@ -257,7 +257,7 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 		// Allocate register for extracted value
 		extractedReg := c.regAlloc.Alloc()
 
-		// Handle property access (identifier or computed)
+		// Handle property access (identifier, number, or computed)
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
 			// Check if the property name is numeric (for array index access)
 			isNumeric := false
@@ -289,6 +289,16 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 				c.emitByte(byte(valueReg))     // object register
 				c.emitUint16(propNameIdx)      // property name constant index
 			}
+		} else if keyNum, ok := prop.Key.(*parser.NumberLiteral); ok {
+			// Numeric key - use OpGetIndex for array element access
+			indexConstIdx := c.chunk.AddConstant(vm.Number(keyNum.Value))
+			indexReg := c.regAlloc.Alloc()
+			c.emitLoadConstant(indexReg, indexConstIdx, line)
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(extractedReg))
+			c.emitByte(byte(valueReg))
+			c.emitByte(byte(indexReg))
+			c.regAlloc.Free(indexReg)
 		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
 			keyReg := c.regAlloc.Alloc()
 			_, err := c.compileNode(computed.Expr, keyReg)

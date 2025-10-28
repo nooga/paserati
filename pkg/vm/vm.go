@@ -2756,11 +2756,22 @@ startExecution:
 						registers[destReg] = arr.elements[idx]
 					}
 				} else {
-					// String/Symbol index - access array properties via prototype chain
+					// String/Symbol index - check if it's a numeric string first
 					var key string
 					switch indexVal.Type() {
 					case TypeString:
 						key = AsString(indexVal)
+						// Check if the string is a valid array index (numeric)
+						// In JavaScript, obj["0"] should access obj[0] for arrays
+						if idx, isNumeric := vm.parseArrayIndex(key); isNumeric {
+							// Convert string index to numeric and access array element
+							if idx < 0 || idx >= len(arr.elements) {
+								registers[destReg] = Undefined
+							} else {
+								registers[destReg] = arr.elements[idx]
+							}
+							continue
+						}
 					case TypeSymbol:
 						// Use symbol key path
 						if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
@@ -7249,6 +7260,38 @@ func (vm *VM) printDisassemblyAroundIP() {
 	fmt.Fprintf(os.Stderr, "Current IP: %d (instruction that was about to execute)\n", currentIP)
 	fmt.Fprintf(os.Stderr, "Frame registers length: %d (R0-R%d)\n", len(frame.registers), len(frame.registers)-1)
 	fmt.Fprintf(os.Stderr, "==========================\n\n")
+}
+
+// parseArrayIndex checks if a string represents a valid array index
+// Returns (index, true) if valid, (0, false) otherwise
+// In JavaScript, valid array indices are non-negative integers in range [0, 2^32-1)
+func (vm *VM) parseArrayIndex(key string) (int, bool) {
+	// Empty string is not a valid array index
+	if key == "" {
+		return 0, false
+	}
+
+	// Leading zeros are not allowed (except "0" itself)
+	// "0" is valid, "00" is not, "01" is not
+	if len(key) > 1 && key[0] == '0' {
+		return 0, false
+	}
+
+	// Parse as integer
+	idx := 0
+	for _, ch := range key {
+		if ch < '0' || ch > '9' {
+			return 0, false // Not a number
+		}
+		idx = idx*10 + int(ch-'0')
+		// Check for overflow - JavaScript array indices must be < 2^32-1
+		// For simplicity, we use a reasonable upper limit
+		if idx > 2147483647 { // Max int32
+			return 0, false
+		}
+	}
+
+	return idx, true
 }
 
 // extractSpreadArguments extracts arguments from a spread iterable value (Array, Set, Map, String, etc.)

@@ -1825,13 +1825,16 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				c.emitUint16(propNameIdx)    // property name constant index
 			}
 		} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
-			// Number literal key: convert to string property name
-			propName := numLit.Token.Literal
-			propNameIdx := c.chunk.AddConstant(vm.String(propName))
-			c.emitOpCode(vm.OpGetProp, line)
-			c.emitByte(byte(valueReg))   // destination register
-			c.emitByte(byte(tempReg))    // object register
-			c.emitUint16(propNameIdx)    // property name constant index
+			// Number literal key: use OpGetIndex for numeric property access
+			// This allows destructuring arrays by numeric index: {0: v, 1: w} = [7, 8]
+			indexConstIdx := c.chunk.AddConstant(vm.Number(numLit.Value))
+			indexReg := c.regAlloc.Alloc()
+			c.emitLoadConstant(indexReg, indexConstIdx, line)
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(valueReg))
+			c.emitByte(byte(tempReg))
+			c.emitByte(byte(indexReg))
+			c.regAlloc.Free(indexReg)
 		} else if bigIntLit, ok := prop.Key.(*parser.BigIntLiteral); ok {
 			// BigInt literal key: convert to string property name (numeric part without 'n')
 			propName := bigIntLit.Value

@@ -2771,13 +2771,21 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 	} else if p.curTokenIs(lexer.IDENT) {
 		// Regular identifier key
 		prop.Key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curTokenIs(lexer.NUMBER) {
+		// Numeric property key (e.g., {0: v, 1: w})
+		// Convert to NumberLiteral for the key
+		numVal := 0.0
+		fmt.Sscanf(p.curToken.Literal, "%f", &numVal)
+		prop.Key = &NumberLiteral{Token: p.curToken, Value: numVal}
 	} else {
-		p.addError(p.curToken, "object parameter property key must be an identifier or computed property")
+		p.addError(p.curToken, "object parameter property key must be an identifier, number, or computed property")
 		return nil
 	}
 
-	// For regular identifiers, check for explicit target (key: target)
-	if _, isIdent := prop.Key.(*Identifier); isIdent && p.peekTokenIs(lexer.COLON) {
+	// For regular identifiers and numbers, check for explicit target (key: target)
+	_, isIdent := prop.Key.(*Identifier)
+	_, isNumber := prop.Key.(*NumberLiteral)
+	if (isIdent || isNumber) && p.peekTokenIs(lexer.COLON) {
 		p.nextToken() // Consume ':'
 		p.nextToken() // Move to target
 
