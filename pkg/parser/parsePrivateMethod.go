@@ -51,7 +51,10 @@ func (p *Parser) parsePrivateMethod(isStatic bool) *MethodDefinition {
 		ReturnTypeAnnotation: returnTypeAnnotation,
 		Body:                 body,
 	}
-	
+
+	// Transform destructuring parameters
+	funcLiteral = p.transformFunctionWithDestructuring(funcLiteral)
+
 	// Create method definition
 	method := &MethodDefinition{
 		Token:    methodToken,
@@ -62,6 +65,6 @@ func (p *Parser) parsePrivateMethod(isStatic bool) *MethodDefinition {
 		// Private methods are implicitly private, but we don't have separate access modifiers
 		// The privacy is indicated by the '#' in the method name
 	}
-	
+
 	return method
 }
