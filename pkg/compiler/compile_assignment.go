@@ -1722,6 +1722,10 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	// This is required at runtime even if type checker catches it at compile time
 	// We need to check: if (tempReg === null || tempReg === undefined) throw TypeError
 
+	if debugAssignment {
+		fmt.Printf("// [compileObjectDestructuringDeclaration] Adding null/undefined check for tempReg=R%d\n", tempReg)
+	}
+
 	// Allocate register for null/undefined checks
 	checkReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(checkReg)
@@ -1740,8 +1744,8 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	// Throw TypeError: Cannot destructure null
 	errorReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(errorReg)
-	typeErrorIdx := c.chunk.AddConstant(vm.String("TypeError"))
-	c.emitGetGlobal(errorReg, typeErrorIdx, line)
+	typeErrorGlobalIdx := c.GetOrAssignGlobalIndex("TypeError")
+	c.emitGetGlobal(errorReg, typeErrorGlobalIdx, line)
 
 	msgReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(msgReg)
@@ -1769,7 +1773,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	notUndefJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
 
 	// Throw TypeError: Cannot destructure undefined
-	c.emitGetGlobal(errorReg, typeErrorIdx, line)
+	c.emitGetGlobal(errorReg, typeErrorGlobalIdx, line)
 	msgConstIdx = c.chunk.AddConstant(vm.String("Cannot destructure 'undefined'"))
 	c.emitLoadConstant(msgReg, msgConstIdx, line)
 	c.emitCall(resultReg, errorReg, 1, line)  // Call TypeError constructor with message

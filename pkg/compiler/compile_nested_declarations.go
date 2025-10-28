@@ -151,6 +151,10 @@ func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLit
 
 // compileArrayDestructuringDeclarationWithValueReg compiles array destructuring declarations using an existing value register
 func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser.ArrayDestructuringDeclaration, valueReg Register, line int) errors.PaseratiError {
+	// ECMAScript compliance: Throw TypeError if destructuring null or undefined
+	// This is required at runtime even if type checker catches it at compile time
+	c.emitDestructuringNullCheck(valueReg, line)
+
 	// Reuse existing array destructuring logic but skip RHS compilation
 	// For each element, compile: define target = valueReg[index]
 	for i, element := range node.Elements {
@@ -247,6 +251,10 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 
 // compileObjectDestructuringDeclarationWithValueReg compiles object destructuring declarations using an existing value register
 func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parser.ObjectDestructuringDeclaration, valueReg Register, line int) errors.PaseratiError {
+	// ECMAScript compliance: Throw TypeError if destructuring null or undefined
+	// This is required at runtime even if type checker catches it at compile time
+	c.emitDestructuringNullCheck(valueReg, line)
+
 	// Reuse existing object destructuring logic but skip RHS compilation
 	// For each property, compile: define target = valueReg.propertyName
 	for _, prop := range node.Properties {
