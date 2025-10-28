@@ -6214,10 +6214,24 @@ func (p *Parser) parseObjectLiteral() Expression {
 				// Transform function if it has destructuring parameters
 				funcLit = p.transformFunctionWithDestructuring(funcLit)
 
+				// Create MethodDefinition for generator method
+				// This ensures [[HomeObject]] is set for super property access
+				generatorMethod := &MethodDefinition{
+					Token:       asteriskToken,
+					Key:         key,
+					Value:       funcLit,
+					Kind:        "method", // Generator methods have kind "method", not "generator"
+					IsStatic:    false,
+					IsPublic:    false,
+					IsPrivate:   false,
+					IsProtected: false,
+					IsOverride:  false,
+				}
+
 				// Add the generator method
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{
 					Key:   key,
-					Value: funcLit,
+					Value: generatorMethod,
 				})
 			} else if p.curTokenIs(lexer.STRING) && p.peekTokenIs(lexer.LPAREN) {
 				// This is a string literal shorthand method like "methodName"() { ... }

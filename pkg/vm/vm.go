@@ -2605,6 +2605,27 @@ startExecution:
 			hasGetter := getterVal.Type() != TypeUndefined
 			hasSetter := setterVal.Type() != TypeUndefined
 
+			// Set [[HomeObject]] on getter/setter for super property access
+			// Per ECMAScript spec, accessors get a [[HomeObject]] pointing to the object where they're defined
+			if hasGetter {
+				if getterVal.Type() == TypeClosure {
+					closure := getterVal.AsClosure()
+					closure.Fn.HomeObject = objVal
+				} else if getterVal.Type() == TypeFunction {
+					funcObj := AsFunction(getterVal)
+					funcObj.HomeObject = objVal
+				}
+			}
+			if hasSetter {
+				if setterVal.Type() == TypeClosure {
+					closure := setterVal.AsClosure()
+					closure.Fn.HomeObject = objVal
+				} else if setterVal.Type() == TypeFunction {
+					funcObj := AsFunction(setterVal)
+					funcObj.HomeObject = objVal
+				}
+			}
+
 			// Default attributes: enumerable=true, configurable=true for object literal accessors
 			enumerable := true
 			configurable := true
@@ -2647,6 +2668,27 @@ startExecution:
 				}
 				hasGetter := getterVal.Type() != TypeUndefined
 				hasSetter := setterVal.Type() != TypeUndefined
+
+				// Set [[HomeObject]] on getter/setter for super property access
+				if hasGetter {
+					if getterVal.Type() == TypeClosure {
+						closure := getterVal.AsClosure()
+						closure.Fn.HomeObject = objVal
+					} else if getterVal.Type() == TypeFunction {
+						funcObj := AsFunction(getterVal)
+						funcObj.HomeObject = objVal
+					}
+				}
+				if hasSetter {
+					if setterVal.Type() == TypeClosure {
+						closure := setterVal.AsClosure()
+						closure.Fn.HomeObject = objVal
+					} else if setterVal.Type() == TypeFunction {
+						funcObj := AsFunction(setterVal)
+						funcObj.HomeObject = objVal
+					}
+				}
+
 				enumerable := true
 				configurable := true
 				obj.DefineAccessorPropertyByKey(NewSymbolKey(nameVal), getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
@@ -2670,6 +2712,27 @@ startExecution:
 			}
 			hasGetter := getterVal.Type() != TypeUndefined
 			hasSetter := setterVal.Type() != TypeUndefined
+
+			// Set [[HomeObject]] on getter/setter for super property access
+			if hasGetter {
+				if getterVal.Type() == TypeClosure {
+					closure := getterVal.AsClosure()
+					closure.Fn.HomeObject = objVal
+				} else if getterVal.Type() == TypeFunction {
+					funcObj := AsFunction(getterVal)
+					funcObj.HomeObject = objVal
+				}
+			}
+			if hasSetter {
+				if setterVal.Type() == TypeClosure {
+					closure := setterVal.AsClosure()
+					closure.Fn.HomeObject = objVal
+				} else if setterVal.Type() == TypeFunction {
+					funcObj := AsFunction(setterVal)
+					funcObj.HomeObject = objVal
+				}
+			}
+
 			enumerable := true
 			configurable := true
 			obj.DefineAccessorProperty(propName, getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
