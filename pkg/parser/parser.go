@@ -5707,7 +5707,8 @@ func (p *Parser) parseObjectLiteral() Expression {
 				p.curToken.Type, p.curToken.Literal, p.peekToken.Type, p.peekToken.Literal)
 
 			// Parse the expression being spread
-			spreadExpr := p.parseExpression(COMMA)
+			// Use ASSIGNMENT precedence to stop before commas (don't consume comma operator)
+			spreadExpr := p.parseExpression(ASSIGNMENT)
 			debugPrint("Object spread: after parseExpression(COMMA), cur=%s(%s), peek=%s(%s)",
 				p.curToken.Type, p.curToken.Literal, p.peekToken.Type, p.peekToken.Literal)
 			if spreadExpr == nil {
@@ -6093,10 +6094,27 @@ func (p *Parser) parseObjectLiteral() Expression {
 					return nil
 				}
 
+				// Save and manage generator context for async generators
+				savedGeneratorContext := p.inGenerator
+				if funcLit.IsGenerator {
+					p.inGenerator++
+					if debugParser {
+						fmt.Printf("[PARSER] Entering generator context (async generator method), inGenerator=%d\n", p.inGenerator)
+					}
+				}
+
 				// Parse method body
 				funcLit.Body = p.parseBlockStatement()
 				if funcLit.Body == nil {
 					return nil
+				}
+
+				// Restore generator context
+				if funcLit.IsGenerator {
+					p.inGenerator = savedGeneratorContext
+					if debugParser {
+						fmt.Printf("[PARSER] Restored generator context to %d (async generator method)\n", p.inGenerator)
+					}
 				}
 
 				// Transform function if it has destructuring parameters
