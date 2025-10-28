@@ -158,7 +158,9 @@ func (fn *FunctionObject) getOrCreatePrototypeWithVM(vm *VM) Value {
 	fn.Properties.SetOwn("prototype", prototypeObj)
 
 	// Set constructor property on prototype (circular reference)
-	if prototypeObj.IsObject() {
+	// IMPORTANT: Generator and async generator function prototypes should NOT have a constructor property
+	// per ECMAScript spec (they should be plain empty objects)
+	if prototypeObj.IsObject() && !fn.IsGenerator {
 		protoPlain := prototypeObj.AsPlainObject()
 		constructorVal := Value{typ: TypeFunction, obj: unsafe.Pointer(fn)}
 		protoPlain.SetOwn("constructor", constructorVal)

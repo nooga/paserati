@@ -20,6 +20,7 @@ const MaxFrames = 64    // Max call stack depth
 const debugVM = false         // VM execution tracing
 const debugCalls = false      // Function call tracing
 const debugExceptions = false // Exception handling tracing
+const debugOpNew = false      // OpNew operation tracing
 
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
@@ -4526,6 +4527,12 @@ startExecution:
 					vm.ThrowTypeError("Arrow functions cannot be used as constructors")
 					return InterpretRuntimeError, Undefined
 				}
+				// Check if it's a generator function - generator functions cannot be constructors
+				if constructorFunc.IsGenerator {
+					frame.ip = callerIP
+					vm.ThrowTypeError("Generator functions cannot be used as constructors")
+					return InterpretRuntimeError, Undefined
+				}
 				// Allow fewer arguments for constructors with optional parameters
 				// The compiler handles padding with undefined for missing optional parameters
 				// JavaScript allows passing more arguments than the function declares - they are
@@ -4672,6 +4679,12 @@ startExecution:
 				if funcToCall.IsArrowFunction {
 					frame.ip = callerIP
 					vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+					return InterpretRuntimeError, Undefined
+				}
+				// Check if it's a generator function - generator functions cannot be constructors
+				if funcToCall.IsGenerator {
+					frame.ip = callerIP
+					vm.ThrowTypeError("Generator functions cannot be used as constructors")
 					return InterpretRuntimeError, Undefined
 				}
 				constructorClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
