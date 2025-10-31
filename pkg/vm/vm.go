@@ -17,14 +17,25 @@ const RegFileSize = 256 // Max registers per function call frame
 const MaxFrames = 64    // Max call stack depth
 
 // Debug flags - set these to control debug output
-const debugVM = false         // VM execution tracing
-const debugCalls = false      // Function call tracing
-const debugExceptions = false // Exception handling tracing
-const debugOpNew = false      // OpNew operation tracing
+const debugVM = false              // VM execution tracing
+const debugCalls = false           // Function call tracing
+const debugExceptions = false      // Exception handling tracing
+const debugOpNew = false           // OpNew operation tracing
+const debugGeneratorStates = false // Generator state transition logging (temporary for development)
 
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
 	LoadModule(specifier string, fromPath string) (ModuleRecord, error)
+}
+
+// logGeneratorStateTransition logs generator state changes for debugging
+func logGeneratorStateTransition(genObj *GeneratorObject, newState GeneratorState, location string) {
+	if debugGeneratorStates {
+		oldState := genObj.State
+		fmt.Printf("[GEN STATE] %s: %s → %s (hasFrame=%v)\n",
+			location, oldState.String(), newState.String(), genObj.Frame != nil)
+	}
+	genObj.State = newState
 }
 
 // ModuleRecord interface to avoid circular imports
@@ -761,6 +772,9 @@ startExecution:
 			regDest := code[ip]
 			regSrc := code[ip+1]
 			ip += 2
+			if debugVM {
+				fmt.Printf("[OpMove] R%d <- R%d (value=%v, type=%s)\n", regDest, regSrc, registers[regSrc], registers[regSrc].Type())
+			}
 			registers[regDest] = registers[regSrc]
 
 		case OpNegate:
@@ -1934,8 +1948,11 @@ startExecution:
 					continue
 				}
 				if debugCalls {
-					fmt.Printf("[DEBUG vm.go] OpCall: Native function completed normally, continuing\n")
+					fmt.Printf("[DEBUG vm.go] OpCall: Native function completed normally, continuing with ip=%d\n", ip)
 				}
+			}
+			if debugCalls {
+				fmt.Printf("[DEBUG vm.go] OpCall: Continuing to next instruction at ip=%d\n", ip)
 			}
 			continue
 
@@ -6492,7 +6509,7 @@ startExecution:
 		// --- Generator Support ---
 		case OpCreateGenerator:
 			// OpCreateGenerator destReg, funcReg, argCount
-			// Create a generator object instead of calling the function
+			// Create a generator object and execute its initialization prologue
 			destReg := code[ip]
 			funcReg := code[ip+1]
 			argCount := int(code[ip+2])
@@ -6519,6 +6536,46 @@ startExecution:
 						genObj.Args[i] = Undefined
 					}
 				}
+			}
+
+			// Store 'this' value for generator context
+			genObj.This = frame.thisValue
+
+			if debugGeneratorStates {
+				fmt.Printf("[GEN STATE] OpCreateGenerator: Created generator, executing prologue\n")
+			}
+
+			// Save state before prologue execution for exception handling (similar to OpCall)
+			// wasUnwinding := vm.unwinding
+			// frameIPBeforeCall := frame.ip
+			// callerIP := ip + 3 // IP after OpCreateGenerator instruction
+			callerIP := ip
+
+			// Execute generator prologue synchronously
+			// This will run parameter initialization and stop at OpInitYield
+			prologueStatus := vm.executeGeneratorPrologue(genObj)
+			if prologueStatus != InterpretOK {
+				// Prologue failed - the exception was thrown in the nested vm.run()
+				// We need to re-throw it in the outer vm.run() context so try-catch can catch it
+				if debugGeneratorStates {
+					fmt.Printf("[GEN STATE] OpCreateGenerator: Prologue failed with status=%d, unwinding=%v, re-throwing\n", prologueStatus, vm.unwinding)
+				}
+
+				frame.ip = callerIP
+
+				// Re-throw the exception in the outer context
+				if vm.currentException.Type() != TypeUndefined {
+					vm.throwException(vm.currentException)
+				} else if vm.lastThrownException.Type() != TypeUndefined {
+					vm.throwException(vm.lastThrownException)
+				} else {
+					vm.throwException(NewString("Generator initialization failed"))
+				}
+				continue
+			}
+
+			if debugGeneratorStates {
+				fmt.Printf("[GEN STATE] OpCreateGenerator: Prologue complete, generator ready\n")
 			}
 
 			// Set result in destination register
@@ -6576,6 +6633,59 @@ startExecution:
 
 			// Return from generator execution
 			return InterpretOK, NewValueFromPlainObject(result)
+
+		case OpInitYield:
+			// OpInitYield marks the end of generator initialization prologue
+			// Behavior depends on generator state:
+			// - GeneratorStart: Save state and return (during prologue execution in OpCreateGenerator)
+			// - SuspendedStart/later: No-op, fall through (during .next() resume)
+
+			if frame.generatorObj == nil {
+				// Not in generator context - shouldn't happen, but be defensive
+				if debugGeneratorStates {
+					fmt.Printf("[GEN STATE] OpInitYield: No generator object in frame!\n")
+				}
+				break
+			}
+
+			genObj := frame.generatorObj
+
+			// Check if this is prologue execution (first time hitting OpInitYield)
+			if genObj.State == GeneratorStart {
+				if debugGeneratorStates {
+					fmt.Printf("[GEN STATE] OpInitYield: Entered case at IP=%d (IP already points to next instruction)\n", ip)
+					fmt.Printf("[GEN STATE] OpInitYield: Prologue complete, saving state at IP=%d\n", ip)
+					fmt.Printf("[GEN STATE] OpInitYield: Register count=%d\n", len(registers))
+					// Print first few register values
+					for i := 0; i < len(registers) && i < 10; i++ {
+						fmt.Printf("[GEN STATE]   R%d = %v (type=%s)\n", i, registers[i], registers[i].Type())
+					}
+				}
+
+				// Save current execution state
+				// IP already points to the first instruction after OpInitYield (the function body start)
+				genObj.Frame = &GeneratorFrame{
+					pc:        ip, // Resume at first instruction of function body (IP already advanced past OpInitYield opcode)
+					registers: make([]Value, len(registers)),
+					thisValue: frame.thisValue,
+					suspendPC: ip,
+					outputReg: 0, // Not used for init yield
+				}
+				copy(genObj.Frame.registers, registers)
+
+				// Transition to SuspendedStart state
+				logGeneratorStateTransition(genObj, GeneratorSuspendedStart, "OpInitYield")
+
+				// Return control to OpCreateGenerator
+				return InterpretOK, Undefined
+			}
+
+			// If state is not GeneratorStart, this is a resume from .next()
+			// OpInitYield is a no-op on resume - just advance past it
+			if debugGeneratorStates {
+				fmt.Printf("[GEN STATE] OpInitYield: No-op (state=%s), advancing IP from %d to %d\n", genObj.State.String(), ip, ip+1)
+			}
+			ip++ // Advance past OpInitYield
 
 		case OpYieldDelegated:
 			// OpYieldDelegated resultReg, outputReg, iteratorReg
@@ -7731,17 +7841,145 @@ func (vm *VM) abstractEqual(a, b Value) bool {
 	return false
 }
 
+// executeGeneratorPrologue executes the generator prologue (parameter initialization and destructuring)
+// synchronously during OpCreateGenerator. Stops at OpInitYield.
+func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult {
+	if debugGeneratorStates {
+		fmt.Printf("[GEN STATE] executeGeneratorPrologue: Starting prologue execution\n")
+	}
+
+	funcVal := genObj.Function
+	args := genObj.Args
+	if args == nil {
+		args = []Value{}
+	}
+
+	if debugGeneratorStates {
+		fmt.Printf("[GEN STATE] executeGeneratorPrologue: args count=%d\n", len(args))
+		for i, arg := range args {
+			fmt.Printf("[GEN STATE]   arg[%d] = %v (type=%s)\n", i, arg, arg.Type())
+		}
+	}
+
+	thisValue := genObj.This
+	if thisValue.Type() == 0 {
+		thisValue = Undefined
+	}
+
+	// Use prepareCall to set up the function frame
+	// We need a minimal caller context
+	destReg := byte(0)
+	callerRegisters := make([]Value, 1)
+	callerIP := 0
+
+	// Call prepareCallWithGeneratorMode to set up frame (true flag means we're in generator execution mode)
+	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, thisValue, args, destReg, callerRegisters, callerIP, true)
+	if err != nil {
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: prepareCall failed: %v\n", err)
+		}
+		return InterpretRuntimeError
+	}
+
+	if !shouldSwitch {
+		// Native function - shouldn't happen for generators
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Native function\n")
+		}
+		return InterpretRuntimeError
+	}
+
+	// Link the frame to the generator object
+	if vm.frameCount > 0 {
+		vm.frames[vm.frameCount-1].generatorObj = genObj
+		// Mark this as a direct call boundary to prevent exception unwinding from destroying caller frames
+		vm.frames[vm.frameCount-1].isDirectCall = true
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Linked frame to generator, frameCount=%d\n", vm.frameCount)
+		}
+	}
+
+	// Set generator state to GeneratorStart to indicate prologue execution
+	logGeneratorStateTransition(genObj, GeneratorStart, "executeGeneratorPrologue")
+
+	// Save register size for cleanup
+	regSize := 0
+	if vm.frameCount > 0 {
+		regSize = len(vm.frames[vm.frameCount-1].registers)
+	}
+
+	if debugGeneratorStates {
+		fmt.Printf("[GEN STATE] executeGeneratorPrologue: About to run, frameCount=%d, regSize=%d\n", vm.frameCount, regSize)
+	}
+
+	// Execute until OpInitYield returns or function completes
+	status, _ := vm.run()
+
+	if debugGeneratorStates {
+		fmt.Printf("[GEN STATE] executeGeneratorPrologue: After run: status=%d, state=%s, frameCount=%d\n",
+			status, genObj.State.String(), vm.frameCount)
+	}
+
+	// Clean up frame
+	if vm.frameCount > 0 {
+		vm.frameCount--
+		vm.nextRegSlot -= regSize
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Cleaned up frame, frameCount now=%d\n", vm.frameCount)
+		}
+	}
+
+	// OpInitYield should have set state to SuspendedStart
+	if status != InterpretOK {
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Prologue failed with status=%d\n", status)
+		}
+		return status
+	}
+
+	// Verify state is now SuspendedStart
+	if genObj.State != GeneratorSuspendedStart {
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: WARNING: Unexpected state %s (expected SuspendedStart)\n",
+				genObj.State.String())
+		}
+		// This might happen for old generators without OpInitYield, but shouldn't with our compiler changes
+		logGeneratorStateTransition(genObj, GeneratorSuspendedStart, "executeGeneratorPrologue-fixup")
+	}
+
+	return InterpretOK
+}
+
 // executeGenerator starts or resumes generator execution
 func (vm *VM) executeGenerator(genObj *GeneratorObject, sentValue Value) (Value, error) {
 	if genObj.State == GeneratorSuspendedStart {
-		// First call - start generator function execution
-		return vm.startGenerator(genObj, sentValue)
+		// First call - check if prologue was already executed
+		if genObj.Frame != nil {
+			// Prologue was executed, resume from saved state (after OpInitYield)
+			if debugGeneratorStates {
+				fmt.Printf("[GEN STATE] executeGenerator: SuspendedStart with Frame, using resumeGenerator\n")
+			}
+			return vm.resumeGenerator(genObj, sentValue)
+		} else {
+			// No prologue executed - start generator function execution from beginning
+			// This shouldn't happen with our new compiler, but handle it for backwards compatibility
+			if debugGeneratorStates {
+				fmt.Printf("[GEN STATE] executeGenerator: SuspendedStart without Frame, using startGenerator\n")
+			}
+			return vm.startGenerator(genObj, sentValue)
+		}
 	} else if genObj.State == GeneratorSuspendedYield {
 		// Resume from yield point
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGenerator: SuspendedYield, using resumeGenerator\n")
+		}
 		return vm.resumeGenerator(genObj, sentValue)
 	}
 
 	// Generator is completed
+	if debugGeneratorStates {
+		fmt.Printf("[GEN STATE] executeGenerator: Completed, returning done\n")
+	}
 	result := NewObject(vm.ObjectPrototype).AsPlainObject()
 	result.SetOwn("value", Undefined)
 	result.SetOwn("done", BooleanValue(true))
@@ -7930,9 +8168,10 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
-	frame.isDirectCall = true // Mark as direct call for proper return handling
-	frame.argCount = 0
-	frame.generatorObj = genObj // Link frame to generator object
+	frame.isDirectCall = true         // Mark as direct call for proper return handling
+	frame.argCount = len(genObj.Args) // Restore argument count
+	frame.args = genObj.Args          // Restore arguments
+	frame.generatorObj = genObj       // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -7942,12 +8181,35 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 		frame.closure = closureVal.AsClosure()
 	}
 
+	if debugGeneratorStates {
+		fmt.Printf("[GEN STATE] resumeGenerator: BEFORE restore, frame.registers values:\n")
+		for i := 0; i < len(frame.registers) && i < 10; i++ {
+			fmt.Printf("[GEN STATE]   R%d = %v (type=%s)\n", i, frame.registers[i], frame.registers[i].Type())
+		}
+	}
+
 	// Restore register state from saved frame
 	copy(frame.registers, genObj.Frame.registers)
 
+	if debugGeneratorStates {
+		fmt.Printf("[GEN STATE] resumeGenerator: AFTER restore, frame.registers values:\n")
+		// Print first few register values
+		for i := 0; i < len(frame.registers) && i < 10; i++ {
+			fmt.Printf("[GEN STATE]   R%d = %v (type=%s)\n", i, frame.registers[i], frame.registers[i].Type())
+		}
+		fmt.Printf("[GEN STATE] resumeGenerator: Resuming at IP=%d\n", genObj.Frame.pc)
+		if funcObj != nil && funcObj.Chunk != nil && genObj.Frame.pc < len(funcObj.Chunk.Code) {
+			opcode := OpCode(funcObj.Chunk.Code[genObj.Frame.pc])
+			fmt.Printf("[GEN STATE] resumeGenerator: Instruction at IP=%d is %s (opcode=%d)\n",
+				genObj.Frame.pc, opcode.String(), opcode)
+		}
+	}
+
 	// Store the sent value in the register specified by the yield instruction
 	// This eliminates the need to hardcode R2 and makes the codegen explicit
-	if genObj.Frame != nil && int(genObj.Frame.outputReg) < len(frame.registers) {
+	// NOTE: Only do this when resuming from a yield (SuspendedYield), NOT when starting (SuspendedStart)
+	// For SuspendedStart, outputReg is 0 but we don't want to overwrite R0 (which contains the first parameter!)
+	if genObj.State == GeneratorSuspendedYield && genObj.Frame != nil && int(genObj.Frame.outputReg) < len(frame.registers) {
 		frame.registers[genObj.Frame.outputReg] = sentValue
 	}
 

@@ -975,6 +975,42 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		}
 	}
 
+	// 3.5. Handle destructuring parameters
+	// For each destructuring parameter, allocate a register and compile the destructuring code
+	// This must happen BEFORE OpInitYield (for generators) so that destructuring errors
+	// are thrown during construction, not during the first .next() call
+	for i, param := range node.Parameters {
+		if debugCompiler {
+			fmt.Printf("// [Compiler] Checking param %d: IsThis=%v, IsDestructuring=%v, Pattern=%v\n",
+				i, param.IsThis, param.IsDestructuring, param.Pattern != nil)
+		}
+		if param.IsThis || !param.IsDestructuring || param.Pattern == nil {
+			continue
+		}
+
+		// Allocate a register for this destructuring parameter
+		// The VM will place the argument value in this register during function call
+		paramReg := functionCompiler.regAlloc.Alloc()
+		debugPrintf("// [Compiler] Destructuring parameter %d allocated R%d\n", i, paramReg)
+
+		// Compile the destructuring pattern
+		// The destructuring will extract values from paramReg and bind them to local variables
+		switch pattern := param.Pattern.(type) {
+		case *parser.ArrayParameterPattern:
+			err := functionCompiler.compileNestedArrayParameterPattern(pattern, paramReg, false, param.Token.Line)
+			if err != nil {
+				functionCompiler.addError(param, fmt.Sprintf("error compiling parameter destructuring: %v", err))
+			}
+		case *parser.ObjectParameterPattern:
+			err := functionCompiler.compileNestedObjectParameterPattern(pattern, paramReg, false, param.Token.Line)
+			if err != nil {
+				functionCompiler.addError(param, fmt.Sprintf("error compiling parameter destructuring: %v", err))
+			}
+		default:
+			functionCompiler.addError(param, "unsupported parameter pattern type")
+		}
+	}
+
 	// 4. Handle rest parameter (if present)
 	var restParamReg Register
 	var restParamPattern parser.Expression // Save pattern for later destructuring
@@ -1035,16 +1071,90 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		}
 	}
 
-	// 5. Compile the body using the function compiler
-	bodyReg := functionCompiler.regAlloc.Alloc()
-	// Mark that we're compiling the function body BlockStatement itself
-	functionCompiler.isCompilingFunctionBody = true
-	_, err := functionCompiler.compileNode(node.Body, bodyReg)
-	functionCompiler.isCompilingFunctionBody = false
-	functionCompiler.regAlloc.Free(bodyReg) // Free since function body doesn't return a value
-	if err != nil {
-		// Propagate errors (already appended to c.errors by sub-compiler)
-		// Proceed to create function object even if body has errors? Continue for now.
+	// 4.5. For generators, emit OpInitYield AFTER compiling desugared parameter declarations
+	// The parser desugars destructuring parameters into const declarations at the start of the body
+	// We need to compile those first, then emit OpInitYield, then compile the rest of the body
+	if node.IsGenerator {
+		debugPrintf("// [Generator] Compiling with OpInitYield after desugared parameters\n")
+
+		// Compile the body specially for generators to insert OpInitYield at the right place
+		bodyReg := functionCompiler.regAlloc.Alloc()
+		functionCompiler.isCompilingFunctionBody = true
+
+		// Get the body as a block statement (it's always a BlockStatement for function literals)
+		blockBody := node.Body
+		if blockBody != nil {
+			// Compile desugared parameter declarations first (they're at the start of the block)
+			// The parser transforms destructuring parameters into regular parameters named __destructured_param_N
+			// and adds ArrayDestructuringDeclaration or ObjectDestructuringDeclaration statements at the start of the body
+			// We need to compile these BEFORE OpInitYield so errors throw during construction
+			desugarCount := 0
+			for i, stmt := range blockBody.Statements {
+				if debugCompiler {
+					fmt.Printf("// [Generator] Checking statement %d: type=%T\n", i, stmt)
+				}
+				// Check if this is a desugared parameter declaration
+				isDesugared := false
+
+				if arrayDecl, ok := stmt.(*parser.ArrayDestructuringDeclaration); ok {
+					// Check if the value is an identifier matching __destructured_param_*
+					if ident, ok := arrayDecl.Value.(*parser.Identifier); ok {
+						if len(ident.Value) >= 21 && ident.Value[:21] == "__destructured_param_" {
+							isDesugared = true
+						}
+					}
+				} else if objDecl, ok := stmt.(*parser.ObjectDestructuringDeclaration); ok {
+					// Check if the value is an identifier matching __destructured_param_*
+					if ident, ok := objDecl.Value.(*parser.Identifier); ok {
+						if debugCompiler {
+							fmt.Printf("// [Generator]   ObjectDestructuringDeclaration.Value = %s\n", ident.Value)
+						}
+						if len(ident.Value) >= 21 && ident.Value[:21] == "__destructured_param_" {
+							isDesugared = true
+						}
+					} else if debugCompiler {
+						fmt.Printf("// [Generator]   ObjectDestructuringDeclaration.Value is not Identifier: %T\n", objDecl.Value)
+					}
+				}
+
+				if !isDesugared {
+					break // Stop when we hit a non-desugared statement
+				}
+
+				// Compile this desugared parameter declaration
+				stmtReg := functionCompiler.regAlloc.Alloc()
+				functionCompiler.compileNode(stmt, stmtReg)
+				functionCompiler.regAlloc.Free(stmtReg)
+				desugarCount++
+
+				debugPrintf("// [Generator] Compiled desugared parameter declaration %d\n", i)
+			}
+
+			// NOW emit OpInitYield after desugared parameters
+			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
+			debugPrintf("// [Generator] Emitted OpInitYield after %d desugared parameter declarations\n", desugarCount)
+
+			// Compile remaining statements (the actual body)
+			for i := desugarCount; i < len(blockBody.Statements); i++ {
+				stmtReg := functionCompiler.regAlloc.Alloc()
+				functionCompiler.compileNode(blockBody.Statements[i], stmtReg)
+				functionCompiler.regAlloc.Free(stmtReg)
+			}
+		} else {
+			// Non-block body (arrow function expression) - just emit OpInitYield first
+			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
+			functionCompiler.compileNode(node.Body, bodyReg)
+		}
+
+		functionCompiler.isCompilingFunctionBody = false
+		functionCompiler.regAlloc.Free(bodyReg)
+	} else {
+		// Non-generator: compile body normally
+		bodyReg := functionCompiler.regAlloc.Alloc()
+		functionCompiler.isCompilingFunctionBody = true
+		functionCompiler.compileNode(node.Body, bodyReg)
+		functionCompiler.isCompilingFunctionBody = false
+		functionCompiler.regAlloc.Free(bodyReg)
 	}
 
 	// 6. Finalize function chunk (add implicit return to the function's chunk)

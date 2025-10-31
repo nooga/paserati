@@ -39,13 +39,26 @@ func (e exceptionError) GetExceptionValue() Value {
 //   - callerIP: The caller's instruction pointer (for error reporting and return)
 //
 // Returns (shouldSwitchFrame, error)
+const debugPrepareCall = false
+
 func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
+	if debugPrepareCall {
+		fmt.Printf("[CALL] prepareCall: isGenExec=false, frameCount=%d\n", vm.frameCount)
+	}
 	return vm.prepareCallWithGeneratorMode(calleeVal, thisValue, args, destReg, callerRegisters, callerIP, false)
 }
 
 func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int, isGeneratorExecution bool) (bool, error) {
 	argCount := len(args)
 	currentFrame := &vm.frames[vm.frameCount-1]
+
+	if debugPrepareCall {
+		funcName := "unknown"
+		if calleeVal.Type() == TypeClosure {
+			funcName = calleeVal.AsClosure().Fn.Name
+		}
+		fmt.Printf("[CALL] prepareCallWithGeneratorMode: func=%s, isGenExec=%v, argCount=%d, frameCount=%d\n", funcName, isGeneratorExecution, argCount, vm.frameCount)
+	}
 
 	// fmt.Printf("DEBUG prepareCall: callee=%v, calleeType=%v, this=%v, args=%v\n",
 	// 	calleeVal.Inspect(), calleeVal.Type(), thisValue.Inspect(), len(args))
@@ -130,12 +143,40 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			copy(genObj.Args, args)
 			genObj.This = thisValue
 
+			// Execute generator prologue synchronously (parameter initialization)
+			// Only execute if prologue hasn't been run yet (state is GeneratorStart)
+			if genObj.State == GeneratorStart {
+				callerIP = currentFrame.ip
+				if debugPrepareCall {
+					fmt.Printf("[CALL] About to execute prologue for func=%s, state=%s\n", calleeFunc.Name, genObj.State.String())
+				}
+				prologueStatus := vm.executeGeneratorPrologue((*GeneratorObject)(genObj))
+				currentFrame.ip = callerIP
+				if debugPrepareCall {
+					fmt.Printf("[CALL] Prologue returned status=%d, state now=%s\n", prologueStatus, genObj.State.String())
+				}
+				if prologueStatus != InterpretOK {
+					// Prologue failed (e.g., destructuring null) - throw exception
+					if vm.currentException.Type() != TypeUndefined {
+						vm.throwException(vm.currentException)
+					} else if vm.lastThrownException.Type() != TypeUndefined {
+						vm.throwException(vm.lastThrownException)
+					} else {
+						vm.throwException(NewString("Generator initialization failed"))
+					}
+					return false, nil // Exception was thrown
+				}
+			}
+
 			callerRegisters[destReg] = genVal
 			return false, nil // Don't switch frames
 		}
 
 		// Check if this is a generator function (but skip if we're already executing a generator)
 		if calleeFunc.IsGenerator && !isGeneratorExecution {
+			if debugPrepareCall {
+				fmt.Printf("[CALL] Generator detected: func=%s, creating generator object\n", calleeFunc.Name)
+			}
 			// Create a generator object instead of calling the function
 			genVal := NewGenerator(calleeVal)
 			genObj := genVal.AsGenerator()
@@ -166,6 +207,34 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			copy(genObj.Args, args)
 			genObj.This = thisValue
 
+			// Execute generator prologue synchronously (parameter initialization)
+			// Only execute if prologue hasn't been run yet (state is GeneratorStart)
+			if genObj.State == GeneratorStart {
+				callerIP = currentFrame.ip
+				if debugPrepareCall {
+					fmt.Printf("[CALL] About to execute prologue for func=%s, state=%s\n", calleeFunc.Name, genObj.State.String())
+				}
+				prologueStatus := vm.executeGeneratorPrologue(genObj)
+				currentFrame.ip = callerIP
+				if debugPrepareCall {
+					fmt.Printf("[CALL] Prologue returned status=%d, state now=%s\n", prologueStatus, genObj.State.String())
+				}
+				if prologueStatus != InterpretOK {
+					// Prologue failed (e.g., destructuring null) - throw exception
+					if vm.currentException.Type() != TypeUndefined {
+						vm.throwException(vm.currentException)
+					} else if vm.lastThrownException.Type() != TypeUndefined {
+						vm.throwException(vm.lastThrownException)
+					} else {
+						vm.throwException(NewString("Generator initialization failed"))
+					}
+					return false, nil // Exception was thrown
+				}
+			}
+
+			if debugPrepareCall {
+				fmt.Printf("[CALL] Returning generator object for func=%s, state=%s\n", calleeFunc.Name, genObj.State.String())
+			}
 			callerRegisters[destReg] = genVal
 			return false, nil // Don't switch frames
 		}

@@ -201,6 +201,7 @@ const (
 	OpYield           OpCode = 75 // Rx, Ry: Suspend generator execution, yield value in Rx, store sent value in Ry
 	OpResumeGenerator OpCode = 76 // Internal: Resume generator execution (used by .next() calls)
 	OpYieldDelegated  OpCode = 100 // ResultReg, OutputReg, IteratorReg: Suspend generator for yield*, yield result as-is, store sent value in OutputReg, save iterator in IteratorReg for .return()/.throw() forwarding
+	OpInitYield       OpCode = 101 // No operands: Mark end of generator initialization prologue (executed during construction)
 
 	// --- Async/Await Support ---
 	OpAwait OpCode = 95 // Rx, PromiseReg: Await promise in PromiseReg, store result in Rx when resolved
@@ -456,6 +457,8 @@ func (op OpCode) String() string {
 		return "OpResumeGenerator"
 	case OpYieldDelegated:
 		return "OpYieldDelegated"
+	case OpInitYield:
+		return "OpInitYield"
 
 	// --- Async/Await Support ---
 	case OpAwait:
@@ -777,6 +780,9 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.simpleInstruction(builder, "OpResumeGenerator", offset)
 	case OpYieldDelegated:
 		return c.registerRegisterRegisterInstruction(builder, "OpYieldDelegated", offset)
+
+	case OpInitYield:
+		return c.simpleInstruction(builder, "OpInitYield", offset)
 
 	// --- Async/Await Support ---
 	case OpAwait:

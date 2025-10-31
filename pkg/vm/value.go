@@ -161,11 +161,30 @@ type ArgumentsObject struct {
 type GeneratorState int
 
 const (
-	GeneratorSuspendedStart GeneratorState = iota // Initial state, not yet started
+	GeneratorStart          GeneratorState = iota // Just created, prologue not yet executed
+	GeneratorSuspendedStart                       // Prologue executed, ready for first .next()
 	GeneratorSuspendedYield                       // Suspended at a yield expression
 	GeneratorExecuting                            // Currently executing
 	GeneratorCompleted                            // Completed (returned or threw)
 )
+
+// String returns a human-readable name for the generator state
+func (gs GeneratorState) String() string {
+	switch gs {
+	case GeneratorStart:
+		return "Start"
+	case GeneratorSuspendedStart:
+		return "SuspendedStart"
+	case GeneratorSuspendedYield:
+		return "SuspendedYield"
+	case GeneratorExecuting:
+		return "Executing"
+	case GeneratorCompleted:
+		return "Completed"
+	default:
+		return "Unknown"
+	}
+}
 
 // GeneratorFrame stores the execution state of a suspended generator
 // This allows the generator to resume execution from where it left off
@@ -200,18 +219,7 @@ type GeneratorObject struct {
 	DelegatedIterator Value           // Iterator being delegated to (for yield* forwarding of .return()/.throw())
 }
 
-type AsyncGeneratorObject struct {
-	Object
-	Function     Value           // The async generator function
-	State        GeneratorState  // Current state (suspended/completed/executing)
-	Frame        *SuspendedFrame // Execution frame (nil if completed)
-	YieldedValue Value           // Last yielded value
-	ReturnValue  Value           // Final return value (when completed)
-	Done         bool            // True when generator is exhausted
-	Args         []Value         // Arguments passed when the generator was created
-	This         Value           // The 'this' value for the generator context
-	Prototype    *PlainObject    // Custom prototype (if set via function.prototype)
-}
+type AsyncGeneratorObject GeneratorObject
 
 type MapObject struct {
 	Object
@@ -335,8 +343,8 @@ func NewArguments(args []Value, callee Value) Value {
 func NewGenerator(function Value) Value {
 	genObj := &GeneratorObject{
 		Function:     function,
-		State:        GeneratorSuspendedStart,
-		Frame:        nil, // Will be created when generator starts
+		State:        GeneratorStart, // Start state - prologue not yet executed
+		Frame:        nil,            // Will be created during prologue execution
 		YieldedValue: Undefined,
 		ReturnValue:  Undefined,
 		Done:         false,
@@ -347,7 +355,7 @@ func NewGenerator(function Value) Value {
 func NewAsyncGenerator(function Value) Value {
 	genObj := &AsyncGeneratorObject{
 		Function:     function,
-		State:        GeneratorSuspendedStart,
+		State:        GeneratorStart,
 		Frame:        nil, // Will be created when generator starts
 		YieldedValue: Undefined,
 		ReturnValue:  Undefined,
