@@ -8181,6 +8181,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	frame.isSentinelFrame = false      // Ensure sentinel flag is clear (frame slot may have been reused)
 	frame.argCount = len(genObj.Args)  // Restore argument count
 	frame.args = genObj.Args           // Restore arguments
+	frame.argumentsObject = Undefined  // Initialize arguments object (will be created on first access)
 	frame.generatorObj = genObj        // Link frame to generator object
 
 	if closureObj != nil {
@@ -8328,10 +8329,12 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
-	frame.isDirectCall = false      // Don't mark as direct call so exceptions can be caught
-	frame.isSentinelFrame = false   // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = 0
-	frame.generatorObj = genObj     // Link frame to generator object
+	frame.isDirectCall = false         // Don't mark as direct call so exceptions can be caught
+	frame.isSentinelFrame = false      // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.argCount = len(genObj.Args)  // Restore argument count
+	frame.args = genObj.Args           // Restore arguments
+	frame.argumentsObject = Undefined  // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj        // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -8463,10 +8466,12 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
-	frame.isDirectCall = false      // Don't mark as direct call so exceptions can be caught
-	frame.isSentinelFrame = false   // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = 0
-	frame.generatorObj = genObj     // Link frame to generator object
+	frame.isDirectCall = false         // Don't mark as direct call so exceptions can be caught
+	frame.isSentinelFrame = false      // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.argCount = len(genObj.Args)  // Restore argument count
+	frame.args = genObj.Args           // Restore arguments
+	frame.argumentsObject = Undefined  // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj        // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj

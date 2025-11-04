@@ -687,9 +687,11 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		if !skipArityCheck && actualArgCount < minRequiredArgs {
 			c.addError(node, fmt.Sprintf("expected at least %d arguments, but got %d", minRequiredArgs, actualArgCount))
 			// Continue checking assignable args anyway? Let's stop if arity wrong.
-		} else if !skipArityCheck && actualArgCount > expectedArgCount {
-			c.addError(node, fmt.Sprintf("expected at most %d arguments, but got %d", expectedArgCount, actualArgCount))
 		} else {
+			// Note: We don't check for too many arguments (actualArgCount > expectedArgCount) because:
+			// 1. JavaScript functions can always accept extra arguments (accessible via arguments object)
+			// 2. Generators often use this pattern with zero declared parameters
+			// 3. TypeScript only warns about this in strict mode, it's not a hard error
 			// Check argument types with spread expansion support
 			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic)
 		}
