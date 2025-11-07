@@ -4,7 +4,7 @@
 
 ## _"Sir, it's no V8 but we're doing what we can"_
 
-Welcome to **PASERATI** - a spec-compliant ES2025 runtime with native TypeScript frontend, written entirely in Go. Unlike traditional TypeScript toolchains, Paserati type-checks and compiles TypeScript directly to bytecode without transpiling to JavaScript. And yes, that means it runs JavaScript too - by definition.
+Welcome to **PASERATI** - a to-be-spec-compliant ES2025 runtime with native TypeScript frontend, written entirely in Go. Unlike traditional TypeScript toolchains, Paserati type-checks and compiles TypeScript directly to bytecode without transpiling to JavaScript. And yes, that means it runs JavaScript too - by definition.
 
 ## What's Under The Hood
 
@@ -16,7 +16,7 @@ Paserati compiles TypeScript/JavaScript directly to bytecode for a register-base
 
 _Lights a cigarette._
 
-- **ECMAScript 2025 Compliance**: Currently at 74.2% Test262 language suite pass rate (17,548/23,634 tests), targeting 90%+ for production readiness.
+- **ECMAScript 2025 Compliance**: Currently at 81.6% Test262 language suite pass rate (19,107/23,634 tests), targeting 90%+ for production readiness.
 - **Native TypeScript Execution**: Full type checking and direct bytecode compilation - no transpilation, no tsc dependency.
 - **Safe Embedding**: Pluggable module resolution, execution quotas at VM level, Deno-like permission system for secure script execution in Go applications.
 - **Practical Performance**: Currently prioritizing correctness, but architecture supports type-driven optimizations (specialization, monomorphization, unchecked opcodes).
@@ -27,7 +27,7 @@ _Lights a cigarette._
 _Tosses 2/3 of the cigarette out the window._
 
 - **Replacing TypeScript Toolchains**: Don't expect this to replace your build pipeline. Go see [microsoft/typescript-go](https://github.com/microsoft/typescript-go) for that.
-- **JIT Performance**: I'm not going to make a JIT in Go, I'll stop just short of that. But we'll beat the fastest pure Go JS engines.
+- **JIT Performance**: I'm not going to make a JIT in Go, I'll stop just short of that. But we might beat the fastest pure Go JS engine.
 - **Legacy JavaScript Quirks**: Targeting modern ES2025 - we don't care about `with` statements or ancient ES3 edge cases.
 
 ## Example
