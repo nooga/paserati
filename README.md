@@ -1,3 +1,5 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/nooga/paserati)
+
 # PASERATI
 
 ![Paserati](paserati.png)
@@ -111,7 +113,7 @@ go test ./tests/...
 
 _Scratches a nasty red spot on the roof._
 
-**Test262 Compliance: 74.2%** (17,548/23,634 language suite tests passing)
+**Test262 Compliance: 82.3%** (19,268/23,410 language suite tests passing)
 
 The engine's running hot and crawling with bugs! Most ES2025 features are implemented and mostly working:
 
