@@ -7892,8 +7892,9 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 	// Link the frame to the generator object
 	if vm.frameCount > 0 {
 		vm.frames[vm.frameCount-1].generatorObj = genObj
-		// Mark this as a direct call boundary to prevent exception unwinding from destroying caller frames
-		vm.frames[vm.frameCount-1].isDirectCall = true
+		// Set isDirectCall = false to allow exceptions to propagate to caller's try-catch
+		// The frame will be cleaned up by exception unwinding, not by executeGeneratorPrologue
+		vm.frames[vm.frameCount-1].isDirectCall = false
 		if debugGeneratorStates {
 			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Linked frame to generator, frameCount=%d\n", vm.frameCount)
 		}
@@ -7920,6 +7921,15 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 			status, genObj.State.String(), vm.frameCount)
 	}
 
+	// Check for errors BEFORE cleaning up - let exception unwinding handle frame cleanup
+	if status != InterpretOK {
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Prologue failed with status=%d, leaving frame for exception unwinding\n", status)
+		}
+		// Don't clean up the frame - exception unwinding needs it intact
+		return status
+	}
+
 	// Zero out the generator frame to prevent stale state (like isSentinelFrame flags)
 	// from nested calls during the prologue affecting later execution
 	if vm.frameCount > 0 {
@@ -7929,21 +7939,13 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 		vm.frames[genFrameIdx] = CallFrame{}
 	}
 
-	// Clean up frame
+	// Clean up frame (only on success)
 	if vm.frameCount > 0 {
 		vm.frameCount--
 		vm.nextRegSlot -= regSize
 		if debugGeneratorStates {
 			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Cleaned up frame, frameCount now=%d\n", vm.frameCount)
 		}
-	}
-
-	// OpInitYield should have set state to SuspendedStart
-	if status != InterpretOK {
-		if debugGeneratorStates {
-			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Prologue failed with status=%d\n", status)
-		}
-		return status
 	}
 
 	// Verify state is now SuspendedStart
