@@ -151,21 +151,16 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 					fmt.Printf("[CALL] About to execute prologue for func=%s, state=%s\n", calleeFunc.Name, genObj.State.String())
 				}
 				prologueStatus := vm.executeGeneratorPrologue((*GeneratorObject)(genObj))
-				currentFrame.ip = callerIP
 				if debugPrepareCall {
 					fmt.Printf("[CALL] Prologue returned status=%d, state now=%s\n", prologueStatus, genObj.State.String())
 				}
 				if prologueStatus != InterpretOK {
-					// Prologue failed (e.g., destructuring null) - throw exception
-					if vm.currentException.Type() != TypeUndefined {
-						vm.throwException(vm.currentException)
-					} else if vm.lastThrownException.Type() != TypeUndefined {
-						vm.throwException(vm.lastThrownException)
-					} else {
-						vm.throwException(NewString("Generator initialization failed"))
-					}
+					// Prologue failed - throw the saved exception fresh (frame.ip already set to handler by throwException)
+					vm.throwException(vm.lastThrownException)
 					return false, nil // Exception was thrown
 				}
+				// Prologue succeeded - restore caller IP
+				currentFrame.ip = callerIP
 			}
 
 			callerRegisters[destReg] = genVal
@@ -215,21 +210,16 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 					fmt.Printf("[CALL] About to execute prologue for func=%s, state=%s\n", calleeFunc.Name, genObj.State.String())
 				}
 				prologueStatus := vm.executeGeneratorPrologue(genObj)
-				currentFrame.ip = callerIP
 				if debugPrepareCall {
 					fmt.Printf("[CALL] Prologue returned status=%d, state now=%s\n", prologueStatus, genObj.State.String())
 				}
 				if prologueStatus != InterpretOK {
-					// Prologue failed (e.g., destructuring null) - throw exception
-					if vm.currentException.Type() != TypeUndefined {
-						vm.throwException(vm.currentException)
-					} else if vm.lastThrownException.Type() != TypeUndefined {
-						vm.throwException(vm.lastThrownException)
-					} else {
-						vm.throwException(NewString("Generator initialization failed"))
-					}
+					// Prologue failed - throw the saved exception fresh (frame.ip already set to handler by throwException)
+					vm.throwException(vm.lastThrownException)
 					return false, nil // Exception was thrown
 				}
+				// Prologue succeeded - restore caller IP
+				currentFrame.ip = callerIP
 			}
 
 			if debugPrepareCall {

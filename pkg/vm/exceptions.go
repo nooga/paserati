@@ -71,11 +71,25 @@ func (vm *VM) throwException(value Value) {
 		fmt.Printf("[DEBUG exceptions.go] unwindException returned %v, frameCount=%d, unwinding=%v\n", handlerFound, vm.frameCount, vm.unwinding)
 	}
 	if !handlerFound {
-		// No handler found, terminate with uncaught exception
-		if debugExceptions {
-			fmt.Printf("[DEBUG exceptions.go] No handler found, calling handleUncaughtException\n")
+		// No handler found - check if we're in a generator prologue
+		// Generator prologues suppress uncaught exception printing
+		inGeneratorPrologue := false
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isGeneratorPrologue {
+			inGeneratorPrologue = true
 		}
-		vm.handleUncaughtException()
+
+		if !inGeneratorPrologue {
+			// Normal case - print uncaught exception
+			if debugExceptions {
+				fmt.Printf("[DEBUG exceptions.go] No handler found, calling handleUncaughtException\n")
+			}
+			vm.handleUncaughtException()
+		} else {
+			// Generator prologue case - don't print, let caller handle it
+			if debugExceptions {
+				fmt.Printf("[DEBUG exceptions.go] No handler found but in generator prologue, suppressing print\n")
+			}
+		}
 	}
 }
 

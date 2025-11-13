@@ -88,10 +88,11 @@ type CallFrame struct {
 	targetRegister    byte    // Which register in the CALLER the result should go into
 	thisValue         Value   // The 'this' value for method calls (undefined for regular function calls)
 	homeObject        Value   // The [[HomeObject]] for super property access (object where method is defined)
-	isConstructorCall bool    // Whether this frame was created by a constructor call (new expression)
-	newTargetValue    Value   // The constructor that was invoked with 'new' (for new.target)
-	isDirectCall      bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
-	isSentinelFrame   bool    // Whether this frame is a sentinel that should cause vm.run() to return immediately
+	isConstructorCall   bool    // Whether this frame was created by a constructor call (new expression)
+	newTargetValue      Value   // The constructor that was invoked with 'new' (for new.target)
+	isDirectCall        bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
+	isSentinelFrame     bool    // Whether this frame is a sentinel that should cause vm.run() to return immediately
+	isGeneratorPrologue bool    // Whether this frame is executing a generator prologue (suppresses uncaught exception printing)
 	argCount          int     // Actual number of arguments passed to this function (for arguments object)
 	args              []Value // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
 	argumentsObject   Value   // Cached arguments object (created on first access to 'arguments')
@@ -1823,14 +1824,18 @@ startExecution:
 			}
 
 			// If an exception was thrown and handled during prepareCall, the frame IP will have changed
+			// CRITICAL: Reload frame pointer first, as prepareCall may have modified vm.frames array
+			if vm.frameCount > 0 {
+				frame = &vm.frames[vm.frameCount-1]
+			}
+
 			// Check if exception handler changed the IP (even if unwinding was cleared by handleCatchBlock)
 			if !wasUnwinding && frame.ip != frameIPBeforeCall {
 				if debugExceptions {
 					fmt.Printf("[DEBUG vm.go] OpCall: Exception handler found, frame.ip changed from %d to %d, unwinding=%v\n",
 						frameIPBeforeCall, frame.ip, vm.unwinding)
 				}
-				// Exception handler was found - reload frame state and jump to handler
-				frame = &vm.frames[vm.frameCount-1]
+				// Exception handler was found - reload full frame state and jump to handler
 				closure = frame.closure
 				function = closure.Fn
 				code = function.Chunk.Code
@@ -6555,22 +6560,32 @@ startExecution:
 			// This will run parameter initialization and stop at OpInitYield
 			prologueStatus := vm.executeGeneratorPrologue(genObj)
 			if prologueStatus != InterpretOK {
-				// Prologue failed - the exception was thrown in the nested vm.run()
-				// We need to re-throw it in the outer vm.run() context so try-catch can catch it
+				// Prologue failed - executeGeneratorPrologue cleaned up everything
+				// VM state is now clean (unwinding=false, frame popped)
+				// Throw the saved exception fresh in the outer context
+
 				if debugGeneratorStates {
-					fmt.Printf("[GEN STATE] OpCreateGenerator: Prologue failed with status=%d, unwinding=%v, re-throwing\n", prologueStatus, vm.unwinding)
+					fmt.Printf("[GEN STATE] OpCreateGenerator: Prologue failed, throwing exception fresh in outer context\n")
 				}
 
 				frame.ip = callerIP
 
-				// Re-throw the exception in the outer context
-				if vm.currentException.Type() != TypeUndefined {
-					vm.throwException(vm.currentException)
-				} else if vm.lastThrownException.Type() != TypeUndefined {
-					vm.throwException(vm.lastThrownException)
-				} else {
-					vm.throwException(NewString("Generator initialization failed"))
+				// Throw the exception fresh (like OpThrow)
+				// This is a FRESH throw in the outer vm.run() context, not a re-throw
+				vm.throwException(vm.lastThrownException)
+
+				// Reload frame state after exception handling (handler may have been found)
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
 				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+
 				continue
 			}
 
@@ -7077,6 +7092,16 @@ startExecution:
 
 		// Check for exception unwinding after each instruction
 		if vm.unwinding {
+			// Check if we've already crossed a native boundary (direct call frame)
+			// If so, we should return immediately and let the caller handle it
+			// Do NOT call unwindException again - it was already called by throwException
+			if vm.unwindingCrossedNative {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] VM run loop: unwinding=true and crossedNative=true, returning to caller\n")
+				}
+				return InterpretRuntimeError, vm.currentException
+			}
+
 			if debugExceptions {
 				fmt.Printf("[DEBUG vm.go] VM run loop: unwinding=true at IP=%d, calling unwindException\n", ip)
 			}
@@ -7892,9 +7917,12 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 	// Link the frame to the generator object
 	if vm.frameCount > 0 {
 		vm.frames[vm.frameCount-1].generatorObj = genObj
-		// Set isDirectCall = false to allow exceptions to propagate to caller's try-catch
-		// The frame will be cleaned up by exception unwinding, not by executeGeneratorPrologue
-		vm.frames[vm.frameCount-1].isDirectCall = false
+		// Set isDirectCall = true to contain exception unwinding within the prologue
+		// This prevents nested vm.run() from unwinding into outer vm.run() frames
+		vm.frames[vm.frameCount-1].isDirectCall = true
+		// Set isGeneratorPrologue = true to suppress uncaught exception printing in nested run
+		// The caller will handle the exception and throw it fresh in the outer context
+		vm.frames[vm.frameCount-1].isGeneratorPrologue = true
 		if debugGeneratorStates {
 			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Linked frame to generator, frameCount=%d\n", vm.frameCount)
 		}
@@ -7917,16 +7945,61 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 	status, _ := vm.run()
 
 	if debugGeneratorStates {
-		fmt.Printf("[GEN STATE] executeGeneratorPrologue: After run: status=%d, state=%s, frameCount=%d\n",
-			status, genObj.State.String(), vm.frameCount)
+		fmt.Printf("[GEN STATE] executeGeneratorPrologue: After run: status=%d, state=%s, frameCount=%d, unwinding=%v\n",
+			status, genObj.State.String(), vm.frameCount, vm.unwinding)
 	}
 
-	// Check for errors BEFORE cleaning up - let exception unwinding handle frame cleanup
+	// ALWAYS clean up the prologue frame and VM state - prologue execution is isolated
+	// The prologue should not leave any trace in the VM state
 	if status != InterpretOK {
-		if debugGeneratorStates {
-			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Prologue failed with status=%d, leaving frame for exception unwinding\n", status)
+		// Prologue failed - save the exception before cleaning up
+		savedException := vm.currentException
+		if savedException.Type() == TypeUndefined {
+			savedException = vm.lastThrownException
 		}
-		// Don't clean up the frame - exception unwinding needs it intact
+		if savedException.Type() == TypeUndefined {
+			savedException = NewString("Generator initialization failed")
+		}
+
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Prologue failed, saving exception and cleaning up. frameCount before cleanup=%d\n", vm.frameCount)
+		}
+
+		// Clean up the prologue frame ONLY if it wasn't already popped by exception unwinding
+		// When isDirectCall=true, exception unwinding pops the frame and stops
+		// Check if the frame with generatorObj==genObj still exists
+		framePoppedByUnwinding := true
+		for i := 0; i < vm.frameCount; i++ {
+			if vm.frames[i].generatorObj == genObj {
+				framePoppedByUnwinding = false
+				break
+			}
+		}
+
+		if !framePoppedByUnwinding && vm.frameCount > 0 {
+			if debugGeneratorStates {
+				fmt.Printf("[GEN STATE] executeGeneratorPrologue: Frame not popped by unwinding, popping it now\n")
+			}
+			vm.frameCount--
+			vm.nextRegSlot -= regSize
+		} else {
+			if debugGeneratorStates {
+				fmt.Printf("[GEN STATE] executeGeneratorPrologue: Frame was already popped by exception unwinding\n")
+			}
+		}
+
+		// Clear VM exception state - the prologue execution is now "erased"
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+		vm.currentException = Null
+
+		// Return error with saved exception in lastThrownException
+		vm.lastThrownException = savedException
+
+		if debugGeneratorStates {
+			fmt.Printf("[GEN STATE] executeGeneratorPrologue: Cleaned up, frameCount=%d, will return error\n", vm.frameCount)
+		}
+
 		return status
 	}
 
