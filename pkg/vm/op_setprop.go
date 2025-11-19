@@ -5,6 +5,9 @@ import "fmt"
 const debugOpSetProp = false
 
 func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Value) (bool, InterpretResult, Value) {
+	if debugOpSetProp {
+		fmt.Printf("[DEBUG opSetProp] ENTRY: propName=%q, objType=%s, valueType=%s\n", propName, objVal.TypeName(), valueToSet.TypeName())
+	}
 
 	// Handle Proxy objects first
 	if objVal.Type() == TypeProxy {
@@ -134,6 +137,21 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		if po == vm.GlobalObject {
 			// Check if this property exists as a global in the heap
 			if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
+				// Check if the property is writable before updating
+				// Global constants like undefined, NaN, Infinity are non-writable
+				for _, f := range po.shape.fields {
+					if f.keyKind == KeyKindString && f.name == propName {
+						if !f.writable {
+							// Property is non-writable - throw TypeError
+							err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+							if excErr, ok := err.(ExceptionError); ok {
+								vm.throwException(excErr.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
+							}
+						}
+						break
+					}
+				}
 				// Update existing global in heap
 				vm.heap.Set(globalIdx, *valueToSet)
 				return true, InterpretOK, *valueToSet
@@ -220,10 +238,17 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 	// --- INLINE CACHE CHECK FOR PROPERTY WRITES (PlainObjects only) ---
 	if objVal.Type() == TypeObject {
+		if debugOpSetProp {
+			fmt.Printf("[DEBUG opSetProp] Object type is TypeObject, entering PlainObject path\n")
+		}
 		po := AsPlainObject(*objVal)
 
 		// Try cache lookup for existing property write (check accessor/writable flags)
 		if entry, hit := cache.lookupEntry(po.shape); hit {
+			if debugOpSetProp {
+				fmt.Printf("[DEBUG opSetProp] Cache HIT for prop=%q: shape=%p, offset=%d, writable=%v, isAccessor=%v\n",
+					propName, po.shape, entry.offset, entry.writable, entry.isAccessor)
+			}
 			// Cache hit! Check if this is an existing property update (fast path)
 			vm.cacheStats.totalHits++
 			switch cache.state {
@@ -238,11 +263,17 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			// Accessor? Defer to slow path to call setter
 			if !entry.isAccessor && entry.writable {
 				if entry.offset < len(po.properties) {
+					if debugOpSetProp {
+						fmt.Printf("[DEBUG opSetProp] Cache hit fast path for property %q, writable=%v\n", propName, entry.writable)
+					}
 					po.properties[entry.offset] = *valueToSet
 					return true, InterpretOK, *valueToSet
 				}
 			}
 			// Cache was stale or property layout changed, fall through to slow path
+			if debugOpSetProp {
+				fmt.Printf("[DEBUG opSetProp] Cache hit but not taking fast path: isAccessor=%v, writable=%v\n", entry.isAccessor, entry.writable)
+			}
 		}
 
 		// Cache miss or new property
@@ -300,9 +331,14 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 					}
 					return true, InterpretOK, *valueToSet
 				}
-				// No setter: ignore in non-strict
+				// No setter: throw TypeError in strict mode (we assume strict mode)
 				if debugOpSetProp {
-					fmt.Printf("[DEBUG opSetProp] Setter is undefined, ignoring\n")
+					fmt.Printf("[DEBUG opSetProp] Setter is undefined, throwing TypeError\n")
+				}
+				err := vm.NewTypeError(fmt.Sprintf("Cannot set property '%s' which has only a getter", propName))
+				if excErr, ok := err.(ExceptionError); ok {
+					vm.throwException(excErr.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
 				}
 				return true, InterpretOK, *valueToSet
 			}
@@ -318,6 +354,61 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		if debugOpSetProp {
 			fmt.Printf("[DEBUG opSetProp] No accessor found, using data property path\n")
 		}
+
+		// Check if property exists on object or prototype and is non-writable (strict mode - always throw)
+		propertyExists := false
+		for _, f := range po.shape.fields {
+			if f.keyKind == KeyKindString && f.name == propName {
+				propertyExists = true
+				if !f.writable {
+					// Property exists but is not writable - throw TypeError
+					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+				}
+				break
+			}
+		}
+
+		// If property doesn't exist on object, check prototype chain for non-writable data property
+		// Per ECMAScript spec, you cannot shadow a non-writable property from prototype
+		if !propertyExists {
+			protoChain := po.GetPrototype()
+			for protoChain.IsObject() {
+				protoObj := protoChain.AsPlainObject()
+				if protoObj == nil {
+					break
+				}
+				// Check if property exists on this prototype
+				for _, f := range protoObj.shape.fields {
+					if f.keyKind == KeyKindString && f.name == propName {
+						// Found property on prototype
+						if !f.isAccessor && !f.writable {
+							// Non-writable data property on prototype - cannot shadow it
+							err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+							if excErr, ok := err.(ExceptionError); ok {
+								vm.throwException(excErr.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
+							}
+						}
+						break
+					}
+				}
+				protoChain = protoObj.GetPrototype()
+			}
+		}
+
+		// Check if we're trying to add a new property to a non-extensible object
+		if !propertyExists && !po.IsExtensible() {
+			err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
+			if excErr, ok := err.(ExceptionError); ok {
+				vm.throwException(excErr.GetExceptionValue())
+				return false, InterpretRuntimeError, Undefined
+			}
+		}
+
 		po.SetOwn(propName, *valueToSet)
 
 		// Update cache if shape didn't change (existing property)
@@ -340,12 +431,52 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 	// --- Fallback for DictObject (no caching) ---
 	// Set property on DictObject or PlainObject
+	if debugOpSetProp {
+		fmt.Printf("[DEBUG opSetProp] Entering fallback path, objType=%d\n", objVal.Type())
+	}
 	switch objVal.Type() {
 	case TypeDictObject:
+		if debugOpSetProp {
+			fmt.Printf("[DEBUG opSetProp] Fallback: TypeDictObject path\n")
+		}
 		d := AsDictObject(*objVal)
+		// Check if property exists
+		_, exists := d.GetOwn(propName)
+		// Check if we're trying to add a new property to a non-extensible object
+		if !exists && !d.IsExtensible() {
+			err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
+			if excErr, ok := err.(ExceptionError); ok {
+				vm.throwException(excErr.GetExceptionValue())
+				return false, InterpretRuntimeError, Undefined
+			}
+		}
 		d.SetOwn(propName, *valueToSet)
 	default:
 		po := AsPlainObject(*objVal)
+		// Check if property exists
+		propertyExists := false
+		for _, f := range po.shape.fields {
+			if f.keyKind == KeyKindString && f.name == propName {
+				propertyExists = true
+				if !f.writable {
+					// Property exists but is not writable - throw TypeError
+					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+				}
+				break
+			}
+		}
+		// Check if we're trying to add a new property to a non-extensible object
+		if !propertyExists && !po.IsExtensible() {
+			err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
+			if excErr, ok := err.(ExceptionError); ok {
+				vm.throwException(excErr.GetExceptionValue())
+				return false, InterpretRuntimeError, Undefined
+			}
+		}
 		po.SetOwn(propName, *valueToSet)
 	}
 

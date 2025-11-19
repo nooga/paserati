@@ -42,3 +42,4 @@ test262/
 paserati-test262
 *.prof
 baseline.txt
+mcp-go-debugger.log

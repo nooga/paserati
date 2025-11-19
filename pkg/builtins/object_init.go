@@ -1737,6 +1737,8 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	// Mark the object as non-extensible
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		plainObj.SetExtensible(false)
+	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+		dictObj.SetExtensible(false)
 	}
 
 	return obj, nil

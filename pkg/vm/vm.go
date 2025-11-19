@@ -393,8 +393,25 @@ func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]in
 
 	// Also add all builtins as properties of the global object
 	// This makes them accessible via globalThis.propertyName
+	// Per ECMAScript spec, NaN, Infinity, and undefined must be non-writable, non-enumerable, non-configurable
+	nonWritableGlobals := map[string]bool{
+		"NaN":       true,
+		"Infinity":  true,
+		"undefined": true,
+	}
+
+	writable := false
+	enumerable := false
+	configurable := false
+
 	for name, value := range globals {
-		vm.GlobalObject.SetOwn(name, value)
+		if nonWritableGlobals[name] {
+			// Define non-writable, non-enumerable, non-configurable globals
+			vm.GlobalObject.DefineOwnProperty(name, value, &writable, &enumerable, &configurable)
+		} else {
+			// Other globals can be writable
+			vm.GlobalObject.SetOwn(name, value)
+		}
 	}
 
 	return nil

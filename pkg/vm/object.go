@@ -750,6 +750,8 @@ type DictObject struct {
 	Object
 	prototype  Value
 	properties map[string]Value
+	// Extensible flag - when false, no new properties can be added
+	extensible bool
 }
 
 // GetOwn looks up a direct property by name. Returns (value, true) if present.
@@ -798,6 +800,20 @@ func (d *DictObject) OwnKeys() []string {
 	// sort for deterministic order
 	sort.Strings(keys)
 	return keys
+}
+
+// IsExtensible returns whether new properties can be added to this object
+func (d *DictObject) IsExtensible() bool {
+	return d.extensible
+}
+
+// SetExtensible sets the extensible flag for this object
+// Per ECMAScript spec, once set to false, it cannot be set back to true
+func (d *DictObject) SetExtensible(extensible bool) {
+	if !extensible {
+		d.extensible = false
+	}
+	// Silently ignore attempts to set extensible back to true
 }
 
 // Get looks up a property by name, walking the prototype chain if necessary.
@@ -891,6 +907,6 @@ func NewDictObject(proto Value) Value {
 	if proto.IsObject() {
 		prototype = proto
 	}
-	dictObj := &DictObject{prototype: prototype, properties: make(map[string]Value)}
+	dictObj := &DictObject{prototype: prototype, properties: make(map[string]Value), extensible: true}
 	return Value{typ: TypeDictObject, obj: unsafe.Pointer(dictObj)}
 }

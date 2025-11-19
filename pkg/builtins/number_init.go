@@ -296,15 +296,18 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(primitiveValue), nil
 	})
 
-	// Add Number static properties
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("MAX_VALUE", vm.NumberValue(math.MaxFloat64))
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("MIN_VALUE", vm.NumberValue(math.SmallestNonzeroFloat64))
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("NaN", vm.NaN)
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("NEGATIVE_INFINITY", vm.NumberValue(math.Inf(-1)))
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("POSITIVE_INFINITY", vm.NumberValue(math.Inf(1)))
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("MAX_SAFE_INTEGER", vm.NumberValue(9007199254740991))  // 2^53 - 1
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("MIN_SAFE_INTEGER", vm.NumberValue(-9007199254740991)) // -(2^53 - 1)
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("EPSILON", vm.NumberValue(math.Nextafter(1.0, 2.0)-1.0))
+	// Add Number static properties (non-writable, non-enumerable, non-configurable per ECMAScript spec)
+	writable := false
+	enumerable := false
+	configurable := false
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("MAX_VALUE", vm.NumberValue(math.MaxFloat64), &writable, &enumerable, &configurable)
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("MIN_VALUE", vm.NumberValue(math.SmallestNonzeroFloat64), &writable, &enumerable, &configurable)
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("NaN", vm.NaN, &writable, &enumerable, &configurable)
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("NEGATIVE_INFINITY", vm.NumberValue(math.Inf(-1)), &writable, &enumerable, &configurable)
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("POSITIVE_INFINITY", vm.NumberValue(math.Inf(1)), &writable, &enumerable, &configurable)
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("MAX_SAFE_INTEGER", vm.NumberValue(9007199254740991), &writable, &enumerable, &configurable)  // 2^53 - 1
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("MIN_SAFE_INTEGER", vm.NumberValue(-9007199254740991), &writable, &enumerable, &configurable) // -(2^53 - 1)
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("EPSILON", vm.NumberValue(math.Nextafter(1.0, 2.0)-1.0), &writable, &enumerable, &configurable)
 
 	// Add Number static methods
 	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isNaN", vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) (vm.Value, error) {
