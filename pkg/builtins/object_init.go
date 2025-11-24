@@ -368,8 +368,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Add static methods
 		ctorPropsObj.Properties.SetOwn("create", vm.NewNativeFunction(2, false, "create", func(args []vm.Value) (vm.Value, error) {
-		return objectCreateWithVM(vmInstance, args)
-	}))
+			return objectCreateWithVM(vmInstance, args)
+		}))
 		ctorPropsObj.Properties.SetOwn("keys", vm.NewNativeFunction(1, false, "keys", func(args []vm.Value) (vm.Value, error) {
 			return objectKeysWithVM(vmInstance, args)
 		}))
@@ -892,10 +892,15 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	}
 
 	// Set the prototype
+	success := true
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		plainObj.SetPrototype(proto)
+		success = plainObj.SetPrototype(proto)
 	} else if dictObj := obj.AsDictObject(); dictObj != nil {
-		dictObj.SetPrototype(proto)
+		success = dictObj.SetPrototype(proto)
+	}
+
+	if !success {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of non-extensible object")
 	}
 
 	// Return the object

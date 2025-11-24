@@ -486,7 +486,8 @@ func (p *Parser) parseStatement() Statement {
 	case lexer.SWITCH:
 		return p.parseSwitchStatement()
 	case lexer.FUNCTION:
-		return p.parseFunctionDeclarationStatement()
+		stmt := p.parseFunctionDeclarationStatement()
+		return stmt
 	case lexer.ASYNC:
 		return p.parseAsyncFunctionDeclarationStatement()
 	case lexer.CLASS:

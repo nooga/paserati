@@ -213,11 +213,18 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		switch target.Type() {
 		case vm.TypeObject:
-			for _, key := range target.AsPlainObject().OwnKeys() {
+			obj := target.AsPlainObject()
+			// 1. String keys (all, including non-enumerable)
+			for _, key := range obj.OwnPropertyNames() {
 				arr.Append(vm.NewString(key))
 			}
+			// 2. Symbol keys
+			for _, sym := range obj.OwnSymbolKeys() {
+				arr.Append(sym)
+			}
 		case vm.TypeDictObject:
-			for _, key := range target.AsDictObject().OwnKeys() {
+			// DictObject only supports string keys for now
+			for _, key := range target.AsDictObject().OwnPropertyNames() {
 				arr.Append(vm.NewString(key))
 			}
 		case vm.TypeArray:

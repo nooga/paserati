@@ -906,6 +906,7 @@ type RunOptions struct {
 	ShowBytecode   bool
 	ShowCacheStats bool   // Show inline cache statistics
 	ModuleName     string // Module name to use (defaults to "__code_module__" if empty)
+	DisasmFilter   string // Filter string for disassembly (empty = all)
 }
 
 // RunCode runs source code with the given Paserati session and options.
@@ -939,14 +940,15 @@ func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []e
 			// Show bytecode if requested
 			if options.ShowBytecode {
 				fmt.Println("\n=== Bytecode ===")
-				fmt.Print(chunk.DisassembleChunk("<module>"))
+				// Use the filter from options
+				fmt.Print(chunk.DisassembleChunkFiltered("<module>", options.DisasmFilter))
 				fmt.Println("================")
 			}
 		}
 
 		// Show cache statistics if requested
 		if options.ShowCacheStats {
-			fmt.Println("\n=== Inline Cache Statistics ===")
+			fmt.Println("\n=== Inline Cache Statistics === ")
 			p.vmInstance.PrintCacheStats()
 			fmt.Println("===============================")
 		}
@@ -1037,7 +1039,6 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 
 	// Set the heap allocator in the main compiler
 	comp.SetHeapAlloc(heapAlloc)
-
 
 	// Set up global variables in VM using the coordinated indices
 	indexMap := heapAlloc.GetNameToIndexMap()

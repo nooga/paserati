@@ -8,6 +8,7 @@ import (
 	"os"
 	"paserati/pkg/errors"
 	"paserati/pkg/runtime"
+	"sort"
 	"strconv"
 	"sync"
 	"unsafe"
@@ -57,6 +58,7 @@ type ModuleContext struct {
 	executing   bool             // Whether module is currently being executed
 	globals     []Value          // Module-specific global variables (indices 0+ within module)
 	globalNames []string         // Module-specific global variable names (for debugging)
+	namespace   Value            // Cached namespace object (ES6 9.4.6 Module Namespace Exotic Object)
 }
 
 // PendingAction represents actions that should be performed after finally blocks complete
@@ -84,18 +86,18 @@ type CallFrame struct {
 	ip      int            // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
-	registers         []Value
-	targetRegister    byte    // Which register in the CALLER the result should go into
-	thisValue         Value   // The 'this' value for method calls (undefined for regular function calls)
-	homeObject        Value   // The [[HomeObject]] for super property access (object where method is defined)
+	registers           []Value
+	targetRegister      byte    // Which register in the CALLER the result should go into
+	thisValue           Value   // The 'this' value for method calls (undefined for regular function calls)
+	homeObject          Value   // The [[HomeObject]] for super property access (object where method is defined)
 	isConstructorCall   bool    // Whether this frame was created by a constructor call (new expression)
 	newTargetValue      Value   // The constructor that was invoked with 'new' (for new.target)
 	isDirectCall        bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
 	isSentinelFrame     bool    // Whether this frame is a sentinel that should cause vm.run() to return immediately
 	isGeneratorPrologue bool    // Whether this frame is executing a generator prologue (suppresses uncaught exception printing)
-	argCount          int     // Actual number of arguments passed to this function (for arguments object)
-	args              []Value // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
-	argumentsObject   Value   // Cached arguments object (created on first access to 'arguments')
+	argCount            int     // Actual number of arguments passed to this function (for arguments object)
+	args                []Value // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
+	argumentsObject     Value   // Cached arguments object (created on first access to 'arguments')
 
 	// For async native functions that can call bytecode
 	isNativeFrame    bool
@@ -1801,19 +1803,19 @@ startExecution:
 					calleeName = calleeVal.TypeName()
 				}
 				if calleeName == "deepEqual" || calleeName == "compareEquality" || calleeName == "compareObjectEquality" {
-					fmt.Printf("[CALL] %s args=%d this=<regular>\n", calleeName, argCount)
+					// fmt.Printf("[CALL] %s args=%d this=<regular>\n", calleeName, argCount)
 				}
 			}
 			args := callerRegisters[funcReg+1 : funcReg+1+byte(argCount)]
 
 			// DEBUG: Log what we're about to call
 			if calleeVal.Type() == TypeUndefined {
-				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCall] About to call undefined! funcReg=%d, IP=%d\n", funcReg, frame.ip)
+				// fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCall] About to call undefined! funcReg=%d, IP=%d\n", funcReg, frame.ip)
 				// Try to see what was supposed to be in this register
-				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCall] Register dump:\n")
-				for i := byte(0); i < 10 && i < byte(len(callerRegisters)); i++ {
-					fmt.Fprintf(os.Stderr, "  R%d: %s (%s)\n", i, callerRegisters[i].Inspect(), callerRegisters[i].TypeName())
-				}
+				// fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCall] Register dump:\n")
+				// for i := byte(0); i < 10 && i < byte(len(callerRegisters)); i++ {
+				// 	fmt.Fprintf(os.Stderr, "  R%d: %s (%s)\n", i, callerRegisters[i].Inspect(), callerRegisters[i].TypeName())
+				// }
 			}
 
 			// Save the current frame index to detect if it gets popped by a direct-call boundary
@@ -3343,24 +3345,32 @@ startExecution:
 
 					// Prevent massive memory allocations from large array indices
 					// JavaScript engines typically use sparse arrays for large indices
-					// For now, we'll reject extremely large indices to prevent memory exhaustion
+					// For indices beyond our dense array limit, store as a property instead
 					const maxArrayIndex = 16777216 // 2^24 - reasonable limit for dense arrays
 					if neededCapacity > maxArrayIndex {
-						frame.ip = ip
-						status := vm.runtimeError("Array index too large: %d (max %d)", idx, maxArrayIndex-1)
-						return status, Undefined
+						// Store as a property (sparse array behavior)
+						// Convert index to string for property key
+						key := fmt.Sprintf("%d", idx)
+						// Use opSetProp to handle property setting with accessor awareness
+						if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+							if status != InterpretOK {
+								return status, res
+							}
+							goto reloadFrame
+						}
+						// Don't update array length for out-of-range indices stored as properties
+					} else {
+						if cap(arr.elements) < neededCapacity {
+							newElements := make([]Value, len(arr.elements), neededCapacity)
+							copy(newElements, arr.elements)
+							arr.elements = newElements
+						}
+						for i := len(arr.elements); i < idx; i++ {
+							arr.elements = append(arr.elements, Undefined)
+						}
+						arr.elements = append(arr.elements, valueVal)
+						arr.length = len(arr.elements)
 					}
-
-					if cap(arr.elements) < neededCapacity {
-						newElements := make([]Value, len(arr.elements), neededCapacity)
-						copy(newElements, arr.elements)
-						arr.elements = newElements
-					}
-					for i := len(arr.elements); i < idx; i++ {
-						arr.elements = append(arr.elements, Undefined)
-					}
-					arr.elements = append(arr.elements, valueVal)
-					arr.length = len(arr.elements)
 				}
 
 			case TypeObject, TypeDictObject, TypeFunction: // Functions can have properties
@@ -4323,14 +4333,14 @@ startExecution:
 			calleeVal := callerRegisters[funcReg]
 			thisVal := callerRegisters[thisReg]
 
-			// DEBUG: Log if calling undefined
+			// DEBUG: Log what we're about to call
 			if calleeVal.Type() == TypeUndefined {
-				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] About to call undefined! funcReg=%d, thisReg=%d, IP=%d\n", funcReg, thisReg, frame.ip)
-				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] thisVal: %s (%s)\n", thisVal.Inspect(), thisVal.TypeName())
-				fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] Register dump:\n")
-				for i := byte(0); i < 10 && i < byte(len(callerRegisters)); i++ {
-					fmt.Fprintf(os.Stderr, "  R%d: %s (%s)\n", i, callerRegisters[i].Inspect(), callerRegisters[i].TypeName())
-				}
+				// fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] About to call undefined! funcReg=%d, thisReg=%d, IP=%d\n", funcReg, thisReg, frame.ip)
+				// fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] thisVal: %s (%s)\n", thisVal.Inspect(), thisVal.TypeName())
+				// fmt.Fprintf(os.Stderr, "[DEBUG vm.go OpCallMethod] Register dump:\n")
+				// for i := byte(0); i < 10 && i < byte(len(callerRegisters)); i++ {
+				// 	fmt.Fprintf(os.Stderr, "  R%d: %s (%s)\n", i, callerRegisters[i].Inspect(), callerRegisters[i].TypeName())
+				// }
 			}
 
 			// Targeted debug for deepEqual recursion investigation
@@ -8269,12 +8279,12 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
-	frame.isDirectCall = true          // Mark as direct call for proper return handling
-	frame.isSentinelFrame = false      // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = len(genObj.Args)  // Restore argument count
-	frame.args = genObj.Args           // Restore arguments
-	frame.argumentsObject = Undefined  // Initialize arguments object (will be created on first access)
-	frame.generatorObj = genObj        // Link frame to generator object
+	frame.isDirectCall = true         // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.argCount = len(genObj.Args) // Restore argument count
+	frame.args = genObj.Args          // Restore arguments
+	frame.argumentsObject = Undefined // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj       // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -8421,12 +8431,12 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
-	frame.isDirectCall = false         // Don't mark as direct call so exceptions can be caught
-	frame.isSentinelFrame = false      // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = len(genObj.Args)  // Restore argument count
-	frame.args = genObj.Args           // Restore arguments
-	frame.argumentsObject = Undefined  // Initialize arguments object (will be created on first access)
-	frame.generatorObj = genObj        // Link frame to generator object
+	frame.isDirectCall = false        // Don't mark as direct call so exceptions can be caught
+	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.argCount = len(genObj.Args) // Restore argument count
+	frame.args = genObj.Args          // Restore arguments
+	frame.argumentsObject = Undefined // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj       // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -8558,12 +8568,12 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
 	frame.isConstructorCall = false
-	frame.isDirectCall = false         // Don't mark as direct call so exceptions can be caught
-	frame.isSentinelFrame = false      // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = len(genObj.Args)  // Restore argument count
-	frame.args = genObj.Args           // Restore arguments
-	frame.argumentsObject = Undefined  // Initialize arguments object (will be created on first access)
-	frame.generatorObj = genObj        // Link frame to generator object
+	frame.isDirectCall = false        // Don't mark as direct call so exceptions can be caught
+	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.argCount = len(genObj.Args) // Restore argument count
+	frame.args = genObj.Args          // Restore arguments
+	frame.argumentsObject = Undefined // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj       // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -9271,38 +9281,99 @@ func (vm *VM) DebugPrintGlobals() {
 }
 
 func (vm *VM) createModuleNamespace(modulePath string) Value {
-	// fmt.Printf("// [VM DEBUG] createModuleNamespace: Creating namespace for '%s'\n", modulePath)
 
 	// Check if module context exists
 	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
-		// fmt.Printf("// [VM DEBUG] createModuleNamespace: Module context found, executed=%v, exports count=%d\n",
-		//	moduleCtx.executed, len(moduleCtx.exports))
 
-		// If module has been executed but exports not collected, collect them now
-		if moduleCtx.executed && len(moduleCtx.exports) == 0 {
-			// fmt.Printf("// [VM DEBUG] createModuleNamespace: Collecting exports for '%s'\n", modulePath)
+		// Always try to collect exports if they haven't been collected yet
+		// This is crucial for having complete export lists before caching
+		if len(moduleCtx.exports) == 0 {
+
 			vm.collectModuleExports(modulePath, moduleCtx)
-			// fmt.Printf("// [VM DEBUG] createModuleNamespace: After collection, exports count=%d\n", len(moduleCtx.exports))
+
+			// Invalidate cached namespace if we just collected exports for the first time
+			// This ensures we recreate the namespace with the collected exports
+			if !moduleCtx.namespace.IsUndefined() {
+
+				moduleCtx.namespace = Undefined
+			}
 		}
 
-		// Create a new namespace object
-		namespace := NewDictObject(DefaultObjectPrototype)
-		namespaceDict := namespace.AsDictObject()
+		// Return cached namespace if it exists
+		// We only cache after exports have been collected, so the cached object is always complete
+		if !moduleCtx.namespace.IsUndefined() {
+
+			return moduleCtx.namespace
+		}
+
+		// Create a new PlainObject with null prototype (Namespace Exotic Object)
+		// ES6 9.4.6: [[Prototype]] is null
+		namespace := NewObject(Null).AsPlainObject()
+		namespace.SetPrototype(Null)
+
+		// ES6 9.4.6: [[ToStringTag]] is "Module"
+		// This property is non-writable, non-enumerable, non-configurable (actually spec says @@toStringTag is usually on prototype,
+		// but for namespace objects it's often implemented as an own property or via internal slot.
+		// V8 puts it as an own property with { value: "Module", writable: false, enumerable: false, configurable: false })
+		// Wait, spec 26.3.1 says @@toStringTag is on Module Namespace Exotic Objects.
+		// Let's make it non-writable, non-enumerable, configurable: false
+		falseVal := false
+		trueVal := true
+		namespace.DefineOwnPropertyByKey(
+			NewSymbolKey(vm.SymbolToStringTag),
+			NewString("Module"),
+			&falseVal, // writable: false
+			&falseVal, // enumerable: false
+			&falseVal, // configurable: false
+		)
+
+		// Sort export names lexicographically
+		// ES6 9.4.6 [[OwnPropertyKeys]] returns keys in sorted order
+		exportNames := make([]string, 0, len(moduleCtx.exports))
+		for name := range moduleCtx.exports {
+			exportNames = append(exportNames, name)
+		}
+		sort.Strings(exportNames)
 
 		// Copy all module exports into the namespace object
-		for exportName, exportValue := range moduleCtx.exports {
-			// fmt.Printf("// [VM DEBUG] createModuleNamespace: Adding export '%s' = %s (type %d)\n",
-			//	exportName, exportValue.ToString(), int(exportValue.Type()))
-			namespaceDict.SetOwn(exportName, exportValue)
+		// Properties must be: writable: true (for live binding updates? No, namespace props are live bindings but the property itself is not writable by user)
+		// Actually, namespace properties are:
+		// [[Writable]]: true (to allow updates from the module system), but [[Set]] returns false.
+		// However, in our VM, we don't have separate internal slots for live bindings yet.
+		// For now, we'll make them writable: false, configurable: false, enumerable: true to mimic the user-facing behavior.
+		// Updates to the export will need to update this object (which we don't fully support yet for live bindings, but this is a step forward).
+
+		// TODO: Implement true live bindings. For now, we snapshot the values.
+		// To prevent user modification, we set writable: false.
+		for _, exportName := range exportNames {
+			exportValue := moduleCtx.exports[exportName]
+
+			namespace.DefineOwnProperty(
+				exportName,
+				exportValue,
+				&falseVal, // writable: false
+				&trueVal,  // enumerable: true
+				&falseVal, // configurable: false
+			)
 		}
 
-		// fmt.Printf("// [VM DEBUG] createModuleNamespace: Created namespace with %d properties\n", len(moduleCtx.exports))
-		return namespace
+		// Prevent extensions (Namespace objects are non-extensible)
+		namespace.SetExtensible(false)
+
+		// Cache the namespace object
+		namespaceValue := NewValueFromPlainObject(namespace)
+
+		moduleCtx.namespace = namespaceValue
+
+		return namespaceValue
 	}
 
-	// fmt.Printf("// [VM DEBUG] createModuleNamespace: Module '%s' not found, creating empty namespace\n", modulePath)
 	// Module not found or not executed - return empty namespace object
-	return NewDictObject(DefaultObjectPrototype)
+
+	namespace := NewObject(Null).AsPlainObject()
+	namespace.SetPrototype(Null)
+	namespace.SetExtensible(false)
+	return NewValueFromPlainObject(namespace)
 }
 
 // findExportValueInHeap searches for an exported value in the VM's global heap

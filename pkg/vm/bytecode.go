@@ -55,10 +55,10 @@ const (
 	OpExponent  OpCode = 32 // Rx Ry Rz: Rx = Ry ** Rz (Assuming next available number)
 
 	// Function/Call related
-	OpCall      OpCode = 19  // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
-	OpReturn    OpCode = 20  // Rx: Return value from register Rx.
-	OpNew       OpCode = 45  // Rx ConstructorReg ArgCount: Create new instance using ConstructorReg with ArgCount args, result in Rx
-	OpSpreadNew OpCode = 83  // Rx ConstructorReg SpreadArgReg: Create new instance using ConstructorReg with spread array as args, result in Rx
+	OpCall           OpCode = 19  // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
+	OpReturn         OpCode = 20  // Rx: Return value from register Rx.
+	OpNew            OpCode = 45  // Rx ConstructorReg ArgCount: Create new instance using ConstructorReg with ArgCount args, result in Rx
+	OpSpreadNew      OpCode = 83  // Rx ConstructorReg SpreadArgReg: Create new instance using ConstructorReg with spread array as args, result in Rx
 	OpTailCall       OpCode = 109 // Rx FuncReg ArgCount: Tail call (frame reuse)
 	OpTailCallMethod OpCode = 110 // Rx FuncReg ThisReg ArgCount: Tail call method (frame reuse with this)
 
@@ -93,34 +93,34 @@ const (
 	// --- END NEW ---
 
 	// --- NEW: Object Operations ---
-	OpMakeEmptyObject OpCode = 40 // Rx: Creates an empty object in Rx
-	OpGetProp         OpCode = 41 // Rx Ry NameIdx(16bit): Rx = Ry[NameIdx]
-	OpSetProp         OpCode = 42 // Rx Ry NameIdx(16bit): Rx[NameIdx] = Ry (Object in Rx, Value in Ry)
-	OpDeleteProp      OpCode = 62 // Rx Ry NameIdx(16bit): Rx = delete Ry[NameIdx] (returns boolean)
-	OpDeleteIndex     OpCode = 79 // Rx Ry Rz: Rx = delete Ry[Rz] (returns boolean)
-	OpDeleteGlobal    OpCode = 86 // Rx HeapIdx(16bit): Rx = delete global[HeapIdx] (returns boolean)
-	OpToPropertyKey   OpCode = 87 // Rx Ry: Rx = ToPropertyKey(Ry) - converts value to property key (string), calling toString() if needed
+	OpMakeEmptyObject  OpCode = 40 // Rx: Creates an empty object in Rx
+	OpGetProp          OpCode = 41 // Rx Ry NameIdx(16bit): Rx = Ry[NameIdx]
+	OpSetProp          OpCode = 42 // Rx Ry NameIdx(16bit): Rx[NameIdx] = Ry (Object in Rx, Value in Ry)
+	OpDeleteProp       OpCode = 62 // Rx Ry NameIdx(16bit): Rx = delete Ry[NameIdx] (returns boolean)
+	OpDeleteIndex      OpCode = 79 // Rx Ry Rz: Rx = delete Ry[Rz] (returns boolean)
+	OpDeleteGlobal     OpCode = 86 // Rx HeapIdx(16bit): Rx = delete global[HeapIdx] (returns boolean)
+	OpToPropertyKey    OpCode = 87 // Rx Ry: Rx = ToPropertyKey(Ry) - converts value to property key (string), calling toString() if needed
 	OpTypeofIdentifier OpCode = 88 // Rx NameIdx(16bit): Rx = typeof identifier - returns "undefined" if identifier doesn't exist (no ReferenceError)
 
 	// --- Private Field Operations (ECMAScript # fields) ---
-	OpGetPrivateField     OpCode = 91 // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
-	OpSetPrivateField     OpCode = 92 // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
+	OpGetPrivateField    OpCode = 91  // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
+	OpSetPrivateField    OpCode = 92  // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
 	OpSetPrivateAccessor OpCode = 106 // Rx GetterReg SetterReg NameIdx(16bit): Set up private getter/setter on Rx
 
 	// --- Type Guards for Runtime Validation ---
-	OpTypeGuardIterable      OpCode = 93 // Rx: Throw TypeError if Rx is not iterable
+	OpTypeGuardIterable       OpCode = 93 // Rx: Throw TypeError if Rx is not iterable
 	OpTypeGuardIteratorReturn OpCode = 94 // Rx: Throw TypeError if Rx (iterator.return() result) is not an object
 	// --- END Type Guards ---
 
 	// --- NEW: Method Calls and This Context ---
-	OpCallMethod OpCode = 43 // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
-	OpLoadThis      OpCode = 44 // Rx: Load 'this' value from current call context into register Rx
-	OpLoadSuper     OpCode = 111 // Rx: Load super base (homeObject.prototype) into register Rx (for super property access)
-	OpGetSuper      OpCode = 112 // Rx NameIdx(16bit): Rx = super.propertyName (super property access with static name)
-	OpSetSuper      OpCode = 113 // NameIdx(16bit) ValueReg: super.propertyName = ValueReg (super property assignment with static name)
-	OpGetSuperComputed OpCode = 114 // Rx KeyReg: Rx = super[KeyReg] (super property access with computed key)
-	OpSetSuperComputed OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
-	OpDefineMethodComputed OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
+	OpCallMethod             OpCode = 43  // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
+	OpLoadThis               OpCode = 44  // Rx: Load 'this' value from current call context into register Rx
+	OpLoadSuper              OpCode = 111 // Rx: Load super base (homeObject.prototype) into register Rx (for super property access)
+	OpGetSuper               OpCode = 112 // Rx NameIdx(16bit): Rx = super.propertyName (super property access with static name)
+	OpSetSuper               OpCode = 113 // NameIdx(16bit) ValueReg: super.propertyName = ValueReg (super property assignment with static name)
+	OpGetSuperComputed       OpCode = 114 // Rx KeyReg: Rx = super[KeyReg] (super property access with computed key)
+	OpSetSuperComputed       OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
+	OpDefineMethodComputed   OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 
 	// --- With Statement Support ---
@@ -183,9 +183,9 @@ const (
 	// --- END Phase 4a ---
 
 	// --- Phase 4a: Handle Pending Actions ---
-	OpHandlePending  OpCode = 67  // Handle pending actions after finally block
-	OpPushBreak      OpCode = 107 // TargetPC(16): Push break completion for try-finally
-	OpPushContinue   OpCode = 108 // TargetPC(16): Push continue completion for try-finally
+	OpHandlePending OpCode = 67  // Handle pending actions after finally block
+	OpPushBreak     OpCode = 107 // TargetPC(16): Push break completion for try-finally
+	OpPushContinue  OpCode = 108 // TargetPC(16): Push continue completion for try-finally
 	// --- END Phase 4a ---
 
 	// --- Module System ---
@@ -197,9 +197,9 @@ const (
 	OpGetArguments OpCode = 73 // Rx: Create arguments object from current function arguments, store in Rx
 
 	// --- Generator Support ---
-	OpCreateGenerator OpCode = 74 // Rx FuncReg: Create generator object from function in FuncReg, store in Rx
-	OpYield           OpCode = 75 // Rx, Ry: Suspend generator execution, yield value in Rx, store sent value in Ry
-	OpResumeGenerator OpCode = 76 // Internal: Resume generator execution (used by .next() calls)
+	OpCreateGenerator OpCode = 74  // Rx FuncReg: Create generator object from function in FuncReg, store in Rx
+	OpYield           OpCode = 75  // Rx, Ry: Suspend generator execution, yield value in Rx, store sent value in Ry
+	OpResumeGenerator OpCode = 76  // Internal: Resume generator execution (used by .next() calls)
 	OpYieldDelegated  OpCode = 100 // ResultReg, OutputReg, IteratorReg: Suspend generator for yield*, yield result as-is, store sent value in OutputReg, save iterator in IteratorReg for .return()/.throw() forwarding
 	OpInitYield       OpCode = 101 // No operands: Mark end of generator initialization prologue (executed during construction)
 
@@ -583,21 +583,57 @@ func (c *Chunk) AddConstant(v Value) uint16 {
 
 // DisassembleChunk returns a human-readable string representation of the chunk.
 func (c *Chunk) DisassembleChunk(name string) string {
-	var builder strings.Builder // Use strings.Builder for efficient concatenation
-	builder.WriteString(fmt.Sprintf("== %s ==\n", name))
-	offset := 0
-	for offset < len(c.Code) {
-		offset = c.disassembleInstruction(&builder, offset)
+	return c.DisassembleChunkFiltered(name, "")
+}
+
+// DisassembleChunkFiltered returns a human-readable string representation of the chunk,
+// optionally filtering by function name. It recurses into nested functions.
+func (c *Chunk) DisassembleChunkFiltered(name string, filter string) string {
+	var builder strings.Builder
+
+	// Determine if this chunk matches the filter
+	// If filter is empty, everything matches.
+	// If filter is set, we check if the name contains the filter string.
+	matches := filter == "" || strings.Contains(name, filter)
+
+	if matches {
+		builder.WriteString(fmt.Sprintf("== %s ==\n", name))
+		offset := 0
+		for offset < len(c.Code) {
+			offset = c.disassembleInstruction(&builder, offset)
+		}
+
+		// Add exception table information
+		if len(c.ExceptionTable) > 0 {
+			builder.WriteString("\n=== Exception Table ===\n")
+			for i, handler := range c.ExceptionTable {
+				builder.WriteString(fmt.Sprintf("Handler %d: TryStart=%d, TryEnd=%d, HandlerPC=%d, IsCatch=%t, IsFinally=%t\n",
+					i, handler.TryStart, handler.TryEnd, handler.HandlerPC, handler.IsCatch, handler.IsFinally))
+			}
+			builder.WriteString("=======================\n")
+		}
 	}
 
-	// Add exception table information
-	if len(c.ExceptionTable) > 0 {
-		builder.WriteString("\n=== Exception Table ===\n")
-		for i, handler := range c.ExceptionTable {
-			builder.WriteString(fmt.Sprintf("Handler %d: TryStart=%d, TryEnd=%d, HandlerPC=%d, IsCatch=%t, IsFinally=%t\n",
-				i, handler.TryStart, handler.TryEnd, handler.HandlerPC, handler.IsCatch, handler.IsFinally))
+	// Recursively disassemble functions found in constants
+	// We do this regardless of whether the current chunk matched,
+	// because a matching function might be nested inside a non-matching one.
+	for _, constant := range c.Constants {
+		if constant.IsFunction() {
+			fn := constant.AsFunction()
+			if fn != nil && fn.Chunk != nil {
+				fnName := fn.Name
+				if fnName == "" {
+					fnName = "<anonymous>"
+				}
+				subOutput := fn.Chunk.DisassembleChunkFiltered(fnName, filter)
+				if subOutput != "" {
+					if matches && builder.Len() > 0 {
+						builder.WriteString("\n")
+					}
+					builder.WriteString(subOutput)
+				}
+			}
 		}
-		builder.WriteString("=======================\n")
 	}
 
 	return builder.String()

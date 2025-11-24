@@ -43,6 +43,23 @@ func (t *Test262Initializer) InitTypes(ctx *builtins.TypeContext) error {
 		return err
 	}
 
+	// Define harness globals as Any to satisfy static checker
+	// The actual implementation is provided by harness files (assert.js, sta.js)
+	// This is critical for module tests where dependencies (self-imports) are checked
+	// by a fresh checker instance that doesn't see the harness script's scope.
+	if err := ctx.DefineGlobal("assert", types.Any); err != nil {
+		return err
+	}
+	if err := ctx.DefineGlobal("Test262Error", types.Any); err != nil {
+		return err
+	}
+	if err := ctx.DefineGlobal("$DONOTEVALUATE", types.Any); err != nil {
+		return err
+	}
+	if err := ctx.DefineGlobal("$ERROR", types.Any); err != nil {
+		return err
+	}
+
 	return nil
 }
 

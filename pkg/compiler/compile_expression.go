@@ -1300,6 +1300,11 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		}
 	}()
 
+	// Check for nil function (should not happen in valid parser output)
+	if node.Function == nil {
+		return BadRegister, NewCompileError(node, "compiler internal error: CallExpression.Function is nil")
+	}
+
 	// Check if this is a __setPrivateAccessor__ marker call (synthetic call from class compilation)
 	if memberExpr, ok := node.Function.(*parser.MemberExpression); ok {
 		if propIdent, ok := memberExpr.Property.(*parser.Identifier); ok {

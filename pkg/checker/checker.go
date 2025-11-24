@@ -499,7 +499,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				Body:                    nil, // Don't process body during hoisting
 				IsArrow:                 false,
 				IsGenerator:             funcLit.IsGenerator, // Detect generator functions during hoisting
-			IsAsync:                 funcLit.IsAsync,     // Detect async functions during hoisting
+				IsAsync:                 funcLit.IsAsync,     // Detect async functions during hoisting
 				AllowSelfReference:      false,               // Don't allow self-reference during hoisting
 				AllowOverloadCompletion: false,               // Don't check overloads during hoisting
 			}
@@ -3660,13 +3660,12 @@ func (c *Checker) extractInferredTypeArguments(genericType *types.GenericType, o
 // EnableModuleMode sets up the checker for module-aware type checking
 func (c *Checker) EnableModuleMode(modulePath string, moduleLoader modules.ModuleLoader) {
 	if c.env == nil {
-		// Create a base environment if none exists
+		// Create a base environment
 		c.env = NewEnvironment()
 	}
 
 	c.moduleEnv = NewModuleEnvironment(c.env, modulePath, moduleLoader)
 	c.moduleLoader = moduleLoader
-	debugPrintf("// [Checker] Enabled module mode for: %s\n", modulePath)
 }
 
 // IsModuleMode returns true if the checker is in module-aware mode

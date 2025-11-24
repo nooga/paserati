@@ -19,6 +19,7 @@ func main() {
 	jsOutputFile := flag.String("o", "", "Output file for JavaScript emission (default: input file with .js extension)")
 	cacheStatsFlag := flag.Bool("cache-stats", false, "Show inline cache statistics after execution")
 	bytecodeFlag := flag.Bool("bytecode", false, "Show compiled bytecode before execution")
+	disasmFilterFlag := flag.String("disasm-filter", "", "Filter disassembly output by function name")
 	astDumpFlag := flag.Bool("ast", false, "Show AST dump before type checking")
 	noTypecheckFlag := flag.Bool("no-typecheck", false, "Ignore TypeScript type errors (like paserati-test262)")
 
@@ -45,7 +46,7 @@ func main() {
 	// Normal execution mode
 	if *exprFlag != "" {
 		// Run the expression provided via -e flag
-		runExpressionWithTypes(*exprFlag, *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag)
+		runExpressionWithTypes(*exprFlag, *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag, *disasmFilterFlag)
 		return
 	}
 
@@ -54,10 +55,10 @@ func main() {
 		os.Exit(64) // Exit code 64: command line usage error
 	} else if flag.NArg() == 1 {
 		// Execute the script file provided as an argument
-		runFileWithTypes(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag)
+		runFileWithTypes(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag, *disasmFilterFlag)
 	} else {
 		// No file provided, start the REPL
-		runReplWithTypes(*cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag)
+		runReplWithTypes(*cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag, *disasmFilterFlag)
 	}
 }
 
@@ -79,10 +80,10 @@ func runExpression(expr string, showCacheStats bool, showBytecode bool) {
 	}
 }
 
-func runExpressionWithTypes(expr string, showCacheStats bool, showBytecode bool, ignoreTypes bool) {
+func runExpressionWithTypes(expr string, showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	paserati := driver.NewPaserati()
 	paserati.SetIgnoreTypeErrors(ignoreTypes)
-	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
+	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, DisasmFilter: disasmFilter}
 	value, errs := paserati.RunCode(expr, options)
 	ok := paserati.DisplayResult(expr, value, errs)
 	if !ok {
@@ -114,7 +115,7 @@ func runFile(filename string, showCacheStats bool, showBytecode bool) {
 	}
 }
 
-func runFileWithTypes(filename string, showCacheStats bool, showBytecode bool, ignoreTypes bool) {
+func runFileWithTypes(filename string, showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	sourceBytes, err := os.ReadFile(filename)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to read file '%s': %s\n", filename, err.Error())
@@ -123,7 +124,7 @@ func runFileWithTypes(filename string, showCacheStats bool, showBytecode bool, i
 	source := string(sourceBytes)
 	paserati := driver.NewPaserati()
 	paserati.SetIgnoreTypeErrors(ignoreTypes)
-	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, ModuleName: filename}
+	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, ModuleName: filename, DisasmFilter: disasmFilter}
 	value, errs := paserati.RunCode(source, options)
 	ok := paserati.DisplayResult(source, value, errs)
 	if !ok {
@@ -174,7 +175,7 @@ func runRepl(showCacheStats bool, showBytecode bool) {
 	}
 }
 
-func runReplWithTypes(showCacheStats bool, showBytecode bool, ignoreTypes bool) {
+func runReplWithTypes(showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	reader := bufio.NewReader(os.Stdin)
 	paserati := driver.NewPaserati()
 	paserati.SetIgnoreTypeErrors(ignoreTypes)
@@ -200,7 +201,7 @@ func runReplWithTypes(showCacheStats bool, showBytecode bool, ignoreTypes bool) 
 			value, errs := paserati.RunStringWithModules(line)
 			_ = paserati.DisplayResult(line, value, errs)
 		} else {
-			options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
+			options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, DisasmFilter: disasmFilter}
 			value, errs := paserati.RunCode(line, options)
 			_ = paserati.DisplayResult(line, value, errs)
 		}

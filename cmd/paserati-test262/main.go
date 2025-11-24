@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -33,12 +34,13 @@ func main() {
 		memprofile = flag.String("memprofile", "", "Write memory profile to file")
 		cpuprofile = flag.String("cpuprofile", "", "Write CPU profile to file")
 		gcstats    = flag.Bool("gcstats", false, "Print garbage collection statistics")
-		treeMode  = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
-		suiteMode = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
-		disasm    = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
+		treeMode   = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
+		suiteMode  = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
+		disasm     = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
 		dumpFile   = flag.String("dump", "", "Dump all test results to file (format: +test-path or -test-path)")
 		diffFile   = flag.String("diff", "", "Compare current results against baseline file and show differences")
 		strictOnly = flag.Bool("strict-only", false, "Skip tests with 'noStrict' flag (only run strict mode tests)")
+		jsonFlag   = flag.Bool("json", false, "Output results in JSON format")
 	)
 
 	flag.Parse()
@@ -71,7 +73,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Running Test262 suite from: %s\n", *testPath)
+	if !*jsonFlag {
+		fmt.Printf("Running Test262 suite from: %s\n", *testPath)
+	}
 
 	// Find test files
 	searchDir := testDir
@@ -81,7 +85,7 @@ func main() {
 		searchDir = strings.TrimSuffix(searchDir, "/**")
 	}
 
-	testFiles, err := findTestFiles(searchDir, *pattern, *subPath)
+	testFiles, err := findTestFiles(searchDir, *pattern, *subPath, *jsonFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error finding test files: %v\n", err)
 		os.Exit(1)
@@ -91,16 +95,33 @@ func main() {
 		testFiles = testFiles[:*limit]
 	}
 
-	fmt.Printf("Found %d test files\n", len(testFiles))
+	if !*jsonFlag {
+		fmt.Printf("Found %d test files\n", len(testFiles))
+	}
 
 	// Run tests
-	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *disasm, *strictOnly)
+	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *disasm, *strictOnly, *jsonFlag)
 
 	// Handle diff/dump modes
 	if *diffFile != "" {
 		handleDiffMode(fileResults, testDir, *diffFile, *dumpFile)
 	} else if *dumpFile != "" {
 		handleDumpMode(fileResults, testDir, *dumpFile)
+	} else if *jsonFlag {
+		// JSON output mode
+		output := struct {
+			Stats   TestStats    `json:"stats"`
+			Results []TestResult `json:"results"`
+		}{
+			Stats:   stats,
+			Results: fileResults,
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(output); err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+			os.Exit(1)
+		}
 	} else {
 		// Print summary, tree, or suite
 		if *suiteMode {
@@ -148,12 +169,13 @@ type TestStats struct {
 
 // TestResult represents the result of a single test
 type TestResult struct {
-	Path     string
-	Passed   bool
-	Failed   bool
-	TimedOut bool
-	Skipped  bool
-	Duration time.Duration
+	Path     string        `json:"path"`
+	Passed   bool          `json:"passed"`
+	Failed   bool          `json:"failed"`
+	TimedOut bool          `json:"timedOut"`
+	Skipped  bool          `json:"skipped"`
+	Duration time.Duration `json:"duration"`
+	Error    string        `json:"error,omitempty"` // Added for JSON output
 }
 
 // TreeNode represents a directory in the test tree with aggregated stats
@@ -166,7 +188,7 @@ type TreeNode struct {
 }
 
 // findTestFiles discovers test files matching the pattern
-func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
+func findTestFiles(testDir, pattern, subPath string, jsonMode bool) ([]string, error) {
 	var testFiles []string
 
 	err := filepath.Walk(testDir, func(path string, info os.FileInfo, err error) error {
@@ -194,7 +216,7 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 	// Sort test files for consistent ordering
 	sort.Strings(testFiles)
 
-	if subPath != "" {
+	if subPath != "" && !jsonMode {
 		fmt.Printf("Searching in subdirectory: %s\n", subPath)
 	}
 
@@ -202,7 +224,7 @@ func findTestFiles(testDir, pattern, subPath string) ([]string, error) {
 }
 
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool, strictOnly bool) (TestStats, []TestResult) {
+func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool, strictOnly bool, jsonMode bool) (TestStats, []TestResult) {
 	var stats TestStats
 	var fileResults []TestResult
 	stats.Total = len(testFiles)
@@ -253,7 +275,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 		}
 
 		// Initial display for tree mode only
-		if treeMode {
+		if treeMode && !jsonMode {
 			fmt.Print("\033[2J\033[H") // Clear screen
 			fmt.Println("\n=== Test262 Progress ===")
 			fmt.Printf("Starting %d tests...\n", len(testFiles))
@@ -274,7 +296,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 		}
 
 		testStart := time.Now()
-		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm, strictOnly)
+		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm, strictOnly, jsonMode)
 		testDuration := time.Since(testStart)
 
 		result := TestResult{
@@ -287,13 +309,16 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 			if strings.Contains(err.Error(), "timed out") {
 				stats.Timeouts++
 				result.TimedOut = true
-				if !treeMode {
+				if !treeMode && !jsonMode {
 					fmt.Printf("TIMEOUT %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
+				}
+				if jsonMode {
+					result.Error = err.Error()
 				}
 			} else {
 				stats.Failed++
 				result.Failed = true
-				if !treeMode {
+				if !treeMode && !jsonMode {
 					fmt.Printf("FAIL %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
 					if disasm {
 						// Attempt to compile and dump bytecode for debugging when enabled
@@ -330,6 +355,9 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 						}
 					}
 				}
+				if jsonMode {
+					result.Error = err.Error()
+				}
 			}
 		} else if passed {
 			stats.Passed++
@@ -339,7 +367,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 			stats.Skipped++
 			result.Skipped = true
 			// Don't print skips unless verbose
-			if verbose && !treeMode {
+			if verbose && !treeMode && !jsonMode {
 				fmt.Printf("SKIP %d/%d %s\n", i+1, stats.Total, testFile)
 			}
 		}
@@ -368,7 +396,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 			isLastTest := i == len(testFiles)-1
 
 			// Update display when directory changes, completes, or on last test
-			if (currentDir != lastDir && lastDir != "") || dirComplete || isLastTest {
+			if ((currentDir != lastDir && lastDir != "") || dirComplete || isLastTest) && !jsonMode {
 				// Clear screen and redraw tree
 				fmt.Print("\033[2J\033[H") // Clear screen and move cursor to top
 				fmt.Println("\n=== Test262 Progress ===")
@@ -397,8 +425,8 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 
 	stats.Duration = time.Since(startTime)
 
-	// Print final memory stats only if not in tree mode
-	if !treeMode {
+	// Print final memory stats only if not in tree mode and not in json mode
+	if !treeMode && !jsonMode {
 		var memStats runtime.MemStats
 		runtime.ReadMemStats(&memStats)
 		memUsageMB := float64(memStats.Alloc) / 1024 / 1024
@@ -412,7 +440,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 }
 
 // runSingleTest runs a single test file with timeout
-func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir string, testRoot string, disasm bool, strictOnly bool) (bool, error) {
+func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir string, testRoot string, disasm bool, strictOnly bool, jsonMode bool) (bool, error) {
 	// Read test file
 	content, err := os.ReadFile(testFile)
 	if err != nil {
@@ -478,11 +506,16 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			includeFiles = append(includeFiles, "assert.js")
 
 			// Check for async flag and auto-include required harness
-			if flags := extractFlags(hdr); len(flags) > 0 {
-				for _, flag := range flags {
-					if flag == "async" {
-						includeFiles = append(includeFiles, "doneprintHandle.js")
-						break
+			hdr := extractFrontmatterHeader(string(content))
+			isModule := false
+			if hdr != "" {
+				if flags := extractFlags(hdr); len(flags) > 0 {
+					for _, flag := range flags {
+						if flag == "async" {
+							includeFiles = append(includeFiles, "doneprintHandle.js")
+						} else if flag == "module" {
+							isModule = true
+						}
 					}
 				}
 			}
@@ -492,7 +525,8 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 				includeFiles = append(includeFiles, includeNames...)
 			}
 
-			// Load and prepend all includes
+			// Load includes
+			var harnessSource string
 			if len(includeFiles) > 0 {
 				for _, inc := range includeFiles {
 					incPath := filepath.Join(testRoot, "harness", inc)
@@ -507,8 +541,89 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 					builder.Write(incBytes)
 					builder.WriteString("\n")
 				}
+				harnessSource = builder.String()
+			}
+
+			if isModule {
+				// --- MODULE MODE: Execute harness as script, then test as module ---
+
+				// 1. Execute Harness (Script Mode)
+				if harnessSource != "" {
+					fmt.Printf("DEBUG: Executing harness for module test\n")
+					lx := lexer.NewLexer(harnessSource)
+					p := parser.NewParser(lx)
+					prog, parseErrs := p.ParseProgram()
+					if len(parseErrs) > 0 {
+						resultChan <- testResult{passed: false, err: fmt.Errorf("harness parse failed: %v", parseErrs[0])}
+						return
+					}
+
+					// Compile harness (Script mode - no EnableModuleMode yet)
+					chunk, compileErrs := paserati.CompileProgram(prog)
+					if len(compileErrs) > 0 {
+						resultChan <- testResult{passed: false, err: fmt.Errorf("harness compile failed: %v", compileErrs[0])}
+						return
+					}
+
+					paserati.SyncGlobalNamesFromCompiler()
+					_, runtimeErrs := paserati.InterpretChunk(chunk)
+					if len(runtimeErrs) > 0 {
+						resultChan <- testResult{passed: false, err: fmt.Errorf("harness execution failed: %v", runtimeErrs[0])}
+						return
+					}
+				}
+
+				// 2. Execute Test Body (Module Mode)
+				fmt.Printf("DEBUG: Executing module test body: %s\n", testFile)
+				paserati.EnableModuleMode(testFile)
+
+				lx := lexer.NewLexer(string(content))
+				p := parser.NewParser(lx)
+				prog, parseErrs := p.ParseProgram()
+				if len(parseErrs) > 0 {
+					if isNegativeTest(string(content)) {
+						resultChan <- testResult{passed: true, err: nil}
+						return
+					}
+					if !jsonMode {
+						errorsPkg.DisplayErrors(parseErrs, string(content))
+					}
+					resultChan <- testResult{passed: false, err: fmt.Errorf("module parse failed: %v", parseErrs[0])}
+					return
+				}
+
+				chunk, compileErrs := paserati.CompileProgram(prog)
+				if len(compileErrs) > 0 {
+					if isNegativeTest(string(content)) {
+						resultChan <- testResult{passed: true, err: nil}
+						return
+					}
+					if !jsonMode {
+						errorsPkg.DisplayErrors(compileErrs, string(content))
+					}
+					resultChan <- testResult{passed: false, err: fmt.Errorf("module compile failed: %v", compileErrs[0])}
+					return
+				}
+
+				paserati.SyncGlobalNamesFromCompiler()
+				_, runtimeErrs := paserati.InterpretChunk(chunk)
+				if len(runtimeErrs) > 0 {
+					if isNegativeTest(string(content)) {
+						resultChan <- testResult{passed: true, err: nil}
+						return
+					}
+					resultChan <- testResult{passed: false, err: fmt.Errorf("module execution failed: %v", runtimeErrs[0])}
+					return
+				}
+
+				// Success
+				resultChan <- testResult{passed: true, err: nil}
+				return
+
+			} else {
+				// --- SCRIPT MODE: Concatenate and execute as one script ---
 				builder.WriteString("\n// [test body]\n")
-				builder.WriteString(sourceWithIncludes)
+				builder.WriteString(string(content))
 				sourceWithIncludes = builder.String()
 			}
 		}
@@ -523,12 +638,15 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 				resultChan <- testResult{passed: true, err: nil}
 				return
 			}
-			errorsPkg.DisplayErrors(parseErrs, sourceWithIncludes)
+			if !jsonMode {
+				errorsPkg.DisplayErrors(parseErrs, sourceWithIncludes)
+			}
 			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", parseErrs[0])}
 			return
 		}
 
 		// Check if this is a module test and enable module mode if needed
+		// (Should not happen here if isModule logic above works, but kept for safety/fallback)
 		if hdr := extractFrontmatterHeader(string(content)); hdr != "" {
 			if flags := extractFlags(hdr); len(flags) > 0 {
 				for _, flag := range flags {
@@ -547,7 +665,9 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 				resultChan <- testResult{passed: true, err: nil}
 				return
 			}
-			errorsPkg.DisplayErrors(compileErrs, sourceWithIncludes)
+			if !jsonMode {
+				errorsPkg.DisplayErrors(compileErrs, sourceWithIncludes)
+			}
 			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", compileErrs[0])}
 			return
 		}
@@ -563,10 +683,12 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 				return
 			}
 			// Optionally show disassembly of the exact chunk that ran
-			if disasm {
+			if disasm && !jsonMode {
 				fmt.Println(chunk.DisassembleChunk(testFile))
 			}
-			errorsPkg.DisplayErrors(runtimeErrs, sourceWithIncludes)
+			if !jsonMode {
+				errorsPkg.DisplayErrors(runtimeErrs, sourceWithIncludes)
+			}
 			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", runtimeErrs[0])}
 			return
 		}

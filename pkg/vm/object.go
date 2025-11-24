@@ -589,6 +589,17 @@ func (o *PlainObject) OwnKeys() []string {
 	return keys
 }
 
+// OwnPropertyNames returns the list of all own string property names (including non-enumerable).
+func (o *PlainObject) OwnPropertyNames() []string {
+	keys := make([]string, 0, len(o.shape.fields))
+	for _, f := range o.shape.fields {
+		if f.keyKind == KeyKindString {
+			keys = append(keys, f.name)
+		}
+	}
+	return keys
+}
+
 // OwnSymbolKeys returns the list of own symbol keys in insertion order.
 func (o *PlainObject) OwnSymbolKeys() []Value {
 	symbols := make([]Value, 0)
@@ -644,9 +655,19 @@ func (o *PlainObject) GetPrototype() Value {
 }
 
 // SetPrototype sets the object's prototype.
-func (o *PlainObject) SetPrototype(proto Value) {
+// Returns true if successful, false if the operation failed (e.g. object is non-extensible)
+func (o *PlainObject) SetPrototype(proto Value) bool {
+	// ES6 9.1.2 [[SetPrototypeOf]]
+	current := o.prototype
+	if proto.Is(current) {
+		return true
+	}
+	if !o.extensible {
+		return false
+	}
 	o.prototype = proto
 	// TODO: Invalidate related caches
+	return true
 }
 
 // GetPrivateField retrieves a private field value (ECMAScript # fields)
@@ -802,18 +823,40 @@ func (d *DictObject) OwnKeys() []string {
 	return keys
 }
 
+// OwnPropertyNames returns the sorted list of own property names (alias for OwnKeys as DictObject has no non-enumerable props).
+func (d *DictObject) OwnPropertyNames() []string {
+	return d.OwnKeys()
+}
+
 // IsExtensible returns whether new properties can be added to this object
 func (d *DictObject) IsExtensible() bool {
 	return d.extensible
 }
 
 // SetExtensible sets the extensible flag for this object
-// Per ECMAScript spec, once set to false, it cannot be set back to true
 func (d *DictObject) SetExtensible(extensible bool) {
 	if !extensible {
 		d.extensible = false
 	}
-	// Silently ignore attempts to set extensible back to true
+}
+
+// GetPrototype returns the object's prototype.
+func (d *DictObject) GetPrototype() Value {
+	return d.prototype
+}
+
+// SetPrototype sets the object's prototype.
+func (d *DictObject) SetPrototype(proto Value) bool {
+	current := d.prototype
+	if proto.Is(current) {
+		return true
+	}
+	if !d.extensible {
+		return false
+	}
+	d.prototype = proto
+	// TODO: Invalidate related caches
+	return true
 }
 
 // Get looks up a property by name, walking the prototype chain if necessary.
@@ -852,17 +895,6 @@ func (d *DictObject) Get(name string) (Value, bool) {
 func (d *DictObject) Has(name string) bool {
 	_, exists := d.Get(name)
 	return exists
-}
-
-// GetPrototype returns the object's prototype.
-func (d *DictObject) GetPrototype() Value {
-	return d.prototype
-}
-
-// SetPrototype sets the object's prototype.
-func (d *DictObject) SetPrototype(proto Value) {
-	d.prototype = proto
-	// TODO: Invalidate related caches
 }
 
 // Define the shared default prototype for plain objects

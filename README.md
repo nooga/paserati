@@ -18,7 +18,7 @@ Paserati compiles TypeScript/JavaScript directly to bytecode for a register-base
 
 _Lights a cigarette._
 
-- **ECMAScript 2025 Compliance**: Currently at 81.6% Test262 language suite pass rate (19,107/23,634 tests), targeting 90%+ for production readiness.
+- **ECMAScript 2025 Compliance**: Currently at 83.9% Test262 language suite pass rate (19,643/23,410 tests), targeting 90%+ for production readiness.
 - **Native TypeScript Execution**: Full type checking and direct bytecode compilation - no transpilation, no tsc dependency.
 - **Safe Embedding**: Pluggable module resolution, execution quotas at VM level, Deno-like permission system for secure script execution in Go applications.
 - **Practical Performance**: Currently prioritizing correctness, but architecture supports type-driven optimizations (specialization, monomorphization, unchecked opcodes).
@@ -113,7 +113,7 @@ go test ./tests/...
 
 _Scratches a nasty red spot on the roof._
 
-**Test262 Compliance: 82.3%** (19,268/23,410 language suite tests passing)
+**Test262 Compliance: 83.9%** (19,643/23,410 language suite tests passing)
 
 The engine's running hot and crawling with bugs! Most ES2025 features are implemented and mostly working:
 
@@ -123,11 +123,13 @@ The engine's running hot and crawling with bugs! Most ES2025 features are implem
 - **Modules** - ESM imports/exports, dynamic `import()`, pluggable module resolution
 - **Classes** - Full ES2025 class syntax including private fields (`#private`), static blocks, inheritance
 - **Generators** - `function*`, `yield`, `yield*` delegation
+- **TCO** - Tail call optimization, elite.
 - **Advanced Types** - Generics, conditional types, mapped types, template literals, `infer` keyword
 - **Modern Operators** - Optional chaining (`?.`), nullish coalescing (`??`), logical assignment
 - **Destructuring** - Arrays, objects, rest/spread in all contexts
 - **Built-ins** - Proxy, Reflect, Map, Set, TypedArrays, ArrayBuffer, RegExp, Symbol, BigInt
 - **Eval** - Direct and indirect eval with proper scoping (bugged)
+- **Namespaces** - Kinda working. 
 
 Last time I checked it could run a pure TS library [date-fns](https://github.com/date-fns/date-fns) from source without any glaring issues. _Cough, not sure if it does so at every commit, but it did at the time of writing._
 
@@ -162,7 +164,7 @@ This project is licensed under the MIT License.
 
 This is a **one-man** project written in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI aimed at delivering a production-quality open source project.
 
-Google Gemini 2.5 Pro and Claude Sonnet 4/4.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
+Google Gemini 2.5/3.0 Pro and Claude Sonnet 4/4.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
 
 That fun sticker at the top of the README? It's made with GPT-4o's image generation.
 

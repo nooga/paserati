@@ -23,7 +23,7 @@ go.work
 *.swp
 *.swo 
 pkg/.DS_Store
-paserati
+/paserati
 paserati-minimal
 
 *.baseline
@@ -39,7 +39,7 @@ timing.json
 scratch/
 # Test262 test suite (cloned by setup-test262.sh)
 test262/
-paserati-test262
+/paserati-test262
 *.prof
 baseline.txt
 mcp-go-debugger.log

@@ -2,7 +2,6 @@ package vm
 
 import (
 	"fmt"
-	"os"
 	"unsafe"
 )
 
@@ -372,7 +371,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 
 		//fmt.Printf("DEBUG prepareCall: args=%v\n", args)
 		if debugCalls {
-			fmt.Printf("[DEBUG call.go] Calling native function %s, frameCount=%d\n", nativeFunc.Name, vm.frameCount)
+			// fmt.Printf("[DEBUG call.go] Calling native function %s, frameCount=%d\n", nativeFunc.Name, vm.frameCount)
 		}
 		// Set the current 'this' value for native function access and restore after call
 		oldThis := vm.currentThis
@@ -381,8 +380,8 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		result, err := nativeFunc.Fn(args)
 		vm.currentThis = oldThis
 		if debugCalls {
-			fmt.Printf("[DEBUG call.go] Native function %s returned, err=%v, frameCount=%d, unwinding=%v\n",
-				nativeFunc.Name, err != nil, vm.frameCount, vm.unwinding)
+			// fmt.Printf("[DEBUG call.go] Native function %s returned, err=%v, frameCount=%d, unwinding=%v\n",
+			// 	nativeFunc.Name, err != nil, vm.frameCount, vm.unwinding)
 		}
 
 		if err != nil {
@@ -480,23 +479,22 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		if calleeVal.Type() == TypeUndefined {
 			// Try to provide more context by checking recent bytecode
 			if debugCalls || true { // Temporarily always log undefined function calls
-				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Attempting to call undefined value\n")
-				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Frame count: %d\n", vm.frameCount)
-				// Show last 10 frames to see the recursion pattern
-				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Last 10 frames:\n")
-				start := vm.frameCount - 10
-				if start < 0 {
-					start = 0
-				}
-				for i := start; i < vm.frameCount; i++ {
-					frame := &vm.frames[i]
-					if frame.closure != nil && frame.closure.Fn != nil {
-						fmt.Fprintf(os.Stderr, "  [%d] %s\n", i, frame.closure.Fn.Name)
-					} else {
-						fmt.Fprintf(os.Stderr, "  [%d] <unknown>\n", i)
-					}
-				}
-				fmt.Fprintf(os.Stderr, "[DEBUG call.go] Stack trace:\n%s\n", vm.CaptureStackTrace())
+				// fmt.Fprintf(os.Stderr, "[DEBUG call.go] Attempting to call undefined value\n")
+				// fmt.Fprintf(os.Stderr, "[DEBUG call.go] Frame count: %d\n", vm.frameCount)
+				// fmt.Fprintf(os.Stderr, "[DEBUG call.go] Last 10 frames:\n") to see the recursion pattern
+
+				// start := vm.frameCount - 10
+				// if start < 0 {
+				// 	start = 0
+				// }
+				// for i := start; i < vm.frameCount; i++ {
+				// 	if vm.frames[i].closure != nil {
+				// 		fmt.Fprintf(os.Stderr, "  [%d] %s\n", i, vm.frames[i].closure.Fn.Name)
+				// 	} else {
+				// 		fmt.Fprintf(os.Stderr, "  [%d] <unknown>\n", i)
+				// 	}
+				// }
+				// fmt.Fprintf(os.Stderr, "[DEBUG call.go] Stack trace:\n%s\n", vm.CaptureStackTrace())
 			}
 		}
 
