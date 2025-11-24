@@ -3527,123 +3527,19 @@ startExecution:
 			destArray := AsArray(destVal)
 
 			// Handle different source types based on ECMAScript iterator protocol
-			switch sourceVal.Type() {
-			case TypeArray:
-				// Fast path for arrays
-				sourceArray := AsArray(sourceVal)
-				destArray.elements = append(destArray.elements, sourceArray.elements...)
-
-			case TypeString:
-				// Strings are iterable character by character
-				str := AsString(sourceVal)
-				for _, char := range str {
-					destArray.elements = append(destArray.elements, NewString(string(char)))
+			// Handle different source types based on ECMAScript iterator protocol
+			spreadArgs, err := vm.extractSpreadArguments(sourceVal)
+			if err != nil {
+				frame.ip = ip
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return InterpretRuntimeError, Undefined
 				}
-
-			case TypeSet:
-				// Sets are iterable - spread their values into the array
-				setObj := sourceVal.AsSet()
-				setObj.ForEach(func(value Value) {
-					destArray.elements = append(destArray.elements, value)
-				})
-
-			case TypeMap:
-				// Maps are iterable - spread [key, value] pairs into the array
-				mapObj := sourceVal.AsMap()
-				mapObj.ForEach(func(key Value, value Value) {
-					pairVal := NewArray()
-					pairArr := pairVal.AsArray()
-					pairArr.elements = []Value{key, value}
-					destArray.elements = append(destArray.elements, pairVal)
-				})
-
-			case TypeObject, TypeDictObject:
-				// Check if object has Symbol.iterator method
-				var iteratorMethod Value
-				var hasIterator bool
-
-				if sourceVal.Type() == TypeObject {
-					obj := sourceVal.AsPlainObject()
-					// Use proper symbol key lookup instead of string
-					iteratorMethod, hasIterator = obj.GetOwnByKey(NewSymbolKey(vm.SymbolIterator))
-				} else {
-					// DictObject doesn't support symbol keys
-					hasIterator = false
-				}
-
-				if hasIterator && (iteratorMethod.IsCallable() || iteratorMethod.IsFunction()) {
-					// Call the iterator method to get an iterator
-					iterator, err := vm.Call(iteratorMethod, sourceVal, []Value{})
-					if err != nil {
-						frame.ip = ip
-						status := vm.runtimeError("error calling Symbol.iterator: %v", err)
-						return status, Undefined
-					}
-
-					// Now iterate using the iterator's next() method
-					for {
-						// Get the next method
-						var nextMethod Value
-						var hasNext bool
-						if iterator.Type() == TypeObject {
-							nextMethod, hasNext = iterator.AsPlainObject().GetOwn("next")
-						} else if iterator.Type() == TypeDictObject {
-							nextMethod, hasNext = iterator.AsDictObject().GetOwn("next")
-						} else {
-							break
-						}
-
-						if !hasNext {
-							frame.ip = ip
-							status := vm.runtimeError("iterator does not have a next method")
-							return status, Undefined
-						}
-
-						// Call next()
-						result, err := vm.Call(nextMethod, iterator, []Value{})
-						if err != nil {
-							frame.ip = ip
-							status := vm.runtimeError("error calling next(): %v", err)
-							return status, Undefined
-						}
-
-						// Check if iteration is done
-						if result.Type() != TypeObject && result.Type() != TypeDictObject {
-							break
-						}
-
-						var doneVal Value
-						var valueVal Value
-						var hasDone, hasValue bool
-
-						if result.Type() == TypeObject {
-							resultObj := result.AsPlainObject()
-							doneVal, hasDone = resultObj.GetOwn("done")
-							valueVal, hasValue = resultObj.GetOwn("value")
-						} else {
-							resultDict := result.AsDictObject()
-							doneVal, hasDone = resultDict.GetOwn("done")
-							valueVal, hasValue = resultDict.GetOwn("value")
-						}
-
-						if hasDone && doneVal.IsBoolean() && doneVal.AsBoolean() {
-							break
-						}
-
-						// Get the value
-						if hasValue {
-							destArray.elements = append(destArray.elements, valueVal)
-						}
-					}
-				} else {
-					// Not iterable, skip (rather than error)
-				}
-
-			default:
-				// For other types (null, undefined, etc.), skip rather than error
-				// This matches JavaScript behavior where spreading non-iterables is usually a TypeError
-				// but we'll be more lenient for now
+				status := vm.runtimeError("Spread error: %s", err.Error())
+				return status, Undefined
 			}
+
+			destArray.elements = append(destArray.elements, spreadArgs...)
 
 			// Update array length
 			destArray.length = len(destArray.elements)
@@ -4498,6 +4394,32 @@ startExecution:
 			callerIP := ip // Pass the IP after the call instruction
 
 			constructorVal := callerRegisters[constructorReg]
+
+			// ES6 12.3.3.1.1 step 7: Validate that constructor is constructible
+			// This must throw TypeError for primitives and non-constructor objects
+			if !constructorVal.IsCallable() {
+				frame.ip = callerIP
+				vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Additional check for functions that are not constructors
+			// Arrow functions, async functions (non-generator), and plain generators cannot be constructors
+			if constructorVal.Type() == TypeFunction {
+				fn := AsFunction(constructorVal)
+				if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
+					frame.ip = callerIP
+					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+					return InterpretRuntimeError, Undefined
+				}
+			} else if constructorVal.Type() == TypeClosure {
+				cl := AsClosure(constructorVal)
+				if cl.Fn.IsArrowFunction || (cl.Fn.IsAsync && !cl.Fn.IsGenerator) {
+					frame.ip = callerIP
+					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+					return InterpretRuntimeError, Undefined
+				}
+			}
 
 			// Handle Proxy with construct trap
 			if constructorVal.Type() == TypeProxy {
@@ -7574,86 +7496,125 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		return args, nil
 
 	default:
-		// Check if the value has Symbol.iterator method (custom iterables)
-		if iterableVal.Type() == TypeObject || iterableVal.Type() == TypeDictObject {
-			var iteratorMethod Value
-			var hasIterator bool
+		// Generic Iterator Protocol (ES6)
+		// 1. Get Symbol.iterator method
+		iteratorMethod := Undefined
+		found := false
 
-			if iterableVal.Type() == TypeObject {
-				obj := iterableVal.AsPlainObject()
-				// Use the actual Symbol.iterator value to get the property
-				iteratorMethod, hasIterator = obj.GetOwnByKey(NewSymbolKey(vm.SymbolIterator))
-			} else {
-				// DictObject doesn't support symbol keys, so skip
-				hasIterator = false
-			}
+		iterKey := NewSymbolKey(vm.SymbolIterator)
+		current := iterableVal
 
-			if hasIterator && (iteratorMethod.IsCallable() || iteratorMethod.IsFunction()) {
-				// Call the iterator method to get an iterator
-				iterator, err := vm.Call(iteratorMethod, iterableVal, []Value{})
-				if err != nil {
-					return nil, fmt.Errorf("error calling Symbol.iterator: %v", err)
-				}
+		// Walk prototype chain to find Symbol.iterator
+		// We need to handle both data properties and accessors (getters)
+		for current.Type() != TypeNull && current.Type() != TypeUndefined {
+			if current.Type() == TypeObject {
+				obj := current.AsPlainObject()
 
-				// Now iterate using the iterator's next() method
-				var args []Value
-				for {
-					// Get the next method
-					var nextMethod Value
-					var hasNext bool
-					if iterator.Type() == TypeObject {
-						nextMethod, hasNext = iterator.AsPlainObject().GetOwn("next")
-					} else if iterator.Type() == TypeDictObject {
-						nextMethod, hasNext = iterator.AsDictObject().GetOwn("next")
-					} else {
-						break
-					}
-
-					if !hasNext {
-						return nil, fmt.Errorf("iterator does not have a next method")
-					}
-
-					// Call next()
-					result, err := vm.Call(nextMethod, iterator, []Value{})
+				// Check for accessor (getter)
+				if g, _, _, _, ok := obj.GetOwnAccessorByKey(iterKey); ok && g.Type() != TypeUndefined {
+					// Call getter with this=iterableVal
+					res, err := vm.Call(g, iterableVal, nil)
 					if err != nil {
-						return nil, fmt.Errorf("error calling next(): %v", err)
+						return nil, err // Propagate ExceptionError directly
 					}
-
-					// Check if iteration is done
-					if result.Type() != TypeObject && result.Type() != TypeDictObject {
-						break
-					}
-
-					var doneVal Value
-					var valueVal Value
-					var hasDone, hasValue bool
-
-					if result.Type() == TypeObject {
-						resultObj := result.AsPlainObject()
-						doneVal, hasDone = resultObj.GetOwn("done")
-						valueVal, hasValue = resultObj.GetOwn("value")
-					} else {
-						resultDict := result.AsDictObject()
-						doneVal, hasDone = resultDict.GetOwn("done")
-						valueVal, hasValue = resultDict.GetOwn("value")
-					}
-
-					if hasDone && doneVal.IsBoolean() && doneVal.AsBoolean() {
-						break
-					}
-
-					// Get the value
-					if hasValue {
-						args = append(args, valueVal)
-					}
+					iteratorMethod = res
+					found = true
+					break
 				}
 
-				return args, nil
+				// Check for data property
+				if val, ok := obj.GetOwnByKey(iterKey); ok {
+					iteratorMethod = val
+					found = true
+					break
+				}
+
+				current = obj.prototype
+			} else if current.Type() == TypeGenerator {
+				// Generator objects delegate to their prototype
+				genObj := current.AsGenerator()
+				if genObj.Prototype != nil {
+					current = NewValueFromPlainObject(genObj.Prototype)
+				} else {
+					break
+				}
+			} else if current.Type() == TypeAsyncGenerator {
+				// AsyncGenerator objects delegate to their prototype
+				genObj := current.AsAsyncGenerator()
+				if genObj.Prototype != nil {
+					current = NewValueFromPlainObject(genObj.Prototype)
+				} else {
+					break
+				}
+			} else if current.Type() == TypeDictObject {
+				// DictObject support (simplified)
+				// DictObjects don't typically use Symbols or complex prototype chains in this VM
+				// But we should check if it has the property
+				// Since DictObject doesn't support GetOwnByKey well, skip for now or rely on fallback
+				// If needed, we can add DictObject support later
+				current = current.AsDictObject().prototype
+			} else {
+				break
 			}
 		}
 
-		// For other types, only arrays and built-in iterables are supported for now
-		return nil, fmt.Errorf("spread argument must be an array or iterable (Array, String, Set, Map), got %s", iterableVal.TypeName())
+		if !found || (!iteratorMethod.IsCallable() && !iteratorMethod.IsFunction()) {
+			return nil, vm.NewTypeError(fmt.Sprintf("%s is not iterable", iterableVal.TypeName()))
+		}
+
+		// 2. Call iterator method to get the iterator object
+		iterator, err := vm.Call(iteratorMethod, iterableVal, []Value{})
+		if err != nil {
+			return nil, err
+		}
+
+		if iterator.Type() != TypeObject && iterator.Type() != TypeDictObject {
+			return nil, vm.NewTypeError("Iterator is not an object")
+		}
+
+		// 3. Iterate using next()
+		var args []Value
+		for {
+			// Get 'next' method - standard property lookup (handles prototype chain)
+			nextMethod, err := vm.GetProperty(iterator, "next")
+			if err != nil {
+				return nil, err
+			}
+
+			if !nextMethod.IsCallable() {
+				return nil, vm.NewTypeError("iterator.next is not a function")
+			}
+
+			// Call next()
+			result, err := vm.Call(nextMethod, iterator, []Value{})
+			if err != nil {
+				return nil, err
+			}
+
+			if result.Type() != TypeObject && result.Type() != TypeDictObject {
+				return nil, vm.NewTypeError("Iterator result is not an object")
+			}
+
+			// Get done property
+			doneVal, err := vm.GetProperty(result, "done")
+			if err != nil {
+				return nil, err
+			}
+
+			if doneVal.IsTruthy() {
+				break
+			}
+
+			// Get value property
+			val, err := vm.GetProperty(result, "value")
+			if err != nil {
+				return nil, err
+			}
+
+			args = append(args, val)
+		}
+
+		return args, nil
 	}
 }
 

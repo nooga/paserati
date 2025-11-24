@@ -1,5 +1,7 @@
 package vm
 
+import "fmt"
+
 // handleOpSpreadNew handles OpSpreadNew bytecode instruction for constructor calls with spread arguments
 func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, registers []Value) (InterpretResult, Value) {
 	destReg := code[*ip]
@@ -11,12 +13,45 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 	callerIP := *ip
 
 	constructorVal := callerRegisters[constructorReg]
+
+	// ES6 12.3.3.1.1 step 7: Validate that constructor is constructible
+	// This must throw TypeError for primitives and non-constructor objects
+	if !constructorVal.IsCallable() {
+		frame.ip = callerIP
+		vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+		return InterpretRuntimeError, Undefined
+	}
+
+	// Additional check for functions that are not constructors
+	// Arrow functions, async functions (non-generator), and plain generators cannot be constructors
+	if constructorVal.Type() == TypeFunction {
+		fn := AsFunction(constructorVal)
+		if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
+			frame.ip = callerIP
+			vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+			return InterpretRuntimeError, Undefined
+		}
+	} else if constructorVal.Type() == TypeClosure {
+		cl := AsClosure(constructorVal)
+		if cl.Fn.IsArrowFunction || (cl.Fn.IsAsync && !cl.Fn.IsGenerator) {
+			frame.ip = callerIP
+			vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+			return InterpretRuntimeError, Undefined
+		}
+	}
+
 	spreadArrayVal := callerRegisters[spreadArgReg]
 
 	// Extract arguments from spread array
 	spreadArgs, err := vm.extractSpreadArguments(spreadArrayVal)
 	if err != nil {
 		frame.ip = callerIP
+		// Check if it's a VM exception (TypeError, etc.) and propagate it
+		if ee, ok := err.(ExceptionError); ok {
+			vm.throwException(ee.GetExceptionValue())
+			return InterpretRuntimeError, Undefined
+		}
+		// Otherwise wrap as generic runtime error
 		status := vm.runtimeError("Spread constructor call error: %s", err.Error())
 		return status, Undefined
 	}
@@ -91,10 +126,10 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
 		newFrame.isConstructorCall = true
-		newFrame.isDirectCall = false       // Not a direct call (spread new)
-		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
+		newFrame.isDirectCall = false            // Not a direct call (spread new)
+		newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 		newFrame.newTargetValue = newTargetValue // Use propagated new.target
-		newFrame.argCount = argCount        // Store actual argument count for arguments object
+		newFrame.argCount = argCount             // Store actual argument count for arguments object
 		// Copy arguments for arguments object (before registers get mutated by function execution)
 		newFrame.args = make([]Value, argCount)
 		copy(newFrame.args, spreadArgs)
@@ -184,10 +219,10 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
 		newFrame.isConstructorCall = true
-		newFrame.isDirectCall = false       // Not a direct call (spread new)
-		newFrame.isSentinelFrame = false    // Clear sentinel flag when reusing frame
+		newFrame.isDirectCall = false            // Not a direct call (spread new)
+		newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 		newFrame.newTargetValue = newTargetValue // Use propagated new.target
-		newFrame.argCount = argCount        // Store actual argument count for arguments object
+		newFrame.argCount = argCount             // Store actual argument count for arguments object
 		// Copy arguments for arguments object (before registers get mutated by function execution)
 		newFrame.args = make([]Value, argCount)
 		copy(newFrame.args, spreadArgs)
