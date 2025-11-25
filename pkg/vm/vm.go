@@ -1870,7 +1870,11 @@ startExecution:
 			// If exception was thrown but not handled, unwinding will still be true
 			if !wasUnwinding && vm.unwinding {
 				if debugExceptions {
-					fmt.Printf("[DEBUG vm.go] OpCall: Exception thrown but not handled, unwinding=%v, frameCount=%d\n", vm.unwinding, vm.frameCount)
+					fmt.Printf("[DEBUG vm.go] OpCall: Exception thrown but not handled, unwinding=%v, frameCount=%d, crossedNative=%v\n", vm.unwinding, vm.frameCount, vm.unwindingCrossedNative)
+				}
+				// If we hit an isDirectCall boundary, return to let native code handle it
+				if vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
 				}
 				// Exception was thrown but not handled - reload frame state
 				frame = &vm.frames[vm.frameCount-1]
@@ -4338,6 +4342,26 @@ startExecution:
 				continue
 			}
 
+			// If exception was thrown but no error returned (e.g. generator prologue throw)
+			if !wasUnwinding && vm.unwinding {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCallMethod: Exception thrown during call, unwinding=%v, crossedNative=%v\n", vm.unwinding, vm.unwindingCrossedNative)
+				}
+				// If we hit an isDirectCall boundary, return to let native code handle it
+				if vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				// Reload frame state and continue unwinding
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
 			// Minimal targeted debug: observe results of [Symbol.iterator] and next()
 			if false && !shouldSwitch {
 				switch calleeVal.Type() {
@@ -5994,7 +6018,22 @@ startExecution:
 					// All frames unwound, uncaught exception
 					return InterpretRuntimeError, vm.currentException
 				}
-				continue // Let the unwinding process take control
+				// If we hit an isDirectCall boundary, return to let native code handle it
+				// This happens when exception propagates through generator prologue, eval, etc.
+				if vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				// Exception is still unwinding but hasn't hit a native boundary
+				// This shouldn't normally happen (unwinding should either find a handler
+				// or hit a boundary), but reload frame state just in case
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			} else {
 				// Exception was handled, synchronize all cached variables and continue execution
 				// The exception handler may have changed the frame, so resynchronize everything
@@ -8425,6 +8464,25 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	if vm.frameCount == 0 && vm.unwinding {
 		// Exception propagated through all frames - surface as ExceptionError
 		return Undefined, exceptionError{exception: vm.currentException}
+	}
+
+	// Check if unwinding hit the direct-call boundary (isDirectCall frame)
+	// In this case, we should return the exception instead of continuing
+	if vm.unwinding && vm.unwindingCrossedNative {
+		savedEx := vm.currentException
+		// Clean up VM state
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+		vm.currentException = Null
+		// Pop frames we pushed
+		if vm.frameCount > 0 {
+			vm.frameCount-- // Pop generator frame
+			vm.nextRegSlot -= regSize
+		}
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount-- // Pop sentinel frame
+		}
+		return Undefined, exceptionError{exception: savedEx}
 	}
 
 	// Execute the VM run loop - it will return when the exception is handled or propagates

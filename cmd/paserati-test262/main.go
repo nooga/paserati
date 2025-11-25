@@ -549,7 +549,6 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 
 				// 1. Execute Harness (Script Mode)
 				if harnessSource != "" {
-					fmt.Printf("DEBUG: Executing harness for module test\n")
 					lx := lexer.NewLexer(harnessSource)
 					p := parser.NewParser(lx)
 					prog, parseErrs := p.ParseProgram()
@@ -574,7 +573,6 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 				}
 
 				// 2. Execute Test Body (Module Mode)
-				fmt.Printf("DEBUG: Executing module test body: %s\n", testFile)
 				paserati.EnableModuleMode(testFile)
 
 				lx := lexer.NewLexer(string(content))

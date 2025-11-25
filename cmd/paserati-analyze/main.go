@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -36,9 +38,23 @@ type Output struct {
 }
 
 func main() {
+	// Read all input and find JSON start (tests may print to stdout)
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Find the start of JSON (first '{')
+	jsonStart := bytes.IndexByte(input, '{')
+	if jsonStart == -1 {
+		fmt.Fprintf(os.Stderr, "Error: no JSON object found in input\n")
+		os.Exit(1)
+	}
+	input = input[jsonStart:]
+
 	var output Output
-	decoder := json.NewDecoder(os.Stdin)
-	if err := decoder.Decode(&output); err != nil {
+	if err := json.Unmarshal(input, &output); err != nil {
 		fmt.Fprintf(os.Stderr, "Error decoding JSON input: %v\n", err)
 		os.Exit(1)
 	}
