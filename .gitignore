@@ -43,3 +43,4 @@ test262/
 *.prof
 baseline.txt
 mcp-go-debugger.log
+dome.js

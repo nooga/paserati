@@ -1361,6 +1361,7 @@ func (p *Parser) parseVarStatement() Statement {
 		return p.parseArrayDestructuringDeclaration(varToken, false, true)
 	case lexer.LBRACE:
 		// Object destructuring: var {a, b} = ...
+		fmt.Printf("// [PARSER DEBUG] parseVarStatement: detected LBRACE, calling parseObjectDestructuringDeclaration\n")
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
 		// Regular identifier case (including contextual keywords in non-strict mode)
@@ -4516,43 +4517,66 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 
 		// For regular properties, we support simple property destructuring
 		// {name, age} = obj (shorthand) or {name: localName} = obj (explicit target)
+		// Also support computed keys: {[key]: value} = obj
 
-		// The key should be an identifier for simple property access
-		keyIdent, ok := pair.Key.(*Identifier)
-		if !ok {
-			msg := fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", pair.Key.String())
+		var key Expression
+		var keyIdent *Identifier
+		var target Expression
+		var defaultValue Expression
+
+		// Check if the key is an identifier or computed property name
+		if ident, ok := pair.Key.(*Identifier); ok {
+			key = ident
+			keyIdent = ident
+		} else if computedKey, ok := pair.Key.(*ComputedPropertyName); ok {
+			key = computedKey
+			// Computed keys cannot use shorthand syntax
+			keyIdent = nil
+		} else {
+			msg := fmt.Sprintf("invalid destructuring property key: %s (expected identifier or computed property)", pair.Key.String())
 			p.addError(objectLit.Token, msg)
 			return nil
 		}
 
-		var target Expression
-		var defaultValue Expression
-
 		// Check for different patterns:
-		// 1. {name} - shorthand without default
-		// 2. {name = defaultVal} - shorthand with default (value is assignment expr)
-		// 3. {name: localVar} - explicit target without default
-		// 4. {name: localVar = defaultVal} - explicit target with default
+		// 1. {name} - shorthand without default (only for identifiers)
+		// 2. {name = defaultVal} - shorthand with default (only for identifiers)
+		// 3. {name: localVar} or {[key]: localVar} - explicit target without default
+		// 4. {name: localVar = defaultVal} or {[key]: localVar = defaultVal} - explicit target with default
 
-		if valueIdent, ok := pair.Value.(*Identifier); ok && valueIdent.Value == keyIdent.Value {
-			// Pattern 1: Shorthand without default {name}
-			target = keyIdent
-			defaultValue = nil
-		} else if assignExpr, ok := pair.Value.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
-			// Check if this is shorthand with default or explicit with default
-			if leftIdent, ok := assignExpr.Left.(*Identifier); ok && leftIdent.Value == keyIdent.Value {
-				// Pattern 2: Shorthand with default {name = defaultVal}
+		if keyIdent != nil {
+			// Only identifiers can use shorthand syntax
+			if valueIdent, ok := pair.Value.(*Identifier); ok && valueIdent.Value == keyIdent.Value {
+				// Pattern 1: Shorthand without default {name}
 				target = keyIdent
-				defaultValue = assignExpr.Value
+				defaultValue = nil
+			} else if assignExpr, ok := pair.Value.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+				// Check if this is shorthand with default or explicit with default
+				if leftIdent, ok := assignExpr.Left.(*Identifier); ok && leftIdent.Value == keyIdent.Value {
+					// Pattern 2: Shorthand with default {name = defaultVal}
+					target = keyIdent
+					defaultValue = assignExpr.Value
+				} else {
+					// Pattern 4: Explicit target with default {name: localVar = defaultVal}
+					target = assignExpr.Left
+					defaultValue = assignExpr.Value
+				}
 			} else {
-				// Pattern 4: Explicit target with default {name: localVar = defaultVal}
-				target = assignExpr.Left
-				defaultValue = assignExpr.Value
+				// Pattern 3: Explicit target without default {name: localVar}
+				target = pair.Value
+				defaultValue = nil
 			}
 		} else {
-			// Pattern 3: Explicit target without default {name: localVar}
-			target = pair.Value
-			defaultValue = nil
+			// Computed keys must use explicit target syntax
+			if assignExpr, ok := pair.Value.(*AssignmentExpression); ok && assignExpr.Operator == "=" {
+				// Pattern 4: Computed with default {[key]: localVar = defaultVal}
+				target = assignExpr.Left
+				defaultValue = assignExpr.Value
+			} else {
+				// Pattern 3: Computed without default {[key]: localVar}
+				target = pair.Value
+				defaultValue = nil
+			}
 		}
 
 		// Validate that the target is a valid destructuring target
@@ -4563,7 +4587,7 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 		}
 
 		destProperty := &DestructuringProperty{
-			Key:     keyIdent,
+			Key:     key,
 			Target:  target,
 			Default: defaultValue,
 		}
@@ -4835,14 +4859,31 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 			propertyKey = &ComputedPropertyName{
 				Expr: propertyKey,
 			}
-		} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.STRING) || p.curTokenIs(lexer.NUMBER) || p.curTokenIs(lexer.BIGINT) {
-			// Regular property name (identifier, string, number, or bigint)
+		} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.STRING) || p.curTokenIs(lexer.NUMBER) || p.curTokenIs(lexer.BIGINT) ||
+			// Allow all keywords as property names (JavaScript allows reserved words as property names)
+			p.curTokenIs(lexer.BREAK) || p.curTokenIs(lexer.CASE) || p.curTokenIs(lexer.CATCH) ||
+			p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.CONST) || p.curTokenIs(lexer.CONTINUE) ||
+			p.curTokenIs(lexer.DEFAULT) || p.curTokenIs(lexer.DO) || p.curTokenIs(lexer.ELSE) ||
+			p.curTokenIs(lexer.EXTENDS) || p.curTokenIs(lexer.FINALLY) || p.curTokenIs(lexer.FOR) ||
+			p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.IF) || p.curTokenIs(lexer.NEW) ||
+			p.curTokenIs(lexer.RETURN) || p.curTokenIs(lexer.SWITCH) || p.curTokenIs(lexer.THIS) ||
+			p.curTokenIs(lexer.THROW) || p.curTokenIs(lexer.TRY) || p.curTokenIs(lexer.TYPEOF) ||
+			p.curTokenIs(lexer.VAR) || p.curTokenIs(lexer.VOID) || p.curTokenIs(lexer.WHILE) ||
+			p.curTokenIs(lexer.WITH) || p.curTokenIs(lexer.YIELD) || p.curTokenIs(lexer.GET) ||
+			p.curTokenIs(lexer.SET) || p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.AWAIT) ||
+			p.curTokenIs(lexer.DELETE) || p.curTokenIs(lexer.IN) || p.curTokenIs(lexer.OF) ||
+			p.curTokenIs(lexer.INSTANCEOF) || p.curTokenIs(lexer.STATIC) || p.curTokenIs(lexer.IMPORT) ||
+			p.curTokenIs(lexer.EXPORT) || p.curTokenIs(lexer.ASYNC) || p.curTokenIs(lexer.FROM) ||
+			p.curTokenIs(lexer.AS) || p.curTokenIs(lexer.NULL) || p.curTokenIs(lexer.TRUE) ||
+			p.curTokenIs(lexer.FALSE) || p.curTokenIs(lexer.UNDEFINED) {
+			// Regular property name (identifier, keyword, string, number, or bigint)
 			if p.curTokenIs(lexer.NUMBER) {
 				propertyKey = p.parseNumberLiteral()
 			} else if p.curTokenIs(lexer.BIGINT) {
 				propertyKey = p.parseBigIntLiteral()
 			} else {
 				propertyKey = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+				fmt.Printf("// [PARSER DEBUG] Parsed property key: token=%s, literal=%s\n", p.curToken.Type, p.curToken.Literal)
 			}
 		} else {
 			p.addError(p.curToken, fmt.Sprintf("expected property name, got %s", p.curToken.Type))

@@ -1,0 +1,1050 @@
+Running Test262 suite from: test262
+Searching in subdirectory: language/expressions/assignment
+Found 485 test files
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: TypeError: Cannot read property 'value' of undefined
+    at <script> (<script>:1:1)
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 5/485 test262/test/language/expressions/assignment/11.13.1-4-1.js - test failed: Runtime Error at 1:1: Uncaught exception: TypeError: Cannot read property 'value' of undefined
+    at <script> (<script>:1:1)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 6/485 test262/test/language/expressions/assignment/11.13.1-4-14-s.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 11/485 test262/test/language/expressions/assignment/11.13.1-4-6-s.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: TypeError: Cannot assign to read only property 'bar'
+    at <script> (<script>:1:1)
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 15/485 test262/test/language/expressions/assignment/8.14.4-8-b_1.js - test failed: Runtime Error at 1:1: Uncaught exception: TypeError: Cannot assign to read only property 'bar'
+    at <script> (<script>:1:1)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: #1: scope.x === 2. Actual: undefined
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 23/485 test262/test/language/expressions/assignment/S11.13.1_A5_T1.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: #1: scope.x === 2. Actual: undefined
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: #1: scope.x === 2. Actual: undefined
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 24/485 test262/test/language/expressions/assignment/S11.13.1_A5_T2.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: #1: scope.x === 2. Actual: undefined
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: #1: innerX === undefined. Actual: 1
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 26/485 test262/test/language/expressions/assignment/S11.13.1_A6_T1.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: #1: innerX === undefined. Actual: 1
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: #1: innerX === 2. Actual: 1
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 27/485 test262/test/language/expressions/assignment/S11.13.1_A6_T2.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: #1: innerX === 2. Actual: 1
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: TypeError: Cannot assign to read only property 'E'
+    at <script> (<script>:15:1)
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 30/485 test262/test/language/expressions/assignment/S8.12.4_A1.js - test failed: Runtime Error at 1:1: Uncaught exception: TypeError: Cannot assign to read only property 'E'
+    at <script> (<script>:15:1)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 33/485 test262/test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval--1.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 34/485 test262/test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval-.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 35/485 test262/test/language/expressions/assignment/destructuring/default-expr-throws-iterator-return-get-throws.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Actual [source, target, target-key, target-key-tostring, set] and expected [source, iterator, target, target-key, iterator-step, iterator-done, target-key-tostring, set] should have the same contents. 
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 37/485 test262/test/language/expressions/assignment/destructuring/iterator-destructuring-property-reference-target-evaluation-order.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Actual [source, target, target-key, target-key-tostring, set] and expected [source, iterator, target, target-key, iterator-step, iterator-done, target-key-tostring, set] should have the same contents. 
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [sourceKey] (only simple identifiers supported)
+  [90m294: [0m  ({
+          [31m^[0m
+[90m    at <eval>:294:4[0m
+
+[34mPS1003[0m [1m[31m[ERROR][0m: no prefix parse function for ) found
+  [90m296: [0m  } = source);
+                   [31m^[0m
+[90m    at <eval>:296:13[0m
+
+FAIL 38/485 test262/test/language/expressions/assignment/destructuring/keyed-destructuring-property-reference-target-evaluation-order-with-bindings.js - test failed: Syntax Error at 294:4: invalid destructuring property key: [sourceKey] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [sourceKey()] (only simple identifiers supported)
+  [90m288: [0m({[sourceKey()]: target()[targetKey()]} = source());
+        [31m^[0m
+[90m    at <eval>:288:2[0m
+
+[34mPS1003[0m [1m[31m[ERROR][0m: no prefix parse function for ) found
+  [90m288: [0m({[sourceKey()]: target()[targetKey()]} = source());
+                                                         [31m^[0m
+[90m    at <eval>:288:51[0m
+
+FAIL 39/485 test262/test/language/expressions/assignment/destructuring/keyed-destructuring-property-reference-target-evaluation-order.js - test failed: Syntax Error at 288:2: invalid destructuring property key: [sourceKey()] (only simple identifiers supported)
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = [arguments = 4, eval = 5] = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 53/485 test262/test/language/expressions/assignment/dstr/array-elem-init-simple-no-strict.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 57/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-get-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 58/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-nrml-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 59/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-nrml-close-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 60/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-nrml-close-skip.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 61/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-nrml-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 62/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 63/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 64/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-rtrn-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 65/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-thrw-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 66/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-thrw-close-skip.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 67/485 test262/test/language/expressions/assignment/dstr/array-elem-iter-thrw-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 87/485 test262/test/language/expressions/assignment/dstr/array-elem-put-const.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 88/485 test262/test/language/expressions/assignment/dstr/array-elem-put-let.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = [ unresolvable ] = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 96/485 test262/test/language/expressions/assignment/dstr/array-elem-put-unresolvable-no-strict.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 97/485 test262/test/language/expressions/assignment/dstr/array-elem-put-unresolvable-strict.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = [arguments, eval] = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 99/485 test262/test/language/expressions/assignment/dstr/array-elem-target-simple-no-strict.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 104/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-elision-iter-abpt.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 105/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-elision-iter-nrml-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 106/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-elision-iter-nrml-close-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «2») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 107/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-elision-iter-nrml-close-skip.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «2») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «2») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 108/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-elision-iter-nrml-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «2») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 109/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-get-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 110/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-nrml-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 111/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-nrml-close-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 112/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-nrml-close-skip.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 113/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-nrml-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 114/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 115/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 116/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-rtrn-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 117/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-thrw-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 118/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-thrw-close-skip.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 119/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-list-thrw-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m15: [0mfunction Test262Error(message) {
+      [31m^[0m
+[90m    at line 15, column 0[0m
+
+FAIL 120/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-rest-nrml-close-skip.js - test failed: Runtime Error at 15:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m229: [0m  0, [ x , ...{}[thrower()] ] = iterable;
+       [31m^[0m
+[90m    at line 229, column 0[0m
+
+FAIL 124/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-rest-thrw-close-err.js - test failed: Runtime Error at 229:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m222: [0m  0, [ x , ...x ] = iterable;
+       [31m^[0m
+[90m    at line 222, column 0[0m
+
+FAIL 125/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-rest-thrw-close-skip.js - test failed: Runtime Error at 222:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m230: [0m  0, [ x , ...{}[thrower()] ] = iterable;
+       [31m^[0m
+[90m    at line 230, column 0[0m
+
+FAIL 126/485 test262/test/language/expressions/assignment/dstr/array-elem-trlg-iter-rest-thrw-close.js - test failed: Runtime Error at 230:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 127/485 test262/test/language/expressions/assignment/dstr/array-elision-iter-abpt.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 128/485 test262/test/language/expressions/assignment/dstr/array-elision-iter-get-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 129/485 test262/test/language/expressions/assignment/dstr/array-elision-iter-nrml-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 130/485 test262/test/language/expressions/assignment/dstr/array-elision-iter-nrml-close-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 131/485 test262/test/language/expressions/assignment/dstr/array-elision-iter-nrml-close-skip.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 132/485 test262/test/language/expressions/assignment/dstr/array-elision-iter-nrml-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot index non-array/object/string/typedarray/generator type 'boolean' at IP 14
+  [90m186: [0m  0, [,] = true;
+       [31m^[0m
+[90m    at line 186, column 0[0m
+
+FAIL 134/485 test262/test/language/expressions/assignment/dstr/array-elision-val-bool.js - test failed: Runtime Error at 186:0: Cannot index non-array/object/string/typedarray/generator type 'boolean' at IP 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot index non-array/object/string/typedarray/generator type 'number' at IP 16
+  [90m186: [0m  0, [,] = 1;
+       [31m^[0m
+[90m    at line 186, column 0[0m
+
+FAIL 136/485 test262/test/language/expressions/assignment/dstr/array-elision-val-num.js - test failed: Runtime Error at 186:0: Cannot index non-array/object/string/typedarray/generator type 'number' at IP 16
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot index non-array/object/string/typedarray/generator type 'symbol' at IP 16
+  [90m187: [0m  0, [,] = s;
+       [31m^[0m
+[90m    at line 187, column 0[0m
+
+FAIL 138/485 test262/test/language/expressions/assignment/dstr/array-elision-val-symbol.js - test failed: Runtime Error at 187:0: Cannot index non-array/object/string/typedarray/generator type 'symbol' at IP 16
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 140/485 test262/test/language/expressions/assignment/dstr/array-empty-iter-close-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 141/485 test262/test/language/expressions/assignment/dstr/array-empty-iter-close-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 142/485 test262/test/language/expressions/assignment/dstr/array-empty-iter-close.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 143/485 test262/test/language/expressions/assignment/dstr/array-empty-iter-get-err.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 145/485 test262/test/language/expressions/assignment/dstr/array-empty-val-bool.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 146/485 test262/test/language/expressions/assignment/dstr/array-empty-val-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 147/485 test262/test/language/expressions/assignment/dstr/array-empty-val-num.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 149/485 test262/test/language/expressions/assignment/dstr/array-empty-val-symbol.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 150/485 test262/test/language/expressions/assignment/dstr/array-empty-val-undef.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «2») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 151/485 test262/test/language/expressions/assignment/dstr/array-iteration.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «2») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m215: [0m  0, [ , ...x] = iterable;
+       [31m^[0m
+[90m    at line 215, column 0[0m
+
+FAIL 158/485 test262/test/language/expressions/assignment/dstr/array-rest-elision-iter-abpt.js - test failed: Runtime Error at 215:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m197: [0m  0, [...x] = iterable;
+       [31m^[0m
+[90m    at line 197, column 0[0m
+
+FAIL 161/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-get-err.js - test failed: Runtime Error at 197:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m15: [0mfunction Test262Error(message) {
+      [31m^[0m
+[90m    at line 15, column 0[0m
+
+FAIL 162/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-nrml-close-skip.js - test failed: Runtime Error at 15:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m232: [0massert.sameValue(result, vals);
+       [31m^[0m
+[90m    at line 232, column 0[0m
+
+FAIL 163/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-rtrn-close-err.js - test failed: Runtime Error at 232:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m234: [0massert.sameValue(result, vals);
+       [31m^[0m
+[90m    at line 234, column 0[0m
+
+FAIL 164/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-rtrn-close-null.js - test failed: Runtime Error at 234:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m244: [0massert.sameValue(result, vals);
+       [31m^[0m
+[90m    at line 244, column 0[0m
+
+FAIL 165/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-rtrn-close.js - test failed: Runtime Error at 244:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m229: [0m  0, [...{}[thrower()]] = iterable;
+       [31m^[0m
+[90m    at line 229, column 0[0m
+
+FAIL 166/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-thrw-close-err.js - test failed: Runtime Error at 229:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m212: [0m  0, [...x] = iterable;
+       [31m^[0m
+[90m    at line 212, column 0[0m
+
+FAIL 167/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-thrw-close-skip.js - test failed: Runtime Error at 212:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m234: [0m  0, [...{}[thrower()]] = iterable;
+       [31m^[0m
+[90m    at line 234, column 0[0m
+
+FAIL 168/485 test262/test/language/expressions/assignment/dstr/array-rest-iter-thrw-close.js - test failed: Runtime Error at 234:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 18
+  [90m15: [0mfunction Test262Error(message) {
+      [31m^[0m
+[90m    at line 15, column 0[0m
+
+FAIL 169/485 test262/test/language/expressions/assignment/dstr/array-rest-iteration.js - test failed: Runtime Error at 15:0: Cannot slice non-array value of type 18
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m221: [0m  0, [...{}[thrower()]] = iterable;
+       [31m^[0m
+[90m    at line 221, column 0[0m
+
+FAIL 170/485 test262/test/language/expressions/assignment/dstr/array-rest-lref-err.js - test failed: Runtime Error at 221:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m15: [0mfunction Test262Error(message) {
+      [31m^[0m
+[90m    at line 15, column 0[0m
+
+FAIL 171/485 test262/test/language/expressions/assignment/dstr/array-rest-lref.js - test failed: Runtime Error at 15:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m224: [0m  0, [...[...{}[thrower()]]] = iterable;
+       [31m^[0m
+[90m    at line 224, column 0[0m
+
+FAIL 173/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-array-iter-thrw-close-skip.js - test failed: Runtime Error at 224:0: Cannot slice non-array value of type 14
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«undefined», «86») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 178/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-array-yield-expr.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«undefined», «86») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«undefined», «86») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 180/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-array-yield-ident-valid.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«undefined», «86») to be true
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = [...{ 0: x, length }] = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 183/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-obj-null.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m192: [0mresult = [...{ 0: x, length }] = vals;
+              [31m^[0m
+[90m    at line 192, column 8[0m
+
+FAIL 184/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-obj-undefined-hole.js - test failed: Compile Error at 192:8: error compiling RHS
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m192: [0mresult = [...{ 0: x, length }] = vals;
+              [31m^[0m
+[90m    at line 192, column 8[0m
+
+FAIL 185/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-obj-undefined-own.js - test failed: Compile Error at 192:8: error compiling RHS
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m192: [0mresult = [...{ 0: x, length }] = vals;
+              [31m^[0m
+[90m    at line 192, column 8[0m
+
+FAIL 186/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-obj-undefined.js - test failed: Compile Error at 192:8: error compiling RHS
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = [...{ 1: x }] = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 190/485 test262/test/language/expressions/assignment/dstr/array-rest-nested-obj.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 191/485 test262/test/language/expressions/assignment/dstr/array-rest-put-const.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 192/485 test262/test/language/expressions/assignment/dstr/array-rest-put-let.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot slice non-array value of type 14
+  [90m227: [0m  0, [...obj.poisoned] = iterable;
+       [31m^[0m
+[90m    at line 227, column 0[0m
+
+FAIL 194/485 test262/test/language/expressions/assignment/dstr/array-rest-put-prop-ref-user-err-iter-close-skip.js - test failed: Runtime Error at 227:0: Cannot slice non-array value of type 14
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = [ ...unresolvable ] = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 197/485 test262/test/language/expressions/assignment/dstr/array-rest-put-unresolvable-no-strict.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 198/485 test262/test/language/expressions/assignment/dstr/array-rest-put-unresolvable-strict.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { bre\u0061k: x } = { break: 42 };
+                             [31m^[0m
+[90m    at line 205, column 23[0m
+
+FAIL 202/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-break-escaped.js - test failed: Compile Error at 205:23: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { c\u0061se: x } = { case: 42 };
+                            [31m^[0m
+[90m    at line 205, column 22[0m
+
+FAIL 203/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-case-escaped.js - test failed: Compile Error at 205:22: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { c\u0061tch: x } = { catch: 42 };
+                             [31m^[0m
+[90m    at line 205, column 23[0m
+
+FAIL 204/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-catch-escaped.js - test failed: Compile Error at 205:23: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { cl\u0061ss: x } = { class: 42 };
+                             [31m^[0m
+[90m    at line 205, column 23[0m
+
+FAIL 205/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-class-escaped.js - test failed: Compile Error at 205:23: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0063onst: x } = { const: 42 };
+                             [31m^[0m
+[90m    at line 205, column 23[0m
+
+FAIL 206/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-const-escaped.js - test failed: Compile Error at 205:23: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0063ontinue: x } = { continue: 42 };
+                                [31m^[0m
+[90m    at line 205, column 26[0m
+
+FAIL 207/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-continue-escaped.js - test failed: Compile Error at 205:26: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0064ebugger: x } = { debugger: 42 };
+                                [31m^[0m
+[90m    at line 205, column 26[0m
+
+FAIL 208/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-debugger-escaped.js - test failed: Compile Error at 205:26: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { def\u{61}ult: x } = { default: 42 };
+                               [31m^[0m
+[90m    at line 205, column 25[0m
+
+FAIL 209/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-default-escaped-ext.js - test failed: Compile Error at 205:25: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { def\u0061ult: x } = { default: 42 };
+                               [31m^[0m
+[90m    at line 205, column 25[0m
+
+FAIL 210/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-default-escaped.js - test failed: Compile Error at 205:25: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { default: x } = { default: 42 };
+                          [31m^[0m
+[90m    at line 205, column 20[0m
+
+FAIL 211/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-default.js - test failed: Compile Error at 205:20: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0064elete: x } = { delete: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 212/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-delete-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0064o: x } = { do: 42 };
+                          [31m^[0m
+[90m    at line 205, column 20[0m
+
+FAIL 213/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-do-escaped.js - test failed: Compile Error at 205:20: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0065lse: x } = { else: 42 };
+                            [31m^[0m
+[90m    at line 205, column 22[0m
+
+FAIL 214/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-else-escaped.js - test failed: Compile Error at 205:22: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0065num: x } = { enum: 42 };
+                            [31m^[0m
+[90m    at line 205, column 22[0m
+
+FAIL 215/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-enum-escaped.js - test failed: Compile Error at 205:22: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0065xport: x } = { export: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 216/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-export-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u{65}xtends: x } = { extends: 42 };
+                               [31m^[0m
+[90m    at line 205, column 25[0m
+
+FAIL 217/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-extends-escaped-ext.js - test failed: Compile Error at 205:25: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0065xtends: x } = { extends: 42 };
+                               [31m^[0m
+[90m    at line 205, column 25[0m
+
+FAIL 218/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-extends-escaped.js - test failed: Compile Error at 205:25: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { extends: x } = { extends: 42 };
+                          [31m^[0m
+[90m    at line 205, column 20[0m
+
+FAIL 219/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-extends.js - test failed: Compile Error at 205:20: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0066inally: x } = { finally: 42 };
+                               [31m^[0m
+[90m    at line 205, column 25[0m
+
+FAIL 220/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-finally-escaped.js - test failed: Compile Error at 205:25: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0066or: x } = { for: 42 };
+                           [31m^[0m
+[90m    at line 205, column 21[0m
+
+FAIL 221/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-for-escaped.js - test failed: Compile Error at 205:21: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0066unction: x } = { function: 42 };
+                                [31m^[0m
+[90m    at line 205, column 26[0m
+
+FAIL 222/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-function-escaped.js - test failed: Compile Error at 205:26: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { i\u0066: x } = { if: 42 };
+                          [31m^[0m
+[90m    at line 205, column 20[0m
+
+FAIL 223/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-if-escaped.js - test failed: Compile Error at 205:20: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0069mplements: x } = { implements: 42 };
+                                  [31m^[0m
+[90m    at line 205, column 28[0m
+
+FAIL 224/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-implements-escaped.js - test failed: Compile Error at 205:28: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0069mport: x } = { import: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 225/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-import-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0069n: x } = { in: 42 };
+                          [31m^[0m
+[90m    at line 205, column 20[0m
+
+FAIL 226/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-in-escaped.js - test failed: Compile Error at 205:20: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { \u0069nstanceof: x } = { instanceof: 42 };
+                                  [31m^[0m
+[90m    at line 205, column 28[0m
+
+FAIL 227/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-instanceof-escaped.js - test failed: Compile Error at 205:28: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { interf\u0061ce: x } = { interface: 42 };
+                                 [31m^[0m
+[90m    at line 205, column 27[0m
+
+FAIL 228/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-interface-escaped.js - test failed: Compile Error at 205:27: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { l\u0065t: x } = { let: 42 };
+                           [31m^[0m
+[90m    at line 205, column 21[0m
+
+FAIL 229/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-let-escaped.js - test failed: Compile Error at 205:21: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { n\u0065w: x } = { new: 42 };
+                           [31m^[0m
+[90m    at line 205, column 21[0m
+
+FAIL 230/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-new-escaped.js - test failed: Compile Error at 205:21: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { p\u0061ckage: x } = { package: 42 };
+                               [31m^[0m
+[90m    at line 205, column 25[0m
+
+FAIL 231/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-package-escaped.js - test failed: Compile Error at 205:25: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { privat\u0065: x } = { private: 42 };
+                               [31m^[0m
+[90m    at line 205, column 25[0m
+
+FAIL 232/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-private-escaped.js - test failed: Compile Error at 205:25: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { prot\u0065cted: x } = { protected: 42 };
+                                 [31m^[0m
+[90m    at line 205, column 27[0m
+
+FAIL 233/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-protected-escaped.js - test failed: Compile Error at 205:27: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { pu\u0062lic: x } = { public: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 234/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-public-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { r\u0065turn: x } = { return: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 235/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-return-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { st\u0061tic: x } = { static: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 236/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-static-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { sup\u0065r: x } = { super: 42 };
+                             [31m^[0m
+[90m    at line 205, column 23[0m
+
+FAIL 237/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-super-escaped.js - test failed: Compile Error at 205:23: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { sw\u0069tch: x } = { switch: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 238/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-switch-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { th\u0069s: x } = { this: 42 };
+                            [31m^[0m
+[90m    at line 205, column 22[0m
+
+FAIL 239/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-this-escaped.js - test failed: Compile Error at 205:22: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { t\u0068row: x } = { throw: 42 };
+                             [31m^[0m
+[90m    at line 205, column 23[0m
+
+FAIL 240/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-throw-escaped.js - test failed: Compile Error at 205:23: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { tr\u0079: x } = { try: 42 };
+                           [31m^[0m
+[90m    at line 205, column 21[0m
+
+FAIL 241/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-try-escaped.js - test failed: Compile Error at 205:21: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { typ\u0065of: x } = { typeof: 42 };
+                              [31m^[0m
+[90m    at line 205, column 24[0m
+
+FAIL 242/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-typeof-escaped.js - test failed: Compile Error at 205:24: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { v\u0061r: x } = { var: 42 };
+                           [31m^[0m
+[90m    at line 205, column 21[0m
+
+FAIL 243/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-var-escaped.js - test failed: Compile Error at 205:21: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { voi\u0064: x } = { void: 42 };
+                            [31m^[0m
+[90m    at line 205, column 22[0m
+
+FAIL 244/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-void-escaped.js - test failed: Compile Error at 205:22: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { whil\u0065: x } = { while: 42 };
+                             [31m^[0m
+[90m    at line 205, column 23[0m
+
+FAIL 245/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-while-escaped.js - test failed: Compile Error at 205:23: undefined variable 'x'
+[34mPS3001[0m [1m[31m[ERROR][0m: undefined variable 'x'
+  [90m205: [0mvar y = { w\u0069th: x } = { with: 42 };
+                            [31m^[0m
+[90m    at line 205, column 22[0m
+
+FAIL 246/485 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-with-escaped.js - test failed: Compile Error at 205:22: undefined variable 'x'
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 248/485 test262/test/language/expressions/assignment/dstr/obj-empty-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 253/485 test262/test/language/expressions/assignment/dstr/obj-empty-undef.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 280/485 test262/test/language/expressions/assignment/dstr/obj-id-put-const.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 281/485 test262/test/language/expressions/assignment/dstr/obj-id-put-let.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = { unresolvable } = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 282/485 test262/test/language/expressions/assignment/dstr/obj-id-put-unresolvable-no-strict.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 283/485 test262/test/language/expressions/assignment/dstr/obj-id-put-unresolvable-strict.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [(a.b)] (only simple identifiers supported)
+  [90m187: [0m  0, { [a.b]: x } = {};
+            [31m^[0m
+[90m    at <eval>:187:6[0m
+
+FAIL 314/485 test262/test/language/expressions/assignment/dstr/obj-prop-name-evaluation-error.js - test failed: Syntax Error at 187:6: invalid destructuring property key: [(a.b)] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [(x + y)] (only simple identifiers supported)
+  [90m189: [0mresult = { ['x' + 'y']: x } = vals;
+                [31m^[0m
+[90m    at <eval>:189:10[0m
+
+FAIL 315/485 test262/test/language/expressions/assignment/dstr/obj-prop-name-evaluation.js - test failed: Syntax Error at 189:10: invalid destructuring property key: [(x + y)] (only simple identifiers supported)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 332/485 test262/test/language/expressions/assignment/dstr/obj-prop-put-const.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 333/485 test262/test/language/expressions/assignment/dstr/obj-prop-put-let.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS3001[0m [1m[31m[ERROR][0m: error compiling RHS
+  [90m189: [0mresult = { x: unresolvable } = vals;
+              [31m^[0m
+[90m    at line 189, column 8[0m
+
+FAIL 338/485 test262/test/language/expressions/assignment/dstr/obj-prop-put-unresolvable-no-strict.js - test failed: Compile Error at 189:8: error compiling RHS
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 339/485 test262/test/language/expressions/assignment/dstr/obj-prop-put-unresolvable-strict.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a ReferenceError to be thrown but no exception was thrown at all
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m564: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:564:10[0m
+
+FAIL 340/485 test262/test/language/expressions/assignment/dstr/obj-rest-computed-property-no-strict.js - test failed: Syntax Error at 564:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m565: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:565:10[0m
+
+FAIL 341/485 test262/test/language/expressions/assignment/dstr/obj-rest-computed-property.js - test failed: Syntax Error at 565:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: obj['a'] descriptor should be writable; obj['a'] descriptor should be configurable
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 342/485 test262/test/language/expressions/assignment/dstr/obj-rest-descriptors.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: obj['a'] descriptor should be writable; obj['a'] descriptor should be configurable
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 344/485 test262/test/language/expressions/assignment/dstr/obj-rest-getter-abrupt-get-error.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a Test262Error to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 345/485 test262/test/language/expressions/assignment/dstr/obj-rest-getter.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«0», «1») to be true
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m565: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:565:10[0m
+
+FAIL 346/485 test262/test/language/expressions/assignment/dstr/obj-rest-non-string-computed-property-1.js - test failed: Syntax Error at 565:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m618: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:618:10[0m
+
+FAIL 347/485 test262/test/language/expressions/assignment/dstr/obj-rest-non-string-computed-property-1dot.js - test failed: Syntax Error at 618:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m565: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:565:10[0m
+
+FAIL 348/485 test262/test/language/expressions/assignment/dstr/obj-rest-non-string-computed-property-1dot0.js - test failed: Syntax Error at 565:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m565: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:565:10[0m
+
+FAIL 349/485 test262/test/language/expressions/assignment/dstr/obj-rest-non-string-computed-property-1e0.js - test failed: Syntax Error at 565:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m618: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:618:10[0m
+
+FAIL 350/485 test262/test/language/expressions/assignment/dstr/obj-rest-non-string-computed-property-array-1.js - test failed: Syntax Error at 618:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m618: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:618:10[0m
+
+FAIL 351/485 test262/test/language/expressions/assignment/dstr/obj-rest-non-string-computed-property-array-1e0.js - test failed: Syntax Error at 618:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS1003[0m [1m[31m[ERROR][0m: invalid destructuring property key: [a] (only simple identifiers supported)
+  [90m565: [0mresult = {[a]:b, ...rest} = vals;
+                [31m^[0m
+[90m    at <eval>:565:10[0m
+
+FAIL 352/485 test262/test/language/expressions/assignment/dstr/obj-rest-non-string-computed-property-string-1.js - test failed: Syntax Error at 565:10: invalid destructuring property key: [a] (only simple identifiers supported)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected true but got false
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 354/485 test262/test/language/expressions/assignment/dstr/obj-rest-number.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected true but got false
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Actual [] and expected [1, z, a, Symbol(foo)] should have the same contents. 
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 355/485 test262/test/language/expressions/assignment/dstr/obj-rest-order.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Actual [] and expected [1, z, a, Symbol(foo)] should have the same contents. 
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 356/485 test262/test/language/expressions/assignment/dstr/obj-rest-put-const.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«[object Object]», «undefined») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 358/485 test262/test/language/expressions/assignment/dstr/obj-rest-skip-non-enumerable.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«[object Object]», «undefined») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: TypeError: Cannot access property '0' on non-object type 'string'
+    at <script> (<script>:15:1)
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 359/485 test262/test/language/expressions/assignment/dstr/obj-rest-str-val.js - test failed: Runtime Error at 1:1: Uncaught exception: TypeError: Cannot access property '0' on non-object type 'string'
+    at <script> (<script>:15:1)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected true but got false
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 360/485 test262/test/language/expressions/assignment/dstr/obj-rest-symbol-val.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected true but got false
+[34mPS1003[0m [1m[31m[ERROR][0m: rest element target must be an identifier
+  [90m197: [0mresult = {...src.y} = vals;
+                [31m^[0m
+[90m    at <eval>:197:10[0m
+
+FAIL 361/485 test262/test/language/expressions/assignment/dstr/obj-rest-to-property-with-setter.js - test failed: Syntax Error at 197:10: rest element target must be an identifier
+[34mPS1003[0m [1m[31m[ERROR][0m: rest element target must be an identifier
+  [90m564: [0mresult = {...src.y} = vals;
+                [31m^[0m
+[90m    at <eval>:564:10[0m
+
+FAIL 362/485 test262/test/language/expressions/assignment/dstr/obj-rest-to-property.js - test failed: Syntax Error at 564:10: rest element target must be an identifier
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 363/485 test262/test/language/expressions/assignment/dstr/obj-rest-val-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 364/485 test262/test/language/expressions/assignment/dstr/obj-rest-val-undefined.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a TypeError to be thrown but no exception was thrown at all
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected SameValue(«3», «undefined») to be true
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 365/485 test262/test/language/expressions/assignment/dstr/obj-rest-valid-object.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected SameValue(«3», «undefined») to be true
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a DummyError but got a TypeError
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 473/485 test262/test/language/expressions/assignment/target-member-computed-reference-null.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a DummyError but got a TypeError
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a DummyError but got a TypeError
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 474/485 test262/test/language/expressions/assignment/target-member-computed-reference-undefined.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a DummyError but got a TypeError
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a DummyError but got a TypeError
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 475/485 test262/test/language/expressions/assignment/target-member-computed-reference.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a DummyError but got a TypeError
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot set property 'prop' on non-object type 'null'
+  [90m194: [0m  base.prop = count += 1;
+       [31m^[0m
+[90m    at line 194, column 0[0m
+
+FAIL 476/485 test262/test/language/expressions/assignment/target-member-identifier-reference-null.js - test failed: Runtime Error at 194:0: Cannot set property 'prop' on non-object type 'null'
+[34mPS4001[0m [1m[31m[ERROR][0m: Cannot set property 'prop' on non-object type 'undefined'
+  [90m194: [0m  base.prop = count += 1;
+       [31m^[0m
+[90m    at line 194, column 0[0m
+
+FAIL 477/485 test262/test/language/expressions/assignment/target-member-identifier-reference-undefined.js - test failed: Runtime Error at 194:0: Cannot set property 'prop' on non-object type 'undefined'
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: TypeError: Object.setPrototypeOf called on non-object
+    at <script> (<script>:1:1)
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 482/485 test262/test/language/expressions/assignment/target-super-computed-reference-null.js - test failed: Runtime Error at 1:1: Uncaught exception: TypeError: Object.setPrototypeOf called on non-object
+    at <script> (<script>:1:1)
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: Error: Expected a DummyError but got a ReferenceError
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 483/485 test262/test/language/expressions/assignment/target-super-computed-reference.js - test failed: Runtime Error at 1:1: Uncaught exception: Error: Expected a DummyError but got a ReferenceError
+[34mPS4001[0m [1m[31m[ERROR][0m: Uncaught exception: TypeError: Object.setPrototypeOf called on non-object
+    at <script> (<script>:1:1)
+  [90m1: [0m
+[90m    at line 1, column 1[0m
+
+FAIL 484/485 test262/test/language/expressions/assignment/target-super-identifier-reference-null.js - test failed: Runtime Error at 1:1: Uncaught exception: TypeError: Object.setPrototypeOf called on non-object
+    at <script> (<script>:1:1)
+
+Final stats: [Mem: 4.0MB Heap: 4.0MB Goroutines: 1]
+
+=== Test262 Summary ===
+Total:    485
+Passed:   301 (62.1%)
+Failed:   184 (37.9%)
+Timeouts: 0 (0.0%)
+Skipped:  0 (0.0%)
+Duration: 938.561125ms
+======================

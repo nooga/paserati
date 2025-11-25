@@ -9,7 +9,6 @@ import (
 	"paserati/pkg/vm"
 )
 
-
 const debugAssignment = false // Enable debug output for assignment compilation
 
 // shouldUseWithProperty checks if an identifier should be treated as a with property
@@ -57,12 +56,12 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		indexReg Register
 	}
 	var memberInfo struct { // Info needed for member expr
-		objectReg         Register
-		nameConstIdx      uint16  // For static properties
-		isComputed        bool    // True if this is a computed property
-		keyReg           Register // For computed properties
-		isPrivateField    bool    // True if this is a private field (#field)
-		isWithProperty    bool    // True if this is a with property (use OpGetWithProperty/OpSetWithProperty)
+		objectReg      Register
+		nameConstIdx   uint16   // For static properties
+		isComputed     bool     // True if this is a computed property
+		keyReg         Register // For computed properties
+		isPrivateField bool     // True if this is a private field (#field)
+		isWithProperty bool     // True if this is a with property (use OpGetWithProperty/OpSetWithProperty)
 	}
 
 	// Track temporary registers for cleanup
@@ -77,7 +76,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	switch lhsNode := node.Left.(type) {
 	case *parser.Identifier:
 		lhsType = lhsIsIdentifier
-		
+
 		// First check if this is a with property (highest priority)
 		if _, isWithProperty := c.shouldUseWithProperty(lhsNode); isWithProperty {
 			// This is a with property assignment - treat as member assignment
@@ -110,43 +109,43 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}
 			} else {
-			// Determine target register/upvalue index and load current value
-			if symbolRef.IsGlobal {
-				// Global variable
-				identInfo.isGlobal = true
-				identInfo.globalIdx = symbolRef.GlobalIndex
-				// For compound assignments, we need the current value
-				if node.Operator != "=" {
-					currentValueReg = c.regAlloc.Alloc()
+				// Determine target register/upvalue index and load current value
+				if symbolRef.IsGlobal {
+					// Global variable
+					identInfo.isGlobal = true
+					identInfo.globalIdx = symbolRef.GlobalIndex
+					// For compound assignments, we need the current value
+					if node.Operator != "=" {
+						currentValueReg = c.regAlloc.Alloc()
+						tempRegs = append(tempRegs, currentValueReg)
+						c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
+					} else {
+						currentValueReg = nilRegister // Not needed for simple assignment
+					}
+				} else if definingTable == c.currentSymbolTable {
+					// Local variable in current scope
+					identInfo.targetReg = symbolRef.Register
+					identInfo.isUpvalue = false
+					identInfo.isGlobal = false
+					currentValueReg = identInfo.targetReg // Current value is already in targetReg
+				} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+					// Variable defined in outer function: treat as upvalue
+					identInfo.isUpvalue = true
+					identInfo.isGlobal = false
+					identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
+					currentValueReg = c.regAlloc.Alloc() // Allocate temporary reg for current value
 					tempRegs = append(tempRegs, currentValueReg)
-					c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
+					c.emitOpCode(vm.OpLoadFree, line)
+					c.emitByte(byte(currentValueReg))  // Destination register
+					c.emitByte(identInfo.upvalueIndex) // Upvalue index
 				} else {
-					currentValueReg = nilRegister // Not needed for simple assignment
+					// Variable in outer block scope of same function (or at top level): access directly via register
+					identInfo.targetReg = symbolRef.Register
+					identInfo.isUpvalue = false
+					identInfo.isGlobal = false
+					currentValueReg = identInfo.targetReg // Current value is already in targetReg
 				}
-			} else if definingTable == c.currentSymbolTable {
-				// Local variable in current scope
-				identInfo.targetReg = symbolRef.Register
-				identInfo.isUpvalue = false
-				identInfo.isGlobal = false
-				currentValueReg = identInfo.targetReg // Current value is already in targetReg
-			} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
-				// Variable defined in outer function: treat as upvalue
-				identInfo.isUpvalue = true
-				identInfo.isGlobal = false
-				identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
-				currentValueReg = c.regAlloc.Alloc() // Allocate temporary reg for current value
-				tempRegs = append(tempRegs, currentValueReg)
-				c.emitOpCode(vm.OpLoadFree, line)
-				c.emitByte(byte(currentValueReg))  // Destination register
-				c.emitByte(identInfo.upvalueIndex) // Upvalue index
-			} else {
-				// Variable in outer block scope of same function (or at top level): access directly via register
-				identInfo.targetReg = symbolRef.Register
-				identInfo.isUpvalue = false
-				identInfo.isGlobal = false
-				currentValueReg = identInfo.targetReg // Current value is already in targetReg
 			}
-		}
 		}
 
 	case *parser.IndexExpression:
@@ -269,9 +268,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				currentValueReg = c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, currentValueReg)
 				c.emitOpCode(vm.OpGetIndex, line)
-				c.emitByte(byte(currentValueReg))       // Destination register
-				c.emitByte(byte(memberInfo.objectReg))  // Object register
-				c.emitByte(byte(memberInfo.keyReg))     // Key register (computed at runtime)
+				c.emitByte(byte(currentValueReg))      // Destination register
+				c.emitByte(byte(memberInfo.objectReg)) // Object register
+				c.emitByte(byte(memberInfo.keyReg))    // Key register (computed at runtime)
 			} else if memberInfo.isPrivateField {
 				// For private fields, use OpGetPrivateField
 				currentValueReg = c.regAlloc.Alloc()
@@ -597,7 +596,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 // Desugars into: temp = expr; a = temp[0]; b = temp[1]; c = temp[2];
 func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestructuringAssignment, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
-	
+
 	if debugAssignment {
 		fmt.Printf("// [Assignment] Compiling array destructuring: %s\n", node.String())
 	}
@@ -605,7 +604,7 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 	// 1. Compile RHS expression into temp register
 	tempReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(tempReg)
-	
+
 	_, err := c.compileNode(node.Value, tempReg)
 	if err != nil {
 		return BadRegister, err
@@ -618,11 +617,11 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 		}
 
 		var valueReg Register
-		
+
 		if element.IsRest {
 			// Rest element: compile temp.slice(i) to get remaining elements
 			valueReg = c.regAlloc.Alloc()
-			
+
 			// Call temp.slice(i) to get the rest of the array
 			err := c.compileArraySliceCall(tempReg, i, valueReg, line)
 			if err != nil {
@@ -633,20 +632,20 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 			// Regular element: compile temp[i]
 			indexReg := c.regAlloc.Alloc()
 			valueReg = c.regAlloc.Alloc()
-			
+
 			// Load the index as a constant
 			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
 			c.emitLoadConstant(indexReg, indexConstIdx, line)
-			
+
 			// Get temp[i] using GetIndex operation
 			c.emitOpCode(vm.OpGetIndex, line)
-			c.emitByte(byte(valueReg))  // destination register
-			c.emitByte(byte(tempReg))   // array register
-			c.emitByte(byte(indexReg))  // index register
-			
+			c.emitByte(byte(valueReg)) // destination register
+			c.emitByte(byte(tempReg))  // array register
+			c.emitByte(byte(indexReg)) // index register
+
 			c.regAlloc.Free(indexReg)
 		}
-		
+
 		// Handle assignment with potential default value
 		if element.Default != nil {
 			// Compile conditional assignment: target = valueReg !== undefined ? valueReg : default
@@ -663,7 +662,7 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 				return BadRegister, err
 			}
 		}
-		
+
 		// Clean up temporary registers
 		c.regAlloc.Free(valueReg)
 	}
@@ -672,27 +671,27 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 	if hint != tempReg {
 		c.emitMove(hint, tempReg, line)
 	}
-	
+
 	return hint, nil
 }
 
 // compileArraySliceCall compiles an array slice operation for rest elements
 func (c *Compiler) compileArraySliceCall(arrayReg Register, startIndex int, resultReg Register, line int) errors.PaseratiError {
 	// This compiles: resultReg = arrayReg.slice(startIndex) using the specialized OpArraySlice opcode
-	
+
 	// Load the start index as a constant
 	startIndexReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(startIndexReg)
-	
+
 	startConstIdx := c.chunk.AddConstant(vm.Number(float64(startIndex)))
 	c.emitLoadConstant(startIndexReg, startConstIdx, line)
-	
+
 	// Emit the array slice opcode: OpArraySlice destReg arrayReg startIndexReg
 	c.emitOpCode(vm.OpArraySlice, line)
-	c.emitByte(byte(resultReg))      // destination register
-	c.emitByte(byte(arrayReg))       // source array register
-	c.emitByte(byte(startIndexReg))  // start index register
-	
+	c.emitByte(byte(resultReg))     // destination register
+	c.emitByte(byte(arrayReg))      // source array register
+	c.emitByte(byte(startIndexReg)) // start index register
+
 	return nil
 }
 
@@ -820,13 +819,13 @@ func (c *Compiler) compileNestedArrayDestructuring(arrayLit *parser.ArrayLiteral
 		Token: arrayLit.Token,
 		Value: nil, // Will not be used since we already have the valueReg
 	}
-	
+
 	// Convert array elements to destructuring elements
 	for i, element := range arrayLit.Elements {
 		var target parser.Expression
 		var defaultValue parser.Expression
 		var isRest bool
-		
+
 		// Check if this element is a rest element (...rest)
 		if spreadExpr, ok := element.(*parser.SpreadElement); ok {
 			// This is a rest element: [...rest]
@@ -844,21 +843,21 @@ func (c *Compiler) compileNestedArrayDestructuring(arrayLit *parser.ArrayLiteral
 			defaultValue = nil
 			isRest = false
 		}
-		
+
 		destElement := &parser.DestructuringElement{
 			Target:  target,
 			Default: defaultValue,
 			IsRest:  isRest,
 		}
-		
+
 		// Validate rest element placement
 		if isRest && i != len(arrayLit.Elements)-1 {
 			return NewCompileError(arrayLit, "rest element must be last element in destructuring pattern")
 		}
-		
+
 		destructureAssign.Elements = append(destructureAssign.Elements, destElement)
 	}
-	
+
 	// Reuse existing compilation logic but with direct value register
 	return c.compileArrayDestructuringWithValueReg(destructureAssign, valueReg, line)
 }
@@ -870,7 +869,7 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 		Token: objectLit.Token,
 		Value: nil, // Will not be used since we already have the valueReg
 	}
-	
+
 	// Convert object properties to destructuring properties
 	for _, pair := range objectLit.Properties {
 		// The key should be an identifier for simple property access
@@ -878,10 +877,10 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 		if !ok {
 			return NewCompileError(objectLit, fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", pair.Key.String()))
 		}
-		
+
 		var target parser.Expression
 		var defaultValue parser.Expression
-		
+
 		// Check for different patterns:
 		// 1. {name} - shorthand without default
 		// 2. {name = defaultVal} - shorthand with default (value is assignment expr)
@@ -889,7 +888,7 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 		// 4. {name: localVar = defaultVal} - explicit target with default
 		// 5. {name: [a, b]} - nested pattern target (NEW)
 		// 6. {name: {x, y}} - nested pattern target (NEW)
-		
+
 		if valueIdent, ok := pair.Value.(*parser.Identifier); ok && valueIdent.Value == keyIdent.Value {
 			// Pattern 1: Shorthand without default {name}
 			target = keyIdent
@@ -910,16 +909,16 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 			target = pair.Value
 			defaultValue = nil
 		}
-		
+
 		destProperty := &parser.DestructuringProperty{
 			Key:     keyIdent,
 			Target:  target,
 			Default: defaultValue,
 		}
-		
+
 		destructureAssign.Properties = append(destructureAssign.Properties, destProperty)
 	}
-	
+
 	// Reuse existing compilation logic but with direct value register
 	return c.compileObjectDestructuringWithValueReg(destructureAssign, valueReg, line)
 }
@@ -934,11 +933,11 @@ func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestr
 		}
 
 		var extractedReg Register
-		
+
 		if element.IsRest {
 			// Rest element: compile valueReg.slice(i) to get remaining elements
 			extractedReg = c.regAlloc.Alloc()
-			
+
 			// Call valueReg.slice(i) to get the rest of the array
 			err := c.compileArraySliceCall(valueReg, i, extractedReg, line)
 			if err != nil {
@@ -949,20 +948,20 @@ func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestr
 			// Regular element: compile valueReg[i]
 			indexReg := c.regAlloc.Alloc()
 			extractedReg = c.regAlloc.Alloc()
-			
+
 			// Load the index as a constant
 			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
 			c.emitLoadConstant(indexReg, indexConstIdx, line)
-			
+
 			// Get valueReg[i] using GetIndex operation
 			c.emitOpCode(vm.OpGetIndex, line)
 			c.emitByte(byte(extractedReg)) // destination register
 			c.emitByte(byte(valueReg))     // array register
 			c.emitByte(byte(indexReg))     // index register
-			
+
 			c.regAlloc.Free(indexReg)
 		}
-		
+
 		// Handle assignment with potential default value (recursive assignment)
 		if element.Default != nil {
 			// Compile conditional assignment: target = extractedReg !== undefined ? extractedReg : default
@@ -979,11 +978,11 @@ func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestr
 				return err
 			}
 		}
-		
+
 		// Clean up temporary registers
 		c.regAlloc.Free(extractedReg)
 	}
-	
+
 	return nil
 }
 
@@ -1020,7 +1019,7 @@ func (c *Compiler) compileObjectDestructuringWithValueReg(node *parser.ObjectDes
 			c.emitByte(byte(keyReg))       // Key
 			c.regAlloc.Free(keyReg)
 		}
-		
+
 		// Handle assignment with potential default value (recursive assignment)
 		if prop.Default != nil {
 			// Compile conditional assignment: target = extractedReg !== undefined ? extractedReg : default
@@ -1037,13 +1036,13 @@ func (c *Compiler) compileObjectDestructuringWithValueReg(node *parser.ObjectDes
 				return err
 			}
 		}
-		
+
 		// Clean up temporary register
 		c.regAlloc.Free(extractedReg)
 	}
-	
+
 	// TODO: Handle rest property if present (for future enhancement)
-	
+
 	return nil
 }
 
@@ -1051,7 +1050,7 @@ func (c *Compiler) compileObjectDestructuringWithValueReg(node *parser.ObjectDes
 // Desugars into: temp = expr; a = temp.a; b = temp.b;
 func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestructuringAssignment, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
-	
+
 	if debugAssignment {
 		fmt.Printf("// [Assignment] Compiling object destructuring: %s\n", node.String())
 	}
@@ -1059,7 +1058,7 @@ func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestr
 	// 1. Compile RHS expression into temp register
 	tempReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(tempReg)
-	
+
 	_, err := c.compileNode(node.Value, tempReg)
 	if err != nil {
 		return BadRegister, err
@@ -1092,7 +1091,7 @@ func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestr
 			c.emitByte(byte(keyReg))
 			c.regAlloc.Free(keyReg)
 		}
-		
+
 		// Handle assignment with potential default value
 		if prop.Default != nil {
 			// Compile conditional assignment: target = valueReg !== undefined ? valueReg : default
@@ -1109,7 +1108,7 @@ func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestr
 				return BadRegister, err
 			}
 		}
-		
+
 		// Clean up temporary register
 		c.regAlloc.Free(valueReg)
 	}
@@ -1126,16 +1125,17 @@ func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestr
 	if hint != tempReg {
 		c.emitMove(hint, tempReg, line)
 	}
-	
+
 	return hint, nil
 }
+
 // compileConditionalAssignment compiles: target = (valueReg !== undefined) ? valueReg : defaultExpr
 func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueReg Register, defaultExpr parser.Expression, line int) errors.PaseratiError {
 	// This implements: target = valueReg !== undefined ? valueReg : defaultExpr
-	
+
 	// 1. Conditional jump: if undefined, jump to default value assignment
 	jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
-	
+
 	// 3. Path 1: Value is not undefined, assign valueReg to target
 	err := c.compileSimpleAssignment(target, valueReg, line)
 	if err != nil {
@@ -1143,10 +1143,10 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 		c.patchJump(jumpToDefault)
 		return err
 	}
-	
+
 	// Jump past the default assignment
 	jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
-	
+
 	// 4. Path 2: Value is undefined, evaluate and assign default
 	c.patchJump(jumpToDefault)
 
@@ -1232,7 +1232,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 		c.regAlloc.Free(defaultReg)
 		return err
 	}
-	
+
 	// 5. Patch the jump past default
 	c.patchJump(jumpPastDefault)
 
@@ -1245,11 +1245,11 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 // compileObjectRestProperty compiles rest property assignment for object destructuring
 func (c *Compiler) compileObjectRestProperty(objReg Register, extractedProps []*parser.DestructuringProperty, restElement *parser.DestructuringElement, line int) errors.PaseratiError {
 	// Use the new OpCopyObjectExcluding opcode for proper property filtering
-	
+
 	// Create array of property names to exclude
 	excludeArrayReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(excludeArrayReg)
-	
+
 	// Create array with extracted property names
 	excludeNames := make([]vm.Value, 0, len(extractedProps))
 	for _, prop := range extractedProps {
@@ -1258,20 +1258,20 @@ func (c *Compiler) compileObjectRestProperty(objReg Register, extractedProps []*
 		}
 		// Skip computed properties (can't exclude statically)
 	}
-	
+
 	if len(excludeNames) == 0 {
 		// No properties to exclude, just copy the whole object
 		c.emitOpCode(vm.OpMakeEmptyObject, line)
 		c.emitByte(byte(excludeArrayReg))
-		
+
 		// Create result register for the rest object
 		restObjReg := c.regAlloc.Alloc()
 		defer c.regAlloc.Free(restObjReg)
-		
+
 		c.emitMove(restObjReg, objReg, line)
 		return c.compileSimpleAssignment(restElement.Target, restObjReg, line)
 	}
-	
+
 	// Emit code to create the exclude array
 	// First allocate contiguous registers for all elements
 	startReg := c.regAlloc.Alloc()
@@ -1282,29 +1282,29 @@ func (c *Compiler) compileObjectRestProperty(objReg Register, extractedProps []*
 		defer c.regAlloc.Free(elementRegs[i])
 	}
 	defer c.regAlloc.Free(startReg)
-	
+
 	// Load each string constant into consecutive registers
 	for i, name := range excludeNames {
 		nameConstIdx := c.chunk.AddConstant(name)
 		c.emitLoadConstant(elementRegs[i], nameConstIdx, line)
 	}
-	
+
 	// Create array from the element registers
 	c.emitOpCode(vm.OpMakeArray, line)
-	c.emitByte(byte(excludeArrayReg))      // destination register
-	c.emitByte(byte(startReg))             // start register (first element)
-	c.emitByte(byte(len(excludeNames)))    // element count
-	
+	c.emitByte(byte(excludeArrayReg))   // destination register
+	c.emitByte(byte(startReg))          // start register (first element)
+	c.emitByte(byte(len(excludeNames))) // element count
+
 	// Create result register for the rest object
 	restObjReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(restObjReg)
-	
+
 	// Use the new opcode: restObj = copyObjectExcluding(sourceObj, excludeArray)
 	c.emitOpCode(vm.OpCopyObjectExcluding, line)
-	c.emitByte(byte(restObjReg))     // destination register
-	c.emitByte(byte(objReg))         // source object register
+	c.emitByte(byte(restObjReg))      // destination register
+	c.emitByte(byte(objReg))          // source object register
 	c.emitByte(byte(excludeArrayReg)) // exclude array register
-	
+
 	// Assign rest object to the rest property target
 	return c.compileSimpleAssignment(restElement.Target, restObjReg, line)
 }
@@ -1329,7 +1329,7 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 	if debugAssignment {
 		fmt.Printf("// [ObjectRest] Total excludeNames: %d\n", len(excludeNames))
 	}
-	
+
 	// Always use OpCopyObjectExcluding to ensure we only copy enumerable properties
 	// Even when excludeNames is empty, we still need to filter out non-enumerable properties
 	if len(excludeNames) == 0 {
@@ -1362,9 +1362,9 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 
 		// Create array from the element registers
 		c.emitOpCode(vm.OpMakeArray, line)
-		c.emitByte(byte(excludeArrayReg))      // destination register
-		c.emitByte(byte(startReg))             // start register (first element)
-		c.emitByte(byte(len(excludeNames)))    // element count
+		c.emitByte(byte(excludeArrayReg))   // destination register
+		c.emitByte(byte(startReg))          // start register (first element)
+		c.emitByte(byte(len(excludeNames))) // element count
 		if debugAssignment {
 			fmt.Printf("// [ObjectRest] OpMakeArray: dest=%d, start=%d, count=%d\n", excludeArrayReg, startReg, len(excludeNames))
 		}
@@ -1376,8 +1376,8 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 
 	// Use OpCopyObjectExcluding which filters out non-enumerable properties
 	c.emitOpCode(vm.OpCopyObjectExcluding, line)
-	c.emitByte(byte(restObjReg))     // destination register
-	c.emitByte(byte(objReg))         // source object register
+	c.emitByte(byte(restObjReg))      // destination register
+	c.emitByte(byte(objReg))          // source object register
 	c.emitByte(byte(excludeArrayReg)) // exclude array register
 
 	// Define the rest variable with the rest object
@@ -1461,9 +1461,9 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 
 			// Get array[i] using GetIndex operation
 			c.emitOpCode(vm.OpGetIndex, line)
-			c.emitByte(byte(valueReg))   // destination register
-			c.emitByte(byte(arrayReg))   // array register
-			c.emitByte(byte(indexReg))   // index register
+			c.emitByte(byte(valueReg)) // destination register
+			c.emitByte(byte(arrayReg)) // array register
+			c.emitByte(byte(indexReg)) // index register
 
 			c.regAlloc.Free(indexReg)
 		}
@@ -1675,7 +1675,7 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 // compileObjectDestructuringDeclaration compiles let/const {a, b} = expr declarations
 func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDestructuringDeclaration, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
-	
+
 	if debugAssignment {
 		fmt.Printf("// [Assignment] Compiling object destructuring declaration: %s\n", node.String())
 	}
@@ -1686,7 +1686,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 			if prop.Target == nil {
 				continue
 			}
-			
+
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
 				// Define variable with undefined value
 				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Undefined, line)
@@ -1695,7 +1695,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				}
 			}
 		}
-		
+
 		// Handle rest property without initializer
 		if node.RestProperty != nil {
 			if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
@@ -1705,7 +1705,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				}
 			}
 		}
-		
+
 		return BadRegister, nil
 	}
 
@@ -1734,9 +1734,9 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	nullConstIdx := c.chunk.AddConstant(vm.Null)
 	c.emitLoadConstant(checkReg, nullConstIdx, line)
 	c.emitOpCode(vm.OpEqual, line)
-	c.emitByte(byte(checkReg))  // result register
-	c.emitByte(byte(tempReg))   // left operand
-	c.emitByte(byte(checkReg))  // right operand (null)
+	c.emitByte(byte(checkReg)) // result register
+	c.emitByte(byte(tempReg))  // left operand
+	c.emitByte(byte(checkReg)) // right operand (null)
 
 	// Jump past error if not null
 	notNullJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
@@ -1754,7 +1754,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)
-	c.emitCall(resultReg, errorReg, 1, line)  // Call TypeError constructor with message
+	c.emitCall(resultReg, errorReg, 1, line) // Call TypeError constructor with message
 	c.emitOpCode(vm.OpThrow, line)
 	c.emitByte(byte(resultReg))
 
@@ -1765,9 +1765,9 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	undefConstIdx := c.chunk.AddConstant(vm.Undefined)
 	c.emitLoadConstant(checkReg, undefConstIdx, line)
 	c.emitOpCode(vm.OpEqual, line)
-	c.emitByte(byte(checkReg))  // result register
-	c.emitByte(byte(tempReg))   // left operand
-	c.emitByte(byte(checkReg))  // right operand (undefined)
+	c.emitByte(byte(checkReg)) // result register
+	c.emitByte(byte(tempReg))  // left operand
+	c.emitByte(byte(checkReg)) // right operand (undefined)
 
 	// Jump past error if not undefined
 	notUndefJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
@@ -1776,7 +1776,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	c.emitGetGlobal(errorReg, typeErrorGlobalIdx, line)
 	msgConstIdx = c.chunk.AddConstant(vm.String("Cannot destructure 'undefined'"))
 	c.emitLoadConstant(msgReg, msgConstIdx, line)
-	c.emitCall(resultReg, errorReg, 1, line)  // Call TypeError constructor with message
+	c.emitCall(resultReg, errorReg, 1, line) // Call TypeError constructor with message
 	c.emitOpCode(vm.OpThrow, line)
 	c.emitByte(byte(resultReg))
 
@@ -1824,9 +1824,9 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				// Use OpGetProp for regular string properties
 				propNameIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
 				c.emitOpCode(vm.OpGetProp, line)
-				c.emitByte(byte(valueReg))   // destination register
-				c.emitByte(byte(tempReg))    // object register
-				c.emitUint16(propNameIdx)    // property name constant index
+				c.emitByte(byte(valueReg)) // destination register
+				c.emitByte(byte(tempReg))  // object register
+				c.emitUint16(propNameIdx)  // property name constant index
 			}
 		} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 			// Number literal key: use OpGetIndex for numeric property access
@@ -1844,9 +1844,9 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 			propName := bigIntLit.Value
 			propNameIdx := c.chunk.AddConstant(vm.String(propName))
 			c.emitOpCode(vm.OpGetProp, line)
-			c.emitByte(byte(valueReg))   // destination register
-			c.emitByte(byte(tempReg))    // object register
-			c.emitUint16(propNameIdx)    // property name constant index
+			c.emitByte(byte(valueReg)) // destination register
+			c.emitByte(byte(tempReg))  // object register
+			c.emitUint16(propNameIdx)  // property name constant index
 		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
 			keyReg := c.regAlloc.Alloc()
 			_, err := c.compileNode(computed.Expr, keyReg)
@@ -1872,13 +1872,13 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
 				}
-				
+
 				// Get the target identifier for conditional assignment
 				targetIdent := &parser.Identifier{
 					Token: ident.Token,
 					Value: ident.Value,
 				}
-				
+
 				// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
 				err = c.compileConditionalAssignment(targetIdent, valueReg, prop.Default, line)
 				if err != nil {
@@ -1911,11 +1911,11 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				}
 			}
 		}
-		
+
 		// Clean up temporary register
 		c.regAlloc.Free(valueReg)
 	}
-	
+
 	// Handle rest property if present
 	if node.RestProperty != nil {
 		if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
@@ -1926,7 +1926,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 			}
 		}
 	}
-	
+
 	return BadRegister, nil
 }
 
@@ -1962,9 +1962,10 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 		// Pin the register since local variables can be captured by upvalues
 		c.regAlloc.Pin(valueReg)
 	}
-	
+
 	return nil
 }
+
 // compileAssignmentToMember compiles assignment to a member expression: obj.prop = valueReg or obj[key] = valueReg
 func (c *Compiler) compileAssignmentToMember(memberExpr *parser.MemberExpression, valueReg Register, line int) errors.PaseratiError {
 	// Compile the object expression

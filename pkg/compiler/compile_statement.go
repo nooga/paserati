@@ -22,114 +22,114 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		isValueFunc := false // Flag to track if value is a function literal
 
 		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-		isValueFunc = true
-		// --- Handle let f = function g() {} or let f = function() {} ---
-		// 1. Define the *variable name (f)* temporarily for potential recursion
-		//    within the function body (e.g., recursive anonymous function).
-		// debug disabled
-		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+			isValueFunc = true
+			// --- Handle let f = function g() {} or let f = function() {} ---
+			// 1. Define the *variable name (f)* temporarily for potential recursion
+			//    within the function body (e.g., recursive anonymous function).
+			// debug disabled
+			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
-		// 2. Compile the function literal body.
-		//    Pass the variable name (f) as the hint for the function object's name
-		//    if the function literal itself is anonymous.
-		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
-		if err != nil {
-			// Error already added to c.errors by compileFunctionLiteral
-			return BadRegister, nil // Return nil error here, main error is tracked
-		}
-		// 3. Create the closure object
-		closureReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(closureReg)
-		// debug disabled
-		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
-
-		// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-		// debug disabled
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
-
-		// The variable's value (the closure) is now set.
-		// We don't need to assign to valueReg anymore for this path.
-
-	} else if node.Value != nil {
-		// Compile other value types normally
-		// Use existing predefined register if present
-		targetReg := valueReg
-		if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
-			targetReg = sym.Register
-		} else {
-			targetReg = c.regAlloc.Alloc()
-			defer c.regAlloc.Free(targetReg)
-		}
-		_, err = c.compileNode(node.Value, targetReg)
-		if err != nil {
-			return BadRegister, err
-		}
-		valueReg = targetReg
-	} // else: node.Value is nil (implicit undefined handled below)
-
-	// Handle implicit undefined (`let x;`)
-	if valueReg == nilRegister && !isValueFunc {
-		undefReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(undefReg)
-		c.emitLoadUndefined(undefReg, node.Name.Token.Line)
-		valueReg = undefReg
-		// Define symbol for the `let x;` case
-		// debug disabled
-		// Check if we're in global scope: no enclosing compiler AND no outer symbol table
-		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
-		if isGlobalScope {
-			// True global scope: use global variable
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		} else {
-			// Local scope (function or enclosed block): use local symbol table
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
-				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
-			} else {
-				c.currentSymbolTable.Define(node.Name.Value, valueReg)
-				c.regAlloc.Pin(valueReg)
+			// 2. Compile the function literal body.
+			//    Pass the variable name (f) as the hint for the function object's name
+			//    if the function literal itself is anonymous.
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
+			if err != nil {
+				// Error already added to c.errors by compileFunctionLiteral
+				return BadRegister, nil // Return nil error here, main error is tracked
 			}
-		}
-	} else if !isValueFunc {
-		// Define symbol ONLY for non-function values.
-		// Function assignments were handled above by UpdateRegister.
-		// debug disabled
-		// Check if we're in global scope: no enclosing compiler AND no outer symbol table
-		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
-		if isGlobalScope {
-			// True global scope: use global variable
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		} else {
-			// Local scope (function or enclosed block): use local symbol table
+			// 3. Create the closure object
+			closureReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(closureReg)
+			// debug disabled
+			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
+
+			// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
+			// debug disabled
+			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+
+			// The variable's value (the closure) is now set.
+			// We don't need to assign to valueReg anymore for this path.
+
+		} else if node.Value != nil {
+			// Compile other value types normally
+			// Use existing predefined register if present
+			targetReg := valueReg
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
-				debugPrintf("// [LetStatement] '%s' already predefined in R%d, moving from valueReg=R%d (symbolTable=%p)\n", node.Name.Value, sym.Register, valueReg, c.currentSymbolTable)
-				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+				targetReg = sym.Register
 			} else {
-				debugPrintf("// [LetStatement] '%s' not predefined, defining in R%d (symbolTable=%p)\n", node.Name.Value, valueReg, c.currentSymbolTable)
-				c.currentSymbolTable.Define(node.Name.Value, valueReg)
-				c.regAlloc.Pin(valueReg)
+				targetReg = c.regAlloc.Alloc()
+				defer c.regAlloc.Free(targetReg)
 			}
-		}
-	} else {
-		// Function value - check if it should be global
-		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
-		if isGlobalScope {
-			// Top-level function: also set as global
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-			// Get the closure register from the symbol table
-			symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
-			if found && symbolRef.Register != nilRegister {
-				c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
-				// Update the symbol to be global
+			_, err = c.compileNode(node.Value, targetReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			valueReg = targetReg
+		} // else: node.Value is nil (implicit undefined handled below)
+
+		// Handle implicit undefined (`let x;`)
+		if valueReg == nilRegister && !isValueFunc {
+			undefReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(undefReg)
+			c.emitLoadUndefined(undefReg, node.Name.Token.Line)
+			valueReg = undefReg
+			// Define symbol for the `let x;` case
+			// debug disabled
+			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			if isGlobalScope {
+				// True global scope: use global variable
+				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-				// Pin the register since function closures can be captured by upvalues
-				c.regAlloc.Pin(symbolRef.Register)
+			} else {
+				// Local scope (function or enclosed block): use local symbol table
+				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+					c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+				} else {
+					c.currentSymbolTable.Define(node.Name.Value, valueReg)
+					c.regAlloc.Pin(valueReg)
+				}
+			}
+		} else if !isValueFunc {
+			// Define symbol ONLY for non-function values.
+			// Function assignments were handled above by UpdateRegister.
+			// debug disabled
+			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			if isGlobalScope {
+				// True global scope: use global variable
+				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+			} else {
+				// Local scope (function or enclosed block): use local symbol table
+				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+					debugPrintf("// [LetStatement] '%s' already predefined in R%d, moving from valueReg=R%d (symbolTable=%p)\n", node.Name.Value, sym.Register, valueReg, c.currentSymbolTable)
+					c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+				} else {
+					debugPrintf("// [LetStatement] '%s' not predefined, defining in R%d (symbolTable=%p)\n", node.Name.Value, valueReg, c.currentSymbolTable)
+					c.currentSymbolTable.Define(node.Name.Value, valueReg)
+					c.regAlloc.Pin(valueReg)
+				}
+			}
+		} else {
+			// Function value - check if it should be global
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			if isGlobalScope {
+				// Top-level function: also set as global
+				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				// Get the closure register from the symbol table
+				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+				if found && symbolRef.Register != nilRegister {
+					c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+					// Update the symbol to be global
+					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+					// Pin the register since function closures can be captured by upvalues
+					c.regAlloc.Pin(symbolRef.Register)
+				}
 			}
 		}
-	}
 	} // end for declarator
 
 	return BadRegister, nil
@@ -275,82 +275,82 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		isValueFunc := false // Flag
 
 		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-		isValueFunc = true
-		// --- Handle const f = function g() {} or const f = function() {} ---
-		// 1. Define the *const name (f)* temporarily for recursion.
-		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+			isValueFunc = true
+			// --- Handle const f = function g() {} or const f = function() {} ---
+			// 1. Define the *const name (f)* temporarily for recursion.
+			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 
-		// 2. Compile the function literal body, passing const name as hint.
-		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
-		if err != nil {
-			// Error already added to c.errors by compileFunctionLiteral
-			return BadRegister, nil // Return nil error here, main error is tracked
-		}
-		// 3. Create the closure object
-		closureReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(closureReg)
-		c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
+			// 2. Compile the function literal body, passing const name as hint.
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
+			if err != nil {
+				// Error already added to c.errors by compileFunctionLiteral
+				return BadRegister, nil // Return nil error here, main error is tracked
+			}
+			// 3. Create the closure object
+			closureReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(closureReg)
+			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
-		// 4. Update the temporary definition for the *const name (f)* with the closure register.
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+			// 4. Update the temporary definition for the *const name (f)* with the closure register.
+			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
-		// The constant's value (the closure) is now set.
-		// We don't need to assign to valueReg anymore for this path.
+			// The constant's value (the closure) is now set.
+			// We don't need to assign to valueReg anymore for this path.
 
-	} else {
-		// Compile other value types normally
-		// Use existing predefined register if present
-		targetReg := valueReg
-		if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
-			targetReg = sym.Register
 		} else {
-			targetReg = c.regAlloc.Alloc()
-			defer c.regAlloc.Free(targetReg)
-		}
-		_, err = c.compileNode(node.Value, targetReg)
-		if err != nil {
-			return BadRegister, err
-		}
-		valueReg = targetReg
-	}
-
-	// Define symbol ONLY for non-function values.
-	// Const function assignments were handled above by UpdateRegister.
-	if !isValueFunc {
-		// For non-functions, Define associates the name with the final value register.
-		// Check if we're in global scope: no enclosing compiler AND no outer symbol table
-		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
-		if isGlobalScope {
-			// True global scope: use global variable
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-			c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		} else {
-			// Local scope (function or enclosed block): use local symbol table
+			// Compile other value types normally
+			// Use existing predefined register if present
+			targetReg := valueReg
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
-				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+				targetReg = sym.Register
 			} else {
-				c.currentSymbolTable.Define(node.Name.Value, valueReg)
-				c.regAlloc.Pin(valueReg)
+				targetReg = c.regAlloc.Alloc()
+				defer c.regAlloc.Free(targetReg)
 			}
+			_, err = c.compileNode(node.Value, targetReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			valueReg = targetReg
 		}
-	} else {
-		// Function value - check if it should be global
-		isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
-		if isGlobalScope {
-			// Top-level function: also set as global
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-			// Get the closure register from the symbol table
-			symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
-			if found && symbolRef.Register != nilRegister {
-				c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
-				// Update the symbol to be global
+
+		// Define symbol ONLY for non-function values.
+		// Const function assignments were handled above by UpdateRegister.
+		if !isValueFunc {
+			// For non-functions, Define associates the name with the final value register.
+			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			if isGlobalScope {
+				// True global scope: use global variable
+				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-				// Pin the register since function closures can be captured by upvalues
-				c.regAlloc.Pin(symbolRef.Register)
+			} else {
+				// Local scope (function or enclosed block): use local symbol table
+				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+					c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+				} else {
+					c.currentSymbolTable.Define(node.Name.Value, valueReg)
+					c.regAlloc.Pin(valueReg)
+				}
+			}
+		} else {
+			// Function value - check if it should be global
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			if isGlobalScope {
+				// Top-level function: also set as global
+				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				// Get the closure register from the symbol table
+				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+				if found && symbolRef.Register != nilRegister {
+					c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+					// Update the symbol to be global
+					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+					// Pin the register since function closures can be captured by upvalues
+					c.regAlloc.Pin(symbolRef.Register)
+				}
 			}
 		}
-	}
 	} // end for declarator
 	return BadRegister, nil
 }
@@ -1207,7 +1207,6 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 func (c *Compiler) compileForOfStatement(node *parser.ForOfStatement, hint Register) (Register, errors.PaseratiError) {
 	return c.compileForOfStatementLabeled(node, "", hint)
 }
-
 
 func (c *Compiler) compileForInStatement(node *parser.ForInStatement, hint Register) (Register, errors.PaseratiError) {
 	return c.compileForInStatementLabeled(node, "", hint)

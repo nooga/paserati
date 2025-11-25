@@ -16,15 +16,15 @@ type Symbol struct {
 
 // WithObjectInfo tracks information about a with object in the compiler
 type WithObjectInfo struct {
-	ObjectRegister Register           // Register containing the with object
-	Properties     map[string]bool    // Set of known properties (true if property exists)
+	ObjectRegister Register        // Register containing the with object
+	Properties     map[string]bool // Set of known properties (true if property exists)
 }
 
 // SymbolTable manages symbols for a single scope.
 type SymbolTable struct {
 	Outer *SymbolTable      // Pointer to the symbol table of the enclosing scope
 	store map[string]Symbol // Stores symbols defined in *this* scope
-	
+
 	// --- With statement support ---
 	withObjects []WithObjectInfo // Stack of with objects in this scope
 }
@@ -121,12 +121,12 @@ func (st *SymbolTable) HasActiveWithObjects() bool {
 	if len(st.withObjects) > 0 {
 		return true
 	}
-	
+
 	// Check outer scopes
 	if st.Outer != nil {
 		return st.Outer.HasActiveWithObjects()
 	}
-	
+
 	return false
 }
 
@@ -146,11 +146,11 @@ func (st *SymbolTable) ResolveWithProperty(name string) (Register, bool) {
 			return withInfo.ObjectRegister, true
 		}
 	}
-	
+
 	// If not found in current scope, check outer scope
 	if st.Outer != nil {
 		return st.Outer.ResolveWithProperty(name)
 	}
-	
+
 	return 0, false
 }
