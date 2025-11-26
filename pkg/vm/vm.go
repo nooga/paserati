@@ -8375,6 +8375,46 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 
 // resumeGeneratorWithException resumes execution from a yield point and throws an exception at that point
 func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Value) (Value, error) {
+	// Clean up stale unwinding state from previous exception that crossed native boundary
+	// This happens when native code catches an exception from a VM call and then calls back into the VM
+	// Note: currentException might be Null if it was already cleared when passing error to native code
+	if vm.unwindingCrossedNative {
+		if debugExceptions {
+			fmt.Printf("[DEBUG resumeGeneratorWithException] Cleaning up stale state: unwinding=%v, crossedNative=%v, frameCount=%d\n",
+				vm.unwinding, vm.unwindingCrossedNative, vm.frameCount)
+		}
+		// The previous exception was caught by native code. We need to pop the frame that had isDirectCall=true
+		// since that frame's execution is done (the native code caught the error).
+		// Pop frames until we're back to a clean state (sentinel frame or the base)
+		for vm.frameCount > 0 {
+			f := &vm.frames[vm.frameCount-1]
+			if f.isSentinelFrame {
+				// Don't pop sentinel frames - they belong to outer calls
+				break
+			}
+			if f.isDirectCall {
+				// This is the frame that caused crossedNative - pop it
+				if debugExceptions {
+					fmt.Printf("[DEBUG resumeGeneratorWithException] Popping stale direct call frame %d\n", vm.frameCount-1)
+				}
+				// Reclaim registers
+				if f.closure != nil && f.closure.Fn != nil {
+					vm.nextRegSlot -= f.closure.Fn.RegisterSize
+				}
+				vm.frameCount--
+				break
+			}
+			// Pop non-sentinel, non-direct frames (shouldn't happen normally)
+			if f.closure != nil && f.closure.Fn != nil {
+				vm.nextRegSlot -= f.closure.Fn.RegisterSize
+			}
+			vm.frameCount--
+		}
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+		vm.currentException = Null
+	}
+
 	// Check if generator has saved state
 	if genObj.Frame == nil {
 		// Generator has no saved frame - it must be completed
