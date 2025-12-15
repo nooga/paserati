@@ -1539,13 +1539,64 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		return objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{proxy.Target(), args[1]})
 	}
 
-	// First argument must be object-like
-	if !(obj.IsObject() || obj.Type() == vm.TypeArray) {
+	// First argument must be object-like (including functions)
+	isObjectLike := obj.IsObject() || obj.Type() == vm.TypeArray ||
+		obj.Type() == vm.TypeFunction || obj.Type() == vm.TypeClosure ||
+		obj.Type() == vm.TypeNativeFunction || obj.Type() == vm.TypeNativeFunctionWithProps ||
+		obj.Type() == vm.TypeAsyncNativeFunction || obj.Type() == vm.TypeBoundFunction
+	if !isObjectLike {
 		return vm.Undefined, nil
 	}
 
 	// Check if the property exists
 	var value vm.Value
+
+	// Handle function types - check Properties for custom props set via DefineMethod
+	switch obj.Type() {
+	case vm.TypeFunction:
+		fn := obj.AsFunction()
+		// Check custom properties first (e.g., static methods on constructor)
+		if fn.Properties != nil {
+			if v, w, e, c, ok := fn.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+		}
+		// Fall through to check intrinsic properties below
+	case vm.TypeClosure:
+		closure := obj.AsClosure()
+		fn := closure.Fn
+		// Check custom properties first
+		if fn.Properties != nil {
+			if v, w, e, c, ok := fn.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+		}
+		// Fall through to check intrinsic properties below
+	case vm.TypeNativeFunctionWithProps:
+		nfp := obj.AsNativeFunctionWithProps()
+		// Check custom properties first
+		if nfp.Properties != nil {
+			if v, w, e, c, ok := nfp.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+		}
+		// Fall through to check intrinsic properties below
+	}
 
 	// Check arrays first before plainObj (arrays can also be AsPlainObject but their indices are stored separately)
 	if obj.Type() == vm.TypeArray {

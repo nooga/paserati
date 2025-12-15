@@ -1002,9 +1002,10 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 		c.emitByte(byte(methodReg))      // Value register (method function)
 		c.emitByte(byte(keyReg))         // Key register (computed at runtime)
 	} else {
-		// Use OpSetProp for static property names
+		// Use OpDefineMethod for static methods to create non-enumerable property
+		// (per ECMAScript, class methods have enumerable: false)
 		methodNameIdx := c.chunk.AddConstant(vm.String(c.extractPropertyName(method.Key)))
-		c.emitSetProp(constructorReg, methodReg, methodNameIdx, method.Token.Line)
+		c.emitDefineMethod(constructorReg, methodReg, methodNameIdx, method.Token.Line)
 	}
 
 	debugPrintf("// DEBUG addStaticMethod: Static method '%s' added to constructor\n", c.extractPropertyName(method.Key))

@@ -44,3 +44,5 @@ test262/
 baseline.txt
 mcp-go-debugger.log
 dome.js
+paserati-analyze
+paserati-test262
