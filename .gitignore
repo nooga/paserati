@@ -46,3 +46,5 @@ mcp-go-debugger.log
 dome.js
 paserati-analyze
 paserati-test262
+paserati-analyze/
+paserati-test262/
