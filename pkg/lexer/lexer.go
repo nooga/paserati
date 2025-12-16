@@ -1880,12 +1880,10 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 			case 0: // EOF after backslash
 				return "", false // Invalid escape sequence due to EOF
 			default:
-				// Invalid escape sequence (e.g., \z)
-				// Option 1: Treat as illegal string
-				return "", false
-				// Option 2: Treat backslash literally (sometimes allowed)
-				// builder.WriteByte('\\')
-				// builder.WriteByte(l.ch)
+				// Identity escape sequence: In JavaScript (non-strict mode), unknown escape
+				// sequences like \A, \z, etc. are treated as the character itself.
+				// The backslash is simply ignored. This is per ECMAScript spec.
+				builder.WriteByte(l.ch)
 			}
 		} else {
 			// Regular character

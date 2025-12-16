@@ -500,14 +500,10 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			var builder strings.Builder
 			includeFiles := []string{}
 
-			// Always include sta.js first (defines Test262Error used by assert.js)
-			includeFiles = append(includeFiles, "sta.js")
-			// Then include assert.js for all tests
-			includeFiles = append(includeFiles, "assert.js")
-
-			// Check for async flag and auto-include required harness
+			// Check for raw flag and other flags first
 			hdr := extractFrontmatterHeader(string(content))
 			isModule := false
+			isRaw := false
 			if hdr != "" {
 				if flags := extractFlags(hdr); len(flags) > 0 {
 					for _, flag := range flags {
@@ -515,9 +511,17 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 							includeFiles = append(includeFiles, "doneprintHandle.js")
 						} else if flag == "module" {
 							isModule = true
+						} else if flag == "raw" {
+							isRaw = true
 						}
 					}
 				}
+			}
+
+			// For raw tests, don't include any harness files
+			if !isRaw {
+				// Always include sta.js first (defines Test262Error used by assert.js)
+				includeFiles = append([]string{"sta.js", "assert.js"}, includeFiles...)
 			}
 
 			// Add explicitly requested includes
@@ -620,9 +624,14 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 
 			} else {
 				// --- SCRIPT MODE: Concatenate and execute as one script ---
-				builder.WriteString("\n// [test body]\n")
-				builder.WriteString(string(content))
-				sourceWithIncludes = builder.String()
+				if isRaw {
+					// Raw tests: use content exactly as-is (no harness, no prefix)
+					sourceWithIncludes = string(content)
+				} else {
+					builder.WriteString("\n// [test body]\n")
+					builder.WriteString(string(content))
+					sourceWithIncludes = builder.String()
+				}
 			}
 		}
 
