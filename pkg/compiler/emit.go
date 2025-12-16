@@ -484,6 +484,15 @@ func (c *Compiler) emitDefineMethodEnumerable(obj, val Register, nameConstIdx ui
 	c.emitUint16(nameConstIdx)
 }
 
+// emitDefineMethodComputedEnumerable emits OpDefineMethodComputedEnumerable ObjReg, ValueReg, KeyReg
+// Used for defining enumerable methods with computed keys (e.g., object literal computed methods)
+func (c *Compiler) emitDefineMethodComputedEnumerable(obj, val, key Register, line int) {
+	c.emitOpCode(vm.OpDefineMethodComputedEnumerable, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitByte(byte(key))
+}
+
 // emitDefineAccessor emits OpDefineAccessor ObjReg, GetterReg, SetterReg, NameConstIdx(Uint16)
 func (c *Compiler) emitDefineAccessor(obj, getter, setter Register, nameConstIdx uint16, line int) {
 	c.emitOpCode(vm.OpDefineAccessor, line)

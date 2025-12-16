@@ -631,13 +631,9 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				}
 			} else if isComputedKey {
 				// Computed regular method name in object literal
-				// Note: Object literal methods are enumerable, so we use OpSetIndex
-				// This means object literal computed methods don't get [[HomeObject]]
-				// TODO: Add enumerable flag to OpDefineMethodComputed or use separate opcode
-				c.emitOpCode(vm.OpSetIndex, line)
-				c.emitByte(byte(hint))     // Object register
-				c.emitByte(byte(keyReg))   // Key register (computed at runtime)
-				c.emitByte(byte(valueReg)) // Value register
+				// Use OpDefineMethodComputedEnumerable to set [[HomeObject]] and make enumerable
+				// (object literal methods are enumerable, and need [[HomeObject]] for super)
+				c.emitDefineMethodComputedEnumerable(hint, valueReg, keyReg, line)
 				continue
 			}
 
@@ -719,11 +715,19 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 
 			// Set the property based on whether it's computed or static
 			if isComputedKey {
-				// Use OpSetIndex for computed keys: obj[keyReg] = valueReg
-				c.emitOpCode(vm.OpSetIndex, line)
-				c.emitByte(byte(hint))     // Object register
-				c.emitByte(byte(keyReg))   // Key register (computed at runtime)
-				c.emitByte(byte(valueReg)) // Value register
+				// Check if this is a computed method (FunctionLiteral with computed key)
+				// Computed methods need [[HomeObject]] for super property access
+				_, isFuncLit := prop.Value.(*parser.FunctionLiteral)
+				if isFuncLit {
+					// Use OpDefineMethodComputedEnumerable to set [[HomeObject]] and make enumerable
+					c.emitDefineMethodComputedEnumerable(hint, valueReg, keyReg, line)
+				} else {
+					// Use OpSetIndex for computed keys: obj[keyReg] = valueReg
+					c.emitOpCode(vm.OpSetIndex, line)
+					c.emitByte(byte(hint))     // Object register
+					c.emitByte(byte(keyReg))   // Key register (computed at runtime)
+					c.emitByte(byte(valueReg)) // Value register
+				}
 			} else {
 				// Use OpSetProp for all static keys (including methods)
 				// Note: Object literal methods are enumerable, unlike class methods

@@ -4207,6 +4207,13 @@ startExecution:
 				return status, value
 			}
 
+		case OpDefineMethodComputedEnumerable:
+			frame.ip = ip
+			status, value := vm.handleOpDefineMethodComputedEnumerable(code, &ip, registers)
+			if status != InterpretOK {
+				return status, value
+			}
+
 		// (OpDeleteProp handled later in switch)
 
 		case OpCallMethod:
@@ -4589,6 +4596,7 @@ startExecution:
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = newInstance         // Set the new instance as 'this' (or undefined for derived)
+				newFrame.homeObject = instancePrototype  // Set [[HomeObject]] for super property access in constructors
 				newFrame.isConstructorCall = true        // Mark this as a constructor call
 				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
 				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
@@ -4746,6 +4754,7 @@ startExecution:
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = newInstance         // Set the new instance as 'this' (or undefined for derived)
+				newFrame.homeObject = instancePrototype  // Set [[HomeObject]] for super property access in constructors
 				newFrame.isConstructorCall = true        // Mark this as a constructor call
 				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
 				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame

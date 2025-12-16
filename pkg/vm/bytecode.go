@@ -120,8 +120,9 @@ const (
 	OpSetSuper               OpCode = 113 // NameIdx(16bit) ValueReg: super.propertyName = ValueReg (super property assignment with static name)
 	OpGetSuperComputed       OpCode = 114 // Rx KeyReg: Rx = super[KeyReg] (super property access with computed key)
 	OpSetSuperComputed       OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
-	OpDefineMethodComputed   OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
-	OpDefineMethodEnumerable OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
+	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
+	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
+	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
 
 	// --- With Statement Support ---
 	OpPushWithObject  OpCode = 118 // ObjReg: Push object onto VM's with-object stack
@@ -367,6 +368,8 @@ func (op OpCode) String() string {
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
 		return "OpDefineMethodEnumerable"
+	case OpDefineMethodComputedEnumerable:
+		return "OpDefineMethodComputedEnumerable"
 	case OpPushWithObject:
 		return "OpPushWithObject"
 	case OpPopWithObject:
@@ -754,6 +757,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // ObjReg ValueReg KeyReg
 	case OpDefineMethodEnumerable:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "method") // ObjReg ValueReg NameIdx(16bit)
+	case OpDefineMethodComputedEnumerable:
+		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // ObjReg ValueReg KeyReg
 	case OpPushWithObject:
 		return c.registerInstruction(builder, instruction.String(), offset) // ObjReg
 	case OpPopWithObject:
