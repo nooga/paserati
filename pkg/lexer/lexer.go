@@ -2096,6 +2096,12 @@ func isUnicodeIDStart(r rune) bool {
 		return true
 	}
 
+	// Unicode Nl (Letter Number) category - valid for ID_Start per ECMAScript
+	// Includes Roman numerals, Cuneiform numbers, etc.
+	if unicode.Is(unicode.Nl, r) {
+		return true
+	}
+
 	// Special cases: $ and _
 	if r == '$' || r == '_' {
 		return true
@@ -2110,6 +2116,169 @@ func isUnicodeIDStart(r rune) bool {
 		0x309C, // ゜ KATAKANA-HIRAGANA SEMI-VOICED SOUND MARK
 		0x1885, // ᢅ (Unicode 9.0)
 		0x1886: // ᢆ (Unicode 9.0)
+		return true
+	}
+
+	// CJK Unified Ideographs and Extensions (may not be in Go's unicode tables)
+	// These are valid ID_Start characters per Unicode standard
+	if r >= 0x3400 && r <= 0x4DBF { // CJK Extension A
+		return true
+	}
+	if r >= 0x4E00 && r <= 0x9FFF { // CJK Unified Ideographs (main block)
+		return true
+	}
+	if r >= 0xF900 && r <= 0xFAFF { // CJK Compatibility Ideographs
+		return true
+	}
+	if r >= 0x20000 && r <= 0x2A6DF { // CJK Extension B
+		return true
+	}
+	if r >= 0x2A700 && r <= 0x2B73F { // CJK Extension C
+		return true
+	}
+	if r >= 0x2B740 && r <= 0x2B81F { // CJK Extension D
+		return true
+	}
+	if r >= 0x2B820 && r <= 0x2CEAF { // CJK Extension E
+		return true
+	}
+	if r >= 0x2CEB0 && r <= 0x2EBEF { // CJK Extension F
+		return true
+	}
+	if r >= 0x2EBF0 && r <= 0x2EE5F { // CJK Extension I (Unicode 15.1)
+		return true
+	}
+	if r >= 0x30000 && r <= 0x3134F { // CJK Extension G
+		return true
+	}
+	if r >= 0x31350 && r <= 0x323AF { // CJK Extension H
+		return true
+	}
+	if r >= 0x2F800 && r <= 0x2FA1F { // CJK Compatibility Ideographs Supplement
+		return true
+	}
+
+	// Unicode 16.0 additions (not yet in Go's unicode tables)
+	if r >= 0x1C80 && r <= 0x1C8F { // Georgian Extended (Unicode 16.0)
+		return true
+	}
+	if r >= 0x10D40 && r <= 0x10D8F { // Garay (Unicode 16.0)
+		return true
+	}
+	if r >= 0x10E80 && r <= 0x10EBF { // Yezidi (Unicode 13.0, but may be missing)
+		return true
+	}
+	if r >= 0x10EC0 && r <= 0x10EFF { // Arabic Extended-C (Unicode 16.0)
+		return true
+	}
+	if r >= 0x11380 && r <= 0x113FF { // Tulu-Tigalari (Unicode 16.0)
+		return true
+	}
+	if r >= 0x16100 && r <= 0x1613F { // Gurung Khema (Unicode 16.0)
+		return true
+	}
+	if r >= 0x1E5D0 && r <= 0x1E5FF { // Todhri (Unicode 16.0)
+		return true
+	}
+	if r >= 0x1E290 && r <= 0x1E2BF { // Toto (Unicode 14.0, may be missing)
+		return true
+	}
+	if r >= 0x1DF00 && r <= 0x1DFFF { // Latin Extended-G (Unicode 14.0)
+		return true
+	}
+	if r >= 0x10570 && r <= 0x105FF { // Vithkuqi + supplementary (Unicode 14.0/16.0)
+		return true
+	}
+
+	// Latin Extended-D additions in Unicode 16.0
+	// Specific characters added: U+A7CB-U+A7DC
+	if r >= 0xA7CB && r <= 0xA7DC {
+		return true
+	}
+
+	// Cypro-Minoan (Unicode 14.0) - U+12F90 to U+12FFF
+	if r >= 0x12F90 && r <= 0x12FFF {
+		return true
+	}
+
+	// Old Uyghur (Unicode 14.0) - U+10F70 to U+10FAF
+	if r >= 0x10F70 && r <= 0x10FAF {
+		return true
+	}
+
+	// Tangsa (Unicode 14.0) - U+16A70 to U+16ACF
+	if r >= 0x16A70 && r <= 0x16ACF {
+		return true
+	}
+
+	// Kawi (Unicode 15.0) - U+11F00 to U+11F5F
+	if r >= 0x11F00 && r <= 0x11F5F {
+		return true
+	}
+
+	// Nag Mundari (Unicode 15.0) - U+1E4D0 to U+1E4FF
+	if r >= 0x1E4D0 && r <= 0x1E4FF {
+		return true
+	}
+
+	// Unicode 16.0 script blocks
+	if r >= 0x11BC0 && r <= 0x11BFF { // Sunuwar (Unicode 16.0)
+		return true
+	}
+	if r >= 0x1E5E0 && r <= 0x1E5FF { // Sidetic (Unicode 16.0) - may overlap with earlier
+		return true
+	}
+	if r >= 0x1CC00 && r <= 0x1CCFF { // Symbols for Legacy Computing Supplement
+		return true
+	}
+	if r >= 0x11B00 && r <= 0x11B5F { // Devanagari Extended-A (Unicode 15.0)
+		return true
+	}
+	if r >= 0x10D00 && r <= 0x10D3F { // Hanifi Rohingya (Unicode 11.0)
+		return true
+	}
+	if r >= 0x10FB0 && r <= 0x10FDF { // Chorasmian (Unicode 13.0)
+		return true
+	}
+	if r >= 0x10FE0 && r <= 0x10FFF { // Elymaic (Unicode 12.0)
+		return true
+	}
+	if r >= 0x11900 && r <= 0x1195F { // Dives Akuru (Unicode 13.0)
+		return true
+	}
+	if r >= 0x16FE4 && r <= 0x16FFF { // Symbols and Marks (Unicode 14.0)
+		return true
+	}
+	if r >= 0x1AFF0 && r <= 0x1AFFF { // Kana Extended-B (Unicode 14.0)
+		return true
+	}
+	if r >= 0x1B000 && r <= 0x1B0FF { // Kana Supplement (Unicode 6.0)
+		return true
+	}
+	if r >= 0x1B100 && r <= 0x1B12F { // Kana Extended-A (Unicode 12.0)
+		return true
+	}
+	if r >= 0x1B130 && r <= 0x1B16F { // Small Kana Extension (Unicode 12.0)
+		return true
+	}
+
+	// Egyptian Hieroglyphs Extended-A (Unicode 14.0) and Extended-B
+	if r >= 0x13460 && r <= 0x143FF {
+		return true
+	}
+
+	// Kirat Rai (Unicode 16.0)
+	if r >= 0x16D40 && r <= 0x16D7F {
+		return true
+	}
+
+	// Khitan Small Script (Unicode 13.0)
+	if r >= 0x18B00 && r <= 0x18CFF {
+		return true
+	}
+
+	// Garay (Unicode 16.0) - extended range
+	if r >= 0x10D40 && r <= 0x10D8F {
 		return true
 	}
 
@@ -2142,7 +2311,42 @@ func isUnicodeIDContinue(r rune) bool {
 		0x1369, 0x136A, 0x136B, 0x136C, 0x136D, 0x136E, 0x136F, 0x1370, 0x1371, // Ethiopian digits
 		0x19DA, // ᧚ NEW TAI LUE THAM DIGIT ONE
 		0x200C, // ZWNJ - Zero Width Non-Joiner
-		0x200D: // ZWJ - Zero Width Joiner
+		0x200D, // ZWJ - Zero Width Joiner
+		0x30FB, // ・ KATAKANA MIDDLE DOT (Unicode 15.1 ID_Continue)
+		0xFF65, // ･ HALFWIDTH KATAKANA MIDDLE DOT (Unicode 15.1 ID_Continue)
+		0x0897: // Arabic Extended-B (Unicode 16.0)
+		return true
+	}
+
+	// Unicode 16.0 ID_Continue ranges (combining marks, digits, etc.)
+	if r >= 0x10D40 && r <= 0x10D6D { // Garay marks/digits
+		return true
+	}
+	if r == 0x10EFC { // Arabic Extended-C mark
+		return true
+	}
+	if r >= 0x113B8 && r <= 0x113E2 { // Tulu-Tigalari marks
+		return true
+	}
+	if r >= 0x116D0 && r <= 0x116E3 { // Siddham marks
+		return true
+	}
+	if r >= 0x11BF0 && r <= 0x11BF9 { // Sunuwar digits
+		return true
+	}
+	if r == 0x11F5A { // Kawi mark
+		return true
+	}
+	if r >= 0x1611E && r <= 0x16139 { // Gurung Khema marks
+		return true
+	}
+	if r >= 0x16D70 && r <= 0x16D79 { // Kirat Rai digits
+		return true
+	}
+	if r >= 0x1CCF0 && r <= 0x1CCF9 { // Legacy Computing digits
+		return true
+	}
+	if r >= 0x1E5EE && r <= 0x1E5FA { // Todhri marks
 		return true
 	}
 
