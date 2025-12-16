@@ -133,15 +133,24 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	// <<< END ADDED >>>
 
 	// 6. Create the function object directly using vm.NewFunction
-	// Count parameters excluding 'this' parameters for arity calculation
+	// Arity: total parameters excluding 'this' (for VM register allocation)
+	// Length: params before first default (for ECMAScript function.length property)
 	arity := 0
+	length := 0
+	seenDefault := false
 	for _, param := range node.Parameters {
-		if !param.IsThis {
-			arity++
+		if param.IsThis {
+			continue
+		}
+		arity++
+		if !seenDefault && param.DefaultValue == nil {
+			length++
+		} else {
+			seenDefault = true
 		}
 	}
 	arrowName := "<arrow>"
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true) // isArrowFunction = true
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
@@ -269,10 +278,20 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	funcCompiler.emitByte(byte(bodyReg))
 
 	// Create function value with custom name
-	arity := len(node.Parameters)
+	// Arity: total parameters excluding 'this' (for VM register allocation)
+	// Length: params before first default (for ECMAScript function.length property)
+	arity := 0
+	length := 0
+	seenDefault := false
 	for _, param := range node.Parameters {
-		if !param.IsThis {
-			arity++
+		if param.IsThis {
+			continue
+		}
+		arity++
+		if !seenDefault && param.DefaultValue == nil {
+			length++
+		} else {
+			seenDefault = true
 		}
 	}
 
@@ -280,7 +299,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	freeSymbols := funcCompiler.freeSymbols
 	regSize := funcCompiler.regAlloc.MaxRegs()
 
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true)
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil
@@ -1205,14 +1224,23 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 
 	// 8. Add the function object to the *outer* compiler's constant pool.
-	// Count parameters excluding 'this' parameters for arity calculation
+	// Arity: total parameters excluding 'this' (for VM register allocation)
+	// Length: params before first default (for ECMAScript function.length property)
 	arity := 0
+	length := 0
+	seenDefault := false
 	for _, param := range node.Parameters {
-		if !param.IsThis {
-			arity++
+		if param.IsThis {
+			continue
+		}
+		arity++
+		if !seenDefault && param.DefaultValue == nil {
+			length++
+		} else {
+			seenDefault = true
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false) // isArrowFunction = false for regular functions
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false) // isArrowFunction = false for regular functions
 
 	// Set the name binding register if this is a named function expression
 	if needsInnerNameBinding {

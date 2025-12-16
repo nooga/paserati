@@ -7,20 +7,21 @@ import (
 
 type FunctionObject struct {
 	Object
-	Arity               int
-	Variadic            bool
-	Chunk               *Chunk
-	Name                string
-	UpvalueCount        int
-	RegisterSize        int
-	IsGenerator         bool         // True for generator functions (function*)
-	IsAsync             bool         // True for async functions
-	IsArrowFunction     bool         // True for arrow functions (cannot be used as constructors)
-	IsDerivedConstructor bool        // True for derived class constructors (must call super())
-	Properties          *PlainObject // For properties like .prototype (created lazily)
-	Prototype           Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
-	HomeObject          Value        // [[HomeObject]] - object where method is defined (for super property access)
-	NameBindingRegister int          // For named function expressions: register to initialize with closure (-1 if not used)
+	Arity                int          // Number of declared parameters (used for VM register allocation)
+	Length               int          // ECMAScript length property (params before first default, per spec)
+	Variadic             bool
+	Chunk                *Chunk
+	Name                 string
+	UpvalueCount         int
+	RegisterSize         int
+	IsGenerator          bool         // True for generator functions (function*)
+	IsAsync              bool         // True for async functions
+	IsArrowFunction      bool         // True for arrow functions (cannot be used as constructors)
+	IsDerivedConstructor bool         // True for derived class constructors (must call super())
+	Properties           *PlainObject // For properties like .prototype (created lazily)
+	Prototype            Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
+	HomeObject           Value        // [[HomeObject]] - object where method is defined (for super property access)
+	NameBindingRegister  int          // For named function expressions: register to initialize with closure (-1 if not used)
 }
 
 type Upvalue struct {
@@ -103,19 +104,20 @@ type VMCaller interface {
 	CallBytecode(fn Value, thisValue Value, args []Value) Value
 }
 
-func NewFunction(arity, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isAsync bool, isArrowFunction bool) Value {
+func NewFunction(arity, length, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isAsync bool, isArrowFunction bool) Value {
 	fnObj := &FunctionObject{
-		Arity:        arity,
-		Variadic:     variadic,
-		Chunk:        chunk,
-		Name:         name,
-		UpvalueCount: upvalueCount,
-		RegisterSize: registerSize,
-		IsGenerator:  isGenerator,
-		IsAsync:      isAsync,
-		IsArrowFunction: isArrowFunction,
-		NameBindingRegister: -1, // Default: no name binding
-		Properties:   nil, // Start with nil - create lazily
+		Arity:               arity,
+		Length:              length,
+		Variadic:            variadic,
+		Chunk:               chunk,
+		Name:                name,
+		UpvalueCount:        upvalueCount,
+		RegisterSize:        registerSize,
+		IsGenerator:         isGenerator,
+		IsAsync:             isAsync,
+		IsArrowFunction:     isArrowFunction,
+		NameBindingRegister: -1,  // Default: no name binding
+		Properties:          nil, // Start with nil - create lazily
 	}
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}
 }

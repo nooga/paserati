@@ -1363,14 +1363,23 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 
 	// 10. Add the function object to the outer compiler's constant pool
-	// Count parameters excluding 'this' parameters for arity calculation
+	// Arity: total parameters excluding 'this' (for VM register allocation)
+	// Length: params before first default (for ECMAScript function.length property)
 	arity := 0
+	length := 0
+	seenDefault := false
 	for _, param := range node.Parameters {
-		if !param.IsThis {
-			arity++
+		if param.IsThis {
+			continue
+		}
+		arity++
+		if !seenDefault && param.DefaultValue == nil {
+			length++
+		} else {
+			seenDefault = true
 		}
 	}
-	funcValue := vm.NewFunction(arity, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false) // isGenerator=false, isAsync=false, isArrowFunction=false
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false) // isGenerator=false, isAsync=false, isArrowFunction=false
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil

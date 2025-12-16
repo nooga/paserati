@@ -94,13 +94,13 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	}
 
 	// Expose intrinsic function properties like .length
-	// Length is the number of parameters (excluding rest parameters)
+	// Per ECMAScript spec, length is the number of parameters before the first default parameter
 	if propName == "length" {
 		switch objVal.Type() {
 		case TypeFunction:
-			return NumberValue(float64(objVal.AsFunction().Arity)), true
+			return NumberValue(float64(objVal.AsFunction().Length)), true
 		case TypeClosure:
-			return NumberValue(float64(objVal.AsClosure().Fn.Arity)), true
+			return NumberValue(float64(objVal.AsClosure().Fn.Length)), true
 		case TypeNativeFunction:
 			nf := objVal.AsNativeFunction()
 			if nf.Variadic {
@@ -120,46 +120,46 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			}
 			return NumberValue(float64(nfp.Arity)), true
 		case TypeBoundFunction:
-			// Bound functions have reduced arity by the number of bound arguments
+			// Bound functions have reduced length by the number of bound arguments
 			bf := objVal.AsBoundFunction()
-			// Get the original function's arity
-			var originalArity int
+			// Get the original function's length
+			var originalLength int
 			switch bf.OriginalFunction.Type() {
 			case TypeFunction:
-				originalArity = bf.OriginalFunction.AsFunction().Arity
+				originalLength = bf.OriginalFunction.AsFunction().Length
 			case TypeClosure:
-				originalArity = bf.OriginalFunction.AsClosure().Fn.Arity
+				originalLength = bf.OriginalFunction.AsClosure().Fn.Length
 			case TypeNativeFunction:
 				nf := bf.OriginalFunction.AsNativeFunction()
 				if nf.Variadic {
-					originalArity = 0
+					originalLength = 0
 				} else {
-					originalArity = nf.Arity
+					originalLength = nf.Arity
 				}
 			case TypeNativeFunctionWithProps:
 				nfp := bf.OriginalFunction.AsNativeFunctionWithProps()
 				if nfp.Variadic {
-					originalArity = 0
+					originalLength = 0
 				} else {
-					originalArity = nfp.Arity
+					originalLength = nfp.Arity
 				}
 			case TypeAsyncNativeFunction:
 				anf := bf.OriginalFunction.AsAsyncNativeFunction()
 				if anf.Variadic {
-					originalArity = 0
+					originalLength = 0
 				} else {
-					originalArity = anf.Arity
+					originalLength = anf.Arity
 				}
 			case TypeBoundFunction:
 				// Recursively get the bound function's length
 				if length, ok := vm.handleCallableProperty(bf.OriginalFunction, "length"); ok {
 					if length.IsNumber() {
-						originalArity = int(length.ToFloat())
+						originalLength = int(length.ToFloat())
 					}
 				}
 			}
 			// Subtract the number of partial arguments
-			boundLength := originalArity - len(bf.PartialArgs)
+			boundLength := originalLength - len(bf.PartialArgs)
 			if boundLength < 0 {
 				boundLength = 0
 			}
