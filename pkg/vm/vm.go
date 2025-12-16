@@ -10,6 +10,7 @@ import (
 	"paserati/pkg/runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"unsafe"
 )
@@ -1087,49 +1088,117 @@ startExecution:
 				// Otherwise convert to numbers and compare
 				var result bool
 
+				// Update frame.ip to current position so exception handlers can be found
+				// if toPrimitive throws. Save the value to detect if a handler was invoked.
+				frame.ip = ip
+				ipBeforeOp := ip
+
 				// Check if both operands are strings
 				if leftVal.Type() == TypeString && rightVal.Type() == TypeString {
-					// String comparison (lexicographic)
+					// String comparison (lexicographic by UTF-16 code units per ECMAScript)
 					leftStr := leftVal.ToString()
 					rightStr := rightVal.ToString()
+					cmp := compareStringsUTF16(leftStr, rightStr)
 					switch opcode {
 					case OpGreater:
-						result = leftStr > rightStr
+						result = cmp > 0
 					case OpLess:
-						result = leftStr < rightStr
+						result = cmp < 0
 					case OpLessEqual:
-						result = leftStr <= rightStr
+						result = cmp <= 0
 					case OpGreaterEqual:
-						result = leftStr >= rightStr
+						result = cmp >= 0
+					}
+				} else if leftVal.Type() == TypeBigInt && rightVal.Type() == TypeBigInt {
+					// BigInt vs BigInt - use precise comparison
+					cmp := leftVal.AsBigInt().Cmp(rightVal.AsBigInt())
+					switch opcode {
+					case OpGreater:
+						result = cmp > 0
+					case OpLess:
+						result = cmp < 0
+					case OpLessEqual:
+						result = cmp <= 0
+					case OpGreaterEqual:
+						result = cmp >= 0
+					}
+				} else if leftVal.Type() == TypeBigInt || rightVal.Type() == TypeBigInt {
+					// BigInt vs other type - special handling
+					var hasError bool
+					result, hasError = vm.compareBigIntRelational(leftVal, rightVal, opcode)
+					if hasError {
+						// Check if exception handler was found
+						if frame.ip != ipBeforeOp {
+							ip = frame.ip
+							continue
+						}
+						return InterpretRuntimeError, Undefined
 					}
 				} else {
 					// Numeric comparison - convert both to primitives then to numbers
-					// ToPrimitive with "number" hint for objects
+					// ToPrimitive with "number" hint for objects and functions
 					leftPrim := leftVal
 					rightPrim := rightVal
-					if leftVal.IsObject() {
+
+					// Need to call toPrimitive for objects AND functions (callables)
+					if leftVal.IsObject() || leftVal.IsCallable() {
 						leftPrim = vm.toPrimitive(leftVal, "number")
+						// Check if toPrimitive threw an exception (either still unwinding, or handler was found and IP changed)
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						// Check if exception handler was found - frame.ip would have changed
+						if frame.ip != ipBeforeOp {
+							ip = frame.ip
+							continue
+						}
 					}
-					if rightVal.IsObject() {
+					if rightVal.IsObject() || rightVal.IsCallable() {
 						rightPrim = vm.toPrimitive(rightVal, "number")
+						// Check if toPrimitive threw an exception
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						// Check if exception handler was found
+						if frame.ip != ipBeforeOp {
+							ip = frame.ip
+							continue
+						}
 					}
 
-					l := leftPrim.ToFloat()
-					r := rightPrim.ToFloat()
-
-					// Per ECMAScript spec, if either operand is NaN, comparison returns false
-					if math.IsNaN(l) || math.IsNaN(r) {
-						result = false
-					} else {
+					// After toPrimitive, if both are strings, compare by UTF-16 code units
+					if leftPrim.Type() == TypeString && rightPrim.Type() == TypeString {
+						leftStr := leftPrim.AsString()
+						rightStr := rightPrim.AsString()
+						cmp := compareStringsUTF16(leftStr, rightStr)
 						switch opcode {
 						case OpGreater:
-							result = l > r
+							result = cmp > 0
 						case OpLess:
-							result = l < r
+							result = cmp < 0
 						case OpLessEqual:
-							result = l <= r
+							result = cmp <= 0
 						case OpGreaterEqual:
-							result = l >= r
+							result = cmp >= 0
+						}
+					} else {
+						l := leftPrim.ToFloat()
+						r := rightPrim.ToFloat()
+
+						// Per ECMAScript spec, if either operand is NaN, comparison returns false
+						if math.IsNaN(l) || math.IsNaN(r) {
+							result = false
+						} else {
+							switch opcode {
+							case OpGreater:
+								result = l > r
+							case OpLess:
+								result = l < r
+							case OpLessEqual:
+								result = l <= r
+							case OpGreaterEqual:
+								result = l >= r
+							}
 						}
 					}
 				}
@@ -3492,8 +3561,8 @@ startExecution:
 				length = float64(arr.Length())
 			case TypeString:
 				str := AsString(srcVal)
-				// Use rune count for string length to handle multi-byte chars correctly
-				length = float64(len(str))
+				// Use UTF-16 code unit count for JavaScript string length
+				length = float64(UTF16Length(str))
 			case TypeObject, TypeDictObject:
 				if po := srcVal.AsPlainObject(); po != nil {
 					if v, ok := po.GetOwn("length"); ok {
@@ -7695,9 +7764,321 @@ func (vm *VM) NewNumberObject(primitiveValue float64) Value {
 func (vm *VM) NewStringObject(primitiveValue string) Value {
 	obj := NewObject(vm.StringPrototype).AsPlainObject()
 	obj.SetOwn("[[PrimitiveValue]]", NewString(primitiveValue))
-	// Add length property (number of UTF-16 code units, which for ASCII/UTF-8 is the string length)
-	obj.SetOwn("length", IntegerValue(int32(len(primitiveValue))))
+	// Add length property (number of UTF-16 code units)
+	obj.SetOwn("length", IntegerValue(int32(UTF16Length(primitiveValue))))
 	return NewValueFromPlainObject(obj)
+}
+
+// compareBigIntRelational handles relational comparison (< > <= >=) when one operand is BigInt
+// Returns the comparison result and whether an error occurred (caller should check vm.unwinding)
+func (vm *VM) compareBigIntRelational(left, right Value, opcode OpCode) (bool, bool) {
+	var bigVal *big.Int
+	var otherVal Value
+	var bigOnLeft bool
+
+	if left.Type() == TypeBigInt {
+		bigVal = left.AsBigInt()
+		otherVal = right
+		bigOnLeft = true
+	} else {
+		bigVal = right.AsBigInt()
+		otherVal = left
+		bigOnLeft = false
+	}
+
+	// Handle based on the other value's type
+	switch otherVal.Type() {
+	case TypeSymbol:
+		// BigInt compared with Symbol should throw TypeError
+		vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+		return false, true // error occurred
+
+	case TypeString:
+		// According to ECMAScript spec, when comparing BigInt with String:
+		// 1. Convert string to BigInt using StringToBigInt
+		// 2. If conversion fails (returns undefined), result is undefined (all comparisons return false)
+		// 3. Otherwise compare the two BigInts
+		str := strings.TrimSpace(otherVal.AsString())
+		if str == "" {
+			// Empty string converts to 0n
+			otherBig := big.NewInt(0)
+			cmp := bigVal.Cmp(otherBig)
+			if !bigOnLeft {
+				cmp = -cmp
+			}
+			return vm.cmpResult(cmp, opcode), false
+		}
+		// Try to parse with different bases (hex, octal, binary, decimal)
+		otherBig, ok := vm.stringToBigInt(str)
+		if !ok {
+			// String cannot be parsed as BigInt - result is undefined (return false for all comparisons)
+			return false, false
+		}
+		// Compare BigInt with parsed BigInt
+		cmp := bigVal.Cmp(otherBig)
+		if !bigOnLeft {
+			cmp = -cmp
+		}
+		return vm.cmpResult(cmp, opcode), false
+
+	case TypeIntegerNumber, TypeFloatNumber:
+		// BigInt vs Number comparison
+		f := otherVal.ToFloat()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			// Special handling for NaN and Infinity
+			if math.IsNaN(f) {
+				return false, false
+			}
+			// +Infinity is greater than any BigInt, -Infinity is less
+			if math.IsInf(f, 1) {
+				// +Infinity: BigInt < +Inf, BigInt <= +Inf, BigInt !> +Inf, BigInt !>= +Inf (unless we flip)
+				if bigOnLeft {
+					return opcode == OpLess || opcode == OpLessEqual, false
+				}
+				return opcode == OpGreater || opcode == OpGreaterEqual, false
+			}
+			// -Infinity
+			if bigOnLeft {
+				return opcode == OpGreater || opcode == OpGreaterEqual, false
+			}
+			return opcode == OpLess || opcode == OpLessEqual, false
+		}
+
+		// For precise comparison, convert number to BigInt if it's an integer
+		if f == math.Trunc(f) {
+			// Use big.Float to precisely convert float64 to big.Int
+			bf := new(big.Float).SetFloat64(f)
+			otherBig, accuracy := bf.Int(nil)
+			if accuracy == big.Exact {
+				cmp := bigVal.Cmp(otherBig)
+				if !bigOnLeft {
+					cmp = -cmp
+				}
+				return vm.cmpResult(cmp, opcode), false
+			}
+		}
+
+		// For non-integer numbers or numbers that couldn't be exactly converted,
+		// we need to compare mathematically. Use big.Float for the BigInt too.
+		bigBF := new(big.Float).SetInt(bigVal)
+		numBF := new(big.Float).SetFloat64(f)
+		cmp := bigBF.Cmp(numBF)
+		if !bigOnLeft {
+			cmp = -cmp
+		}
+		return vm.cmpResult(cmp, opcode), false
+
+	default:
+		// Convert to number and compare
+		f := otherVal.ToFloat()
+		if math.IsNaN(f) {
+			return false, false
+		}
+		bigFloat, _ := bigVal.Float64()
+		return vm.compareFloats(bigFloat, f, opcode, bigOnLeft), false
+	}
+}
+
+// compareFloats compares two floats based on opcode and whether bigint was on left
+func (vm *VM) compareFloats(bigFloat, f float64, opcode OpCode, bigOnLeft bool) bool {
+	if bigOnLeft {
+		switch opcode {
+		case OpGreater:
+			return bigFloat > f
+		case OpLess:
+			return bigFloat < f
+		case OpLessEqual:
+			return bigFloat <= f
+		case OpGreaterEqual:
+			return bigFloat >= f
+		}
+	} else {
+		switch opcode {
+		case OpGreater:
+			return f > bigFloat
+		case OpLess:
+			return f < bigFloat
+		case OpLessEqual:
+			return f <= bigFloat
+		case OpGreaterEqual:
+			return f >= bigFloat
+		}
+	}
+	return false
+}
+
+// cmpResult converts a Cmp result (-1, 0, 1) to a boolean based on opcode
+func (vm *VM) cmpResult(cmp int, opcode OpCode) bool {
+	switch opcode {
+	case OpGreater:
+		return cmp > 0
+	case OpLess:
+		return cmp < 0
+	case OpLessEqual:
+		return cmp <= 0
+	case OpGreaterEqual:
+		return cmp >= 0
+	}
+	return false
+}
+
+// compareStringsUTF16 compares two strings using UTF-16 code unit ordering
+// Returns -1 if a < b, 0 if a == b, 1 if a > b
+func compareStringsUTF16(a, b string) int {
+	// Convert both strings to UTF-16 code units and compare
+	aUnits := StringToUTF16(a)
+	bUnits := StringToUTF16(b)
+
+	minLen := len(aUnits)
+	if len(bUnits) < minLen {
+		minLen = len(bUnits)
+	}
+
+	for i := 0; i < minLen; i++ {
+		if aUnits[i] < bUnits[i] {
+			return -1
+		}
+		if aUnits[i] > bUnits[i] {
+			return 1
+		}
+	}
+
+	// If all compared units are equal, shorter string is less
+	if len(aUnits) < len(bUnits) {
+		return -1
+	}
+	if len(aUnits) > len(bUnits) {
+		return 1
+	}
+	return 0
+}
+
+// UTF16Length returns the number of UTF-16 code units in a string
+// This is the correct length for JavaScript string.length property
+func UTF16Length(s string) int {
+	return len(StringToUTF16(s))
+}
+
+// StringToUTF16 converts a Go string (UTF-8/WTF-8) to UTF-16 code units
+// This handles WTF-8 encoded lone surrogates that our lexer produces
+func StringToUTF16(s string) []uint16 {
+	result := make([]uint16, 0, len(s))
+	bytes := []byte(s)
+	i := 0
+
+	for i < len(bytes) {
+		b := bytes[i]
+		if b < 0x80 {
+			// ASCII
+			result = append(result, uint16(b))
+			i++
+		} else if b < 0xC0 {
+			// Invalid leading byte, treat as single byte
+			result = append(result, uint16(b))
+			i++
+		} else if b < 0xE0 {
+			// 2-byte sequence
+			if i+1 < len(bytes) {
+				r := rune(b&0x1F)<<6 | rune(bytes[i+1]&0x3F)
+				result = append(result, uint16(r))
+				i += 2
+			} else {
+				result = append(result, uint16(b))
+				i++
+			}
+		} else if b < 0xF0 {
+			// 3-byte sequence - check for WTF-8 surrogate encoding
+			if i+2 < len(bytes) {
+				b2 := bytes[i+1]
+				b3 := bytes[i+2]
+				// Decode the code point
+				r := rune(b&0x0F)<<12 | rune(b2&0x3F)<<6 | rune(b3&0x3F)
+				// This handles both regular BMP chars and WTF-8 surrogates
+				result = append(result, uint16(r))
+				i += 3
+			} else {
+				result = append(result, uint16(b))
+				i++
+			}
+		} else if b < 0xF8 {
+			// 4-byte sequence - supplementary character
+			if i+3 < len(bytes) {
+				r := rune(b&0x07)<<18 | rune(bytes[i+1]&0x3F)<<12 |
+					rune(bytes[i+2]&0x3F)<<6 | rune(bytes[i+3]&0x3F)
+				// Convert to surrogate pair
+				r -= 0x10000
+				high := uint16(0xD800 + (r >> 10))
+				low := uint16(0xDC00 + (r & 0x3FF))
+				result = append(result, high, low)
+				i += 4
+			} else {
+				result = append(result, uint16(b))
+				i++
+			}
+		} else {
+			// Invalid UTF-8 leading byte
+			result = append(result, uint16(b))
+			i++
+		}
+	}
+
+	return result
+}
+
+// stringToBigInt implements ECMAScript StringToBigInt
+// Handles decimal, hex (0x), octal (0o), and binary (0b) formats
+func (vm *VM) stringToBigInt(str string) (*big.Int, bool) {
+	if len(str) == 0 {
+		return big.NewInt(0), true
+	}
+
+	// Handle sign (only one sign character allowed)
+	negative := false
+	if str[0] == '-' {
+		negative = true
+		str = str[1:]
+	} else if str[0] == '+' {
+		str = str[1:]
+	}
+
+	if len(str) == 0 {
+		return nil, false
+	}
+
+	// After stripping sign, string must not start with another sign
+	if str[0] == '+' || str[0] == '-' {
+		return nil, false
+	}
+
+	var result *big.Int
+	var ok bool
+
+	// Check for different bases
+	if len(str) >= 2 {
+		prefix := strings.ToLower(str[:2])
+		switch prefix {
+		case "0x":
+			result, ok = new(big.Int).SetString(str[2:], 16)
+		case "0o":
+			result, ok = new(big.Int).SetString(str[2:], 8)
+		case "0b":
+			result, ok = new(big.Int).SetString(str[2:], 2)
+		default:
+			result, ok = new(big.Int).SetString(str, 10)
+		}
+	} else {
+		result, ok = new(big.Int).SetString(str, 10)
+	}
+
+	if !ok || result == nil {
+		return nil, false
+	}
+
+	if negative {
+		result.Neg(result)
+	}
+
+	return result, true
 }
 
 // toPrimitive implements JavaScript ToPrimitive abstract operation
@@ -7807,7 +8188,7 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 
 	// ECMAScript 7.1.1.1 OrdinaryToPrimitive step 6:
 	// If no method returned a primitive, throw a TypeError
-	vm.throwException(NewString("TypeError: Cannot convert object to primitive value"))
+	vm.ThrowTypeError("Cannot convert object to primitive value")
 	return Undefined
 }
 

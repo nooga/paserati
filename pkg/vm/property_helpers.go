@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"unicode/utf8"
 	"unsafe"
 )
 
@@ -371,8 +370,8 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 			return Number(float64(args.Length())), true
 		case TypeString:
 			str := AsString(objVal)
-			// Use rune count for correct length of multi-byte strings
-			return Number(float64(utf8.RuneCountInString(str))), true
+			// Use UTF-16 code unit count for correct JavaScript string length
+			return Number(float64(UTF16Length(str))), true
 		}
 	}
 	if propName == "callee" {

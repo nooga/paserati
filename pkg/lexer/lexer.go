@@ -714,7 +714,20 @@ func PreprocessUnicodeEscapesContextAware(input string) string {
 			// Convert hex to character
 			if len(unicodeHex) > 0 {
 				if codePoint, err := strconv.ParseInt(unicodeHex, 16, 32); err == nil {
-					result.WriteRune(rune(codePoint))
+					// Check if this is a lone surrogate (D800-DFFF)
+					// Go's WriteRune would replace these with U+FFFD, so we need to
+					// encode them using WTF-8 style (raw bytes) to preserve them
+					if codePoint >= 0xD800 && codePoint <= 0xDFFF {
+						// WTF-8 encoding for surrogates (3 bytes: ED XX XX)
+						b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
+						b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
+						b3 := byte(0x80 | (codePoint & 0x3F))
+						result.WriteByte(b1)
+						result.WriteByte(b2)
+						result.WriteByte(b3)
+					} else {
+						result.WriteRune(rune(codePoint))
+					}
 				} else {
 					// Invalid hex, keep original
 					result.WriteString("\\u")
@@ -1852,7 +1865,18 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 					if l.peekChar() == '}' {
 						l.readChar() // consume '}'
 						if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil && codePoint <= 0x10FFFF {
-							builder.WriteRune(rune(codePoint))
+							// Check if this is a lone surrogate (D800-DFFF)
+							if codePoint >= 0xD800 && codePoint <= 0xDFFF {
+								// WTF-8 encoding for surrogates (3 bytes: ED XX XX)
+								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
+								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
+								b3 := byte(0x80 | (codePoint & 0x3F))
+								builder.WriteByte(b1)
+								builder.WriteByte(b2)
+								builder.WriteByte(b3)
+							} else {
+								builder.WriteRune(rune(codePoint))
+							}
 						} else {
 							return "", false // Invalid code point
 						}
@@ -1871,7 +1895,18 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 						}
 					}
 					if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
-						builder.WriteRune(rune(codePoint))
+						// Check if this is a lone surrogate (D800-DFFF)
+						if codePoint >= 0xD800 && codePoint <= 0xDFFF {
+							// WTF-8 encoding for surrogates (3 bytes: ED XX XX)
+							b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
+							b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
+							b3 := byte(0x80 | (codePoint & 0x3F))
+							builder.WriteByte(b1)
+							builder.WriteByte(b2)
+							builder.WriteByte(b3)
+						} else {
+							builder.WriteRune(rune(codePoint))
+						}
 					} else {
 						return "", false // Invalid code point
 					}

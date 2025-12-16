@@ -141,11 +141,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.NumberValue(float64(0x7FFFFFFF)), nil // NaN equivalent
 		}
+		// Convert to UTF-16 code units for proper JavaScript string semantics
+		utf16Units := vm.StringToUTF16(thisStr)
 		index := int(args[0].ToFloat())
-		if index < 0 || index >= len(thisStr) {
+		if index < 0 || index >= len(utf16Units) {
 			return vm.NumberValue(float64(0x7FFFFFFF)), nil // NaN equivalent
 		}
-		return vm.NumberValue(float64(thisStr[index])), nil
+		return vm.NumberValue(float64(utf16Units[index])), nil
 	}))
 
 	stringProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
