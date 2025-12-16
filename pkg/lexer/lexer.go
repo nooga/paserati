@@ -1787,6 +1787,21 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 
 		if l.ch == '\\' { // Handle escape sequence
 			l.readChar() // Consume the backslash
+
+			// Check for Unicode line terminators (U+2028, U+2029) for line continuation
+			// These are multi-byte UTF-8 sequences: U+2028 = E2 80 A8, U+2029 = E2 80 A9
+			if l.ch == 0xE2 && l.position+2 < len(l.input) {
+				remaining := []byte(l.input[l.position:])
+				r, size := utf8.DecodeRune(remaining)
+				if r == 0x2028 || r == 0x2029 {
+					// Line continuation with Unicode line terminator - skip the terminator
+					for i := 0; i < size; i++ {
+						l.readChar()
+					}
+					continue // Continue parsing the string
+				}
+			}
+
 			switch l.ch {
 			case 'n':
 				builder.WriteByte('\n')
