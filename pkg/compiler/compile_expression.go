@@ -560,7 +560,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 
 	// 2. Check if operand is BigInt (needs special handling)
 	// For BigInt, we don't convert to number - we use BigInt arithmetic
-	// For other types, convert to number via ToNumber
+	// For other types, convert to number via ToNumeric (preserves BigInt at runtime)
 	argType := node.Argument.GetComputedType()
 	isBigInt := argType != nil && argType == types.BigInt
 
@@ -569,27 +569,25 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		// BigInt: use current value as-is (no conversion)
 		numericValueReg = currentValueReg
 	} else {
-		// Non-BigInt: convert to number (handles boolean, null, undefined, string)
+		// Type unknown or not BigInt: use ToNumeric which preserves BigInt at runtime
+		// and converts other types (boolean, null, undefined, string) to Number
 		numericValueReg = c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, numericValueReg)
-		c.emitOpCode(vm.OpToNumber, line)
-		c.emitByte(byte(numericValueReg)) // destination: numeric value
-		c.emitByte(byte(currentValueReg)) // source: original value
+		c.emitToNumeric(numericValueReg, currentValueReg, line)
 	}
 
 	// 3. Load constant 1 (or 1n for BigInt)
 	constOneReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, constOneReg)
-	var constOneIdx uint16
 	if isBigInt {
-		// Use BigInt(1) for bigint operands
+		// Type known to be BigInt at compile time: use BigInt(1) constant
 		bigIntOne := big.NewInt(1)
-		constOneIdx = c.chunk.AddConstant(vm.NewBigInt(bigIntOne))
+		constOneIdx := c.chunk.AddConstant(vm.NewBigInt(bigIntOne))
+		c.emitLoadConstant(constOneReg, constOneIdx, line)
 	} else {
-		// Use Number(1) for numeric operands
-		constOneIdx = c.chunk.AddConstant(vm.Number(1))
+		// Type unknown: use OpLoadNumericOne to dynamically load 1 or 1n based on runtime type
+		c.emitLoadNumericOne(constOneReg, numericValueReg, line)
 	}
-	c.emitLoadConstant(constOneReg, constOneIdx, line)
 
 	// 4. Perform Pre/Post logic using hint as result register
 	if node.Prefix {

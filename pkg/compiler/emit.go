@@ -552,6 +552,20 @@ func (c *Compiler) emitToNumber(dest, src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+// emitToNumeric converts to Number but preserves BigInt (for ++/--)
+func (c *Compiler) emitToNumeric(dest, src Register, line int) {
+	c.emitOpCode(vm.OpToNumeric, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
+// emitLoadNumericOne loads 1 or 1n based on src type (for ++/--)
+func (c *Compiler) emitLoadNumericOne(dest, src Register, line int) {
+	c.emitOpCode(vm.OpLoadNumericOne, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
 // --- NEW: Efficient Nullish Check Emitters ---
 
 // emitIsNull emits OpIsNull instruction: dest = (src === null)

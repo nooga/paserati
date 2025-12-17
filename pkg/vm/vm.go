@@ -868,8 +868,52 @@ startExecution:
 			primVal := srcVal
 			if srcVal.IsObject() || srcVal.IsCallable() {
 				primVal = vm.toPrimitive(srcVal, "number")
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+			}
+			// ECMAScript: ToNumber(bigint) throws a TypeError
+			if primVal.IsBigInt() {
+				frame.ip = ip
+				vm.ThrowTypeError("Cannot convert a BigInt value to a number")
+				return InterpretRuntimeError, Undefined
 			}
 			registers[destReg] = Number(primVal.ToFloat())
+
+		case OpToNumeric:
+			// ToNumeric: Used for ++/-- operators
+			// Returns BigInt as-is, converts other types to Number
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			srcVal := registers[srcReg]
+			// For objects, call ToPrimitive first
+			primVal := srcVal
+			if srcVal.IsObject() || srcVal.IsCallable() {
+				primVal = vm.toPrimitive(srcVal, "number")
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+			}
+			// BigInt is preserved as-is, everything else converts to Number
+			if primVal.IsBigInt() {
+				registers[destReg] = primVal
+			} else {
+				registers[destReg] = Number(primVal.ToFloat())
+			}
+
+		case OpLoadNumericOne:
+			// Load 1 or 1n based on the type of the source register
+			// Used by ++/-- operators to get the correct increment value
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			srcVal := registers[srcReg]
+			if srcVal.IsBigInt() {
+				registers[destReg] = NewBigInt(big.NewInt(1))
+			} else {
+				registers[destReg] = Number(1)
+			}
 
 		case OpStringConcat:
 			destReg := code[ip]

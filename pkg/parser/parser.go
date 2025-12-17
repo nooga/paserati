@@ -1361,7 +1361,7 @@ func (p *Parser) parseVarStatement() Statement {
 		return p.parseArrayDestructuringDeclaration(varToken, false, true)
 	case lexer.LBRACE:
 		// Object destructuring: var {a, b} = ...
-		fmt.Printf("// [PARSER DEBUG] parseVarStatement: detected LBRACE, calling parseObjectDestructuringDeclaration\n")
+		debugPrint("// [PARSER DEBUG] parseVarStatement: detected LBRACE, calling parseObjectDestructuringDeclaration\n")
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
 		// Regular identifier case (including contextual keywords in non-strict mode)
@@ -4883,7 +4883,7 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 				propertyKey = p.parseBigIntLiteral()
 			} else {
 				propertyKey = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-				fmt.Printf("// [PARSER DEBUG] Parsed property key: token=%s, literal=%s\n", p.curToken.Type, p.curToken.Literal)
+				debugPrint("// [PARSER DEBUG] Parsed property key: token=%s, literal=%s\n", p.curToken.Type, p.curToken.Literal)
 			}
 		} else {
 			p.addError(p.curToken, fmt.Sprintf("expected property name, got %s", p.curToken.Type))
