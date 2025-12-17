@@ -234,6 +234,18 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 	return true
 }
 
+// IsOwnPropertyNonConfigurable returns (exists, nonConfigurable) for an own property.
+// exists is true if the property exists on this object.
+// nonConfigurable is true if the property exists and is not configurable.
+func (o *PlainObject) IsOwnPropertyNonConfigurable(name string) (exists bool, nonConfigurable bool) {
+	for _, f := range o.shape.fields {
+		if f.keyKind == KeyKindString && f.name == name {
+			return true, !f.configurable
+		}
+	}
+	return false, false
+}
+
 // SetOwn sets or defines an own property. Creates a new shape on first definition.
 // If the property exists and is non-writable, this is a no-op.
 func (o *PlainObject) SetOwn(name string, v Value) {
@@ -810,6 +822,13 @@ func (d *DictObject) DeleteOwn(name string) bool {
 		return true
 	}
 	return false
+}
+
+// IsOwnPropertyNonConfigurable returns (exists, nonConfigurable) for an own property.
+// DictObject properties are always configurable, so nonConfigurable is always false.
+func (d *DictObject) IsOwnPropertyNonConfigurable(name string) (exists bool, nonConfigurable bool) {
+	_, exists = d.properties[name]
+	return exists, false // DictObject properties are always configurable
 }
 
 // OwnKeys returns the sorted list of own property names.

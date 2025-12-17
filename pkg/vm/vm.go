@@ -7167,26 +7167,147 @@ startExecution:
 				}
 			} else if obj.IsObject() {
 				if po := obj.AsPlainObject(); po != nil {
+					// In strict mode, throw TypeError for non-configurable properties
+					if function.Chunk.IsStrict {
+						exists, nonConfig := po.IsOwnPropertyNonConfigurable(propName)
+						if exists && nonConfig {
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot delete property '" + propName + "' of #<Object>")
+							// Check if exception was handled by a catch block
+							if !vm.unwinding {
+								// Exception was caught, reload frame state and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							// Exception is propagating, check if we hit a native boundary
+							if vm.unwindingCrossedNative || vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							// Continue unwinding
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+					}
 					success = po.DeleteOwn(propName)
 				} else if d := obj.AsDictObject(); d != nil {
+					// DictObject properties are always configurable, no strict mode check needed
 					success = d.DeleteOwn(propName)
 				}
 			} else if obj.Type() == TypeFunction {
 				// Delete from function's properties
 				fn := obj.AsFunction()
 				if fn.Properties != nil {
+					// In strict mode, check for non-configurable
+					if function.Chunk.IsStrict {
+						exists, nonConfig := fn.Properties.IsOwnPropertyNonConfigurable(propName)
+						if exists && nonConfig {
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							if vm.unwindingCrossedNative || vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+					}
 					success = fn.Properties.DeleteOwn(propName)
 				}
 			} else if obj.Type() == TypeClosure {
 				// Delete from closure's function properties
-				closure := obj.AsClosure()
-				if closure.Fn.Properties != nil {
-					success = closure.Fn.Properties.DeleteOwn(propName)
+				closureObj := obj.AsClosure()
+				if closureObj.Fn.Properties != nil {
+					// In strict mode, check for non-configurable
+					if function.Chunk.IsStrict {
+						exists, nonConfig := closureObj.Fn.Properties.IsOwnPropertyNonConfigurable(propName)
+						if exists && nonConfig {
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							if vm.unwindingCrossedNative || vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+					}
+					success = closureObj.Fn.Properties.DeleteOwn(propName)
 				}
 			} else if obj.Type() == TypeNativeFunctionWithProps {
 				// Delete from native function's properties
 				nfp := obj.AsNativeFunctionWithProps()
 				if nfp.Properties != nil {
+					// In strict mode, check for non-configurable
+					if function.Chunk.IsStrict {
+						exists, nonConfig := nfp.Properties.IsOwnPropertyNonConfigurable(propName)
+						if exists && nonConfig {
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							if vm.unwindingCrossedNative || vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+					}
 					success = nfp.Properties.DeleteOwn(propName)
 				}
 			}

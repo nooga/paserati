@@ -519,6 +519,7 @@ type Chunk struct {
 	Constants      []Value            // Constant pool (Now uses Value from vm package)
 	Lines          []int              // Line number corresponding to the start of each instruction
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
+	IsStrict       bool               // Whether this chunk runs in strict mode
 	// Add MaxRegs later for function definitions
 }
 

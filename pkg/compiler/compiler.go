@@ -285,8 +285,11 @@ func (c *Compiler) GetModuleExports() map[string]vm.Value {
 // newFunctionCompiler creates a compiler instance specifically for a function body.
 func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	// Pass the checker and module bindings down to nested compilers
+	chunk := vm.NewChunk()
+	// Inherit strict mode from enclosing compiler
+	chunk.IsStrict = enclosingCompiler.chunk.IsStrict
 	return &Compiler{
-		chunk:                   vm.NewChunk(),
+		chunk:                   chunk,
 		regAlloc:                NewRegisterAllocator(),
 		currentSymbolTable:      NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
 		enclosing:               enclosingCompiler,
@@ -359,6 +362,27 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	c.chunk = vm.NewChunk()
 	c.regAlloc = NewRegisterAllocator()
 	c.currentSymbolTable = NewSymbolTable()
+
+	// --- Determine strict mode ---
+	// TypeScript mode (type checking enabled): default to strict mode
+	// JavaScript mode (type checking disabled): respect "use strict" directive
+	if !c.ignoreTypeErrors {
+		// TypeScript mode - always strict
+		c.chunk.IsStrict = true
+		debugPrintf("[Compile] TypeScript mode - enabling strict mode by default\n")
+	} else {
+		// JavaScript mode - check for "use strict" directive
+		if len(program.Statements) > 0 {
+			if exprStmt, ok := program.Statements[0].(*parser.ExpressionStatement); ok {
+				if strLit, ok := exprStmt.Expression.(*parser.StringLiteral); ok {
+					if strLit.Value == "use strict" {
+						c.chunk.IsStrict = true
+						debugPrintf("[Compile] Detected 'use strict' directive - enabling strict mode\n")
+					}
+				}
+			}
+		}
+	}
 
 	// --- Global Symbol Table Initialization (if needed) ---
 	// c.defineBuiltinGlobals() // TODO: Define built-ins if any

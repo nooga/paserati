@@ -504,6 +504,7 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 			hdr := extractFrontmatterHeader(string(content))
 			isModule := false
 			isRaw := false
+			isOnlyStrict := false
 			if hdr != "" {
 				if flags := extractFlags(hdr); len(flags) > 0 {
 					for _, flag := range flags {
@@ -513,9 +514,17 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 							isModule = true
 						} else if flag == "raw" {
 							isRaw = true
+						} else if flag == "onlyStrict" {
+							isOnlyStrict = true
 						}
 					}
 				}
+			}
+
+			// For onlyStrict tests, add "use strict" at the VERY beginning
+			// This must come before any harness includes
+			if isOnlyStrict && !isRaw {
+				builder.WriteString("\"use strict\";\n")
 			}
 
 			// For raw tests, don't include any harness files
