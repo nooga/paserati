@@ -69,13 +69,17 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	if node.RestParameter != nil {
 		// Define the rest parameter in the symbol table
 		restParamReg := funcCompiler.regAlloc.Alloc()
-		funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+		// Handle both simple rest parameters (...args) and destructured (...[x, y])
+		if node.RestParameter.Name != nil {
+			funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+		} else if node.RestParameter.Pattern != nil {
+			// For destructured rest parameters, we'll define a temporary and handle destructuring
+			funcCompiler.currentSymbolTable.Define("__rest__", restParamReg)
+			debugPrintf("// [Compiler] Rest parameter (destructured) defined in R%d\n", restParamReg)
+		}
 		// Pin the register since rest parameters can be captured by inner functions
 		funcCompiler.regAlloc.Pin(restParamReg)
-
-		// The rest parameter collection will be handled at runtime during function call
-		// We just need to ensure it has a register allocated here
-		debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
 	}
 
 	// 5. Compile the function body
@@ -256,7 +260,11 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	// Handle rest parameter (same as original)
 	if node.RestParameter != nil {
 		restParamReg := funcCompiler.regAlloc.Alloc()
-		funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+		if node.RestParameter.Name != nil {
+			funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+		} else if node.RestParameter.Pattern != nil {
+			funcCompiler.currentSymbolTable.Define("__rest__", restParamReg)
+		}
 		funcCompiler.regAlloc.Pin(restParamReg)
 		// Rest parameter collection is handled at runtime during function call
 	}

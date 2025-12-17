@@ -414,7 +414,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 			}
 
 			// Also check for exported functions
-			if exportDecl, isExport := stmt.(*ExportNamedDeclaration); isExport && exportDecl.Declaration != nil {
+			if exportDecl, isExport := stmt.(*ExportNamedDeclaration); isExport && exportDecl != nil && exportDecl.Declaration != nil {
 				// Check if the exported declaration is a function
 				if exprStmt, isExprStmt := exportDecl.Declaration.(*ExpressionStatement); isExprStmt {
 					if exprStmt.Expression != nil {
@@ -9586,36 +9586,79 @@ func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token, isTypeOnly b
 	return stmt
 }
 
+// isExportSpecifierName checks if a token can be used as an export specifier name
+// In ES modules, export specifier names can be identifiers, strings, or certain keywords
+func isExportSpecifierName(t lexer.TokenType) bool {
+	switch t {
+	case lexer.IDENT, lexer.STRING:
+		return true
+	// Keywords that can be used as export names
+	case lexer.DEFAULT, lexer.AS, lexer.FROM,
+		lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.DO,
+		lexer.SWITCH, lexer.CASE, lexer.BREAK, lexer.CONTINUE, lexer.RETURN,
+		lexer.THROW, lexer.TRY, lexer.CATCH, lexer.FINALLY,
+		lexer.FUNCTION, lexer.CLASS, lexer.CONST, lexer.LET, lexer.VAR,
+		lexer.NEW, lexer.DELETE, lexer.TYPEOF, lexer.VOID, lexer.IN, lexer.INSTANCEOF,
+		lexer.THIS, lexer.SUPER, lexer.NULL, lexer.TRUE, lexer.FALSE,
+		lexer.IMPORT, lexer.EXPORT, lexer.EXTENDS, lexer.IMPLEMENTS,
+		lexer.STATIC, lexer.GET, lexer.SET, lexer.ASYNC, lexer.AWAIT, lexer.YIELD,
+		lexer.TYPE, lexer.INTERFACE, lexer.ENUM,
+		lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.READONLY, lexer.ABSTRACT,
+		lexer.KEYOF, lexer.INFER, lexer.IS:
+		return true
+	}
+	return false
+}
+
+// parseExportSpecifierExpr parses an export specifier name as an expression
+func (p *Parser) parseExportSpecifierExpr() Expression {
+	if p.curToken.Type == lexer.STRING {
+		return &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	}
+	// For all other valid tokens (identifiers and keywords), create an identifier
+	return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+}
+
 // parseExportNamedDeclarationWithSpecifiers parses: export { name1, name2 } [from "module"]
 func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Token, isTypeOnly bool) *ExportNamedDeclaration {
 	stmt := &ExportNamedDeclaration{Token: exportToken, IsTypeOnly: isTypeOnly}
 
-	// Parse export specifiers
-	if !p.expectPeek(lexer.IDENT) {
+	// Parse export specifiers - first specifier can be identifier, string, or keyword
+	p.nextToken() // move past '{'
+	if !isExportSpecifierName(p.curToken.Type) {
+		p.addError(p.curToken, "expected identifier or string in export specifier")
 		return nil
 	}
 
 	var specifiers []ExportSpecifier
 
 	for {
-		// Parse export specifier
-		local := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		exported := local // Default: same as local name
+		// Parse export specifier - can be identifier, string literal, or keyword
+		var local Expression
+		var exported Expression
+
+		if !isExportSpecifierName(p.curToken.Type) {
+			p.addError(p.curToken, "expected identifier or string in export specifier")
+			return nil
+		}
+		local = p.parseExportSpecifierExpr()
+		exported = local // Default: same as local name
 
 		// Check for 'as' alias
 		if p.peekToken.Type == lexer.AS {
 			p.nextToken() // consume local name
 			p.nextToken() // consume 'as'
 
-			if p.curToken.Type != lexer.IDENT {
-				p.peekError(lexer.IDENT)
+			// Exported name can be identifier, string literal, or keyword
+			if !isExportSpecifierName(p.curToken.Type) {
+				p.addError(p.curToken, "expected identifier or string after 'as' in export specifier")
 				return nil
 			}
-			exported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			exported = p.parseExportSpecifierExpr()
 		}
 
 		namedSpec := &ExportNamedSpecifier{
-			Token:    local.Token,
+			Token:    p.curToken,
 			Local:    local,
 			Exported: exported,
 		}
@@ -9628,8 +9671,8 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Tok
 		p.nextToken() // consume current identifier/alias
 		p.nextToken() // consume comma
 
-		if p.curToken.Type != lexer.IDENT {
-			p.peekError(lexer.IDENT)
+		if !isExportSpecifierName(p.curToken.Type) {
+			p.addError(p.curToken, "expected identifier or string in export specifier")
 			return nil
 		}
 	}

@@ -2090,20 +2090,22 @@ type ExportSpecifier interface {
 	exportSpecifier() // Marker method
 }
 
-// ExportNamedSpecifier represents: export { name } or export { name as alias }
+// ExportNamedSpecifier represents: export { name } or export { name as alias } or export { name as "string" }
 type ExportNamedSpecifier struct {
 	Token    lexer.Token // The exported name token
-	Local    *Identifier // Local name being exported
-	Exported *Identifier // Export name (same as Local if no alias)
+	Local    Expression  // Local name being exported (Identifier or StringLiteral)
+	Exported Expression  // Export name (Identifier or StringLiteral, same as Local if no alias)
 }
 
 func (ens *ExportNamedSpecifier) exportSpecifier()     {}
 func (ens *ExportNamedSpecifier) TokenLiteral() string { return ens.Token.Literal }
 func (ens *ExportNamedSpecifier) String() string {
-	if ens.Local.Value != ens.Exported.Value {
-		return ens.Local.String() + " as " + ens.Exported.String()
+	localStr := ens.Local.String()
+	exportedStr := ens.Exported.String()
+	if localStr != exportedStr {
+		return localStr + " as " + exportedStr
 	}
-	return ens.Local.String()
+	return localStr
 }
 
 // ----------------------------------------------------------------------------

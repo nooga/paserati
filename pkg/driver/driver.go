@@ -272,7 +272,14 @@ func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.
 // SyncGlobalNamesFromCompiler syncs the compiler's global name mappings to the VM
 // This should be called after CompileProgram to ensure globalThis property access works
 func (p *Paserati) SyncGlobalNamesFromCompiler() {
-	nameMap := p.compiler.GetHeapAlloc().GetNameToIndexMap()
+	if p.compiler == nil {
+		return
+	}
+	heapAlloc := p.compiler.GetHeapAlloc()
+	if heapAlloc == nil {
+		return
+	}
+	nameMap := heapAlloc.GetNameToIndexMap()
 	if debugDriver {
 		fmt.Printf("[DEBUG SyncGlobalNames] Syncing %d names from compiler to VM\n", len(nameMap))
 		hasArray := false

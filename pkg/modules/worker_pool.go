@@ -347,9 +347,21 @@ func extractExportSpecs(program *parser.Program) []*ExportSpec {
 			// Handle named exports
 			for _, specifier := range node.Specifiers {
 				if namedSpec, ok := specifier.(*parser.ExportNamedSpecifier); ok {
+					// Get export name (can be Identifier or StringLiteral)
+					var exportName, localName string
+					if ident, ok := namedSpec.Exported.(*parser.Identifier); ok {
+						exportName = ident.Value
+					} else if strLit, ok := namedSpec.Exported.(*parser.StringLiteral); ok {
+						exportName = strLit.Value
+					}
+					if ident, ok := namedSpec.Local.(*parser.Identifier); ok {
+						localName = ident.Value
+					} else if strLit, ok := namedSpec.Local.(*parser.StringLiteral); ok {
+						localName = strLit.Value
+					}
 					spec := &ExportSpec{
-						ExportName: namedSpec.Exported.Value,
-						LocalName:  namedSpec.Local.Value,
+						ExportName: exportName,
+						LocalName:  localName,
 					}
 					specs = append(specs, spec)
 				}

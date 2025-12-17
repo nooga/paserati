@@ -22,6 +22,21 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
+// getExportSpecName extracts the name string from an export specifier's Local or Exported field
+// which can be either an Identifier or StringLiteral (ES2022 string export names)
+func getExportSpecName(expr parser.Expression) string {
+	if expr == nil {
+		return ""
+	}
+	if ident, ok := expr.(*parser.Identifier); ok {
+		return ident.Value
+	}
+	if strLit, ok := expr.(*parser.StringLiteral); ok {
+		return strLit.Value
+	}
+	return ""
+}
+
 // isStringConcatenatable checks if a type can be coerced to string in concatenation
 // TypeScript allows concatenation with string for most types
 func (c *Checker) isStringConcatenatable(t types.Type) bool {
@@ -3830,8 +3845,8 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 
 			for _, spec := range node.Specifiers {
 				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
-					localName := exportSpec.Local.Value
-					exportName := exportSpec.Exported.Value
+					localName := getExportSpecName(exportSpec.Local)
+					exportName := getExportSpecName(exportSpec.Exported)
 
 					if c.IsModuleMode() {
 						c.moduleEnv.DefineReExport(exportName, sourceModule, localName, node.IsTypeOnly)
@@ -3849,8 +3864,8 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 						continue
 					}
 
-					localName := exportSpec.Local.Value
-					exportName := exportSpec.Exported.Value
+					localName := getExportSpecName(exportSpec.Local)
+					exportName := getExportSpecName(exportSpec.Exported)
 
 					// Check if the local name exists in current scope
 					if localType, _, exists := c.env.Resolve(localName); exists {

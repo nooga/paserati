@@ -18,6 +18,21 @@ import (
 // Also used temporarily for recursive function definition
 const nilRegister Register = 255 // Or another value guaranteed not to be used
 
+// getExportSpecName extracts the name string from an export specifier's Local or Exported field
+// which can be either an Identifier or StringLiteral (ES2022 string export names)
+func getExportSpecName(expr parser.Expression) string {
+	if expr == nil {
+		return ""
+	}
+	if ident, ok := expr.(*parser.Identifier); ok {
+		return ident.Value
+	}
+	if strLit, ok := expr.(*parser.StringLiteral); ok {
+		return strLit.Value
+	}
+	return ""
+}
+
 // --- New: Loop Context for Break/Continue ---
 type LoopContext struct {
 	// Optional label for this loop/statement
@@ -1325,13 +1340,16 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	if node.RestParameter != nil {
 		// Define the rest parameter in the symbol table
 		restParamReg := functionCompiler.regAlloc.Alloc()
-		functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+		// Handle both simple rest parameters (...args) and destructured (...[x, y])
+		if node.RestParameter.Name != nil {
+			functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+		} else if node.RestParameter.Pattern != nil {
+			functionCompiler.currentSymbolTable.Define("__rest__", restParamReg)
+			debugPrintf("// [Compiler] Rest parameter (destructured) defined in R%d\n", restParamReg)
+		}
 		// Pin the register since rest parameters can be captured by inner functions
 		functionCompiler.regAlloc.Pin(restParamReg)
-
-		// The rest parameter collection will be handled at runtime during function call
-		// We just need to ensure it has a register allocated here
-		debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
 	}
 
 	// 7. Compile the body using the function compiler
@@ -2373,8 +2391,8 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 
 			for _, spec := range node.Specifiers {
 				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
-					localName := exportSpec.Local.Value
-					exportName := exportSpec.Exported.Value
+					localName := getExportSpecName(exportSpec.Local)
+					exportName := getExportSpecName(exportSpec.Exported)
 
 					if c.IsModuleMode() {
 						c.moduleBindings.DefineReExport(exportName, sourceModule, localName)
@@ -2391,8 +2409,8 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 						return BadRegister, NewCompileError(node, "export specifier missing local name")
 					}
 
-					localName := exportSpec.Local.Value
-					exportName := exportSpec.Exported.Value
+					localName := getExportSpecName(exportSpec.Local)
+					exportName := getExportSpecName(exportSpec.Exported)
 
 					// Check if the local name exists in current symbol table
 					if _, _, exists := c.currentSymbolTable.Resolve(localName); exists {
@@ -2583,9 +2601,9 @@ func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 					if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
 						if exportSpec.Local != nil {
 							// Use the export name (or local name if no alias)
-							exportName := exportSpec.Local.Value
+							exportName := getExportSpecName(exportSpec.Local)
 							if exportSpec.Exported != nil {
-								exportName = exportSpec.Exported.Value
+								exportName = getExportSpecName(exportSpec.Exported)
 							}
 							exportNames = append(exportNames, exportName)
 						}
