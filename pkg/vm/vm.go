@@ -3949,11 +3949,20 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// JavaScript-style type coercion for bitwise operations
-			// undefined becomes 0, null becomes 0, booleans become 0/1, etc.
-			srcInt := int64(srcPrim.ToInteger())
-			result := ^srcInt
-			registers[destReg] = Number(float64(result))
+			// BigInt: ~x = -(x + 1)
+			if srcPrim.IsBigInt() {
+				bigVal := srcPrim.AsBigInt()
+				// ~x = -(x + 1) for BigInt
+				result := new(big.Int).Add(bigVal, big.NewInt(1))
+				result.Neg(result)
+				registers[destReg] = NewBigInt(result)
+			} else {
+				// JavaScript-style type coercion for bitwise operations
+				// undefined becomes 0, null becomes 0, booleans become 0/1, etc.
+				srcInt := int32(srcPrim.ToInteger())
+				result := ^srcInt
+				registers[destReg] = Number(float64(result))
+			}
 
 		case OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
 			OpShiftLeft, OpShiftRight, OpUnsignedShiftRight:
