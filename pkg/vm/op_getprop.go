@@ -82,10 +82,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return true, InterpretOK, *dest
 	}
 
-	// 3. NativeFunctionWithProps (like String.fromCharCode)
+	// 3. NativeFunctionWithProps (like String.fromCharCode, Function.prototype)
 	if objVal.Type() == TypeNativeFunctionWithProps {
 		nativeFnWithProps := objVal.AsNativeFunctionWithProps()
 
+		// First check own properties
 		if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
 			if debugVM {
 				if propName == "name" || propName == "constructor" {
@@ -96,6 +97,20 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			}
 			*dest = prop
 			return true, InterpretOK, *dest
+		}
+
+		// Walk prototype chain for inherited properties (like isPrototypeOf from Object.prototype)
+		proto := nativeFnWithProps.Properties.GetPrototype()
+		for proto.Type() != TypeNull && proto.Type() != TypeUndefined {
+			if proto.Type() == TypeObject {
+				if prop, exists := proto.AsPlainObject().GetOwn(propName); exists {
+					*dest = prop
+					return true, InterpretOK, *dest
+				}
+				proto = proto.AsPlainObject().GetPrototype()
+			} else {
+				break
+			}
 		}
 	}
 

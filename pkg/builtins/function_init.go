@@ -51,33 +51,41 @@ func (f *FunctionInitializer) InitTypes(ctx *TypeContext) error {
 func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Create Function.prototype inheriting from Object.prototype
-	functionProto := vm.NewObject(ctx.ObjectPrototype).AsPlainObject()
+	// Create Function.prototype as a callable function (per ECMAScript spec)
+	// Function.prototype is a function that accepts any arguments and returns undefined
+	functionProtoFn := vm.NewNativeFunctionWithProps(0, true, "", func(args []vm.Value) (vm.Value, error) {
+		// Per spec: Function.prototype() returns undefined
+		return vm.Undefined, nil
+	})
+	functionProtoObj := functionProtoFn.AsNativeFunctionWithProps()
+
+	// Set prototype chain: Function.prototype.[[Prototype]] = Object.prototype
+	functionProtoObj.Properties.SetPrototype(ctx.ObjectPrototype)
 
 	// Add prototype methods
 	// Function.prototype.call
 	callImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeCallImpl(vmInstance, args)
 	}
-	functionProto.SetOwn("call", vm.NewNativeFunction(0, true, "call", callImpl))
+	functionProtoObj.Properties.SetOwn("call", vm.NewNativeFunction(0, true, "call", callImpl))
 
 	// Function.prototype.apply
 	applyImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeApplyImpl(vmInstance, args)
 	}
-	functionProto.SetOwn("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
+	functionProtoObj.Properties.SetOwn("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
 
 	// Function.prototype.bind
 	bindImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeBindImpl(vmInstance, args)
 	}
-	functionProto.SetOwn("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
+	functionProtoObj.Properties.SetOwn("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
 
 	// Function.prototype.toString
 	toStringImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeToStringImpl(vmInstance, args)
 	}
-	functionProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
+	functionProtoObj.Properties.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
 
 	// Create Function constructor
 	functionCtor := vm.NewNativeFunction(-1, true, "Function", func(args []vm.Value) (vm.Value, error) {
@@ -91,16 +99,16 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(functionProto))
+		ctorPropsObj.Properties.SetOwn("prototype", functionProtoFn)
 
 		functionCtor = ctorWithProps
 	}
 
 	// Set constructor property on prototype
-	functionProto.SetOwn("constructor", functionCtor)
+	functionProtoObj.Properties.SetOwn("constructor", functionCtor)
 
-	// Store in VM
-	vmInstance.FunctionPrototype = vm.NewValueFromPlainObject(functionProto)
+	// Store in VM - Function.prototype is now a callable
+	vmInstance.FunctionPrototype = functionProtoFn
 
 	// Define globally
 	return ctx.DefineGlobal("Function", functionCtor)

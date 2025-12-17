@@ -252,16 +252,32 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		for {
 			// Get the prototype of current object
 			var proto vm.Value
-			if plainObj := current.AsPlainObject(); plainObj != nil {
-				proto = plainObj.GetPrototype()
-			} else if dictObj := current.AsDictObject(); dictObj != nil {
-				proto = dictObj.GetPrototype()
-			} else {
-				break // No prototype
+			switch current.Type() {
+			case vm.TypeObject:
+				if plainObj := current.AsPlainObject(); plainObj != nil {
+					proto = plainObj.GetPrototype()
+				}
+			case vm.TypeDictObject:
+				if dictObj := current.AsDictObject(); dictObj != nil {
+					proto = dictObj.GetPrototype()
+				}
+			case vm.TypeFunction, vm.TypeClosure:
+				// Functions have FunctionPrototype as their prototype
+				proto = vmInstance.FunctionPrototype
+			case vm.TypeNativeFunctionWithProps:
+				// NativeFunctionWithProps has its Properties' prototype
+				if nfp := current.AsNativeFunctionWithProps(); nfp != nil {
+					proto = nfp.Properties.GetPrototype()
+				}
+			case vm.TypeArray:
+				proto = vmInstance.ArrayPrototype
+			default:
+				// No prototype for this type
+				break
 			}
 
-			// If we reached null, we're done
-			if proto.Type() == vm.TypeNull {
+			// If we couldn't get a prototype or reached null/undefined, we're done
+			if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined || proto.Type() == 0 {
 				break
 			}
 
@@ -459,7 +475,13 @@ func objectCreateWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if proto.Type() == vm.TypeUndefined {
 		return vm.Undefined, vmInstance.NewTypeError("Object prototype may only be an Object or null: undefined")
 	}
-	if proto.Type() != vm.TypeNull && proto.Type() != vm.TypeObject {
+	// In JavaScript, any object-like value can be a prototype (functions, arrays, generators, etc.)
+	protoIsValid := proto.Type() == vm.TypeNull ||
+		proto.IsObject() ||
+		proto.IsCallable() ||
+		proto.Type() == vm.TypeGenerator ||
+		proto.Type() == vm.TypeAsyncGenerator
+	if !protoIsValid {
 		return vm.Undefined, vmInstance.NewTypeError("Object prototype may only be an Object or null")
 	}
 
@@ -790,6 +812,13 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return cl.Fn.Prototype, nil
 		}
 		return vm.Null, nil
+	case vm.TypeNativeFunctionWithProps:
+		// For NativeFunctionWithProps (like Function.prototype), return its internal prototype
+		nfp := obj.AsNativeFunctionWithProps()
+		if nfp != nil && nfp.Properties != nil {
+			return nfp.Properties.GetPrototype(), nil
+		}
+		return vm.Null, nil
 	case vm.TypeGenerator:
 		// For generators, return their custom prototype or GeneratorPrototype
 		genObj := obj.AsGenerator()
@@ -850,7 +879,14 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	proto := args[1]
 
 	// Second argument must be an object or null
-	if proto.Type() != vm.TypeNull && proto.Type() != vm.TypeObject {
+	// In JavaScript, any object-like value can be a prototype (functions, arrays, generators, etc.)
+	// Use IsObject() which checks for PlainObject/DictObject/Array/etc., or callable check for functions
+	protoIsValid := proto.Type() == vm.TypeNull ||
+		proto.IsObject() ||
+		proto.IsCallable() ||
+		proto.Type() == vm.TypeGenerator ||
+		proto.Type() == vm.TypeAsyncGenerator
+	if !protoIsValid {
 		return vm.Undefined, vmInstance.NewTypeError("Object prototype may only be an Object or null")
 	}
 
@@ -1327,8 +1363,12 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return objectDefinePropertyWithVM(vmInstance, []vm.Value{proxy.Target(), args[1], descriptor})
 	}
 
-	// First argument must be an object
-	if !obj.IsObject() {
+	// First argument must be an object (including functions, which are objects in JS)
+	isObjectLike := obj.IsObject() ||
+		obj.Type() == vm.TypeFunction ||
+		obj.Type() == vm.TypeClosure ||
+		obj.Type() == vm.TypeNativeFunctionWithProps
+	if !isObjectLike {
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty called on non-object")
 	}
 
@@ -1476,6 +1516,66 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		// DictObject has no attributes; set value only for string keys; symbols unsupported
 		if !keyIsSymbol {
 			dictObj.SetOwn(propName, value)
+		}
+	} else if obj.Type() == vm.TypeNativeFunctionWithProps {
+		// NativeFunctionWithProps (like Function.prototype) stores properties in Properties
+		nfp := obj.AsNativeFunctionWithProps()
+		if nfp != nil && nfp.Properties != nil {
+			if hasGetter || hasSetter {
+				if keyIsSymbol {
+					nfp.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					nfp.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					nfp.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					nfp.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
+			}
+		}
+	} else if obj.Type() == vm.TypeFunction {
+		// Functions store additional properties in Properties field
+		fn := obj.AsFunction()
+		if fn != nil {
+			if fn.Properties == nil {
+				fn.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
+			}
+			if hasGetter || hasSetter {
+				if keyIsSymbol {
+					fn.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					fn.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					fn.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					fn.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
+			}
+		}
+	} else if obj.Type() == vm.TypeClosure {
+		// Closures store additional properties in their function's Properties field
+		cl := obj.AsClosure()
+		if cl != nil && cl.Fn != nil {
+			if cl.Fn.Properties == nil {
+				cl.Fn.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
+			}
+			if hasGetter || hasSetter {
+				if keyIsSymbol {
+					cl.Fn.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					cl.Fn.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					cl.Fn.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					cl.Fn.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
+			}
 		}
 	}
 

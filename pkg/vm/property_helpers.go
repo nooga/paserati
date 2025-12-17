@@ -170,11 +170,9 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	if propName == "constructor" {
 		// In JS, Function.prototype.constructor === Function
 		// For callable values, return global Function constructor if available
-		if vm.FunctionPrototype.Type() == TypeObject {
-			// Lookup global 'Function' constructor via VM API
-			if ctorVal, ok := vm.GetGlobal("Function"); ok && ctorVal.IsCallable() {
-				return ctorVal, true
-			}
+		// Lookup global 'Function' constructor via VM API
+		if ctorVal, ok := vm.GetGlobal("Function"); ok && ctorVal.IsCallable() {
+			return ctorVal, true
 		}
 		// Fallback: undefined
 		return Undefined, true
@@ -186,6 +184,13 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		if method, exists := funcProto.GetOwn(propName); exists {
 			UpdatePrototypeStats("function_proto", 1)
 			// Always return the raw method. The VM's OpCallMethod path binds 'this' correctly.
+			return method, true
+		}
+	} else if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+		// Function.prototype is a callable NativeFunctionWithProps
+		funcProtoObj := vm.FunctionPrototype.AsNativeFunctionWithProps()
+		if method, exists := funcProtoObj.Properties.GetOwn(propName); exists {
+			UpdatePrototypeStats("function_proto", 1)
 			return method, true
 		}
 	}

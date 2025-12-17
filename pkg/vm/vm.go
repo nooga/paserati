@@ -1342,6 +1342,72 @@ startExecution:
 			objVal := registers[objReg]
 			constructorVal := registers[constructorReg]
 
+			// Per ECMAScript spec 12.10.4 InstanceofOperator:
+			// 1. If C is not an object, throw TypeError
+			if !constructorVal.IsObject() && !constructorVal.IsCallable() {
+				frame.ip = ip
+				vm.ThrowTypeError("Right-hand side of 'instanceof' is not an object")
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// 2-4. Check for Symbol.hasInstance method
+			var hasInstanceHandler Value = Undefined
+			if constructorVal.IsObject() {
+				// Try to get @@hasInstance from the constructor
+				if ok, _, _ := vm.opGetPropSymbol(frame, ip, &constructorVal, vm.SymbolHasInstance, &hasInstanceHandler); ok {
+					if hasInstanceHandler.IsCallable() {
+						// Call the handler: instOfHandler.call(C, O)
+						result, err := vm.Call(hasInstanceHandler, constructorVal, []Value{objVal})
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							}
+							if vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						// Return ToBoolean(result)
+						registers[destReg] = BooleanValue(!result.IsFalsey())
+						continue
+					}
+				}
+			}
+
+			// 5. If IsCallable(C) is false, throw TypeError
+			if !constructorVal.IsCallable() {
+				frame.ip = ip
+				vm.ThrowTypeError("Right-hand side of 'instanceof' is not callable")
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
 			// Get constructor's .prototype property (may create it lazily)
 			var constructorPrototype Value = Undefined
 			if constructorVal.Type() == TypeFunction {
@@ -1413,6 +1479,10 @@ startExecution:
 						} else {
 							break
 						}
+					} else if current.Type() == TypeNativeFunctionWithProps {
+						// Handle callable Function.prototype
+						nfp := current.AsNativeFunctionWithProps()
+						current = nfp.Properties.GetPrototype()
 					} else {
 						break
 					}
@@ -7047,6 +7117,24 @@ startExecution:
 					success = po.DeleteOwn(propName)
 				} else if d := obj.AsDictObject(); d != nil {
 					success = d.DeleteOwn(propName)
+				}
+			} else if obj.Type() == TypeFunction {
+				// Delete from function's properties
+				fn := obj.AsFunction()
+				if fn.Properties != nil {
+					success = fn.Properties.DeleteOwn(propName)
+				}
+			} else if obj.Type() == TypeClosure {
+				// Delete from closure's function properties
+				closure := obj.AsClosure()
+				if closure.Fn.Properties != nil {
+					success = closure.Fn.Properties.DeleteOwn(propName)
+				}
+			} else if obj.Type() == TypeNativeFunctionWithProps {
+				// Delete from native function's properties
+				nfp := obj.AsNativeFunctionWithProps()
+				if nfp.Properties != nil {
+					success = nfp.Properties.DeleteOwn(propName)
 				}
 			}
 			registers[destReg] = BooleanValue(success)
