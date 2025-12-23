@@ -8391,7 +8391,7 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 					result, err := vm.Call(toPrimMethod, val, []Value{hintArg})
 					if err == nil {
 						// Result must be a primitive
-						if !result.IsObject() && result.typ != TypeArray && result.typ != TypeArguments &&
+						if !result.IsObject() && !result.IsCallable() && result.typ != TypeArray && result.typ != TypeArguments &&
 							result.typ != TypeRegExp && result.typ != TypeMap && result.typ != TypeSet && result.typ != TypeProxy {
 							return result
 						}
@@ -8439,7 +8439,7 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 				}
 
 				// If result is primitive, return it
-				if !result.IsObject() && result.typ != TypeArray && result.typ != TypeArguments &&
+				if !result.IsObject() && !result.IsCallable() && result.typ != TypeArray && result.typ != TypeArguments &&
 					result.typ != TypeRegExp && result.typ != TypeMap && result.typ != TypeSet && result.typ != TypeProxy {
 					return result
 				}
