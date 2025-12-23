@@ -179,6 +179,7 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	}
 
 	// Check function prototype methods using the VM's FunctionPrototype
+	// and walk the prototype chain (Function.prototype -> Object.prototype)
 	if vm.FunctionPrototype.Type() == TypeObject {
 		funcProto := vm.FunctionPrototype.AsPlainObject()
 		if method, exists := funcProto.GetOwn(propName); exists {
@@ -186,12 +187,38 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			// Always return the raw method. The VM's OpCallMethod path binds 'this' correctly.
 			return method, true
 		}
+		// Walk prototype chain to Object.prototype
+		proto := funcProto.GetPrototype()
+		for proto.Type() != TypeNull && proto.Type() != TypeUndefined {
+			if proto.Type() == TypeObject {
+				if method, exists := proto.AsPlainObject().GetOwn(propName); exists {
+					UpdatePrototypeStats("object_proto_via_function", 1)
+					return method, true
+				}
+				proto = proto.AsPlainObject().GetPrototype()
+			} else {
+				break
+			}
+		}
 	} else if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
 		// Function.prototype is a callable NativeFunctionWithProps
 		funcProtoObj := vm.FunctionPrototype.AsNativeFunctionWithProps()
 		if method, exists := funcProtoObj.Properties.GetOwn(propName); exists {
 			UpdatePrototypeStats("function_proto", 1)
 			return method, true
+		}
+		// Walk prototype chain to Object.prototype
+		proto := funcProtoObj.Properties.GetPrototype()
+		for proto.Type() != TypeNull && proto.Type() != TypeUndefined {
+			if proto.Type() == TypeObject {
+				if method, exists := proto.AsPlainObject().GetOwn(propName); exists {
+					UpdatePrototypeStats("object_proto_via_function", 1)
+					return method, true
+				}
+				proto = proto.AsPlainObject().GetPrototype()
+			} else {
+				break
+			}
 		}
 	}
 
