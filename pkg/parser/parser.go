@@ -400,7 +400,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 
 			// --- Hoisting Check ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
-			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt {
+			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt != nil {
 				if exprStmt.Expression != nil {
 					if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
 						if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
@@ -416,7 +416,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 			// Also check for exported functions
 			if exportDecl, isExport := stmt.(*ExportNamedDeclaration); isExport && exportDecl != nil && exportDecl.Declaration != nil {
 				// Check if the exported declaration is a function
-				if exprStmt, isExprStmt := exportDecl.Declaration.(*ExpressionStatement); isExprStmt {
+				if exprStmt, isExprStmt := exportDecl.Declaration.(*ExpressionStatement); isExprStmt && exprStmt != nil {
 					if exprStmt.Expression != nil {
 						if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
 							if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
@@ -3370,8 +3370,17 @@ func (p *Parser) expectPeek(t lexer.TokenType) bool {
 
 // isKeywordThatCanBeIdentifier checks if a token type is a keyword that can be used as an identifier
 func (p *Parser) isKeywordThatCanBeIdentifier(tokenType lexer.TokenType) bool {
+	// In JavaScript/TypeScript, all keywords can be used as property names in object literals
+	// This matches the list in parsePropertyName()
 	switch tokenType {
-	case lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
+	case lexer.DELETE, lexer.GET, lexer.SET, lexer.IF, lexer.ELSE, lexer.FOR, lexer.WHILE, lexer.FUNCTION,
+		lexer.RETURN, lexer.THROW, lexer.LET, lexer.CONST, lexer.TRUE, lexer.FALSE, lexer.NULL,
+		lexer.UNDEFINED, lexer.THIS, lexer.NEW, lexer.TYPEOF, lexer.VOID, lexer.AS, lexer.SATISFIES,
+		lexer.IN, lexer.INSTANCEOF, lexer.DO, lexer.ENUM, lexer.FROM, lexer.CATCH, lexer.FINALLY,
+		lexer.TRY, lexer.SWITCH, lexer.CASE, lexer.DEFAULT, lexer.BREAK, lexer.CONTINUE, lexer.CLASS,
+		lexer.STATIC, lexer.READONLY, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT,
+		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.AWAIT, lexer.VAR, lexer.TYPE, lexer.KEYOF,
+		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER, lexer.WITH:
 		return true
 	default:
 		return false
