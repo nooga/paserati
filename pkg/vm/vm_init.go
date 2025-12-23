@@ -459,3 +459,18 @@ func (vm *VM) ExecuteGeneratorWithReturn(genObj *GeneratorObject, returnValue Va
 func (vm *VM) NewExceptionError(value Value) error {
 	return exceptionError{exception: value}
 }
+
+// ClearErrors clears all recorded errors from the VM.
+// This is used by async generators which convert exceptions to rejected promises.
+func (vm *VM) ClearErrors() {
+	vm.errors = nil
+}
+
+// ClearUnwindingState clears the exception unwinding state.
+// This should be called when native code successfully handles an exception
+// (e.g., by returning a rejected promise) so the VM knows the exception has been handled.
+func (vm *VM) ClearUnwindingState() {
+	vm.unwinding = false
+	vm.unwindingCrossedNative = false
+	vm.currentException = Null
+}

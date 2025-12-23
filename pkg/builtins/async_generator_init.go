@@ -85,6 +85,21 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisGen.Done = genObj.Done
 
 		if err != nil {
+			// Async generators convert exceptions to rejected promises
+			// Mark as completed since async generators don't resume after exception
+			thisGen.State = vm.GeneratorCompleted
+			thisGen.Done = true
+			thisGen.Frame = nil  // OK for async - won't resume
+
+			// Clear recorded errors since we're handling the exception by returning a rejected promise
+			// This prevents "Uncaught exception" from being printed when the exception is actually caught
+			vmInstance.ClearErrors()
+
+			// Extract exception value and wrap in rejected promise
+			if ee, ok := err.(vm.ExceptionError); ok {
+				return vmInstance.NewRejectedPromise(ee.GetExceptionValue()), nil
+			}
+			// Fallback for other errors
 			return vmInstance.NewRejectedPromise(vm.NewString(err.Error())), nil
 		}
 

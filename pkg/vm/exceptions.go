@@ -48,7 +48,9 @@ func (vm *VM) throwException(value Value) {
 			value.ToString(), vm.frameCount, vm.unwinding, vm.unwindingCrossedNative)
 	}
 	// Avoid double-throwing the same value in a single unwinding sequence
-	if vm.unwinding && vm.currentException.Is(value) {
+	// EXCEPT when crossing native boundaries (unwindingCrossedNative=true)
+	// In that case, this is a legitimate re-throw from native code back into bytecode
+	if vm.unwinding && vm.currentException.Is(value) && !vm.unwindingCrossedNative {
 		if debugExceptions {
 			fmt.Printf("[DEBUG exceptions.go] Duplicate throw of same exception during unwind; ignoring rethrow\n")
 		}

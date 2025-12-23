@@ -8829,6 +8829,21 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
+		// Exception occurred - clean up frames before returning
+		// NOTE: Don't modify generator state here - let the exception propagate
+		// The generator will be marked as completed if no handler catches the exception
+
+		// Pop the generator frame and sentinel frame
+		// During exception, frames may still be on the stack
+		vm.frameCount-- // Pop generator frame (or already popped during unwind)
+		if vm.frameCount > 0 && regSize > 0 {
+			vm.nextRegSlot -= regSize
+		}
+		// Pop the sentinel frame if present
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+		}
+
 		if vm.unwinding && vm.currentException != Null {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
@@ -8988,6 +9003,21 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Execute the VM run loop - it will return when the generator yields or the sentinel frame is hit
 	status, result := vm.run()
 	if status == InterpretRuntimeError {
+		// Exception occurred - clean up frames before returning
+		// NOTE: Don't modify generator state here - let the exception propagate
+		// The generator will be marked as completed if no handler catches the exception
+
+		// Pop the generator frame and sentinel frame
+		// During exception, frames may still be on the stack
+		vm.frameCount-- // Pop generator frame (or already popped during unwind)
+		if vm.frameCount > 0 {
+			vm.nextRegSlot -= regSize
+		}
+		// Pop the sentinel frame if present
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+		}
+
 		if vm.unwinding && vm.currentException != Null {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
