@@ -7724,7 +7724,7 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken() // consume '='
 				p.nextToken() // move to RHS
-				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
+				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok && arrayDecl != nil {
 					arrayDecl.Value = p.parseExpression(LOWEST)
 				}
 			}
@@ -7737,7 +7737,7 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 			if p.peekTokenIs(lexer.ASSIGN) {
 				p.nextToken() // consume '='
 				p.nextToken() // move to RHS
-				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
+				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok && objDecl != nil {
 					objDecl.Value = p.parseExpression(LOWEST)
 				}
 			}

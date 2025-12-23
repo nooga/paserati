@@ -2207,6 +2207,12 @@ func (c *Compiler) hasMethodInType(objType *types.ObjectType, methodName string)
 // compileImportDeclaration handles compilation of import statements
 // Following the same pattern as type checker's checkImportDeclaration
 func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint Register) (Register, errors.PaseratiError) {
+	// Import declarations are only valid at module top-level
+	// If processedModules is nil, we're in a nested function scope
+	if c.processedModules == nil {
+		return BadRegister, NewCompileError(node, "import declarations can only appear at the top level of a module")
+	}
+
 	// Type-only imports are handled during type checking only - no runtime code needed
 	if node.IsTypeOnly {
 		debugPrintf("// [Compiler] Skipping type-only import from: %s\n", node.Source.Value)
