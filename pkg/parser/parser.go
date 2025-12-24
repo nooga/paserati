@@ -403,12 +403,9 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt != nil {
 				if exprStmt.Expression != nil {
 					if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
-						if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
-							// Function with this name already hoisted
-							p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration: %s", funcLit.Name.Value))
-						} else {
-							program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
-						}
+						// In JavaScript, duplicate function declarations are allowed
+						// The last declaration wins due to hoisting
+						program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
 					}
 				}
 			}
@@ -419,12 +416,9 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 				if exprStmt, isExprStmt := exportDecl.Declaration.(*ExpressionStatement); isExprStmt && exprStmt != nil {
 					if exprStmt.Expression != nil {
 						if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
-							if _, exists := program.HoistedDeclarations[funcLit.Name.Value]; exists {
-								// Function with this name already hoisted
-								p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration: %s", funcLit.Name.Value))
-							} else {
-								program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
-							}
+							// In JavaScript, duplicate function declarations are allowed
+							// The last declaration wins due to hoisting
+							program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
 						}
 					}
 				}

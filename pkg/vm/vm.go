@@ -8008,6 +8008,20 @@ func (vm *VM) IsConstructorCall() bool {
 	return vm.inConstructorCall
 }
 
+// IsInStrictMode returns true if the current execution context is in strict mode
+// This checks the current frame's chunk for the IsStrict flag
+// Used by eval() to determine whether to compile eval'd code in strict mode
+func (vm *VM) IsInStrictMode() bool {
+	if vm.frameCount == 0 {
+		return false
+	}
+	frame := &vm.frames[vm.frameCount-1]
+	if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.Chunk != nil {
+		return frame.closure.Fn.Chunk.IsStrict
+	}
+	return false
+}
+
 // NewBooleanObject creates a Boolean wrapper object with the given primitive value
 func (vm *VM) NewBooleanObject(primitiveValue bool) Value {
 	obj := NewObject(vm.BooleanPrototype).AsPlainObject()

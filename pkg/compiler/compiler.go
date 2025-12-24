@@ -128,6 +128,9 @@ type Compiler struct {
 	finallyContextStack     []*FinallyContext // Stack of active finally contexts
 	withBlockDepth          int               // Number of enclosing with blocks (inherited by nested functions)
 
+	// --- Strict Mode Inheritance ---
+	inheritedStrictMode bool // Inherited strict mode from eval context
+
 	// --- Phase 5: Module Bindings ---
 	moduleBindings *ModuleBindings      // Module-aware binding resolver
 	moduleLoader   modules.ModuleLoader // Reference to module loader
@@ -225,6 +228,12 @@ func (c *Compiler) EnableModuleMode(modulePath string, loader modules.ModuleLoad
 // IsModuleMode returns true if the compiler is in module mode
 func (c *Compiler) IsModuleMode() bool {
 	return c.moduleBindings != nil
+}
+
+// SetStrictMode sets the initial strict mode for the compiler
+// This is used by eval() to compile code in strict mode when called from strict context
+func (c *Compiler) SetStrictMode(strict bool) {
+	c.inheritedStrictMode = strict
 }
 
 // syncImportsFromTypeChecker synchronizes import information from the type checker
@@ -365,14 +374,17 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 
 	// --- Determine strict mode ---
 	// TypeScript mode (type checking enabled): default to strict mode
-	// JavaScript mode (type checking disabled): respect "use strict" directive
+	// JavaScript mode (type checking disabled): respect "use strict" directive or inherited strict mode
 	if !c.ignoreTypeErrors {
 		// TypeScript mode - always strict
 		c.chunk.IsStrict = true
 		debugPrintf("[Compile] TypeScript mode - enabling strict mode by default\n")
 	} else {
-		// JavaScript mode - check for "use strict" directive
-		if len(program.Statements) > 0 {
+		// JavaScript mode - check for inherited strict mode (from eval context) first
+		if c.inheritedStrictMode {
+			c.chunk.IsStrict = true
+		} else if len(program.Statements) > 0 {
+			// Check for "use strict" directive
 			if exprStmt, ok := program.Statements[0].(*parser.ExpressionStatement); ok {
 				if strLit, ok := exprStmt.Expression.(*parser.StringLiteral); ok {
 					if strLit.Value == "use strict" {

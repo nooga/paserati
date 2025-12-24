@@ -478,15 +478,18 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, fmt.Errorf("eval: driver is nil")
 		}
 
-		// Define interface for accessing compiler
+		// Define interface for accessing compiler with strict mode support
 		type driverInterface interface {
-			CompileProgram(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
+			CompileProgramWithStrictMode(*parser.Program, bool) (*vm.Chunk, []errors.PaseratiError)
 		}
 
 		driver, ok := ctx.Driver.(driverInterface)
 		if !ok {
-			return vm.Undefined, fmt.Errorf("eval: driver doesn't implement CompileProgram")
+			return vm.Undefined, fmt.Errorf("eval: driver doesn't implement CompileProgramWithStrictMode")
 		}
+
+		// Check if caller is in strict mode - direct eval inherits strict mode from calling context
+		callerIsStrict := ctx.VM.IsInStrictMode()
 
 		// Parse the source code
 		lx := lexer.NewLexer(codeStr)
@@ -502,8 +505,8 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
 		}
 
-		// Compile the program
-		chunk, compileErrs := driver.CompileProgram(prog)
+		// Compile the program with inherited strict mode
+		chunk, compileErrs := driver.CompileProgramWithStrictMode(prog, callerIsStrict)
 		if len(compileErrs) > 0 {
 			// Throw SyntaxError
 			if ctor, ok := ctx.VM.GetGlobal("SyntaxError"); ok {

@@ -269,6 +269,18 @@ func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.
 	return p.compiler.Compile(program)
 }
 
+// CompileProgramWithStrictMode compiles a parsed program with the specified strict mode
+// This is used by eval() to compile code in strict mode when called from strict context
+func (p *Paserati) CompileProgramWithStrictMode(program *parser.Program, strict bool) (*vm.Chunk, []errors.PaseratiError) {
+	// Honor session setting to ignore type errors (used for Test262)
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	// Set strict mode before compilation
+	if strict {
+		p.compiler.SetStrictMode(true)
+	}
+	return p.compiler.Compile(program)
+}
+
 // SyncGlobalNamesFromCompiler syncs the compiler's global name mappings to the VM
 // This should be called after CompileProgram to ensure globalThis property access works
 func (p *Paserati) SyncGlobalNamesFromCompiler() {

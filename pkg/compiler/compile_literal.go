@@ -13,8 +13,33 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	funcCompiler := newFunctionCompiler(c)
 	funcCompiler.compilingFuncName = "<arrow>" // Set name for arrow functions
 
+	// 1.5. Check for 'use strict' directive in arrow function body (if it's a block statement)
+	if blockBody, ok := node.Body.(*parser.BlockStatement); ok {
+		if hasStrictDirective(blockBody) {
+			funcCompiler.chunk.IsStrict = true
+			debugPrintf("// [compileArrowFunctionLiteral] Detected 'use strict' directive in arrow function body\n")
+		}
+	}
+
 	// 2. Define parameters in the function's symbol table
+	// Track seen parameter names for duplicate detection in strict mode
+	seenArrowParams := make(map[string]bool)
+
 	for _, p := range node.Parameters {
+		// Strict mode validation: cannot use 'eval' or 'arguments' as parameter names
+		if funcCompiler.chunk.IsStrict && (p.Name.Value == "eval" || p.Name.Value == "arguments") {
+			funcCompiler.addError(p.Name, fmt.Sprintf("SyntaxError: Strict mode function may not have parameter named '%s'", p.Name.Value))
+			// Continue defining it to avoid cascading errors
+		}
+
+		// Strict mode validation: duplicate parameter names are forbidden
+		if funcCompiler.chunk.IsStrict {
+			if seenArrowParams[p.Name.Value] {
+				funcCompiler.addError(p.Name, fmt.Sprintf("SyntaxError: Duplicate parameter name '%s' not allowed in strict mode", p.Name.Value))
+			}
+			seenArrowParams[p.Name.Value] = true
+		}
+
 		reg := funcCompiler.regAlloc.Alloc()
 		// --- FIX: Access Name field ---
 		funcCompiler.currentSymbolTable.Define(p.Name.Value, reg)
@@ -863,6 +888,19 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	// 1. Create a new Compiler instance for the function body, linked to the current one
 	functionCompiler := newFunctionCompiler(c) // <<< Keep this instance variable
 
+	// 1.5. Check for 'use strict' directive in function body
+	if hasStrictDirective(node.Body) {
+		functionCompiler.chunk.IsStrict = true
+		debugPrintf("// [compileFunctionLiteral] Detected 'use strict' directive in function body\n")
+	}
+
+	// 1.6. Strict mode validation: cannot use 'eval' or 'arguments' as function names
+	if functionCompiler.chunk.IsStrict && node.Name != nil {
+		if node.Name.Value == "eval" || node.Name.Value == "arguments" {
+			functionCompiler.addError(node.Name, fmt.Sprintf("SyntaxError: Function name '%s' is not allowed in strict mode", node.Name.Value))
+		}
+	}
+
 	// ... (rest of the function setup: determine name, define inner name, define params) ...
 	// --- Determine and set the function name being compiled ---
 	var determinedFuncName string
@@ -910,6 +948,9 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	debugPrintf("// [Compiling Function Literal] %s\n", determinedFuncName)
 
 	// 2. Define parameters in the function compiler's *enclosed* scope
+	// Track seen parameter names for duplicate detection in strict mode
+	seenParams := make(map[string]bool)
+
 	for _, param := range node.Parameters {
 		// Skip 'this' parameters - they don't have names and don't get compiled as regular parameters
 		if param.IsThis {
@@ -929,6 +970,21 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			functionCompiler.addError(tempNode, "parameter has nil Name but IsDestructuring is false")
 			continue
 		}
+
+		// Strict mode validation: cannot use 'eval' or 'arguments' as parameter names
+		if functionCompiler.chunk.IsStrict && (param.Name.Value == "eval" || param.Name.Value == "arguments") {
+			functionCompiler.addError(param.Name, fmt.Sprintf("SyntaxError: Strict mode function may not have parameter named '%s'", param.Name.Value))
+			// Continue defining it to avoid cascading errors
+		}
+
+		// Strict mode validation: duplicate parameter names are forbidden
+		if functionCompiler.chunk.IsStrict {
+			if seenParams[param.Name.Value] {
+				functionCompiler.addError(param.Name, fmt.Sprintf("SyntaxError: Duplicate parameter name '%s' not allowed in strict mode", param.Name.Value))
+			}
+			seenParams[param.Name.Value] = true
+		}
+
 		reg := functionCompiler.regAlloc.Alloc()
 		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
 		// Pin the register since parameters can be captured by inner functions
@@ -1267,4 +1323,20 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	// --- Return the constant index, the free symbols, and nil error ---
 	// Accumulated errors are in c.errors.
 	return constIdx, freeSymbols, nil // <<< MODIFY return statement
+}
+
+// hasStrictDirective checks if a block statement begins with a 'use strict' directive
+func hasStrictDirective(body *parser.BlockStatement) bool {
+	if body == nil || len(body.Statements) == 0 {
+		return false
+	}
+
+	// Check if first statement is an expression statement containing a string literal 'use strict'
+	if exprStmt, ok := body.Statements[0].(*parser.ExpressionStatement); ok {
+		if strLit, ok := exprStmt.Expression.(*parser.StringLiteral); ok {
+			return strLit.Value == "use strict"
+		}
+	}
+
+	return false
 }

@@ -77,6 +77,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	case *parser.Identifier:
 		lhsType = lhsIsIdentifier
 
+		// Strict mode validation: cannot assign to 'eval' or 'arguments'
+		if c.chunk.IsStrict && (lhsNode.Value == "eval" || lhsNode.Value == "arguments") {
+			c.addError(lhsNode, fmt.Sprintf("SyntaxError: Cannot assign to '%s' in strict mode", lhsNode.Value))
+		}
+
 		// First check if this is a with property (highest priority)
 		if _, isWithProperty := c.shouldUseWithProperty(lhsNode); isWithProperty {
 			// This is a with property assignment - treat as member assignment
