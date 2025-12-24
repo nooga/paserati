@@ -7382,6 +7382,30 @@ startExecution:
 					// Not supporting element deletion yet
 					success = false
 				}
+			} else if obj.Type() == TypeString {
+				// String primitives: indices within length are non-configurable
+				// indices beyond length don't exist, so delete returns true
+				str := AsString(obj)
+				keyStr := key.ToString()
+				// Check if it's a numeric index
+				if idx, isNumeric := vm.parseArrayIndex(keyStr); isNumeric {
+					if idx >= 0 && idx < len(str) {
+						// Character at this index - non-configurable
+						success = false
+					} else {
+						// Beyond string length - no property exists
+						success = true
+					}
+				} else if keyStr == "length" {
+					// length property is non-configurable
+					success = false
+				} else {
+					// Other properties don't exist on string primitives
+					success = true
+				}
+			} else {
+				// For other primitives (number, boolean), properties don't exist
+				success = true
 			}
 			registers[destReg] = BooleanValue(success)
 

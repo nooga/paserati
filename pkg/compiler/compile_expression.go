@@ -1030,6 +1030,29 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 		}
 	}()
 
+	// Special case: delete with unresolvable identifier should return true without throwing
+	// This must be checked BEFORE compiling the operand, as unresolvable identifiers would fail
+	if node.Operator == "delete" {
+		if ident, ok := node.Right.(*parser.Identifier); ok {
+			// Check if this identifier is resolvable
+			_, _, found := c.currentSymbolTable.Resolve(ident.Value)
+			if !found {
+				// Not a local - check if it's a global
+				if c.heapAlloc != nil {
+					if _, isGlobal := c.heapAlloc.GetIndex(ident.Value); !isGlobal {
+						// Unresolvable reference - return true (per ECMAScript spec)
+						c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
+						return hint, nil
+					}
+				} else {
+					// No heap allocator - treat as unresolvable, return true
+					c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
+					return hint, nil
+				}
+			}
+		}
+	}
+
 	// Compile the right operand first
 	rightReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, rightReg)

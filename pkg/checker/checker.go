@@ -2034,6 +2034,20 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.PrefixExpression:
 		// --- UPDATED: Handle PrefixExpression ---
+		// Special case: delete operator with identifier - don't throw error for undefined identifiers
+		// Similar to typeof, delete on unresolvable reference should work in non-strict mode
+		if node.Operator == "delete" {
+			if ident, ok := node.Right.(*parser.Identifier); ok {
+				// Check if identifier exists
+				_, _, found := c.env.Resolve(ident.Value)
+				if !found {
+					// Identifier doesn't exist - this is valid for delete (returns true)
+					// Set computed type and return early
+					node.SetComputedType(types.Boolean)
+					return
+				}
+			}
+		}
 		c.visit(node.Right) // Visit the operand first
 		rightType := node.Right.GetComputedType()
 		var resultType types.Type = types.Any // Default to Any on error
