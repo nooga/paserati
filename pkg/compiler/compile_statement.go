@@ -16,6 +16,11 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		node.Value = declarator.Value
 		node.ComputedType = declarator.ComputedType
 
+		// Strict mode validation: FutureReservedWords cannot be used as variable names
+		if c.chunk.IsStrict && isFutureReservedWord(declarator.Name.Value) {
+			c.addError(declarator.Name, fmt.Sprintf("SyntaxError: Unexpected strict mode reserved word '%s'", declarator.Name.Value))
+		}
+
 		// debug disabled
 		var valueReg Register = nilRegister
 		var err errors.PaseratiError
@@ -152,6 +157,11 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		node.Value = declarator.Value
 		node.ComputedType = declarator.ComputedType
 
+		// Strict mode validation: FutureReservedWords cannot be used as variable names
+		if c.chunk.IsStrict && isFutureReservedWord(declarator.Name.Value) {
+			c.addError(declarator.Name, fmt.Sprintf("SyntaxError: Unexpected strict mode reserved word '%s'", declarator.Name.Value))
+		}
+
 		// debug disabled
 		var valueReg Register = nilRegister
 		var err errors.PaseratiError
@@ -265,6 +275,11 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		node.Name = declarator.Name
 		node.Value = declarator.Value
 		node.ComputedType = declarator.ComputedType
+
+		// Strict mode validation: FutureReservedWords cannot be used as variable names
+		if c.chunk.IsStrict && isFutureReservedWord(declarator.Name.Value) {
+			c.addError(declarator.Name, fmt.Sprintf("SyntaxError: Unexpected strict mode reserved word '%s'", declarator.Name.Value))
+		}
 
 		if node.Value == nil {
 			// Parser should prevent this, but defensive check

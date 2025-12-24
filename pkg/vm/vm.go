@@ -1259,6 +1259,26 @@ startExecution:
 			propVal := registers[propReg]
 			objVal := registers[objReg]
 
+			// Per ECMAScript spec 12.10.1: If Type(rval) is not Object, throw a TypeError exception
+			objType := objVal.Type()
+			if objType != TypeObject && objType != TypeDictObject && objType != TypeArray &&
+				objType != TypeFunction && objType != TypeNativeFunctionWithProps && objType != TypeProxy &&
+				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction {
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
 			// Check if property exists in object or its prototype chain
 			var hasProperty bool
 			if propVal.Type() == TypeSymbol {
@@ -1369,8 +1389,22 @@ startExecution:
 					} else {
 						hasProperty = false
 					}
+				case TypeClosure:
+					// Closures are functions and can have properties via their FunctionObject
+					cl := objVal.AsClosure()
+					if cl.Fn != nil && cl.Fn.Properties != nil {
+						hasProperty = cl.Fn.Properties.Has(propKey)
+					} else {
+						hasProperty = false
+					}
+				case TypeNativeFunction:
+					// Native functions are objects but typically don't have custom properties
+					hasProperty = false
+				case TypeBoundFunction:
+					// Bound functions are objects
+					hasProperty = false
 				default:
-					// Non-object RHS
+					// Non-object RHS - shouldn't reach here due to check above
 					hasProperty = false
 				}
 			}

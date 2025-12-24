@@ -7,6 +7,23 @@ import (
 	"paserati/pkg/vm"
 )
 
+// isFutureReservedWord checks if an identifier is a FutureReservedWord
+// These are reserved in strict mode but allowed as identifiers in non-strict mode
+// Note: 'yield' and 'let' are handled specially by the parser and are not included here
+var futureReservedWords = map[string]bool{
+	"implements": true,
+	"interface":  true,
+	"package":    true,
+	"private":    true,
+	"protected":  true,
+	"public":     true,
+	"static":     true,
+}
+
+func isFutureReservedWord(name string) bool {
+	return futureReservedWords[name]
+}
+
 // compileArrowFunctionLiteral compiles an arrow function literal expression.
 func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral, hint Register) (Register, errors.PaseratiError) {
 	// 1. Create a compiler for the function scope
@@ -30,6 +47,11 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		if funcCompiler.chunk.IsStrict && (p.Name.Value == "eval" || p.Name.Value == "arguments") {
 			funcCompiler.addError(p.Name, fmt.Sprintf("SyntaxError: Strict mode function may not have parameter named '%s'", p.Name.Value))
 			// Continue defining it to avoid cascading errors
+		}
+
+		// Strict mode validation: FutureReservedWords cannot be used as parameter names
+		if funcCompiler.chunk.IsStrict && isFutureReservedWord(p.Name.Value) {
+			funcCompiler.addError(p.Name, fmt.Sprintf("SyntaxError: Unexpected strict mode reserved word '%s'", p.Name.Value))
 		}
 
 		// Strict mode validation: duplicate parameter names are forbidden
@@ -899,6 +921,10 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		if node.Name.Value == "eval" || node.Name.Value == "arguments" {
 			functionCompiler.addError(node.Name, fmt.Sprintf("SyntaxError: Function name '%s' is not allowed in strict mode", node.Name.Value))
 		}
+		// Strict mode validation: FutureReservedWords cannot be used as function names
+		if isFutureReservedWord(node.Name.Value) {
+			functionCompiler.addError(node.Name, fmt.Sprintf("SyntaxError: Unexpected strict mode reserved word '%s'", node.Name.Value))
+		}
 	}
 
 	// ... (rest of the function setup: determine name, define inner name, define params) ...
@@ -975,6 +1001,11 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		if functionCompiler.chunk.IsStrict && (param.Name.Value == "eval" || param.Name.Value == "arguments") {
 			functionCompiler.addError(param.Name, fmt.Sprintf("SyntaxError: Strict mode function may not have parameter named '%s'", param.Name.Value))
 			// Continue defining it to avoid cascading errors
+		}
+
+		// Strict mode validation: FutureReservedWords cannot be used as parameter names
+		if functionCompiler.chunk.IsStrict && isFutureReservedWord(param.Name.Value) {
+			functionCompiler.addError(param.Name, fmt.Sprintf("SyntaxError: Unexpected strict mode reserved word '%s'", param.Name.Value))
 		}
 
 		// Strict mode validation: duplicate parameter names are forbidden

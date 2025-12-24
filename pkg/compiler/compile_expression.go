@@ -1061,6 +1061,27 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 		// delete operator requires special handling based on the operand type
 		switch operand := node.Right.(type) {
 		case *parser.MemberExpression:
+			// Check if this is delete super.property - this must throw ReferenceError
+			if _, isSuper := operand.Object.(*parser.SuperExpression); isSuper {
+				// delete super.property always throws ReferenceError per ECMAScript spec
+				errorReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, errorReg)
+				refErrorGlobalIdx := c.GetOrAssignGlobalIndex("ReferenceError")
+				c.emitGetGlobal(errorReg, refErrorGlobalIdx, node.Token.Line)
+
+				msgReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, msgReg)
+				msgConstIdx := c.chunk.AddConstant(vm.String("Unsupported reference to 'super'"))
+				c.emitLoadConstant(msgReg, msgConstIdx, node.Token.Line)
+
+				resultReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, resultReg)
+				c.emitCall(resultReg, errorReg, 1, node.Token.Line) // Call ReferenceError constructor
+				c.emitOpCode(vm.OpThrow, node.Token.Line)
+				c.emitByte(byte(resultReg))
+				return hint, nil
+			}
+
 			// delete obj.prop
 			objReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, objReg)
@@ -1074,6 +1095,27 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			c.emitDeleteProp(hint, objReg, propIdx, node.Token.Line)
 
 		case *parser.IndexExpression:
+			// Check if this is delete super[key] - this must throw ReferenceError
+			if _, isSuper := operand.Left.(*parser.SuperExpression); isSuper {
+				// delete super[key] always throws ReferenceError per ECMAScript spec
+				errorReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, errorReg)
+				refErrorGlobalIdx := c.GetOrAssignGlobalIndex("ReferenceError")
+				c.emitGetGlobal(errorReg, refErrorGlobalIdx, node.Token.Line)
+
+				msgReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, msgReg)
+				msgConstIdx := c.chunk.AddConstant(vm.String("Unsupported reference to 'super'"))
+				c.emitLoadConstant(msgReg, msgConstIdx, node.Token.Line)
+
+				resultReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, resultReg)
+				c.emitCall(resultReg, errorReg, 1, node.Token.Line) // Call ReferenceError constructor
+				c.emitOpCode(vm.OpThrow, node.Token.Line)
+				c.emitByte(byte(resultReg))
+				return hint, nil
+			}
+
 			// delete obj[key]
 			objReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, objReg)

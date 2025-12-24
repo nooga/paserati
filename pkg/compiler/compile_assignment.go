@@ -82,6 +82,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			c.addError(lhsNode, fmt.Sprintf("SyntaxError: Cannot assign to '%s' in strict mode", lhsNode.Value))
 		}
 
+		// Strict mode validation: cannot assign to FutureReservedWords
+		if c.chunk.IsStrict && isFutureReservedWord(lhsNode.Value) {
+			c.addError(lhsNode, fmt.Sprintf("SyntaxError: Unexpected strict mode reserved word '%s'", lhsNode.Value))
+		}
+
 		// First check if this is a with property (highest priority)
 		if _, isWithProperty := c.shouldUseWithProperty(lhsNode); isWithProperty {
 			// This is a with property assignment - treat as member assignment

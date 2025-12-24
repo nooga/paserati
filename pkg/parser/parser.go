@@ -219,6 +219,13 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.THROW, p.parseIdentifier)            // THROW can be used as identifier in object literals
 	p.registerPrefix(lexer.RETURN, p.parseIdentifier)           // RETURN can be used as identifier in object literals
 	p.registerPrefix(lexer.LET, p.parseIdentifier)              // LET can be used as identifier in non-strict mode
+	// FutureReservedWords - can be used as identifiers in non-strict mode
+	p.registerPrefix(lexer.STATIC, p.parseIdentifier)
+	p.registerPrefix(lexer.IMPLEMENTS, p.parseIdentifier)
+	p.registerPrefix(lexer.INTERFACE, p.parseIdentifier)
+	p.registerPrefix(lexer.PRIVATE, p.parseIdentifier)
+	p.registerPrefix(lexer.PROTECTED, p.parseIdentifier)
+	p.registerPrefix(lexer.PUBLIC, p.parseIdentifier)
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
@@ -1170,8 +1177,9 @@ func (p *Parser) parseLetStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: let {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(letToken, false, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
-		// Regular identifier: let x = ... or let x = ..., y = ... (including contextual keywords)
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC:
+		// Regular identifier: let x = ... or let x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &LetStatement{Token: letToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1265,8 +1273,9 @@ func (p *Parser) parseConstStatement() Statement {
 	case lexer.LBRACE:
 		// Object destructuring: const {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(constToken, true, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
-		// Regular identifier: const x = ... or const x = ..., y = ... (including contextual keywords)
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC:
+		// Regular identifier: const x = ... or const x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &ConstStatement{Token: constToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -1357,8 +1366,9 @@ func (p *Parser) parseVarStatement() Statement {
 		// Object destructuring: var {a, b} = ...
 		debugPrint("// [PARSER DEBUG] parseVarStatement: detected LBRACE, calling parseObjectDestructuringDeclaration\n")
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT:
-		// Regular identifier case (including contextual keywords in non-strict mode)
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC:
+		// Regular identifier case (including contextual keywords and FutureReservedWords in non-strict mode)
 		stmt := &VarStatement{Token: varToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
