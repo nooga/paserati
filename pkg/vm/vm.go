@@ -236,6 +236,8 @@ type VM struct {
 	currentException       Value // Current thrown exception
 	unwinding              bool  // True during exception unwinding
 	unwindingCrossedNative bool  // True if we've crossed a native boundary during unwinding
+	helperCallDepth        int   // Track when we're inside helper functions like toPrimitive
+	handlerFound           bool  // True when a catch handler was invoked while in a helper function
 
 	// Finally block state (Phase 3)
 	pendingAction   PendingAction // Action to perform after finally blocks complete
@@ -953,16 +955,32 @@ startExecution:
 				// else if both BigInt → BigInt add; else Number add; BigInt/Number mixing is an error.
 
 				// Step 1: Convert objects to primitives via ToPrimitive
+				vm.helperCallDepth++
 				leftPrim := vm.toPrimitive(leftVal, "default")
+				vm.helperCallDepth--
 				// Check if toPrimitive threw an exception
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
+				// Check if exception was caught - need to jump to handler
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
+				}
 
+				vm.helperCallDepth++
 				rightPrim := vm.toPrimitive(rightVal, "default")
+				vm.helperCallDepth--
 				// Check if toPrimitive threw an exception
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
+				}
+				// Check if exception was caught - need to jump to handler
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
 				}
 
 				// Step 2: If either is a string, do string concatenation

@@ -213,6 +213,11 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	vm.currentException = Null
 	vm.unwinding = false
 	vm.unwindingCrossedNative = false // NEW: Reset flag
+	// Only set handlerFound when we're inside a helper function call
+	// This allows the helper's caller to know it needs to jump to the handler
+	if vm.helperCallDepth > 0 {
+		vm.handlerFound = true
+	}
 }
 
 // handleFinallyBlock transfers control to a finally block

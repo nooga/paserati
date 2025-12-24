@@ -226,6 +226,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.PRIVATE, p.parseIdentifier)
 	p.registerPrefix(lexer.PROTECTED, p.parseIdentifier)
 	p.registerPrefix(lexer.PUBLIC, p.parseIdentifier)
+	p.registerPrefix(lexer.OF, p.parseIdentifier) // OF is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
@@ -1178,7 +1179,7 @@ func (p *Parser) parseLetStatement() Statement {
 		// Object destructuring: let {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(letToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC:
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF:
 		// Regular identifier: let x = ... or let x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &LetStatement{Token: letToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1274,7 +1275,7 @@ func (p *Parser) parseConstStatement() Statement {
 		// Object destructuring: const {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(constToken, true, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC:
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF:
 		// Regular identifier: const x = ... or const x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &ConstStatement{Token: constToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1367,7 +1368,7 @@ func (p *Parser) parseVarStatement() Statement {
 		debugPrint("// [PARSER DEBUG] parseVarStatement: detected LBRACE, calling parseObjectDestructuringDeclaration\n")
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC:
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF:
 		// Regular identifier case (including contextual keywords and FutureReservedWords in non-strict mode)
 		stmt := &VarStatement{Token: varToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1448,7 +1449,16 @@ func (p *Parser) parseVarStatement() Statement {
 
 func (p *Parser) parseReturnStatement() *ReturnStatement {
 	stmt := &ReturnStatement{Token: p.curToken}
+	returnLine := p.curToken.Line
 	p.nextToken() // Consume 'return'
+
+	// ASI: If there's a line terminator after 'return', treat as 'return;'
+	// This is a restricted production in ECMAScript
+	if p.curToken.Line != returnLine {
+		// Line terminator after 'return' - ASI inserts semicolon
+		stmt.ReturnValue = nil
+		return stmt
+	}
 
 	if p.curTokenIs(lexer.SEMICOLON) {
 		// Handle 'return;' explicitly by setting nil and consuming ';'
@@ -5203,9 +5213,10 @@ func (p *Parser) parseForStatement() Statement {
 
 func (p *Parser) parseBreakStatement() *BreakStatement {
 	stmt := &BreakStatement{Token: p.curToken} // Current token is 'break'
+	breakLine := p.curToken.Line
 
-	// Check for optional label
-	if p.peekTokenIs(lexer.IDENT) {
+	// Check for optional label - must be on the same line (restricted production)
+	if p.peekTokenIs(lexer.IDENT) && p.peekToken.Line == breakLine {
 		p.nextToken()
 		stmt.Label = &Identifier{
 			Token: p.curToken,
@@ -5229,9 +5240,10 @@ func (p *Parser) parseEmptyStatement() *EmptyStatement {
 
 func (p *Parser) parseContinueStatement() *ContinueStatement {
 	stmt := &ContinueStatement{Token: p.curToken} // Current token is 'continue'
+	continueLine := p.curToken.Line
 
-	// Check for optional label
-	if p.peekTokenIs(lexer.IDENT) {
+	// Check for optional label - must be on the same line (restricted production)
+	if p.peekTokenIs(lexer.IDENT) && p.peekToken.Line == continueLine {
 		p.nextToken()
 		stmt.Label = &Identifier{
 			Token: p.curToken,
@@ -8696,15 +8708,23 @@ func (p *Parser) parseCatchClause() *CatchClause {
 // parseThrowStatement parses a throw statement
 func (p *Parser) parseThrowStatement() *ThrowStatement {
 	stmt := &ThrowStatement{Token: p.curToken} // 'throw' token
+	throwLine := p.curToken.Line
 
 	// In JavaScript, throw requires an expression on the same line
-	// We'll be lenient and just require an expression
 	if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) {
 		p.addError(p.curToken, "throw statement requires an expression")
 		return nil
 	}
 
 	p.nextToken() // move to expression
+
+	// ASI: If there's a line terminator after 'throw', it's a syntax error
+	// This is a restricted production - no LineTerminator allowed after throw
+	if p.curToken.Line != throwLine {
+		p.addError(stmt.Token, "Illegal newline after throw")
+		return nil
+	}
+
 	stmt.Value = p.parseExpression(LOWEST)
 	if stmt.Value == nil {
 		return nil
