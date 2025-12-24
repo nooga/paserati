@@ -955,6 +955,8 @@ startExecution:
 				// else if both BigInt → BigInt add; else Number add; BigInt/Number mixing is an error.
 
 				// Step 1: Convert objects to primitives via ToPrimitive
+				// Save IP before calling helper functions so exception handlers can be found
+				frame.ip = ip
 				vm.helperCallDepth++
 				leftPrim := vm.toPrimitive(leftVal, "default")
 				vm.helperCallDepth--
