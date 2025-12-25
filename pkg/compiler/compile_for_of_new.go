@@ -70,6 +70,9 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
 	c.emitGetProp(nextMethodReg, iteratorObjReg, nextConstIdx, node.Token.Line)
 
+	// Per ECMAScript spec, initialize completion value V = undefined
+	c.emitLoadUndefined(hint, node.Token.Line)
+
 	// 7. Loop start & context setup
 	loopStartPos := len(c.chunk.Code)
 	loopContext := &LoopContext{
@@ -81,6 +84,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			IteratorReg:          iteratorObjReg,
 			UsesIteratorProtocol: true,
 		},
+		CompletionReg: hint, // For break/continue to update via UpdateEmpty
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
@@ -269,9 +273,14 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	// 14. Compile loop body
 	bodyReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, bodyReg)
-	if _, err := c.compileNode(node.Body, bodyReg); err != nil {
+	bodyResultReg, err := c.compileNode(node.Body, bodyReg)
+	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, err
+	}
+	// If the body produced a value, update completion value V
+	if bodyResultReg != BadRegister {
+		c.emitMove(hint, bodyResultReg, node.Token.Line)
 	}
 
 	// 15. Patch continue jumps to land here (before next iteration)
@@ -301,7 +310,8 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		c.patchJump(breakPos)
 	}
 
-	return BadRegister, nil
+	// Return completion value
+	return hint, nil
 }
 
 // compileForOfArrayAssignmentWithIterator uses iterator protocol for array assignment destructuring in for-of

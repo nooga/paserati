@@ -49,6 +49,8 @@ type LoopContext struct {
 	ContinuePlaceholderPosList []int
 	// Iterator cleanup information for for...of loops using iterator protocol
 	IteratorCleanup *IteratorCleanupInfo
+	// Completion value register for this loop (for break/continue to set to undefined per UpdateEmpty)
+	CompletionReg Register
 }
 
 // IteratorCleanupInfo tracks iterator objects that need cleanup on early exit
@@ -729,14 +731,22 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			}
 		}
 
-		// 2) Compile statements in order
+		// 2) Compile statements in order, tracking completion value
+		// Per ECMAScript, block completion value is the value of the last statement that produces a value
+		hasCompletionValue := false
 		for _, stmt := range node.Statements {
 			stmtReg := c.regAlloc.Alloc()
-			_, err := c.compileNode(stmt, stmtReg)
-			c.regAlloc.Free(stmtReg)
+			resultReg, err := c.compileNode(stmt, stmtReg)
 			if err != nil {
+				c.regAlloc.Free(stmtReg)
 				return BadRegister, err
 			}
+			// If the statement produced a value, update the completion value
+			if resultReg != BadRegister {
+				c.emitMove(hint, resultReg, node.Token.Line)
+				hasCompletionValue = true
+			}
+			c.regAlloc.Free(stmtReg)
 		}
 
 		// Restore previous scope if we created an enclosed one
@@ -745,6 +755,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			debugPrintf("// [BlockStatement] Restored previous scope\n")
 		}
 
+		// Return hint if we got a completion value, otherwise BadRegister
+		if hasCompletionValue {
+			return hint, nil
+		}
 		return BadRegister, nil
 
 	// --- Statements ---
