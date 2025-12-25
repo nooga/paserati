@@ -1343,6 +1343,17 @@ func (v Value) Is(other Value) bool {
 // StrictlyEquals compares two values using the ECMAScript Strict Equality Comparison (`===`).
 // Types must match, no coercion. NaN !== NaN. +0 === -0.
 func (v Value) StrictlyEquals(other Value) bool {
+	// Handle cross-numeric comparison: IntegerNumber and FloatNumber are both JavaScript "number" type
+	if v.IsNumber() && other.IsNumber() {
+		vf := v.ToFloat()
+		of := other.ToFloat()
+		// Strict equality: NaN !== NaN
+		if math.IsNaN(vf) || math.IsNaN(of) {
+			return false
+		}
+		return vf == of
+	}
+
 	if v.typ != other.typ {
 		return false // Different types are never strictly equal
 	}

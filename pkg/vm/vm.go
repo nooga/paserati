@@ -8553,6 +8553,11 @@ func (vm *VM) abstractEqual(a, b Value) bool {
 		return a.StrictlyEquals(b)
 	}
 
+	// Handle cross-numeric comparison: IntegerNumber and FloatNumber are both JavaScript "number" type
+	if IsNumber(a) && IsNumber(b) {
+		return a.ToFloat() == b.ToFloat()
+	}
+
 	// null/undefined
 	if (a.Type() == TypeNull && b.Type() == TypeUndefined) || (a.Type() == TypeUndefined && b.Type() == TypeNull) {
 		return true
