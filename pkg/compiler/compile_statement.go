@@ -1079,143 +1079,132 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	if err != nil {
 		return BadRegister, err
 	}
-	// Keep this register allocated until the end of the switch
 
-	// List to hold the positions of OpJumpIfFalse instructions for each case test.
-	// These jump to the *next* case test if the current one fails.
-	caseTestFailJumps := []int{}
-
-	// List to hold the positions of OpJump instructions that jump to the end of the switch
-	// (used by break statements and potentially at the end of cases without breaks).
-	jumpToEndPatches := []int{}
-
-	// Find the default case (if any) - needed for patching the last case's jump
-	defaultCaseBodyIndex := -1
+	// Find the default case (if any)
+	defaultCaseIndex := -1
 	for i, caseClause := range node.Cases {
-		if caseClause.Condition == nil { // This is the default case
-			if defaultCaseBodyIndex != -1 {
-				// Use the switch statement node for error reporting context
+		if caseClause.Condition == nil {
+			if defaultCaseIndex != -1 {
 				c.addError(node, "Multiple default cases in switch statement")
-				return BadRegister, nil // Indicate error occurred
+				return BadRegister, nil
 			}
-			defaultCaseBodyIndex = i
+			defaultCaseIndex = i
 		}
 	}
 
 	// Push a context to handle break statements within the switch
-	c.pushLoopContext(-1, -1) // -1 indicates no target for continue/loop start
+	c.pushLoopContext(-1, -1)
 
-	// Track completion value (last evaluated expression in switch)
+	// Track completion value
 	completionReg := hint
 	if completionReg == BadRegister {
 		completionReg = c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, completionReg)
 	}
-	// Initialize to undefined
 	c.emitLoadUndefined(completionReg, 0)
 
-	// --- Iterate through cases to emit comparison and body code ---
-	caseBodyStartPositions := make([]int, len(node.Cases))
+	// === PHASE 1: Emit all case comparisons ===
+	// Each comparison jumps to the corresponding body if matched.
+	// If no match, falls through to the next comparison.
+	// After all comparisons, jump to default body (if exists) or end.
+	jumpToBodyPlaceholders := make([]int, len(node.Cases))
 
 	for i, caseClause := range node.Cases {
-		// Get line info directly from the token
+		if caseClause.Condition == nil {
+			// Default case: no comparison, will be handled after all comparisons
+			continue
+		}
+
 		caseLine := caseClause.Token.Line
 
-		// Patch jumps from *previous* failed case tests to point here
-		for _, jumpPos := range caseTestFailJumps {
-			c.patchJump(jumpPos)
+		// Compile the case condition
+		caseCondReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, caseCondReg)
+		_, err := c.compileNode(caseClause.Condition, caseCondReg)
+		if err != nil {
+			return BadRegister, err
 		}
-		caseTestFailJumps = []int{} // Clear the list for the current case
 
-		if caseClause.Condition != nil { // Regular 'case expr:'
-			// Compile the case condition
-			caseCondReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, caseCondReg)
-			_, err := c.compileNode(caseClause.Condition, caseCondReg)
-			if err != nil {
-				return BadRegister, err
-			}
+		// Compare switch expression value with case condition value
+		matchReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, matchReg)
+		c.emitStrictEqual(matchReg, switchExprReg, caseCondReg, caseLine)
 
-			// Compare switch expression value with case condition value
-			matchReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, matchReg)
-			c.emitStrictEqual(matchReg, switchExprReg, caseCondReg, caseLine)
+		// Pattern: JumpIfFalse to skip the jump-to-body, then unconditional jump to body
+		// JumpIfFalse matchReg, +3 (skip the OpJump instruction which is 3 bytes)
+		c.emitOpCode(vm.OpJumpIfFalse, caseLine)
+		c.emitByte(byte(matchReg))
+		c.emitUint16(3) // Skip the following OpJump (1 byte opcode + 2 bytes offset)
 
-			// If no match, jump to the next case test (or default/end)
-			jumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, matchReg, caseLine)
-			caseTestFailJumps = append(caseTestFailJumps, jumpPos)
-
-			// Record the start position of the body for potential jumps
-			caseBodyStartPositions[i] = c.currentPosition()
-
-			// Compile the case body statements, tracking completion value
-			// According to ECMAScript spec, completion value is the last non-empty statement value
-			if caseClause.Body != nil && len(caseClause.Body.Statements) > 0 {
-				for _, stmt := range caseClause.Body.Statements {
-					stmtReg, err := c.compileNode(stmt, completionReg)
-					if err != nil {
-						return BadRegister, err
-					}
-					// If statement returned a value (not BadRegister), update completion
-					if stmtReg != BadRegister {
-						if stmtReg != completionReg {
-							c.emitMove(completionReg, stmtReg, caseLine)
-						}
-					}
-				}
-			}
-			// Implicit fallthrough *to the end* unless break exists.
-			// Add a jump to the end, break will have already added its own.
-			// Check if the last instruction was already a jump (from break/return)
-			// This is tricky, let's always add the jump for now, might be redundant.
-			endCaseJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, caseLine) // 0 = unused reg for OpJump
-			jumpToEndPatches = append(jumpToEndPatches, endCaseJumpPos)
-
-		} else { // 'default:' case
-			// Record the start position of the default body
-			caseBodyStartPositions[i] = c.currentPosition()
-
-			// Compile the default case body statements, tracking completion value
-			if caseClause.Body != nil && len(caseClause.Body.Statements) > 0 {
-				for _, stmt := range caseClause.Body.Statements {
-					stmtReg, err := c.compileNode(stmt, completionReg)
-					if err != nil {
-						return BadRegister, err
-					}
-					// If statement returned a value (not BadRegister), update completion
-					if stmtReg != BadRegister {
-						if stmtReg != completionReg {
-							c.emitMove(completionReg, stmtReg, caseLine)
-						}
-					}
-				}
-			}
-			// Add jump to end (optional, could just fall out if it's last)
-			endCaseJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, caseLine) // 0 = unused reg for OpJump
-			jumpToEndPatches = append(jumpToEndPatches, endCaseJumpPos)
-		}
+		// If match, jump to the body (placeholder to be patched)
+		jumpToBodyPlaceholders[i] = c.emitPlaceholderJump(vm.OpJump, 0, caseLine)
+		// If no match (JumpIfFalse taken), continue to the next comparison
 	}
 
-	// Patch the last set of test failure jumps to point to the end of the switch
-	for _, jumpPos := range caseTestFailJumps {
-		c.patchJump(jumpPos)
+	// After all comparisons fail, jump to default body or end
+	var jumpToDefaultOrEnd int
+	if defaultCaseIndex >= 0 {
+		// Jump to default body (will be patched later)
+		jumpToDefaultOrEnd = c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+	} else {
+		// No default, jump to end (will be patched later)
+		jumpToDefaultOrEnd = c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 	}
 
-	// Patch all break jumps and end-of-case jumps
+	// === PHASE 2: Emit all case bodies in order ===
+	// Bodies are emitted in order for natural fall-through.
+	// Break statements emit jumps to the end.
+	caseBodyPositions := make([]int, len(node.Cases))
+
+	for i, caseClause := range node.Cases {
+		caseLine := caseClause.Token.Line
+
+		// Record the body position
+		caseBodyPositions[i] = c.currentPosition()
+
+		// Patch the jump from the comparison to this body
+		if caseClause.Condition != nil && jumpToBodyPlaceholders[i] != 0 {
+			c.patchJump(jumpToBodyPlaceholders[i])
+		}
+
+		// Compile the case body statements
+		if caseClause.Body != nil && len(caseClause.Body.Statements) > 0 {
+			for _, stmt := range caseClause.Body.Statements {
+				stmtReg, err := c.compileNode(stmt, completionReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				if stmtReg != BadRegister && stmtReg != completionReg {
+					c.emitMove(completionReg, stmtReg, caseLine)
+				}
+			}
+		}
+		// Fall through to the next case body (no jump emitted)
+	}
+
+	// Patch the jump to default body or end
+	if defaultCaseIndex >= 0 {
+		// Patch to jump to default body position
+		// We need to manually patch since the default body was already emitted
+		jumpInstructionEndPos := jumpToDefaultOrEnd + 1 + 2
+		targetOffset := caseBodyPositions[defaultCaseIndex] - jumpInstructionEndPos
+		c.chunk.Code[jumpToDefaultOrEnd+1] = byte(int16(targetOffset) >> 8)
+		c.chunk.Code[jumpToDefaultOrEnd+2] = byte(int16(targetOffset) & 0xFF)
+	} else {
+		// Patch to jump to end (current position)
+		c.patchJump(jumpToDefaultOrEnd)
+	}
+
+	// Patch all break jumps to point here (end of switch)
 	loopCtx := c.currentLoopContext()
-	if loopCtx != nil { // Should always exist here
+	if loopCtx != nil {
 		for _, breakJumpPos := range loopCtx.BreakPlaceholderPosList {
 			c.patchJump(breakJumpPos)
 		}
 	}
-	for _, endJumpPos := range jumpToEndPatches {
-		c.patchJump(endJumpPos)
-	}
 
-	// Pop the break context
 	c.popLoopContext()
 
-	// Return the completion value register
 	return completionReg, nil
 }
 

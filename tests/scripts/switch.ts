@@ -1,4 +1,4 @@
-// expect: 35
+// expect: 70
 // Test switch statements with fallthrough, break, default, and interaction with other features.
 
 let a = 0;
@@ -46,6 +46,7 @@ for (let i = 0; i < 5; i = i + 1) {
   }
 }
 // End of loop: Variable 'b' should be 60.
+// i=0: b=5, i=1: b=15+15=30, i=2: b=30+15=45, i=3: b=45+20=65, i=4: b=65-5=60
 
 // Closure that uses switch
 let getBonus = (val) => {
@@ -63,4 +64,4 @@ let getBonus = (val) => {
 let extra = getBonus(b); // extra = 10
 
 // Final result calculation
-a + b + extra; // 0 + 45 - 10 = 35
+a + b + extra; // 0 + 60 + 10 = 70
