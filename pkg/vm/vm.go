@@ -816,7 +816,21 @@ startExecution:
 				// For objects, call ToPrimitive first, then convert to number
 				primVal := srcVal
 				if srcVal.IsObject() || srcVal.IsCallable() {
+					// Save IP before calling helper functions so exception handlers can be found
+					frame.ip = ip
+					vm.helperCallDepth++
 					primVal = vm.toPrimitive(srcVal, "number")
+					vm.helperCallDepth--
+					// Check if toPrimitive threw an exception
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					// Check if exception was caught - need to jump to handler
+					if vm.handlerFound {
+						vm.handlerFound = false
+						ip = frame.ip // Jump to catch handler
+						continue
+					}
 				}
 				numVal := primVal.ToFloat()
 				registers[destReg] = Number(-numVal)
@@ -869,9 +883,20 @@ startExecution:
 			// For objects, call ToPrimitive first, then convert to number
 			primVal := srcVal
 			if srcVal.IsObject() || srcVal.IsCallable() {
+				// Save IP before calling helper functions so exception handlers can be found
+				frame.ip = ip
+				vm.helperCallDepth++
 				primVal = vm.toPrimitive(srcVal, "number")
+				vm.helperCallDepth--
+				// Check if toPrimitive threw an exception
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
+				}
+				// Check if exception was caught - need to jump to handler
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
 				}
 			}
 			// ECMAScript: ToNumber(bigint) throws a TypeError
@@ -892,9 +917,20 @@ startExecution:
 			// For objects, call ToPrimitive first
 			primVal := srcVal
 			if srcVal.IsObject() || srcVal.IsCallable() {
+				// Save IP before calling helper functions so exception handlers can be found
+				frame.ip = ip
+				vm.helperCallDepth++
 				primVal = vm.toPrimitive(srcVal, "number")
+				vm.helperCallDepth--
+				// Check if toPrimitive threw an exception
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
+				}
+				// Check if exception was caught - need to jump to handler
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
 				}
 			}
 			// BigInt is preserved as-is, everything else converts to Number
@@ -1013,14 +1049,30 @@ startExecution:
 			case OpSubtract, OpMultiply, OpDivide:
 				// Apply ToPrimitive and type coercion like JavaScript
 				// First convert objects to primitives
+				// Save IP before calling helper functions so exception handlers can be found
+				frame.ip = ip
+				vm.helperCallDepth++
 				leftPrim := vm.toPrimitive(leftVal, "default")
+				vm.helperCallDepth--
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
+				}
 
+				vm.helperCallDepth++
 				rightPrim := vm.toPrimitive(rightVal, "default")
+				vm.helperCallDepth--
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
+				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
 				}
 
 				// Handle numbers and BigInts separately (no mixing allowed)
@@ -1067,8 +1119,31 @@ startExecution:
 				}
 			case OpRemainder:
 				// Apply ToPrimitive and type coercion
+				// Save IP before calling helper functions so exception handlers can be found
+				frame.ip = ip
+				vm.helperCallDepth++
 				leftPrim := vm.toPrimitive(leftVal, "default")
+				vm.helperCallDepth--
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
+				}
+
+				vm.helperCallDepth++
 				rightPrim := vm.toPrimitive(rightVal, "default")
+				vm.helperCallDepth--
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip // Jump to catch handler
+					continue
+				}
 
 				// Handle numbers and BigInts separately (no mixing allowed)
 				if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
@@ -3998,9 +4073,18 @@ startExecution:
 			srcVal := registers[srcReg]
 
 			// Apply ToPrimitive for objects (calls valueOf/toString per ECMAScript spec)
+			// Save IP before calling helper functions so exception handlers can be found
+			frame.ip = ip
+			vm.helperCallDepth++
 			srcPrim := vm.toPrimitive(srcVal, "number")
+			vm.helperCallDepth--
 			if vm.unwinding {
 				return InterpretRuntimeError, Undefined
+			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				ip = frame.ip // Jump to catch handler
+				continue
 			}
 
 			// BigInt: ~x = -(x + 1)
@@ -4090,14 +4174,30 @@ startExecution:
 
 			// Regular number bitwise/shift operations
 			// Apply ToPrimitive for objects (calls valueOf/toString per ECMAScript spec)
+			// Save IP before calling helper functions so exception handlers can be found
+			frame.ip = ip
+			vm.helperCallDepth++
 			leftPrim := vm.toPrimitive(leftVal, "number")
+			vm.helperCallDepth--
 			if vm.unwinding {
 				return InterpretRuntimeError, Undefined
 			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				ip = frame.ip // Jump to catch handler
+				continue
+			}
 
+			vm.helperCallDepth++
 			rightPrim := vm.toPrimitive(rightVal, "number")
+			vm.helperCallDepth--
 			if vm.unwinding {
 				return InterpretRuntimeError, Undefined
+			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				ip = frame.ip // Jump to catch handler
+				continue
 			}
 
 			// Use ToInt32 for left operand, ToUint32 for right operand (shift count)
