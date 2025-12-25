@@ -1697,12 +1697,20 @@ func (p *Parser) parseNumberLiteral() Expression {
 	if isFloat {
 		value, err := strconv.ParseFloat(cleanedLiteral, 64)
 		if err != nil {
-			// This suggests the lexer allowed an invalid float format (e.g., "1.2.3", "1e-e")
-			msg := fmt.Sprintf("could not parse %q as float64: %v", rawLiteral, err)
-			p.addError(p.curToken, msg)
-			return nil
+			// Check if it's an overflow - Go returns +Inf/-Inf with a range error
+			// JavaScript represents overflows as Infinity, so this is valid
+			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+				// Accept the Inf value - this is valid JavaScript behavior
+				lit.Value = value
+			} else {
+				// This suggests the lexer allowed an invalid float format (e.g., "1.2.3", "1e-e")
+				msg := fmt.Sprintf("could not parse %q as float64: %v", rawLiteral, err)
+				p.addError(p.curToken, msg)
+				return nil
+			}
+		} else {
+			lit.Value = value
 		}
-		lit.Value = value
 	} else {
 		// Parse as integer first
 		value, err := strconv.ParseInt(cleanedLiteral, base, 64)
@@ -8683,11 +8691,34 @@ func (p *Parser) parseCatchClause() *CatchClause {
 		p.nextToken() // move to parameter
 
 		// Parameter can be identifier or destructuring pattern
+		// Note: await/yield can be identifiers in non-async/non-generator contexts
 		switch p.curToken.Type {
 		case lexer.IDENT:
 			clause.Parameter = &Identifier{
 				Token: p.curToken,
 				Value: p.curToken.Literal,
+			}
+		case lexer.AWAIT:
+			// await is valid as catch parameter in non-async context
+			if p.inAsyncFunction == 0 {
+				clause.Parameter = &Identifier{
+					Token: p.curToken,
+					Value: p.curToken.Literal,
+				}
+			} else {
+				p.addError(p.curToken, "await is not allowed as catch parameter in async function")
+				return nil
+			}
+		case lexer.YIELD:
+			// yield is valid as catch parameter in non-generator context
+			if p.inGenerator == 0 {
+				clause.Parameter = &Identifier{
+					Token: p.curToken,
+					Value: p.curToken.Literal,
+				}
+			} else {
+				p.addError(p.curToken, "yield is not allowed as catch parameter in generator function")
+				return nil
 			}
 		case lexer.LBRACKET:
 			// Array destructuring: catch ([x, y])
