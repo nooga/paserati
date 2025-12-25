@@ -550,6 +550,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	for _, continuePos := range poppedContext.ContinuePlaceholderPosList {
 		jumpInstructionEndPos := continuePos + 1 + 2 // OpCode + 16bit offset
 		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
+
 		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
 			return BadRegister, NewCompileError(node, fmt.Sprintf("internal compiler error: continue jump offset %d exceeds 16-bit limit", targetOffset))
 		}
@@ -781,7 +782,8 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 	}
 
 	// Check if we're inside a try-finally block AND the break targets a loop outside it
-	if len(c.finallyContextStack) > 0 {
+	// BUT NOT if we're already inside the finally block itself - in that case, just emit direct jump
+	if len(c.finallyContextStack) > 0 && !c.inFinallyBlock {
 		finallyCtx := c.finallyContextStack[len(c.finallyContextStack)-1]
 
 		// Find the index of the target loop in the stack
@@ -869,7 +871,8 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 	}
 
 	// Check if we're inside a try-finally block
-	if len(c.finallyContextStack) > 0 {
+	// BUT NOT if we're already inside the finally block itself - in that case, just emit direct jump
+	if len(c.finallyContextStack) > 0 && !c.inFinallyBlock {
 		finallyCtx := c.finallyContextStack[len(c.finallyContextStack)-1]
 
 		// Find which loop index the target context is at
