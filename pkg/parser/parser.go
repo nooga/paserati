@@ -531,6 +531,18 @@ func (p *Parser) parseStatement() Statement {
 			return p.parseLabeledStatement()
 		}
 		return p.parseExpressionStatement()
+	case lexer.YIELD:
+		// In non-strict mode and outside generators, yield can be used as a label
+		if p.peekTokenIs(lexer.COLON) && p.inGenerator == 0 {
+			return p.parseLabeledStatement()
+		}
+		return p.parseExpressionStatement()
+	case lexer.AWAIT:
+		// In non-strict mode and outside async functions, await can be used as a label
+		if p.peekTokenIs(lexer.COLON) && p.inAsyncFunction == 0 {
+			return p.parseLabeledStatement()
+		}
+		return p.parseExpressionStatement()
 	case lexer.ILLEGAL:
 		// Handle ILLEGAL tokens by adding error and advancing
 		p.addError(p.curToken, fmt.Sprintf("illegal token: %s", p.curToken.Literal))
