@@ -266,16 +266,30 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 		prevInFinally := c.inFinallyBlock
 		c.inFinallyBlock = true
 
-		// Allocate a fresh register for finally block compilation
-		finallyReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(finallyReg)
+		// Per ECMAScript spec:
+		// - If finally completes normally, the try/catch completion value is used
+		// - If finally completes abnormally (break/continue/return/throw), the finally's
+		//   completion value (with UpdateEmpty applied) becomes the result
+		//
+		// Save try/catch completion value, then initialize hint to undefined for finally's
+		// own statement list evaluation (UpdateEmpty semantics).
+		tryCatchValueReg := c.regAlloc.Alloc()
+		c.emitMove(tryCatchValueReg, hint, node.Token.Line)
+		c.emitLoadUndefined(hint, node.Token.Line)
 
-		_, err := c.compileNode(node.FinallyBlock, finallyReg)
+		// Compile finally block with hint for its own completion tracking
+		_, err := c.compileNode(node.FinallyBlock, hint)
 		c.inFinallyBlock = prevInFinally // Restore previous context
 
 		if err != nil {
+			c.regAlloc.Free(tryCatchValueReg)
 			return BadRegister, err
 		}
+
+		// If we reach here, finally completed normally (no break/continue/return/throw)
+		// Restore the try/catch completion value per ECMAScript spec
+		c.emitMove(hint, tryCatchValueReg, node.Token.Line)
+		c.regAlloc.Free(tryCatchValueReg)
 
 		// ALWAYS emit instruction to handle pending actions after finally block
 		// This ensures that even empty finally blocks properly handle pending returns/throws

@@ -521,16 +521,12 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 
 	// --- Compile Body ---
 	// Per ECMAScript spec, if body produces a value, update V (the completion value in hint)
-	bodyReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(bodyReg)
-	resultReg, err := c.compileNode(node.Body, bodyReg)
+	// Compile directly with hint so break/continue inside nested try-finally can access
+	// the completion value correctly
+	_, err = c.compileNode(node.Body, hint)
 	if err != nil {
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1] // Pop context on error
 		return BadRegister, NewCompileError(node, "error compiling while body").CausedBy(err)
-	}
-	// If the body produced a value, update completion value V
-	if resultReg != BadRegister {
-		c.emitMove(hint, resultReg, line)
 	}
 
 	// --- Jump Back To Start ---
@@ -702,17 +698,14 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 
 	// --- 3. Body ---
 	// Continue placeholders will be added to loopContext here
-	bodyReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, bodyReg)
-	resultReg, err := c.compileNode(node.Body, bodyReg)
+	// Per ECMAScript spec, if body produces a value, update V (the completion value in hint)
+	// Compile directly with hint so break/continue inside nested try-finally can access
+	// the completion value correctly
+	_, err := c.compileNode(node.Body, hint)
 	if err != nil {
 		// Clean up loop context if body compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, err
-	}
-	// If the body produced a value, update completion value V
-	if resultReg != BadRegister {
-		c.emitMove(hint, resultReg, node.Token.Line)
 	}
 
 	// --- 4. Patch Continues & Compile Update ---
@@ -800,9 +793,17 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 
 	// Per ECMAScript spec, break has an empty completion value.
 	// UpdateEmpty on break with undefined produces break with undefined as value.
-	// Set the loop's completion register to undefined before breaking.
+	// Set the loop's completion register before breaking.
 	if targetContext.CompletionReg != BadRegister {
-		c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
+		if c.inFinallyBlock && hint != BadRegister && hint != targetContext.CompletionReg {
+			// Inside finally: copy the finally's completion value to the loop's completion register
+			// This propagates the finally's completion value (which started as undefined and
+			// accumulates statement values via UpdateEmpty) to the outer loop
+			c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
+		} else if !c.inFinallyBlock {
+			// Outside finally: set to undefined (empty completion becomes undefined via UpdateEmpty)
+			c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
+		}
 	}
 
 	// Check if we're inside a try-finally block AND the break targets a loop outside it
@@ -897,9 +898,17 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 	// Per ECMAScript spec, continue has an empty completion value.
 	// When wrapped by try-catch, UpdateEmpty on continue produces continue with undefined value.
 	// This undefined value then becomes the loop's V per step 5.f of ForBodyEvaluation.
-	// Set the loop's completion register to undefined before continuing.
+	// Set the loop's completion register before continuing.
 	if targetContext.CompletionReg != BadRegister {
-		c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
+		if c.inFinallyBlock && hint != BadRegister && hint != targetContext.CompletionReg {
+			// Inside finally: copy the finally's completion value to the loop's completion register
+			// This propagates the finally's completion value (which started as undefined and
+			// accumulates statement values via UpdateEmpty) to the outer loop
+			c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
+		} else if !c.inFinallyBlock {
+			// Outside finally: set to undefined (empty completion becomes undefined via UpdateEmpty)
+			c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
+		}
 	}
 
 	// Check if we're inside a try-finally block
@@ -1024,17 +1033,13 @@ func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement,
 
 	// 3. Compile Body (executes at least once)
 	// Per ECMAScript spec, if body produces a value, update V (the completion value in hint)
-	bodyReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, bodyReg)
-	resultReg, err := c.compileNode(node.Body, bodyReg)
+	// Compile directly with hint so break/continue inside nested try-finally can access
+	// the completion value correctly
+	_, err := c.compileNode(node.Body, hint)
 	if err != nil {
 		// Pop context if body compilation fails
 		c.loopContextStack = c.loopContextStack[:len(c.loopContextStack)-1]
 		return BadRegister, NewCompileError(node, "error compiling do-while body").CausedBy(err)
-	}
-	// If the body produced a value, update completion value V
-	if resultReg != BadRegister {
-		c.emitMove(hint, resultReg, line)
 	}
 
 	// 3.5. Patch continue jumps to land here (after body, before condition check)

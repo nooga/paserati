@@ -733,20 +733,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 		// 2) Compile statements in order, tracking completion value
 		// Per ECMAScript, block completion value is the value of the last statement that produces a value
+		// Compile directly with hint so nested try-finally with break/continue can correctly
+		// propagate completion values
 		hasCompletionValue := false
 		for _, stmt := range node.Statements {
-			stmtReg := c.regAlloc.Alloc()
-			resultReg, err := c.compileNode(stmt, stmtReg)
+			resultReg, err := c.compileNode(stmt, hint)
 			if err != nil {
-				c.regAlloc.Free(stmtReg)
 				return BadRegister, err
 			}
-			// If the statement produced a value, update the completion value
+			// If the statement produced a value, it's already in hint
 			if resultReg != BadRegister {
-				c.emitMove(hint, resultReg, node.Token.Line)
 				hasCompletionValue = true
 			}
-			c.regAlloc.Free(stmtReg)
 		}
 
 		// Restore previous scope if we created an enclosed one
