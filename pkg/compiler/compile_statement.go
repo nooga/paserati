@@ -228,27 +228,24 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		} else if !isValueFunc {
 			// Define symbol ONLY for non-function values.
 			// Function assignments were handled above by UpdateRegister.
-			// debug disabled
-			if c.enclosing == nil {
-				// Top-level: use global variable
+			// Check if variable was already pre-defined during var hoisting (works for both top-level and function scope)
+			// Exclude global symbols since they use OpSetGlobal, not local registers
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
+				// Variable was pre-defined with a local register, reuse it and emit move
+				debugPrintf("// [VarStmt] Variable '%s' was pre-defined in R%d, emitting move from R%d\n", node.Name.Value, sym.Register, valueReg)
+				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+			} else if c.enclosing == nil {
+				// Top-level and not pre-defined: use global variable
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 			} else {
-				// Function scope: use local symbol table
-				// Check if variable was already pre-defined during var hoisting
-				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
-					// Variable was pre-defined, reuse the register and emit move
-					debugPrintf("// [VarStmt] Variable '%s' was pre-defined in R%d, emitting move from R%d\n", node.Name.Value, sym.Register, valueReg)
-					c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
-				} else {
-					// Variable not pre-defined, define it now
-					debugPrintf("// [VarStmt] Defining '%s' in local symbol table with register R%d\n", node.Name.Value, valueReg)
-					c.currentSymbolTable.Define(node.Name.Value, valueReg)
-					// Pin the register since local variables can be captured by upvalues
-					c.regAlloc.Pin(valueReg)
-					debugPrintf("// [VarStmt] Successfully defined '%s', register pinned\n", node.Name.Value)
-				}
+				// Function scope and not pre-defined: use local symbol table
+				debugPrintf("// [VarStmt] Defining '%s' in local symbol table with register R%d\n", node.Name.Value, valueReg)
+				c.currentSymbolTable.Define(node.Name.Value, valueReg)
+				// Pin the register since local variables can be captured by upvalues
+				c.regAlloc.Pin(valueReg)
+				debugPrintf("// [VarStmt] Successfully defined '%s', register pinned\n", node.Name.Value)
 			}
 		} else if c.enclosing == nil {
 			// Top-level function: also set as global

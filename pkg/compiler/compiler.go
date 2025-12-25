@@ -679,7 +679,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						if declarator.Name != nil {
 							// Find the function-level symbol table (the one with Outer == nil OR whose Outer is from enclosing compiler)
 							funcTable := c.currentSymbolTable
-							for funcTable.Outer != nil && c.enclosing != nil && !c.isDefinedInEnclosingCompiler(funcTable.Outer) {
+							for funcTable.Outer != nil {
+								// Stop if the outer scope belongs to an enclosing compiler (for nested functions)
+								if c.enclosing != nil && c.isDefinedInEnclosingCompiler(funcTable.Outer) {
+									break
+								}
 								funcTable = funcTable.Outer
 							}
 
@@ -688,6 +692,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 								reg := c.regAlloc.Alloc()
 								funcTable.Define(declarator.Name.Value, reg)
 								c.regAlloc.Pin(reg)
+								// Initialize to undefined (var hoisting semantics: declaration is hoisted, not initialization)
+								c.emitLoadUndefined(reg, s.Token.Line)
 								debugPrintf("// [BlockPredefine] Pre-defined var '%s' in register R%d in function scope (funcTable=%p, currentTable=%p)\n", declarator.Name.Value, reg, funcTable, c.currentSymbolTable)
 							}
 						}
