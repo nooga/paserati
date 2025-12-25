@@ -292,15 +292,10 @@ func (c *Compiler) compileThrowStatement(node *parser.ThrowStatement, hint Regis
 		}
 	}
 
-	// Move into R0 to guarantee a valid register index at runtime
-	const r0 Register = 0
-	if valueReg != r0 {
-		c.emitMove(r0, valueReg, node.Token.Line)
-	}
-
-	// Emit OpThrow instruction using R0
+	// Emit OpThrow instruction using the value register directly
+	// Note: Previously this moved to R0, but that corrupts function parameters in R0
 	c.emitOpCode(vm.OpThrow, node.Token.Line)
-	c.emitByte(byte(r0))
+	c.emitByte(byte(valueReg))
 
 	return BadRegister, nil
 }
