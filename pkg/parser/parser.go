@@ -1380,8 +1380,10 @@ func (p *Parser) parseVarStatement() Statement {
 		debugPrint("// [PARSER DEBUG] parseVarStatement: detected LBRACE, calling parseObjectDestructuringDeclaration\n")
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF:
-		// Regular identifier case (including contextual keywords and FutureReservedWords in non-strict mode)
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF,
+		lexer.UNDEFINED, lexer.NULL:
+		// Regular identifier case (including contextual keywords, FutureReservedWords in non-strict mode,
+		// and global property names like undefined/null which are not reserved words)
 		stmt := &VarStatement{Token: varToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
