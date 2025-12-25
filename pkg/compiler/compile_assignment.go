@@ -757,7 +757,12 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	// Resolve the identifier to determine how to store it
 	symbol, _, found := c.currentSymbolTable.Resolve(identTarget.Value)
 	if !found {
-		return NewCompileError(identTarget, fmt.Sprintf("undefined variable '%s'", identTarget.Value))
+		// Variable not found in any scope - in non-strict mode, treat as implicit global assignment
+		// In strict mode, this would be a ReferenceError at runtime, but we handle it as a global
+		// (Test262 runs without type checking, so we need to support this for compliance)
+		globalIdx := c.GetOrAssignGlobalIndex(identTarget.Value)
+		c.emitSetGlobal(globalIdx, valueReg, line)
+		return nil
 	}
 
 	// Generate appropriate store instruction based on symbol type
