@@ -36,12 +36,57 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 		}()
 	}
 
-	// Compile try body
-	bodyReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(bodyReg)
+	// Per ECMAScript spec, try statement completion value is undefined if the block is empty
+	// or the last statement doesn't produce a value. Load undefined as the default.
+	c.emitLoadUndefined(hint, node.Token.Line)
 
-	if _, err := c.compileNode(node.Body, bodyReg); err != nil {
-		return BadRegister, err
+	// Compile try body - we need to track completion values from statements
+	// instead of using the block compilation which discards them
+	// Also need to preserve block scoping for let/const declarations
+	if node.Body != nil {
+		// Create enclosed scope for the try block (like BlockStatement does)
+		previousSymbolTable := c.currentSymbolTable
+		c.currentSymbolTable = NewEnclosedSymbolTable(previousSymbolTable)
+
+		// Pre-define let/const variables in the block scope
+		for _, stmt := range node.Body.Statements {
+			switch s := stmt.(type) {
+			case *parser.LetStatement:
+				if s.Name != nil {
+					if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+						reg := c.regAlloc.Alloc()
+						c.currentSymbolTable.Define(s.Name.Value, reg)
+						c.regAlloc.Pin(reg)
+					}
+				}
+			case *parser.ConstStatement:
+				if s.Name != nil {
+					if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+						reg := c.regAlloc.Alloc()
+						c.currentSymbolTable.Define(s.Name.Value, reg)
+						c.regAlloc.Pin(reg)
+					}
+				}
+			}
+		}
+
+		// Compile statements
+		for _, stmt := range node.Body.Statements {
+			stmtReg, err := c.compileNode(stmt, hint)
+			if err != nil {
+				c.currentSymbolTable = previousSymbolTable
+				return BadRegister, err
+			}
+			// If the statement produced a value (expression statement), it's in hint
+			// If not (declaration, etc.), hint still has the previous value or undefined
+			if stmtReg != BadRegister && stmtReg != hint {
+				// Move the result to hint if it ended up in a different register
+				c.emitMove(hint, stmtReg, node.Token.Line)
+			}
+		}
+
+		// Restore previous scope
+		c.currentSymbolTable = previousSymbolTable
 	}
 
 	// Strategy: If finally exists, ALL exits must go through it
@@ -102,19 +147,83 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 					return BadRegister, NewCompileError(node, fmt.Sprintf("unexpected catch parameter type: %T", param))
 				}
 
-				// Compile catch body
-				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
-					c.currentSymbolTable = previousSymbolTable
-					return BadRegister, err
+				// Pre-define let/const in the catch scope before compiling statements
+				for _, stmt := range node.CatchClause.Body.Statements {
+					switch s := stmt.(type) {
+					case *parser.LetStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					case *parser.ConstStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					}
+				}
+
+				// Compile catch body - track completion value in hint
+				for _, stmt := range node.CatchClause.Body.Statements {
+					stmtReg, err := c.compileNode(stmt, hint)
+					if err != nil {
+						c.currentSymbolTable = previousSymbolTable
+						return BadRegister, err
+					}
+					if stmtReg != BadRegister && stmtReg != hint {
+						c.emitMove(hint, stmtReg, node.Token.Line)
+					}
 				}
 
 				// Restore the previous symbol table
 				c.currentSymbolTable = previousSymbolTable
 			} else {
-				// Catch without parameter (ES2019+)
-				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
-					return BadRegister, err
+				// Catch without parameter (ES2019+) - still need enclosed scope for block scoping
+				catchScopePrev := c.currentSymbolTable
+				c.currentSymbolTable = NewEnclosedSymbolTable(catchScopePrev)
+
+				// Pre-define let/const in the catch scope
+				for _, stmt := range node.CatchClause.Body.Statements {
+					switch s := stmt.(type) {
+					case *parser.LetStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					case *parser.ConstStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					}
 				}
+
+				// Compile catch body
+				for _, stmt := range node.CatchClause.Body.Statements {
+					stmtReg, err := c.compileNode(stmt, hint)
+					if err != nil {
+						c.currentSymbolTable = catchScopePrev
+						return BadRegister, err
+					}
+					if stmtReg != BadRegister && stmtReg != hint {
+						c.emitMove(hint, stmtReg, node.Token.Line)
+					}
+				}
+
+				// Restore scope
+				c.currentSymbolTable = catchScopePrev
 			}
 
 			// After catch, jump to finally
@@ -240,19 +349,83 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 					return BadRegister, NewCompileError(node, fmt.Sprintf("unexpected catch parameter type: %T", param))
 				}
 
-				// Compile catch body
-				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
-					c.currentSymbolTable = previousSymbolTable
-					return BadRegister, err
+				// Pre-define let/const in the catch scope before compiling statements
+				for _, stmt := range node.CatchClause.Body.Statements {
+					switch s := stmt.(type) {
+					case *parser.LetStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					case *parser.ConstStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					}
+				}
+
+				// Compile catch body - track completion value in hint
+				for _, stmt := range node.CatchClause.Body.Statements {
+					stmtReg, err := c.compileNode(stmt, hint)
+					if err != nil {
+						c.currentSymbolTable = previousSymbolTable
+						return BadRegister, err
+					}
+					if stmtReg != BadRegister && stmtReg != hint {
+						c.emitMove(hint, stmtReg, node.Token.Line)
+					}
 				}
 
 				// Restore the previous symbol table
 				c.currentSymbolTable = previousSymbolTable
 			} else {
-				// Catch without parameter (ES2019+)
-				if _, err := c.compileNode(node.CatchClause.Body, bodyReg); err != nil {
-					return BadRegister, err
+				// Catch without parameter (ES2019+) - still need enclosed scope for block scoping
+				catchScopePrev := c.currentSymbolTable
+				c.currentSymbolTable = NewEnclosedSymbolTable(catchScopePrev)
+
+				// Pre-define let/const in the catch scope
+				for _, stmt := range node.CatchClause.Body.Statements {
+					switch s := stmt.(type) {
+					case *parser.LetStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					case *parser.ConstStatement:
+						if s.Name != nil {
+							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+								reg := c.regAlloc.Alloc()
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							}
+						}
+					}
 				}
+
+				// Compile catch body
+				for _, stmt := range node.CatchClause.Body.Statements {
+					stmtReg, err := c.compileNode(stmt, hint)
+					if err != nil {
+						c.currentSymbolTable = catchScopePrev
+						return BadRegister, err
+					}
+					if stmtReg != BadRegister && stmtReg != hint {
+						c.emitMove(hint, stmtReg, node.Token.Line)
+					}
+				}
+
+				// Restore scope
+				c.currentSymbolTable = catchScopePrev
 			}
 
 			// Add catch handler to exception table
@@ -271,7 +444,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 		c.patchJump(normalExitJump)
 	}
 
-	return BadRegister, nil
+	return hint, nil
 }
 
 // compileThrowStatement compiles a throw statement

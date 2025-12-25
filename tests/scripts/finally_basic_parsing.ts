@@ -16,4 +16,4 @@ try {
     console.log("finally block");
 }
 
-// expect: null
+// expect: undefined
