@@ -3635,6 +3635,9 @@ startExecution:
 					argObj.args = append(argObj.args, Undefined)
 				}
 				argObj.args[idx] = valueVal
+				// Update length to match the actual args slice length
+				// This is needed because OpGetIndex uses Length() to check bounds
+				argObj.length = len(argObj.args)
 
 			case TypeArray:
 				if !IsNumber(indexVal) {
