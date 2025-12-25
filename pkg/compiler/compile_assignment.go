@@ -603,7 +603,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 }
 
 // compileArrayDestructuringAssignment compiles array destructuring like [a, b, c] = expr
-// Desugars into: temp = expr; a = temp[0]; b = temp[1]; c = temp[2];
+// Uses the iterator protocol per ECMAScript spec: gets iterator, calls next() for each element,
+// and calls iterator.return() when finished early (IteratorClose)
 func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestructuringAssignment, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
@@ -611,76 +612,109 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 		fmt.Printf("// [Assignment] Compiling array destructuring: %s\n", node.String())
 	}
 
-	// 1. Compile RHS expression into temp register
-	tempReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(tempReg)
+	// 1. Compile RHS expression into iterable register
+	iterableReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iterableReg)
 
-	_, err := c.compileNode(node.Value, tempReg)
+	_, err := c.compileNode(node.Value, iterableReg)
 	if err != nil {
 		return BadRegister, err
 	}
 
-	// 2. For each element, compile: target = temp[index] or target = temp.slice(index)
-	for i, element := range node.Elements {
-		if element.Target == nil {
-			continue // Skip malformed elements
-		}
+	// Save the original value for returning (assignment expression returns the RHS value)
+	if hint != iterableReg {
+		c.emitMove(hint, iterableReg, line)
+	}
 
-		var valueReg Register
+	// 2. Get Symbol.iterator method
+	iteratorMethodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorMethodReg)
+
+	// Load global Symbol
+	symbolObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(symbolObjReg)
+	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	c.emitGetGlobal(symbolObjReg, symIdx, line)
+
+	// Get Symbol.iterator
+	propNameReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(propNameReg)
+	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
+
+	iteratorKeyReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorKeyReg)
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorKeyReg))
+	c.emitByte(byte(symbolObjReg))
+	c.emitByte(byte(propNameReg))
+
+	// Get iterable[Symbol.iterator]
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorMethodReg))
+	c.emitByte(byte(iterableReg))
+	c.emitByte(byte(iteratorKeyReg))
+
+	// 3. Call the iterator method to get iterator object
+	iteratorObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorObjReg)
+	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, line)
+
+	// 4. Allocate register to track iterator.done state
+	doneReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(doneReg)
+	c.emitLoadFalse(doneReg, line)
+
+	// 5. For each element, call iterator.next() and assign
+	for _, element := range node.Elements {
+		if element.Target == nil {
+			// Elision: consume iterator value but don't bind
+			c.compileIteratorNext(iteratorObjReg, BadRegister, doneReg, line, true)
+			continue
+		}
 
 		if element.IsRest {
-			// Rest element: compile temp.slice(i) to get remaining elements
-			valueReg = c.regAlloc.Alloc()
-
-			// Call temp.slice(i) to get the rest of the array
-			err := c.compileArraySliceCall(tempReg, i, valueReg, line)
+			// Rest element: collect all remaining iterator values into an array
+			restArrayReg := c.regAlloc.Alloc()
+			err := c.compileIteratorToArray(iteratorObjReg, restArrayReg, line)
 			if err != nil {
-				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(restArrayReg)
 				return BadRegister, err
 			}
-		} else {
-			// Regular element: compile temp[i]
-			indexReg := c.regAlloc.Alloc()
-			valueReg = c.regAlloc.Alloc()
 
-			// Load the index as a constant
-			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
-			c.emitLoadConstant(indexReg, indexConstIdx, line)
+			// Assign rest array to target
+			if element.Default != nil {
+				err = c.compileConditionalAssignment(element.Target, restArrayReg, element.Default, line)
+			} else {
+				err = c.compileSimpleAssignment(element.Target, restArrayReg, line)
+			}
+			c.regAlloc.Free(restArrayReg)
+			if err != nil {
+				return BadRegister, err
+			}
 
-			// Get temp[i] using GetIndex operation
-			c.emitOpCode(vm.OpGetIndex, line)
-			c.emitByte(byte(valueReg)) // destination register
-			c.emitByte(byte(tempReg))  // array register
-			c.emitByte(byte(indexReg)) // index register
-
-			c.regAlloc.Free(indexReg)
+			// Rest must be last, the iterator is exhausted
+			c.emitLoadTrue(doneReg, line)
+			break
 		}
+
+		// Regular element: get next value from iterator
+		valueReg := c.regAlloc.Alloc()
+		c.compileIteratorNext(iteratorObjReg, valueReg, doneReg, line, false)
 
 		// Handle assignment with potential default value
 		if element.Default != nil {
-			// Compile conditional assignment: target = valueReg !== undefined ? valueReg : default
-			err := c.compileConditionalAssignment(element.Target, valueReg, element.Default, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
-			}
+			err = c.compileConditionalAssignment(element.Target, valueReg, element.Default, line)
 		} else {
-			// Simple assignment: target = valueReg
-			err := c.compileSimpleAssignment(element.Target, valueReg, line)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				return BadRegister, err
-			}
+			err = c.compileSimpleAssignment(element.Target, valueReg, line)
 		}
-
-		// Clean up temporary registers
 		c.regAlloc.Free(valueReg)
+		if err != nil {
+			return BadRegister, err
+		}
 	}
 
-	// 3. Return the original RHS value (like regular assignment)
-	if hint != tempReg {
-		c.emitMove(hint, tempReg, line)
-	}
+	// 6. Call IteratorClose (iterator.return if it exists AND iterator is not done)
+	c.emitIteratorCleanupWithDone(iteratorObjReg, doneReg, line)
 
 	return hint, nil
 }
@@ -939,54 +973,92 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 }
 
 // compileArrayDestructuringWithValueReg compiles array destructuring using an existing value register
-func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestructuringAssignment, valueReg Register, line int) errors.PaseratiError {
-	// Reuse existing array destructuring logic but skip RHS compilation
-	// 2. For each element, compile: target = valueReg[index] or target = valueReg.slice(index)
-	for i, element := range node.Elements {
-		if element.Target == nil {
-			continue // Skip malformed elements
-		}
+// Uses the iterator protocol per ECMAScript spec
+func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestructuringAssignment, iterableReg Register, line int) errors.PaseratiError {
+	// 1. Get Symbol.iterator method
+	iteratorMethodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorMethodReg)
 
-		var extractedReg Register
+	// Load global Symbol
+	symbolObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(symbolObjReg)
+	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	c.emitGetGlobal(symbolObjReg, symIdx, line)
+
+	// Get Symbol.iterator
+	propNameReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(propNameReg)
+	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
+
+	iteratorKeyReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorKeyReg)
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorKeyReg))
+	c.emitByte(byte(symbolObjReg))
+	c.emitByte(byte(propNameReg))
+
+	// Get iterable[Symbol.iterator]
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorMethodReg))
+	c.emitByte(byte(iterableReg))
+	c.emitByte(byte(iteratorKeyReg))
+
+	// 2. Call the iterator method to get iterator object
+	iteratorObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorObjReg)
+	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, line)
+
+	// 3. Allocate register to track iterator.done state
+	doneReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(doneReg)
+	c.emitLoadFalse(doneReg, line)
+
+	// 4. For each element, call iterator.next() and assign
+	for _, element := range node.Elements {
+		if element.Target == nil {
+			// Elision: consume iterator value but don't bind
+			c.compileIteratorNext(iteratorObjReg, BadRegister, doneReg, line, true)
+			continue
+		}
 
 		if element.IsRest {
-			// Rest element: compile valueReg.slice(i) to get remaining elements
-			extractedReg = c.regAlloc.Alloc()
-
-			// Call valueReg.slice(i) to get the rest of the array
-			err := c.compileArraySliceCall(valueReg, i, extractedReg, line)
+			// Rest element: collect all remaining iterator values into an array
+			restArrayReg := c.regAlloc.Alloc()
+			err := c.compileIteratorToArray(iteratorObjReg, restArrayReg, line)
 			if err != nil {
-				c.regAlloc.Free(extractedReg)
+				c.regAlloc.Free(restArrayReg)
 				return err
 			}
-		} else {
-			// Regular element: compile valueReg[i]
-			indexReg := c.regAlloc.Alloc()
-			extractedReg = c.regAlloc.Alloc()
 
-			// Load the index as a constant
-			indexConstIdx := c.chunk.AddConstant(vm.Number(float64(i)))
-			c.emitLoadConstant(indexReg, indexConstIdx, line)
+			// Assign rest array to target
+			var err2 errors.PaseratiError
+			if element.Default != nil {
+				err2 = c.compileConditionalAssignment(element.Target, restArrayReg, element.Default, line)
+			} else {
+				err2 = c.compileRecursiveAssignment(element.Target, restArrayReg, line)
+			}
+			c.regAlloc.Free(restArrayReg)
+			if err2 != nil {
+				return err2
+			}
 
-			// Get valueReg[i] using GetIndex operation
-			c.emitOpCode(vm.OpGetIndex, line)
-			c.emitByte(byte(extractedReg)) // destination register
-			c.emitByte(byte(valueReg))     // array register
-			c.emitByte(byte(indexReg))     // index register
-
-			c.regAlloc.Free(indexReg)
+			// Rest must be last, the iterator is exhausted
+			c.emitLoadTrue(doneReg, line)
+			break
 		}
+
+		// Regular element: get next value from iterator
+		extractedReg := c.regAlloc.Alloc()
+		c.compileIteratorNext(iteratorObjReg, extractedReg, doneReg, line, false)
 
 		// Handle assignment with potential default value (recursive assignment)
 		if element.Default != nil {
-			// Compile conditional assignment: target = extractedReg !== undefined ? extractedReg : default
 			err := c.compileConditionalAssignment(element.Target, extractedReg, element.Default, line)
 			if err != nil {
 				c.regAlloc.Free(extractedReg)
 				return err
 			}
 		} else {
-			// Recursive assignment: target = extractedReg (may be nested pattern)
 			err := c.compileRecursiveAssignment(element.Target, extractedReg, line)
 			if err != nil {
 				c.regAlloc.Free(extractedReg)
@@ -994,9 +1066,11 @@ func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestr
 			}
 		}
 
-		// Clean up temporary registers
 		c.regAlloc.Free(extractedReg)
 	}
+
+	// 5. Call IteratorClose (iterator.return if it exists AND iterator is not done)
+	c.emitIteratorCleanupWithDone(iteratorObjReg, doneReg, line)
 
 	return nil
 }
