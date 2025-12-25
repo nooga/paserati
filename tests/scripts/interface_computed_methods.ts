@@ -21,4 +21,4 @@ interface ComputedInterface {
 // Test that the interface compiles correctly
 let obj: ComputedInterface;
 
-// expect: null
+// expect: undefined

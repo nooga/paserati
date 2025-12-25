@@ -23,4 +23,4 @@ function complexTest<T extends object = { prop: string }>() {
     return {};
 }
 
-// expect: null
+// expect: undefined

@@ -2,4 +2,4 @@
 interface Test {
   method(a: string, b?: number): void;
 }
-// expect: null
+// expect: undefined

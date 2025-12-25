@@ -4,4 +4,4 @@ interface Container<T = string> {
     value: T;
 }
 
-// expect: null
+// expect: undefined

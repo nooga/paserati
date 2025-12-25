@@ -2,4 +2,4 @@
 
 type Test<T = string> = T;
 
-// expect: null
+// expect: undefined

@@ -42,8 +42,8 @@ func cleanExponentialFormat(s string) string {
 type ValueType uint8
 
 const (
-	TypeNull ValueType = iota
-	TypeUndefined
+	TypeUndefined ValueType = iota
+	TypeNull
 
 	TypeString
 	TypeSymbol

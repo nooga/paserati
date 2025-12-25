@@ -7,4 +7,4 @@ let nums1: Array<number> = [1, 2, 3];
 let nums2: number[] = nums1;
 let nums3: Array<number> = nums2;
 
-// expect: null
+// expect: undefined

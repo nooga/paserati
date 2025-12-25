@@ -4,4 +4,4 @@ function test<T = string>() {
     return "hello";
 }
 
-// expect: null
+// expect: undefined

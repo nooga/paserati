@@ -22,4 +22,4 @@ type Constrained<T extends object = {}> = T;
 let constrainedDefault: Constrained; // Should use {} default
 let constrainedExplicit: Constrained<{name: string}>; // Should use explicit type
 
-// expect: null
+// expect: undefined

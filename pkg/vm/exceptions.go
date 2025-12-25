@@ -67,6 +67,14 @@ func (vm *VM) throwException(value Value) {
 	vm.unwinding = true
 	vm.lastThrownException = value
 
+	// If we're inside a finally block (finallyDepth > 0), a new exception thrown
+	// here overrides any pending exception from the original try/catch block.
+	// Per ECMAScript spec, the new exception takes precedence.
+	if vm.finallyDepth > 0 && vm.pendingAction == ActionThrow {
+		vm.pendingAction = ActionNone
+		vm.pendingValue = Undefined
+	}
+
 	// Start unwinding from current frame
 	handlerFound := vm.unwindException()
 	if debugExceptions {

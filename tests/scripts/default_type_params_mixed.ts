@@ -18,4 +18,4 @@ type MixedType<T, U = string> = {
 let mixed1: MixedType<number>; // U should default to string
 let mixed2: MixedType<number, boolean>; // Explicit U
 
-// expect: null
+// expect: undefined

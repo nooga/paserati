@@ -4,4 +4,4 @@ class Test<T = string> {
     value: T;
 }
 
-// expect: null
+// expect: undefined
