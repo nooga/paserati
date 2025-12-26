@@ -466,6 +466,15 @@ func (c *Compiler) emitSetPrivateField(obj, val Register, nameConstIdx uint16, l
 	c.emitUint16(nameConstIdx)
 }
 
+// emitSetPrivateMethod emits OpSetPrivateMethod ObjReg, ValueReg, NameConstIdx(Uint16)
+// For ECMAScript private method definition: obj.#method = func (not writable)
+func (c *Compiler) emitSetPrivateMethod(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpSetPrivateMethod, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
 // emitDefineMethod emits OpDefineMethod ObjReg, ValueReg, NameConstIdx(Uint16)
 // Used for defining non-enumerable methods (e.g., class methods)
 func (c *Compiler) emitDefineMethod(obj, val Register, nameConstIdx uint16, line int) {

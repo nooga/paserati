@@ -624,8 +624,8 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 	}
 
 	// Add private methods as field initializers
-	// Private methods must be stored as private fields containing function values
-	// This allows them to be referenced (e.g., const fn = this.#method)
+	// Private methods are stored via OpSetPrivateMethod (not writable)
+	// This allows them to be referenced (e.g., const fn = this.#method) but not reassigned
 	// NOTE: Private getters/setters are handled separately below
 	for _, method := range node.Body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic {
@@ -637,21 +637,27 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 					continue
 				}
 
-				// Create assignment: this.#method = function() {...}
-				assignment := &parser.AssignmentExpression{
-					Token:    method.Token,
-					Operator: "=",
-					Left: &parser.MemberExpression{
+				// Strip the # prefix for the field name argument
+				fieldName := methodName[1:]
+
+				// Create a marker call that we'll recognize during compilation
+				// this.__setPrivateMethod__(fieldName, methodFunction)
+				callExpr := &parser.CallExpression{
+					Token: method.Token,
+					Function: &parser.MemberExpression{
 						Token:    method.Token,
 						Object:   &parser.ThisExpression{Token: method.Token},
-						Property: method.Key,
+						Property: &parser.Identifier{Token: method.Token, Value: "__setPrivateMethod__"},
 					},
-					Value: method.Value, // The function literal
+					Arguments: []parser.Expression{
+						&parser.StringLiteral{Token: method.Token, Value: fieldName},
+						method.Value, // The function literal
+					},
 				}
 
 				fieldInitStatement := &parser.ExpressionStatement{
 					Token:      method.Token,
-					Expression: assignment,
+					Expression: callExpr,
 				}
 
 				fieldInitializers = append(fieldInitializers, fieldInitStatement)
@@ -1029,13 +1035,14 @@ func (c *Compiler) addStaticPrivateMethod(method *parser.MethodDefinition, const
 	defer c.regAlloc.Free(methodReg)
 	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
 
-	// Store as private field on constructor: constructor.#method = methodFunction
+	// Store as private method on constructor: constructor.#method = methodFunction
+	// Methods are not writable - attempts to assign will throw TypeError
 	// Strip the # prefix for storage
 	fieldName := methodName[1:]
 	methodNameIdx := c.chunk.AddConstant(vm.String(fieldName))
-	c.emitSetPrivateField(constructorReg, methodReg, methodNameIdx, method.Token.Line)
+	c.emitSetPrivateMethod(constructorReg, methodReg, methodNameIdx, method.Token.Line)
 
-	debugPrintf("// DEBUG addStaticPrivateMethod: Static private method '%s' stored as private field\n", methodName)
+	debugPrintf("// DEBUG addStaticPrivateMethod: Static private method '%s' stored as private method\n", methodName)
 	return nil
 }
 

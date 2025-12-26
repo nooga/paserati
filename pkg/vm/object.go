@@ -100,6 +100,10 @@ type PlainObject struct {
 	// Private field storage (ECMAScript # fields)
 	// Keyed by field name (without the # prefix)
 	privateFields map[string]Value
+	// Private methods storage (ECMAScript # methods)
+	// Keyed by method name (without the # prefix)
+	// Methods are not writable - assignment throws TypeError
+	privateMethods map[string]Value
 	// Private accessor storage (ECMAScript # getters/setters)
 	// Keyed by field name (without the # prefix)
 	privateGetters map[string]Value
@@ -710,6 +714,36 @@ func (o *PlainObject) HasPrivateField(name string) bool {
 		return false
 	}
 	_, ok := o.privateFields[name]
+	return ok
+}
+
+// GetPrivateMethod retrieves a private method value (ECMAScript # methods)
+func (o *PlainObject) GetPrivateMethod(name string) (Value, bool) {
+	if o.privateMethods == nil {
+		return Undefined, false
+	}
+	v, ok := o.privateMethods[name]
+	if !ok {
+		return Undefined, false
+	}
+	return v, true
+}
+
+// SetPrivateMethod sets a private method value (ECMAScript # methods)
+// Methods are not writable - any subsequent assignment throws TypeError
+func (o *PlainObject) SetPrivateMethod(name string, value Value) {
+	if o.privateMethods == nil {
+		o.privateMethods = make(map[string]Value)
+	}
+	o.privateMethods[name] = value
+}
+
+// IsPrivateMethod checks if a private method exists
+func (o *PlainObject) IsPrivateMethod(name string) bool {
+	if o.privateMethods == nil {
+		return false
+	}
+	_, ok := o.privateMethods[name]
 	return ok
 }
 

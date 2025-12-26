@@ -4340,8 +4340,11 @@ startExecution:
 				return status, Undefined
 			}
 
-			// Check if this is a private accessor (getter/setter)
-			if obj.IsPrivateAccessor(fieldName) {
+			// Check if this is a private method
+			if value, exists := obj.GetPrivateMethod(fieldName); exists {
+				registers[destReg] = value
+			} else if obj.IsPrivateAccessor(fieldName) {
+				// Check if this is a private accessor (getter/setter)
 				getter, _, exists := obj.GetPrivateAccessor(fieldName)
 				if !exists || getter.IsUndefined() {
 					frame.ip = ip
@@ -4470,13 +4473,39 @@ startExecution:
 				return status, Undefined
 			}
 
+			// Check if this is a private method (ECMAScript spec: PrivateSet throws TypeError for methods)
+			if obj.IsPrivateMethod(fieldName) {
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot assign to private method '#%s'", fieldName))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
 			// Check if this is a private accessor (getter/setter)
 			if obj.IsPrivateAccessor(fieldName) {
 				_, setter, exists := obj.GetPrivateAccessor(fieldName)
 				if !exists || setter.IsUndefined() {
 					frame.ip = ip
-					status := vm.runtimeError("Cannot write private accessor '%s': no setter defined", fieldName)
-					return status, Undefined
+					vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read-only private accessor '#%s'", fieldName))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 				// Call the setter function with the object as 'this'
 				frame.ip = ip
@@ -4489,6 +4518,51 @@ startExecution:
 				// Regular private data field
 				obj.SetPrivateField(fieldName, registers[valReg])
 			}
+		case OpSetPrivateMethod:
+			// Store a private method (not writable - attempts to assign will throw TypeError)
+			objReg := code[ip]
+			valReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get method name from constants (stored without # prefix)
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for private method name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Private method name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			methodName := AsString(nameVal)
+
+			objVal := registers[objReg]
+
+			// Private methods can be set on objects or functions (for static private methods)
+			var obj *PlainObject
+			if objVal.Type() == TypeObject {
+				obj = objVal.AsPlainObject()
+			} else if objVal.Type() == TypeFunction {
+				// Static private methods are stored on the constructor's Properties object
+				fn := objVal.AsFunction()
+				if fn.Properties == nil {
+					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = fn.Properties
+			} else {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot set private method '%s' of %s", methodName, objVal.TypeName())
+				return status, Undefined
+			}
+
+			// Store as private method (not writable)
+			obj.SetPrivateMethod(methodName, registers[valReg])
+
 		case OpSetPrivateAccessor:
 			objReg := code[ip]
 			getterReg := code[ip+1]
