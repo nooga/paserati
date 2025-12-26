@@ -1339,50 +1339,45 @@ func (c *Compiler) compileObjectRestProperty(objReg Register, extractedProps []*
 	excludeArrayReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(excludeArrayReg)
 
-	// Create array with extracted property names
-	excludeNames := make([]vm.Value, 0, len(extractedProps))
-	for _, prop := range extractedProps {
-		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
-			excludeNames = append(excludeNames, vm.String(keyIdent.Value))
-		}
-		// Skip computed properties (can't exclude statically)
-	}
+	// Count total properties to exclude (both static and computed)
+	totalProps := len(extractedProps)
 
-	if len(excludeNames) == 0 {
-		// No properties to exclude, just copy the whole object
-		c.emitOpCode(vm.OpMakeEmptyObject, line)
+	if totalProps == 0 {
+		// No properties to exclude, create empty array and copy object
+		c.emitOpCode(vm.OpMakeArray, line)
 		c.emitByte(byte(excludeArrayReg))
+		c.emitByte(0) // start register (unused for count=0)
+		c.emitByte(0) // count: 0 elements
+	} else {
+		// Allocate contiguous registers for all array elements
+		startReg := c.regAlloc.AllocContiguous(totalProps)
+		// Mark all registers for cleanup
+		for i := 0; i < totalProps; i++ {
+			defer c.regAlloc.Free(startReg + Register(i))
+		}
 
-		// Create result register for the rest object
-		restObjReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(restObjReg)
+		// Load each property key into consecutive registers
+		for i, prop := range extractedProps {
+			targetReg := startReg + Register(i)
+			if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+				// Static identifier key - load as string constant
+				nameConstIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+				c.emitLoadConstant(targetReg, nameConstIdx, line)
+			} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				// Computed property key - evaluate expression at runtime
+				_, err := c.compileNode(computed.Expr, targetReg)
+				if err != nil {
+					return err
+				}
+			}
+		}
 
-		c.emitMove(restObjReg, objReg, line)
-		return c.compileSimpleAssignment(restElement.Target, restObjReg, line)
+		// Create array from the element registers
+		c.emitOpCode(vm.OpMakeArray, line)
+		c.emitByte(byte(excludeArrayReg)) // destination register
+		c.emitByte(byte(startReg))        // start register (first element)
+		c.emitByte(byte(totalProps))      // element count
 	}
-
-	// Emit code to create the exclude array
-	// First allocate contiguous registers for all elements
-	startReg := c.regAlloc.Alloc()
-	elementRegs := make([]Register, len(excludeNames))
-	elementRegs[0] = startReg
-	for i := 1; i < len(excludeNames); i++ {
-		elementRegs[i] = c.regAlloc.Alloc()
-		defer c.regAlloc.Free(elementRegs[i])
-	}
-	defer c.regAlloc.Free(startReg)
-
-	// Load each string constant into consecutive registers
-	for i, name := range excludeNames {
-		nameConstIdx := c.chunk.AddConstant(name)
-		c.emitLoadConstant(elementRegs[i], nameConstIdx, line)
-	}
-
-	// Create array from the element registers
-	c.emitOpCode(vm.OpMakeArray, line)
-	c.emitByte(byte(excludeArrayReg))   // destination register
-	c.emitByte(byte(startReg))          // start register (first element)
-	c.emitByte(byte(len(excludeNames))) // element count
 
 	// Create result register for the rest object
 	restObjReg := c.regAlloc.Alloc()
@@ -1404,58 +1399,59 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 	excludeArrayReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(excludeArrayReg)
 
-	// Create array with extracted property names
-	excludeNames := make([]vm.Value, 0, len(extractedProps))
-	for _, prop := range extractedProps {
-		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
-			excludeNames = append(excludeNames, vm.String(keyIdent.Value))
-			if debugAssignment {
-				fmt.Printf("// [ObjectRest] Excluding property: %s\n", keyIdent.Value)
-			}
-		}
-		// Skip computed properties (can't exclude statically)
-	}
+	// Count total properties to exclude (both static and computed)
+	totalProps := len(extractedProps)
 	if debugAssignment {
-		fmt.Printf("// [ObjectRest] Total excludeNames: %d\n", len(excludeNames))
+		fmt.Printf("// [ObjectRest] Total properties to exclude: %d\n", totalProps)
 	}
 
 	// Always use OpCopyObjectExcluding to ensure we only copy enumerable properties
-	// Even when excludeNames is empty, we still need to filter out non-enumerable properties
-	if len(excludeNames) == 0 {
+	if totalProps == 0 {
 		// Create empty array for exclude list
 		c.emitOpCode(vm.OpMakeArray, line)
 		c.emitByte(byte(excludeArrayReg))
 		c.emitByte(0) // start register (unused for count=0)
 		c.emitByte(0) // count: 0 elements
 	} else {
-		// Emit code to create the exclude array
 		// Allocate contiguous registers for all array elements
-		startReg := c.regAlloc.AllocContiguous(len(excludeNames))
+		startReg := c.regAlloc.AllocContiguous(totalProps)
 		// Mark all registers for cleanup
-		for i := 0; i < len(excludeNames); i++ {
+		for i := 0; i < totalProps; i++ {
 			defer c.regAlloc.Free(startReg + Register(i))
 		}
 		if debugAssignment {
-			fmt.Printf("// [ObjectRest] Allocated contiguous registers starting at %d for %d elements\n", startReg, len(excludeNames))
+			fmt.Printf("// [ObjectRest] Allocated contiguous registers starting at %d for %d elements\n", startReg, totalProps)
 		}
 
-		// Load each string constant into consecutive registers
-		for i, name := range excludeNames {
-			nameConstIdx := c.chunk.AddConstant(name)
+		// Load each property key into consecutive registers
+		for i, prop := range extractedProps {
 			targetReg := startReg + Register(i)
-			c.emitLoadConstant(targetReg, nameConstIdx, line)
-			if debugAssignment {
-				fmt.Printf("// [ObjectRest] Loading '%s' into reg %d (const idx %d)\n", name.AsString(), targetReg, nameConstIdx)
+			if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+				// Static identifier key - load as string constant
+				nameConstIdx := c.chunk.AddConstant(vm.String(keyIdent.Value))
+				c.emitLoadConstant(targetReg, nameConstIdx, line)
+				if debugAssignment {
+					fmt.Printf("// [ObjectRest] Loading static '%s' into reg %d\n", keyIdent.Value, targetReg)
+				}
+			} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+				// Computed property key - evaluate expression at runtime
+				_, err := c.compileNode(computed.Expr, targetReg)
+				if err != nil {
+					return err
+				}
+				if debugAssignment {
+					fmt.Printf("// [ObjectRest] Compiled computed property into reg %d\n", targetReg)
+				}
 			}
 		}
 
 		// Create array from the element registers
 		c.emitOpCode(vm.OpMakeArray, line)
-		c.emitByte(byte(excludeArrayReg))   // destination register
-		c.emitByte(byte(startReg))          // start register (first element)
-		c.emitByte(byte(len(excludeNames))) // element count
+		c.emitByte(byte(excludeArrayReg)) // destination register
+		c.emitByte(byte(startReg))        // start register (first element)
+		c.emitByte(byte(totalProps))      // element count
 		if debugAssignment {
-			fmt.Printf("// [ObjectRest] OpMakeArray: dest=%d, start=%d, count=%d\n", excludeArrayReg, startReg, len(excludeNames))
+			fmt.Printf("// [ObjectRest] OpMakeArray: dest=%d, start=%d, count=%d\n", excludeArrayReg, startReg, totalProps)
 		}
 	}
 
