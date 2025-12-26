@@ -246,8 +246,9 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.IF, p.parseIfExpression)
 	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
 	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)  // <<< NEW: Register Object Literal Parsing
-	p.registerPrefix(lexer.SPREAD, p.parseSpreadElement)  // NEW: Spread syntax in calls
-	p.registerPrefix(lexer.SUPER, p.parseSuperExpression) // NEW: Super expressions
+	p.registerPrefix(lexer.SPREAD, p.parseSpreadElement)        // NEW: Spread syntax in calls
+	p.registerPrefix(lexer.SUPER, p.parseSuperExpression)       // NEW: Super expressions
+	p.registerPrefix(lexer.PRIVATE_IDENT, p.parsePrivateIdent)  // Private field presence check: #field in obj
 
 	// --- Register VALUE Infix Functions ---
 	// Arithmetic & Comparison/Logical
@@ -7271,6 +7272,15 @@ func (p *Parser) parsePropertyName() *Identifier {
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	default:
 		return nil
+	}
+}
+
+// parsePrivateIdent parses a standalone private identifier for use in 'in' expressions.
+// Syntax: #field in obj - checks if private field exists on object
+func (p *Parser) parsePrivateIdent() Expression {
+	return &PrivateIdentifier{
+		Token: p.curToken,
+		Value: p.curToken.Literal, // includes the # prefix
 	}
 }
 

@@ -246,6 +246,18 @@ func (i *Identifier) expressionNode()      {}
 func (i *Identifier) TokenLiteral() string { return i.Token.Literal }
 func (i *Identifier) String() string       { return i.Value }
 
+// PrivateIdentifier represents a standalone private identifier (#field) for use in 'in' expressions
+// Syntax: #field in obj - checks if private field exists on object
+type PrivateIdentifier struct {
+	BaseExpression
+	Token lexer.Token
+	Value string // The name including the # prefix (e.g., "#field")
+}
+
+func (pi *PrivateIdentifier) expressionNode()      {}
+func (pi *PrivateIdentifier) TokenLiteral() string { return pi.Token.Literal }
+func (pi *PrivateIdentifier) String() string       { return pi.Value }
+
 // --- NEW: Parameter Node ---
 // Represents a function parameter with an optional type annotation.
 // <Name> : <TypeAnnotation>

@@ -735,6 +735,29 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			}
 		}
 
+		// --- SPECIAL: Private field presence check: #field in obj ---
+		if node.Operator == "in" {
+			if privIdent, ok := node.Left.(*parser.PrivateIdentifier); ok {
+				// Get field name (without # prefix for storage)
+				fieldName := privIdent.Value
+				if len(fieldName) > 0 && fieldName[0] == '#' {
+					fieldName = fieldName[1:]
+				}
+				nameIdx := c.chunk.AddConstant(vm.String(fieldName))
+
+				// Compile the right side (object)
+				objReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, objReg)
+				_, err := c.compileNode(node.Right, objReg)
+				if err != nil {
+					return BadRegister, err
+				}
+
+				c.emitHasPrivateField(hint, objReg, nameIdx, line)
+				return hint, nil
+			}
+		}
+
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
 		_, err := c.compileNode(node.Left, leftReg)

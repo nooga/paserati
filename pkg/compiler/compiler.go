@@ -1041,6 +1041,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		c.emitDynamicImport(hint, specifierReg, node.Token.Line)
 		return hint, nil
 
+	case *parser.PrivateIdentifier:
+		// PrivateIdentifier is only valid as the left operand of 'in' expressions (#field in obj)
+		// If we get here, it's being used in an invalid context
+		return BadRegister, NewCompileError(node,
+			fmt.Sprintf("Private identifier '%s' can only be used on the left side of 'in' expressions", node.Value))
+
 	case *parser.Identifier:
 		// Special handling for 'arguments' identifier - only available in non-arrow functions
 		if node.Value == "arguments" {

@@ -4162,13 +4162,25 @@ startExecution:
 					result = new(big.Int).Xor(leftBigInt, rightBigInt)
 				case OpShiftLeft:
 					// For BigInt, shift amount is ToBigInt, not masked to 32 bits
-					// Convert shift count to int64
+					// Per ECMAScript: BigInt::leftShift(x, y)
+					// If y < 0, right shift by -y; else left shift by y
 					shiftAmount := rightBigInt.Int64()
-					result = new(big.Int).Lsh(leftBigInt, uint(shiftAmount))
+					if shiftAmount < 0 {
+						// Negative left shift is right shift
+						result = new(big.Int).Rsh(leftBigInt, uint(-shiftAmount))
+					} else {
+						result = new(big.Int).Lsh(leftBigInt, uint(shiftAmount))
+					}
 				case OpShiftRight:
-					// Convert shift count to int64
+					// Per ECMAScript: BigInt::signedRightShift(x, y) = BigInt::leftShift(x, -y)
+					// If y < 0, left shift by -y; else right shift by y
 					shiftAmount := rightBigInt.Int64()
-					result = new(big.Int).Rsh(leftBigInt, uint(shiftAmount))
+					if shiftAmount < 0 {
+						// Negative right shift is left shift
+						result = new(big.Int).Lsh(leftBigInt, uint(-shiftAmount))
+					} else {
+						result = new(big.Int).Rsh(leftBigInt, uint(shiftAmount))
+					}
 				}
 
 				registers[destReg] = NewBigInt(result)
@@ -4562,6 +4574,81 @@ startExecution:
 
 			// Store as private method (not writable)
 			obj.SetPrivateMethod(methodName, registers[valReg])
+
+		case OpHasPrivateField:
+			// Check if private field/method/accessor exists on object: #field in obj
+			destReg := code[ip]
+			objReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get field name from constants (stored without # prefix)
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for private field name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			fieldName := AsString(nameVal)
+
+			objVal := registers[objReg]
+
+			// Per ECMAScript: #field in obj throws TypeError if obj is not an object
+			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction {
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '#%s' in %s", fieldName, objVal.TypeName()))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// Get the object
+			var obj *PlainObject
+			if objVal.Type() == TypeObject {
+				obj = objVal.AsPlainObject()
+			} else {
+				// Function - check its Properties object for static private fields
+				fn := objVal.AsFunction()
+				if fn.Properties != nil {
+					obj = fn.Properties
+				}
+			}
+
+			// Check for private field, method, or accessor
+			hasField := false
+			if obj != nil {
+				// Check private fields
+				if _, ok := obj.GetPrivateField(fieldName); ok {
+					hasField = true
+				}
+				// Check private methods
+				if !hasField && obj.IsPrivateMethod(fieldName) {
+					hasField = true
+				}
+				// Check private accessors
+				if !hasField {
+					if _, _, ok := obj.GetPrivateAccessor(fieldName); ok {
+						hasField = true
+					}
+				}
+			}
+
+			registers[destReg] = BooleanValue(hasField)
 
 		case OpSetPrivateAccessor:
 			objReg := code[ip]

@@ -107,7 +107,8 @@ const (
 	// --- Private Field Operations (ECMAScript # fields) ---
 	OpGetPrivateField    OpCode = 91  // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
 	OpSetPrivateField    OpCode = 92  // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
-	OpSetPrivateMethod   OpCode = 98 // Rx Ry NameIdx(16bit): Rx.#method = Ry (private method - not writable)
+	OpSetPrivateMethod   OpCode = 98  // Rx Ry NameIdx(16bit): Rx.#method = Ry (private method - not writable)
+	OpHasPrivateField    OpCode = 99  // Rx Ry NameIdx(16bit): Rx = #field in Ry (check private field presence)
 	OpSetPrivateAccessor OpCode = 106 // Rx GetterReg SetterReg NameIdx(16bit): Set up private getter/setter on Rx
 
 	// --- Type Guards for Runtime Validation ---
@@ -353,6 +354,8 @@ func (op OpCode) String() string {
 		return "OpSetPrivateField"
 	case OpSetPrivateMethod:
 		return "OpSetPrivateMethod"
+	case OpHasPrivateField:
+		return "OpHasPrivateField"
 	case OpSetPrivateAccessor:
 		return "OpSetPrivateAccessor"
 	case OpCallMethod:
@@ -736,6 +739,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpSetPrivateField:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateMethod:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpHasPrivateField:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateAccessor:
 		return c.registerRegisterRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")

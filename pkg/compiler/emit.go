@@ -475,6 +475,15 @@ func (c *Compiler) emitSetPrivateMethod(obj, val Register, nameConstIdx uint16, 
 	c.emitUint16(nameConstIdx)
 }
 
+// emitHasPrivateField emits OpHasPrivateField DestReg, ObjReg, NameConstIdx(Uint16)
+// For ECMAScript private field presence check: #field in obj
+func (c *Compiler) emitHasPrivateField(dest, obj Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpHasPrivateField, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(obj))
+	c.emitUint16(nameConstIdx)
+}
+
 // emitDefineMethod emits OpDefineMethod ObjReg, ValueReg, NameConstIdx(Uint16)
 // Used for defining non-enumerable methods (e.g., class methods)
 func (c *Compiler) emitDefineMethod(obj, val Register, nameConstIdx uint16, line int) {

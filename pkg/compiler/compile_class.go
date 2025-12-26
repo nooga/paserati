@@ -599,28 +599,33 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 
 	// Extract field initializers from class properties
 	for _, property := range node.Body.Properties {
-		if property.Value != nil { // Property has an initializer
-			// Create assignment statement: this.propertyName = initializerExpression
-			assignment := &parser.AssignmentExpression{
-				Token:    property.Token,
-				Operator: "=",
-				Left: &parser.MemberExpression{
-					Token:    property.Token,
-					Object:   &parser.ThisExpression{Token: property.Token},
-					Property: property.Key,
-				},
-				Value: property.Value,
-			}
-
-			// Wrap in expression statement
-			fieldInitStatement := &parser.ExpressionStatement{
-				Token:      property.Token,
-				Expression: assignment,
-			}
-
-			fieldInitializers = append(fieldInitializers, fieldInitStatement)
-			debugPrintf("// DEBUG injectFieldInitializers: Added field initializer for '%s'\n", c.extractPropertyName(property.Key))
+		// Per ECMAScript: class fields without initializers are initialized to undefined
+		initValue := property.Value
+		if initValue == nil {
+			// Create synthetic undefined literal
+			initValue = &parser.UndefinedLiteral{Token: property.Token}
 		}
+
+		// Create assignment statement: this.propertyName = initializerExpression
+		assignment := &parser.AssignmentExpression{
+			Token:    property.Token,
+			Operator: "=",
+			Left: &parser.MemberExpression{
+				Token:    property.Token,
+				Object:   &parser.ThisExpression{Token: property.Token},
+				Property: property.Key,
+			},
+			Value: initValue,
+		}
+
+		// Wrap in expression statement
+		fieldInitStatement := &parser.ExpressionStatement{
+			Token:      property.Token,
+			Expression: assignment,
+		}
+
+		fieldInitializers = append(fieldInitializers, fieldInitStatement)
+		debugPrintf("// DEBUG injectFieldInitializers: Added field initializer for '%s'\n", c.extractPropertyName(property.Key))
 	}
 
 	// Add private methods as field initializers
