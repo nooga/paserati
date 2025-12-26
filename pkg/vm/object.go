@@ -335,13 +335,23 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 		if f.keyKind == KeyKindString && f.name == name {
 			// Existing property: enforce non-configurable rules
 			newF := f
+			convertingFromAccessor := false
 			if f.isAccessor {
 				// Convert accessor to data property: only if configurable
 				if !f.configurable {
 					return
 				}
 				newF.isAccessor = false
-				newF.writable = false
+				newF.writable = false // Default for new data property
+				convertingFromAccessor = true
+				// Clean up getter/setter maps
+				keyHash := keyFromString(name).hash()
+				if o.getters != nil {
+					delete(o.getters, keyHash)
+				}
+				if o.setters != nil {
+					delete(o.setters, keyHash)
+				}
 			}
 			// If current non-configurable, cannot change configurable or enumerable
 			if !f.configurable {
@@ -352,12 +362,12 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 					return
 				}
 			}
-			// If current writable is false, cannot make it true
-			if f.writable == false && writable != nil && *writable == true {
+			// If current writable is false and not converting from accessor, cannot make it true
+			if !convertingFromAccessor && f.writable == false && writable != nil && *writable == true {
 				return
 			}
-			// Update value only if writable or becoming defined new
-			if f.writable {
+			// Update value: always when converting from accessor, or if current writable is true
+			if convertingFromAccessor || f.writable {
 				o.properties[f.offset] = value
 			}
 			if writable != nil {

@@ -803,11 +803,10 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 					c.emitByte(byte(valueReg)) // Value register
 				}
 			} else {
-				// Use OpSetProp for all static keys (including methods)
-				// Note: Object literal methods are enumerable, unlike class methods
-				// This means object literal methods don't get [[HomeObject]]
-				// TODO: Add separate opcode for enumerable methods with [[HomeObject]]
-				c.emitSetProp(hint, valueReg, keyConstIdx, line)
+				// Use OpDefineDataProperty for static keys in object literals
+				// This uses DefineOwnProperty semantics and can overwrite existing properties
+				// including accessors (e.g., { get foo() {}, foo: 1 } - foo becomes data property)
+				c.emitDefineDataProperty(hint, valueReg, keyConstIdx, line)
 			}
 		}
 	}

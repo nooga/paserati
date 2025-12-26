@@ -4740,6 +4740,13 @@ startExecution:
 				return status, value
 			}
 
+		case OpDefineDataProperty:
+			frame.ip = ip
+			status, value := vm.handleOpDefineDataProperty(code, &ip, constants, registers)
+			if status != InterpretOK {
+				return status, value
+			}
+
 		// (OpDeleteProp handled later in switch)
 
 		case OpCallMethod:

@@ -1842,6 +1842,11 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 		return vm.BooleanValue(true), nil
 	}
 
+	// Functions and closures are objects and extensible by default per ECMAScript
+	if obj.Type() == vm.TypeFunction || obj.Type() == vm.TypeClosure {
+		return vm.BooleanValue(true), nil
+	}
+
 	return vm.BooleanValue(false), nil
 }
 

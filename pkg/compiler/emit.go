@@ -448,6 +448,16 @@ func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int)
 	c.emitUint16(nameConstIdx)
 }
 
+// emitDefineDataProperty emits OpDefineDataProperty ObjReg, ValueReg, NameConstIdx(Uint16)
+// This uses DefineOwnProperty semantics and can overwrite any existing property including accessors.
+// Used for object literal data properties.
+func (c *Compiler) emitDefineDataProperty(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpDefineDataProperty, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
 // emitGetPrivateField emits OpGetPrivateField DestReg, ObjReg, NameConstIdx(Uint16)
 // For ECMAScript private field access: obj.#field
 func (c *Compiler) emitGetPrivateField(dest, obj Register, nameConstIdx uint16, line int) {
