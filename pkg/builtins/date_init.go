@@ -92,7 +92,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	dateProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Date prototype methods
-	dateProto.SetOwn("getTime", vm.NewNativeFunction(0, false, "getTime", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getTime", vm.NewNativeFunction(0, false, "getTime", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			return vm.NumberValue(timestamp), nil
@@ -100,7 +100,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getFullYear", vm.NewNativeFunction(0, false, "getFullYear", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getFullYear", vm.NewNativeFunction(0, false, "getFullYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -109,7 +109,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getMonth", vm.NewNativeFunction(0, false, "getMonth", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getMonth", vm.NewNativeFunction(0, false, "getMonth", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -118,7 +118,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getDate", vm.NewNativeFunction(0, false, "getDate", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getDate", vm.NewNativeFunction(0, false, "getDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -127,7 +127,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getDay", vm.NewNativeFunction(0, false, "getDay", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getDay", vm.NewNativeFunction(0, false, "getDay", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -136,7 +136,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getHours", vm.NewNativeFunction(0, false, "getHours", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getHours", vm.NewNativeFunction(0, false, "getHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -145,7 +145,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getMinutes", vm.NewNativeFunction(0, false, "getMinutes", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getMinutes", vm.NewNativeFunction(0, false, "getMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -154,7 +154,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getSeconds", vm.NewNativeFunction(0, false, "getSeconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getSeconds", vm.NewNativeFunction(0, false, "getSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -163,7 +163,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getMilliseconds", vm.NewNativeFunction(0, false, "getMilliseconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getMilliseconds", vm.NewNativeFunction(0, false, "getMilliseconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -173,7 +173,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// UTC getter methods
-	dateProto.SetOwn("getUTCFullYear", vm.NewNativeFunction(0, false, "getUTCFullYear", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCFullYear", vm.NewNativeFunction(0, false, "getUTCFullYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -182,7 +182,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getUTCMonth", vm.NewNativeFunction(0, false, "getUTCMonth", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCMonth", vm.NewNativeFunction(0, false, "getUTCMonth", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -191,7 +191,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getUTCDate", vm.NewNativeFunction(0, false, "getUTCDate", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCDate", vm.NewNativeFunction(0, false, "getUTCDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -200,7 +200,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getUTCDay", vm.NewNativeFunction(0, false, "getUTCDay", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCDay", vm.NewNativeFunction(0, false, "getUTCDay", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -209,7 +209,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getUTCHours", vm.NewNativeFunction(0, false, "getUTCHours", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCHours", vm.NewNativeFunction(0, false, "getUTCHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -218,7 +218,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getUTCMinutes", vm.NewNativeFunction(0, false, "getUTCMinutes", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCMinutes", vm.NewNativeFunction(0, false, "getUTCMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -227,7 +227,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getUTCSeconds", vm.NewNativeFunction(0, false, "getUTCSeconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCSeconds", vm.NewNativeFunction(0, false, "getUTCSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -236,7 +236,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getUTCMilliseconds", vm.NewNativeFunction(0, false, "getUTCMilliseconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getUTCMilliseconds", vm.NewNativeFunction(0, false, "getUTCMilliseconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -245,7 +245,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("getTimezoneOffset", vm.NewNativeFunction(0, false, "getTimezoneOffset", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getTimezoneOffset", vm.NewNativeFunction(0, false, "getTimezoneOffset", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -256,7 +256,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setTime method
-	dateProto.SetOwn("setTime", vm.NewNativeFunction(1, false, "setTime", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setTime", vm.NewNativeFunction(1, false, "setTime", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -266,7 +266,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(newTimestamp), nil
 	}))
 
-	dateProto.SetOwn("setDate", vm.NewNativeFunction(1, false, "setDate", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setDate", vm.NewNativeFunction(1, false, "setDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -282,7 +282,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setMonth", vm.NewNativeFunction(2, false, "setMonth", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setMonth", vm.NewNativeFunction(2, false, "setMonth", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -305,7 +305,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setFullYear", vm.NewNativeFunction(3, false, "setFullYear", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setFullYear", vm.NewNativeFunction(3, false, "setFullYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -334,7 +334,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setHours", vm.NewNativeFunction(4, false, "setHours", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setHours", vm.NewNativeFunction(4, false, "setHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -368,7 +368,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setMinutes", vm.NewNativeFunction(3, false, "setMinutes", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setMinutes", vm.NewNativeFunction(3, false, "setMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -397,7 +397,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setSeconds", vm.NewNativeFunction(2, false, "setSeconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setSeconds", vm.NewNativeFunction(2, false, "setSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -421,7 +421,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setMilliseconds", vm.NewNativeFunction(1, false, "setMilliseconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setMilliseconds", vm.NewNativeFunction(1, false, "setMilliseconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -437,7 +437,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -446,7 +446,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toISOString", vm.NewNativeFunction(0, false, "toISOString", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toISOString", vm.NewNativeFunction(0, false, "toISOString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
@@ -455,7 +455,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toDateString", vm.NewNativeFunction(0, false, "toDateString", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toDateString", vm.NewNativeFunction(0, false, "toDateString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -464,7 +464,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toTimeString", vm.NewNativeFunction(0, false, "toTimeString", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toTimeString", vm.NewNativeFunction(0, false, "toTimeString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -473,7 +473,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			return vm.NumberValue(timestamp), nil
@@ -482,7 +482,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Locale methods
-	dateProto.SetOwn("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -492,7 +492,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toLocaleDateString", vm.NewNativeFunction(0, false, "toLocaleDateString", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toLocaleDateString", vm.NewNativeFunction(0, false, "toLocaleDateString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -502,7 +502,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString("Invalid Date"), nil
 	}))
 
-	dateProto.SetOwn("toLocaleTimeString", vm.NewNativeFunction(0, false, "toLocaleTimeString", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toLocaleTimeString", vm.NewNativeFunction(0, false, "toLocaleTimeString", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -513,7 +513,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// toJSON method
-	dateProto.SetOwn("toJSON", vm.NewNativeFunction(0, false, "toJSON", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("toJSON", vm.NewNativeFunction(0, false, "toJSON", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			// Check if the timestamp is NaN (invalid date)
@@ -529,7 +529,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Annex B methods
-	dateProto.SetOwn("getYear", vm.NewNativeFunction(0, false, "getYear", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("getYear", vm.NewNativeFunction(0, false, "getYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
@@ -539,7 +539,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setYear", vm.NewNativeFunction(1, false, "setYear", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setYear", vm.NewNativeFunction(1, false, "setYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		dateObj := thisDate.AsPlainObject()
 		if dateObj == nil {
@@ -553,13 +553,13 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		if len(args) == 0 {
 			// Set to NaN if no arguments
-			dateObj.SetOwn("__timestamp__", vm.NaN)
+			dateObj.SetOwnNonEnumerable("__timestamp__", vm.NaN)
 			return vm.NaN, nil
 		}
 
 		yearArg := args[0].ToFloat()
 		if math.IsNaN(yearArg) {
-			dateObj.SetOwn("__timestamp__", vm.NaN)
+			dateObj.SetOwnNonEnumerable("__timestamp__", vm.NaN)
 			return vm.NaN, nil
 		}
 
@@ -584,12 +584,12 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		newTimestamp := float64(newTime.UnixMilli())
 
 		// Update the date object
-		dateObj.SetOwn("__timestamp__", vm.NumberValue(newTimestamp))
+		dateObj.SetOwnNonEnumerable("__timestamp__", vm.NumberValue(newTimestamp))
 		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	// UTC setter methods
-	dateProto.SetOwn("setUTCFullYear", vm.NewNativeFunction(3, false, "setUTCFullYear", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setUTCFullYear", vm.NewNativeFunction(3, false, "setUTCFullYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -618,7 +618,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setUTCMonth", vm.NewNativeFunction(2, false, "setUTCMonth", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setUTCMonth", vm.NewNativeFunction(2, false, "setUTCMonth", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -641,7 +641,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setUTCDate", vm.NewNativeFunction(1, false, "setUTCDate", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setUTCDate", vm.NewNativeFunction(1, false, "setUTCDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -657,7 +657,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setUTCHours", vm.NewNativeFunction(4, false, "setUTCHours", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setUTCHours", vm.NewNativeFunction(4, false, "setUTCHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -691,7 +691,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setUTCMinutes", vm.NewNativeFunction(3, false, "setUTCMinutes", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setUTCMinutes", vm.NewNativeFunction(3, false, "setUTCMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -720,7 +720,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setUTCSeconds", vm.NewNativeFunction(2, false, "setUTCSeconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setUTCSeconds", vm.NewNativeFunction(2, false, "setUTCSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -744,7 +744,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	dateProto.SetOwn("setUTCMilliseconds", vm.NewNativeFunction(1, false, "setUTCMilliseconds", func(args []vm.Value) (vm.Value, error) {
+	dateProto.SetOwnNonEnumerable("setUTCMilliseconds", vm.NewNativeFunction(1, false, "setUTCMilliseconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
 		if len(args) < 1 {
 			return vm.NaN, nil
@@ -841,20 +841,20 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create Date object with timestamp stored as a property
 		dateObj := vm.NewObject(vm.NewValueFromPlainObject(dateProto))
-		dateObj.AsPlainObject().SetOwn("__timestamp__", vm.NumberValue(timestamp))
+		dateObj.AsPlainObject().SetOwnNonEnumerable("__timestamp__", vm.NumberValue(timestamp))
 		
 		return dateObj, nil
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(dateProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(dateProto))
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("now", vm.NewNativeFunction(0, false, "now", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("now", vm.NewNativeFunction(0, false, "now", func(args []vm.Value) (vm.Value, error) {
 		return vm.NumberValue(float64(time.Now().UnixMilli())), nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.NaN, nil
 		}
@@ -878,7 +878,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil // Invalid date
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("UTC", vm.NewNativeFunction(2, true, "UTC", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("UTC", vm.NewNativeFunction(2, true, "UTC", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.NaN, nil
 		}
@@ -915,7 +915,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	dateCtor := ctorWithProps
 
 	// Set constructor property on prototype
-	dateProto.SetOwn("constructor", dateCtor)
+	dateProto.SetOwnNonEnumerable("constructor", dateCtor)
 
 	// Set Date prototype in VM (if needed)
 	// vmInstance.DatePrototype = vm.NewValueFromPlainObject(dateProto)
@@ -936,6 +936,6 @@ func getDateTimestamp(dateValue vm.Value) (float64, bool) {
 
 func setDateTimestamp(dateValue vm.Value, timestamp float64) {
 	if obj := dateValue.AsPlainObject(); obj != nil {
-		obj.SetOwn("__timestamp__", vm.NumberValue(timestamp))
+		obj.SetOwnNonEnumerable("__timestamp__", vm.NumberValue(timestamp))
 	}
 }

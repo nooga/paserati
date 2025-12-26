@@ -39,7 +39,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	asyncGeneratorProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// next(value?) - Returns Promise that resolves to next yielded value
-	asyncGeneratorProto.SetOwn("next", vm.NewNativeFunction(1, false, "next", func(args []vm.Value) (vm.Value, error) {
+	asyncGeneratorProto.SetOwnNonEnumerable("next", vm.NewNativeFunction(1, false, "next", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() != vm.TypeAsyncGenerator {
 			return vm.Undefined, fmt.Errorf("TypeError: Method AsyncGenerator.prototype.next called on incompatible receiver")
@@ -49,8 +49,8 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// If generator is completed, return resolved promise with { value: undefined, done: true }
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
 			result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			result.SetOwn("value", vm.Undefined)
-			result.SetOwn("done", vm.BooleanValue(true))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			resultVal := vm.NewValueFromPlainObject(result)
 			return vmInstance.NewResolvedPromise(resultVal), nil
 		}
@@ -107,7 +107,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// return(value?) - Returns Promise that resolves to force generator completion
-	asyncGeneratorProto.SetOwn("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
+	asyncGeneratorProto.SetOwnNonEnumerable("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() != vm.TypeAsyncGenerator {
 			return vm.Undefined, fmt.Errorf("TypeError: Method AsyncGenerator.prototype.return called on incompatible receiver")
@@ -125,15 +125,15 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Return a promise that resolves to { value: returnValue, done: true }
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		result.SetOwn("value", returnValue)
-		result.SetOwn("done", vm.BooleanValue(true))
+		result.SetOwnNonEnumerable("value", returnValue)
+		result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 		resultVal := vm.NewValueFromPlainObject(result)
 
 		return vmInstance.NewResolvedPromise(resultVal), nil
 	}))
 
 	// throw(exception?) - Returns Promise that may reject based on generator handling
-	asyncGeneratorProto.SetOwn("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
+	asyncGeneratorProto.SetOwnNonEnumerable("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() != vm.TypeAsyncGenerator {
 			return vm.Undefined, fmt.Errorf("TypeError: Method AsyncGenerator.prototype.throw called on incompatible receiver")

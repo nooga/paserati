@@ -67,25 +67,25 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	callImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeCallImpl(vmInstance, args)
 	}
-	functionProtoObj.Properties.SetOwn("call", vm.NewNativeFunction(0, true, "call", callImpl))
+	functionProtoObj.Properties.SetOwnNonEnumerable("call", vm.NewNativeFunction(0, true, "call", callImpl))
 
 	// Function.prototype.apply
 	applyImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeApplyImpl(vmInstance, args)
 	}
-	functionProtoObj.Properties.SetOwn("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
+	functionProtoObj.Properties.SetOwnNonEnumerable("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
 
 	// Function.prototype.bind
 	bindImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeBindImpl(vmInstance, args)
 	}
-	functionProtoObj.Properties.SetOwn("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
+	functionProtoObj.Properties.SetOwnNonEnumerable("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
 
 	// Function.prototype.toString
 	toStringImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeToStringImpl(vmInstance, args)
 	}
-	functionProtoObj.Properties.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
+	functionProtoObj.Properties.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
 
 	// Create Function constructor
 	functionCtor := vm.NewNativeFunction(-1, true, "Function", func(args []vm.Value) (vm.Value, error) {
@@ -99,13 +99,13 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwn("prototype", functionProtoFn)
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", functionProtoFn)
 
 		functionCtor = ctorWithProps
 	}
 
 	// Set constructor property on prototype
-	functionProtoObj.Properties.SetOwn("constructor", functionCtor)
+	functionProtoObj.Properties.SetOwnNonEnumerable("constructor", functionCtor)
 
 	// Store in VM - Function.prototype is now a callable
 	vmInstance.FunctionPrototype = functionProtoFn

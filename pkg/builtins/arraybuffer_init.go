@@ -41,7 +41,7 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	arrayBufferProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add ArrayBuffer prototype properties and methods
-	arrayBufferProto.SetOwn("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
+	arrayBufferProto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
 		thisBuffer := vmInstance.GetThis()
 		if buffer := thisBuffer.AsArrayBuffer(); buffer != nil {
 			// Return 0 for detached buffers per spec
@@ -53,7 +53,7 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	arrayBufferProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	arrayBufferProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisBuffer := vmInstance.GetThis()
 		buffer := thisBuffer.AsArrayBuffer()
 		if buffer == nil {
@@ -129,10 +129,10 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(arrayBufferProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(arrayBufferProto))
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("isView", vm.NewNativeFunction(1, false, "isView", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isView", vm.NewNativeFunction(1, false, "isView", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
 		}
@@ -143,7 +143,7 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Set constructor property on prototype
-	arrayBufferProto.SetOwn("constructor", ctorWithProps)
+	arrayBufferProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
 	// Register ArrayBuffer constructor as global
 	return ctx.DefineGlobal("ArrayBuffer", ctorWithProps)

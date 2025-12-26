@@ -89,7 +89,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Add Generator prototype methods
 
 	// next(value?) - Resume generator execution and return next yielded value
-	generatorProto.SetOwn("next", vm.NewNativeFunction(1, false, "next", func(args []vm.Value) (vm.Value, error) {
+	generatorProto.SetOwnNonEnumerable("next", vm.NewNativeFunction(1, false, "next", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
 			// TypeError: Method Generator.prototype.next called on incompatible receiver
@@ -100,8 +100,8 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// If generator is completed, return { value: undefined, done: true }
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
 			result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			result.SetOwn("value", vm.Undefined)
-			result.SetOwn("done", vm.BooleanValue(true))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}
 
@@ -116,7 +116,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// return(value?) - Force generator to return and complete
-	generatorProto.SetOwn("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
+	generatorProto.SetOwnNonEnumerable("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
 			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype.return called on incompatible receiver")
@@ -197,8 +197,8 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			thisGen.Frame = nil
 
 			result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			result.SetOwn("value", returnValue)
-			result.SetOwn("done", vm.BooleanValue(true))
+			result.SetOwnNonEnumerable("value", returnValue)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}
 
@@ -208,7 +208,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// throw(exception?) - Throw an exception into the generator
-	generatorProto.SetOwn("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
+	generatorProto.SetOwnNonEnumerable("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
 			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype.throw called on incompatible receiver")
@@ -309,8 +309,8 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
 			// Wrap into Error object to match expected test messages
 			errObj := vm.NewObject(vm.Null).AsPlainObject()
-			errObj.SetOwn("name", vm.NewString("Error"))
-			errObj.SetOwn("message", vm.NewString("exception thrown: "+exception.ToString()))
+			errObj.SetOwnNonEnumerable("name", vm.NewString("Error"))
+			errObj.SetOwnNonEnumerable("message", vm.NewString("exception thrown: "+exception.ToString()))
 			return vm.Undefined, vmInstance.NewExceptionError(vm.NewValueFromPlainObject(errObj))
 		}
 

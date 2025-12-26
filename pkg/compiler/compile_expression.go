@@ -1076,12 +1076,17 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 		}
 	}
 
-	// Compile the right operand first
-	rightReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, rightReg)
-	_, err := c.compileNode(node.Right, rightReg)
-	if err != nil {
-		return BadRegister, err
+	// For delete operator, skip the general operand compilation since it handles
+	// MemberExpression and IndexExpression specially (must NOT call the getter)
+	var rightReg Register
+	if node.Operator != "delete" {
+		// Compile the right operand first (for operators that need the value)
+		rightReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, rightReg)
+		_, err := c.compileNode(node.Right, rightReg)
+		if err != nil {
+			return BadRegister, err
+		}
 	}
 
 	// Emit the corresponding unary opcode using hint as destination

@@ -52,7 +52,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 	bigintProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add BigInt prototype methods
-	bigintProto.SetOwn("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	bigintProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisBigInt := vmInstance.GetThis()
 
 		// Get the primitive BigInt value
@@ -91,7 +91,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(bigIntVal.Text(radix)), nil
 	}))
 
-	bigintProto.SetOwn("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+	bigintProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		thisBigInt := vmInstance.GetThis()
 
 		// Get the primitive BigInt value
@@ -117,7 +117,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(primitiveBigInt.AsBigInt().String()), nil
 	}))
 
-	bigintProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+	bigintProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisBigInt := vmInstance.GetThis()
 
 		// Return the primitive BigInt value
@@ -202,7 +202,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add BigInt static methods
-	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwn("asIntN", vm.NewNativeFunction(2, false, "asIntN", func(args []vm.Value) (vm.Value, error) {
+	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asIntN", vm.NewNativeFunction(2, false, "asIntN", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, fmt.Errorf("TypeError: BigInt.asIntN requires 2 arguments")
 		}
@@ -227,7 +227,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewBigInt(result), nil
 	}))
 
-	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwn("asUintN", vm.NewNativeFunction(2, false, "asUintN", func(args []vm.Value) (vm.Value, error) {
+	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asUintN", vm.NewNativeFunction(2, false, "asUintN", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, fmt.Errorf("TypeError: BigInt.asUintN requires 2 arguments")
 		}
@@ -252,10 +252,10 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewBigInt(result), nil
 	}))
 
-	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.BigIntPrototype)
+	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.BigIntPrototype)
 
 	// Set constructor property on prototype
-	bigintProto.SetOwn("constructor", bigintConstructor)
+	bigintProto.SetOwnNonEnumerable("constructor", bigintConstructor)
 
 	// Define BigInt constructor in global scope
 	return ctx.DefineGlobal("BigInt", bigintConstructor)

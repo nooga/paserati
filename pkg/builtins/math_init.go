@@ -87,77 +87,77 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mathObj.DefineOwnProperty("SQRT2", vm.NumberValue(math.Sqrt2), &f, &t, &f)
 
 	// Add methods
-	mathObj.SetOwn("abs", vm.NewNativeFunction(1, false, "abs", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("abs", vm.NewNativeFunction(1, false, "abs", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Abs(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("acos", vm.NewNativeFunction(1, false, "acos", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("acos", vm.NewNativeFunction(1, false, "acos", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Acos(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("acosh", vm.NewNativeFunction(1, false, "acosh", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("acosh", vm.NewNativeFunction(1, false, "acosh", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Acosh(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("asin", vm.NewNativeFunction(1, false, "asin", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("asin", vm.NewNativeFunction(1, false, "asin", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Asin(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("asinh", vm.NewNativeFunction(1, false, "asinh", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("asinh", vm.NewNativeFunction(1, false, "asinh", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Asinh(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("atan", vm.NewNativeFunction(1, false, "atan", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("atan", vm.NewNativeFunction(1, false, "atan", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Atan(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("atanh", vm.NewNativeFunction(1, false, "atanh", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("atanh", vm.NewNativeFunction(1, false, "atanh", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Atanh(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("atan2", vm.NewNativeFunction(2, false, "atan2", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("atan2", vm.NewNativeFunction(2, false, "atan2", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Atan2(args[0].ToFloat(), args[1].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("cbrt", vm.NewNativeFunction(1, false, "cbrt", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("cbrt", vm.NewNativeFunction(1, false, "cbrt", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Cbrt(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("ceil", vm.NewNativeFunction(1, false, "ceil", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("ceil", vm.NewNativeFunction(1, false, "ceil", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Ceil(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("clz32", vm.NewNativeFunction(1, false, "clz32", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("clz32", vm.NewNativeFunction(1, false, "clz32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(32), nil
 		}
@@ -176,42 +176,42 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(count)), nil
 	}))
 
-	mathObj.SetOwn("cos", vm.NewNativeFunction(1, false, "cos", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("cos", vm.NewNativeFunction(1, false, "cos", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Cos(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("cosh", vm.NewNativeFunction(1, false, "cosh", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("cosh", vm.NewNativeFunction(1, false, "cosh", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Cosh(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("exp", vm.NewNativeFunction(1, false, "exp", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("exp", vm.NewNativeFunction(1, false, "exp", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Exp(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("expm1", vm.NewNativeFunction(1, false, "expm1", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("expm1", vm.NewNativeFunction(1, false, "expm1", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Expm1(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("floor", vm.NewNativeFunction(1, false, "floor", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("floor", vm.NewNativeFunction(1, false, "floor", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Floor(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("fround", vm.NewNativeFunction(1, false, "fround", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("fround", vm.NewNativeFunction(1, false, "fround", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
@@ -219,7 +219,7 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(float32(args[0].ToFloat()))), nil
 	}))
 
-	mathObj.SetOwn("hypot", vm.NewNativeFunction(0, true, "hypot", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("hypot", vm.NewNativeFunction(0, true, "hypot", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(0), nil
 		}
@@ -231,7 +231,7 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(math.Sqrt(sum)), nil
 	}))
 
-	mathObj.SetOwn("imul", vm.NewNativeFunction(2, false, "imul", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("imul", vm.NewNativeFunction(2, false, "imul", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.NumberValue(0), nil
 		}
@@ -240,35 +240,35 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(a * b)), nil
 	}))
 
-	mathObj.SetOwn("log", vm.NewNativeFunction(1, false, "log", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("log", vm.NewNativeFunction(1, false, "log", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Log(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("log1p", vm.NewNativeFunction(1, false, "log1p", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("log1p", vm.NewNativeFunction(1, false, "log1p", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Log1p(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("log10", vm.NewNativeFunction(1, false, "log10", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("log10", vm.NewNativeFunction(1, false, "log10", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Log10(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("log2", vm.NewNativeFunction(1, false, "log2", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("log2", vm.NewNativeFunction(1, false, "log2", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Log2(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("max", vm.NewNativeFunction(0, true, "max", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("max", vm.NewNativeFunction(0, true, "max", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.Inf(-1)), nil // -Infinity
 		}
@@ -282,7 +282,7 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(max), nil
 	}))
 
-	mathObj.SetOwn("min", vm.NewNativeFunction(0, true, "min", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("min", vm.NewNativeFunction(0, true, "min", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.Inf(1)), nil // +Infinity
 		}
@@ -296,25 +296,25 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(min), nil
 	}))
 
-	mathObj.SetOwn("pow", vm.NewNativeFunction(2, false, "pow", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("pow", vm.NewNativeFunction(2, false, "pow", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Pow(args[0].ToFloat(), args[1].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("random", vm.NewNativeFunction(0, false, "random", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("random", vm.NewNativeFunction(0, false, "random", func(args []vm.Value) (vm.Value, error) {
 		return vm.NumberValue(rand.Float64()), nil
 	}))
 
-	mathObj.SetOwn("round", vm.NewNativeFunction(1, false, "round", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("round", vm.NewNativeFunction(1, false, "round", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Round(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("sign", vm.NewNativeFunction(1, false, "sign", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("sign", vm.NewNativeFunction(1, false, "sign", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
@@ -331,42 +331,42 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(-1), nil
 	}))
 
-	mathObj.SetOwn("sin", vm.NewNativeFunction(1, false, "sin", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("sin", vm.NewNativeFunction(1, false, "sin", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Sin(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("sinh", vm.NewNativeFunction(1, false, "sinh", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("sinh", vm.NewNativeFunction(1, false, "sinh", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Sinh(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("sqrt", vm.NewNativeFunction(1, false, "sqrt", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("sqrt", vm.NewNativeFunction(1, false, "sqrt", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Sqrt(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("tan", vm.NewNativeFunction(1, false, "tan", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("tan", vm.NewNativeFunction(1, false, "tan", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Tan(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("tanh", vm.NewNativeFunction(1, false, "tanh", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("tanh", vm.NewNativeFunction(1, false, "tanh", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
 		return vm.NumberValue(math.Tanh(args[0].ToFloat())), nil
 	}))
 
-	mathObj.SetOwn("trunc", vm.NewNativeFunction(1, false, "trunc", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("trunc", vm.NewNativeFunction(1, false, "trunc", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}

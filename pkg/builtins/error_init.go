@@ -42,13 +42,13 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	errorPrototype := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
 	// Set Error.prototype.name = "Error"
-	errorPrototype.SetOwn("name", vm.NewString("Error"))
+	errorPrototype.SetOwnNonEnumerable("name", vm.NewString("Error"))
 
 	// Set Error.prototype.message = ""
-	errorPrototype.SetOwn("message", vm.NewString(""))
+	errorPrototype.SetOwnNonEnumerable("message", vm.NewString(""))
 
 	// Error.prototype.toString()
-	errorPrototype.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	errorPrototype.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' context from VM
 		thisValue := vmInstance.GetThis()
 
@@ -95,12 +95,12 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		errorInstancePtr := errorInstance.AsPlainObject()
 
 		// Set properties
-		errorInstancePtr.SetOwn("name", vm.NewString("Error"))
-		errorInstancePtr.SetOwn("message", vm.NewString(message))
+		errorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("Error"))
+		errorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 
 		// Capture stack trace at the time of Error creation
 		stackTrace := vmInstance.CaptureStackTrace()
-		errorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
+		errorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
 
 		return errorInstance, nil
 	})
@@ -112,13 +112,13 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(errorPrototype))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(errorPrototype))
 
 		errorConstructor = ctorWithProps
 	}
 
 	// Set constructor property on prototype
-	errorPrototype.SetOwn("constructor", errorConstructor)
+	errorPrototype.SetOwnNonEnumerable("constructor", errorConstructor)
 	// DEBUG (optional): we could print or assert here if needed
 
 	// Store in VM
@@ -176,24 +176,24 @@ func (e *URIErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	vmInstance := ctx.VM
 	proto := vm.NewObject(vmInstance.ErrorPrototype).AsPlainObject()
-	proto.SetOwn("name", vm.NewString(name))
+	proto.SetOwnNonEnumerable("name", vm.NewString(name))
 	ctor := vm.NewNativeFunction(-1, true, name, func(args []vm.Value) (vm.Value, error) {
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
 		}
 		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
-		inst.SetOwn("name", vm.NewString(name))
-		inst.SetOwn("message", vm.NewString(message))
-		inst.SetOwn("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+		inst.SetOwnNonEnumerable("name", vm.NewString(name))
+		inst.SetOwnNonEnumerable("message", vm.NewString(message))
+		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 	if nf := ctor.AsNativeFunction(); nf != nil {
 		withProps := vm.NewNativeFunctionWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
-		withProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(proto))
-		proto.SetOwn("constructor", withProps)
+		withProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+		proto.SetOwnNonEnumerable("constructor", withProps)
 		return ctx.DefineGlobal(name, withProps)
 	}
-	proto.SetOwn("constructor", ctor)
+	proto.SetOwnNonEnumerable("constructor", ctor)
 	return ctx.DefineGlobal(name, ctor)
 }

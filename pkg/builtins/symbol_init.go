@@ -88,7 +88,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	symbolProto := vmInstance.SymbolPrototype.AsPlainObject()
 
 	// Symbol.prototype.toString
-	symbolProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	symbolProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' value
 		thisVal := vmInstance.GetThis()
 
@@ -106,7 +106,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Symbol.prototype.valueOf
-	symbolProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+	symbolProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' value
 		thisVal := vmInstance.GetThis()
 
@@ -132,10 +132,10 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property - use the VM's SymbolPrototype
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.SymbolPrototype)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.SymbolPrototype)
 
 	// Symbol.prototype.constructor
-	symbolProto.SetOwn("constructor", ctorWithProps)
+	symbolProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
 	// Initialize well-known symbols - reuse existing ones if already created
 	// This ensures symbols are true singletons across VM resets
@@ -170,7 +170,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("for", vm.NewNativeFunction(1, false, "for", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("for", vm.NewNativeFunction(1, false, "for", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			// Should throw TypeError, but return undefined for now
 			return vm.Undefined, nil
@@ -192,7 +192,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return sym, nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("keyFor", vm.NewNativeFunction(1, false, "keyFor", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("keyFor", vm.NewNativeFunction(1, false, "keyFor", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 || !args[0].IsSymbol() {
 			// Should throw TypeError, but return undefined for now
 			return vm.Undefined, nil
@@ -215,18 +215,18 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add well-known symbols as static properties
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("iterator", SymbolIterator)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("toStringTag", SymbolToStringTag)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("hasInstance", SymbolHasInstance)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("toPrimitive", SymbolToPrimitive)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("isConcatSpreadable", SymbolIsConcatSpreadable)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("species", SymbolSpecies)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("match", SymbolMatch)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("replace", SymbolReplace)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("search", SymbolSearch)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("split", SymbolSplit)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("unscopables", SymbolUnscopables)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("asyncIterator", SymbolAsyncIterator)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("iterator", SymbolIterator)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("toStringTag", SymbolToStringTag)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("hasInstance", SymbolHasInstance)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("toPrimitive", SymbolToPrimitive)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isConcatSpreadable", SymbolIsConcatSpreadable)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("species", SymbolSpecies)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("match", SymbolMatch)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("replace", SymbolReplace)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("search", SymbolSearch)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("split", SymbolSplit)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("unscopables", SymbolUnscopables)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asyncIterator", SymbolAsyncIterator)
 
 	symbolCtor := ctorWithProps
 

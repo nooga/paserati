@@ -80,7 +80,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mapProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Map prototype methods
-	mapProto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
@@ -102,7 +102,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("set", v, &w, &e, &c)
 	}
 
-	mapProto.SetOwn("get", vm.NewNativeFunction(1, false, "get", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("get", vm.NewNativeFunction(1, false, "get", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
@@ -121,7 +121,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("get", v, &w, &e, &c)
 	}
 
-	mapProto.SetOwn("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
@@ -140,7 +140,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("has", v, &w, &e, &c)
 	}
 
-	mapProto.SetOwn("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
@@ -159,7 +159,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("delete", v, &w, &e, &c)
 	}
 
-	mapProto.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
@@ -184,12 +184,12 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapObj := thisMap.AsMap()
 		return vm.IntegerValue(int32(mapObj.Size())), nil
 	})
-	mapProto.SetOwn("size", sizeGetter)
+	mapProto.SetOwnNonEnumerable("size", sizeGetter)
 	w, e, c := true, false, true
 	mapProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
 
 	// Minimal iterator helpers for harness usage -> implement proper iterators
-	mapProto.SetOwn("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, nil
@@ -205,10 +205,10 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		})
 		// Create iterator object
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwn("__data__", pairs)
-		it.SetOwn("__index__", vm.IntegerValue(0))
+		it.SetOwnNonEnumerable("__data__", pairs)
+		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
 		// next()
-		it.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
+		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			self := vmInstance.GetThis().AsPlainObject()
 			dataVal, _ := self.GetOwn("__data__")
 			idxVal, _ := self.GetOwn("__index__")
@@ -216,13 +216,13 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
 			if idx >= data.Length() {
-				result.SetOwn("value", vm.Undefined)
-				result.SetOwn("done", vm.BooleanValue(true))
+				result.SetOwnNonEnumerable("value", vm.Undefined)
+				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 				return vm.NewValueFromPlainObject(result), nil
 			}
-			result.SetOwn("value", data.Get(idx))
-			result.SetOwn("done", vm.BooleanValue(false))
-			self.SetOwn("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", data.Get(idx))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		// [Symbol.iterator]() { return this }
@@ -235,7 +235,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		mapProto.DefineOwnProperty("entries", v, &w, &e, &c)
 	}
-	mapProto.SetOwn("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, nil
@@ -247,9 +247,9 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			valsArr.Append(val)
 		})
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwn("__data__", vals)
-		it.SetOwn("__index__", vm.IntegerValue(0))
-		it.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
+		it.SetOwnNonEnumerable("__data__", vals)
+		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			self := vmInstance.GetThis().AsPlainObject()
 			dataVal, _ := self.GetOwn("__data__")
 			idxVal, _ := self.GetOwn("__index__")
@@ -257,13 +257,13 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
 			if idx >= data.Length() {
-				result.SetOwn("value", vm.Undefined)
-				result.SetOwn("done", vm.BooleanValue(true))
+				result.SetOwnNonEnumerable("value", vm.Undefined)
+				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 				return vm.NewValueFromPlainObject(result), nil
 			}
-			result.SetOwn("value", data.Get(idx))
-			result.SetOwn("done", vm.BooleanValue(false))
-			self.SetOwn("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", data.Get(idx))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -275,7 +275,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		mapProto.DefineOwnProperty("values", v, &w, &e, &c)
 	}
-	mapProto.SetOwn("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, nil
@@ -287,9 +287,9 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			ksArr.Append(key)
 		})
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwn("__data__", ks)
-		it.SetOwn("__index__", vm.IntegerValue(0))
-		it.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
+		it.SetOwnNonEnumerable("__data__", ks)
+		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			self := vmInstance.GetThis().AsPlainObject()
 			dataVal, _ := self.GetOwn("__data__")
 			idxVal, _ := self.GetOwn("__index__")
@@ -297,13 +297,13 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
 			if idx >= data.Length() {
-				result.SetOwn("value", vm.Undefined)
-				result.SetOwn("done", vm.BooleanValue(true))
+				result.SetOwnNonEnumerable("value", vm.Undefined)
+				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 				return vm.NewValueFromPlainObject(result), nil
 			}
-			result.SetOwn("value", data.Get(idx))
-			result.SetOwn("done", vm.BooleanValue(false))
-			self.SetOwn("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", data.Get(idx))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -369,7 +369,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Set constructor property on Map.prototype to point to Map constructor
-	mapProto.SetOwn("constructor", mapConstructor)
+	mapProto.SetOwnNonEnumerable("constructor", mapConstructor)
 	if v, ok := mapProto.GetOwn("constructor"); ok {
 		w, e, c := true, false, true // writable, not enumerable, configurable
 		mapProto.DefineOwnProperty("constructor", v, &w, &e, &c)
@@ -379,7 +379,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.MapPrototype = vm.NewValueFromPlainObject(mapProto)
 
 	// Add prototype property
-	mapConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.MapPrototype)
+	mapConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.MapPrototype)
 	if v, ok := mapConstructor.AsNativeFunctionWithProps().Properties.GetOwn("prototype"); ok {
 		w, e, c := false, false, false
 		mapConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("prototype", v, &w, &e, &c)

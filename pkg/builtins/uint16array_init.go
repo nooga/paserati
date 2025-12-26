@@ -50,10 +50,10 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	uint16ArrayProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add prototype properties
-	uint16ArrayProto.SetOwn("BYTES_PER_ELEMENT", vm.Number(2))
+	uint16ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(2))
 
 	// Add buffer getter
-	uint16ArrayProto.SetOwn("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Value{}, nil // TODO: Return proper ArrayBuffer value
@@ -62,7 +62,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add byteLength getter
-	uint16ArrayProto.SetOwn("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteLength())), nil
@@ -71,7 +71,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add byteOffset getter
-	uint16ArrayProto.SetOwn("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteOffset())), nil
@@ -80,7 +80,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add length getter
-	uint16ArrayProto.SetOwn("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetLength())), nil
@@ -89,7 +89,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add set method
-	uint16ArrayProto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil || len(args) == 0 {
@@ -118,7 +118,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add subarray method
-	uint16ArrayProto.SetOwn("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -165,7 +165,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add fill method
-	uint16ArrayProto.SetOwn("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -205,7 +205,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add slice method (creates new array)
-	uint16ArrayProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	uint16ArrayProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -305,12 +305,12 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(uint16ArrayProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(uint16ArrayProto))
 
 	// Add static properties and methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("BYTES_PER_ELEMENT", vm.Number(2))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(2))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayUint16, 0, 0, 0), nil
 		}
@@ -327,12 +327,12 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayUint16, 0, 0, 0), nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewTypedArray(vm.TypedArrayUint16, args, 0, 0), nil
 	}))
 
 	// Set constructor property on prototype
-	uint16ArrayProto.SetOwn("constructor", ctorWithProps)
+	uint16ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
 	// Register Uint16Array constructor as global
 	return ctx.DefineGlobal("Uint16Array", ctorWithProps)

@@ -82,7 +82,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	objectProto := vm.NewObject(vm.Null).AsPlainObject()
 
 	// Add prototype methods
-	objectProto.SetOwn("hasOwnProperty", vm.NewNativeFunction(1, false, "hasOwnProperty", func(args []vm.Value) (vm.Value, error) {
+	objectProto.SetOwnNonEnumerable("hasOwnProperty", vm.NewNativeFunction(1, false, "hasOwnProperty", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
@@ -140,7 +140,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// propertyIsEnumerable
-	objectProto.SetOwn("propertyIsEnumerable", vm.NewNativeFunction(1, false, "propertyIsEnumerable", func(args []vm.Value) (vm.Value, error) {
+	objectProto.SetOwnNonEnumerable("propertyIsEnumerable", vm.NewNativeFunction(1, false, "propertyIsEnumerable", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
@@ -191,7 +191,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("propertyIsEnumerable", v, &w, &e, &c)
 	}
 
-	objectProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	objectProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 
 		// Return appropriate string representation based on type
@@ -219,7 +219,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("toString", v, &w, &e, &c)
 	}
 
-	objectProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+	objectProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		return vmInstance.GetThis(), nil // Return this
 	}))
 	if v, ok := objectProto.GetOwn("valueOf"); ok {
@@ -227,7 +227,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("valueOf", v, &w, &e, &c)
 	}
 
-	objectProto.SetOwn("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+	objectProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		// Default implementation: call toString()
 		thisValue := vmInstance.GetThis()
 		if toStringMethod, err := vmInstance.GetProperty(thisValue, "toString"); err == nil && toStringMethod.IsCallable() {
@@ -240,7 +240,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("toLocaleString", v, &w, &e, &c)
 	}
 
-	objectProto.SetOwn("isPrototypeOf", vm.NewNativeFunction(1, false, "isPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+	objectProto.SetOwnNonEnumerable("isPrototypeOf", vm.NewNativeFunction(1, false, "isPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
@@ -320,9 +320,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Create BigInt wrapper object
 			wrapper := vm.NewObject(vmInstance.BigIntPrototype).AsPlainObject()
 			// Store the primitive value internally
-			wrapper.SetOwn("[[PrimitiveValue]]", arg)
+			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
 			// Add valueOf method that returns the primitive
-			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 				return arg, nil
 			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
@@ -330,8 +330,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 			// Create Number wrapper object
 			wrapper := vm.NewObject(vmInstance.NumberPrototype).AsPlainObject()
-			wrapper.SetOwn("[[PrimitiveValue]]", arg)
-			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
+			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 				return arg, nil
 			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
@@ -339,8 +339,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		case vm.TypeString:
 			// Create String wrapper object
 			wrapper := vm.NewObject(vmInstance.StringPrototype).AsPlainObject()
-			wrapper.SetOwn("[[PrimitiveValue]]", arg)
-			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
+			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 				return arg, nil
 			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
@@ -348,8 +348,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		case vm.TypeBoolean:
 			// Create Boolean wrapper object
 			wrapper := vm.NewObject(vmInstance.BooleanPrototype).AsPlainObject()
-			wrapper.SetOwn("[[PrimitiveValue]]", arg)
-			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
+			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 				return arg, nil
 			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
@@ -357,8 +357,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		case vm.TypeSymbol:
 			// Create Symbol wrapper object
 			wrapper := vm.NewObject(vmInstance.SymbolPrototype).AsPlainObject()
-			wrapper.SetOwn("[[PrimitiveValue]]", arg)
-			wrapper.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
+			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 				return arg, nil
 			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
@@ -376,66 +376,66 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(objectProto))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(objectProto))
 		if v, ok := ctorPropsObj.Properties.GetOwn("prototype"); ok {
 			w, e, c := false, false, false
 			ctorPropsObj.Properties.DefineOwnProperty("prototype", v, &w, &e, &c)
 		}
 
 		// Add static methods
-		ctorPropsObj.Properties.SetOwn("create", vm.NewNativeFunction(2, false, "create", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("create", vm.NewNativeFunction(2, false, "create", func(args []vm.Value) (vm.Value, error) {
 			return objectCreateWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("keys", vm.NewNativeFunction(1, false, "keys", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("keys", vm.NewNativeFunction(1, false, "keys", func(args []vm.Value) (vm.Value, error) {
 			return objectKeysWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("values", vm.NewNativeFunction(1, false, "values", objectValuesImpl))
-		ctorPropsObj.Properties.SetOwn("entries", vm.NewNativeFunction(1, false, "entries", objectEntriesImpl))
-		ctorPropsObj.Properties.SetOwn("getOwnPropertyNames", vm.NewNativeFunction(1, false, "getOwnPropertyNames", objectGetOwnPropertyNamesImpl))
-		ctorPropsObj.Properties.SetOwn("getOwnPropertySymbols", vm.NewNativeFunction(1, false, "getOwnPropertySymbols", objectGetOwnPropertySymbolsImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("values", vm.NewNativeFunction(1, false, "values", objectValuesImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("entries", vm.NewNativeFunction(1, false, "entries", objectEntriesImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertyNames", vm.NewNativeFunction(1, false, "getOwnPropertyNames", objectGetOwnPropertyNamesImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertySymbols", vm.NewNativeFunction(1, false, "getOwnPropertySymbols", objectGetOwnPropertySymbolsImpl))
 		// Reflect-like ownKeys: strings first, then symbols
-		ctorPropsObj.Properties.SetOwn("__ownKeys", vm.NewNativeFunction(1, false, "__ownKeys", reflectOwnKeysImpl))
-		ctorPropsObj.Properties.SetOwn("assign", vm.NewNativeFunction(1, true, "assign", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("__ownKeys", vm.NewNativeFunction(1, false, "__ownKeys", reflectOwnKeysImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("assign", vm.NewNativeFunction(1, true, "assign", func(args []vm.Value) (vm.Value, error) {
 			return objectAssignWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", objectHasOwnImpl))
-		ctorPropsObj.Properties.SetOwn("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
-		ctorPropsObj.Properties.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", objectHasOwnImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 			return objectGetPrototypeOfWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 			return objectSetPrototypeOfWithVM(vmInstance, args)
 		}))
 		// defineProperty delegates to the full implementation with symbol/accessor support
-		ctorPropsObj.Properties.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
 			return objectDefinePropertyWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("defineProperties", vm.NewNativeFunction(2, false, "defineProperties", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("defineProperties", vm.NewNativeFunction(2, false, "defineProperties", func(args []vm.Value) (vm.Value, error) {
 			return objectDefinePropertiesWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
 			return objectGetOwnPropertyDescriptorWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("isExtensible", vm.NewNativeFunction(1, false, "isExtensible", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("isExtensible", vm.NewNativeFunction(1, false, "isExtensible", func(args []vm.Value) (vm.Value, error) {
 			return objectIsExtensibleWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
 			return objectPreventExtensionsWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("freeze", vm.NewNativeFunction(1, false, "freeze", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("freeze", vm.NewNativeFunction(1, false, "freeze", func(args []vm.Value) (vm.Value, error) {
 			return objectFreezeWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("seal", vm.NewNativeFunction(1, false, "seal", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("seal", vm.NewNativeFunction(1, false, "seal", func(args []vm.Value) (vm.Value, error) {
 			return objectSealWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("isFrozen", vm.NewNativeFunction(1, false, "isFrozen", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("isFrozen", vm.NewNativeFunction(1, false, "isFrozen", func(args []vm.Value) (vm.Value, error) {
 			return objectIsFrozenWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwn("isSealed", vm.NewNativeFunction(1, false, "isSealed", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("isSealed", vm.NewNativeFunction(1, false, "isSealed", func(args []vm.Value) (vm.Value, error) {
 			return objectIsSealedWithVM(vmInstance, args)
 		}))
 		// Object.is
-		ctorPropsObj.Properties.SetOwn("is", vm.NewNativeFunction(2, false, "is", func(args []vm.Value) (vm.Value, error) {
+		ctorPropsObj.Properties.SetOwnNonEnumerable("is", vm.NewNativeFunction(2, false, "is", func(args []vm.Value) (vm.Value, error) {
 			if len(args) < 2 {
 				return vm.BooleanValue(false), nil
 			}
@@ -446,7 +446,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Set constructor property on prototype
-	objectProto.SetOwn("constructor", objectCtor)
+	objectProto.SetOwnNonEnumerable("constructor", objectCtor)
 	if v, ok := objectProto.GetOwn("constructor"); ok {
 		w, e, c := true, false, true
 		objectProto.DefineOwnProperty("constructor", v, &w, &e, &c)
@@ -1167,12 +1167,12 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			// Box to Boolean object (we'd need to add NewBooleanObject)
 			// For now, create a plain object with [[PrimitiveValue]]
 			obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			obj.SetOwn("[[PrimitiveValue]]", target)
+			obj.SetOwnNonEnumerable("[[PrimitiveValue]]", target)
 			target = vm.NewValueFromPlainObject(obj)
 		case vm.TypeSymbol:
 			// Box to Symbol object
 			obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			obj.SetOwn("[[PrimitiveValue]]", target)
+			obj.SetOwnNonEnumerable("[[PrimitiveValue]]", target)
 			target = vm.NewValueFromPlainObject(obj)
 		}
 	}
@@ -1192,7 +1192,7 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				value, _ := plainObj.GetOwn(key)
 				// Set on target
 				if targetPlain := target.AsPlainObject(); targetPlain != nil {
-					targetPlain.SetOwn(key, value)
+					targetPlain.SetOwnNonEnumerable(key, value)
 				} else if targetDict := target.AsDictObject(); targetDict != nil {
 					targetDict.SetOwn(key, value)
 				}
@@ -1202,7 +1202,7 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				value, _ := dictObj.GetOwn(key)
 				// Set on target
 				if targetPlain := target.AsPlainObject(); targetPlain != nil {
-					targetPlain.SetOwn(key, value)
+					targetPlain.SetOwnNonEnumerable(key, value)
 				} else if targetDict := target.AsDictObject(); targetDict != nil {
 					targetDict.SetOwn(key, value)
 				}
@@ -1214,14 +1214,14 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				value := arrObj.Get(i)
 				// Set on target
 				if targetPlain := target.AsPlainObject(); targetPlain != nil {
-					targetPlain.SetOwn(key, value)
+					targetPlain.SetOwnNonEnumerable(key, value)
 				} else if targetDict := target.AsDictObject(); targetDict != nil {
 					targetDict.SetOwn(key, value)
 				}
 			}
 			// Also copy length property
 			if targetPlain := target.AsPlainObject(); targetPlain != nil {
-				targetPlain.SetOwn("length", vm.NumberValue(float64(arrObj.Length())))
+				targetPlain.SetOwnNonEnumerable("length", vm.NumberValue(float64(arrObj.Length())))
 			} else if targetDict := target.AsDictObject(); targetDict != nil {
 				targetDict.SetOwn("length", vm.NumberValue(float64(arrObj.Length())))
 			}
@@ -1295,7 +1295,7 @@ func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
 			if entryArr := entry.AsArray(); entryArr != nil && entryArr.Length() >= 2 {
 				key := entryArr.Get(0).ToString()
 				value := entryArr.Get(1)
-				resultObj.SetOwn(key, value)
+				resultObj.SetOwnNonEnumerable(key, value)
 			}
 		}
 	}

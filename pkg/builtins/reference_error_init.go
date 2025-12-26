@@ -49,7 +49,7 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	referenceErrorPrototype := vm.NewObject(errorPrototype).AsPlainObject()
 	
 	// Override the name property to "ReferenceError"
-	referenceErrorPrototype.SetOwn("name", vm.NewString("ReferenceError"))
+	referenceErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("ReferenceError"))
 	
 	// ReferenceError constructor function
 	referenceErrorConstructor := vm.NewNativeFunction(-1, true, "ReferenceError", func(args []vm.Value) (vm.Value, error) {
@@ -64,12 +64,12 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		referenceErrorInstancePtr := referenceErrorInstance.AsPlainObject()
 		
 		// Set properties (override name, set message and stack)
-		referenceErrorInstancePtr.SetOwn("name", vm.NewString("ReferenceError"))
-		referenceErrorInstancePtr.SetOwn("message", vm.NewString(message))
+		referenceErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("ReferenceError"))
+		referenceErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 		
 		// Capture stack trace at the time of ReferenceError creation
 		stackTrace := vmInstance.CaptureStackTrace()
-		referenceErrorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
+		referenceErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
 		
 		return referenceErrorInstance, nil
 	})
@@ -81,13 +81,13 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(referenceErrorPrototype))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(referenceErrorPrototype))
 
 		referenceErrorConstructor = ctorWithProps
 	}
 
 	// Set constructor property on prototype
-	referenceErrorPrototype.SetOwn("constructor", referenceErrorConstructor)
+	referenceErrorPrototype.SetOwnNonEnumerable("constructor", referenceErrorConstructor)
 
 	// Store in VM for later use
 	vmInstance.ReferenceErrorPrototype = vm.NewValueFromPlainObject(referenceErrorPrototype)

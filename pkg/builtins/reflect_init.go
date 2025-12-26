@@ -47,7 +47,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	reflectObj := vm.NewObject(vm.Undefined).AsPlainObject()
 
 	// Reflect.get(target, propertyKey [, receiver])
-	reflectObj.SetOwn("get", vm.NewNativeFunction(2, false, "get", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("get", vm.NewNativeFunction(2, false, "get", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.get requires at least 2 arguments")
 		}
@@ -83,7 +83,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.set(target, propertyKey, value [, receiver])
-	reflectObj.SetOwn("set", vm.NewNativeFunction(3, false, "set", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("set", vm.NewNativeFunction(3, false, "set", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 3 {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set requires at least 3 arguments")
 		}
@@ -98,7 +98,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Perform simple property set
 		switch target.Type() {
 		case vm.TypeObject:
-			target.AsPlainObject().SetOwn(propKey, value)
+			target.AsPlainObject().SetOwnNonEnumerable(propKey, value)
 			return vm.BooleanValue(true), nil
 		case vm.TypeDictObject:
 			target.AsDictObject().SetOwn(propKey, value)
@@ -119,7 +119,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.has(target, propertyKey)
-	reflectObj.SetOwn("has", vm.NewNativeFunction(2, false, "has", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("has", vm.NewNativeFunction(2, false, "has", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.has requires 2 arguments")
 		}
@@ -150,7 +150,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.deleteProperty(target, propertyKey)
-	reflectObj.SetOwn("deleteProperty", vm.NewNativeFunction(2, false, "deleteProperty", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("deleteProperty", vm.NewNativeFunction(2, false, "deleteProperty", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.deleteProperty requires 2 arguments")
 		}
@@ -167,12 +167,12 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.getPrototypeOf(target) - reuse Object.getPrototypeOf
-	reflectObj.SetOwn("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		return objectGetPrototypeOfWithVM(vmInstance, args)
 	}))
 
 	// Reflect.setPrototypeOf(target, prototype)
-	reflectObj.SetOwn("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		result, err := objectSetPrototypeOfWithVM(vmInstance, args)
 		if err != nil {
 			return vm.BooleanValue(false), err
@@ -182,7 +182,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.defineProperty(target, propertyKey, attributes)
-	reflectObj.SetOwn("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
 		result, err := objectDefinePropertyWithVM(vmInstance, args)
 		if err != nil {
 			return vm.BooleanValue(false), err
@@ -192,12 +192,12 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.getOwnPropertyDescriptor(target, propertyKey)
-	reflectObj.SetOwn("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
 		return objectGetOwnPropertyDescriptorWithVM(vmInstance, args)
 	}))
 
 	// Reflect.ownKeys(target) - returns array of all own property keys
-	reflectObj.SetOwn("ownKeys", vm.NewNativeFunction(1, false, "ownKeys", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("ownKeys", vm.NewNativeFunction(1, false, "ownKeys", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.ownKeys requires 1 argument")
 		}
@@ -258,12 +258,12 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.isExtensible(target)
-	reflectObj.SetOwn("isExtensible", vm.NewNativeFunction(1, false, "isExtensible", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("isExtensible", vm.NewNativeFunction(1, false, "isExtensible", func(args []vm.Value) (vm.Value, error) {
 		return objectIsExtensibleWithVM(vmInstance, args)
 	}))
 
 	// Reflect.preventExtensions(target)
-	reflectObj.SetOwn("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
 		result, err := objectPreventExtensionsWithVM(vmInstance, args)
 		if err != nil {
 			return vm.BooleanValue(false), err
@@ -272,7 +272,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.apply(target, thisArgument, argumentsList)
-	reflectObj.SetOwn("apply", vm.NewNativeFunction(3, false, "apply", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("apply", vm.NewNativeFunction(3, false, "apply", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 3 {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.apply requires 3 arguments")
 		}
@@ -301,7 +301,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.construct(target, argumentsList [, newTarget])
-	reflectObj.SetOwn("construct", vm.NewNativeFunction(2, false, "construct", func(args []vm.Value) (vm.Value, error) {
+	reflectObj.SetOwnNonEnumerable("construct", vm.NewNativeFunction(2, false, "construct", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.construct requires at least 2 arguments")
 		}

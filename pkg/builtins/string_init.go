@@ -84,7 +84,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	stringProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add String prototype methods
-	stringProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis()
 
 		// If this is a primitive string, return it
@@ -103,7 +103,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, fmt.Errorf("String.prototype.valueOf requires that 'this' be a String")
 	}))
 
-	stringProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis()
 
 		// If this is a primitive string, return it
@@ -124,7 +124,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, fmt.Errorf("String.prototype.toString requires that 'this' be a String")
 	}))
 
-	stringProto.SetOwn("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.NewString(""), nil
@@ -136,7 +136,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(string(thisStr[index])), nil
 	}))
 
-	stringProto.SetOwn("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.NumberValue(float64(0x7FFFFFFF)), nil // NaN equivalent
@@ -150,7 +150,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(utf16Units[index])), nil
 	}))
 
-	stringProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
 		if len(args) < 1 {
@@ -183,7 +183,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(thisStr[start:end]), nil
 	}))
 
-	stringProto.SetOwn("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
 		if len(args) < 1 {
@@ -211,7 +211,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(thisStr[start:end]), nil
 	}))
 
-	stringProto.SetOwn("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		length := len(thisStr)
 		if len(args) < 1 {
@@ -240,7 +240,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(thisStr[start:end]), nil
 	}))
 
-	stringProto.SetOwn("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
@@ -263,7 +263,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(position + index)), nil
 	}))
 
-	stringProto.SetOwn("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
@@ -282,7 +282,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(index)), nil
 	}))
 
-	stringProto.SetOwn("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
@@ -301,7 +301,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(strings.Contains(thisStr[position:], searchStr)), nil
 	}))
 
-	stringProto.SetOwn("startsWith", vm.NewNativeFunction(2, false, "startsWith", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("startsWith", vm.NewNativeFunction(2, false, "startsWith", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
@@ -320,7 +320,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(strings.HasPrefix(thisStr[position:], searchStr)), nil
 	}))
 
-	stringProto.SetOwn("endsWith", vm.NewNativeFunction(2, false, "endsWith", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("endsWith", vm.NewNativeFunction(2, false, "endsWith", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
@@ -341,32 +341,32 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(strings.HasSuffix(thisStr[:length], searchStr)), nil
 	}))
 
-	stringProto.SetOwn("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.ToLower(thisStr)), nil
 	}))
 
-	stringProto.SetOwn("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.ToUpper(thisStr)), nil
 	}))
 
-	stringProto.SetOwn("trim", vm.NewNativeFunction(0, false, "trim", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("trim", vm.NewNativeFunction(0, false, "trim", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.TrimSpace(thisStr)), nil
 	}))
 
-	stringProto.SetOwn("trimStart", vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("trimStart", vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.TrimLeftFunc(thisStr, unicode.IsSpace)), nil
 	}))
 
-	stringProto.SetOwn("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		return vm.NewString(strings.TrimRightFunc(thisStr, unicode.IsSpace)), nil
 	}))
 
-	stringProto.SetOwn("repeat", vm.NewNativeFunction(1, false, "repeat", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("repeat", vm.NewNativeFunction(1, false, "repeat", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.NewString(""), nil
@@ -382,7 +382,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(strings.Repeat(thisStr, count)), nil
 	}))
 
-	stringProto.SetOwn("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		result := thisStr
 		for i := 0; i < len(args); i++ {
@@ -391,7 +391,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(result), nil
 	}))
 
-	stringProto.SetOwn("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) == 0 {
 			// No separator - return array with whole string
@@ -453,7 +453,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}))
 
-	stringProto.SetOwn("replace", vm.NewNativeFunction(2, false, "replace", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("replace", vm.NewNativeFunction(2, false, "replace", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 2 {
 			return vm.NewString(thisStr), nil
@@ -488,7 +488,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}))
 
-	stringProto.SetOwn("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.Null, nil
@@ -535,7 +535,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}))
 
-	stringProto.SetOwn("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) (vm.Value, error) {
 		thisStr := vmInstance.GetThis().ToString()
 		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
@@ -620,10 +620,10 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(stringProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(stringProto))
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("fromCharCode", vm.NewNativeFunction(0, true, "fromCharCode", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("fromCharCode", vm.NewNativeFunction(0, true, "fromCharCode", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewString(""), nil
 		}
@@ -638,7 +638,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	stringCtor = ctorWithProps
 
 	// Set constructor property on prototype
-	stringProto.SetOwn("constructor", stringCtor)
+	stringProto.SetOwnNonEnumerable("constructor", stringCtor)
 
 	// Add Symbol.iterator implementation for strings (native symbol key)
 	strIterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
@@ -665,19 +665,19 @@ func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
 	currentIndex := 0
 
 	// Add next() method to iterator
-	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		// Create iterator result object {value, done}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
 		if currentIndex >= len(str) {
 			// Iterator is exhausted
-			result.SetOwn("value", vm.Undefined)
-			result.SetOwn("done", vm.BooleanValue(true))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 		} else {
 			// Return current character and advance
 			char := string(str[currentIndex])
-			result.SetOwn("value", vm.NewString(char))
-			result.SetOwn("done", vm.BooleanValue(false))
+			result.SetOwnNonEnumerable("value", vm.NewString(char))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
 			currentIndex++
 		}
 

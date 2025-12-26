@@ -49,7 +49,7 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	syntaxErrorPrototype := vm.NewObject(errorPrototype).AsPlainObject()
 	
 	// Override the name property to "SyntaxError"
-	syntaxErrorPrototype.SetOwn("name", vm.NewString("SyntaxError"))
+	syntaxErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))
 	
 	// SyntaxError constructor function
 	syntaxErrorConstructor := vm.NewNativeFunction(-1, true, "SyntaxError", func(args []vm.Value) (vm.Value, error) {
@@ -64,12 +64,12 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		syntaxErrorInstancePtr := syntaxErrorInstance.AsPlainObject()
 		
 		// Set properties (override name, set message and stack)
-		syntaxErrorInstancePtr.SetOwn("name", vm.NewString("SyntaxError"))
-		syntaxErrorInstancePtr.SetOwn("message", vm.NewString(message))
+		syntaxErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))
+		syntaxErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 		
 		// Capture stack trace at the time of SyntaxError creation
 		stackTrace := vmInstance.CaptureStackTrace()
-		syntaxErrorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
+		syntaxErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
 		
 		return syntaxErrorInstance, nil
 	})
@@ -81,13 +81,13 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(syntaxErrorPrototype))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(syntaxErrorPrototype))
 
 		syntaxErrorConstructor = ctorWithProps
 	}
 
 	// Set constructor property on prototype
-	syntaxErrorPrototype.SetOwn("constructor", syntaxErrorConstructor)
+	syntaxErrorPrototype.SetOwnNonEnumerable("constructor", syntaxErrorConstructor)
 
 	// Define globally
 	return ctx.DefineGlobal("SyntaxError", syntaxErrorConstructor)

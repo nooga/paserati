@@ -336,8 +336,8 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			// Fallback: throw a generic error object
 			errObj := vm.NewObject(ctx.VM.ErrorPrototype).AsPlainObject()
-			errObj.SetOwn("name", vm.NewString("SyntaxError"))
-			errObj.SetOwn("message", vm.NewString("Invalid format control character in source"))
+			errObj.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))
+			errObj.SetOwnNonEnumerable("message", vm.NewString("Invalid format control character in source"))
 			return vm.Undefined, ctx.VM.NewExceptionError(vm.NewValueFromPlainObject(errObj))
 		}
 

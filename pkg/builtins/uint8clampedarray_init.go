@@ -50,10 +50,10 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	uint8ClampedArrayProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add prototype properties
-	uint8ClampedArrayProto.SetOwn("BYTES_PER_ELEMENT", vm.Number(1))
+	uint8ClampedArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
 
 	// Add buffer getter
-	uint8ClampedArrayProto.SetOwn("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Value{}, nil // TODO: Return proper ArrayBuffer value
@@ -62,7 +62,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add byteLength getter
-	uint8ClampedArrayProto.SetOwn("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteLength())), nil
@@ -71,7 +71,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add byteOffset getter
-	uint8ClampedArrayProto.SetOwn("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteOffset())), nil
@@ -80,7 +80,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add length getter
-	uint8ClampedArrayProto.SetOwn("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetLength())), nil
@@ -89,7 +89,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add set method
-	uint8ClampedArrayProto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil || len(args) == 0 {
@@ -118,7 +118,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add fill method
-	uint8ClampedArrayProto.SetOwn("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -158,7 +158,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add subarray method
-	uint8ClampedArrayProto.SetOwn("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -205,7 +205,7 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add slice method (creates new array)
-	uint8ClampedArrayProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	uint8ClampedArrayProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -305,12 +305,12 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(uint8ClampedArrayProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(uint8ClampedArrayProto))
 
 	// Add static properties and methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("BYTES_PER_ELEMENT", vm.Number(1))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayUint8Clamped, 0, 0, 0), nil
 		}
@@ -327,12 +327,12 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayUint8Clamped, 0, 0, 0), nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewTypedArray(vm.TypedArrayUint8Clamped, args, 0, 0), nil
 	}))
 
 	// Set constructor property on prototype
-	uint8ClampedArrayProto.SetOwn("constructor", ctorWithProps)
+	uint8ClampedArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
 	// Register Uint8ClampedArray constructor as global
 	return ctx.DefineGlobal("Uint8ClampedArray", ctorWithProps)

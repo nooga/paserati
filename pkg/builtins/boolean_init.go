@@ -48,7 +48,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 	booleanProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Boolean prototype methods
-	booleanProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	booleanProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisBool := vmInstance.GetThis()
 
 		// If this is a primitive boolean, convert it
@@ -77,7 +77,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, fmt.Errorf("Boolean.prototype.toString requires that 'this' be a Boolean")
 	}))
 
-	booleanProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+	booleanProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisBool := vmInstance.GetThis()
 
 		// If this is a primitive boolean, return it
@@ -157,10 +157,10 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property to constructor
-	booleanConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.BooleanPrototype)
+	booleanConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.BooleanPrototype)
 
 	// Set constructor property on prototype
-	booleanProto.SetOwn("constructor", booleanConstructor)
+	booleanProto.SetOwnNonEnumerable("constructor", booleanConstructor)
 
 	// Define Boolean constructor in global scope
 	return ctx.DefineGlobal("Boolean", booleanConstructor)

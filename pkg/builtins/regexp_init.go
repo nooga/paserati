@@ -57,7 +57,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	regexpProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add RegExp prototype methods
-	regexpProto.SetOwn("test", vm.NewNativeFunction(1, false, "test", func(args []vm.Value) (vm.Value, error) {
+	regexpProto.SetOwnNonEnumerable("test", vm.NewNativeFunction(1, false, "test", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
 			return vm.Undefined, nil
@@ -71,7 +71,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(matched), nil
 	}))
 
-	regexpProto.SetOwn("exec", vm.NewNativeFunction(1, false, "exec", func(args []vm.Value) (vm.Value, error) {
+	regexpProto.SetOwnNonEnumerable("exec", vm.NewNativeFunction(1, false, "exec", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
 			return vm.Undefined, nil
@@ -113,7 +113,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return result, nil
 	}))
 
-	regexpProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	regexpProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
 			return vm.Undefined, nil
@@ -155,7 +155,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Set constructor property on RegExp.prototype to point to RegExp constructor
-	regexpProto.SetOwn("constructor", regexpCtor)
+	regexpProto.SetOwnNonEnumerable("constructor", regexpCtor)
 	if v, ok := regexpProto.GetOwn("constructor"); ok {
 		w, e, c := true, false, true // writable, not enumerable, configurable
 		regexpProto.DefineOwnProperty("constructor", v, &w, &e, &c)
@@ -165,7 +165,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.RegExpPrototype = vm.NewValueFromPlainObject(regexpProto)
 
 	// Set up prototype relationship
-	regexpCtor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(regexpProto))
+	regexpCtor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(regexpProto))
 
 	return ctx.DefineGlobal("RegExp", regexpCtor)
 }

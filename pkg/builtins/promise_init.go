@@ -80,7 +80,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	promiseProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Promise.prototype.then(onFulfilled, onRejected)
-	promiseProto.SetOwn("then", vm.NewNativeFunction(2, false, "then", func(args []vm.Value) (vm.Value, error) {
+	promiseProto.SetOwnNonEnumerable("then", vm.NewNativeFunction(2, false, "then", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		onFulfilled := vm.Undefined
 		onRejected := vm.Undefined
@@ -96,7 +96,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Promise.prototype.catch(onRejected)
-	promiseProto.SetOwn("catch", vm.NewNativeFunction(1, false, "catch", func(args []vm.Value) (vm.Value, error) {
+	promiseProto.SetOwnNonEnumerable("catch", vm.NewNativeFunction(1, false, "catch", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		onRejected := vm.Undefined
 		if len(args) > 0 {
@@ -108,7 +108,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Promise.prototype.finally(onFinally)
-	promiseProto.SetOwn("finally", vm.NewNativeFunction(1, false, "finally", func(args []vm.Value) (vm.Value, error) {
+	promiseProto.SetOwnNonEnumerable("finally", vm.NewNativeFunction(1, false, "finally", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		onFinally := vm.Undefined
 		if len(args) > 0 {
@@ -151,10 +151,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	props := promiseCtor.AsNativeFunctionWithProps().Properties
 
 	// Promise.prototype
-	props.SetOwn("prototype", vmInstance.PromisePrototype)
+	props.SetOwnNonEnumerable("prototype", vmInstance.PromisePrototype)
 
 	// Promise.resolve(value)
-	props.SetOwn("resolve", vm.NewNativeFunction(1, false, "resolve", func(args []vm.Value) (vm.Value, error) {
+	props.SetOwnNonEnumerable("resolve", vm.NewNativeFunction(1, false, "resolve", func(args []vm.Value) (vm.Value, error) {
 		value := vm.Undefined
 		if len(args) > 0 {
 			value = args[0]
@@ -169,7 +169,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Promise.reject(reason)
-	props.SetOwn("reject", vm.NewNativeFunction(1, false, "reject", func(args []vm.Value) (vm.Value, error) {
+	props.SetOwnNonEnumerable("reject", vm.NewNativeFunction(1, false, "reject", func(args []vm.Value) (vm.Value, error) {
 		reason := vm.Undefined
 		if len(args) > 0 {
 			reason = args[0]
@@ -207,7 +207,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Promise.all(iterable)
-	props.SetOwn("all", vm.NewNativeFunction(1, false, "all", func(args []vm.Value) (vm.Value, error) {
+	props.SetOwnNonEnumerable("all", vm.NewNativeFunction(1, false, "all", func(args []vm.Value) (vm.Value, error) {
 		iterable := vm.Undefined
 		if len(args) > 0 {
 			iterable = args[0]
@@ -312,7 +312,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Promise.race(iterable)
-	props.SetOwn("race", vm.NewNativeFunction(1, false, "race", func(args []vm.Value) (vm.Value, error) {
+	props.SetOwnNonEnumerable("race", vm.NewNativeFunction(1, false, "race", func(args []vm.Value) (vm.Value, error) {
 		iterable := vm.Undefined
 		if len(args) > 0 {
 			iterable = args[0]
@@ -395,7 +395,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Promise.any(iterable)
-	props.SetOwn("any", vm.NewNativeFunction(1, false, "any", func(args []vm.Value) (vm.Value, error) {
+	props.SetOwnNonEnumerable("any", vm.NewNativeFunction(1, false, "any", func(args []vm.Value) (vm.Value, error) {
 		iterable := vm.Undefined
 		if len(args) > 0 {
 			iterable = args[0]
@@ -495,7 +495,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Promise.allSettled(iterable)
-	props.SetOwn("allSettled", vm.NewNativeFunction(1, false, "allSettled", func(args []vm.Value) (vm.Value, error) {
+	props.SetOwnNonEnumerable("allSettled", vm.NewNativeFunction(1, false, "allSettled", func(args []vm.Value) (vm.Value, error) {
 		iterable := vm.Undefined
 		if len(args) > 0 {
 			iterable = args[0]
@@ -552,8 +552,8 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 					// Create { status: "fulfilled", value: ... } object
 					resultObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-					resultObj.SetOwn("status", vm.NewString("fulfilled"))
-					resultObj.SetOwn("value", value)
+					resultObj.SetOwnNonEnumerable("status", vm.NewString("fulfilled"))
+					resultObj.SetOwnNonEnumerable("value", value)
 
 					results[idx] = vm.NewValueFromPlainObject(resultObj)
 					remaining--
@@ -576,8 +576,8 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 					// Create { status: "rejected", reason: ... } object
 					resultObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-					resultObj.SetOwn("status", vm.NewString("rejected"))
-					resultObj.SetOwn("reason", reason)
+					resultObj.SetOwnNonEnumerable("status", vm.NewString("rejected"))
+					resultObj.SetOwnNonEnumerable("reason", reason)
 
 					results[idx] = vm.NewValueFromPlainObject(resultObj)
 					remaining--
@@ -606,7 +606,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Set constructor property on prototype
-	promiseProto.SetOwn("constructor", promiseCtor)
+	promiseProto.SetOwnNonEnumerable("constructor", promiseCtor)
 
 	// Register Promise constructor as global
 	return ctx.DefineGlobal("Promise", promiseCtor)

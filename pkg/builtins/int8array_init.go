@@ -38,10 +38,10 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmx := ctx.VM
 	proto := vm.NewObject(ctx.ObjectPrototype).AsPlainObject()
 
-	proto.SetOwn("BYTES_PER_ELEMENT", vm.Number(1))
+	proto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
 
 	// accessors
-	proto.SetOwn("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmx.GetThis()
 		if ta := thisVal.AsTypedArray(); ta != nil {
 			// property_helpers exposes wrapping via Value{TypeArrayBuffer, ptr}; reuse by reading through a temporary Value
@@ -52,19 +52,19 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.Undefined, nil
 	}))
-	proto.SetOwn("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteLength())), nil
 		}
 		return vm.Undefined, nil
 	}))
-	proto.SetOwn("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteOffset())), nil
 		}
 		return vm.Undefined, nil
 	}))
-	proto.SetOwn("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetLength())), nil
 		}
@@ -72,7 +72,7 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// set
-	proto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		thisArr := vmx.GetThis()
 		ta := thisArr.AsTypedArray()
 		if ta == nil {
@@ -96,7 +96,7 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// subarray
-	proto.SetOwn("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			start, end := 0, ta.GetLength()
 			if len(args) > 0 && !args[0].IsUndefined() {
@@ -132,7 +132,7 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// slice
-	proto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			start, end := 0, ta.GetLength()
 			if len(args) > 0 && !args[0].IsUndefined() {
@@ -175,7 +175,7 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// fill
-	proto.SetOwn("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			value := vm.Undefined
 			if len(args) > 0 {
@@ -245,9 +245,9 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
 	})
-	ctor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(proto))
-	ctor.AsNativeFunctionWithProps().Properties.SetOwn("BYTES_PER_ELEMENT", vm.Number(1))
-	ctor.AsNativeFunctionWithProps().Properties.SetOwn("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
 		}
@@ -261,9 +261,9 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
 	}))
-	ctor.AsNativeFunctionWithProps().Properties.SetOwn("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) { return vm.NewTypedArray(vm.TypedArrayInt8, args, 0, 0), nil }))
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) { return vm.NewTypedArray(vm.TypedArrayInt8, args, 0, 0), nil }))
 
-	proto.SetOwn("constructor", ctor)
+	proto.SetOwnNonEnumerable("constructor", ctor)
 	// store on VM if a slot exists; otherwise rely on handlePrimitiveMethod dispatch by element kind
 	return ctx.DefineGlobal("Int8Array", ctor)
 }

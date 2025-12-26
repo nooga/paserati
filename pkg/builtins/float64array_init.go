@@ -50,10 +50,10 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	float64ArrayProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add prototype properties
-	float64ArrayProto.SetOwn("BYTES_PER_ELEMENT", vm.Number(8))
+	float64ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(8))
 
 	// Add buffer getter
-	float64ArrayProto.SetOwn("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Value{}, nil // TODO: Return proper ArrayBuffer value
@@ -62,7 +62,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add byteLength getter
-	float64ArrayProto.SetOwn("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteLength())), nil
@@ -71,7 +71,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add byteOffset getter
-	float64ArrayProto.SetOwn("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetByteOffset())), nil
@@ -80,7 +80,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add length getter
-	float64ArrayProto.SetOwn("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		if ta := thisArray.AsTypedArray(); ta != nil {
 			return vm.Number(float64(ta.GetLength())), nil
@@ -89,7 +89,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add set method
-	float64ArrayProto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil || len(args) == 0 {
@@ -118,7 +118,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add fill method
-	float64ArrayProto.SetOwn("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -158,7 +158,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add subarray method
-	float64ArrayProto.SetOwn("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -205,7 +205,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add slice method (creates new array)
-	float64ArrayProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	float64ArrayProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta := thisArray.AsTypedArray()
 		if ta == nil {
@@ -305,12 +305,12 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(float64ArrayProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(float64ArrayProto))
 
 	// Add static properties and methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("BYTES_PER_ELEMENT", vm.Number(8))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(8))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayFloat64, 0, 0, 0), nil
 		}
@@ -327,12 +327,12 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayFloat64, 0, 0, 0), nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewTypedArray(vm.TypedArrayFloat64, args, 0, 0), nil
 	}))
 
 	// Set constructor property on prototype
-	float64ArrayProto.SetOwn("constructor", ctorWithProps)
+	float64ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
 	// Register Float64Array constructor as global
 	return ctx.DefineGlobal("Float64Array", ctorWithProps)

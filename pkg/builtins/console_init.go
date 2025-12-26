@@ -60,44 +60,44 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Add console methods
-	consoleObj.SetOwn("log", vm.NewNativeFunction(0, true, "log", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("log", vm.NewNativeFunction(0, true, "log", func(args []vm.Value) (vm.Value, error) {
 		fmt.Println(formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("error", vm.NewNativeFunction(0, true, "error", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("error", vm.NewNativeFunction(0, true, "error", func(args []vm.Value) (vm.Value, error) {
 		fmt.Printf("ERROR: %s\n", formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("warn", vm.NewNativeFunction(0, true, "warn", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("warn", vm.NewNativeFunction(0, true, "warn", func(args []vm.Value) (vm.Value, error) {
 		fmt.Printf("WARN: %s\n", formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("info", vm.NewNativeFunction(0, true, "info", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("info", vm.NewNativeFunction(0, true, "info", func(args []vm.Value) (vm.Value, error) {
 		fmt.Printf("INFO: %s\n", formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("debug", vm.NewNativeFunction(0, true, "debug", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("debug", vm.NewNativeFunction(0, true, "debug", func(args []vm.Value) (vm.Value, error) {
 		fmt.Printf("DEBUG: %s\n", formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("trace", vm.NewNativeFunction(0, true, "trace", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("trace", vm.NewNativeFunction(0, true, "trace", func(args []vm.Value) (vm.Value, error) {
 		fmt.Printf("TRACE: %s\n", formatArgs(args))
 		// TODO: Add stack trace
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
 		// TODO: Implement console clear
 		fmt.Print("\033[2J\033[H") // ANSI escape sequence to clear screen
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("count", vm.NewNativeFunction(1, false, "count", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("count", vm.NewNativeFunction(1, false, "count", func(args []vm.Value) (vm.Value, error) {
 		label := "default"
 		if len(args) > 0 {
 			label = args[0].ToString()
@@ -107,7 +107,7 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("countReset", vm.NewNativeFunction(1, false, "countReset", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("countReset", vm.NewNativeFunction(1, false, "countReset", func(args []vm.Value) (vm.Value, error) {
 		label := "default"
 		if len(args) > 0 {
 			label = args[0].ToString()
@@ -117,7 +117,7 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("time", vm.NewNativeFunction(1, false, "time", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("time", vm.NewNativeFunction(1, false, "time", func(args []vm.Value) (vm.Value, error) {
 		label := "default"
 		if len(args) > 0 {
 			label = args[0].ToString()
@@ -126,7 +126,7 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("timeEnd", vm.NewNativeFunction(1, false, "timeEnd", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("timeEnd", vm.NewNativeFunction(1, false, "timeEnd", func(args []vm.Value) (vm.Value, error) {
 		label := "default"
 		if len(args) > 0 {
 			label = args[0].ToString()
@@ -141,19 +141,19 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("group", vm.NewNativeFunction(0, true, "group", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("group", vm.NewNativeFunction(0, true, "group", func(args []vm.Value) (vm.Value, error) {
 		fmt.Printf("▼ %s\n", formatArgs(args))
 		// TODO: Implement proper grouping
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("groupCollapsed", vm.NewNativeFunction(0, true, "groupCollapsed", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("groupCollapsed", vm.NewNativeFunction(0, true, "groupCollapsed", func(args []vm.Value) (vm.Value, error) {
 		fmt.Printf("▶ %s\n", formatArgs(args))
 		// TODO: Implement proper grouping
 		return vm.Undefined, nil
 	}))
 
-	consoleObj.SetOwn("groupEnd", vm.NewNativeFunction(0, false, "groupEnd", func(args []vm.Value) (vm.Value, error) {
+	consoleObj.SetOwnNonEnumerable("groupEnd", vm.NewNativeFunction(0, false, "groupEnd", func(args []vm.Value) (vm.Value, error) {
 		// TODO: Implement proper group ending
 		return vm.Undefined, nil
 	}))

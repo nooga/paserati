@@ -68,7 +68,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	numberProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Number prototype methods
-	numberProto.SetOwn("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	numberProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from Number wrapper object
@@ -112,7 +112,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}))
 
-	numberProto.SetOwn("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+	numberProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 		
 		// Check if this is a number
@@ -125,7 +125,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(thisNum.ToString()), nil
 	}))
 
-	numberProto.SetOwn("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
+	numberProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 
 		// If this is a primitive number, return it
@@ -144,7 +144,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, fmt.Errorf("Number.prototype.valueOf requires that 'this' be a Number")
 	}))
 
-	numberProto.SetOwn("toFixed", vm.NewNativeFunction(1, false, "toFixed", func(args []vm.Value) (vm.Value, error) {
+	numberProto.SetOwnNonEnumerable("toFixed", vm.NewNativeFunction(1, false, "toFixed", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from wrapper if needed
@@ -171,7 +171,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(strconv.FormatFloat(numVal, 'f', digits, 64)), nil
 	}))
 
-	numberProto.SetOwn("toExponential", vm.NewNativeFunction(1, false, "toExponential", func(args []vm.Value) (vm.Value, error) {
+	numberProto.SetOwnNonEnumerable("toExponential", vm.NewNativeFunction(1, false, "toExponential", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from wrapper if needed
@@ -198,7 +198,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(strconv.FormatFloat(numVal, 'e', digits, 64)), nil
 	}))
 
-	numberProto.SetOwn("toPrecision", vm.NewNativeFunction(1, false, "toPrecision", func(args []vm.Value) (vm.Value, error) {
+	numberProto.SetOwnNonEnumerable("toPrecision", vm.NewNativeFunction(1, false, "toPrecision", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from wrapper if needed
@@ -310,7 +310,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("EPSILON", vm.NumberValue(math.Nextafter(1.0, 2.0)-1.0), &writable, &enumerable, &configurable)
 
 	// Add Number static methods
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isNaN", vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) (vm.Value, error) {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isNaN", vm.NewNativeFunction(1, false, "isNaN", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
 		}
@@ -321,7 +321,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(math.IsNaN(val.ToFloat())), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isFinite", vm.NewNativeFunction(1, false, "isFinite", func(args []vm.Value) (vm.Value, error) {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isFinite", vm.NewNativeFunction(1, false, "isFinite", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
 		}
@@ -333,7 +333,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f)), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isInteger", vm.NewNativeFunction(1, false, "isInteger", func(args []vm.Value) (vm.Value, error) {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isInteger", vm.NewNativeFunction(1, false, "isInteger", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
 		}
@@ -345,7 +345,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f) && math.Floor(f) == f), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("isSafeInteger", vm.NewNativeFunction(1, false, "isSafeInteger", func(args []vm.Value) (vm.Value, error) {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isSafeInteger", vm.NewNativeFunction(1, false, "isSafeInteger", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
 		}
@@ -358,7 +358,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(!math.IsInf(f, 0) && !math.IsNaN(f) && math.Floor(f) == f && f >= -maxSafe && f <= maxSafe), nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("parseFloat", vm.NewNativeFunction(1, false, "parseFloat", func(args []vm.Value) (vm.Value, error) {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("parseFloat", vm.NewNativeFunction(1, false, "parseFloat", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NaN, nil
 		}
@@ -369,7 +369,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("parseInt", vm.NewNativeFunction(2, false, "parseInt", func(args []vm.Value) (vm.Value, error) {
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("parseInt", vm.NewNativeFunction(2, false, "parseInt", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NaN, nil
 		}
@@ -393,10 +393,10 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.NumberPrototype)
+	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.NumberPrototype)
 
 	// Set constructor property on prototype
-	numberProto.SetOwn("constructor", numberConstructor)
+	numberProto.SetOwnNonEnumerable("constructor", numberConstructor)
 
 	// Define Number constructor in global scope
 	return ctx.DefineGlobal("Number", numberConstructor)

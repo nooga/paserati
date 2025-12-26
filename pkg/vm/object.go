@@ -288,6 +288,45 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 	o.properties = append(o.properties, v)
 }
 
+// SetOwnNonEnumerable sets or defines an own property as non-enumerable (for built-in methods).
+// Creates a new shape on first definition with enumerable: false, writable: true, configurable: true.
+func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
+	// Check if property already exists
+	for _, f := range o.shape.fields {
+		if f.keyKind == KeyKindString && f.name == name {
+			// existing property: honor writable flag
+			if f.writable {
+				o.properties[f.offset] = v
+			}
+			return
+		}
+	}
+	// new property: built-in assignment semantics -> writable: true, enumerable: false, configurable: true
+	cur := o.shape
+	cur.mu.RLock()
+	hashKey := keyFromString(name).hash() + "_nonenum" // Different hash to avoid collision with enumerable version
+	next, ok := cur.transitions[hashKey]
+	cur.mu.RUnlock()
+	if !ok {
+		off := len(cur.fields)
+		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: false, configurable: true}
+		newFields := make([]Field, len(cur.fields)+1)
+		copy(newFields, cur.fields)
+		newFields[len(cur.fields)] = fld
+		newTrans := make(map[string]*Shape)
+		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
+		cur.mu.Lock()
+		if existing, exists := cur.transitions[hashKey]; exists {
+			next = existing
+		} else {
+			cur.transitions[hashKey] = next
+		}
+		cur.mu.Unlock()
+	}
+	o.shape = next
+	o.properties = append(o.properties, v)
+}
+
 // DefineOwnProperty defines or updates an own property with explicit attributes.
 // For existing properties, unspecified attributes (nil) will keep previous values.
 func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool, enumerable *bool, configurable *bool) {

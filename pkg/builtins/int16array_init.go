@@ -38,7 +38,7 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmx := ctx.VM
 	proto := vm.NewObject(ctx.ObjectPrototype).AsPlainObject()
 
-	proto.SetOwn("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		ta := vmx.GetThis().AsTypedArray()
 		if ta == nil {
 			return vm.Undefined, nil
@@ -60,7 +60,7 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	proto.SetOwn("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			start, end := 0, ta.GetLength()
 			if len(args) > 0 && !args[0].IsUndefined() {
@@ -95,7 +95,7 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	proto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			start, end := 0, ta.GetLength()
 			if len(args) > 0 && !args[0].IsUndefined() {
@@ -137,7 +137,7 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	proto.SetOwn("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
 		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
 			value := vm.Undefined
 			if len(args) > 0 {
@@ -206,6 +206,6 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
 	})
-	ctor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(proto))
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
 	return ctx.DefineGlobal("Int16Array", ctor)
 }

@@ -95,14 +95,14 @@ func (p *ProxyInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create the result object
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		result.SetOwn("proxy", proxy)
-		result.SetOwn("revoke", revokeFn)
+		result.SetOwnNonEnumerable("proxy", proxy)
+		result.SetOwnNonEnumerable("revoke", revokeFn)
 
 		return vm.NewValueFromPlainObject(result), nil
 	})
 
 	// Add Proxy.revocable as a property on the constructor to match type system
-	proxyConstructor.AsNativeFunctionWithProps().Properties.SetOwn("revocable", revocableFn)
+	proxyConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("revocable", revocableFn)
 
 	// Define Proxy constructor in global scope
 	return ctx.DefineGlobal("Proxy", proxyConstructor)

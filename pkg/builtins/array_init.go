@@ -117,7 +117,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	arrayProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Array prototype methods
-	arrayProto.SetOwn("push", vm.NewNativeFunction(0, true, "push", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("push", vm.NewNativeFunction(0, true, "push", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(0), nil
@@ -128,7 +128,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(thisArray.Length())), nil
 	}))
 
-	arrayProto.SetOwn("pop", vm.NewNativeFunction(0, false, "pop", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("pop", vm.NewNativeFunction(0, false, "pop", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || thisArray.Length() == 0 {
 			return vm.Undefined, nil
@@ -139,7 +139,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return lastElement, nil
 	}))
 
-	arrayProto.SetOwn("shift", vm.NewNativeFunction(0, false, "shift", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("shift", vm.NewNativeFunction(0, false, "shift", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || thisArray.Length() == 0 {
 			return vm.Undefined, nil
@@ -154,7 +154,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return firstElement, nil
 	}))
 
-	arrayProto.SetOwn("unshift", vm.NewNativeFunction(0, true, "unshift", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("unshift", vm.NewNativeFunction(0, true, "unshift", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(0), nil
@@ -173,7 +173,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(thisArray.Length())), nil
 	}))
 
-	arrayProto.SetOwn("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewArray(), nil
@@ -213,7 +213,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewArrayWithArgs(elements), nil
 	}))
 
-	arrayProto.SetOwn("splice", vm.NewNativeFunction(2, true, "splice", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("splice", vm.NewNativeFunction(2, true, "splice", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewArray(), nil
@@ -270,7 +270,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return deleted, nil
 	}))
 
-	arrayProto.SetOwn("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewArray(), nil
@@ -295,7 +295,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return result, nil
 	}))
 
-	arrayProto.SetOwn("join", vm.NewNativeFunction(1, false, "join", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("join", vm.NewNativeFunction(1, false, "join", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vm.NewString(""), nil
@@ -315,7 +315,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(result), nil
 	}))
 
-	arrayProto.SetOwn("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Per ECMAScript spec, Array.prototype.toString is equivalent to calling join() with no arguments
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
@@ -332,7 +332,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(result), nil
 	}))
 
-	arrayProto.SetOwn("reverse", vm.NewNativeFunction(0, false, "reverse", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("reverse", vm.NewNativeFunction(0, false, "reverse", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vmInstance.GetThis(), nil
@@ -349,7 +349,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vmInstance.GetThis(), nil // Return the same array
 	}))
 
-	arrayProto.SetOwn("sort", vm.NewNativeFunction(1, false, "sort", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("sort", vm.NewNativeFunction(1, false, "sort", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil {
 			return vmInstance.GetThis(), nil
@@ -376,7 +376,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vmInstance.GetThis(), nil // Return the same array
 	}))
 
-	arrayProto.SetOwn("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.NumberValue(-1), nil
@@ -400,7 +400,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(-1), nil
 	}))
 
-	arrayProto.SetOwn("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.NumberValue(-1), nil
@@ -423,7 +423,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(-1), nil
 	}))
 
-	arrayProto.SetOwn("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.BooleanValue(false), nil
@@ -447,7 +447,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(false), nil
 	}))
 
-	arrayProto.SetOwn("find", vm.NewNativeFunction(1, false, "find", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("find", vm.NewNativeFunction(1, false, "find", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined, nil
@@ -469,7 +469,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	arrayProto.SetOwn("findIndex", vm.NewNativeFunction(1, false, "findIndex", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("findIndex", vm.NewNativeFunction(1, false, "findIndex", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.NumberValue(-1), nil
@@ -491,7 +491,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(-1), nil
 	}))
 
-	arrayProto.SetOwn("filter", vm.NewNativeFunction(1, false, "filter", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("filter", vm.NewNativeFunction(1, false, "filter", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.NewArray(), nil
@@ -514,7 +514,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return result, nil
 	}))
 
-	arrayProto.SetOwn("map", vm.NewNativeFunction(1, false, "map", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("map", vm.NewNativeFunction(1, false, "map", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.NewArray(), nil
 		}
@@ -567,7 +567,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return result, nil
 	}))
 
-	arrayProto.SetOwn("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined, nil
@@ -586,7 +586,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	arrayProto.SetOwn("every", vm.NewNativeFunction(1, false, "every", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("every", vm.NewNativeFunction(1, false, "every", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.BooleanValue(true), nil
@@ -608,7 +608,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(true), nil
 	}))
 
-	arrayProto.SetOwn("some", vm.NewNativeFunction(1, false, "some", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("some", vm.NewNativeFunction(1, false, "some", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.BooleanValue(false), nil
@@ -630,7 +630,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(false), nil
 	}))
 
-	arrayProto.SetOwn("reduce", vm.NewNativeFunction(2, false, "reduce", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("reduce", vm.NewNativeFunction(2, false, "reduce", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined, nil
@@ -665,7 +665,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return accumulator, nil
 	}))
 
-	arrayProto.SetOwn("reduceRight", vm.NewNativeFunction(2, false, "reduceRight", func(args []vm.Value) (vm.Value, error) {
+	arrayProto.SetOwnNonEnumerable("reduceRight", vm.NewNativeFunction(2, false, "reduceRight", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined, nil
@@ -726,17 +726,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vm.NewValueFromPlainObject(arrayProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(arrayProto))
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("isArray", vm.NewNativeFunction(1, false, "isArray", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isArray", vm.NewNativeFunction(1, false, "isArray", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
 		return vm.BooleanValue(args[0].Type() == vm.TypeArray), nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("from", vm.NewNativeFunction(2, false, "from", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(2, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.NewArray(), nil
 		}
@@ -767,7 +767,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewArray(), nil
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwn("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewArrayWithArgs(args), nil
 	}))
 
@@ -805,7 +805,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	arrayCtor := ctorWithProps
 
 	// Set constructor property on Array.prototype to point to Array constructor
-	arrayProto.SetOwn("constructor", arrayCtor)
+	arrayProto.SetOwnNonEnumerable("constructor", arrayCtor)
 	// Make it non-enumerable like in standard JavaScript
 	if v, ok := arrayProto.GetOwn("constructor"); ok {
 		w, e, c := true, false, true // writable, not enumerable, configurable
@@ -827,19 +827,19 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 	currentIndex := 0
 
 	// Add next() method to iterator
-	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		// Create iterator result object {value, done}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
 		if currentIndex >= array.Length() {
 			// Iterator is exhausted
-			result.SetOwn("value", vm.Undefined)
-			result.SetOwn("done", vm.BooleanValue(true))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 		} else {
 			// Return current element and advance
 			val := array.Get(currentIndex)
-			result.SetOwn("value", val)
-			result.SetOwn("done", vm.BooleanValue(false))
+			result.SetOwnNonEnumerable("value", val)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
 			currentIndex++
 		}
 
@@ -859,19 +859,19 @@ func createAsyncArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value
 	currentIndex := 0
 
 	// Add next() method to iterator - returns Promise<{value, done}>
-	iterator.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		// Create iterator result object {value, done}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
 		if currentIndex >= array.Length() {
 			// Iterator is exhausted
-			result.SetOwn("value", vm.Undefined)
-			result.SetOwn("done", vm.BooleanValue(true))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 		} else {
 			// Return current element and advance
 			val := array.Get(currentIndex)
-			result.SetOwn("value", val)
-			result.SetOwn("done", vm.BooleanValue(false))
+			result.SetOwnNonEnumerable("value", val)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
 			currentIndex++
 		}
 

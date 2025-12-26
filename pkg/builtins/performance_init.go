@@ -64,14 +64,14 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	performanceObj := vm.NewObject(objectProto).AsPlainObject()
 
 	// performance.now() - High-resolution timestamp
-	performanceObj.SetOwn("now", vm.NewNativeFunction(0, false, "now", func(args []vm.Value) (vm.Value, error) {
+	performanceObj.SetOwnNonEnumerable("now", vm.NewNativeFunction(0, false, "now", func(args []vm.Value) (vm.Value, error) {
 		// Return milliseconds since performance origin with sub-millisecond precision
 		elapsed := time.Since(performanceOrigin)
 		return vm.NumberValue(float64(elapsed.Nanoseconds()) / 1e6), nil
 	}))
 
 	// performance.mark() - Create a named timestamp
-	performanceObj.SetOwn("mark", vm.NewNativeFunction(1, false, "mark", func(args []vm.Value) (vm.Value, error) {
+	performanceObj.SetOwnNonEnumerable("mark", vm.NewNativeFunction(1, false, "mark", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, nil
 		}
@@ -85,7 +85,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// performance.measure() - Measure between two marks or from start
-	performanceObj.SetOwn("measure", vm.NewNativeFunction(3, false, "measure", func(args []vm.Value) (vm.Value, error) {
+	performanceObj.SetOwnNonEnumerable("measure", vm.NewNativeFunction(3, false, "measure", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, nil
 		}
@@ -136,7 +136,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// performance.getEntriesByType() - Get entries by type
-	performanceObj.SetOwn("getEntriesByType", vm.NewNativeFunction(1, false, "getEntriesByType", func(args []vm.Value) (vm.Value, error) {
+	performanceObj.SetOwnNonEnumerable("getEntriesByType", vm.NewNativeFunction(1, false, "getEntriesByType", func(args []vm.Value) (vm.Value, error) {
 		result := vm.NewArray()
 		resultArray := result.AsArray()
 		
@@ -149,19 +149,19 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if entryType == "mark" {
 			for name, startTime := range performanceMarks {
 				entry := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				entry.SetOwn("name", vm.NewString(name))
-				entry.SetOwn("entryType", vm.NewString("mark"))
-				entry.SetOwn("startTime", vm.NumberValue(startTime))
-				entry.SetOwn("duration", vm.NumberValue(0))
+				entry.SetOwnNonEnumerable("name", vm.NewString(name))
+				entry.SetOwnNonEnumerable("entryType", vm.NewString("mark"))
+				entry.SetOwnNonEnumerable("startTime", vm.NumberValue(startTime))
+				entry.SetOwnNonEnumerable("duration", vm.NumberValue(0))
 				resultArray.Append(vm.NewValueFromPlainObject(entry))
 			}
 		} else if entryType == "measure" {
 			for _, measure := range performanceMeasures {
 				entry := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				entry.SetOwn("name", vm.NewString(measure.Name))
-				entry.SetOwn("entryType", vm.NewString("measure"))
-				entry.SetOwn("startTime", vm.NumberValue(measure.StartTime))
-				entry.SetOwn("duration", vm.NumberValue(measure.Duration))
+				entry.SetOwnNonEnumerable("name", vm.NewString(measure.Name))
+				entry.SetOwnNonEnumerable("entryType", vm.NewString("measure"))
+				entry.SetOwnNonEnumerable("startTime", vm.NumberValue(measure.StartTime))
+				entry.SetOwnNonEnumerable("duration", vm.NumberValue(measure.Duration))
 				resultArray.Append(vm.NewValueFromPlainObject(entry))
 			}
 		}
@@ -170,7 +170,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// performance.getEntriesByName() - Get entries by name
-	performanceObj.SetOwn("getEntriesByName", vm.NewNativeFunction(2, false, "getEntriesByName", func(args []vm.Value) (vm.Value, error) {
+	performanceObj.SetOwnNonEnumerable("getEntriesByName", vm.NewNativeFunction(2, false, "getEntriesByName", func(args []vm.Value) (vm.Value, error) {
 		result := vm.NewArray()
 		resultArray := result.AsArray()
 		
@@ -188,10 +188,10 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if (entryType == "" || entryType == "mark") {
 			if startTime, exists := performanceMarks[name]; exists {
 				entry := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				entry.SetOwn("name", vm.NewString(name))
-				entry.SetOwn("entryType", vm.NewString("mark"))
-				entry.SetOwn("startTime", vm.NumberValue(startTime))
-				entry.SetOwn("duration", vm.NumberValue(0))
+				entry.SetOwnNonEnumerable("name", vm.NewString(name))
+				entry.SetOwnNonEnumerable("entryType", vm.NewString("mark"))
+				entry.SetOwnNonEnumerable("startTime", vm.NumberValue(startTime))
+				entry.SetOwnNonEnumerable("duration", vm.NumberValue(0))
 				resultArray.Append(vm.NewValueFromPlainObject(entry))
 			}
 		}
@@ -200,10 +200,10 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if (entryType == "" || entryType == "measure") {
 			if measure, exists := performanceMeasures[name]; exists {
 				entry := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				entry.SetOwn("name", vm.NewString(measure.Name))
-				entry.SetOwn("entryType", vm.NewString("measure"))
-				entry.SetOwn("startTime", vm.NumberValue(measure.StartTime))
-				entry.SetOwn("duration", vm.NumberValue(measure.Duration))
+				entry.SetOwnNonEnumerable("name", vm.NewString(measure.Name))
+				entry.SetOwnNonEnumerable("entryType", vm.NewString("measure"))
+				entry.SetOwnNonEnumerable("startTime", vm.NumberValue(measure.StartTime))
+				entry.SetOwnNonEnumerable("duration", vm.NumberValue(measure.Duration))
 				resultArray.Append(vm.NewValueFromPlainObject(entry))
 			}
 		}
@@ -212,7 +212,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// performance.clearMarks() - Clear marks
-	performanceObj.SetOwn("clearMarks", vm.NewNativeFunction(1, false, "clearMarks", func(args []vm.Value) (vm.Value, error) {
+	performanceObj.SetOwnNonEnumerable("clearMarks", vm.NewNativeFunction(1, false, "clearMarks", func(args []vm.Value) (vm.Value, error) {
 		if len(args) >= 1 && !args[0].IsUndefined() {
 			// Clear specific mark
 			markName := args[0].ToString()
@@ -225,7 +225,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// performance.clearMeasures() - Clear measures
-	performanceObj.SetOwn("clearMeasures", vm.NewNativeFunction(1, false, "clearMeasures", func(args []vm.Value) (vm.Value, error) {
+	performanceObj.SetOwnNonEnumerable("clearMeasures", vm.NewNativeFunction(1, false, "clearMeasures", func(args []vm.Value) (vm.Value, error) {
 		if len(args) >= 1 && !args[0].IsUndefined() {
 			// Clear specific measure
 			measureName := args[0].ToString()

@@ -49,7 +49,7 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	typeErrorPrototype := vm.NewObject(errorPrototype).AsPlainObject()
 	
 	// Override the name property to "TypeError"
-	typeErrorPrototype.SetOwn("name", vm.NewString("TypeError"))
+	typeErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("TypeError"))
 	
 	// TypeError constructor function
 	typeErrorConstructor := vm.NewNativeFunction(-1, true, "TypeError", func(args []vm.Value) (vm.Value, error) {
@@ -64,12 +64,12 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		typeErrorInstancePtr := typeErrorInstance.AsPlainObject()
 		
 		// Set properties (override name, set message and stack)
-		typeErrorInstancePtr.SetOwn("name", vm.NewString("TypeError"))
-		typeErrorInstancePtr.SetOwn("message", vm.NewString(message))
+		typeErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("TypeError"))
+		typeErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 		
 		// Capture stack trace at the time of TypeError creation
 		stackTrace := vmInstance.CaptureStackTrace()
-		typeErrorInstancePtr.SetOwn("stack", vm.NewString(stackTrace))
+		typeErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
 		
 		return typeErrorInstance, nil
 	})
@@ -81,13 +81,13 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(typeErrorPrototype))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(typeErrorPrototype))
 
 		typeErrorConstructor = ctorWithProps
 	}
 
 	// Set constructor property on prototype
-	typeErrorPrototype.SetOwn("constructor", typeErrorConstructor)
+	typeErrorPrototype.SetOwnNonEnumerable("constructor", typeErrorConstructor)
 
 	// Store in VM for later use
 	vmInstance.TypeErrorPrototype = vm.NewValueFromPlainObject(typeErrorPrototype)

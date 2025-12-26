@@ -90,7 +90,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add Set prototype methods
-	setProto.SetOwn("add", vm.NewNativeFunction(1, false, "add", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("add", vm.NewNativeFunction(1, false, "add", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
@@ -111,7 +111,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setProto.DefineOwnProperty("add", v, &w, &e, &c)
 	}
 
-	setProto.SetOwn("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("has", vm.NewNativeFunction(1, false, "has", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
@@ -130,7 +130,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setProto.DefineOwnProperty("has", v, &w, &e, &c)
 	}
 
-	setProto.SetOwn("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("delete", vm.NewNativeFunction(1, false, "delete", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
@@ -149,7 +149,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setProto.DefineOwnProperty("delete", v, &w, &e, &c)
 	}
 
-	setProto.SetOwn("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("clear", vm.NewNativeFunction(0, false, "clear", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
@@ -166,7 +166,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// forEach(callback, thisArg)
-	setProto.SetOwn("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.forEach called on non-Set")
@@ -198,7 +198,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Minimal iterator helpers: values(), keys(), entries(), and [Symbol.iterator]
-	setProto.SetOwn("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, nil
@@ -209,9 +209,9 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			valsArr.Append(val)
 		})
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwn("__data__", vals)
-		it.SetOwn("__index__", vm.IntegerValue(0))
-		it.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
+		it.SetOwnNonEnumerable("__data__", vals)
+		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			self := vmInstance.GetThis().AsPlainObject()
 			dataVal, _ := self.GetOwn("__data__")
 			idxVal, _ := self.GetOwn("__index__")
@@ -219,13 +219,13 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
 			if idx >= data.Length() {
-				result.SetOwn("value", vm.Undefined)
-				result.SetOwn("done", vm.BooleanValue(true))
+				result.SetOwnNonEnumerable("value", vm.Undefined)
+				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 				return vm.NewValueFromPlainObject(result), nil
 			}
-			result.SetOwn("value", data.Get(idx))
-			result.SetOwn("done", vm.BooleanValue(false))
-			self.SetOwn("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", data.Get(idx))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -238,7 +238,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setProto.DefineOwnProperty("values", v, &w, &e, &c)
 	}
 	// keys() is an alias of values() for Set
-	setProto.SetOwn("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		// Call values() method
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
@@ -251,9 +251,9 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			valsArr.Append(val)
 		})
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwn("__data__", vals)
-		it.SetOwn("__index__", vm.IntegerValue(0))
-		it.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
+		it.SetOwnNonEnumerable("__data__", vals)
+		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			self := vmInstance.GetThis().AsPlainObject()
 			dataVal, _ := self.GetOwn("__data__")
 			idxVal, _ := self.GetOwn("__index__")
@@ -261,13 +261,13 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
 			if idx >= data.Length() {
-				result.SetOwn("value", vm.Undefined)
-				result.SetOwn("done", vm.BooleanValue(true))
+				result.SetOwnNonEnumerable("value", vm.Undefined)
+				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 				return vm.NewValueFromPlainObject(result), nil
 			}
-			result.SetOwn("value", data.Get(idx))
-			result.SetOwn("done", vm.BooleanValue(false))
-			self.SetOwn("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", data.Get(idx))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -280,7 +280,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setProto.DefineOwnProperty("keys", v, &w, &e, &c)
 	}
 	// entries() yields [value, value]
-	setProto.SetOwn("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
+	setProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, nil
@@ -294,9 +294,9 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			pairsArr.Append(pair)
 		})
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwn("__data__", pairs)
-		it.SetOwn("__index__", vm.IntegerValue(0))
-		it.SetOwn("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
+		it.SetOwnNonEnumerable("__data__", pairs)
+		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			self := vmInstance.GetThis().AsPlainObject()
 			dataVal, _ := self.GetOwn("__data__")
 			idxVal, _ := self.GetOwn("__index__")
@@ -304,13 +304,13 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
 			if idx >= data.Length() {
-				result.SetOwn("value", vm.Undefined)
-				result.SetOwn("done", vm.BooleanValue(true))
+				result.SetOwnNonEnumerable("value", vm.Undefined)
+				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 				return vm.NewValueFromPlainObject(result), nil
 			}
-			result.SetOwn("value", data.Get(idx))
-			result.SetOwn("done", vm.BooleanValue(false))
-			self.SetOwn("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", data.Get(idx))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -343,7 +343,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setObj := thisSet.AsSet()
 		return vm.IntegerValue(int32(setObj.Size())), nil
 	})
-	setProto.SetOwn("size", sizeGetter)
+	setProto.SetOwnNonEnumerable("size", sizeGetter)
 	w, e, c := true, false, true
 	setProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
 
@@ -396,7 +396,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Set constructor property on Set.prototype to point to Set constructor
-	setProto.SetOwn("constructor", setConstructor)
+	setProto.SetOwnNonEnumerable("constructor", setConstructor)
 	if v, ok := setProto.GetOwn("constructor"); ok {
 		w, e, c := true, false, true // writable, not enumerable, configurable
 		setProto.DefineOwnProperty("constructor", v, &w, &e, &c)
@@ -406,7 +406,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.SetPrototype = vm.NewValueFromPlainObject(setProto)
 
 	// Add prototype property
-	setConstructor.AsNativeFunctionWithProps().Properties.SetOwn("prototype", vmInstance.SetPrototype)
+	setConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.SetPrototype)
 	if v, ok := setConstructor.AsNativeFunctionWithProps().Properties.GetOwn("prototype"); ok {
 		w, e, c := false, false, false
 		setConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("prototype", v, &w, &e, &c)

@@ -40,7 +40,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	jsonObj := vm.NewObject(vm.Null).AsPlainObject()
 
 	// Add parse method
-	jsonObj.SetOwn("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
+	jsonObj.SetOwnNonEnumerable("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			// Throw SyntaxError for missing argument
 			// Create a real SyntaxError instance and return it as an exception
@@ -67,7 +67,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add stringify method (supports optional replacer and space parameters)
-	jsonObj.SetOwn("stringify", vm.NewNativeFunction(1, true, "stringify", func(args []vm.Value) (vm.Value, error) {
+	jsonObj.SetOwnNonEnumerable("stringify", vm.NewNativeFunction(1, true, "stringify", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.Undefined, nil
 		}
@@ -164,7 +164,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Wrap the value in a wrapper object for initial call
 		wrapper := vm.NewObject(vm.Null)
-		wrapper.AsPlainObject().SetOwn("", value)
+		wrapper.AsPlainObject().SetOwnNonEnumerable("", value)
 
 		visited := make(map[uintptr]bool)
 		result, err := stringifyValueToJSONWithVisited(ctx.VM, value, visited, gap, "", "", wrapper, replacerFunc, propertyList)
@@ -214,7 +214,7 @@ func convertJSONValue(value interface{}) vm.Value {
 		// Convert object
 		obj := vm.NewObject(vm.Null).AsPlainObject()
 		for key, val := range v {
-			obj.SetOwn(key, convertJSONValue(val))
+			obj.SetOwnNonEnumerable(key, convertJSONValue(val))
 		}
 		return vm.NewValueFromPlainObject(obj)
 	default:

@@ -184,7 +184,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
 		if propName == "prototype" {
-			fn.Properties.SetOwn("prototype", *valueToSet)
+			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false
+			w, e, c := false, false, false
+			fn.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
 		} else {
 			fn.Properties.SetOwn(propName, *valueToSet)
 		}
@@ -196,7 +198,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
 		if propName == "prototype" {
-			fn.Properties.SetOwn("prototype", *valueToSet)
+			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false
+			w, e, c := false, false, false
+			fn.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
 		} else {
 			fn.Properties.SetOwn(propName, *valueToSet)
 		}
