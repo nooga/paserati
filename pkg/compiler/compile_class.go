@@ -950,16 +950,41 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 
 	// Compile the property value (if it has an initializer)
 	if property.Value != nil {
-		var err errors.PaseratiError
-		compiledReg, err := c.compileNode(property.Value, valueReg)
+		// Per ECMAScript, static field initializers are evaluated with `this` = class constructor
+		// We wrap the initializer in a function and call it with `this` = constructor
+		// This ensures arrow functions capture the correct `this` value
+		wrapperFunc := &parser.FunctionLiteral{
+			Token:      property.Token,
+			Name:       nil,
+			Parameters: []*parser.Parameter{},
+			Body: &parser.BlockStatement{
+				Token: property.Token,
+				Statements: []parser.Statement{
+					&parser.ReturnStatement{
+						Token:       property.Token,
+						ReturnValue: property.Value,
+					},
+				},
+			},
+		}
+
+		// Compile the wrapper function
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(wrapperFunc, "__static_field_init__")
 		if err != nil {
 			return err
 		}
-		// If compileNode returned a different register, move it to our allocated register
-		if compiledReg != valueReg {
-			c.emitMove(valueReg, compiledReg, property.Token.Line)
-			c.regAlloc.Free(compiledReg)
-		}
+
+		// Create closure for the initializer function
+		funcReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(funcReg)
+		c.emitClosure(funcReg, funcConstIndex, wrapperFunc, freeSymbols)
+
+		// Call the initializer with `this` = constructor, result in valueReg
+		c.emitOpCode(vm.OpCallMethod, property.Token.Line)
+		c.emitByte(byte(valueReg))       // Destination register
+		c.emitByte(byte(funcReg))        // Function register
+		c.emitByte(byte(constructorReg)) // This register (constructor)
+		c.emitByte(0)                    // Argument count (0)
 	} else {
 		// No initializer, use undefined
 		c.emitLoadUndefined(valueReg, property.Token.Line)

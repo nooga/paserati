@@ -274,7 +274,13 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.closure = calleeClosure
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
-		newFrame.thisValue = thisValue
+		// Arrow functions use their captured 'this' (lexical this binding)
+		// They ignore the provided thisValue from call/apply/bind
+		if calleeFunc.IsArrowFunction {
+			newFrame.thisValue = calleeClosure.CapturedThis
+		} else {
+			newFrame.thisValue = thisValue
+		}
 		// Set [[HomeObject]] for super property access
 		// Arrow functions inherit homeObject from their enclosing scope
 		if calleeFunc.IsArrowFunction {

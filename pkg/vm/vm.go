@@ -2817,6 +2817,10 @@ startExecution:
 			// Set the function's [[Prototype]] to Function.prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
 				cl.Fn.Prototype = vm.FunctionPrototype
+				// For arrow functions, capture the current 'this' value (lexical this binding)
+				if cl.Fn.IsArrowFunction {
+					cl.CapturedThis = frame.thisValue
+				}
 			}
 
 			registers[destReg] = closureVal
