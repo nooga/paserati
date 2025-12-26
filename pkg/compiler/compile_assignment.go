@@ -921,10 +921,30 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 
 	// Convert object properties to destructuring properties
 	for _, pair := range objectLit.Properties {
-		// The key should be an identifier for simple property access
-		keyIdent, ok := pair.Key.(*parser.Identifier)
-		if !ok {
-			return NewCompileError(objectLit, fmt.Sprintf("invalid destructuring property key: %s (only simple identifiers supported)", pair.Key.String()))
+		// Extract the key - can be identifier, string literal, number literal, or computed
+		var keyExpr parser.Expression
+		var keyName string
+		var isShorthand bool
+
+		switch k := pair.Key.(type) {
+		case *parser.Identifier:
+			keyExpr = k
+			keyName = k.Value
+			isShorthand = true // Could be shorthand
+		case *parser.StringLiteral:
+			// String literal key like {"foo": x}
+			keyExpr = &parser.Identifier{Value: k.Value}
+			keyName = k.Value
+		case *parser.NumberLiteral:
+			// Numeric key like {0: x} - use the token literal as string
+			keyExpr = &parser.Identifier{Value: k.Token.Literal}
+			keyName = k.Token.Literal
+		case *parser.ComputedPropertyName:
+			// Computed key - pass through for runtime evaluation
+			keyExpr = k
+			keyName = ""
+		default:
+			return NewCompileError(objectLit, fmt.Sprintf("invalid destructuring property key: %s", pair.Key.String()))
 		}
 
 		var target parser.Expression
@@ -935,32 +955,44 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 		// 2. {name = defaultVal} - shorthand with default (value is assignment expr)
 		// 3. {name: localVar} - explicit target without default
 		// 4. {name: localVar = defaultVal} - explicit target with default
-		// 5. {name: [a, b]} - nested pattern target (NEW)
-		// 6. {name: {x, y}} - nested pattern target (NEW)
+		// 5. {name: [a, b]} - nested pattern target
+		// 6. {name: {x, y}} - nested pattern target
 
-		if valueIdent, ok := pair.Value.(*parser.Identifier); ok && valueIdent.Value == keyIdent.Value {
-			// Pattern 1: Shorthand without default {name}
-			target = keyIdent
-			defaultValue = nil
-		} else if assignExpr, ok := pair.Value.(*parser.AssignmentExpression); ok && assignExpr.Operator == "=" {
-			// Check if this is shorthand with default or explicit with default
-			if leftIdent, ok := assignExpr.Left.(*parser.Identifier); ok && leftIdent.Value == keyIdent.Value {
-				// Pattern 2: Shorthand with default {name = defaultVal}
-				target = keyIdent
-				defaultValue = assignExpr.Value
+		if isShorthand {
+			if valueIdent, ok := pair.Value.(*parser.Identifier); ok && valueIdent.Value == keyName {
+				// Pattern 1: Shorthand without default {name}
+				target = valueIdent
+				defaultValue = nil
+			} else if assignExpr, ok := pair.Value.(*parser.AssignmentExpression); ok && assignExpr.Operator == "=" {
+				if leftIdent, ok := assignExpr.Left.(*parser.Identifier); ok && leftIdent.Value == keyName {
+					// Pattern 2: Shorthand with default {name = defaultVal}
+					target = leftIdent
+					defaultValue = assignExpr.Value
+				} else {
+					// Pattern 4: Explicit target with default {name: localVar = defaultVal}
+					target = assignExpr.Left
+					defaultValue = assignExpr.Value
+				}
 			} else {
-				// Pattern 4: Explicit target with default {name: localVar = defaultVal}
-				target = assignExpr.Left
-				defaultValue = assignExpr.Value
+				// Pattern 3, 5, 6: Explicit target without default
+				target = pair.Value
+				defaultValue = nil
 			}
 		} else {
-			// Pattern 3, 5, 6: Explicit target without default {name: localVar} or {name: [a, b]} or {name: {x, y}}
-			target = pair.Value
-			defaultValue = nil
+			// Non-shorthand (string/number/computed key) - always explicit target
+			if assignExpr, ok := pair.Value.(*parser.AssignmentExpression); ok && assignExpr.Operator == "=" {
+				// Pattern 4: Explicit target with default {0: x = defaultVal}
+				target = assignExpr.Left
+				defaultValue = assignExpr.Value
+			} else {
+				// Pattern 3, 5, 6: Explicit target without default {0: x}
+				target = pair.Value
+				defaultValue = nil
+			}
 		}
 
 		destProperty := &parser.DestructuringProperty{
-			Key:     keyIdent,
+			Key:     keyExpr,
 			Target:  target,
 			Default: defaultValue,
 		}

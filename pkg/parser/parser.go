@@ -4570,7 +4570,7 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 		var target Expression
 		var defaultValue Expression
 
-		// Check if the key is an identifier or computed property name
+		// Check if the key is an identifier, string/number literal, or computed property name
 		if ident, ok := pair.Key.(*Identifier); ok {
 			key = ident
 			keyIdent = ident
@@ -4578,8 +4578,16 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 			key = computedKey
 			// Computed keys cannot use shorthand syntax
 			keyIdent = nil
+		} else if strKey, ok := pair.Key.(*StringLiteral); ok {
+			// String literal key like {"foo": x} - convert to identifier for property access
+			key = &Identifier{Value: strKey.Value, Token: strKey.Token}
+			keyIdent = nil // Cannot use shorthand syntax
+		} else if numKey, ok := pair.Key.(*NumberLiteral); ok {
+			// Numeric key like {0: x} - convert to identifier for property access
+			key = &Identifier{Value: numKey.Token.Literal, Token: numKey.Token}
+			keyIdent = nil // Cannot use shorthand syntax
 		} else {
-			msg := fmt.Sprintf("invalid destructuring property key: %s (expected identifier or computed property)", pair.Key.String())
+			msg := fmt.Sprintf("invalid destructuring property key: %s (expected identifier, string, number, or computed property)", pair.Key.String())
 			p.addError(objectLit.Token, msg)
 			return nil
 		}

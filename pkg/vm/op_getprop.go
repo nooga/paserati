@@ -466,6 +466,32 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 	// 8. Array objects (after special properties are handled)
 	if objVal.Type() == TypeArray {
+		arr := objVal.AsArray()
+		// Check if propName is a valid array index (numeric string like "0", "1", etc.)
+		// Per ECMAScript, arr["0"] should work the same as arr[0]
+		if len(propName) > 0 {
+			isNumeric := true
+			for _, c := range propName {
+				if c < '0' || c > '9' {
+					isNumeric = false
+					break
+				}
+			}
+			// Also reject leading zeros (except "0" itself) to match canonical array index
+			if isNumeric && len(propName) > 1 && propName[0] == '0' {
+				isNumeric = false
+			}
+			if isNumeric {
+				idx := 0
+				for _, c := range propName {
+					idx = idx*10 + int(c-'0')
+				}
+				if idx < arr.Length() {
+					*dest = arr.Get(idx)
+					return true, InterpretOK, *dest
+				}
+			}
+		}
 		// Arrays don't have additional own properties beyond special ones
 		*dest = Undefined
 		return true, InterpretOK, *dest
