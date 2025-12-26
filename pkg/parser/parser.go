@@ -554,20 +554,16 @@ func (p *Parser) parseStatement() Statement {
 	}
 }
 
-// isDestructuringAssignment uses a simple heuristic to determine if a { starts destructuring.
-// For now, we'll use a conservative approach: if the immediate next token is an identifier,
-// it's likely destructuring. This isn't perfect but should handle common cases.
+// isDestructuringAssignment checks if the current { starts a destructuring assignment.
+// Per ECMAScript, at the statement level, { always starts a block statement.
+// Destructuring assignments at statement level MUST be parenthesized: ({ a } = x);
+// So at statement level, we should NEVER treat a bare { as destructuring.
+// This function is called from parseStatement, so we should return false.
 func (p *Parser) isDestructuringAssignment() bool {
-	// Simple heuristic: { followed by identifier suggests destructuring
-	// More sophisticated lookahead would require lexer state saving
-
-	if !p.curTokenIs(lexer.LBRACE) {
-		return false
-	}
-
-	// Check if the next token is an identifier
-	// This catches patterns like: {a} = ..., {a, b} = ..., {a: b} = ...
-	return p.peekTokenIs(lexer.IDENT)
+	// At statement level, { always starts a block statement per ECMAScript grammar.
+	// Destructuring assignments like { a } = x require parentheses at statement level.
+	// The parenthesized form ({ a } = x) is handled as an expression statement.
+	return false
 }
 
 // --- Function Declaration Statement Parsing ---
@@ -4547,15 +4543,29 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 				return nil
 			}
 
-			// Validate that the spread argument is an identifier
-			if ident, ok := spreadElement.Argument.(*Identifier); ok {
+			// Validate that the spread argument is an identifier or member expression
+			// ECMAScript allows rest targets to be any simple assignment target
+			switch target := spreadElement.Argument.(type) {
+			case *Identifier:
 				destructure.RestProperty = &DestructuringElement{
-					Target:  ident,
+					Target:  target,
 					Default: nil,
 					IsRest:  true,
 				}
-			} else {
-				p.addError(objectLit.Token, "rest element target must be an identifier")
+			case *MemberExpression:
+				destructure.RestProperty = &DestructuringElement{
+					Target:  target,
+					Default: nil,
+					IsRest:  true,
+				}
+			case *IndexExpression:
+				destructure.RestProperty = &DestructuringElement{
+					Target:  target,
+					Default: nil,
+					IsRest:  true,
+				}
+			default:
+				p.addError(objectLit.Token, "rest element target must be an identifier or member expression")
 				return nil
 			}
 			continue

@@ -452,12 +452,13 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 	prototypeNameIdx := c.chunk.AddConstant(vm.String("prototype"))
 	c.emitSetProp(constructorReg, prototypeReg, prototypeNameIdx, node.Token.Line)
 
-	// Set prototypeObject.constructor = constructor
+	// Set prototypeObject.constructor = constructor (non-enumerable per ECMAScript)
 	// This is crucial for inheritance - it fixes the constructor reference
 	// Skip this if prototype is null (class extends null)
 	if _, isNull := node.SuperClass.(*parser.NullLiteral); !isNull {
 		constructorNameIdx := c.chunk.AddConstant(vm.String("constructor"))
-		c.emitSetProp(prototypeReg, constructorReg, constructorNameIdx, node.Token.Line)
+		// Use OpDefineMethod to make constructor non-enumerable (writable, configurable, not enumerable)
+		c.emitDefineMethod(prototypeReg, constructorReg, constructorNameIdx, node.Token.Line)
 	}
 
 	debugPrintf("// DEBUG setupClassPrototype: Prototype setup complete for class '%s'\n", node.Name.Value)
