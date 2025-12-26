@@ -44,13 +44,18 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			}
 			// 3. Create the closure object
 			closureReg := c.regAlloc.Alloc()
-			defer c.regAlloc.Free(closureReg)
 			// debug disabled
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
 			// debug disabled
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+
+			// Pin the register if inside a function, since local variables can be captured by upvalues
+			// and the register must remain valid for subsequent uses of this variable
+			if c.enclosing != nil {
+				c.regAlloc.Pin(closureReg)
+			}
 
 			// The variable's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
@@ -185,13 +190,18 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			}
 			// 3. Create the closure object
 			closureReg := c.regAlloc.Alloc()
-			defer c.regAlloc.Free(closureReg)
 			// debug disabled
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
 			// debug disabled
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+
+			// Pin the register if inside a function, since local variables can be captured by upvalues
+			// and the register must remain valid for subsequent uses of this variable
+			if c.enclosing != nil {
+				c.regAlloc.Pin(closureReg)
+			}
 
 			// The variable's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
@@ -300,11 +310,16 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			}
 			// 3. Create the closure object
 			closureReg := c.regAlloc.Alloc()
-			defer c.regAlloc.Free(closureReg)
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Update the temporary definition for the *const name (f)* with the closure register.
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+
+			// Pin the register if inside a function, since local variables can be captured by upvalues
+			// and the register must remain valid for subsequent uses of this variable
+			if c.enclosing != nil {
+				c.regAlloc.Pin(closureReg)
+			}
 
 			// The constant's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
