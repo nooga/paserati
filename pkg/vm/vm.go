@@ -4053,7 +4053,7 @@ startExecution:
 			case TypeObject:
 				sourceObj := AsPlainObject(sourceVal)
 				sourceKeys = sourceObj.OwnKeys()
-				// Copy each property
+				// Copy each string-keyed property
 				for _, key := range sourceKeys {
 					if value, exists := sourceObj.GetOwn(key); exists {
 						if destVal.Type() == TypeDictObject {
@@ -4062,6 +4062,22 @@ startExecution:
 						} else {
 							destObj := AsPlainObject(destVal)
 							destObj.SetOwn(key, value)
+						}
+					}
+				}
+				// Also copy symbol-keyed properties (per ECMAScript CopyDataProperties)
+				symbolKeys := sourceObj.OwnSymbolKeys()
+				for _, sym := range symbolKeys {
+					key := NewSymbolKey(sym)
+					if value, exists := sourceObj.GetOwnByKey(key); exists {
+						// Check if enumerable before copying
+						if _, _, enumerable, _, ok := sourceObj.GetOwnDescriptorByKey(key); ok && enumerable {
+							if destVal.Type() == TypeObject {
+								destObj := AsPlainObject(destVal)
+								w, e, c := true, true, true
+								destObj.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+							}
+							// DictObject doesn't support symbol keys, so skip for DictObject destination
 						}
 					}
 				}

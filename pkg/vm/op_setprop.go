@@ -721,11 +721,13 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		return true, InterpretOK, *valueToSet
 	}
 
-	// Define new data property by symbol key (defaults false unless specified elsewhere)
+	// Define new data property by symbol key with default assignment semantics:
+	// writable=true, enumerable=true, configurable=true (per ECMAScript [[Set]])
 	if debugVM {
 		fmt.Printf("[DBG opSetPropSymbol] Defining new symbol property on obj=%p, symbol=%s, value=%s\n", po, symKey.AsSymbol(), valueToSet.Inspect())
 	}
-	po.DefineOwnPropertyByKey(NewSymbolKey(symKey), *valueToSet, nil, nil, nil)
+	w, e, c := true, true, true
+	po.DefineOwnPropertyByKey(NewSymbolKey(symKey), *valueToSet, &w, &e, &c)
 	// Find new field to cache
 	for _, f := range po.shape.fields {
 		if f.keyKind == KeyKindSymbol && f.symbolVal.obj == symKey.obj {
