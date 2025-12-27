@@ -8482,7 +8482,11 @@ func (vm *VM) NewStringObject(primitiveValue string) Value {
 	obj := NewObject(vm.StringPrototype).AsPlainObject()
 	obj.SetOwn("[[PrimitiveValue]]", NewString(primitiveValue))
 	// Add length property (number of UTF-16 code units)
-	obj.SetOwn("length", IntegerValue(int32(UTF16Length(primitiveValue))))
+	// Per ECMAScript spec, String object's length is non-writable, non-enumerable, non-configurable
+	writable := false
+	enumerable := false
+	configurable := false
+	obj.DefineOwnProperty("length", IntegerValue(int32(UTF16Length(primitiveValue))), &writable, &enumerable, &configurable)
 	return NewValueFromPlainObject(obj)
 }
 

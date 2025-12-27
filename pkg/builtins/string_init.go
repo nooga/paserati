@@ -4,14 +4,68 @@ import (
 	"fmt"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"regexp"
 	"strings"
-	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
-// getStringValue extracts the string value from a value.
+// requireObjectCoercible checks if a value can be converted to an object (not null or undefined).
+// Returns an error if the value is null or undefined, nil otherwise.
+func requireObjectCoercible(vmInstance *vm.VM, val vm.Value, methodName string) error {
+	if val.Type() == vm.TypeNull {
+		return vmInstance.NewTypeError(fmt.Sprintf("String.prototype.%s called on null or undefined", methodName))
+	}
+	if val.Type() == vm.TypeUndefined {
+		return vmInstance.NewTypeError(fmt.Sprintf("String.prototype.%s called on null or undefined", methodName))
+	}
+	return nil
+}
+
+// isRegExp checks if a value is a RegExp object
+func isRegExp(val vm.Value) bool {
+	return val.IsRegExp()
+}
+
+// getStringValueWithVM extracts the string value from a value using the VM.
 // For primitive strings, returns the string directly.
 // For String wrapper objects, extracts the [[PrimitiveValue]].
-// For other objects, calls ToString().
+// For other objects, calls ToPrimitive with "string" hint to get proper conversion.
+// Returns an error if a Symbol is passed (cannot convert Symbol to string).
+func getStringValueWithVM(vmInstance *vm.VM, val vm.Value) (string, error) {
+	// Symbols cannot be converted to strings implicitly
+	if val.Type() == vm.TypeSymbol {
+		return "", vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+	}
+
+	// If it's a primitive string, return it directly
+	if val.Type() == vm.TypeString {
+		return val.ToString(), nil
+	}
+
+	// If it's an object, check for [[PrimitiveValue]] (String wrapper)
+	if val.IsObject() {
+		if plainObj := val.AsPlainObject(); plainObj != nil {
+			if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+				if primitiveVal.Type() == vm.TypeString {
+					return primitiveVal.ToString(), nil
+				}
+			}
+		}
+		// For other objects, use ToPrimitive to properly call toString/valueOf
+		primVal := vmInstance.ToPrimitive(val, "string")
+		// Check if ToPrimitive returned a Symbol
+		if primVal.Type() == vm.TypeSymbol {
+			return "", vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+		}
+		return primVal.ToString(), nil
+	}
+
+	// Fall back to ToString() for other types
+	return val.ToString(), nil
+}
+
+// getStringValue is a simple version without VM access (for backward compatibility)
 func getStringValue(val vm.Value) string {
 	// If it's a primitive string, return it directly
 	if val.Type() == vm.TypeString {
@@ -33,6 +87,56 @@ func getStringValue(val vm.Value) string {
 	return val.ToString()
 }
 
+// isECMAScriptWhitespace checks if a rune is considered whitespace by ECMAScript
+// This includes all Unicode whitespace plus BOM (U+FEFF) and line terminators
+func isECMAScriptWhitespace(r rune) bool {
+	// ECMAScript 5.1 - 7.2 White Space + 7.3 Line Terminators
+	switch r {
+	case '\t', // TAB
+		'\n', // LF (Line Feed)
+		'\v', // VT (Vertical Tab)
+		'\f', // FF (Form Feed)
+		'\r', // CR (Carriage Return)
+		' ',  // Space
+		'\u00A0', // No-Break Space
+		'\u1680', // Ogham Space Mark
+		'\u2000', // En Quad
+		'\u2001', // Em Quad
+		'\u2002', // En Space
+		'\u2003', // Em Space
+		'\u2004', // Three-Per-Em Space
+		'\u2005', // Four-Per-Em Space
+		'\u2006', // Six-Per-Em Space
+		'\u2007', // Figure Space
+		'\u2008', // Punctuation Space
+		'\u2009', // Thin Space
+		'\u200A', // Hair Space
+		'\u2028', // Line Separator
+		'\u2029', // Paragraph Separator
+		'\u202F', // Narrow No-Break Space
+		'\u205F', // Medium Mathematical Space
+		'\u3000', // Ideographic Space
+		'\uFEFF': // Zero Width No-Break Space (BOM)
+		return true
+	}
+	return false
+}
+
+// trimECMAScriptWhitespace trims ECMAScript whitespace from both ends of a string
+func trimECMAScriptWhitespace(s string) string {
+	return strings.TrimFunc(s, isECMAScriptWhitespace)
+}
+
+// trimLeftECMAScriptWhitespace trims ECMAScript whitespace from the left of a string
+func trimLeftECMAScriptWhitespace(s string) string {
+	return strings.TrimLeftFunc(s, isECMAScriptWhitespace)
+}
+
+// trimRightECMAScriptWhitespace trims ECMAScript whitespace from the right of a string
+func trimRightECMAScriptWhitespace(s string) string {
+	return strings.TrimRightFunc(s, isECMAScriptWhitespace)
+}
+
 type StringInitializer struct{}
 
 func (s *StringInitializer) Name() string {
@@ -46,7 +150,9 @@ func (s *StringInitializer) Priority() int {
 func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 	// Create String constructor type first (needed for constructor property)
 	stringCtorType := types.NewSimpleFunction([]types.Type{types.Any}, types.String).
-		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number}))
+		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number})).
+		WithProperty("fromCodePoint", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number})).
+		WithProperty("raw", types.NewVariadicFunction([]types.Type{types.Any}, types.String, &types.ArrayType{ElementType: types.Any}))
 
 	// Create String.prototype type with all methods
 	// Note: 'this' is implicit and not included in type signatures
@@ -54,6 +160,7 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("at", types.NewOptionalFunction([]types.Type{types.Number}, types.NewUnionType(types.String, types.Undefined), []bool{true})).
 		WithProperty("charAt", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
 		WithProperty("charCodeAt", types.NewOptionalFunction([]types.Type{types.Number}, types.Number, []bool{true})).
+		WithProperty("codePointAt", types.NewOptionalFunction([]types.Type{types.Number}, types.NewUnionType(types.Number, types.Undefined), []bool{true})).
 		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.String, []bool{false, true})).
 		WithProperty("substring", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.String, []bool{false, true})).
 		WithProperty("substr", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.String, []bool{false, true})).
@@ -64,14 +171,22 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("endsWith", types.NewOptionalFunction([]types.Type{types.String, types.Number}, types.Boolean, []bool{false, true})).
 		WithProperty("toLowerCase", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toUpperCase", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toLocaleLowerCase", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
+		WithProperty("toLocaleUpperCase", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
+		WithProperty("normalize", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
+		WithProperty("localeCompare", types.NewSimpleFunction([]types.Type{types.String}, types.Number)).
 		WithProperty("trim", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("trimStart", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("trimEnd", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("repeat", types.NewSimpleFunction([]types.Type{types.Number}, types.String)).
+		WithProperty("padStart", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
+		WithProperty("padEnd", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
 		WithProperty("concat", types.NewVariadicFunction([]types.Type{}, types.String, types.String)).
 		WithProperty("split", types.NewOptionalFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.Number}, &types.ArrayType{ElementType: types.String}, []bool{false, true})).
 		WithProperty("replace", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.String}, types.String)).
+		WithProperty("replaceAll", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.String}, types.String)).
 		WithProperty("match", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.NewUnionType(&types.ArrayType{ElementType: types.String}, types.Null))).
+		WithProperty("matchAll", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Any)). // Returns IterableIterator<RegExpMatchArray>
 		WithProperty("search", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Number)).
 		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
 
@@ -154,8 +269,16 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	stringProto.SetOwnNonEnumerable("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "charAt"); err != nil {
+			return vm.Undefined, err
+		}
 		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
-		thisStr := getStringValue(thisVal)
+		// For other objects, call ToPrimitive("string") to get proper conversion
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		// Default to index 0 if no argument provided, using proper ToInteger conversion
 		index := 0
 		if len(args) >= 1 {
@@ -172,8 +295,16 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	stringProto.SetOwnNonEnumerable("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "charCodeAt"); err != nil {
+			return vm.Undefined, err
+		}
 		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
-		thisStr := getStringValue(thisVal)
+		// For other objects, call ToPrimitive("string") to get proper conversion
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		// Default to index 0 if no argument provided, using proper ToInteger conversion
 		index := 0
 		if len(args) >= 1 {
@@ -190,8 +321,16 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// String.prototype.at - returns character at relative index (supports negative indices)
 	stringProto.SetOwnNonEnumerable("at", vm.NewNativeFunction(1, false, "at", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "at"); err != nil {
+			return vm.Undefined, err
+		}
 		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
-		thisStr := getStringValue(thisVal)
+		// For other objects, call ToPrimitive("string") to get proper conversion
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		// Convert to UTF-16 code units for proper JavaScript string semantics
 		utf16Units := vm.StringToUTF16(thisStr)
 		length := len(utf16Units)
@@ -216,8 +355,66 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(string(rune(utf16Units[index]))), nil
 	}))
 
+	// String.prototype.codePointAt - returns code point at position (handles surrogate pairs)
+	stringProto.SetOwnNonEnumerable("codePointAt", vm.NewNativeFunction(1, false, "codePointAt", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "codePointAt"); err != nil {
+			return vm.Undefined, err
+		}
+		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
+		// For other objects, call ToPrimitive("string") to get proper conversion
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Convert to UTF-16 code units for proper JavaScript string semantics
+		utf16Units := vm.StringToUTF16(thisStr)
+		size := len(utf16Units)
+
+		// Default to 0 if no argument provided, using proper ToInteger conversion
+		position := 0
+		if len(args) >= 1 {
+			position = vmInstance.ToInteger(args[0])
+		}
+
+		// Return undefined if out of bounds
+		if position < 0 || position >= size {
+			return vm.Undefined, nil
+		}
+
+		// Get the first code unit
+		first := utf16Units[position]
+
+		// If not a lead surrogate, or at end of string, return the code unit
+		if first < 0xD800 || first > 0xDBFF || position+1 >= size {
+			return vm.NumberValue(float64(first)), nil
+		}
+
+		// Get the second code unit
+		second := utf16Units[position+1]
+
+		// If not a trail surrogate, return the lead surrogate
+		if second < 0xDC00 || second > 0xDFFF {
+			return vm.NumberValue(float64(first)), nil
+		}
+
+		// Compute the full code point from surrogate pair
+		// Formula: (first - 0xD800) * 0x400 + (second - 0xDC00) + 0x10000
+		codePoint := (int(first)-0xD800)*0x400 + (int(second) - 0xDC00) + 0x10000
+		return vm.NumberValue(float64(codePoint)), nil
+	}))
+
 	stringProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "slice"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		length := len(thisStr)
 		if len(args) < 1 {
 			return vm.NewString(thisStr), nil
@@ -250,7 +447,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "substring"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		length := len(thisStr)
 		if len(args) < 1 {
 			return vm.NewString(thisStr), nil
@@ -278,7 +483,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "substr"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		length := len(thisStr)
 		if len(args) < 1 {
 			return vm.NewString(thisStr), nil
@@ -307,7 +520,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "indexOf"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
 		}
@@ -330,7 +551,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "lastIndexOf"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
 		}
@@ -349,9 +578,21 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "includes"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
+		}
+		// Reject RegExp arguments
+		if isRegExp(args[0]) {
+			return vm.Undefined, vmInstance.NewTypeError("First argument to String.prototype.includes must not be a regular expression")
 		}
 		searchStr := args[0].ToString()
 		position := 0
@@ -368,9 +609,21 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("startsWith", vm.NewNativeFunction(2, false, "startsWith", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "startsWith"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
+		}
+		// Reject RegExp arguments
+		if isRegExp(args[0]) {
+			return vm.Undefined, vmInstance.NewTypeError("First argument to String.prototype.startsWith must not be a regular expression")
 		}
 		searchStr := args[0].ToString()
 		position := 0
@@ -387,9 +640,21 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("endsWith", vm.NewNativeFunction(2, false, "endsWith", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "endsWith"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
+		}
+		// Reject RegExp arguments
+		if isRegExp(args[0]) {
+			return vm.Undefined, vmInstance.NewTypeError("First argument to String.prototype.endsWith must not be a regular expression")
 		}
 		searchStr := args[0].ToString()
 		length := len(thisStr)
@@ -408,32 +673,174 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "toLowerCase"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		return vm.NewString(strings.ToLower(thisStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "toUpperCase"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		return vm.NewString(strings.ToUpper(thisStr)), nil
 	}))
 
+	// String.prototype.toLocaleLowerCase - returns string converted to lower case, according to locale
+	stringProto.SetOwnNonEnumerable("toLocaleLowerCase", vm.NewNativeFunction(0, false, "toLocaleLowerCase", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "toLocaleLowerCase"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// For now, use simple lower case (proper locale support requires Intl)
+		return vm.NewString(strings.ToLower(thisStr)), nil
+	}))
+
+	// String.prototype.toLocaleUpperCase - returns string converted to upper case, according to locale
+	stringProto.SetOwnNonEnumerable("toLocaleUpperCase", vm.NewNativeFunction(0, false, "toLocaleUpperCase", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "toLocaleUpperCase"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// For now, use simple upper case (proper locale support requires Intl)
+		return vm.NewString(strings.ToUpper(thisStr)), nil
+	}))
+
+	// String.prototype.normalize - returns Unicode Normalization Form of the string
+	stringProto.SetOwnNonEnumerable("normalize", vm.NewNativeFunction(1, false, "normalize", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "normalize"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Default form is "NFC"
+		formName := "NFC"
+		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
+			formName = args[0].ToString()
+		}
+
+		var result string
+		switch formName {
+		case "NFC":
+			result = norm.NFC.String(thisStr)
+		case "NFD":
+			result = norm.NFD.String(thisStr)
+		case "NFKC":
+			result = norm.NFKC.String(thisStr)
+		case "NFKD":
+			result = norm.NFKD.String(thisStr)
+		default:
+			return vm.Undefined, vmInstance.NewRangeError("The normalization form should be one of NFC, NFD, NFKC, NFKD")
+		}
+		return vm.NewString(result), nil
+	}))
+
+	// String.prototype.localeCompare - compares two strings in the current locale
+	stringProto.SetOwnNonEnumerable("localeCompare", vm.NewNativeFunction(1, false, "localeCompare", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "localeCompare"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		if len(args) < 1 {
+			return vm.NumberValue(0), nil
+		}
+
+		compareStr := args[0].ToString()
+
+		// Simple comparison (proper locale support requires Intl.Collator)
+		if thisStr < compareStr {
+			return vm.NumberValue(-1), nil
+		} else if thisStr > compareStr {
+			return vm.NumberValue(1), nil
+		}
+		return vm.NumberValue(0), nil
+	}))
+
 	stringProto.SetOwnNonEnumerable("trim", vm.NewNativeFunction(0, false, "trim", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.TrimSpace(thisStr)), nil
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "trim"); err != nil {
+			return vm.Undefined, err
+		}
+		// Use proper string conversion (ToPrimitive for objects)
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewString(trimECMAScriptWhitespace(thisStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("trimStart", vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.TrimLeftFunc(thisStr, unicode.IsSpace)), nil
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "trimStart"); err != nil {
+			return vm.Undefined, err
+		}
+		// Use proper string conversion (ToPrimitive for objects)
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewString(trimLeftECMAScriptWhitespace(thisStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
-		return vm.NewString(strings.TrimRightFunc(thisStr, unicode.IsSpace)), nil
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "trimEnd"); err != nil {
+			return vm.Undefined, err
+		}
+		// Use proper string conversion (ToPrimitive for objects)
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewString(trimRightECMAScriptWhitespace(thisStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("repeat", vm.NewNativeFunction(1, false, "repeat", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "repeat"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.NewString(""), nil
 		}
@@ -448,17 +855,168 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(strings.Repeat(thisStr, count)), nil
 	}))
 
+	// String.prototype.padStart - pads string at the start to reach target length
+	stringProto.SetOwnNonEnumerable("padStart", vm.NewNativeFunction(2, false, "padStart", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "padStart"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		utf16Units := vm.StringToUTF16(thisStr)
+		stringLength := len(utf16Units)
+
+		// Get target length
+		targetLength := 0
+		if len(args) >= 1 {
+			targetLength = vmInstance.ToInteger(args[0])
+		}
+
+		// If target length is less than or equal to current length, return original
+		if targetLength <= stringLength {
+			return vm.NewString(thisStr), nil
+		}
+
+		// Get pad string (default to space)
+		padString := " "
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
+			var padErr error
+			padString, padErr = getStringValueWithVM(vmInstance, args[1])
+			if padErr != nil {
+				return vm.Undefined, padErr
+			}
+		}
+
+		// If pad string is empty, return original
+		if padString == "" {
+			return vm.NewString(thisStr), nil
+		}
+
+		// Calculate fill length and build result
+		fillLength := targetLength - stringLength
+		padUtf16 := vm.StringToUTF16(padString)
+
+		// Build the padding
+		var result strings.Builder
+		for result.Len() < fillLength {
+			for _, unit := range padUtf16 {
+				if result.Len() >= fillLength {
+					break
+				}
+				result.WriteRune(rune(unit))
+			}
+		}
+		// Truncate if necessary and append original string
+		padding := result.String()
+		if len(vm.StringToUTF16(padding)) > fillLength {
+			// Truncate to exact fill length
+			padRunes := []rune(padding)
+			padding = string(padRunes[:fillLength])
+		}
+		return vm.NewString(padding + thisStr), nil
+	}))
+
+	// String.prototype.padEnd - pads string at the end to reach target length
+	stringProto.SetOwnNonEnumerable("padEnd", vm.NewNativeFunction(2, false, "padEnd", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "padEnd"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		utf16Units := vm.StringToUTF16(thisStr)
+		stringLength := len(utf16Units)
+
+		// Get target length
+		targetLength := 0
+		if len(args) >= 1 {
+			targetLength = vmInstance.ToInteger(args[0])
+		}
+
+		// If target length is less than or equal to current length, return original
+		if targetLength <= stringLength {
+			return vm.NewString(thisStr), nil
+		}
+
+		// Get pad string (default to space)
+		padString := " "
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
+			var padErr error
+			padString, padErr = getStringValueWithVM(vmInstance, args[1])
+			if padErr != nil {
+				return vm.Undefined, padErr
+			}
+		}
+
+		// If pad string is empty, return original
+		if padString == "" {
+			return vm.NewString(thisStr), nil
+		}
+
+		// Calculate fill length and build result
+		fillLength := targetLength - stringLength
+		padUtf16 := vm.StringToUTF16(padString)
+
+		// Build the padding
+		var result strings.Builder
+		for result.Len() < fillLength {
+			for _, unit := range padUtf16 {
+				if result.Len() >= fillLength {
+					break
+				}
+				result.WriteRune(rune(unit))
+			}
+		}
+		// Truncate if necessary and prepend original string
+		padding := result.String()
+		if len(vm.StringToUTF16(padding)) > fillLength {
+			// Truncate to exact fill length
+			padRunes := []rune(padding)
+			padding = string(padRunes[:fillLength])
+		}
+		return vm.NewString(thisStr + padding), nil
+	}))
+
 	stringProto.SetOwnNonEnumerable("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "concat"); err != nil {
+			return vm.Undefined, err
+		}
+		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
+		// For other objects, call ToPrimitive("string") to get proper conversion
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		result := thisStr
 		for i := 0; i < len(args); i++ {
-			result += args[i].ToString()
+			// Also convert arguments using ToPrimitive for proper object handling
+			argStr, argErr := getStringValueWithVM(vmInstance, args[i])
+			if argErr != nil {
+				return vm.Undefined, argErr
+			}
+			result += argStr
 		}
 		return vm.NewString(result), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "split"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) == 0 {
 			// No separator - return array with whole string
 			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)}), nil
@@ -520,7 +1078,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("replace", vm.NewNativeFunction(2, false, "replace", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "replace"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 2 {
 			return vm.NewString(thisStr), nil
 		}
@@ -554,8 +1120,51 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}))
 
+	// String.prototype.replaceAll - replaces all occurrences of a search string/pattern
+	stringProto.SetOwnNonEnumerable("replaceAll", vm.NewNativeFunction(2, false, "replaceAll", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "replaceAll"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if len(args) < 2 {
+			return vm.NewString(thisStr), nil
+		}
+
+		searchArg := args[0]
+		replaceValue := args[1].ToString()
+
+		if searchArg.IsRegExp() {
+			// RegExp argument - must be global
+			regexObj := searchArg.AsRegExpObject()
+			if !regexObj.IsGlobal() {
+				return vm.Undefined, vmInstance.NewTypeError("String.prototype.replaceAll called with a non-global RegExp argument")
+			}
+			compiledRegex := regexObj.GetCompiledRegex()
+			result := compiledRegex.ReplaceAllString(thisStr, replaceValue)
+			return vm.NewString(result), nil
+		} else {
+			// String argument - replace all occurrences
+			searchValue := searchArg.ToString()
+			result := strings.ReplaceAll(thisStr, searchValue, replaceValue)
+			return vm.NewString(result), nil
+		}
+	}))
+
 	stringProto.SetOwnNonEnumerable("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "match"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.Null, nil
 		}
@@ -601,8 +1210,58 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}))
 
+	// String.prototype.matchAll - returns an iterator of all matches
+	stringProto.SetOwnNonEnumerable("matchAll", vm.NewNativeFunction(1, false, "matchAll", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "matchAll"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("String.prototype.matchAll called with undefined or null argument")
+		}
+
+		arg := args[0]
+		var compiledRegex *regexp.Regexp
+
+		if arg.IsRegExp() {
+			// RegExp argument - must be global
+			regexObj := arg.AsRegExpObject()
+			if !regexObj.IsGlobal() {
+				return vm.Undefined, vmInstance.NewTypeError("String.prototype.matchAll called with a non-global RegExp argument")
+			}
+			compiledRegex = regexObj.GetCompiledRegex()
+		} else {
+			// String argument - create a global RegExp from it
+			pattern := regexp.QuoteMeta(arg.ToString())
+			var err error
+			compiledRegex, err = regexp.Compile(pattern)
+			if err != nil {
+				return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", err.Error())
+			}
+		}
+
+		// Find all matches with indices
+		allMatches := compiledRegex.FindAllStringSubmatchIndex(thisStr, -1)
+
+		// Create iterator that returns match results
+		return createMatchAllIterator(vmInstance, thisStr, allMatches, compiledRegex), nil
+	}))
+
 	stringProto.SetOwnNonEnumerable("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "search"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
 		}
@@ -696,10 +1355,107 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Use runes to properly handle Unicode code points
 		result := make([]rune, len(args))
 		for i, arg := range args {
-			code := int(arg.ToFloat()) & 0xFFFF // Mask to 16 bits like JS
+			// Use ToNumber to properly call ToPrimitive for objects
+			code := int(vmInstance.ToNumber(arg)) & 0xFFFF // Mask to 16 bits like JS
 			result[i] = rune(code)
 		}
 		return vm.NewString(string(result)), nil
+	}))
+
+	// String.fromCodePoint - creates string from code points (supports full Unicode range)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("fromCodePoint", vm.NewNativeFunction(0, true, "fromCodePoint", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 {
+			return vm.NewString(""), nil
+		}
+		var result strings.Builder
+		for _, arg := range args {
+			// Use ToNumber to properly call ToPrimitive for objects
+			codePoint := int(vmInstance.ToNumber(arg))
+			// Check for valid code point range
+			if codePoint < 0 || codePoint > 0x10FFFF {
+				return vm.Undefined, vmInstance.NewRangeError("Invalid code point")
+			}
+			// Convert code point to string (handles surrogate pairs automatically)
+			result.WriteRune(rune(codePoint))
+		}
+		return vm.NewString(result.String()), nil
+	}))
+
+	// String.raw - template tag function for raw string literals
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("raw", vm.NewNativeFunction(1, true, "raw", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+
+		// Get the template object (first argument)
+		template := args[0]
+		if !template.IsObject() && !template.IsArray() {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+
+		// Get the 'raw' property from template
+		var rawArray vm.Value
+		if template.IsObject() {
+			if po := template.AsPlainObject(); po != nil {
+				if rawProp, exists := po.Get("raw"); exists {
+					rawArray = rawProp
+				} else {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+				}
+			} else {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+			}
+		} else {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+
+		// Get length and elements from raw array
+		var rawElements []vm.Value
+		if rawArray.IsArray() {
+			arr := rawArray.AsArray()
+			if arr != nil {
+				rawLength := arr.Length()
+				rawElements = make([]vm.Value, rawLength)
+				for i := 0; i < rawLength; i++ {
+					rawElements[i] = arr.Get(i)
+				}
+			}
+		} else if rawArray.IsObject() {
+			// Could be array-like object
+			if po := rawArray.AsPlainObject(); po != nil {
+				if lengthVal, exists := po.Get("length"); exists {
+					rawLength := int(lengthVal.ToFloat())
+					rawElements = make([]vm.Value, rawLength)
+					for i := 0; i < rawLength; i++ {
+						if elem, exists := po.Get(fmt.Sprintf("%d", i)); exists {
+							rawElements[i] = elem
+						} else {
+							rawElements[i] = vm.Undefined
+						}
+					}
+				}
+			}
+		}
+
+		if len(rawElements) == 0 {
+			return vm.NewString(""), nil
+		}
+
+		// Build the result by interleaving raw strings and substitutions
+		var result strings.Builder
+		substitutions := args[1:] // Rest of args are substitutions
+
+		for i, rawElement := range rawElements {
+			// Convert raw element to string
+			result.WriteString(rawElement.ToString())
+
+			// Add substitution if available (between raw strings)
+			if i < len(rawElements)-1 && i < len(substitutions) {
+				result.WriteString(substitutions[i].ToString())
+			}
+		}
+
+		return vm.NewString(result.String()), nil
 	}))
 
 	stringCtor = ctorWithProps
@@ -721,6 +1477,63 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Register String constructor as global
 	return ctx.DefineGlobal("String", stringCtor)
+}
+
+// createMatchAllIterator creates an iterator for String.prototype.matchAll
+func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int, compiledRegex *regexp.Regexp) vm.Value {
+	// Create iterator object inheriting from Object.prototype
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Iterator state: current match index
+	currentMatchIndex := 0
+
+	// Add next() method to iterator
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		// Create iterator result object {value, done}
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+		if currentMatchIndex >= len(allMatches) {
+			// Iterator is exhausted
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+		} else {
+			// Get current match indices
+			matchIndices := allMatches[currentMatchIndex]
+
+			// Create match result array (similar to RegExp.exec result)
+			matchResult := vm.NewArray()
+			arr := matchResult.AsArray()
+
+			// Add full match first
+			if matchIndices[0] >= 0 && matchIndices[1] >= 0 {
+				arr.Append(vm.NewString(str[matchIndices[0]:matchIndices[1]]))
+			} else {
+				arr.Append(vm.Undefined)
+			}
+
+			// Add capture groups
+			for i := 2; i < len(matchIndices); i += 2 {
+				if matchIndices[i] >= 0 && matchIndices[i+1] >= 0 {
+					arr.Append(vm.NewString(str[matchIndices[i]:matchIndices[i+1]]))
+				} else {
+					arr.Append(vm.Undefined)
+				}
+			}
+
+			// Add index property
+			matchResult.AsPlainObject().SetOwn("index", vm.NumberValue(float64(matchIndices[0])))
+			// Add input property
+			matchResult.AsPlainObject().SetOwn("input", vm.NewString(str))
+
+			result.SetOwn("value", matchResult)
+			result.SetOwn("done", vm.BooleanValue(false))
+			currentMatchIndex++
+		}
+
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+
+	return vm.NewValueFromPlainObject(iterator)
 }
 
 // createStringIterator creates an iterator object for string iteration
