@@ -8,6 +8,31 @@ import (
 	"unicode"
 )
 
+// getStringValue extracts the string value from a value.
+// For primitive strings, returns the string directly.
+// For String wrapper objects, extracts the [[PrimitiveValue]].
+// For other objects, calls ToString().
+func getStringValue(val vm.Value) string {
+	// If it's a primitive string, return it directly
+	if val.Type() == vm.TypeString {
+		return val.ToString()
+	}
+
+	// If it's an object, check for [[PrimitiveValue]] (String wrapper)
+	if val.IsObject() {
+		if plainObj := val.AsPlainObject(); plainObj != nil {
+			if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+				if primitiveVal.Type() == vm.TypeString {
+					return primitiveVal.ToString()
+				}
+			}
+		}
+	}
+
+	// Fall back to ToString() for other types
+	return val.ToString()
+}
+
 type StringInitializer struct{}
 
 func (s *StringInitializer) Name() string {
@@ -26,8 +51,9 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 	// Create String.prototype type with all methods
 	// Note: 'this' is implicit and not included in type signatures
 	stringProtoType := types.NewObjectType().
-		WithProperty("charAt", types.NewSimpleFunction([]types.Type{types.Number}, types.String)).
-		WithProperty("charCodeAt", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("at", types.NewOptionalFunction([]types.Type{types.Number}, types.NewUnionType(types.String, types.Undefined), []bool{true})).
+		WithProperty("charAt", types.NewOptionalFunction([]types.Type{types.Number}, types.String, []bool{true})).
+		WithProperty("charCodeAt", types.NewOptionalFunction([]types.Type{types.Number}, types.Number, []bool{true})).
 		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.String, []bool{false, true})).
 		WithProperty("substring", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.String, []bool{false, true})).
 		WithProperty("substr", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.String, []bool{false, true})).
@@ -81,7 +107,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	objectProto := vmInstance.ObjectPrototype
 
 	// Create String.prototype inheriting from Object.prototype
+	// String.prototype itself has [[PrimitiveValue]] = "" per ES spec
 	stringProto := vm.NewObject(objectProto).AsPlainObject()
+	stringProto.SetOwn("[[PrimitiveValue]]", vm.NewString(""))
 
 	// Add String prototype methods
 	stringProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
@@ -125,29 +153,67 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	stringProto.SetOwnNonEnumerable("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
-		if len(args) < 1 {
-			return vm.NewString(""), nil
-		}
-		index := int(args[0].ToFloat())
-		if index < 0 || index >= len(thisStr) {
-			return vm.NewString(""), nil
-		}
-		return vm.NewString(string(thisStr[index])), nil
-	}))
-
-	stringProto.SetOwnNonEnumerable("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
-		if len(args) < 1 {
-			return vm.NumberValue(float64(0x7FFFFFFF)), nil // NaN equivalent
+		thisVal := vmInstance.GetThis()
+		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
+		thisStr := getStringValue(thisVal)
+		// Default to index 0 if no argument provided, using proper ToInteger conversion
+		index := 0
+		if len(args) >= 1 {
+			index = vmInstance.ToInteger(args[0])
 		}
 		// Convert to UTF-16 code units for proper JavaScript string semantics
 		utf16Units := vm.StringToUTF16(thisStr)
-		index := int(args[0].ToFloat())
 		if index < 0 || index >= len(utf16Units) {
-			return vm.NumberValue(float64(0x7FFFFFFF)), nil // NaN equivalent
+			return vm.NewString(""), nil
+		}
+		// Return the character at the UTF-16 index
+		return vm.NewString(string(rune(utf16Units[index]))), nil
+	}))
+
+	stringProto.SetOwnNonEnumerable("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
+		thisStr := getStringValue(thisVal)
+		// Default to index 0 if no argument provided, using proper ToInteger conversion
+		index := 0
+		if len(args) >= 1 {
+			index = vmInstance.ToInteger(args[0])
+		}
+		// Convert to UTF-16 code units for proper JavaScript string semantics
+		utf16Units := vm.StringToUTF16(thisStr)
+		if index < 0 || index >= len(utf16Units) {
+			return vm.NaN, nil // Return NaN for out of bounds
 		}
 		return vm.NumberValue(float64(utf16Units[index])), nil
+	}))
+
+	// String.prototype.at - returns character at relative index (supports negative indices)
+	stringProto.SetOwnNonEnumerable("at", vm.NewNativeFunction(1, false, "at", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
+		thisStr := getStringValue(thisVal)
+		// Convert to UTF-16 code units for proper JavaScript string semantics
+		utf16Units := vm.StringToUTF16(thisStr)
+		length := len(utf16Units)
+
+		// Default to 0 if no argument provided, using proper ToInteger conversion
+		index := 0
+		if len(args) >= 1 {
+			index = vmInstance.ToInteger(args[0])
+		}
+
+		// Handle negative indices (relative to end)
+		if index < 0 {
+			index = length + index
+		}
+
+		// Return undefined if out of bounds
+		if index < 0 || index >= length {
+			return vm.Undefined, nil
+		}
+
+		// Return the character at the UTF-16 index
+		return vm.NewString(string(rune(utf16Units[index]))), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {

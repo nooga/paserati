@@ -8916,6 +8916,40 @@ func (vm *VM) ToPrimitive(val Value, hint string) Value {
 	return vm.toPrimitive(val, hint)
 }
 
+// ToNumber implements ECMAScript ToNumber abstract operation.
+// It properly converts objects by first calling ToPrimitive with "number" hint.
+func (vm *VM) ToNumber(val Value) float64 {
+	// For objects, first convert to primitive with "number" hint
+	if val.IsObject() || val.IsCallable() {
+		val = vm.toPrimitive(val, "number")
+		// If toPrimitive threw, return NaN (error handling is done elsewhere)
+		if vm.unwinding {
+			return math.NaN()
+		}
+	}
+	return val.ToFloat()
+}
+
+// ToInteger implements ECMAScript ToInteger abstract operation.
+// Returns an int after proper number conversion.
+func (vm *VM) ToInteger(val Value) int {
+	n := vm.ToNumber(val)
+	if math.IsNaN(n) || n == 0 {
+		return 0
+	}
+	if math.IsInf(n, 0) {
+		if n > 0 {
+			return math.MaxInt32
+		}
+		return math.MinInt32
+	}
+	// Truncate towards zero
+	if n < 0 {
+		return int(math.Ceil(n))
+	}
+	return int(math.Floor(n))
+}
+
 // abstractEqual implements ECMAScript Abstract Equality (==) with object-to-primitive conversion
 func (vm *VM) abstractEqual(a, b Value) bool {
 	// If types are identical, use strict equality
