@@ -213,6 +213,21 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString("[object Array]"), nil
 		case vm.TypeFunction, vm.TypeNativeFunction, vm.TypeClosure:
 			return vm.NewString("[object Function]"), nil
+		case vm.TypeObject:
+			// Check for wrapper objects with [[PrimitiveValue]]
+			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
+				if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+					switch primitiveVal.Type() {
+					case vm.TypeBoolean:
+						return vm.NewString("[object Boolean]"), nil
+					case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+						return vm.NewString("[object Number]"), nil
+					case vm.TypeString:
+						return vm.NewString("[object String]"), nil
+					}
+				}
+			}
+			return vm.NewString("[object Object]"), nil
 		default:
 			return vm.NewString("[object Object]"), nil
 		}

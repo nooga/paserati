@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"fmt"
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -45,7 +44,9 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 	objectProto := vmInstance.ObjectPrototype
 
 	// Create Boolean.prototype inheriting from Object.prototype
+	// Boolean.prototype itself is a Boolean wrapper object with [[PrimitiveValue]] = false
 	booleanProto := vm.NewObject(objectProto).AsPlainObject()
+	booleanProto.SetOwn("[[PrimitiveValue]]", vm.BooleanValue(false))
 
 	// Add Boolean prototype methods
 	booleanProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -73,8 +74,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// TypeError: Boolean.prototype.toString requires that 'this' be a Boolean
-		return vm.Undefined, fmt.Errorf("Boolean.prototype.toString requires that 'this' be a Boolean")
+		return vm.Undefined, vmInstance.NewTypeError("Boolean.prototype.toString requires that 'this' be a Boolean")
 	}))
 
 	booleanProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
@@ -88,12 +88,14 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// If this is a Boolean wrapper object, extract [[PrimitiveValue]]
 		if thisBool.IsObject() {
 			if primitiveVal, exists := thisBool.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
-				return primitiveVal, nil
+				// Must be a boolean [[PrimitiveValue]], not string or number
+				if primitiveVal.Type() == vm.TypeBoolean {
+					return primitiveVal, nil
+				}
 			}
 		}
 
-		// TypeError: Boolean.prototype.valueOf requires that 'this' be a Boolean
-		return vm.Undefined, fmt.Errorf("Boolean.prototype.valueOf requires that 'this' be a Boolean")
+		return vm.Undefined, vmInstance.NewTypeError("Boolean.prototype.valueOf requires that 'this' be a Boolean")
 	}))
 
 	// Set Boolean.prototype
@@ -111,8 +113,8 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 			case vm.TypeBoolean:
 				primitiveValue = arg.AsBoolean()
 			case vm.TypeString:
-				str := arg.ToString()
-				primitiveValue = str != "" && str != "0" && str != "false"
+				// In JavaScript, any non-empty string is truthy (including "0" and "false")
+				primitiveValue = arg.ToString() != ""
 			case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 				num := arg.ToFloat()
 				primitiveValue = num != 0 && !math.IsNaN(num)
