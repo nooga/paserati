@@ -176,6 +176,15 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return false, InterpretOK, Undefined
 			}
 			return false, InterpretRuntimeError, Undefined
+		case TypeString, TypeFloatNumber, TypeIntegerNumber, TypeBoolean, TypeSymbol, TypeBigInt:
+			// For primitive types (string, number, boolean, symbol, bigint), accessing
+			// unknown properties should return undefined (not throw an error).
+			// Prototype methods and special properties were already handled above.
+			if debugVM {
+				fmt.Printf("[DBG opGetProp] Unknown property '%s' on primitive %s -> undefined\n", propName, objVal.TypeName())
+			}
+			*dest = Undefined
+			return true, InterpretOK, *dest
 		default:
 			// Generic error for other non-object types -> TypeError
 			if debugVM && (propName == "value" || propName == "next") {

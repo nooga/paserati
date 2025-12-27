@@ -3293,12 +3293,18 @@ startExecution:
 				str := AsString(baseVal)
 				if IsNumber(indexVal) {
 					// Numeric index - access string characters
-					idx := int(AsNumber(indexVal))
-					runes := []rune(str)
-					if idx < 0 || idx >= len(runes) {
-						registers[destReg] = Undefined // Out of bounds -> undefined
+					numIdx := AsNumber(indexVal)
+					// NaN, Infinity, or non-integer indices return undefined
+					if math.IsNaN(numIdx) || math.IsInf(numIdx, 0) || numIdx != float64(int(numIdx)) {
+						registers[destReg] = Undefined
 					} else {
-						registers[destReg] = String(string(runes[idx])) // Return char as string
+						idx := int(numIdx)
+						runes := []rune(str)
+						if idx < 0 || idx >= len(runes) {
+							registers[destReg] = Undefined // Out of bounds -> undefined
+						} else {
+							registers[destReg] = String(string(runes[idx])) // Return char as string
+						}
 					}
 				} else {
 					// String/Symbol index - access string properties via prototype chain
@@ -8744,6 +8750,28 @@ func StringToUTF16(s string) []uint16 {
 	}
 
 	return result
+}
+
+// UTF16ToString converts a slice of UTF-16 code units back to a Go string
+func UTF16ToString(units []uint16) string {
+	var result []byte
+	for i := 0; i < len(units); i++ {
+		c := units[i]
+		if c >= 0xD800 && c <= 0xDBFF && i+1 < len(units) {
+			// High surrogate - check for low surrogate
+			low := units[i+1]
+			if low >= 0xDC00 && low <= 0xDFFF {
+				// Valid surrogate pair - convert to UTF-8
+				r := rune(0x10000 + ((rune(c) - 0xD800) << 10) + (rune(low) - 0xDC00))
+				result = append(result, string(r)...)
+				i++ // Skip the low surrogate
+				continue
+			}
+		}
+		// Single code unit (BMP character or lone surrogate)
+		result = append(result, string(rune(c))...)
+	}
+	return string(result)
 }
 
 // stringToBigInt implements ECMAScript StringToBigInt

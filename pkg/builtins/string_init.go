@@ -416,7 +416,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		length := len(thisStr)
-		if len(args) < 1 {
+		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
 			return vm.NewString(thisStr), nil
 		}
 		start := int(args[0].ToFloat())
@@ -429,7 +429,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			start = length
 		}
 		end := length
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			end = int(args[1].ToFloat())
 			if end < 0 {
 				end = length + end
@@ -457,7 +457,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		length := len(thisStr)
-		if len(args) < 1 {
+		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
 			return vm.NewString(thisStr), nil
 		}
 		start := int(args[0].ToFloat())
@@ -467,7 +467,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			start = length
 		}
 		end := length
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			end = int(args[1].ToFloat())
 			if end < 0 {
 				end = 0
@@ -493,7 +493,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		length := len(thisStr)
-		if len(args) < 1 {
+		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
 			return vm.NewString(thisStr), nil
 		}
 		start := int(args[0].ToFloat())
@@ -506,7 +506,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString(""), nil
 		}
 		substrLength := length - start
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			substrLength = int(args[1].ToFloat())
 			if substrLength < 0 {
 				return vm.NewString(""), nil
@@ -529,12 +529,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.NumberValue(-1), nil
+		// indexOf(undefined) searches for "undefined"
+		searchStr := "undefined"
+		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
+			searchStr = args[0].ToString()
 		}
-		searchStr := args[0].ToString()
 		position := 0
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
@@ -560,12 +561,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.NumberValue(-1), nil
+		// lastIndexOf(undefined) searches for "undefined"
+		searchStr := "undefined"
+		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
+			searchStr = args[0].ToString()
 		}
-		searchStr := args[0].ToString()
 		position := len(thisStr)
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
@@ -573,11 +575,16 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				position = len(thisStr)
 			}
 		}
-		index := strings.LastIndex(thisStr[:position+len(searchStr)], searchStr)
+		// Ensure we don't go past the end of the string
+		endPos := position + len(searchStr)
+		if endPos > len(thisStr) {
+			endPos = len(thisStr)
+		}
+		index := strings.LastIndex(thisStr[:endPos], searchStr)
 		return vm.NumberValue(float64(index)), nil
 	}))
 
-	stringProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(1, false, "includes", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "includes"); err != nil {
@@ -587,8 +594,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.BooleanValue(false), nil
+		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
+			// includes(undefined) should search for "undefined"
+			return vm.BooleanValue(strings.Contains(thisStr, "undefined")), nil
 		}
 		// Reject RegExp arguments
 		if isRegExp(args[0]) {
@@ -596,11 +604,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		searchStr := args[0].ToString()
 		position := 0
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
 			}
+		}
+		// Empty string is found at any position (including at the end)
+		if searchStr == "" {
+			return vm.BooleanValue(true), nil
 		}
 		if position >= len(thisStr) {
 			return vm.BooleanValue(false), nil
@@ -608,7 +620,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(strings.Contains(thisStr[position:], searchStr)), nil
 	}))
 
-	stringProto.SetOwnNonEnumerable("startsWith", vm.NewNativeFunction(2, false, "startsWith", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("startsWith", vm.NewNativeFunction(1, false, "startsWith", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "startsWith"); err != nil {
@@ -618,8 +630,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.BooleanValue(false), nil
+		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
+			// startsWith(undefined) should search for "undefined"
+			return vm.BooleanValue(strings.HasPrefix(thisStr, "undefined")), nil
 		}
 		// Reject RegExp arguments
 		if isRegExp(args[0]) {
@@ -627,7 +640,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		searchStr := args[0].ToString()
 		position := 0
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			position = int(args[1].ToFloat())
 			if position < 0 {
 				position = 0
@@ -639,7 +652,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(strings.HasPrefix(thisStr[position:], searchStr)), nil
 	}))
 
-	stringProto.SetOwnNonEnumerable("endsWith", vm.NewNativeFunction(2, false, "endsWith", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("endsWith", vm.NewNativeFunction(1, false, "endsWith", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "endsWith"); err != nil {
@@ -649,8 +662,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.BooleanValue(false), nil
+		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
+			// endsWith(undefined) should search for "undefined"
+			return vm.BooleanValue(strings.HasSuffix(thisStr, "undefined")), nil
 		}
 		// Reject RegExp arguments
 		if isRegExp(args[0]) {
@@ -658,7 +672,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		searchStr := args[0].ToString()
 		length := len(thisStr)
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			length = int(args[1].ToFloat())
 			if length < 0 {
 				length = 0
@@ -829,6 +843,78 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		return vm.NewString(trimRightECMAScriptWhitespace(thisStr)), nil
+	}))
+
+	// String.prototype.isWellFormed - checks if string has no lone surrogates (ES2024)
+	stringProto.SetOwnNonEnumerable("isWellFormed", vm.NewNativeFunction(0, false, "isWellFormed", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "isWellFormed"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Convert to UTF-16 and check for lone surrogates
+		utf16Units := vm.StringToUTF16(thisStr)
+		for i := 0; i < len(utf16Units); i++ {
+			c := utf16Units[i]
+			// Check if it's a high surrogate (0xD800-0xDBFF)
+			if c >= 0xD800 && c <= 0xDBFF {
+				// Must be followed by a low surrogate
+				if i+1 >= len(utf16Units) || utf16Units[i+1] < 0xDC00 || utf16Units[i+1] > 0xDFFF {
+					return vm.BooleanValue(false), nil
+				}
+				i++ // Skip the low surrogate
+			} else if c >= 0xDC00 && c <= 0xDFFF {
+				// Low surrogate without preceding high surrogate
+				return vm.BooleanValue(false), nil
+			}
+		}
+		return vm.BooleanValue(true), nil
+	}))
+
+	// String.prototype.toWellFormed - replaces lone surrogates with U+FFFD (ES2024)
+	stringProto.SetOwnNonEnumerable("toWellFormed", vm.NewNativeFunction(0, false, "toWellFormed", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "toWellFormed"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Convert to UTF-16 and replace lone surrogates with U+FFFD
+		utf16Units := vm.StringToUTF16(thisStr)
+		result := make([]uint16, 0, len(utf16Units))
+
+		for i := 0; i < len(utf16Units); i++ {
+			c := utf16Units[i]
+			// Check if it's a high surrogate (0xD800-0xDBFF)
+			if c >= 0xD800 && c <= 0xDBFF {
+				// Check if followed by low surrogate
+				if i+1 < len(utf16Units) && utf16Units[i+1] >= 0xDC00 && utf16Units[i+1] <= 0xDFFF {
+					// Valid surrogate pair - keep both
+					result = append(result, c, utf16Units[i+1])
+					i++ // Skip the low surrogate
+				} else {
+					// Lone high surrogate - replace with U+FFFD
+					result = append(result, 0xFFFD)
+				}
+			} else if c >= 0xDC00 && c <= 0xDFFF {
+				// Low surrogate without preceding high surrogate - replace with U+FFFD
+				result = append(result, 0xFFFD)
+			} else {
+				// Normal character
+				result = append(result, c)
+			}
+		}
+
+		return vm.NewString(vm.UTF16ToString(result)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("repeat", vm.NewNativeFunction(1, false, "repeat", func(args []vm.Value) (vm.Value, error) {
