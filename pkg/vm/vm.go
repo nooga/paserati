@@ -3662,7 +3662,10 @@ startExecution:
 					arr.elements[idx] = valueVal
 				} else if idx == len(arr.elements) {
 					arr.elements = append(arr.elements, valueVal)
-					arr.length++
+					// Only update length if the new index exceeds current length
+					if len(arr.elements) > arr.length {
+						arr.length = len(arr.elements)
+					}
 				} else {
 					neededCapacity := idx + 1
 
@@ -3689,10 +3692,13 @@ startExecution:
 							arr.elements = newElements
 						}
 						for i := len(arr.elements); i < idx; i++ {
-							arr.elements = append(arr.elements, Undefined)
+							arr.elements = append(arr.elements, Hole) // Use Hole marker for sparse array gaps
 						}
 						arr.elements = append(arr.elements, valueVal)
-						arr.length = len(arr.elements)
+						// Only update length if the new index exceeds current length (preserve sparse array length)
+						if len(arr.elements) > arr.length {
+							arr.length = len(arr.elements)
+						}
 					}
 				}
 

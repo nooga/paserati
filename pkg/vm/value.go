@@ -75,6 +75,7 @@ const (
 	TypeArrayBuffer
 	TypeTypedArray
 	TypeProxy
+	TypeHole // Internal marker for array holes (sparse arrays)
 )
 
 // String returns a human-readable string representation of the ValueType
@@ -307,6 +308,7 @@ func (vm *VM) NewRangeError(message string) error {
 var (
 	Undefined = Value{typ: TypeUndefined}
 	Null      = Value{typ: TypeNull}
+	Hole      = Value{typ: TypeHole} // Internal marker for array holes (sparse arrays)
 	True      = Value{typ: TypeBoolean, payload: 1}
 	False     = Value{typ: TypeBoolean, payload: 0}
 	NaN       = Value{typ: TypeFloatNumber, payload: math.Float64bits(math.NaN())}
@@ -1703,7 +1705,12 @@ func (a *ArrayObject) Get(index int) Value {
 	if index < 0 || index >= len(a.elements) {
 		return Undefined
 	}
-	return a.elements[index]
+	elem := a.elements[index]
+	// Holes should appear as undefined when accessed
+	if elem.typ == TypeHole {
+		return Undefined
+	}
+	return elem
 }
 
 // Set sets the element at the given index, expanding the array if necessary
@@ -1714,12 +1721,13 @@ func (a *ArrayObject) Set(index int, value Value) {
 
 	// Expand array if necessary
 	if index >= len(a.elements) {
-		for i := len(a.elements); i <= index; i++ {
-			a.elements = append(a.elements, Undefined)
+		for i := len(a.elements); i < index; i++ {
+			a.elements = append(a.elements, Hole) // Use Hole marker for gaps
 		}
+		a.elements = append(a.elements, value) // Append the actual value at index
+	} else {
+		a.elements[index] = value
 	}
-
-	a.elements[index] = value
 	if index >= a.length {
 		a.length = index + 1
 	}
@@ -1736,6 +1744,16 @@ func (a *ArrayObject) SetElements(elements []Value) {
 func (a *ArrayObject) Append(value Value) {
 	a.elements = append(a.elements, value)
 	a.length++
+}
+
+// HasIndex returns true if the index has an actual value (not a hole in sparse array)
+func (a *ArrayObject) HasIndex(index int) bool {
+	// Check bounds first
+	if index < 0 || index >= len(a.elements) {
+		return false
+	}
+	// Check if it's a hole (using the special Hole marker)
+	return a.elements[index].typ != TypeHole
 }
 
 // ArgumentsObject methods

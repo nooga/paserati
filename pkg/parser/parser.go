@@ -226,7 +226,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.PRIVATE, p.parseIdentifier)
 	p.registerPrefix(lexer.PROTECTED, p.parseIdentifier)
 	p.registerPrefix(lexer.PUBLIC, p.parseIdentifier)
-	p.registerPrefix(lexer.OF, p.parseIdentifier) // OF is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.OF, p.parseIdentifier)   // OF is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.TYPE, p.parseIdentifier) // TYPE is a contextual keyword (TypeScript), can be used as identifier in JS
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
@@ -2281,7 +2282,9 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 	isYieldParam := p.curTokenIs(lexer.YIELD) && p.inGenerator == 0
 	// Allow AWAIT as parameter name in non-async functions
 	isAwaitParam := p.curTokenIs(lexer.AWAIT) && p.inAsyncFunction == 0
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam {
+	// Allow TYPE as parameter name (it's a contextual keyword in TypeScript, valid as identifier in JS)
+	isTypeParam := p.curTokenIs(lexer.TYPE)
+	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.THIS) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.LBRACE) && !isYieldParam && !isAwaitParam && !isTypeParam {
 		msg := fmt.Sprintf("expected identifier, 'this', or destructuring pattern for parameter, got %s", p.curToken.Type)
 		p.addError(p.curToken, msg)
 		debugPrint("parseParameterList: Error - %s", msg)

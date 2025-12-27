@@ -498,6 +498,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.filter called on null or undefined")
 		}
 
+		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
 		var callback vm.Value
 		if len(args) >= 1 {
@@ -513,40 +526,44 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
 
+		// Get thisArg (second argument to filter)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		result := vm.NewArray()
 
-		// Support both arrays and array-like objects
+		// Support both arrays and array-like objects (with sparse array support)
 		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < arr.Length(); i++ {
-				element := arr.Get(i)
-				test, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.NewArray(), err
-				}
-				if test.IsTruthy() {
-					result.AsArray().Append(element)
+			for i := 0; i < length; i++ {
+				// Only call callback for indices that actually exist (sparse array support)
+				if arr.HasIndex(i) {
+					element := arr.Get(i)
+					test, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.NewArray(), err
+					}
+					if test.IsTruthy() {
+						result.AsArray().Append(element)
+					}
 				}
 			}
 		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
 			for i := 0; i < length; i++ {
 				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				test, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.NewArray(), err
-				}
-				if test.IsTruthy() {
-					result.AsArray().Append(elem)
+				// Only call callback for indices that actually exist
+				if _, ok := po.GetOwn(key); ok {
+					elem, _ := po.Get(key)
+					test, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.NewArray(), err
+					}
+					if test.IsTruthy() {
+						result.AsArray().Append(elem)
+					}
 				}
 			}
 		}
@@ -560,6 +577,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.map called on null or undefined")
 		}
 
+		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
 		var callback vm.Value
 		if len(args) >= 1 {
@@ -575,40 +605,47 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
 
+		// Get thisArg (second argument to map)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
+		// Create result array with same length (for sparse array support)
 		result := vm.NewArray()
+		resultArr := result.AsArray()
+		resultArr.SetLength(length)
 
 		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < arr.Length(); i++ {
-				element := arr.Get(i)
-				mappedValue, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.Undefined, err
+			for i := 0; i < length; i++ {
+				// Only call callback for indices that actually exist (sparse array support)
+				if arr.HasIndex(i) {
+					element := arr.Get(i)
+					mappedValue, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					resultArr.Set(i, mappedValue)
 				}
-				result.AsArray().Append(mappedValue)
 			}
 			return result, nil
 		}
 
 		// Array-like: { length: N, 0: ..., 1: ..., ... }
 		if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
 			for i := 0; i < length; i++ {
 				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
+				// Only call callback for indices that actually exist
+				if _, ok := po.GetOwn(key); ok {
+					elem, _ := po.Get(key)
+					mappedValue, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					resultArr.Set(i, mappedValue)
 				}
-				mappedValue, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.Undefined, err
-				}
-				result.AsArray().Append(mappedValue)
 			}
 			return result, nil
 		}
@@ -624,6 +661,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.forEach called on null or undefined")
 		}
 
+		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
 		var callback vm.Value
 		if len(args) >= 1 {
@@ -639,32 +689,36 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
 
-		// Support both arrays and array-like objects
+		// Get thisArg (second argument to forEach)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
+		// Support both arrays and array-like objects (with sparse array support)
 		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < arr.Length(); i++ {
-				element := arr.Get(i)
-				_, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.Undefined, err
+			for i := 0; i < length; i++ {
+				// Only call callback for indices that actually exist (sparse array support)
+				if arr.HasIndex(i) {
+					element := arr.Get(i)
+					_, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.Undefined, err
+					}
 				}
 			}
 		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
 			for i := 0; i < length; i++ {
 				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				_, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.Undefined, err
+				// Only call callback for indices that actually exist
+				if _, ok := po.GetOwn(key); ok {
+					elem, _ := po.Get(key)
+					_, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.Undefined, err
+					}
 				}
 			}
 		}
@@ -678,6 +732,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.every called on null or undefined")
 		}
 
+		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
 		var callback vm.Value
 		if len(args) >= 1 {
@@ -693,38 +760,42 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
 
-		// Support both arrays and array-like objects
+		// Get thisArg (second argument to every)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
+		// Support both arrays and array-like objects (with sparse array support)
 		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < arr.Length(); i++ {
-				element := arr.Get(i)
-				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-				if !result.IsTruthy() {
-					return vm.BooleanValue(false), nil
+			for i := 0; i < length; i++ {
+				// Only call callback for indices that actually exist (sparse array support)
+				if arr.HasIndex(i) {
+					element := arr.Get(i)
+					result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.BooleanValue(false), err
+					}
+					if !result.IsTruthy() {
+						return vm.BooleanValue(false), nil
+					}
 				}
 			}
 		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
 			for i := 0; i < length; i++ {
 				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-				if !result.IsTruthy() {
-					return vm.BooleanValue(false), nil
+				// Only call callback for indices that actually exist
+				if _, ok := po.GetOwn(key); ok {
+					elem, _ := po.Get(key)
+					result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.BooleanValue(false), err
+					}
+					if !result.IsTruthy() {
+						return vm.BooleanValue(false), nil
+					}
 				}
 			}
 		}
@@ -738,6 +809,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.some called on null or undefined")
 		}
 
+		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
 		var callback vm.Value
 		if len(args) >= 1 {
@@ -753,38 +837,42 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
 
-		// Support both arrays and array-like objects
+		// Get thisArg (second argument to some)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
+		// Support both arrays and array-like objects (with sparse array support)
 		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < arr.Length(); i++ {
-				element := arr.Get(i)
-				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-				if result.IsTruthy() {
-					return vm.BooleanValue(true), nil
+			for i := 0; i < length; i++ {
+				// Only call callback for indices that actually exist (sparse array support)
+				if arr.HasIndex(i) {
+					element := arr.Get(i)
+					result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.BooleanValue(false), err
+					}
+					if result.IsTruthy() {
+						return vm.BooleanValue(true), nil
+					}
 				}
 			}
 		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
 			for i := 0; i < length; i++ {
 				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-				if result.IsTruthy() {
-					return vm.BooleanValue(true), nil
+				// Only call callback for indices that actually exist
+				if _, ok := po.GetOwn(key); ok {
+					elem, _ := po.Get(key)
+					result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					if err != nil {
+						return vm.BooleanValue(false), err
+					}
+					if result.IsTruthy() {
+						return vm.BooleanValue(true), nil
+					}
 				}
 			}
 		}
@@ -798,6 +886,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.reduce called on null or undefined")
 		}
 
+		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
 		var callback vm.Value
 		if len(args) >= 1 {
@@ -811,19 +912,6 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				callbackStr = callback.ToString()
 			}
 			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
-		}
-
-		// Get length
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
 		}
 
 		// 5. If len = 0 and initialValue is not present, throw a TypeError exception.
@@ -879,6 +967,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.reduceRight called on null or undefined")
 		}
 
+		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
 		var callback vm.Value
 		if len(args) >= 1 {
@@ -892,19 +993,6 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				callbackStr = callback.ToString()
 			}
 			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
-		}
-
-		// Get length
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
 		}
 
 		// 5. If len = 0 and initialValue is not present, throw a TypeError exception.
