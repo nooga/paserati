@@ -87,8 +87,8 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 	functionProtoObj.Properties.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
 
-	// Create Function constructor
-	functionCtor := vm.NewNativeFunction(-1, true, "Function", func(args []vm.Value) (vm.Value, error) {
+	// Create Function constructor (length=1 per spec)
+	functionCtor := vm.NewNativeFunction(1, true, "Function", func(args []vm.Value) (vm.Value, error) {
 		return functionConstructorImpl(vmInstance, ctx.Driver, args)
 	})
 

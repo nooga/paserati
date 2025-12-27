@@ -314,8 +314,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("isPrototypeOf", v, &w, &e, &c)
 	}
 
-	// Create Object constructor
-	objectCtor := vm.NewNativeFunction(-1, true, "Object", func(args []vm.Value) (vm.Value, error) {
+	// Create Object constructor (length=1 per spec)
+	objectCtor := vm.NewNativeFunction(1, true, "Object", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
 		}

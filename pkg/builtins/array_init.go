@@ -1762,8 +1762,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return result, nil
 	}))
 
-	// Create Array constructor
-	ctorWithProps := vm.NewConstructorWithProps(-1, true, "Array", func(args []vm.Value) (vm.Value, error) {
+	// Create Array constructor (length=1 per spec, variadic for multiple args)
+	ctorWithProps := vm.NewConstructorWithProps(1, true, "Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewArray(), nil
 		}
