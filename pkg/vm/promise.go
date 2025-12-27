@@ -430,3 +430,29 @@ func (vm *VM) NewArrayFromSlice(elements []Value) Value {
 	arrayObj.SetElements(elements)
 	return arr
 }
+
+// NewPendingPromise creates a new promise in pending state
+func (vm *VM) NewPendingPromise() Value {
+	promise := &PromiseObject{
+		State:            PromisePending,
+		Result:           Undefined,
+		FulfillReactions: []PromiseReaction{},
+		RejectReactions:  []PromiseReaction{},
+	}
+	return Value{typ: TypePromise, obj: promiseToUnsafe(promise)}
+}
+
+// ResolvePromise fulfills a promise with a value (exported wrapper)
+func (vm *VM) ResolvePromise(promise *PromiseObject, value Value) {
+	vm.resolvePromise(promise, value)
+}
+
+// RejectPromise rejects a promise with a reason (exported wrapper)
+func (vm *VM) RejectPromise(promise *PromiseObject, reason Value) {
+	vm.rejectPromise(promise, reason)
+}
+
+// AddPromiseReaction adds a reaction to a promise (exported wrapper)
+func (vm *VM) AddPromiseReaction(promiseVal Value, isFulfilled bool, callback func(Value)) {
+	vm.addPromiseReaction(promiseVal, isFulfilled, callback)
+}

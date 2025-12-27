@@ -320,6 +320,91 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 	return Undefined, nil
 }
 
+// GetSymbolProperty gets a symbol property from an object value, properly handling prototype chain
+// This is safe to call from native functions
+func (vm *VM) GetSymbolProperty(obj Value, symbol Value) (Value, bool) {
+	if symbol.Type() != TypeSymbol {
+		return Undefined, false
+	}
+	symKey := NewSymbolKey(symbol)
+
+	// Handle array type
+	if obj.Type() == TypeArray {
+		arr := obj.AsArray()
+		if arr != nil {
+			// Arrays use ArrayPrototype for symbol properties
+			if vm.ArrayPrototype.Type() != TypeUndefined {
+				proto := vm.ArrayPrototype.AsPlainObject()
+				if proto != nil {
+					if v, ok := proto.GetOwnByKey(symKey); ok {
+						return v, true
+					}
+				}
+			}
+		}
+		return Undefined, false
+	}
+
+	// Handle generator type
+	if obj.Type() == TypeGenerator {
+		if vm.GeneratorPrototype.Type() != TypeUndefined {
+			proto := vm.GeneratorPrototype.AsPlainObject()
+			if proto != nil {
+				if v, ok := proto.GetOwnByKey(symKey); ok {
+					return v, true
+				}
+			}
+		}
+		return Undefined, false
+	}
+
+	// Handle async generator type
+	if obj.Type() == TypeAsyncGenerator {
+		if vm.AsyncGeneratorPrototype.Type() != TypeUndefined {
+			proto := vm.AsyncGeneratorPrototype.AsPlainObject()
+			if proto != nil {
+				if v, ok := proto.GetOwnByKey(symKey); ok {
+					return v, true
+				}
+			}
+		}
+		return Undefined, false
+	}
+
+	// Handle plain object type
+	if obj.Type() == TypeObject {
+		po := obj.AsPlainObject()
+		if po == nil {
+			return Undefined, false
+		}
+
+		// Check own property first
+		if v, ok := po.GetOwnByKey(symKey); ok {
+			return v, true
+		}
+
+		// Walk prototype chain
+		cur := po
+		for cur != nil {
+			protoVal := cur.GetPrototype()
+			if protoVal.Type() != TypeObject {
+				break
+			}
+			proto := protoVal.AsPlainObject()
+			if proto == nil {
+				break
+			}
+			if v, ok := proto.GetOwnByKey(symKey); ok {
+				return v, true
+			}
+			cur = proto
+		}
+		return Undefined, false
+	}
+
+	return Undefined, false
+}
+
 // Call is a unified function calling interface that handles all function types properly
 // This replaces the complex web of CallFunctionDirectly, CallUserFunction, etc.
 func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {

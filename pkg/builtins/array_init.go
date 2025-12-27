@@ -1905,6 +1905,399 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return A, nil
 	}))
 
+	// Array.fromAsync ( asyncItems [ , mapfn [ , thisArg ] ] )
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("fromAsync", vm.NewNativeFunction(1, false, "fromAsync", func(args []vm.Value) (vm.Value, error) {
+		// Get asyncItems
+		var asyncItems vm.Value = vm.Undefined
+		if len(args) > 0 {
+			asyncItems = args[0]
+		}
+
+		// Check if asyncItems is undefined or null
+		if asyncItems.Type() == vm.TypeUndefined || asyncItems.Type() == vm.TypeNull {
+			// Return a rejected promise with TypeError
+			reason := vmInstance.NewTypeError("Cannot convert undefined or null to object")
+			return vmInstance.NewRejectedPromise(vm.NewString(reason.Error())), nil
+		}
+
+		// Get mapfn (optional)
+		var mapfn vm.Value = vm.Undefined
+		if len(args) > 1 {
+			mapfn = args[1]
+		}
+
+		// Get thisArg (optional)
+		var thisArg vm.Value = vm.Undefined
+		if len(args) > 2 {
+			thisArg = args[2]
+		}
+
+		// If mapfn is not undefined and not callable, throw TypeError
+		if mapfn.Type() != vm.TypeUndefined && !mapfn.IsCallable() {
+			reason := vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", mapfn.Type().String()))
+			return vmInstance.NewRejectedPromise(vm.NewString(reason.Error())), nil
+		}
+
+		// Get C (the this value - for subclass support)
+		C := vmInstance.GetThis()
+
+		// Create the promise that will be returned
+		// We need to set up async iteration or array-like processing
+		// This is done inside a promise executor
+
+		// Create pending promise and resolve/reject functions
+		promise := vmInstance.NewPendingPromise()
+		promiseObj := promise.AsPromise()
+
+		// Helper function to resolve the promise with the result array
+		resolveWithArray := func(arr vm.Value) {
+			vmInstance.ResolvePromise(promiseObj, arr)
+		}
+
+		// Helper function to reject the promise
+		rejectWithError := func(err error) {
+			vmInstance.RejectPromise(promiseObj, vm.NewString(err.Error()))
+		}
+
+		// Start async processing
+		rt := vmInstance.GetAsyncRuntime()
+		rt.ScheduleMicrotask(func() {
+			// Try to get async iterator first
+			var iteratorMethod vm.Value = vm.Undefined
+			var usingAsyncIterator bool = false
+
+			// Check for Symbol.asyncIterator using the VM's GetSymbolProperty
+			if method, ok := vmInstance.GetSymbolProperty(asyncItems, SymbolAsyncIterator); ok && method.IsCallable() {
+				iteratorMethod = method
+				usingAsyncIterator = true
+			}
+
+			// If no async iterator, check for sync iterator
+			if iteratorMethod.Type() == vm.TypeUndefined || !iteratorMethod.IsCallable() {
+				usingAsyncIterator = false
+				if method, ok := vmInstance.GetSymbolProperty(asyncItems, SymbolIterator); ok && method.IsCallable() {
+					iteratorMethod = method
+				}
+			}
+
+			// Create result array using constructor if appropriate
+			var A vm.Value
+			if C.IsCallable() && vmInstance.IsConstructor(C) {
+				// Use the constructor
+				result, err := vmInstance.Construct(C, []vm.Value{vm.NumberValue(0)})
+				if err != nil {
+					rejectWithError(err)
+					return
+				}
+				A = result
+			} else {
+				A = vm.NewArray()
+			}
+
+			// Process using iterator or array-like
+			if iteratorMethod.IsCallable() {
+				// Use iterator
+				iterator, err := vmInstance.Call(iteratorMethod, asyncItems, []vm.Value{})
+				if err != nil {
+					rejectWithError(err)
+					return
+				}
+
+				// Get next method - handle different iterator types
+				var nextMethod vm.Value = vm.Undefined
+
+				// For plain objects, use GetProperty
+				if iterator.Type() == vm.TypeObject {
+					nextMethod, err = vmInstance.GetProperty(iterator, "next")
+					if err != nil {
+						rejectWithError(err)
+						return
+					}
+				} else if iterator.Type() == vm.TypeGenerator {
+					// For generators, get from GeneratorPrototype
+					if vmInstance.GeneratorPrototype.Type() != vm.TypeUndefined {
+						proto := vmInstance.GeneratorPrototype.AsPlainObject()
+						if proto != nil {
+							if m, ok := proto.Get("next"); ok {
+								nextMethod = m
+							}
+						}
+					}
+				} else if iterator.Type() == vm.TypeAsyncGenerator {
+					// For async generators, get from AsyncGeneratorPrototype
+					if vmInstance.AsyncGeneratorPrototype.Type() != vm.TypeUndefined {
+						proto := vmInstance.AsyncGeneratorPrototype.AsPlainObject()
+						if proto != nil {
+							if m, ok := proto.Get("next"); ok {
+								nextMethod = m
+							}
+						}
+					}
+				}
+
+				if !nextMethod.IsCallable() {
+					rejectWithError(fmt.Errorf("iterator.next is not a function"))
+					return
+				}
+
+				// Iterate asynchronously
+				k := 0
+				var iterateNext func()
+				iterateNext = func() {
+					// Call next()
+					nextResult, err := vmInstance.Call(nextMethod, iterator, []vm.Value{})
+					if err != nil {
+						rejectWithError(err)
+						return
+					}
+
+					// Handle async iterator (nextResult might be a promise)
+					var handleNextResult func(result vm.Value)
+					handleNextResult = func(result vm.Value) {
+						// Get done and value
+						var done bool = false
+						var value vm.Value = vm.Undefined
+
+						if result.IsObject() {
+							obj := result.AsPlainObject()
+							if obj != nil {
+								if doneVal, ok := obj.GetOwn("done"); ok {
+									done = doneVal.IsTruthy()
+								}
+								if v, ok := obj.GetOwn("value"); ok {
+									value = v
+								}
+							}
+						}
+
+						if done {
+							// Set length and resolve
+							if A.IsArray() {
+								// Length is automatically updated for arrays
+							} else if A.IsObject() {
+								A.AsPlainObject().SetOwn("length", vm.NumberValue(float64(k)))
+							}
+							resolveWithArray(A)
+							return
+						}
+
+						// For async iterator, the value might be a promise
+						var handleValue func(val vm.Value)
+						handleValue = func(val vm.Value) {
+							// Apply mapfn if present
+							var mappedValue vm.Value = val
+							if mapfn.IsCallable() {
+								result, err := vmInstance.Call(mapfn, thisArg, []vm.Value{val, vm.NumberValue(float64(k))})
+								if err != nil {
+									rejectWithError(err)
+									return
+								}
+								mappedValue = result
+							}
+
+							// If mappedValue is a promise, wait for it
+							if mappedValue.Type() == vm.TypePromise {
+								mp := mappedValue.AsPromise()
+								if mp != nil && mp.State == vm.PromisePending {
+									vmInstance.AddPromiseReaction(mappedValue, true, func(v vm.Value) {
+										// Add to result array
+										if A.IsArray() {
+											A.AsArray().Set(k, v)
+										} else if A.IsObject() {
+											A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), v)
+										}
+										k++
+										iterateNext()
+									})
+									vmInstance.AddPromiseReaction(mappedValue, false, func(r vm.Value) {
+										rejectWithError(fmt.Errorf("%s", r.ToString()))
+									})
+									return
+								} else if mp != nil && mp.State == vm.PromiseFulfilled {
+									mappedValue = mp.Result
+								} else if mp != nil && mp.State == vm.PromiseRejected {
+									rejectWithError(fmt.Errorf("%s", mp.Result.ToString()))
+									return
+								}
+							}
+
+							// Add to result array
+							if A.IsArray() {
+								A.AsArray().Set(k, mappedValue)
+							} else if A.IsObject() {
+								A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), mappedValue)
+							}
+							k++
+							rt.ScheduleMicrotask(iterateNext)
+						}
+
+						// If value is a promise (for sync iterator with promise elements), wait for it
+						if value.Type() == vm.TypePromise {
+							vp := value.AsPromise()
+							if vp != nil && vp.State == vm.PromisePending {
+								vmInstance.AddPromiseReaction(value, true, handleValue)
+								vmInstance.AddPromiseReaction(value, false, func(r vm.Value) {
+									rejectWithError(fmt.Errorf("%s", r.ToString()))
+								})
+								return
+							} else if vp != nil && vp.State == vm.PromiseFulfilled {
+								value = vp.Result
+							} else if vp != nil && vp.State == vm.PromiseRejected {
+								rejectWithError(fmt.Errorf("%s", vp.Result.ToString()))
+								return
+							}
+						}
+						handleValue(value)
+					}
+
+					// If nextResult is a promise (async iterator), wait for it
+					if usingAsyncIterator && nextResult.Type() == vm.TypePromise {
+						np := nextResult.AsPromise()
+						if np != nil && np.State == vm.PromisePending {
+							vmInstance.AddPromiseReaction(nextResult, true, handleNextResult)
+							vmInstance.AddPromiseReaction(nextResult, false, func(r vm.Value) {
+								rejectWithError(fmt.Errorf("%s", r.ToString()))
+							})
+							return
+						} else if np != nil && np.State == vm.PromiseFulfilled {
+							nextResult = np.Result
+						} else if np != nil && np.State == vm.PromiseRejected {
+							rejectWithError(fmt.Errorf("%s", np.Result.ToString()))
+							return
+						}
+					}
+					handleNextResult(nextResult)
+				}
+
+				iterateNext()
+			} else {
+				// Array-like: use length property
+				var length int = 0
+
+				if asyncItems.IsArray() {
+					length = asyncItems.AsArray().Length()
+				} else if asyncItems.IsObject() {
+					obj := asyncItems.AsPlainObject()
+					if obj != nil {
+						if lenVal, ok := obj.GetOwn("length"); ok {
+							length = int(lenVal.ToFloat())
+						}
+					}
+				} else {
+					// For primitives, treat as empty
+					resolveWithArray(A)
+					return
+				}
+
+				if length == 0 {
+					resolveWithArray(A)
+					return
+				}
+
+				// Process array-like elements
+				k := 0
+				var processNext func()
+				processNext = func() {
+					if k >= length {
+						// Set length and resolve
+						if A.IsArray() {
+							// Length is auto-updated
+						} else if A.IsObject() {
+							A.AsPlainObject().SetOwn("length", vm.NumberValue(float64(k)))
+						}
+						resolveWithArray(A)
+						return
+					}
+
+					// Get element at k
+					var kValue vm.Value = vm.Undefined
+					if asyncItems.IsArray() {
+						kValue = asyncItems.AsArray().Get(k)
+					} else if asyncItems.IsObject() {
+						obj := asyncItems.AsPlainObject()
+						if obj != nil {
+							if v, ok := obj.GetOwn(fmt.Sprintf("%d", k)); ok {
+								kValue = v
+							}
+						}
+					}
+
+					// Handle the value (might be a promise)
+					var handleKValue func(val vm.Value)
+					handleKValue = func(val vm.Value) {
+						// Apply mapfn if present
+						var mappedValue vm.Value = val
+						if mapfn.IsCallable() {
+							result, err := vmInstance.Call(mapfn, thisArg, []vm.Value{val, vm.NumberValue(float64(k))})
+							if err != nil {
+								rejectWithError(err)
+								return
+							}
+							mappedValue = result
+						}
+
+						// If mappedValue is a promise, wait for it
+						if mappedValue.Type() == vm.TypePromise {
+							mp := mappedValue.AsPromise()
+							if mp != nil && mp.State == vm.PromisePending {
+								vmInstance.AddPromiseReaction(mappedValue, true, func(v vm.Value) {
+									// Add to result array
+									if A.IsArray() {
+										A.AsArray().Set(k, v)
+									} else if A.IsObject() {
+										A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), v)
+									}
+									k++
+									processNext()
+								})
+								vmInstance.AddPromiseReaction(mappedValue, false, func(r vm.Value) {
+									rejectWithError(fmt.Errorf("%s", r.ToString()))
+								})
+								return
+							} else if mp != nil && mp.State == vm.PromiseFulfilled {
+								mappedValue = mp.Result
+							} else if mp != nil && mp.State == vm.PromiseRejected {
+								rejectWithError(fmt.Errorf("%s", mp.Result.ToString()))
+								return
+							}
+						}
+
+						// Add to result array
+						if A.IsArray() {
+							A.AsArray().Set(k, mappedValue)
+						} else if A.IsObject() {
+							A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), mappedValue)
+						}
+						k++
+						rt.ScheduleMicrotask(processNext)
+					}
+
+					// If kValue is a promise, wait for it
+					if kValue.Type() == vm.TypePromise {
+						kp := kValue.AsPromise()
+						if kp != nil && kp.State == vm.PromisePending {
+							vmInstance.AddPromiseReaction(kValue, true, handleKValue)
+							vmInstance.AddPromiseReaction(kValue, false, func(r vm.Value) {
+								rejectWithError(fmt.Errorf("%s", r.ToString()))
+							})
+							return
+						} else if kp != nil && kp.State == vm.PromiseFulfilled {
+							kValue = kp.Result
+						} else if kp != nil && kp.State == vm.PromiseRejected {
+							rejectWithError(fmt.Errorf("%s", kp.Result.ToString()))
+							return
+						}
+					}
+					handleKValue(kValue)
+				}
+
+				processNext()
+			}
+		})
+
+		return promise, nil
+	}))
+
 	// Add Symbol.iterator implementation for arrays
 	// Use the global SymbolIterator (Symbol initializes before Array now)
 	// Register [Symbol.iterator] using native symbol key
