@@ -124,7 +124,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create RegExp constructor function with properties
-	regexpCtor := vm.NewNativeFunctionWithProps(-1, true, "RegExp", func(args []vm.Value) (vm.Value, error) {
+	regexpCtor := vm.NewConstructorWithProps(-1, true, "RegExp", func(args []vm.Value) (vm.Value, error) {
 		// Constructor logic
 		if len(args) == 0 {
 			// new RegExp() - empty pattern

@@ -258,7 +258,7 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Float32Array constructor
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Float32Array", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewConstructorWithProps(-1, true, "Float32Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayFloat32, 0, 0, 0), nil
 		}

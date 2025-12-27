@@ -213,7 +213,7 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// constructor
-	ctor := vm.NewNativeFunctionWithProps(-1, true, "Int8Array", func(args []vm.Value) (vm.Value, error) {
+	ctor := vm.NewConstructorWithProps(-1, true, "Int8Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
 		}

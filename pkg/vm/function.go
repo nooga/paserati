@@ -55,10 +55,11 @@ type ClosureObject struct {
 // NativeFunctionObject represents a native Go function callable from Paserati.
 type NativeFunctionObject struct {
 	Object
-	Arity    int
-	Variadic bool
-	Name     string
-	Fn       func(args []Value) (Value, error)
+	Arity         int
+	Variadic      bool
+	Name          string
+	Fn            func(args []Value) (Value, error)
+	IsConstructor bool // If true, can be used with 'new'; false by default for most native functions
 }
 
 // BoundNativeFunctionObject represents a native function bound to a 'this' value
@@ -82,11 +83,12 @@ type BoundFunctionObject struct {
 // This is useful for constructors that need static methods (like String.fromCharCode)
 type NativeFunctionObjectWithProps struct {
 	Object
-	Arity      int
-	Variadic   bool
-	Name       string
-	Fn         func(args []Value) (Value, error)
-	Properties *PlainObject // Can have properties like static methods
+	Arity         int
+	Variadic      bool
+	Name          string
+	Fn            func(args []Value) (Value, error)
+	Properties    *PlainObject // Can have properties like static methods
+	IsConstructor bool         // If true, can be used with 'new'; most built-in constructors set this to true
 }
 
 // AsyncNativeFunctionObject represents a native function that can call bytecode functions
@@ -197,6 +199,18 @@ func NewNativeFunction(arity int, variadic bool, name string, fn func(args []Val
 	})}
 }
 
+// NewNativeConstructor creates a native function that can be used as a constructor.
+// This is the same as NewNativeFunction but with IsConstructor set to true.
+func NewNativeConstructor(arity int, variadic bool, name string, fn func(args []Value) (Value, error)) Value {
+	return Value{typ: TypeNativeFunction, obj: unsafe.Pointer(&NativeFunctionObject{
+		Arity:         arity,
+		Variadic:      variadic,
+		Name:          name,
+		Fn:            fn,
+		IsConstructor: true,
+	})}
+}
+
 func NewNativeFunctionWithProps(arity int, variadic bool, name string, fn func(args []Value) (Value, error)) Value {
 	props := NewObject(Undefined).AsPlainObject()
 	return Value{typ: TypeNativeFunctionWithProps, obj: unsafe.Pointer(&NativeFunctionObjectWithProps{
@@ -205,6 +219,20 @@ func NewNativeFunctionWithProps(arity int, variadic bool, name string, fn func(a
 		Name:       name,
 		Fn:         fn,
 		Properties: props,
+	})}
+}
+
+// NewConstructorWithProps creates a native function with properties that can be used as a constructor.
+// This is the same as NewNativeFunctionWithProps but with IsConstructor set to true.
+func NewConstructorWithProps(arity int, variadic bool, name string, fn func(args []Value) (Value, error)) Value {
+	props := NewObject(Undefined).AsPlainObject()
+	return Value{typ: TypeNativeFunctionWithProps, obj: unsafe.Pointer(&NativeFunctionObjectWithProps{
+		Arity:         arity,
+		Variadic:      variadic,
+		Name:          name,
+		Fn:            fn,
+		Properties:    props,
+		IsConstructor: true,
 	})}
 }
 

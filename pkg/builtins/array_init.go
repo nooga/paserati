@@ -701,7 +701,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Array constructor
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Array", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewConstructorWithProps(-1, true, "Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewArray(), nil
 		}

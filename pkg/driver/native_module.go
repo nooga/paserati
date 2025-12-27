@@ -235,7 +235,7 @@ func (m *ModuleBuilder) createClassConstructor(goStruct interface{}, constructor
 		return vm.Undefined
 	}
 
-	return vm.NewNativeFunction(constructorType.NumIn(), constructorType.IsVariadic(), "class_constructor", func(args []vm.Value) (vm.Value, error) {
+	return vm.NewNativeConstructor(constructorType.NumIn(), constructorType.IsVariadic(), "class_constructor", func(args []vm.Value) (vm.Value, error) {
 		// Convert VM values to Go values for constructor call
 		goArgs := make([]reflect.Value, len(args))
 		for i, arg := range args {

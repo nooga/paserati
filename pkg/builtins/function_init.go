@@ -95,7 +95,7 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Make it a proper constructor with static methods
 	if ctorObj := functionCtor.AsNativeFunction(); ctorObj != nil {
 		// Convert to object with properties
-		ctorWithProps := vm.NewNativeFunctionWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
+		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property

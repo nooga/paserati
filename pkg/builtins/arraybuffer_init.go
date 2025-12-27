@@ -114,7 +114,7 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create ArrayBuffer constructor
-	ctorWithProps := vm.NewNativeFunctionWithProps(1, true, "ArrayBuffer", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewConstructorWithProps(1, true, "ArrayBuffer", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewArrayBuffer(0), nil
 		}

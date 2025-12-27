@@ -348,7 +348,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
 
 	// Create Set constructor function (before setting prototype, so we can reference it)
-	setConstructor := vm.NewNativeFunctionWithProps(0, false, "Set", func(args []vm.Value) (vm.Value, error) {
+	setConstructor := vm.NewConstructorWithProps(0, false, "Set", func(args []vm.Value) (vm.Value, error) {
 		// Create new Set instance
 		newSet := vm.NewSet()
 		setObj := newSet.AsSet()

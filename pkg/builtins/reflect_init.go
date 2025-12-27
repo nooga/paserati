@@ -6,6 +6,37 @@ import (
 	"strconv"
 )
 
+// isConstructor checks if a value can be used as a constructor (called with 'new')
+func isConstructor(v vm.Value) bool {
+	switch v.Type() {
+	case vm.TypeFunction:
+		fn := vm.AsFunction(v)
+		// Arrow functions and async (non-generator) functions are not constructors
+		if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
+			return false
+		}
+		return true
+	case vm.TypeClosure:
+		cl := vm.AsClosure(v)
+		if cl.Fn.IsArrowFunction || (cl.Fn.IsAsync && !cl.Fn.IsGenerator) {
+			return false
+		}
+		return true
+	case vm.TypeNativeFunction:
+		nf := vm.AsNativeFunction(v)
+		return nf.IsConstructor
+	case vm.TypeNativeFunctionWithProps:
+		nfp := v.AsNativeFunctionWithProps()
+		return nfp.IsConstructor
+	case vm.TypeBoundFunction:
+		// Bound functions inherit constructor status from original
+		bf := v.AsBoundFunction()
+		return isConstructor(bf.OriginalFunction)
+	default:
+		return false
+	}
+}
+
 type ReflectInitializer struct{}
 
 func (r *ReflectInitializer) Name() string  { return "Reflect" }
@@ -313,10 +344,19 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) >= 3 {
 			newTarget = args[2]
 		}
-		_ = newTarget // TODO: Use newTarget for prototype chain
 
 		if !target.IsFunction() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.construct: target is not a constructor")
+		}
+
+		// Check if target is actually a constructor (not arrow function, async, etc.)
+		if !isConstructor(target) {
+			return vm.Undefined, vmInstance.NewTypeError("Reflect.construct: target is not a constructor")
+		}
+
+		// Check if newTarget is a constructor (per ECMAScript spec)
+		if !isConstructor(newTarget) {
+			return vm.Undefined, vmInstance.NewTypeError("Reflect.construct: newTarget is not a constructor")
 		}
 
 		// Convert argsList to array of values

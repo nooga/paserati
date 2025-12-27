@@ -328,7 +328,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mapProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), wIter, &wb, &eb, &cb)
 
 	// Create Map constructor function (before setting prototype, so we can reference it)
-	mapConstructor := vm.NewNativeFunctionWithProps(0, false, "Map", func(args []vm.Value) (vm.Value, error) {
+	mapConstructor := vm.NewConstructorWithProps(0, false, "Map", func(args []vm.Value) (vm.Value, error) {
 		// Create new Map instance
 		newMap := vm.NewMap()
 		mapObj := newMap.AsMap()

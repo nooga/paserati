@@ -174,7 +174,7 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	ctor := vm.NewNativeFunctionWithProps(-1, true, "Int16Array", func(args []vm.Value) (vm.Value, error) {
+	ctor := vm.NewConstructorWithProps(-1, true, "Int16Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
 		}

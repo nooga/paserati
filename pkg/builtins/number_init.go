@@ -230,7 +230,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.NumberPrototype = vm.NewValueFromPlainObject(numberProto)
 
 	// Create Number constructor function
-	numberConstructor := vm.NewNativeFunctionWithProps(1, false, "Number", func(args []vm.Value) (vm.Value, error) {
+	numberConstructor := vm.NewConstructorWithProps(1, false, "Number", func(args []vm.Value) (vm.Value, error) {
 		// Determine the primitive number value
 		var primitiveValue float64
 		if len(args) == 0 {

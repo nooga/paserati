@@ -569,7 +569,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Make it a proper constructor with static methods
-	ctorWithProps := vm.NewNativeFunctionWithProps(1, true, "String", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewConstructorWithProps(1, true, "String", func(args []vm.Value) (vm.Value, error) {
 		// Determine the primitive string value
 		var primitiveValue string
 		if len(args) == 0 {

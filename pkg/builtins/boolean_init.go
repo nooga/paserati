@@ -100,7 +100,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.BooleanPrototype = vm.NewValueFromPlainObject(booleanProto)
 
 	// Create Boolean constructor function
-	booleanConstructor := vm.NewNativeFunctionWithProps(1, false, "Boolean", func(args []vm.Value) (vm.Value, error) {
+	booleanConstructor := vm.NewConstructorWithProps(1, false, "Boolean", func(args []vm.Value) (vm.Value, error) {
 		// Determine the primitive boolean value
 		var primitiveValue bool
 		if len(args) == 0 {

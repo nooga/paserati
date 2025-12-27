@@ -258,7 +258,7 @@ func (u *Uint8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Uint8Array constructor
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Uint8Array", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewConstructorWithProps(-1, true, "Uint8Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayUint8, 0, 0, 0), nil
 		}

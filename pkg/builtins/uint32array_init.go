@@ -174,7 +174,7 @@ func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	ctor := vm.NewNativeFunctionWithProps(-1, true, "Uint32Array", func(args []vm.Value) (vm.Value, error) {
+	ctor := vm.NewConstructorWithProps(-1, true, "Uint32Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayUint32, 0, 0, 0), nil
 		}

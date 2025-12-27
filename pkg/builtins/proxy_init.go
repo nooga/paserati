@@ -42,7 +42,7 @@ func (p *ProxyInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
 	// Create Proxy constructor
-	proxyConstructor := vm.NewNativeFunctionWithProps(2, false, "Proxy", func(args []vm.Value) (vm.Value, error) {
+	proxyConstructor := vm.NewConstructorWithProps(2, false, "Proxy", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("Proxy constructor requires target and handler arguments")
 		}

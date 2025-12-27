@@ -134,7 +134,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.PromisePrototype = vm.NewValueFromPlainObject(promiseProto)
 
 	// Create Promise constructor
-	promiseCtor := vm.NewNativeFunctionWithProps(1, true, "Promise", func(args []vm.Value) (vm.Value, error) {
+	promiseCtor := vm.NewConstructorWithProps(1, true, "Promise", func(args []vm.Value) (vm.Value, error) {
 		executor := vm.Undefined
 		if len(args) > 0 {
 			executor = args[0]

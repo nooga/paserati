@@ -108,7 +108,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Make it a proper constructor with prototype property
 	if ctorObj := errorConstructor.AsNativeFunction(); ctorObj != nil {
 		// Convert to object with properties
-		ctorWithProps := vm.NewNativeFunctionWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
+		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
@@ -189,7 +189,7 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 	if nf := ctor.AsNativeFunction(); nf != nil {
-		withProps := vm.NewNativeFunctionWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
+		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		withProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
 		proto.SetOwnNonEnumerable("constructor", withProps)
 		return ctx.DefineGlobal(name, withProps)

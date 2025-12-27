@@ -258,7 +258,7 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Uint16Array constructor
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Uint16Array", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewConstructorWithProps(-1, true, "Uint16Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayUint16, 0, 0, 0), nil
 		}

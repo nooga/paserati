@@ -77,7 +77,7 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Make it a proper constructor with prototype property
 	if ctorObj := typeErrorConstructor.AsNativeFunction(); ctorObj != nil {
 		// Convert to object with properties
-		ctorWithProps := vm.NewNativeFunctionWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
+		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property

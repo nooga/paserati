@@ -258,7 +258,7 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Float64Array constructor
-	ctorWithProps := vm.NewNativeFunctionWithProps(-1, true, "Float64Array", func(args []vm.Value) (vm.Value, error) {
+	ctorWithProps := vm.NewConstructorWithProps(-1, true, "Float64Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayFloat64, 0, 0, 0), nil
 		}

@@ -5370,6 +5370,23 @@ startExecution:
 				// Constructor call on builtin function
 				builtin := AsNativeFunction(constructorVal)
 
+				// Check if this native function can be used as a constructor
+				if !builtin.IsConstructor {
+					frame.ip = callerIP
+					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", builtin.Name))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+
 				// Be permissive with builtin constructor arity; missing args become undefined
 
 				// Collect arguments for builtin constructor call
@@ -5425,6 +5442,23 @@ startExecution:
 			case TypeNativeFunctionWithProps:
 				// Constructor call on builtin function with properties
 				builtinWithProps := constructorVal.AsNativeFunctionWithProps()
+
+				// Check if this native function can be used as a constructor
+				if !builtinWithProps.IsConstructor {
+					frame.ip = callerIP
+					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", builtinWithProps.Name))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 
 				// Be permissive with builtin constructor arity
 
