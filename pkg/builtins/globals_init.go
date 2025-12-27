@@ -109,6 +109,8 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 }
 
 func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
+	vmInstance := ctx.VM
+
 	// Define global constants
 	if err := ctx.DefineGlobal("Infinity", vm.NumberValue(math.Inf(1))); err != nil {
 		return err
@@ -137,16 +139,11 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NumberValue(math.NaN()), nil
 		}
 
-		// Convert argument to string (applies ToPrimitive with hint "string")
+		// Convert argument to string using ToPrimitive with hint "string" per ECMAScript spec
 		inputVal := args[0]
 
-		// Handle boxed primitives (Number, String objects) by extracting primitive value
-		if inputVal.IsObject() {
-			obj := inputVal.AsPlainObject()
-			if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
-				inputVal = primVal
-			}
-		}
+		// Use ToPrimitive to convert objects - this will call toString() or valueOf()
+		inputVal = vmInstance.ToPrimitive(inputVal, "string")
 
 		str := inputVal.ToString()
 
@@ -163,18 +160,13 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			str = str[1:]
 		}
 
-		// Convert radix to int32 using ToNumber
+		// Convert radix to int32 using ToNumber (with ToPrimitive for objects)
 		var radix int64 = 0
 		if len(args) > 1 {
 			radixArg := args[1]
 
-			// Handle boxed primitives for radix
-			if radixArg.IsObject() {
-				obj := radixArg.AsPlainObject()
-				if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
-					radixArg = primVal
-				}
-			}
+			// Use ToPrimitive to convert objects to number
+			radixArg = vmInstance.ToPrimitive(radixArg, "number")
 
 			radixVal := radixArg.ToFloat()
 			// ToInt32: Convert to integer with wrapping
@@ -237,8 +229,9 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NumberValue(math.NaN()), nil
 		}
 
-		// Convert argument to string (applies ToPrimitive with hint "string")
+		// Convert argument to string using ToPrimitive with hint "string" per ECMAScript spec
 		inputVal := args[0]
+		inputVal = vmInstance.ToPrimitive(inputVal, "string")
 		str := inputVal.ToString()
 
 		// Trim leading whitespace (including Unicode whitespace)
@@ -250,7 +243,7 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NumberValue(math.NaN()), nil
 		}
 
-		// Check for Infinity/-Infinity
+		// Check for Infinity/-Infinity (case-sensitive, only "Infinity" with capital I)
 		if strings.HasPrefix(str, "Infinity") {
 			return vm.NumberValue(math.Inf(1)), nil
 		}
@@ -261,10 +254,68 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NumberValue(math.Inf(-1)), nil
 		}
 
-		// Find the longest valid float prefix
-		// Try parsing progressively shorter prefixes until one works
-		for i := len(str); i > 0; i-- {
-			prefix := str[:i]
+		// Find the longest valid decimal literal prefix
+		// ECMAScript parseFloat grammar only allows: digits, '.', sign, 'e'/'E'
+		// NOTE: Underscores are NOT valid in parseFloat strings (unlike numeric literals in source)
+		// NOTE: "infinity", "inf", etc. are NOT valid (only "Infinity" with capital I)
+		end := 0
+		hasDigit := false
+		hasDecimalPoint := false
+		hasExponent := false
+
+		// Optional leading sign
+		if end < len(str) && (str[end] == '+' || str[end] == '-') {
+			end++
+		}
+
+		// Parse integer part or leading decimal point
+		for end < len(str) && str[end] >= '0' && str[end] <= '9' {
+			hasDigit = true
+			end++
+		}
+
+		// Optional decimal point and fractional part
+		if end < len(str) && str[end] == '.' {
+			hasDecimalPoint = true
+			end++
+			for end < len(str) && str[end] >= '0' && str[end] <= '9' {
+				hasDigit = true
+				end++
+			}
+		}
+
+		// Must have at least one digit
+		if !hasDigit {
+			return vm.NumberValue(math.NaN()), nil
+		}
+
+		// Optional exponent part
+		if end < len(str) && (str[end] == 'e' || str[end] == 'E') {
+			expStart := end
+			end++
+			// Optional sign
+			if end < len(str) && (str[end] == '+' || str[end] == '-') {
+				end++
+			}
+			// Must have at least one digit after e/E
+			if end < len(str) && str[end] >= '0' && str[end] <= '9' {
+				hasExponent = true
+				for end < len(str) && str[end] >= '0' && str[end] <= '9' {
+					end++
+				}
+			} else {
+				// Invalid exponent, backtrack to before 'e'/'E'
+				end = expStart
+			}
+		}
+
+		// Avoid unused variable warnings
+		_ = hasDecimalPoint
+		_ = hasExponent
+
+		// Parse the valid prefix
+		if end > 0 {
+			prefix := str[:end]
 			if result, err := strconv.ParseFloat(prefix, 64); err == nil {
 				// Special case: convert -0 to +0 as per spec
 				if result == 0 && math.Signbit(result) {
@@ -289,7 +340,9 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		val := args[0]
-		// Convert to number first (like JavaScript does)
+		// Use ToPrimitive to convert objects to number
+		val = vmInstance.ToPrimitive(val, "number")
+		// Convert to number (like JavaScript does)
 		numVal := val.ToFloat()
 		return vm.BooleanValue(math.IsNaN(numVal)), nil
 	})
@@ -305,7 +358,9 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		val := args[0]
-		// Convert to number first (like JavaScript does)
+		// Use ToPrimitive to convert objects to number
+		val = vmInstance.ToPrimitive(val, "number")
+		// Convert to number (like JavaScript does)
 		numVal := val.ToFloat()
 		return vm.BooleanValue(!math.IsNaN(numVal) && !math.IsInf(numVal, 0)), nil
 	})

@@ -178,10 +178,15 @@ func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]i
 				if err := h.Set(index, value); err != nil {
 					return fmt.Errorf("failed to set builtin global '%s' at index %d: %v", name, index, err)
 				}
-				// Mark non-configurable globals
+				// Set configurable flag based on ECMAScript spec
 				if nonConfigurableGlobals[name] {
 					if err := h.SetConfigurable(index, false); err != nil {
 						return fmt.Errorf("failed to mark '%s' as non-configurable: %v", name, err)
+					}
+				} else {
+					// Most builtins are configurable (can be deleted)
+					if err := h.SetConfigurable(index, true); err != nil {
+						return fmt.Errorf("failed to mark '%s' as configurable: %v", name, err)
 					}
 				}
 			}

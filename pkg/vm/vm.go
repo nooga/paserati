@@ -398,24 +398,24 @@ func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]in
 
 	// Also add all builtins as properties of the global object
 	// This makes them accessible via globalThis.propertyName
-	// Per ECMAScript spec, NaN, Infinity, and undefined must be non-writable, non-enumerable, non-configurable
+	// Per ECMAScript spec:
+	// - NaN, Infinity, and undefined must be non-writable, non-enumerable, non-configurable
+	// - All other built-in globals are writable, non-enumerable, configurable
 	nonWritableGlobals := map[string]bool{
 		"NaN":       true,
 		"Infinity":  true,
 		"undefined": true,
 	}
 
-	writable := false
-	enumerable := false
-	configurable := false
-
 	for name, value := range globals {
 		if nonWritableGlobals[name] {
 			// Define non-writable, non-enumerable, non-configurable globals
-			vm.GlobalObject.DefineOwnProperty(name, value, &writable, &enumerable, &configurable)
+			w, e, c := false, false, false
+			vm.GlobalObject.DefineOwnProperty(name, value, &w, &e, &c)
 		} else {
-			// Other globals can be writable
-			vm.GlobalObject.SetOwn(name, value)
+			// Other built-in globals are writable=true, enumerable=false, configurable=true
+			w, e, c := true, false, true
+			vm.GlobalObject.DefineOwnProperty(name, value, &w, &e, &c)
 		}
 	}
 
@@ -3756,6 +3756,25 @@ startExecution:
 							return status, Undefined
 						}
 					} else {
+						// GlobalThis special case: keep heap and PlainObject in sync
+						if obj == vm.GlobalObject {
+							if globalIdx, exists := vm.heap.nameToIndex[key]; exists {
+								// Check if property is writable
+								writable := true
+								for _, f := range obj.shape.fields {
+									if f.keyKind == KeyKindString && f.name == key {
+										writable = f.writable
+										break
+									}
+								}
+								if !writable {
+									// Non-writable, throw TypeError
+									vm.throwException(vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", key)).(ExceptionError).GetExceptionValue())
+									return InterpretRuntimeError, Undefined
+								}
+								vm.heap.Set(globalIdx, valueVal)
+							}
+						}
 						// No setter, set as data property
 						obj.SetOwn(key, valueVal)
 					}
@@ -7580,6 +7599,12 @@ startExecution:
 						}
 					}
 					success = po.DeleteOwn(propName)
+					// If this is the GlobalObject, also mark the heap entry as deleted
+					if success && po == vm.GlobalObject {
+						if idx, exists := vm.heap.GetNameToIndex()[propName]; exists {
+							vm.heap.Delete(idx)
+						}
+					}
 				} else if d := obj.AsDictObject(); d != nil {
 					// DictObject properties are always configurable, no strict mode check needed
 					success = d.DeleteOwn(propName)
@@ -7715,7 +7740,14 @@ startExecution:
 					if key.Type() == TypeSymbol {
 						success = po.DeleteOwnByKey(NewSymbolKey(key))
 					} else {
-						success = po.DeleteOwn(key.ToString())
+						propName := key.ToString()
+						success = po.DeleteOwn(propName)
+						// GlobalThis special case: keep heap in sync
+						if success && po == vm.GlobalObject {
+							if idx, exists := vm.heap.GetNameToIndex()[propName]; exists {
+								vm.heap.Delete(idx)
+							}
+						}
 					}
 				} else if d := obj.AsDictObject(); d != nil {
 					if key.Type() == TypeSymbol {
@@ -8869,6 +8901,13 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	// If no method returned a primitive, throw a TypeError
 	vm.ThrowTypeError("Cannot convert object to primitive value")
 	return Undefined
+}
+
+// ToPrimitive is the public wrapper for toPrimitive, allowing builtins to call it.
+// It implements the ECMAScript ToPrimitive abstract operation.
+// hint should be "string", "number", or "default".
+func (vm *VM) ToPrimitive(val Value, hint string) Value {
+	return vm.toPrimitive(val, hint)
 }
 
 // abstractEqual implements ECMAScript Abstract Equality (==) with object-to-primitive conversion

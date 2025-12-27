@@ -110,8 +110,11 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if plainObj := thisValue.AsPlainObject(); plainObj != nil {
 			// Special case for globalThis: check heap for top-level declarations
 			if plainObj == vmInstance.GlobalObject {
-				if _, exists := vmInstance.GetHeap().GetNameToIndex()[propName]; exists {
-					return vm.BooleanValue(true), nil
+				if idx, exists := vmInstance.GetHeap().GetNameToIndex()[propName]; exists {
+					// Also verify the heap value is still initialized (not deleted)
+					if _, isInit := vmInstance.GetHeap().Get(idx); isInit {
+						return vm.BooleanValue(true), nil
+					}
 				}
 			}
 			_, hasOwn := plainObj.GetOwn(propName)

@@ -134,8 +134,15 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 	// This makes globalThis.propertyName = value work for top-level var/function declarations
 	if objVal.Type() == TypeObject {
 		po := AsPlainObject(*objVal)
+		if debugOpSetProp {
+			fmt.Printf("[DEBUG opSetProp] GlobalObject check: po=%p, vm.GlobalObject=%p, match=%v\n", po, vm.GlobalObject, po == vm.GlobalObject)
+		}
 		if po == vm.GlobalObject {
 			// Check if this property exists as a global in the heap
+			if debugOpSetProp {
+				_, exists := vm.heap.nameToIndex[propName]
+				fmt.Printf("[DEBUG opSetProp] Heap check for %q: exists=%v\n", propName, exists)
+			}
 			if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
 				// Check if the property is writable before updating
 				// Global constants like undefined, NaN, Infinity are non-writable
@@ -152,8 +159,10 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 						break
 					}
 				}
-				// Update existing global in heap
+				// Update existing global in heap AND the PlainObject
+				// Both need to be in sync so reads via bracket notation work
 				vm.heap.Set(globalIdx, *valueToSet)
+				po.SetOwn(propName, *valueToSet)
 				return true, InterpretOK, *valueToSet
 			}
 			// If not in heap, we could allocate a new global slot here
