@@ -361,6 +361,102 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 	}
 }
 
+// IsConstructor checks if a value can be used as a constructor
+func (vm *VM) IsConstructor(val Value) bool {
+	switch val.Type() {
+	case TypeNativeFunction:
+		return val.AsNativeFunction().IsConstructor
+	case TypeNativeFunctionWithProps:
+		return val.AsNativeFunctionWithProps().IsConstructor
+	case TypeClosure:
+		cl := val.AsClosure()
+		// Arrow functions and async (non-generator) functions cannot be constructors
+		return !cl.Fn.IsArrowFunction && !(cl.Fn.IsAsync && !cl.Fn.IsGenerator)
+	case TypeFunction:
+		fn := val.AsFunction()
+		return !fn.IsArrowFunction && !(fn.IsAsync && !fn.IsGenerator)
+	case TypeBoundFunction:
+		// Bound functions inherit constructability from the original
+		return vm.IsConstructor(val.AsBoundFunction().OriginalFunction)
+	default:
+		return false
+	}
+}
+
+// Construct calls a constructor function with the given arguments, similar to 'new Constructor(args)'
+// This creates a new object and calls the constructor with that object as 'this'
+func (vm *VM) Construct(constructor Value, args []Value) (Value, error) {
+	if !constructor.IsCallable() {
+		return Undefined, fmt.Errorf("%s is not a constructor", constructor.TypeName())
+	}
+
+	switch constructor.Type() {
+	case TypeNativeFunction:
+		nf := constructor.AsNativeFunction()
+		if !nf.IsConstructor {
+			return Undefined, fmt.Errorf("%s is not a constructor", nf.Name)
+		}
+		// For native constructors, call directly - they handle creating the object
+		prevThis := vm.currentThis
+		vm.currentThis = Undefined // Native constructors typically create their own 'this'
+		defer func() { vm.currentThis = prevThis }()
+		return nf.Fn(args)
+
+	case TypeNativeFunctionWithProps:
+		nfp := constructor.AsNativeFunctionWithProps()
+		if !nfp.IsConstructor {
+			return Undefined, fmt.Errorf("%s is not a constructor", nfp.Name)
+		}
+		prevThis := vm.currentThis
+		vm.currentThis = Undefined
+		defer func() { vm.currentThis = prevThis }()
+		return nfp.Fn(args)
+
+	case TypeClosure, TypeFunction:
+		// For user-defined constructors, create a new object with the prototype
+		// and call the function with that object as 'this'
+		var fn *FunctionObject
+		if constructor.Type() == TypeClosure {
+			fn = constructor.AsClosure().Fn
+		} else {
+			fn = constructor.AsFunction()
+		}
+
+		// Check if constructable
+		if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
+			return Undefined, fmt.Errorf("function is not a constructor")
+		}
+
+		// Create new object with constructor's prototype
+		prototype := fn.getOrCreatePrototypeWithVM(vm)
+		newObj := NewObject(prototype)
+
+		// Call the constructor with the new object as 'this'
+		result, err := vm.executeUserFunctionSafe(constructor, newObj, args)
+		if err != nil {
+			return Undefined, err
+		}
+
+		// If the constructor returns an object, use that; otherwise use the new object
+		if result.IsObject() {
+			return result, nil
+		}
+		return newObj, nil
+
+	case TypeBoundFunction:
+		bf := constructor.AsBoundFunction()
+		// Combine partial args with call-time args
+		finalArgs := make([]Value, len(bf.PartialArgs)+len(args))
+		copy(finalArgs, bf.PartialArgs)
+		copy(finalArgs[len(bf.PartialArgs):], args)
+		// Bound functions ignore their boundThis when called as constructors
+		return vm.Construct(bf.OriginalFunction, finalArgs)
+
+	default:
+		return Undefined, fmt.Errorf("%s is not a constructor", constructor.TypeName())
+	}
+}
+
 // executeUserFunctionSafe executes a user function from a native function using sentinel frames
 // This allows proper nested calls without infinite recursion
 func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (Value, error) {

@@ -290,6 +290,20 @@ func (vm *VM) NewReferenceError(message string) error {
 	return exceptionError{exception: NewValueFromPlainObject(obj)}
 }
 
+// NewRangeError constructs a RangeError exception error for builtin helpers to return
+func (vm *VM) NewRangeError(message string) error {
+	ctor, _ := vm.GetGlobal("RangeError")
+	if ctor != Undefined {
+		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
+		return exceptionError{exception: errObj}
+	}
+	// Fallback generic error object
+	obj := NewObject(Null).AsPlainObject()
+	obj.SetOwn("name", NewString("RangeError"))
+	obj.SetOwn("message", NewString(message))
+	return exceptionError{exception: NewValueFromPlainObject(obj)}
+}
+
 var (
 	Undefined = Value{typ: TypeUndefined}
 	Null      = Value{typ: TypeNull}
@@ -388,6 +402,15 @@ func NewArrayWithArgs(args []Value) Value {
 		arrayObj.SetElements(args)
 		return arr
 	}
+}
+
+// NewArrayWithLength creates an array with the specified length
+func NewArrayWithLength(length int) Value {
+	arr := NewArray()
+	if length > 0 {
+		arr.AsArray().SetLength(length)
+	}
+	return arr
 }
 
 func NewMap() Value {

@@ -361,13 +361,13 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 				if enumerable != nil && *enumerable != f.enumerable {
 					return
 				}
+				// Non-configurable, non-writable properties cannot have writable changed to true
+				if f.writable == false && writable != nil && *writable == true {
+					return
+				}
 			}
-			// If current writable is false and not converting from accessor, cannot make it true
-			if !convertingFromAccessor && f.writable == false && writable != nil && *writable == true {
-				return
-			}
-			// Update value: always when converting from accessor, or if current writable is true
-			if convertingFromAccessor || f.writable {
+			// Update value: if configurable, always allow; otherwise only if writable
+			if f.configurable || convertingFromAccessor || f.writable {
 				o.properties[f.offset] = value
 			}
 			if writable != nil {

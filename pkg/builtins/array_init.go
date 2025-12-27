@@ -492,39 +492,89 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("filter", vm.NewNativeFunction(1, false, "filter", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
-			return vm.NewArray(), nil
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.filter called on null or undefined")
 		}
-		callback := args[0]
+
+		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
+		var callback vm.Value
+		if len(args) >= 1 {
+			callback = args[0]
+		} else {
+			callback = vm.Undefined
+		}
 		if !callback.IsCallable() {
-			return vm.NewArray(), nil
-		}
-		result := vm.NewArray()
-		for i := 0; i < thisArray.Length(); i++ {
-			element := thisArray.Get(i)
-			test, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
-			if err != nil {
-				return vm.NewArray(), err
+			callbackStr := "undefined"
+			if callback.Type() != vm.TypeUndefined {
+				callbackStr = callback.ToString()
 			}
-			if test.IsTruthy() {
-				result.AsArray().Append(element)
+			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
+		}
+
+		result := vm.NewArray()
+
+		// Support both arrays and array-like objects
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < arr.Length(); i++ {
+				element := arr.Get(i)
+				test, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.NewArray(), err
+				}
+				if test.IsTruthy() {
+					result.AsArray().Append(element)
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+			for i := 0; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				test, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.NewArray(), err
+				}
+				if test.IsTruthy() {
+					result.AsArray().Append(elem)
+				}
 			}
 		}
 		return result, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("map", vm.NewNativeFunction(1, false, "map", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 1 {
-			return vm.NewArray(), nil
-		}
-		callback := args[0]
-		if !callback.IsCallable() {
-			return vm.NewArray(), nil
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.map called on null or undefined")
 		}
 
-		// Support both real arrays and array-like objects when borrowed via call/apply
-		thisVal := vmInstance.GetThis()
+		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
+		var callback vm.Value
+		if len(args) >= 1 {
+			callback = args[0]
+		} else {
+			callback = vm.Undefined
+		}
+		if !callback.IsCallable() {
+			callbackStr := "undefined"
+			if callback.Type() != vm.TypeUndefined {
+				callbackStr = callback.ToString()
+			}
+			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
+		}
+
 		result := vm.NewArray()
 
 		if arr := thisVal.AsArray(); arr != nil {
@@ -568,136 +618,1060 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
-			return vm.Undefined, nil
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.forEach called on null or undefined")
 		}
-		callback := args[0]
+
+		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
+		var callback vm.Value
+		if len(args) >= 1 {
+			callback = args[0]
+		} else {
+			callback = vm.Undefined
+		}
 		if !callback.IsCallable() {
-			return vm.Undefined, nil
+			callbackStr := "undefined"
+			if callback.Type() != vm.TypeUndefined {
+				callbackStr = callback.ToString()
+			}
+			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
-		for i := 0; i < thisArray.Length(); i++ {
-			element := thisArray.Get(i)
-			_, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
-			if err != nil {
-				return vm.Undefined, err
+
+		// Support both arrays and array-like objects
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < arr.Length(); i++ {
+				element := arr.Get(i)
+				_, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+			for i := 0; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				_, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
 			}
 		}
 		return vm.Undefined, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("every", vm.NewNativeFunction(1, false, "every", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
-			return vm.BooleanValue(true), nil
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.every called on null or undefined")
 		}
-		callback := args[0]
+
+		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
+		var callback vm.Value
+		if len(args) >= 1 {
+			callback = args[0]
+		} else {
+			callback = vm.Undefined
+		}
 		if !callback.IsCallable() {
-			return vm.BooleanValue(true), nil
-		}
-		for i := 0; i < thisArray.Length(); i++ {
-			element := thisArray.Get(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
-			if err != nil {
-				return vm.BooleanValue(false), err
+			callbackStr := "undefined"
+			if callback.Type() != vm.TypeUndefined {
+				callbackStr = callback.ToString()
 			}
-			if !result.IsTruthy() {
-				return vm.BooleanValue(false), nil
+			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
+		}
+
+		// Support both arrays and array-like objects
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < arr.Length(); i++ {
+				element := arr.Get(i)
+				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.BooleanValue(false), err
+				}
+				if !result.IsTruthy() {
+					return vm.BooleanValue(false), nil
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+			for i := 0; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.BooleanValue(false), err
+				}
+				if !result.IsTruthy() {
+					return vm.BooleanValue(false), nil
+				}
 			}
 		}
 		return vm.BooleanValue(true), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("some", vm.NewNativeFunction(1, false, "some", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
-			return vm.BooleanValue(false), nil
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.some called on null or undefined")
 		}
-		callback := args[0]
+
+		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
+		var callback vm.Value
+		if len(args) >= 1 {
+			callback = args[0]
+		} else {
+			callback = vm.Undefined
+		}
 		if !callback.IsCallable() {
-			return vm.BooleanValue(false), nil
-		}
-		for i := 0; i < thisArray.Length(); i++ {
-			element := thisArray.Get(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
-			if err != nil {
-				return vm.BooleanValue(false), err
+			callbackStr := "undefined"
+			if callback.Type() != vm.TypeUndefined {
+				callbackStr = callback.ToString()
 			}
-			if result.IsTruthy() {
-				return vm.BooleanValue(true), nil
+			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
+		}
+
+		// Support both arrays and array-like objects
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < arr.Length(); i++ {
+				element := arr.Get(i)
+				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.BooleanValue(false), err
+				}
+				if result.IsTruthy() {
+					return vm.BooleanValue(true), nil
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+			for i := 0; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.BooleanValue(false), err
+				}
+				if result.IsTruthy() {
+					return vm.BooleanValue(true), nil
+				}
 			}
 		}
 		return vm.BooleanValue(false), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("reduce", vm.NewNativeFunction(2, false, "reduce", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
-			return vm.Undefined, nil
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.reduce called on null or undefined")
 		}
-		callback := args[0]
+
+		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
+		var callback vm.Value
+		if len(args) >= 1 {
+			callback = args[0]
+		} else {
+			callback = vm.Undefined
+		}
 		if !callback.IsCallable() {
-			return vm.Undefined, nil
-		}
-		length := thisArray.Length()
-		if length == 0 {
-			if len(args) >= 2 {
-				return args[1], nil // Return initial value
+			callbackStr := "undefined"
+			if callback.Type() != vm.TypeUndefined {
+				callbackStr = callback.ToString()
 			}
-			return vm.Undefined, nil // Should throw TypeError
+			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
+
+		// Get length
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
+		// 5. If len = 0 and initialValue is not present, throw a TypeError exception.
+		if length == 0 && len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("Reduce of empty array with no initial value")
+		}
+
 		accumulator := vm.Undefined
 		startIndex := 0
 		if len(args) >= 2 {
 			accumulator = args[1]
-		} else {
-			accumulator = thisArray.Get(0)
+		} else if arr := thisVal.AsArray(); arr != nil {
+			accumulator = arr.Get(0)
+			startIndex = 1
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if v, ok := po.Get("0"); ok {
+				accumulator = v
+			}
 			startIndex = 1
 		}
-		for i := startIndex; i < length; i++ {
-			element := thisArray.Get(i)
-			var err error
-			accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
-			if err != nil {
-				return vm.Undefined, err
+
+		// Iterate
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := startIndex; i < length; i++ {
+				element := arr.Get(i)
+				var err error
+				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			for i := startIndex; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				var err error
+				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
 			}
 		}
 		return accumulator, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("reduceRight", vm.NewNativeFunction(2, false, "reduceRight", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
-			return vm.Undefined, nil
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.reduceRight called on null or undefined")
 		}
-		callback := args[0]
+
+		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
+		var callback vm.Value
+		if len(args) >= 1 {
+			callback = args[0]
+		} else {
+			callback = vm.Undefined
+		}
 		if !callback.IsCallable() {
-			return vm.Undefined, nil
-		}
-		length := thisArray.Length()
-		if length == 0 {
-			if len(args) >= 2 {
-				return args[1], nil // Return initial value
+			callbackStr := "undefined"
+			if callback.Type() != vm.TypeUndefined {
+				callbackStr = callback.ToString()
 			}
-			return vm.Undefined, nil // Should throw TypeError
+			return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", callbackStr))
 		}
+
+		// Get length
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+				if length < 0 {
+					length = 0
+				}
+			}
+		}
+
+		// 5. If len = 0 and initialValue is not present, throw a TypeError exception.
+		if length == 0 && len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("Reduce of empty array with no initial value")
+		}
+
 		accumulator := vm.Undefined
 		startIndex := length - 1
 		if len(args) >= 2 {
 			accumulator = args[1]
-		} else {
-			accumulator = thisArray.Get(length - 1)
+		} else if arr := thisVal.AsArray(); arr != nil {
+			accumulator = arr.Get(length - 1)
+			startIndex = length - 2
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			key := fmt.Sprintf("%d", length-1)
+			if v, ok := po.Get(key); ok {
+				accumulator = v
+			}
 			startIndex = length - 2
 		}
-		for i := startIndex; i >= 0; i-- {
-			element := thisArray.Get(i)
-			var err error
-			accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
-			if err != nil {
-				return vm.Undefined, err
+
+		// Iterate backwards
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := startIndex; i >= 0; i-- {
+				element := arr.Get(i)
+				var err error
+				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			for i := startIndex; i >= 0; i-- {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				var err error
+				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
 			}
 		}
 		return accumulator, nil
+	}))
+
+	// Array.prototype.at - relative indexing access
+	arrayProto.SetOwnNonEnumerable("at", vm.NewNativeFunction(1, false, "at", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.at called on null or undefined")
+		}
+
+		// Get length
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+			}
+		}
+
+		// 3. Let relativeIndex be ? ToIntegerOrInfinity(index).
+		var relativeIndex int
+		if len(args) >= 1 {
+			relativeIndex = int(args[0].ToFloat())
+		}
+
+		// 4. If relativeIndex ≥ 0, let k be relativeIndex. Else let k be len + relativeIndex.
+		var k int
+		if relativeIndex >= 0 {
+			k = relativeIndex
+		} else {
+			k = length + relativeIndex
+		}
+
+		// 5. If k < 0 or k ≥ len, return undefined.
+		if k < 0 || k >= length {
+			return vm.Undefined, nil
+		}
+
+		// 6. Return ? Get(O, ! ToString(k)).
+		if arr := thisVal.AsArray(); arr != nil {
+			return arr.Get(k), nil
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			key := fmt.Sprintf("%d", k)
+			if v, ok := po.Get(key); ok {
+				return v, nil
+			}
+		}
+		return vm.Undefined, nil
+	}))
+
+	// Array.prototype.findLast - find from end
+	arrayProto.SetOwnNonEnumerable("findLast", vm.NewNativeFunction(1, false, "findLast", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.findLast called on null or undefined")
+		}
+
+		// 3. If IsCallable(predicate) is false, throw a TypeError exception.
+		var predicate vm.Value
+		if len(args) >= 1 {
+			predicate = args[0]
+		} else {
+			predicate = vm.Undefined
+		}
+		if !predicate.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("predicate is not a function")
+		}
+
+		// Get length and iterate backwards
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := arr.Length() - 1; i >= 0; i-- {
+				element := arr.Get(i)
+				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if result.IsTruthy() {
+					return element, nil
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+			}
+			for i := length - 1; i >= 0; i-- {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if result.IsTruthy() {
+					return elem, nil
+				}
+			}
+		}
+		return vm.Undefined, nil
+	}))
+
+	// Array.prototype.findLastIndex - find index from end
+	arrayProto.SetOwnNonEnumerable("findLastIndex", vm.NewNativeFunction(1, false, "findLastIndex", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.findLastIndex called on null or undefined")
+		}
+
+		// 3. If IsCallable(predicate) is false, throw a TypeError exception.
+		var predicate vm.Value
+		if len(args) >= 1 {
+			predicate = args[0]
+		} else {
+			predicate = vm.Undefined
+		}
+		if !predicate.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("predicate is not a function")
+		}
+
+		// Get length and iterate backwards
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := arr.Length() - 1; i >= 0; i-- {
+				element := arr.Get(i)
+				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.NumberValue(-1), err
+				}
+				if result.IsTruthy() {
+					return vm.NumberValue(float64(i)), nil
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+			}
+			for i := length - 1; i >= 0; i-- {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.NumberValue(-1), err
+				}
+				if result.IsTruthy() {
+					return vm.NumberValue(float64(i)), nil
+				}
+			}
+		}
+		return vm.NumberValue(-1), nil
+	}))
+
+	// Array.prototype.copyWithin - copy sequence of elements within array
+	arrayProto.SetOwnNonEnumerable("copyWithin", vm.NewNativeFunction(3, false, "copyWithin", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.copyWithin called on null or undefined")
+		}
+
+		arr := thisVal.AsArray()
+		if arr == nil {
+			// For array-like objects, return unchanged
+			return thisVal, nil
+		}
+
+		length := arr.Length()
+		if length == 0 {
+			return thisVal, nil
+		}
+
+		// 3. Let relativeTarget be ? ToIntegerOrInfinity(target).
+		var target int
+		if len(args) >= 1 {
+			target = int(args[0].ToFloat())
+		}
+		// 4. If relativeTarget < 0, let to be max(len + relativeTarget, 0); else let to be min(relativeTarget, len).
+		var to int
+		if target < 0 {
+			to = length + target
+			if to < 0 {
+				to = 0
+			}
+		} else {
+			to = target
+			if to > length {
+				to = length
+			}
+		}
+
+		// 5. Let relativeStart be ? ToIntegerOrInfinity(start).
+		var start int
+		if len(args) >= 2 {
+			start = int(args[1].ToFloat())
+		}
+		// 6. If relativeStart < 0, let from be max(len + relativeStart, 0); else let from be min(relativeStart, len).
+		var from int
+		if start < 0 {
+			from = length + start
+			if from < 0 {
+				from = 0
+			}
+		} else {
+			from = start
+			if from > length {
+				from = length
+			}
+		}
+
+		// 7. If end is undefined, let relativeEnd be len; else let relativeEnd be ? ToIntegerOrInfinity(end).
+		var end int
+		if len(args) >= 3 && args[2].Type() != vm.TypeUndefined {
+			end = int(args[2].ToFloat())
+		} else {
+			end = length
+		}
+		// 8. If relativeEnd < 0, let final be max(len + relativeEnd, 0); else let final be min(relativeEnd, len).
+		var final int
+		if end < 0 {
+			final = length + end
+			if final < 0 {
+				final = 0
+			}
+		} else {
+			final = end
+			if final > length {
+				final = length
+			}
+		}
+
+		// 9. Let count be min(final - from, len - to).
+		count := final - from
+		if length-to < count {
+			count = length - to
+		}
+
+		// Copy the elements
+		if count > 0 {
+			// Need to handle overlapping regions
+			if from < to && to < from+count {
+				// Copy backwards to avoid overwriting source
+				for i := count - 1; i >= 0; i-- {
+					arr.Set(to+i, arr.Get(from+i))
+				}
+			} else {
+				// Copy forwards
+				for i := 0; i < count; i++ {
+					arr.Set(to+i, arr.Get(from+i))
+				}
+			}
+		}
+
+		return thisVal, nil
+	}))
+
+	// Array.prototype.fill - fill array with value
+	arrayProto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.fill called on null or undefined")
+		}
+
+		arr := thisVal.AsArray()
+		if arr == nil {
+			return thisVal, nil
+		}
+
+		length := arr.Length()
+
+		// Get value to fill
+		value := vm.Undefined
+		if len(args) >= 1 {
+			value = args[0]
+		}
+
+		// Get start index
+		var start int
+		if len(args) >= 2 {
+			start = int(args[1].ToFloat())
+		}
+		if start < 0 {
+			start = length + start
+			if start < 0 {
+				start = 0
+			}
+		} else if start > length {
+			start = length
+		}
+
+		// Get end index
+		end := length
+		if len(args) >= 3 && args[2].Type() != vm.TypeUndefined {
+			end = int(args[2].ToFloat())
+		}
+		if end < 0 {
+			end = length + end
+			if end < 0 {
+				end = 0
+			}
+		} else if end > length {
+			end = length
+		}
+
+		// Fill the array
+		for i := start; i < end; i++ {
+			arr.Set(i, value)
+		}
+
+		return thisVal, nil
+	}))
+
+	// Array.prototype.flat - flatten nested arrays
+	arrayProto.SetOwnNonEnumerable("flat", vm.NewNativeFunction(1, false, "flat", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.flat called on null or undefined")
+		}
+
+		// 3. Let depthNum be 1 or the provided depth
+		depth := 1
+		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
+			depth = int(args[0].ToFloat())
+		}
+
+		result := vm.NewArray()
+		resultArr := result.AsArray()
+
+		// Helper function to flatten recursively
+		var flattenInto func(source vm.Value, currentDepth int)
+		flattenInto = func(source vm.Value, currentDepth int) {
+			var length int
+			var getElement func(i int) vm.Value
+
+			if arr := source.AsArray(); arr != nil {
+				length = arr.Length()
+				getElement = func(i int) vm.Value { return arr.Get(i) }
+			} else if po := source.AsPlainObject(); po != nil {
+				if lv, ok := po.Get("length"); ok {
+					length = int(lv.ToFloat())
+				}
+				getElement = func(i int) vm.Value {
+					if v, ok := po.Get(fmt.Sprintf("%d", i)); ok {
+						return v
+					}
+					return vm.Undefined
+				}
+			} else {
+				return
+			}
+
+			for i := 0; i < length; i++ {
+				element := getElement(i)
+				if currentDepth > 0 && element.IsArray() {
+					flattenInto(element, currentDepth-1)
+				} else {
+					resultArr.Append(element)
+				}
+			}
+		}
+
+		flattenInto(thisVal, depth)
+		return result, nil
+	}))
+
+	// Array.prototype.flatMap - map then flatten by one level
+	arrayProto.SetOwnNonEnumerable("flatMap", vm.NewNativeFunction(1, false, "flatMap", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.flatMap called on null or undefined")
+		}
+
+		// 3. If IsCallable(mapperFunction) is false, throw a TypeError exception.
+		var mapper vm.Value
+		if len(args) >= 1 {
+			mapper = args[0]
+		} else {
+			mapper = vm.Undefined
+		}
+		if !mapper.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("flatMap mapper is not a function")
+		}
+
+		result := vm.NewArray()
+		resultArr := result.AsArray()
+
+		// Get length and iterate
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < arr.Length(); i++ {
+				element := arr.Get(i)
+				mapped, err := vmInstance.Call(mapper, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				// Flatten by one level
+				if mappedArr := mapped.AsArray(); mappedArr != nil {
+					for j := 0; j < mappedArr.Length(); j++ {
+						resultArr.Append(mappedArr.Get(j))
+					}
+				} else {
+					resultArr.Append(mapped)
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+			}
+			for i := 0; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				var elem vm.Value = vm.Undefined
+				if v, ok := po.Get(key); ok {
+					elem = v
+				}
+				mapped, err := vmInstance.Call(mapper, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if mappedArr := mapped.AsArray(); mappedArr != nil {
+					for j := 0; j < mappedArr.Length(); j++ {
+						resultArr.Append(mappedArr.Get(j))
+					}
+				} else {
+					resultArr.Append(mapped)
+				}
+			}
+		}
+
+		return result, nil
+	}))
+
+	// Array.prototype.toSorted - non-mutating sort
+	arrayProto.SetOwnNonEnumerable("toSorted", vm.NewNativeFunction(1, false, "toSorted", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.toSorted called on null or undefined")
+		}
+
+		// Check comparator if provided
+		var comparator vm.Value
+		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
+			comparator = args[0]
+			if !comparator.IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("comparator is not a function")
+			}
+		}
+
+		// Create a copy
+		result := vm.NewArray()
+		resultArr := result.AsArray()
+
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < arr.Length(); i++ {
+				resultArr.Append(arr.Get(i))
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			length := 0
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+			}
+			for i := 0; i < length; i++ {
+				key := fmt.Sprintf("%d", i)
+				if v, ok := po.Get(key); ok {
+					resultArr.Append(v)
+				} else {
+					resultArr.Append(vm.Undefined)
+				}
+			}
+		}
+
+		// Sort the copy using the same logic as sort
+		n := resultArr.Length()
+		if n <= 1 {
+			return result, nil
+		}
+
+		// Simple insertion sort for stability
+		for i := 1; i < n; i++ {
+			key := resultArr.Get(i)
+			j := i - 1
+			for j >= 0 {
+				cmp := 0
+				if comparator.IsCallable() {
+					res, err := vmInstance.Call(comparator, vm.Undefined, []vm.Value{resultArr.Get(j), key})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					cmp = int(res.ToFloat())
+				} else {
+					// Default string comparison
+					a := resultArr.Get(j).ToString()
+					b := key.ToString()
+					if a > b {
+						cmp = 1
+					} else if a < b {
+						cmp = -1
+					}
+				}
+				if cmp <= 0 {
+					break
+				}
+				resultArr.Set(j+1, resultArr.Get(j))
+				j--
+			}
+			resultArr.Set(j+1, key)
+		}
+
+		return result, nil
+	}))
+
+	// Array.prototype.toSpliced - non-mutating splice
+	arrayProto.SetOwnNonEnumerable("toSpliced", vm.NewNativeFunction(3, true, "toSpliced", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.toSpliced called on null or undefined")
+		}
+
+		// Get source length
+		var sourceLength int
+		if arr := thisVal.AsArray(); arr != nil {
+			sourceLength = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				sourceLength = int(lv.ToFloat())
+			}
+		}
+
+		// Parse start argument
+		var actualStart int
+		if len(args) >= 1 {
+			start := int(args[0].ToFloat())
+			if start < 0 {
+				actualStart = sourceLength + start
+				if actualStart < 0 {
+					actualStart = 0
+				}
+			} else {
+				actualStart = start
+				if actualStart > sourceLength {
+					actualStart = sourceLength
+				}
+			}
+		}
+
+		// Parse deleteCount argument
+		actualDeleteCount := 0
+		if len(args) >= 2 {
+			deleteCount := int(args[1].ToFloat())
+			if deleteCount < 0 {
+				deleteCount = 0
+			}
+			actualDeleteCount = deleteCount
+			if actualDeleteCount > sourceLength-actualStart {
+				actualDeleteCount = sourceLength - actualStart
+			}
+		} else if len(args) >= 1 {
+			// If start is present but deleteCount is not, delete to end
+			actualDeleteCount = sourceLength - actualStart
+		}
+
+		// Items to insert
+		insertItems := []vm.Value{}
+		if len(args) > 2 {
+			insertItems = args[2:]
+		}
+
+		// Create result array
+		result := vm.NewArray()
+		resultArr := result.AsArray()
+
+		// Helper to get element
+		getElement := func(i int) vm.Value {
+			if arr := thisVal.AsArray(); arr != nil {
+				return arr.Get(i)
+			} else if po := thisVal.AsPlainObject(); po != nil {
+				if v, ok := po.Get(fmt.Sprintf("%d", i)); ok {
+					return v
+				}
+			}
+			return vm.Undefined
+		}
+
+		// Copy elements before start
+		for i := 0; i < actualStart; i++ {
+			resultArr.Append(getElement(i))
+		}
+
+		// Insert new elements
+		for _, item := range insertItems {
+			resultArr.Append(item)
+		}
+
+		// Copy remaining elements after deleted section
+		for i := actualStart + actualDeleteCount; i < sourceLength; i++ {
+			resultArr.Append(getElement(i))
+		}
+
+		return result, nil
+	}))
+
+	// Array.prototype.with - non-mutating element replacement
+	arrayProto.SetOwnNonEnumerable("with", vm.NewNativeFunction(2, false, "with", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.with called on null or undefined")
+		}
+
+		// Get length
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+			}
+		}
+
+		// 3. Let relativeIndex be ? ToIntegerOrInfinity(index).
+		var index int
+		if len(args) >= 1 {
+			index = int(args[0].ToFloat())
+		}
+
+		// 4. If relativeIndex ≥ 0, let actualIndex be relativeIndex. Else let actualIndex be len + relativeIndex.
+		actualIndex := index
+		if index < 0 {
+			actualIndex = length + index
+		}
+
+		// 5. If actualIndex ≥ len or actualIndex < 0, throw a RangeError exception.
+		if actualIndex < 0 || actualIndex >= length {
+			return vm.Undefined, vmInstance.NewRangeError(fmt.Sprintf("Invalid index: %d", index))
+		}
+
+		// Get value
+		value := vm.Undefined
+		if len(args) >= 2 {
+			value = args[1]
+		}
+
+		// Create copy with replaced element
+		result := vm.NewArray()
+		resultArr := result.AsArray()
+
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := 0; i < length; i++ {
+				if i == actualIndex {
+					resultArr.Append(value)
+				} else {
+					resultArr.Append(arr.Get(i))
+				}
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			for i := 0; i < length; i++ {
+				if i == actualIndex {
+					resultArr.Append(value)
+				} else {
+					key := fmt.Sprintf("%d", i)
+					if v, ok := po.Get(key); ok {
+						resultArr.Append(v)
+					} else {
+						resultArr.Append(vm.Undefined)
+					}
+				}
+			}
+		}
+
+		return result, nil
+	}))
+
+	// Array.prototype.toReversed - non-mutating reverse
+	arrayProto.SetOwnNonEnumerable("toReversed", vm.NewNativeFunction(0, false, "toReversed", func(args []vm.Value) (vm.Value, error) {
+		// 1. Let O be ? ToObject(this value).
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.toReversed called on null or undefined")
+		}
+
+		// Get length
+		var length int
+		if arr := thisVal.AsArray(); arr != nil {
+			length = arr.Length()
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			if lv, ok := po.Get("length"); ok {
+				length = int(lv.ToFloat())
+			}
+		}
+
+		// Create reversed copy
+		result := vm.NewArray()
+		resultArr := result.AsArray()
+
+		if arr := thisVal.AsArray(); arr != nil {
+			for i := length - 1; i >= 0; i-- {
+				resultArr.Append(arr.Get(i))
+			}
+		} else if po := thisVal.AsPlainObject(); po != nil {
+			for i := length - 1; i >= 0; i-- {
+				key := fmt.Sprintf("%d", i)
+				if v, ok := po.Get(key); ok {
+					resultArr.Append(v)
+				} else {
+					resultArr.Append(vm.Undefined)
+				}
+			}
+		}
+
+		return result, nil
 	}))
 
 	// Create Array constructor
@@ -768,7 +1742,79 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
-		return vm.NewArrayWithArgs(args), nil
+		// Array.of ( ...items )
+		// 1. Let len be the actual number of arguments passed to this function.
+		len := len(args)
+
+		// 3. Let C be the this value.
+		C := vmInstance.GetThis()
+
+		var A vm.Value
+
+		// 4. If IsConstructor(C) is true, then
+		//    a. Let A be ? Construct(C, « len »).
+		if C.IsCallable() && vmInstance.IsConstructor(C) {
+			// Call C as constructor with len as single argument
+			result, err := vmInstance.Construct(C, []vm.Value{vm.NumberValue(float64(len))})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			A = result
+		} else {
+			// 5. Else,
+			//    a. Let A be ? ArrayCreate(len).
+			A = vm.NewArrayWithLength(len)
+		}
+
+		// 6. Let k be 0.
+		// 7. Repeat, while k < len
+		for k := 0; k < len; k++ {
+			// a. Let kValue be items[k].
+			kValue := args[k]
+			// b. Let Pk be ! ToString(k).
+			pk := fmt.Sprintf("%d", k)
+			// c. Perform ? CreateDataPropertyOrThrow(A, Pk, kValue).
+			if A.IsArray() {
+				arr := A.AsArray()
+				arr.Set(k, kValue)
+			} else if A.IsObject() {
+				po := A.AsPlainObject()
+				// Check if we can create/update this property
+				// CreateDataPropertyOrThrow fails if:
+				// 1. Object is non-extensible and property doesn't exist
+				// 2. Property exists but is non-configurable
+				// GetOwnDescriptor returns: (Value, writable, enumerable, configurable, exists)
+				_, _, _, configurable, existingProp := po.GetOwnDescriptor(pk)
+				if !existingProp && !po.IsExtensible() {
+					return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("Cannot add property %s, object is not extensible", pk))
+				}
+				if existingProp && !configurable {
+					return vm.Undefined, vmInstance.NewTypeError(fmt.Sprintf("Cannot redefine property: %s", pk))
+				}
+				w, e, c := true, true, true // writable, enumerable, configurable
+				po.DefineOwnProperty(pk, kValue, &w, &e, &c)
+			}
+		}
+
+		// 8. Perform ? Set(A, "length", len, true).
+		if A.IsArray() {
+			// Already set by Set
+		} else if A.IsObject() {
+			po := A.AsPlainObject()
+			lengthVal := vm.NumberValue(float64(len))
+			// Check if there's a setter for "length" and call it
+			if _, setter, _, _, ok := po.GetOwnAccessor("length"); ok && setter.Type() != vm.TypeUndefined {
+				_, err := vmInstance.Call(setter, A, []vm.Value{lengthVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+			} else {
+				po.SetOwn("length", lengthVal)
+			}
+		}
+
+		// 9. Return A.
+		return A, nil
 	}))
 
 	// Add Symbol.iterator implementation for arrays
