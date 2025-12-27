@@ -178,6 +178,16 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		return Undefined, true
 	}
 
+	// Expose __proto__ on functions to return Function.prototype
+	// This allows Function.prototype.isPrototypeOf(Boolean) to work correctly
+	// Special case: Function.prototype itself has Object.prototype as its __proto__
+	if propName == "__proto__" {
+		if objVal.Is(vm.FunctionPrototype) {
+			return vm.ObjectPrototype, true
+		}
+		return vm.FunctionPrototype, true
+	}
+
 	// Check function prototype methods using the VM's FunctionPrototype
 	// and walk the prototype chain (Function.prototype -> Object.prototype)
 	if vm.FunctionPrototype.Type() == TypeObject {
@@ -240,6 +250,11 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 	case TypeFloatNumber, TypeIntegerNumber:
 		if vm.NumberPrototype.Type() == TypeObject {
 			prototype = vm.NumberPrototype.AsPlainObject()
+		}
+	case TypeBoolean:
+		// Auto-box primitive boolean to access Boolean.prototype methods
+		if vm.BooleanPrototype.Type() == TypeObject {
+			prototype = vm.BooleanPrototype.AsPlainObject()
 		}
 	case TypeArray:
 		prototype = vm.ArrayPrototype.AsPlainObject()

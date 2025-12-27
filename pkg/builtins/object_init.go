@@ -279,13 +279,13 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if dictObj := current.AsDictObject(); dictObj != nil {
 					proto = dictObj.GetPrototype()
 				}
-			case vm.TypeFunction, vm.TypeClosure:
-				// Functions have FunctionPrototype as their prototype
-				proto = vmInstance.FunctionPrototype
-			case vm.TypeNativeFunctionWithProps:
-				// NativeFunctionWithProps has its Properties' prototype
-				if nfp := current.AsNativeFunctionWithProps(); nfp != nil {
-					proto = nfp.Properties.GetPrototype()
+			case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeAsyncNativeFunction, vm.TypeBoundFunction:
+				// All functions have FunctionPrototype as their prototype
+				// Special case: Function.prototype itself has Object.prototype as its prototype
+				if current.Is(vmInstance.FunctionPrototype) {
+					proto = vmInstance.ObjectPrototype
+				} else {
+					proto = vmInstance.FunctionPrototype
 				}
 			case vm.TypeArray:
 				proto = vmInstance.ArrayPrototype
