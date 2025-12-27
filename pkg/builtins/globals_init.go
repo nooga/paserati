@@ -200,23 +200,38 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Parse the longest valid prefix for the given radix
-		var result int64
+		// Use float64 to handle numbers larger than int64
+		var result float64
 		parsed := false
-		for i := 1; i <= len(str); i++ {
-			prefix := str[:i]
-			if val, err := strconv.ParseInt(prefix, int(radix), 64); err == nil {
-				result = val
-				parsed = true
+		radixFloat := float64(radix)
+
+		for _, ch := range str {
+			var digit int
+			if ch >= '0' && ch <= '9' {
+				digit = int(ch - '0')
+			} else if ch >= 'a' && ch <= 'z' {
+				digit = int(ch-'a') + 10
+			} else if ch >= 'A' && ch <= 'Z' {
+				digit = int(ch-'A') + 10
 			} else {
+				// Non-alphanumeric character stops parsing
 				break
 			}
+
+			// Check if digit is valid for the given radix
+			if digit >= int(radix) {
+				break
+			}
+
+			result = result*radixFloat + float64(digit)
+			parsed = true
 		}
 
 		if !parsed {
 			return vm.NumberValue(math.NaN()), nil
 		}
 
-		return vm.NumberValue(float64(sign * result)), nil
+		return vm.NumberValue(float64(sign) * result), nil
 	})
 
 	if err := ctx.DefineGlobal("parseInt", parseIntFunc); err != nil {

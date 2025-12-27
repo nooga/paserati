@@ -1714,13 +1714,27 @@ func (p *Parser) parseNumberLiteral() Expression {
 		// Parse as integer first
 		value, err := strconv.ParseInt(cleanedLiteral, base, 64)
 		if err != nil {
-			// This suggests the lexer allowed invalid digits for the base or invalid format
-			msg := fmt.Sprintf("could not parse %q as int (base %d): %v", rawLiteral, base, err)
-			p.addError(p.curToken, msg)
-			return nil
+			// Check if it's an overflow - for very large integers, fall back to float64 parsing
+			// JavaScript numbers are IEEE 754 doubles, so this is the correct behavior
+			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+				// Try parsing as float64 instead
+				floatVal, floatErr := strconv.ParseFloat(cleanedLiteral, 64)
+				if floatErr != nil {
+					msg := fmt.Sprintf("could not parse %q as number: %v", rawLiteral, floatErr)
+					p.addError(p.curToken, msg)
+					return nil
+				}
+				lit.Value = floatVal
+			} else {
+				// This suggests the lexer allowed invalid digits for the base or invalid format
+				msg := fmt.Sprintf("could not parse %q as int (base %d): %v", rawLiteral, base, err)
+				p.addError(p.curToken, msg)
+				return nil
+			}
+		} else {
+			// Store as float64 in the AST for simplicity/consistency
+			lit.Value = float64(value)
 		}
-		// Store as float64 in the AST for simplicity/consistency
-		lit.Value = float64(value)
 	}
 
 	return lit

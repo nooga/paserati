@@ -627,10 +627,11 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.NewString(""), nil
 		}
-		result := make([]byte, len(args))
+		// Use runes to properly handle Unicode code points
+		result := make([]rune, len(args))
 		for i, arg := range args {
 			code := int(arg.ToFloat()) & 0xFFFF // Mask to 16 bits like JS
-			result[i] = byte(code)
+			result[i] = rune(code)
 		}
 		return vm.NewString(string(result)), nil
 	}))
