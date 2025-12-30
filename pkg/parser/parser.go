@@ -5705,6 +5705,7 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 	// Parse the statements belonging to this case
 	caseClause.Body = &BlockStatement{Token: caseClause.Token}
 	caseClause.Body.Statements = []Statement{}
+	caseClause.Body.HoistedDeclarations = make(map[string]Expression) // Initialize for function hoisting
 
 	// Loop until the next case, default, or the end of the switch block
 	// Similar loop logic as parseBlockStatement
@@ -5712,6 +5713,20 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 		stmt := p.parseStatement() // parseStatement consumes tokens including optional semicolon
 		if stmt != nil {
 			caseClause.Body.Statements = append(caseClause.Body.Statements, stmt)
+
+			// --- Hoisting Check (same as parseBlockStatement) ---
+			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
+			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
+				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+					if _, exists := caseClause.Body.HoistedDeclarations[funcLit.Name.Value]; exists {
+						// Function with this name already hoisted in this block
+						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in switch case: %s", funcLit.Name.Value))
+					} else {
+						caseClause.Body.HoistedDeclarations[funcLit.Name.Value] = funcLit
+					}
+				}
+			}
+			// --- End Hoisting Check ---
 		} else {
 			// If parseStatement returns nil due to an error, break the inner loop
 			// to avoid infinite loops and let the outer switch parser handle recovery.
@@ -5720,11 +5735,10 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 		}
 
 		// Advance AFTER parsing the statement, similar to parseBlockStatement
-		// Check for termination conditions before advancing.
-		if p.curTokenIs(lexer.EOF) || p.curTokenIs(lexer.CASE) || p.curTokenIs(lexer.DEFAULT) || p.curTokenIs(lexer.RBRACE) {
-			break // Reached end of case block or EOF
-		}
-		p.nextToken() // Advance to the next token to continue parsing statements within the case
+		// IMPORTANT: Call nextToken BEFORE checking for termination, because after parsing
+		// a statement with a block body (like if/while/for), curToken will be '}' from that
+		// inner block, not from the switch. We need to advance past it first.
+		p.nextToken()
 	}
 
 	// The token that terminated the loop (CASE, DEFAULT, RBRACE, or EOF) is the current token.

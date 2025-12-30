@@ -156,8 +156,16 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 
-	// Expose .constructor on functions to return the Function constructor
+	// Expose .constructor on functions to return the appropriate constructor
 	if propName == "constructor" {
+		// For async functions, return the AsyncFunction constructor
+		// For regular functions, return the Function constructor
+		if fn != nil && fn.IsAsync && !fn.IsGenerator {
+			// AsyncFunction constructor (not a global, but stored in VM)
+			if vm.AsyncFunctionConstructor.IsCallable() {
+				return vm.AsyncFunctionConstructor, true
+			}
+		}
 		// In JS, Function.prototype.constructor === Function
 		// For callable values, return global Function constructor if available
 		// Lookup global 'Function' constructor via VM API

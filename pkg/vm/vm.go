@@ -179,6 +179,10 @@ type VM struct {
 	ReferenceErrorPrototype Value
 	SymbolPrototype         Value
 
+	// Constructors and prototypes for non-global built-in types
+	AsyncFunctionConstructor Value
+	AsyncFunctionPrototype   Value
+
 	// Well-known symbols (stored as singletons)
 	SymbolIterator           Value
 	SymbolToPrimitive        Value

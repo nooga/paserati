@@ -55,8 +55,92 @@ func NewRegExp(pattern, flags string) (Value, error) {
 	return RegExpValue(regexObj), nil
 }
 
+// preprocessUnicodeEscapes converts JavaScript \uXXXX and \xXX escapes to actual Unicode characters
+// This is needed because Go's regexp doesn't support \u escapes
+func preprocessUnicodeEscapes(pattern string) string {
+	result := strings.Builder{}
+	i := 0
+	for i < len(pattern) {
+		if i+1 < len(pattern) && pattern[i] == '\\' {
+			switch pattern[i+1] {
+			case 'u':
+				// Handle \uXXXX (4 hex digits)
+				if i+5 < len(pattern) {
+					hex := pattern[i+2 : i+6]
+					if isValidHex(hex) {
+						codePoint := parseHex(hex)
+						result.WriteRune(rune(codePoint))
+						i += 6
+						continue
+					}
+				}
+				// Handle \u{XXXXX} (1-6 hex digits, for unicode flag)
+				if i+3 < len(pattern) && pattern[i+2] == '{' {
+					end := strings.Index(pattern[i+3:], "}")
+					if end != -1 && end <= 6 {
+						hex := pattern[i+3 : i+3+end]
+						if isValidHex(hex) {
+							codePoint := parseHex(hex)
+							result.WriteRune(rune(codePoint))
+							i += 4 + end
+							continue
+						}
+					}
+				}
+			case 'x':
+				// Handle \xXX (2 hex digits)
+				if i+3 < len(pattern) {
+					hex := pattern[i+2 : i+4]
+					if isValidHex(hex) {
+						codePoint := parseHex(hex)
+						result.WriteRune(rune(codePoint))
+						i += 4
+						continue
+					}
+				}
+			}
+		}
+		result.WriteByte(pattern[i])
+		i++
+	}
+	return result.String()
+}
+
+// isValidHex checks if a string contains only valid hex digits
+func isValidHex(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// parseHex parses a hex string to an integer
+func parseHex(s string) int {
+	result := 0
+	for _, c := range s {
+		result *= 16
+		switch {
+		case c >= '0' && c <= '9':
+			result += int(c - '0')
+		case c >= 'a' && c <= 'f':
+			result += int(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			result += int(c-'A') + 10
+		}
+	}
+	return result
+}
+
 // translateJSFlagsToGo converts JavaScript regex flags to Go inline flag syntax
 func translateJSFlagsToGo(pattern, flags string) (string, error) {
+	// Preprocess Unicode escapes (\uXXXX, \xXX) that Go's regexp doesn't support
+	pattern = preprocessUnicodeEscapes(pattern)
+
 	// Check for JavaScript features that Go's regexp doesn't support
 	// Go's regexp library doesn't support numbered backreferences like \1, \2, etc.
 	for i := 1; i <= 9; i++ {
@@ -65,7 +149,7 @@ func translateJSFlagsToGo(pattern, flags string) (string, error) {
 			return "", fmt.Errorf("numbered backreferences like %s are not supported (Go regexp limitation)", backref)
 		}
 	}
-	
+
 	goPattern := pattern
 
 	// Apply flags as Go inline flags (prepended to pattern)

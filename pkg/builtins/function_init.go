@@ -110,6 +110,30 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Store in VM - Function.prototype is now a callable
 	vmInstance.FunctionPrototype = functionProtoFn
 
+	// Create AsyncFunction constructor (not a global, but accessible via async function's constructor)
+	asyncFunctionCtor := vm.NewNativeFunction(1, true, "AsyncFunction", func(args []vm.Value) (vm.Value, error) {
+		return asyncFunctionConstructorImpl(vmInstance, ctx.Driver, args)
+	})
+
+	// Make it a proper constructor with prototype
+	// AsyncFunction.prototype is a plain object whose [[Prototype]] is Function.prototype
+	asyncFunctionProto := vm.NewObject(functionProtoFn)
+	asyncFunctionProtoObj := asyncFunctionProto.AsPlainObject()
+
+	if ctorObj := asyncFunctionCtor.AsNativeFunction(); ctorObj != nil {
+		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
+		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", asyncFunctionProto)
+		asyncFunctionCtor = ctorWithProps
+
+		// Set constructor property on AsyncFunction.prototype
+		asyncFunctionProtoObj.SetOwnNonEnumerable("constructor", asyncFunctionCtor)
+	}
+
+	// Store AsyncFunction constructor and prototype in VM
+	vmInstance.AsyncFunctionConstructor = asyncFunctionCtor
+	vmInstance.AsyncFunctionPrototype = asyncFunctionProto
+
 	// Define globally
 	return ctx.DefineGlobal("Function", functionCtor)
 }
@@ -250,7 +274,8 @@ func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value
 		if name == "" {
 			name = "anonymous"
 		}
-		return vm.NewString(fmt.Sprintf("function %s() { [bytecode] }", name)), nil
+		// Per NativeFunction syntax spec: function [name]() { [native code] }
+		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
 	case vm.TypeClosure:
 		cl := thisFunction.AsClosure()
 		if cl.Fn != nil {
@@ -259,7 +284,8 @@ func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value
 		if name == "" {
 			name = "anonymous"
 		}
-		return vm.NewString(fmt.Sprintf("function %s() { [bytecode] }", name)), nil
+		// Per NativeFunction syntax spec: function [name]() { [native code] }
+		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
 	case vm.TypeBoundFunction:
 		bf := thisFunction.AsBoundFunction()
 		name = bf.Name
@@ -296,19 +322,23 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 
 	// Construct the function source code as an IIFE that returns the function
 	// This ensures it's evaluated as an expression
+	// ECMAScript spec requires newlines between parameter strings and around body
+	// to handle single-line comments (//) correctly
 	var source string
 	if len(params) == 0 {
-		source = fmt.Sprintf("return (function() { %s });", body)
+		source = fmt.Sprintf("return (function() {\n%s\n});", body)
 	} else {
 		// Join parameters with commas
+		// Per ECMAScript spec section 20.2.1.1: each parameter string is separated
+		// by ',' but we need newlines to handle // comments within parameter strings
 		paramStr := ""
 		for i, param := range params {
 			if i > 0 {
-				paramStr += ", "
+				paramStr += ","
 			}
 			paramStr += param
 		}
-		source = fmt.Sprintf("return (function(%s) { %s });", paramStr, body)
+		source = fmt.Sprintf("return (function(%s\n) {\n%s\n});", paramStr, body)
 	}
 
 	// We need access to the driver to compile this source code
@@ -363,6 +393,96 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	// Verify it's actually a function
 	if !functionValue.IsCallable() {
 		return vm.Undefined, fmt.Errorf("Internal Error: Function() constant is not callable (got %s)", functionValue.TypeName())
+	}
+
+	return functionValue, nil
+}
+
+func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value) (vm.Value, error) {
+	// The AsyncFunction constructor has signature:
+	// AsyncFunction(param1, param2, ..., paramN, body)
+	// Where all arguments are strings, creates an async function
+
+	var params []string
+	var body string
+
+	if len(args) == 0 {
+		// AsyncFunction() - no parameters, empty body
+		body = ""
+	} else if len(args) == 1 {
+		// AsyncFunction(body) - no parameters, just body
+		body = args[0].ToString()
+	} else {
+		// AsyncFunction(param1, ..., paramN, body) - last arg is body, rest are parameters
+		for i := 0; i < len(args)-1; i++ {
+			params = append(params, args[i].ToString())
+		}
+		body = args[len(args)-1].ToString()
+	}
+
+	// Construct the async function source code as an IIFE that returns the function
+	// ECMAScript spec requires newlines between parameter strings and around body
+	// to handle single-line comments (//) correctly
+	var source string
+	if len(params) == 0 {
+		source = fmt.Sprintf("return (async function() {\n%s\n});", body)
+	} else {
+		// Join parameters with commas
+		// Per ECMAScript spec section 20.2.1.1: each parameter string is separated
+		// by ',' but we need newlines to handle // comments within parameter strings
+		paramStr := ""
+		for i, param := range params {
+			if i > 0 {
+				paramStr += ","
+			}
+			paramStr += param
+		}
+		source = fmt.Sprintf("return (async function(%s\n) {\n%s\n});", paramStr, body)
+	}
+
+	// We need access to the driver to compile this source code
+	if driver == nil {
+		return vm.Undefined, fmt.Errorf("SyntaxError: AsyncFunction constructor - driver is nil")
+	}
+
+	// Define interface for accessing compiler without state modification
+	type driverInterface interface {
+		CompileProgram(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
+	}
+
+	d, ok := driver.(driverInterface)
+	if !ok {
+		return vm.Undefined, fmt.Errorf("SyntaxError: AsyncFunction constructor - driver doesn't implement CompileProgram")
+	}
+
+	// Parse the source code
+	lx := lexer.NewLexer(source)
+	p := parser.NewParser(lx)
+	prog, parseErrs := p.ParseProgram()
+	if len(parseErrs) > 0 {
+		return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
+	}
+
+	// Compile the program
+	chunk, compileErrs := d.CompileProgram(prog)
+	if len(compileErrs) > 0 {
+		return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
+	}
+
+	if chunk == nil {
+		return vm.Undefined, fmt.Errorf("SyntaxError: compilation returned nil chunk")
+	}
+
+	if len(chunk.Constants) == 0 {
+		return vm.Undefined, fmt.Errorf("Internal Error: compiled AsyncFunction() code has no constants")
+	}
+
+	// The first constant is the async function object we created
+	functionValue := chunk.Constants[0]
+
+	// Verify it's actually a function
+	if !functionValue.IsCallable() {
+		return vm.Undefined, fmt.Errorf("Internal Error: AsyncFunction() constant is not callable (got %s)", functionValue.TypeName())
 	}
 
 	return functionValue, nil
