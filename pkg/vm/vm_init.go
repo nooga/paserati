@@ -287,6 +287,30 @@ func (vm *VM) IsUnwinding() bool {
 	return vm.unwinding
 }
 
+// EnterHelperCall increments the helper call depth counter.
+// This should be called before native functions call helpers like ToPrimitive
+// that might throw exceptions which need to be caught by try/catch blocks.
+func (vm *VM) EnterHelperCall() {
+	vm.helperCallDepth++
+}
+
+// ExitHelperCall decrements the helper call depth counter.
+// This should be called after native functions return from helpers like ToPrimitive.
+func (vm *VM) ExitHelperCall() {
+	vm.helperCallDepth--
+}
+
+// IsHandlerFound returns true if an exception handler was found during a helper call.
+// After checking this, the caller should call ClearHandlerFound().
+func (vm *VM) IsHandlerFound() bool {
+	return vm.handlerFound
+}
+
+// ClearHandlerFound clears the handler found flag.
+func (vm *VM) ClearHandlerFound() {
+	vm.handlerFound = false
+}
+
 // GetFrameCount returns the current frame count for debugging
 func (vm *VM) GetFrameCount() int {
 	return vm.frameCount

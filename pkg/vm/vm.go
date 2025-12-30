@@ -4937,6 +4937,18 @@ startExecution:
 				continue
 			}
 
+			// If exception was thrown AND a handler was found (unwinding cleared, handlerFound=true),
+			// we need to jump to the handler. This happens when native functions call ToPrimitive
+			// which throws an exception that gets caught by a try/catch block.
+			if vm.handlerFound {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCallMethod: Handler found during native call, jumping to frame.ip=%d\n", frame.ip)
+				}
+				vm.handlerFound = false
+				ip = frame.ip
+				continue
+			}
+
 			// Minimal targeted debug: observe results of [Symbol.iterator] and next()
 			if false && !shouldSwitch {
 				switch calleeVal.Type() {
@@ -8863,6 +8875,14 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 		}
 		if ok {
 			if toPrimMethod.Type() != TypeNull && toPrimMethod.Type() != TypeUndefined {
+				// Check if @@toPrimitive is callable - if not, throw TypeError
+				if toPrimMethod.Type() != TypeFunction && toPrimMethod.Type() != TypeClosure &&
+					toPrimMethod.Type() != TypeNativeFunction && toPrimMethod.Type() != TypeNativeFunctionWithProps &&
+					toPrimMethod.Type() != TypeBoundFunction {
+					vm.ThrowTypeError("@@toPrimitive must be callable")
+					return Undefined
+				}
+
 				// Call Symbol.toPrimitive with hint as argument
 				var hintArg Value
 				if hint == "string" {
@@ -8873,25 +8893,22 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 					hintArg = NewString("default")
 				}
 
-				if toPrimMethod.Type() == TypeFunction || toPrimMethod.Type() == TypeClosure ||
-					toPrimMethod.Type() == TypeNativeFunction || toPrimMethod.Type() == TypeNativeFunctionWithProps {
-					result, err := vm.Call(toPrimMethod, val, []Value{hintArg})
-					if err == nil {
-						// Result must be a primitive
-						if !result.IsObject() && !result.IsCallable() && result.typ != TypeArray && result.typ != TypeArguments &&
-							result.typ != TypeRegExp && result.typ != TypeMap && result.typ != TypeSet && result.typ != TypeProxy {
-							return result
-						}
-						// If result is not primitive, throw TypeError
-						vm.ThrowTypeError("Symbol.toPrimitive must return a primitive value")
-						return Undefined
+				result, err := vm.Call(toPrimMethod, val, []Value{hintArg})
+				if err == nil {
+					// Result must be a primitive
+					if !result.IsObject() && !result.IsCallable() && result.typ != TypeArray && result.typ != TypeArguments &&
+						result.typ != TypeRegExp && result.typ != TypeMap && result.typ != TypeSet && result.typ != TypeProxy {
+						return result
 					}
-					// If Symbol.toPrimitive throws, propagate the exception
-					if ee, ok := err.(ExceptionError); ok {
-						vm.throwException(ee.GetExceptionValue())
-					}
+					// If result is not primitive, throw TypeError
+					vm.ThrowTypeError("Symbol.toPrimitive must return a primitive value")
 					return Undefined
 				}
+				// If Symbol.toPrimitive throws, propagate the exception
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+				}
+				return Undefined
 			}
 		}
 	}

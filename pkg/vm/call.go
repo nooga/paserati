@@ -402,6 +402,13 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			return false, nil
 		}
 
+		// Check if an exception was thrown and a handler was found during the native call.
+		// When this happens: unwinding=false (cleared by handleCatchBlock), but handlerFound=true.
+		// We need to NOT store the result and let the VM loop jump to the handler.
+		if vm.handlerFound {
+			return false, nil
+		}
+
 		//fmt.Printf("DEBUG prepareCall: result=%v\n", result.Inspect())
 
 		// Store result
@@ -434,6 +441,11 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 
 		// Check if VM started unwinding during the native function call
 		if vm.unwinding {
+			return false, nil
+		}
+
+		// Check if an exception was thrown and a handler was found during the native call.
+		if vm.handlerFound {
 			return false, nil
 		}
 

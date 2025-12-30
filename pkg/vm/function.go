@@ -147,7 +147,7 @@ func (fn *FunctionObject) getOrCreatePrototypeWithVM(vm *VM) Value {
 	// Determine the correct prototype parent based on function type
 	var prototypeParent Value = DefaultObjectPrototype
 
-	// For generator and async generator functions, use their specific prototypes
+	// When we have a VM, use the proper prototypes
 	if vm != nil {
 		if fn.IsAsync && fn.IsGenerator {
 			// Async generator function's .prototype should inherit from AsyncGeneratorPrototype
@@ -155,6 +155,10 @@ func (fn *FunctionObject) getOrCreatePrototypeWithVM(vm *VM) Value {
 		} else if fn.IsGenerator {
 			// Generator function's .prototype should inherit from GeneratorPrototype
 			prototypeParent = vm.GeneratorPrototype
+		} else {
+			// Regular function's .prototype should inherit from Object.prototype
+			// This ensures user-defined constructor prototypes have toString(), valueOf(), etc.
+			prototypeParent = vm.ObjectPrototype
 		}
 	}
 

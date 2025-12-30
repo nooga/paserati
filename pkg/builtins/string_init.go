@@ -65,10 +65,13 @@ func getStringValueWithVM(vmInstance *vm.VM, val vm.Value) (string, error) {
 			}
 		}
 		// For other objects, use ToPrimitive to properly call toString/valueOf
+		// Track that we're in a helper call so exception handlers can be found
+		vmInstance.EnterHelperCall()
 		primVal := vmInstance.ToPrimitive(val, "string")
+		vmInstance.ExitHelperCall()
 		// Check if ToPrimitive threw an exception - if so, the VM is unwinding
 		// and we should return ErrVMUnwinding to signal the caller to abort
-		if vmInstance.IsUnwinding() {
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 			return "", ErrVMUnwinding
 		}
 		// Check if ToPrimitive returned a Symbol
@@ -166,10 +169,13 @@ func toNumberWithVM(vmInstance *vm.VM, val vm.Value) (float64, error) {
 	}
 	// For objects, use ToPrimitive first
 	if val.IsObject() || val.IsCallable() {
+		// Track that we're in a helper call so exception handlers can be found
+		vmInstance.EnterHelperCall()
 		val = vmInstance.ToPrimitive(val, "number")
+		vmInstance.ExitHelperCall()
 		// Check if ToPrimitive threw an exception - if so, the VM is unwinding
 		// and we should return ErrVMUnwinding to signal the caller to abort
-		if vmInstance.IsUnwinding() {
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 			return 0, ErrVMUnwinding
 		}
 		// Check again after ToPrimitive
@@ -203,10 +209,8 @@ func toIntegerWithVM(vmInstance *vm.VM, val vm.Value) (int, error) {
 	if n < 0 && n < float64(-(1 << 31)) {
 		return -(1 << 31), nil
 	}
-	// Truncate towards zero
-	if n < 0 {
-		return int(n + 0.5), nil
-	}
+	// Truncate towards zero (ECMAScript ToInteger)
+	// int() in Go truncates towards zero, which is correct
 	return int(n), nil
 }
 
