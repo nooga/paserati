@@ -33,6 +33,111 @@ func getExportSpecName(expr parser.Expression) string {
 	return ""
 }
 
+// collectVarDeclarations recursively collects all var declaration names from statements.
+// This is used for var hoisting - var declarations are hoisted to the top of their
+// function/script scope and initialized to undefined.
+func collectVarDeclarations(stmts []parser.Statement) []string {
+	var names []string
+	seen := make(map[string]bool)
+
+	var collect func(stmt parser.Statement)
+	collect = func(stmt parser.Statement) {
+		if stmt == nil {
+			return
+		}
+		switch s := stmt.(type) {
+		case *parser.VarStatement:
+			for _, decl := range s.Declarations {
+				if decl.Name != nil && !seen[decl.Name.Value] {
+					names = append(names, decl.Name.Value)
+					seen[decl.Name.Value] = true
+				}
+			}
+		case *parser.BlockStatement:
+			if s != nil && s.Statements != nil {
+				for _, inner := range s.Statements {
+					collect(inner)
+				}
+			}
+		case *parser.IfStatement:
+			if s.Consequence != nil {
+				collect(s.Consequence)
+			}
+			if s.Alternative != nil {
+				collect(s.Alternative)
+			}
+		case *parser.WhileStatement:
+			if s.Body != nil {
+				collect(s.Body)
+			}
+		case *parser.DoWhileStatement:
+			if s.Body != nil {
+				collect(s.Body)
+			}
+		case *parser.ForStatement:
+			if s.Initializer != nil {
+				collect(s.Initializer)
+			}
+			if s.Body != nil {
+				collect(s.Body)
+			}
+		case *parser.ForInStatement:
+			// For-in initializer can be a var declaration
+			if s.Variable != nil {
+				if varStmt, ok := s.Variable.(*parser.VarStatement); ok {
+					collect(varStmt)
+				}
+			}
+			if s.Body != nil {
+				collect(s.Body)
+			}
+		case *parser.ForOfStatement:
+			// For-of initializer can be a var declaration
+			if s.Variable != nil {
+				if varStmt, ok := s.Variable.(*parser.VarStatement); ok {
+					collect(varStmt)
+				}
+			}
+			if s.Body != nil {
+				collect(s.Body)
+			}
+		case *parser.SwitchStatement:
+			if s.Cases != nil {
+				for _, caseClause := range s.Cases {
+					if caseClause != nil && caseClause.Body != nil && caseClause.Body.Statements != nil {
+						for _, inner := range caseClause.Body.Statements {
+							collect(inner)
+						}
+					}
+				}
+			}
+		case *parser.TryStatement:
+			if s.Body != nil {
+				collect(s.Body)
+			}
+			if s.CatchClause != nil && s.CatchClause.Body != nil {
+				collect(s.CatchClause.Body)
+			}
+			if s.FinallyBlock != nil {
+				collect(s.FinallyBlock)
+			}
+		case *parser.WithStatement:
+			if s.Body != nil {
+				collect(s.Body)
+			}
+		case *parser.LabeledStatement:
+			if s.Statement != nil {
+				collect(s.Statement)
+			}
+		}
+	}
+
+	for _, stmt := range stmts {
+		collect(stmt)
+	}
+	return names
+}
+
 // --- New: Loop Context for Break/Continue ---
 type LoopContext struct {
 	// Optional label for this loop/statement
@@ -466,6 +571,31 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		}
 	}
 	// --- END Hoisted Global Function Processing ---
+
+	// --- Hoist var declarations at top-level (script scope) ---
+	// Var declarations are hoisted to the top of their function/script scope
+	// and initialized to undefined. This must happen before any statements execute.
+	if c.enclosing == nil {
+		varNames := collectVarDeclarations(program.Statements)
+		debugPrintf("[Compile] Hoisting %d top-level var declarations\n", len(varNames))
+		for _, name := range varNames {
+			// Skip if already defined (e.g., by a hoisted function with the same name)
+			if _, _, found := c.currentSymbolTable.Resolve(name); found {
+				debugPrintf("[Compile VarHoist] Skipping '%s' - already defined\n", name)
+				continue
+			}
+			// Define as global with undefined value
+			globalIdx := c.GetOrAssignGlobalIndex(name)
+			c.currentSymbolTable.DefineGlobal(name, globalIdx)
+			// Emit code to initialize to undefined
+			tempReg := c.regAlloc.Alloc()
+			c.emitLoadUndefined(tempReg, 0)
+			c.emitSetGlobal(globalIdx, tempReg, 0)
+			c.regAlloc.Free(tempReg)
+			debugPrintf("[Compile VarHoist] Hoisted var '%s' at global index %d\n", name, globalIdx)
+		}
+	}
+	// --- END var hoisting ---
 
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)
