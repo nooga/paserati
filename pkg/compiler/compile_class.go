@@ -419,6 +419,35 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 		c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
 	}
 
+	// Set constructor.prototype = prototypeObject
+	prototypeNameIdx := c.chunk.AddConstant(vm.String("prototype"))
+	c.emitSetProp(constructorReg, prototypeReg, prototypeNameIdx, node.Token.Line)
+
+	// Check for computed method with key "constructor" - per ECMAScript,
+	// computed property names take precedence and prototype.constructor should not be auto-set
+	hasComputedConstructor := false
+	for _, method := range node.Body.Methods {
+		if method.Kind != "constructor" && !method.IsStatic {
+			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+				// Check if the computed key is a string literal "constructor"
+				if strLit, ok := computedKey.Expr.(*parser.StringLiteral); ok && strLit.Value == "constructor" {
+					hasComputedConstructor = true
+					break
+				}
+			}
+		}
+	}
+
+	// Set prototypeObject.constructor = constructor (non-enumerable per ECMAScript)
+	// This is crucial for inheritance - it fixes the constructor reference
+	// Do this BEFORE adding other methods to maintain proper property insertion order
+	// Skip this if prototype is null (class extends null) or if there's a computed "constructor" method
+	if _, isNull := node.SuperClass.(*parser.NullLiteral); !isNull && !hasComputedConstructor {
+		constructorNameIdx := c.chunk.AddConstant(vm.String("constructor"))
+		// Use OpDefineMethod to make constructor non-enumerable (writable, configurable, not enumerable)
+		c.emitDefineMethod(prototypeReg, constructorReg, constructorNameIdx, node.Token.Line)
+	}
+
 	// Add methods to prototype (excluding constructor, static methods, and private methods)
 	for _, method := range node.Body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic {
@@ -446,19 +475,6 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 				}
 			}
 		}
-	}
-
-	// Set constructor.prototype = prototypeObject
-	prototypeNameIdx := c.chunk.AddConstant(vm.String("prototype"))
-	c.emitSetProp(constructorReg, prototypeReg, prototypeNameIdx, node.Token.Line)
-
-	// Set prototypeObject.constructor = constructor (non-enumerable per ECMAScript)
-	// This is crucial for inheritance - it fixes the constructor reference
-	// Skip this if prototype is null (class extends null)
-	if _, isNull := node.SuperClass.(*parser.NullLiteral); !isNull {
-		constructorNameIdx := c.chunk.AddConstant(vm.String("constructor"))
-		// Use OpDefineMethod to make constructor non-enumerable (writable, configurable, not enumerable)
-		c.emitDefineMethod(prototypeReg, constructorReg, constructorNameIdx, node.Token.Line)
 	}
 
 	debugPrintf("// DEBUG setupClassPrototype: Prototype setup complete for class '%s'\n", node.Name.Value)

@@ -1090,11 +1090,13 @@ func objectGetOwnPropertyNamesImpl(args []vm.Value) (vm.Value, error) {
 	arr := vm.NewArray()
 	arrObj := arr.AsArray()
 	if po := obj.AsPlainObject(); po != nil {
-		for _, k := range po.OwnKeys() {
+		// OwnPropertyNames returns ALL own string property names including non-enumerable
+		for _, k := range po.OwnPropertyNames() {
 			arrObj.Append(vm.NewString(k))
 		}
 	} else if d := obj.AsDictObject(); d != nil {
-		for _, k := range d.OwnKeys() {
+		// DictObject.OwnPropertyNames returns all property names
+		for _, k := range d.OwnPropertyNames() {
 			arrObj.Append(vm.NewString(k))
 		}
 	} else if a := obj.AsArray(); a != nil {
