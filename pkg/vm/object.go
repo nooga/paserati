@@ -655,14 +655,82 @@ func (o *PlainObject) OwnKeys() []string {
 }
 
 // OwnPropertyNames returns the list of all own string property names (including non-enumerable).
+// Per ECMAScript spec, integer indices come first (in ascending numeric order), then string keys
+// in insertion order.
 func (o *PlainObject) OwnPropertyNames() []string {
-	keys := make([]string, 0, len(o.shape.fields))
+	// Separate integer indices from string keys
+	var integerIndices []int
+	var stringKeys []string
+
 	for _, f := range o.shape.fields {
 		if f.keyKind == KeyKindString {
-			keys = append(keys, f.name)
+			// Check if this is an integer index (non-negative integer string)
+			if idx, isInt := tryParseArrayIndex(f.name); isInt {
+				integerIndices = append(integerIndices, idx)
+			} else {
+				stringKeys = append(stringKeys, f.name)
+			}
 		}
 	}
-	return keys
+
+	// Sort integer indices in ascending order
+	sortInts(integerIndices)
+
+	// Build result: integer indices first, then string keys in insertion order
+	result := make([]string, 0, len(integerIndices)+len(stringKeys))
+	for _, idx := range integerIndices {
+		result = append(result, intToString(idx))
+	}
+	result = append(result, stringKeys...)
+
+	return result
+}
+
+// tryParseArrayIndex checks if a string represents a valid array index.
+// Returns (index, true) if valid, (0, false) otherwise.
+// Valid array indices are non-negative integers in range [0, 2^32-1) without leading zeros.
+func tryParseArrayIndex(key string) (int, bool) {
+	if key == "" {
+		return 0, false
+	}
+	// Leading zeros not allowed (except "0" itself)
+	if len(key) > 1 && key[0] == '0' {
+		return 0, false
+	}
+	idx := 0
+	for _, ch := range key {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		idx = idx*10 + int(ch-'0')
+		// Check for overflow (max array index is 2^32 - 2)
+		if idx > 4294967294 {
+			return 0, false
+		}
+	}
+	return idx, true
+}
+
+// intToString converts an int to string without importing strconv
+func intToString(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var digits []byte
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	return string(digits)
+}
+
+// sortInts sorts a slice of ints in ascending order (simple insertion sort for small slices)
+func sortInts(a []int) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j-1] > a[j]; j-- {
+			a[j-1], a[j] = a[j], a[j-1]
+		}
+	}
 }
 
 // OwnSymbolKeys returns the list of own symbol keys in insertion order.

@@ -1079,32 +1079,139 @@ func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
 	return entries, nil
 }
 
+// isIntegerIndex checks if a string represents a valid integer index (0, 1, 2, ...)
+func isIntegerIndex(s string) bool {
+	if s == "" {
+		return false
+	}
+	// Leading zeros not allowed (except "0" itself)
+	if len(s) > 1 && s[0] == '0' {
+		return false
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func objectGetOwnPropertyNamesImpl(args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		return vm.NewArray(), nil
 	}
 	obj := args[0]
-	if !obj.IsObject() {
-		return vm.NewArray(), nil
-	}
+
 	arr := vm.NewArray()
 	arrObj := arr.AsArray()
-	if po := obj.AsPlainObject(); po != nil {
-		// OwnPropertyNames returns ALL own string property names including non-enumerable
-		for _, k := range po.OwnPropertyNames() {
-			arrObj.Append(vm.NewString(k))
+
+	// Handle different object types
+	switch obj.Type() {
+	case vm.TypeObject:
+		if po := obj.AsPlainObject(); po != nil {
+			// OwnPropertyNames returns ALL own string property names including non-enumerable
+			for _, k := range po.OwnPropertyNames() {
+				arrObj.Append(vm.NewString(k))
+			}
+		} else if d := obj.AsDictObject(); d != nil {
+			// DictObject.OwnPropertyNames returns all property names
+			for _, k := range d.OwnPropertyNames() {
+				arrObj.Append(vm.NewString(k))
+			}
 		}
-	} else if d := obj.AsDictObject(); d != nil {
-		// DictObject.OwnPropertyNames returns all property names
-		for _, k := range d.OwnPropertyNames() {
-			arrObj.Append(vm.NewString(k))
-		}
-	} else if a := obj.AsArray(); a != nil {
+	case vm.TypeArray:
+		a := obj.AsArray()
 		for i := 0; i < a.Length(); i++ {
 			arrObj.Append(vm.NewString(strconv.Itoa(i)))
 		}
 		arrObj.Append(vm.NewString("length"))
+	case vm.TypeFunction:
+		fn := obj.AsFunction()
+		// Per ECMAScript OrdinaryOwnPropertyKeys:
+		// 1. Integer indices in ascending numeric order
+		// 2. String keys in property creation order
+		// For functions: "length", "name", "prototype" are created first, then user properties
+		propNames := fn.Properties.OwnPropertyNames() // Already sorted with integers first
+		// Add any integer indices from properties first (already done by OwnPropertyNames)
+		for _, k := range propNames {
+			// Check if it's an integer index
+			if isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		// Then add standard function properties
+		arrObj.Append(vm.NewString("length"))
+		arrObj.Append(vm.NewString("name"))
+
+		// Check if prototype is in Properties
+		hasPrototype := false
+		for _, k := range propNames {
+			if k == "prototype" {
+				hasPrototype = true
+				break
+			}
+		}
+		if hasPrototype {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+
+		// Add user-defined string properties excluding built-ins and integer indices
+		for _, k := range propNames {
+			if k != "length" && k != "name" && k != "prototype" && !isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		// If no prototype was found in Properties, add it at the end
+		if !hasPrototype {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+	case vm.TypeClosure:
+		cl := obj.AsClosure()
+		// Per ECMAScript OrdinaryOwnPropertyKeys - same logic as TypeFunction
+		var propNames []string
+		if cl.Fn != nil && cl.Fn.Properties != nil {
+			propNames = cl.Fn.Properties.OwnPropertyNames()
+		}
+
+		// Add integer indices first
+		for _, k := range propNames {
+			if isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		// Then standard function properties
+		arrObj.Append(vm.NewString("length"))
+		arrObj.Append(vm.NewString("name"))
+
+		hasPrototype := false
+		for _, k := range propNames {
+			if k == "prototype" {
+				hasPrototype = true
+				break
+			}
+		}
+		if hasPrototype {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+
+		// Add user-defined string properties
+		for _, k := range propNames {
+			if k != "length" && k != "name" && k != "prototype" && !isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		if !hasPrototype {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+	default:
+		// Non-object types return empty array
+		return arr, nil
 	}
+
 	return arr, nil
 }
 

@@ -3072,6 +3072,12 @@ startExecution:
 
 			var obj *PlainObject
 			if objVal.Type() == TypeFunction {
+				// Per ECMAScript 14.5.14: Static accessor named "prototype" is forbidden
+				if propName == "prototype" {
+					frame.ip = ip
+					vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
+					return InterpretRuntimeError, Undefined
+				}
 				obj = objVal.AsFunction().Properties
 			} else {
 				obj = objVal.AsPlainObject()

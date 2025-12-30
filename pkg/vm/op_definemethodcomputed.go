@@ -47,11 +47,29 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		return InterpretOK, Undefined
 	} else if objVal.Type() == TypeFunction {
 		// Static class methods - add to the constructor function's properties
+		// Per ECMAScript 14.5.14: Static method named "prototype" is forbidden
+		if propKey.kind == KeyKindString && propKey.name == "prototype" {
+			vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
+			return InterpretRuntimeError, Undefined
+		}
 		funcObj := objVal.AsFunction()
 		if funcObj.Properties == nil {
 			funcObj.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 		}
 		funcObj.Properties.DefineOwnPropertyByKey(propKey, methodVal, &writable, &enumerable, &configurable)
+		return InterpretOK, Undefined
+	} else if objVal.Type() == TypeClosure {
+		// Static class methods on closures - add to the underlying function's properties
+		// Per ECMAScript 14.5.14: Static method named "prototype" is forbidden
+		if propKey.kind == KeyKindString && propKey.name == "prototype" {
+			vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
+			return InterpretRuntimeError, Undefined
+		}
+		closure := objVal.AsClosure()
+		if closure.Fn.Properties == nil {
+			closure.Fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+		}
+		closure.Fn.Properties.DefineOwnPropertyByKey(propKey, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined
 	} else {
 		status := vm.runtimeError("Cannot define method on non-object type '%s'", objVal.TypeName())
