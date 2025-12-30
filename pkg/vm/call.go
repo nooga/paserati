@@ -395,6 +395,13 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			return false, err
 		}
 
+		// Check if VM started unwinding during the native function call (e.g., due to
+		// ToPrimitive calling valueOf/toString which threw an exception).
+		// In this case, don't store the result - let the exception propagate.
+		if vm.unwinding {
+			return false, nil
+		}
+
 		//fmt.Printf("DEBUG prepareCall: result=%v\n", result.Inspect())
 
 		// Store result
@@ -423,6 +430,11 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		if err != nil {
 			// Return error to be handled by the VM
 			return false, err
+		}
+
+		// Check if VM started unwinding during the native function call
+		if vm.unwinding {
+			return false, nil
 		}
 
 		// Store result

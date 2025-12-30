@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"errors"
 	"fmt"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
@@ -9,6 +10,12 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 )
+
+// ErrVMUnwinding is a sentinel error that indicates the VM is unwinding
+// with an exception. When this error is returned, the caller should abort
+// and return vm.Undefined immediately (without returning an error) to let
+// the exception continue to propagate.
+var ErrVMUnwinding = errors.New("VM unwinding")
 
 // requireObjectCoercible checks if a value can be converted to an object (not null or undefined).
 // Returns an error if the value is null or undefined, nil otherwise.
@@ -32,6 +39,7 @@ func isRegExp(val vm.Value) bool {
 // For String wrapper objects, extracts the [[PrimitiveValue]].
 // For other objects, calls ToPrimitive with "string" hint to get proper conversion.
 // Returns an error if a Symbol is passed (cannot convert Symbol to string).
+// Also propagates any exceptions thrown during ToPrimitive conversion.
 func getStringValueWithVM(vmInstance *vm.VM, val vm.Value) (string, error) {
 	// Symbols cannot be converted to strings implicitly
 	if val.Type() == vm.TypeSymbol {
@@ -50,10 +58,19 @@ func getStringValueWithVM(vmInstance *vm.VM, val vm.Value) (string, error) {
 				if primitiveVal.Type() == vm.TypeString {
 					return primitiveVal.ToString(), nil
 				}
+				// Check if [[PrimitiveValue]] is a Symbol - can't convert to string
+				if primitiveVal.Type() == vm.TypeSymbol {
+					return "", vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+				}
 			}
 		}
 		// For other objects, use ToPrimitive to properly call toString/valueOf
 		primVal := vmInstance.ToPrimitive(val, "string")
+		// Check if ToPrimitive threw an exception - if so, the VM is unwinding
+		// and we should return ErrVMUnwinding to signal the caller to abort
+		if vmInstance.IsUnwinding() {
+			return "", ErrVMUnwinding
+		}
 		// Check if ToPrimitive returned a Symbol
 		if primVal.Type() == vm.TypeSymbol {
 			return "", vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
@@ -135,6 +152,62 @@ func trimLeftECMAScriptWhitespace(s string) string {
 // trimRightECMAScriptWhitespace trims ECMAScript whitespace from the right of a string
 func trimRightECMAScriptWhitespace(s string) string {
 	return strings.TrimRightFunc(s, isECMAScriptWhitespace)
+}
+
+// toNumberWithVM converts a value to a number, throwing TypeError for Symbols and BigInt.
+// This implements ECMAScript's ToNumber abstract operation with proper Symbol/BigInt handling.
+// It also propagates any exceptions thrown during ToPrimitive conversion.
+func toNumberWithVM(vmInstance *vm.VM, val vm.Value) (float64, error) {
+	if val.Type() == vm.TypeSymbol {
+		return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+	}
+	if val.Type() == vm.TypeBigInt {
+		return 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+	}
+	// For objects, use ToPrimitive first
+	if val.IsObject() || val.IsCallable() {
+		val = vmInstance.ToPrimitive(val, "number")
+		// Check if ToPrimitive threw an exception - if so, the VM is unwinding
+		// and we should return ErrVMUnwinding to signal the caller to abort
+		if vmInstance.IsUnwinding() {
+			return 0, ErrVMUnwinding
+		}
+		// Check again after ToPrimitive
+		if val.Type() == vm.TypeSymbol {
+			return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
+		if val.Type() == vm.TypeBigInt {
+			return 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+		}
+	}
+	return val.ToFloat(), nil
+}
+
+// toIntegerWithVM converts a value to an integer, throwing TypeError for Symbols.
+// This implements ECMAScript's ToInteger abstract operation with proper Symbol handling.
+func toIntegerWithVM(vmInstance *vm.VM, val vm.Value) (int, error) {
+	n, err := toNumberWithVM(vmInstance, val)
+	if err != nil {
+		return 0, err
+	}
+	if n != n { // NaN
+		return 0, nil
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	// Handle infinity
+	if n > 0 && n > float64(1<<31-1) {
+		return 1<<31 - 1, nil
+	}
+	if n < 0 && n < float64(-(1 << 31)) {
+		return -(1 << 31), nil
+	}
+	// Truncate towards zero
+	if n < 0 {
+		return int(n + 0.5), nil
+	}
+	return int(n), nil
 }
 
 type StringInitializer struct{}
@@ -280,9 +353,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		// Default to index 0 if no argument provided, using proper ToInteger conversion
+		// that throws TypeError for Symbols
 		index := 0
 		if len(args) >= 1 {
-			index = vmInstance.ToInteger(args[0])
+			index, err = toIntegerWithVM(vmInstance, args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 		// Convert to UTF-16 code units for proper JavaScript string semantics
 		utf16Units := vm.StringToUTF16(thisStr)
@@ -306,9 +383,13 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		// Default to index 0 if no argument provided, using proper ToInteger conversion
+		// that throws TypeError for Symbols
 		index := 0
 		if len(args) >= 1 {
-			index = vmInstance.ToInteger(args[0])
+			index, err = toIntegerWithVM(vmInstance, args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 		// Convert to UTF-16 code units for proper JavaScript string semantics
 		utf16Units := vm.StringToUTF16(thisStr)
@@ -336,9 +417,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		length := len(utf16Units)
 
 		// Default to 0 if no argument provided, using proper ToInteger conversion
+		// that throws TypeError for Symbols
 		index := 0
 		if len(args) >= 1 {
-			index = vmInstance.ToInteger(args[0])
+			var err error
+			index, err = toIntegerWithVM(vmInstance, args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 
 		// Handle negative indices (relative to end)
@@ -373,9 +459,14 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		size := len(utf16Units)
 
 		// Default to 0 if no argument provided, using proper ToInteger conversion
+		// that throws TypeError for Symbols
 		position := 0
 		if len(args) >= 1 {
-			position = vmInstance.ToInteger(args[0])
+			var err error
+			position, err = toIntegerWithVM(vmInstance, args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 
 		// Return undefined if out of bounds
@@ -527,16 +618,34 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
 		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil // Abort: let VM continue unwinding
+			}
 			return vm.Undefined, err
 		}
 		// indexOf(undefined) searches for "undefined"
+		// Convert searchString - throws TypeError for Symbols
 		searchStr := "undefined"
 		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
-			searchStr = args[0].ToString()
+			searchStr, err = getStringValueWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil // Abort: let VM continue unwinding
+				}
+				return vm.Undefined, err
+			}
 		}
 		position := 0
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			position = int(args[1].ToFloat())
+			// Convert position - throws TypeError for Symbols
+			positionF, err := toNumberWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil // Abort: let VM continue unwinding
+				}
+				return vm.Undefined, err
+			}
+			position = int(positionF)
 			if position < 0 {
 				position = 0
 			}
@@ -562,13 +671,22 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		// lastIndexOf(undefined) searches for "undefined"
+		// Convert searchString - throws TypeError for Symbols
 		searchStr := "undefined"
 		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
-			searchStr = args[0].ToString()
+			searchStr, err = getStringValueWithVM(vmInstance, args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 		position := len(thisStr)
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			position = int(args[1].ToFloat())
+			// Convert position - throws TypeError for Symbols
+			positionF, err := toNumberWithVM(vmInstance, args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
+			position = int(positionF)
 			if position < 0 {
 				position = 0
 			} else if position > len(thisStr) {
@@ -602,10 +720,19 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if isRegExp(args[0]) {
 			return vm.Undefined, vmInstance.NewTypeError("First argument to String.prototype.includes must not be a regular expression")
 		}
-		searchStr := args[0].ToString()
+		// Convert searchString - throws TypeError for Symbols
+		searchStr, err := getStringValueWithVM(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
+		}
 		position := 0
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			position = int(args[1].ToFloat())
+			// Convert position - throws TypeError for Symbols
+			positionF, err := toNumberWithVM(vmInstance, args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
+			position = int(positionF)
 			if position < 0 {
 				position = 0
 			}
@@ -638,10 +765,19 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if isRegExp(args[0]) {
 			return vm.Undefined, vmInstance.NewTypeError("First argument to String.prototype.startsWith must not be a regular expression")
 		}
-		searchStr := args[0].ToString()
+		// Convert searchString - throws TypeError for Symbols
+		searchStr, err := getStringValueWithVM(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
+		}
 		position := 0
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			position = int(args[1].ToFloat())
+			// Convert position - throws TypeError for Symbols
+			positionF, err := toNumberWithVM(vmInstance, args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
+			position = int(positionF)
 			if position < 0 {
 				position = 0
 			}
@@ -670,10 +806,19 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if isRegExp(args[0]) {
 			return vm.Undefined, vmInstance.NewTypeError("First argument to String.prototype.endsWith must not be a regular expression")
 		}
-		searchStr := args[0].ToString()
+		// Convert searchString - throws TypeError for Symbols
+		searchStr, err := getStringValueWithVM(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
+		}
 		length := len(thisStr)
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			length = int(args[1].ToFloat())
+			// Convert position - throws TypeError for Symbols
+			lengthF, err := toNumberWithVM(vmInstance, args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
+			length = int(lengthF)
 			if length < 0 {
 				length = 0
 			} else if length > len(thisStr) {
@@ -1455,11 +1600,27 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		var result strings.Builder
 		for _, arg := range args {
-			// Use ToNumber to properly call ToPrimitive for objects
-			codePoint := int(vmInstance.ToNumber(arg))
+			// Use toNumberWithVM to throw TypeError for Symbols
+			codePointF, err := toNumberWithVM(vmInstance, arg)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			// Check for NaN - not an integral number
+			if codePointF != codePointF { // NaN check
+				return vm.Undefined, vmInstance.NewRangeError("Invalid code point NaN")
+			}
+			// Check for Infinity - not an integral number
+			if codePointF > 1e20 || codePointF < -1e20 {
+				return vm.Undefined, vmInstance.NewRangeError("Invalid code point Infinity")
+			}
+			// Check if it's an integer (no decimal part)
+			codePoint := int(codePointF)
+			if float64(codePoint) != codePointF {
+				return vm.Undefined, vmInstance.NewRangeError("Invalid code point " + fmt.Sprintf("%v", codePointF))
+			}
 			// Check for valid code point range
 			if codePoint < 0 || codePoint > 0x10FFFF {
-				return vm.Undefined, vmInstance.NewRangeError("Invalid code point")
+				return vm.Undefined, vmInstance.NewRangeError("Invalid code point " + fmt.Sprintf("%d", codePoint))
 			}
 			// Convert code point to string (handles surrogate pairs automatically)
 			result.WriteRune(rune(codePoint))
@@ -1551,7 +1712,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add Symbol.iterator implementation for strings (native symbol key)
 	strIterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
-		thisStr := vmInstance.GetThis().ToString()
+		thisVal := vmInstance.GetThis()
+		// RequireObjectCoercible: throw TypeError for null/undefined
+		if err := requireObjectCoercible(vmInstance, thisVal, "[Symbol.iterator]"); err != nil {
+			return vm.Undefined, err
+		}
+		thisStr := thisVal.ToString()
 
 		// Create a string iterator object
 		return createStringIterator(vmInstance, thisStr), nil
