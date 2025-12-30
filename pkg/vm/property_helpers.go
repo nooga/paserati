@@ -30,6 +30,8 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	}
 
 	// Other function properties (if any) - not available on bound functions
+	// Check these BEFORE the strict mode caller/arguments restriction, because
+	// classes can have getters/methods named "arguments" or "caller" that should work
 	if fn != nil && fn.Properties != nil {
 		// Check for accessor properties first (getters/setters)
 		if getter, _, _, _, exists := fn.Properties.GetOwnAccessor(propName); exists {
@@ -72,6 +74,19 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		if prop, exists := fn.Properties.GetOwn(propName); exists {
 			return prop, true
 		}
+	}
+
+	// ES5 strict mode restriction: accessing "caller" or "arguments" on strict functions throws TypeError
+	// Per 15.3.5.4, strict mode functions have [[ThrowTypeError]] accessors for these properties
+	// This check comes AFTER own property checks because classes can define their own "arguments" getters
+	if propName == "caller" || propName == "arguments" {
+		// Check if the function is strict (for bytecode functions)
+		if fn != nil && fn.Chunk != nil && fn.Chunk.IsStrict {
+			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+			return Undefined, false
+		}
+		// For non-strict functions, return undefined (we don't track caller/arguments)
+		return Undefined, true
 	}
 
 	// Expose intrinsic function properties like .name

@@ -116,7 +116,15 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 	// 4. Functions, Closures, Native Functions, Native Functions with Props, Async Native Functions, and Bound Functions (unified handling)
 	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypeBoundFunction || objVal.Type() == TypeNativeFunction || objVal.Type() == TypeNativeFunctionWithProps || objVal.Type() == TypeAsyncNativeFunction {
-		if result, handled := vm.handleCallableProperty(*objVal, propName); handled {
+		// Set frame.ip before calling handleCallableProperty in case it throws (for exception handler lookup)
+		if frame != nil {
+			frame.ip = ip - 4
+		}
+		// Track helper call depth so exception handlers can set handlerFound
+		vm.EnterHelperCall()
+		result, handled := vm.handleCallableProperty(*objVal, propName)
+		vm.ExitHelperCall()
+		if handled {
 			if debugVM {
 				if propName == "name" || propName == "constructor" {
 					if debugVM {
@@ -126,6 +134,15 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			}
 			*dest = result
 			return true, InterpretOK, *dest
+		} else if vm.unwinding || vm.handlerFound {
+			// Exception was thrown (e.g., strict mode caller/arguments access)
+			if vm.handlerFound {
+				vm.handlerFound = false
+			}
+			if !vm.unwinding {
+				return false, InterpretOK, Undefined
+			}
+			return false, InterpretRuntimeError, Undefined
 		}
 	}
 

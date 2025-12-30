@@ -189,6 +189,11 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 	switch objVal.Type() {
 	case TypeFunction:
 		fn := AsFunction(*objVal)
+		// ES5 strict mode restriction: writing to "caller" or "arguments" on strict functions throws TypeError
+		if (propName == "caller" || propName == "arguments") && fn.Chunk != nil && fn.Chunk.IsStrict {
+			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+			return false, InterpretRuntimeError, Undefined
+		}
 		if fn.Properties == nil {
 			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
@@ -203,6 +208,11 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 	case TypeClosure:
 		closure := AsClosure(*objVal)
 		fn := closure.Fn
+		// ES5 strict mode restriction: writing to "caller" or "arguments" on strict functions throws TypeError
+		if (propName == "caller" || propName == "arguments") && fn.Chunk != nil && fn.Chunk.IsStrict {
+			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+			return false, InterpretRuntimeError, Undefined
+		}
 		if fn.Properties == nil {
 			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
