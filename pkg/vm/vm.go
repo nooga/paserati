@@ -6570,8 +6570,15 @@ startExecution:
 			status, _ := vm.executeModule(specifier)
 			if status != InterpretOK {
 				// Module load failed - reject the promise with the error
+				// Get error from vm.errors if available
 				var errorMsg string
-				if vm.currentException != Null {
+				if len(vm.errors) > 0 {
+					// Use the last error message from vm.errors
+					lastErr := vm.errors[len(vm.errors)-1]
+					errorMsg = lastErr.Error()
+					// Clear the error since we're handling it
+					vm.errors = vm.errors[:len(vm.errors)-1]
+				} else if vm.currentException != Null {
 					errorMsg = vm.currentException.ToString()
 					vm.currentException = Null
 					vm.unwinding = false
@@ -10879,6 +10886,17 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// Now the module will execute as frameCount=1 and OpReturn will exit at frameCount=0
 	resultStatus, result := vm.run()
 
+	// Capture any JavaScript exception that was thrown but not caught
+	// This happens when the module contains throw statements without try/catch
+	var moduleException Value
+	if vm.unwinding && vm.currentException != Null {
+		moduleException = vm.currentException
+		// Clear the unwinding state since we're handling the exception here
+		vm.unwinding = false
+		vm.currentException = Null
+		resultStatus = InterpretRuntimeError
+	}
+
 	// Restore frame state after module execution
 	vm.frameCount = savedFrameCount
 	vm.nextRegSlot = savedNextRegSlot
@@ -10890,8 +10908,19 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// Convert result status to errors if needed
 	var errs []errors.PaseratiError
 	if resultStatus == InterpretRuntimeError {
-		errs = make([]errors.PaseratiError, len(vm.errors))
-		copy(errs, vm.errors)
+		// If we have a JS exception, that takes precedence
+		if moduleException != Null {
+			// Create a RuntimeError from the exception
+			runtimeErr := &errors.RuntimeError{
+				Position: errors.Position{Line: 1, Column: 1},
+				Msg:      fmt.Sprintf("Uncaught exception: %s", moduleException.ToString()),
+			}
+			errs = []errors.PaseratiError{runtimeErr}
+			vm.errors = append(vm.errors[:0], runtimeErr) // Clear and add only the exception
+		} else {
+			errs = make([]errors.PaseratiError, len(vm.errors))
+			copy(errs, vm.errors)
+		}
 	}
 	// fmt.Printf("// [VM DEBUG] === FINISHED MODULE EXECUTION: %s (result: %s, errors: %d) ===\n", modulePath, result.Inspect(), len(errs))
 
@@ -10908,11 +10937,12 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	}
 
 	// fmt.Printf("// [VM] executeModule: vm.Interpret completed for module '%s', errors: %d, result: %s\n", modulePath, len(errs), result.ToString())
-	if len(errs) > 0 {
-		for i, err := range errs {
-			fmt.Printf("// [VM] executeModule: Error %d: %s\n", i, err.Error())
-		}
-	}
+	// Debug output for module errors (disabled)
+	// if len(errs) > 0 {
+	//	for i, err := range errs {
+	//		fmt.Printf("// [VM] executeModule: Error %d: %s\n", i, err.Error())
+	//	}
+	// }
 
 	// Pop and restore execution context from stack with deep copied registers
 	if len(vm.executionContextStack) > 0 {
