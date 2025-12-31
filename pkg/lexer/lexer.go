@@ -527,6 +527,13 @@ func (l *Lexer) readChar() {
 	l.column++ // Increment column for the character now at l.position
 }
 
+// isEOF returns true if we've reached the end of the input.
+// This is needed because literal null bytes (0x00) in source code
+// should not be confused with EOF.
+func (l *Lexer) isEOF() bool {
+	return l.position >= len(l.input)
+}
+
 // peekChar looks ahead in the input without consuming the character.
 func (l *Lexer) peekChar() byte {
 	if l.readPosition >= len(l.input) {
@@ -891,30 +898,10 @@ func (l *Lexer) NextToken() Token {
 	startCol := l.column
 	startPos := l.position
 
-	// --- NEW: Check for invalid Unicode characters in token stream ---
-	if l.ch >= 128 {
-		remaining := []byte(l.input[l.position:])
-		r, size := utf8.DecodeRune(remaining)
-		if r != utf8.RuneError && isInvalidInTokenStream(r) {
-			// This is a Format control character that should not appear in token stream
-			illegalLiteral := string(r)
-			illegalToken := Token{
-				Type:     ILLEGAL,
-				Literal:  illegalLiteral,
-				Line:     startLine,
-				Column:   startCol,
-				StartPos: startPos,
-				EndPos:   startPos + size,
-			}
-			// Skip the invalid character
-			for i := 0; i < size; i++ {
-				l.readChar()
-			}
-			return illegalToken
-		}
-	}
-
 	// --- NEW: Handle template literal state ---
+	// IMPORTANT: Handle template literals FIRST, before checking for invalid Unicode.
+	// Format control characters (like U+180E) are allowed inside template literals
+	// per ECMAScript spec section 11.1.
 	if l.inTemplate && l.braceDepth == 0 {
 		// We're inside a template literal but not in an interpolation
 		// Check if we're at the start of an interpolation or template string
@@ -943,6 +930,31 @@ func (l *Lexer) NextToken() Token {
 		} else {
 			// Read template string content
 			return l.readTemplateString(startLine, startCol, startPos)
+		}
+	}
+
+	// --- Check for invalid Unicode characters in token stream ---
+	// This check comes AFTER template literal handling because format control
+	// characters are allowed inside template literals per ECMAScript spec.
+	if l.ch >= 128 {
+		remaining := []byte(l.input[l.position:])
+		r, size := utf8.DecodeRune(remaining)
+		if r != utf8.RuneError && isInvalidInTokenStream(r) {
+			// This is a Format control character that should not appear in token stream
+			illegalLiteral := string(r)
+			illegalToken := Token{
+				Type:     ILLEGAL,
+				Literal:  illegalLiteral,
+				Line:     startLine,
+				Column:   startCol,
+				StartPos: startPos,
+				EndPos:   startPos + size,
+			}
+			// Skip the invalid character
+			for i := 0; i < size; i++ {
+				l.readChar()
+			}
+			return illegalToken
 		}
 	}
 
@@ -1803,7 +1815,7 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 			l.readChar() // Consume the closing quote
 			return builder.String(), true
 		}
-		if l.ch == 0 { // EOF
+		if l.isEOF() { // EOF - use isEOF() to distinguish from literal null bytes
 			// Unterminated string
 			return "", false
 		}
@@ -2560,10 +2572,9 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 	var builder strings.Builder
 
 	for {
-		// Stop conditions
-		if l.ch == 0 { // EOF
-			// Unterminated template literal - advance to prevent infinite loop
-			l.readChar() // Advance past EOF to prevent getting stuck
+		// Stop conditions - use isEOF() to distinguish from literal null bytes in source
+		if l.isEOF() {
+			// Unterminated template literal
 			return Token{
 				Type:     ILLEGAL,
 				Literal:  "Unterminated template literal",
@@ -2600,6 +2611,114 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 				builder.WriteByte('`') // Escaped backtick
 			case '$':
 				builder.WriteByte('$') // Escaped dollar sign
+			case '0':
+				builder.WriteByte('\000') // Null character (U+0000)
+			case 'f':
+				builder.WriteByte('\f') // Form feed (U+000C)
+			case 'v':
+				builder.WriteByte('\v') // Vertical tab (U+000B)
+			case 'b':
+				builder.WriteByte('\b') // Backspace (U+0008)
+			case 'u':
+				// Unicode escape sequence \uXXXX or \u{XXXX}
+				// For tagged templates (ES2018+), invalid escapes pass through
+				if l.peekChar() == '{' {
+					// \u{XXXX} format - try to parse, fall back to literal on failure
+					l.readChar() // consume '{'
+					hexStr := ""
+					// Peek-before-consume to avoid eating template terminators
+					for l.peekChar() != '}' && l.peekChar() != 0 && l.peekChar() != '`' && l.peekChar() != '$' && len(hexStr) < 6 && isHexDigit(l.peekChar()) {
+						l.readChar()
+						hexStr += string(l.ch)
+					}
+					if l.peekChar() == '}' && len(hexStr) > 0 {
+						l.readChar() // consume '}'
+						if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil && codePoint <= 0x10FFFF {
+							if codePoint >= 0xD800 && codePoint <= 0xDFFF {
+								// WTF-8 encoding for surrogates
+								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
+								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
+								b3 := byte(0x80 | (codePoint & 0x3F))
+								builder.WriteByte(b1)
+								builder.WriteByte(b2)
+								builder.WriteByte(b3)
+							} else {
+								builder.WriteRune(rune(codePoint))
+							}
+						} else {
+							// Invalid code point - write literally
+							builder.WriteString("\\u{")
+							builder.WriteString(hexStr)
+							builder.WriteByte('}')
+						}
+					} else {
+						// Invalid escape - write what we consumed literally
+						builder.WriteString("\\u{")
+						builder.WriteString(hexStr)
+						// Don't write closing brace - it wasn't there or we stopped early
+					}
+				} else if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
+					// \uXXXX format
+					hexStr := ""
+					for i := 0; i < 4; i++ {
+						if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
+							l.readChar()
+							hexStr += string(l.ch)
+						} else {
+							break
+						}
+					}
+					if len(hexStr) == 4 {
+						if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
+							if codePoint >= 0xD800 && codePoint <= 0xDFFF {
+								// WTF-8 encoding for surrogates
+								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
+								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
+								b3 := byte(0x80 | (codePoint & 0x3F))
+								builder.WriteByte(b1)
+								builder.WriteByte(b2)
+								builder.WriteByte(b3)
+							} else {
+								builder.WriteRune(rune(codePoint))
+							}
+						}
+					} else {
+						// Incomplete escape - write literally
+						builder.WriteString("\\u")
+						builder.WriteString(hexStr)
+					}
+				} else {
+					// Not followed by hex digit or brace - write literally
+					builder.WriteByte('\\')
+					builder.WriteByte('u')
+				}
+			case 'x':
+				// Hex escape sequence \xXX
+				// For tagged templates (ES2018+), invalid escapes pass through
+				if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
+					hexStr := ""
+					for i := 0; i < 2; i++ {
+						if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
+							l.readChar()
+							hexStr += string(l.ch)
+						} else {
+							break
+						}
+					}
+					if len(hexStr) == 2 {
+						if val, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
+							builder.WriteByte(byte(val))
+						}
+					} else {
+						// Incomplete escape - write literally
+						builder.WriteString("\\x")
+						builder.WriteString(hexStr)
+					}
+				} else {
+					// Not followed by hex digit - write literally
+					builder.WriteByte('\\')
+					builder.WriteByte('x')
+				}
 			case 0: // EOF after backslash
 				return Token{
 					Type:     ILLEGAL,

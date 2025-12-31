@@ -972,7 +972,23 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Optimized string concatenation: convert both operands to strings
+			// For objects, call ToPrimitive with "string" hint to invoke toString()
+			if leftVal.IsObject() || leftVal.IsCallable() {
+				leftVal = vm.toPrimitive(leftVal, "string")
+				if vm.unwinding {
+					frame.ip = ip
+					return InterpretRuntimeError, vm.currentException
+				}
+			}
+			if rightVal.IsObject() || rightVal.IsCallable() {
+				rightVal = vm.toPrimitive(rightVal, "string")
+				if vm.unwinding {
+					frame.ip = ip
+					return InterpretRuntimeError, vm.currentException
+				}
+			}
+
+			// Now convert primitives to strings
 			leftStr := leftVal.ToString()
 			rightStr := rightVal.ToString()
 			registers[destReg] = String(leftStr + rightStr)
