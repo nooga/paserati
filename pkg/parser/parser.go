@@ -4040,6 +4040,13 @@ func (p *Parser) parseCommaExpression(left Expression) Expression {
 func (p *Parser) parseCallExpression(function Expression) Expression {
 	exp := &CallExpression{Token: p.curToken, Function: function}
 	exp.Arguments = p.parseExpressionList(lexer.RPAREN)
+
+	// Detect direct eval calls: callee must be a plain Identifier with name "eval"
+	// Indirect eval patterns like (0,eval)(...), eval?.(...), or obj.eval(...) won't match
+	if ident, ok := function.(*Identifier); ok && ident.Value == "eval" {
+		exp.IsDirectEval = true
+	}
+
 	return exp
 }
 

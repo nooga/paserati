@@ -129,6 +129,10 @@ const (
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
 	OpDefineDataProperty             OpCode = 125 // ObjReg ValueReg NameIdx(16bit): Define enumerable data property on object (uses DefineOwnProperty, for object literals)
 
+	// --- Direct Eval Support ---
+	OpDirectEval OpCode = 126 // Rx CodeReg: Execute direct eval with code string in CodeReg, result in Rx (inherits caller's strict mode and scope)
+	// --- END Direct Eval ---
+
 	// --- With Statement Support ---
 	OpPushWithObject  OpCode = 118 // ObjReg: Push object onto VM's with-object stack
 	OpPopWithObject   OpCode = 119 // No operands: Pop object from VM's with-object stack
@@ -505,6 +509,10 @@ func (op OpCode) String() string {
 		return "OpTypeGuardIterable"
 	case OpTypeGuardIteratorReturn:
 		return "OpTypeGuardIteratorReturn"
+
+	// Direct eval
+	case OpDirectEval:
+		return "OpDirectEval"
 
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
@@ -923,6 +931,17 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		count := c.Code[offset+5]
 		builder.WriteString(fmt.Sprintf("%-16s R%d, Off %d, R%d, Count %d\n", "OpArrayCopy", destReg, off, startReg, count))
 		return offset + 6
+
+	case OpDirectEval:
+		// Rx CodeReg: Execute direct eval with code string in CodeReg, result in Rx
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpDirectEval (missing operands)\n")
+			return offset + 1
+		}
+		destReg := c.Code[offset+1]
+		codeReg := c.Code[offset+2]
+		builder.WriteString(fmt.Sprintf("%-20s R%d R%d\n", "OpDirectEval", destReg, codeReg))
+		return offset + 3
 
 	default:
 		builder.WriteString(fmt.Sprintf("Unknown opcode %d\n", instruction))

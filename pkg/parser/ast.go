@@ -1359,6 +1359,7 @@ type CallExpression struct {
 	Function       Expression   // Identifier or FunctionLiteral being called
 	TypeArguments  []Expression // Type arguments (e.g., <string, number>)
 	Arguments      []Expression // List of arguments
+	IsDirectEval   bool         // True if this is a direct eval call: eval(...) where callee is plain Identifier "eval"
 }
 
 func (ce *CallExpression) expressionNode()      {}

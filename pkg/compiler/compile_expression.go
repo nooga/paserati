@@ -1413,10 +1413,17 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return c.compileSuperConstructorCall(node, hint, &tempRegs)
 	}
 
-	// Check if any argument uses spread syntax
+	// Check if any argument uses spread syntax - must come BEFORE direct eval check
+	// because eval(...spread) should be handled as a normal spread call (indirect eval)
 	hasSpread := c.hasSpreadArgument(node.Arguments)
 	if hasSpread {
 		return c.compileSpreadCallExpression(node, hint, &tempRegs)
+	}
+
+	// Check if this is a direct eval call - needs special opcode for scope access
+	// Note: This only triggers for non-spread direct eval like eval("code")
+	if node.IsDirectEval {
+		return c.compileDirectEval(node, hint, &tempRegs)
 	}
 
 	// Check if this is a method call (function is a member expression like obj.method() or obj[key]())
@@ -2956,6 +2963,40 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 
 	// 8. Patch the end jump
 	c.patchJump(endJumpPos)
+
+	return hint, nil
+}
+
+// compileDirectEval handles direct eval calls: eval(code)
+// Direct eval is distinguished from indirect eval by the parser (IsDirectEval flag).
+// It generates OpDirectEval which allows the VM to:
+// 1. Inherit strict mode from the caller
+// 2. Access the caller's local scope (Phase 3)
+// For now, we still compile as a regular call but with the special opcode.
+func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+
+	// Direct eval takes exactly one argument (the code string)
+	// If no arguments, it returns undefined
+	// If more than one argument, extra arguments are ignored
+	if len(node.Arguments) == 0 {
+		// eval() with no arguments returns undefined
+		c.emitLoadUndefined(hint, line)
+		return hint, nil
+	}
+
+	// Compile the code argument
+	codeReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, codeReg)
+	_, err := c.compileNode(node.Arguments[0], codeReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// Emit OpDirectEval: result in hint, code string in codeReg
+	c.chunk.WriteOpCode(vm.OpDirectEval, line)
+	c.chunk.WriteByte(byte(hint))
+	c.chunk.WriteByte(byte(codeReg))
 
 	return hint, nil
 }

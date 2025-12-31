@@ -30,6 +30,14 @@ type ModuleLoader interface {
 	LoadModule(specifier string, fromPath string) (ModuleRecord, error)
 }
 
+// EvalDriver interface for eval() compilation without circular imports
+// This is set by the driver during VM initialization
+type EvalDriver interface {
+	// EvalCode compiles and executes eval code with the given strict mode inheritance
+	// Returns (result, errors) - errors is empty on success
+	EvalCode(code string, inheritStrict bool) (Value, []error)
+}
+
 // logGeneratorStateTransition logs generator state changes for debugging
 func logGeneratorStateTransition(genObj *GeneratorObject, newState GeneratorState, location string) {
 	if debugGeneratorStates {
@@ -233,6 +241,9 @@ type VM struct {
 	// Current 'this' value for native function execution
 	currentThis Value
 
+	// Eval driver for OpDirectEval - set by the driver during initialization
+	evalDriver EvalDriver
+
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
 
@@ -371,6 +382,11 @@ func (vm *VM) SetModuleLoader(loader ModuleLoader) {
 	vm.moduleLoader = loader
 }
 
+// SetEvalDriver sets the eval driver for this VM instance (used by OpDirectEval)
+func (vm *VM) SetEvalDriver(driver EvalDriver) {
+	vm.evalDriver = driver
+}
+
 // SetCurrentModulePath sets the current module path for module-specific features like import.meta
 func (vm *VM) SetCurrentModulePath(modulePath string) {
 	vm.currentModulePath = modulePath
@@ -392,6 +408,43 @@ func (vm *VM) GetGlobal(name string) (Value, bool) {
 // GetGlobalByIndex retrieves a global value by its index
 func (vm *VM) GetGlobalByIndex(index int) (Value, bool) {
 	return vm.heap.Get(index)
+}
+
+// SyncHeapToGlobalObject copies heap variables to GlobalObject as properties
+// This is called after indirect eval execution to make var declarations accessible via globalThis
+// Only syncs user-defined globals (indices >= builtinCount)
+func (vm *VM) SyncHeapToGlobalObject() {
+	if vm.heap == nil || vm.GlobalObject == nil {
+		return
+	}
+
+	nameToIndex := vm.heap.GetNameToIndex()
+	if nameToIndex == nil {
+		return
+	}
+
+	// Sync all named heap variables to GlobalObject
+	for name, idx := range nameToIndex {
+		// Get the value from heap
+		val, ok := vm.heap.Get(idx)
+		if !ok {
+			continue
+		}
+
+		// Skip if property already exists on GlobalObject (don't override)
+		if _, exists := vm.GlobalObject.GetOwn(name); exists {
+			// Update the existing property value
+			vm.GlobalObject.SetOwn(name, val)
+			continue
+		}
+
+		// Create new property with eval-specific attributes:
+		// writable: true, enumerable: true, configurable: true
+		w := true
+		e := true
+		c := true
+		vm.GlobalObject.DefineOwnProperty(name, val, &w, &e, &c)
+	}
 }
 
 func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]int) error {
@@ -8322,6 +8375,58 @@ startExecution:
 			}
 
 			registers[destReg] = String(keyStr)
+
+		case OpDirectEval:
+			// OpDirectEval: Rx CodeReg - Execute direct eval with code string in CodeReg, result in Rx
+			// Direct eval inherits strict mode from the caller and (in future) can access caller's scope
+			destReg := code[ip]
+			codeReg := code[ip+1]
+			ip += 2
+
+			codeVal := registers[codeReg]
+
+			// If the argument is not a string, return it as-is (ECMAScript spec)
+			if codeVal.Type() != TypeString {
+				registers[destReg] = codeVal
+				continue
+			}
+
+			codeStr := AsString(codeVal)
+
+			// Check if the eval driver is available
+			if vm.evalDriver == nil {
+				frame.ip = ip
+				status := vm.runtimeError("eval: evalDriver is nil")
+				return status, Undefined
+			}
+
+			// Direct eval inherits strict mode from the current chunk
+			callerIsStrict := function.Chunk.IsStrict
+
+			// Save current frame state
+			frame.ip = ip
+
+			// Use the evalDriver to compile and execute
+			result, evalErrs := vm.evalDriver.EvalCode(codeStr, callerIsStrict)
+			if len(evalErrs) > 0 {
+				// Error occurred - it should have been thrown as an exception
+				// Check if we're already unwinding
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				// Throw as SyntaxError if it looks like a syntax error
+				errMsg := evalErrs[0].Error()
+				if ctor, ok := vm.GetGlobal("SyntaxError"); ok {
+					msg := NewString(errMsg)
+					errObj, _ := vm.Call(ctor, Undefined, []Value{msg})
+					vm.throwException(errObj)
+					return InterpretRuntimeError, Undefined
+				}
+				status := vm.runtimeError("eval error: %v", evalErrs[0])
+				return status, Undefined
+			}
+
+			registers[destReg] = result
 
 		default:
 			frame.ip = ip // Save IP before erroring

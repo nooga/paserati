@@ -142,6 +142,9 @@ func NewPaseratiWithInitializersAndBaseDir(customInitializers []builtins.Builtin
 	// Wire the module loader into the VM
 	vmInstance.SetModuleLoader(moduleLoader)
 
+	// Set the eval driver for OpDirectEval
+	vmInstance.SetEvalDriver(paserati)
+
 	// Set the VM instance in the module loader for native module initialization
 	moduleLoader.SetVMInstance(vmInstance)
 
@@ -219,6 +222,9 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	// Wire the module loader into the VM
 	vmInstance.SetModuleLoader(moduleLoader)
 
+	// Set the eval driver for OpDirectEval
+	vmInstance.SetEvalDriver(paserati)
+
 	// Set the VM instance in the module loader for native module initialization
 	moduleLoader.SetVMInstance(vmInstance)
 
@@ -279,6 +285,48 @@ func (p *Paserati) CompileProgramWithStrictMode(program *parser.Program, strict 
 		p.compiler.SetStrictMode(true)
 	}
 	return p.compiler.Compile(program)
+}
+
+// EvalCode implements vm.EvalDriver interface for OpDirectEval
+// It compiles and executes eval code with the given strict mode inheritance
+func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error) {
+	// Parse the source code
+	lx := lexer.NewLexer(code)
+	ps := parser.NewParser(lx)
+	prog, parseErrs := ps.ParseProgram()
+	if len(parseErrs) > 0 {
+		errs := make([]error, len(parseErrs))
+		for i, e := range parseErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	// Compile with inherited strict mode
+	chunk, compileErrs := p.CompileProgramWithStrictMode(prog, inheritStrict)
+	if len(compileErrs) > 0 {
+		errs := make([]error, len(compileErrs))
+		for i, e := range compileErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	if chunk == nil {
+		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
+	}
+
+	// Execute the chunk
+	result, runtimeErrs := p.vmInstance.Interpret(chunk)
+	if len(runtimeErrs) > 0 {
+		errs := make([]error, len(runtimeErrs))
+		for i, e := range runtimeErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	return result, nil
 }
 
 // SyncGlobalNamesFromCompiler syncs the compiler's global name mappings to the VM
