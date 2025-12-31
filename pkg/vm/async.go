@@ -20,22 +20,22 @@ func (vm *VM) executeAsyncFunction(calleeVal Value, thisValue Value, args []Valu
 	}
 	promiseVal := Value{typ: TypePromise, obj: unsafe.Pointer(promiseObj)}
 
-	// Schedule the async function execution as a microtask
-	asyncRuntime := vm.GetAsyncRuntime()
+	// Execute the async function body SYNCHRONOUSLY until first await
+	// Per ECMAScript spec, the body runs synchronously until the first await expression
+	// Only the continuation after await is scheduled as a microtask
+	result, err := vm.executeAsyncFunctionBody(calleeVal, thisValue, args, promiseObj)
 
-	asyncRuntime.ScheduleMicrotask(func() {
-		// Execute the async function
-		// We need to set up a special frame that knows about the promise
-		result, err := vm.executeAsyncFunctionBody(calleeVal, thisValue, args, promiseObj)
-
-		if err != nil {
-			// Reject the promise with the error
-			vm.rejectPromise(promiseObj, NewString(err.Error()))
-		} else {
-			// Resolve the promise with the result
-			vm.resolvePromise(promiseObj, result)
-		}
-	})
+	if err != nil {
+		// Reject the promise with the error
+		vm.rejectPromise(promiseObj, NewString(err.Error()))
+	} else if promiseObj.Frame != nil {
+		// Function hit an await and is suspended (Frame is set by OpAwait)
+		// The promise will be resolved when the async function completes via resumption
+	} else {
+		// Function completed synchronously without hitting await
+		// promiseObj.Frame is nil, meaning no suspension occurred
+		vm.resolvePromise(promiseObj, result)
+	}
 
 	return promiseVal
 }
@@ -60,6 +60,10 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 		return Undefined, fmt.Errorf("Invalid async function type")
 	}
 
+	// Save current VM state so we can restore after vm.run() returns
+	savedFrameCount := vm.frameCount
+	savedNextRegSlot := vm.nextRegSlot
+
 	// Set up caller context for sentinel frame approach
 	callerRegisters := make([]Value, 1)
 	destReg := byte(0)
@@ -74,14 +78,14 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 
 	// Check if we have space for the async function frame
 	if vm.frameCount >= MaxFrames {
-		vm.frameCount-- // Remove sentinel frame
+		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
 
 	// Allocate registers for the async function
 	regSize := funcObj.RegisterSize
 	if vm.nextRegSlot+regSize > len(vm.registerStack) {
-		vm.frameCount-- // Remove sentinel frame
+		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Out of registers")
 	}
 
@@ -117,6 +121,16 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 
 	// Execute the VM run loop - it will return when the async function yields or completes
 	status, result := vm.run()
+
+	// CRITICAL: Clean up frames only if OpAwait suspended execution
+	// When the async function completes normally via OpReturn, the sentinel frame
+	// is already cleaned up by OpReturn. But when execution suspends at OpAwait,
+	// the frames are NOT cleaned up, so we need to restore them here.
+	// We can detect this by checking if frameCount is still higher than what we saved.
+	if vm.frameCount > savedFrameCount {
+		vm.frameCount = savedFrameCount
+		vm.nextRegSlot = savedNextRegSlot
+	}
 
 	if status == InterpretRuntimeError {
 		if vm.unwinding && vm.currentException != Null {

@@ -6500,23 +6500,101 @@ startExecution:
 			// Save current frame state
 			frame.ip = ip
 
+			// Dynamic import MUST return a Promise per ECMAScript spec
+			// Create a Promise that will be resolved with the module namespace or rejected with an error
+			baseObj := NewObject(vm.PromisePrototype).AsPlainObject()
+			promiseObj := &PromiseObject{
+				Object:           baseObj.Object,
+				State:            PromisePending,
+				Result:           Undefined,
+				FulfillReactions: []PromiseReaction{},
+				RejectReactions:  []PromiseReaction{},
+			}
+			promiseVal := Value{typ: TypePromise, obj: unsafe.Pointer(promiseObj)}
+
 			// Get the module specifier from the register
+			// Per ECMAScript spec, import() calls ToString(specifier) which involves ToPrimitive
+			// If ToString throws (IfAbruptRejectPromise), reject the promise instead of propagating
 			specifierValue := registers[specifierReg]
-			specifier := specifierValue.ToString()
+			var specifier string
+
+			// For objects, call toString() directly and handle errors
+			if specifierValue.IsObject() || specifierValue.IsCallable() {
+				var toStringMethod Value
+				if ok, _, _ := vm.opGetProp(nil, 0, &specifierValue, "toString", &toStringMethod); ok {
+					if toStringMethod.IsCallable() {
+						// Save state before calling
+						savedFrameCount := vm.frameCount
+						savedNextRegSlot := vm.nextRegSlot
+						savedUnwinding := vm.unwinding
+						savedCurrentException := vm.currentException
+
+						result, err := vm.Call(toStringMethod, specifierValue, nil)
+
+						// Check for exception
+						if err != nil || vm.unwinding {
+							// Capture the exception before resetting state
+							var exceptionVal Value
+							if vm.currentException != Null {
+								exceptionVal = vm.currentException
+							} else if ee, ok := err.(ExceptionError); ok {
+								exceptionVal = ee.GetExceptionValue()
+							} else if err != nil {
+								exceptionVal = NewString(err.Error())
+							}
+
+							// Restore state to prevent unwinding
+							vm.frameCount = savedFrameCount
+							vm.nextRegSlot = savedNextRegSlot
+							vm.unwinding = savedUnwinding
+							vm.currentException = savedCurrentException
+
+							// Reject promise with the exception
+							vm.rejectPromise(promiseObj, exceptionVal)
+							registers[destReg] = promiseVal
+							continue
+						}
+						specifier = result.ToString()
+					} else {
+						specifier = specifierValue.ToString()
+					}
+				} else {
+					specifier = specifierValue.ToString()
+				}
+			} else {
+				specifier = specifierValue.ToString()
+			}
 
 			// Execute the module using the standard module loading infrastructure
 			// This goes through the resolver chain (fs, virtual, data URLs, native modules)
-			// TODO: Implement proper Promise-based async loading
 			status, _ := vm.executeModule(specifier)
 			if status != InterpretOK {
-				// Error was already set by executeModule
-				return status, Undefined
+				// Module load failed - reject the promise with the error
+				var errorMsg string
+				if vm.currentException != Null {
+					errorMsg = vm.currentException.ToString()
+					vm.currentException = Null
+					vm.unwinding = false
+				} else {
+					errorMsg = fmt.Sprintf("Failed to load module '%s'", specifier)
+				}
+				errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+				errObj.SetOwn("name", NewString("Error"))
+				errObj.SetOwn("message", NewString(errorMsg))
+				vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
+				registers[destReg] = promiseVal
+				continue
 			}
 
 			// Get the module context to access its exports
 			moduleCtx, exists := vm.moduleContexts[specifier]
 			if !exists {
-				return vm.runtimeError("Module '%s' was loaded but context is missing", specifier), Undefined
+				errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+				errObj.SetOwn("name", NewString("Error"))
+				errObj.SetOwn("message", NewString(fmt.Sprintf("Module '%s' was loaded but context is missing", specifier)))
+				vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
+				registers[destReg] = promiseVal
+				continue
 			}
 
 			// Ensure exports are collected
@@ -6533,7 +6611,9 @@ startExecution:
 				namespaceDict.SetOwn(exportName, exportValue)
 			}
 
-			registers[destReg] = namespaceObj
+			// Resolve the promise with the namespace object
+			vm.resolvePromise(promiseObj, namespaceObj)
+			registers[destReg] = promiseVal
 
 			// Restore frame state
 			frame.ip = ip
@@ -7757,77 +7837,90 @@ startExecution:
 			// Get the promise object
 			awaitedPromise := awaitedValue.AsPromise()
 
-			// Check promise state
-			switch awaitedPromise.State {
-			case PromiseFulfilled:
-				// Promise already fulfilled - store result and continue
-				registers[resultReg] = awaitedPromise.Result
-				continue
+			// Per ECMAScript spec, await ALWAYS suspends and schedules resumption as microtask
+			// even when the promise is already settled
 
-			case PromiseRejected:
-				// Promise already rejected - throw the error
-				frame.ip = ip
-				status := vm.runtimeError("Uncaught (in promise): %s", awaitedPromise.Result.Inspect())
-				return status, Undefined
-
-			case PromisePending:
-				// Promise is pending - need to suspend execution
-				// This is the complex case: save state, attach handlers, schedule resumption
-
-				// Check if we're in an async function context
-				// Top-level await: if not in async context, drain microtasks until settled
-				if frame.promiseObj == nil {
-					// Top-level await with pending promise
-					// Drain microtasks repeatedly until the promise settles
+			// Check if we're in top-level await (no async function context)
+			if frame.promiseObj == nil {
+				// Top-level await - drain microtasks until settled for pending promises
+				if awaitedPromise.State == PromisePending {
 					rt := vm.GetAsyncRuntime()
 					for awaitedPromise.State == PromisePending {
-						// Drain all pending microtasks
 						if !rt.RunUntilIdle() {
-							// No more microtasks and promise still pending
-							// This means the promise will never resolve - error
 							frame.ip = ip
 							status := vm.runtimeError("Top-level await: promise remains pending with no microtasks to process")
 							return status, Undefined
 						}
-						// Check promise state again after draining
-					}
-
-					// Promise has settled - check if fulfilled or rejected
-					switch awaitedPromise.State {
-					case PromiseFulfilled:
-						registers[resultReg] = awaitedPromise.Result
-						continue
-					case PromiseRejected:
-						frame.ip = ip
-						status := vm.runtimeError("Uncaught (in promise): %s", awaitedPromise.Result.Inspect())
-						return status, Undefined
 					}
 				}
-
-				// Save the execution frame state (similar to OpYield)
-				if frame.promiseObj.Frame == nil {
-					frame.promiseObj.Frame = &SuspendedFrame{
-						pc:        ip, // Resume after this await instruction
-						registers: make([]Value, len(registers)),
-						locals:    make([]Value, 0),
-						stackBase: 0,
-						suspendPC: ip - 2,    // IP was advanced by 2 for two-register instruction
-						outputReg: resultReg, // Store where to put resolved value
-					}
+				// Promise has settled - return result or throw
+				if awaitedPromise.State == PromiseFulfilled {
+					registers[resultReg] = awaitedPromise.Result
+					continue
 				} else {
-					frame.promiseObj.Frame.pc = ip
-					frame.promiseObj.Frame.suspendPC = ip - 2
-					frame.promiseObj.Frame.outputReg = resultReg
+					frame.ip = ip
+					status := vm.runtimeError("Uncaught (in promise): %s", awaitedPromise.Result.Inspect())
+					return status, Undefined
 				}
+			}
 
-				// Copy register state
-				copy(frame.promiseObj.Frame.registers, registers)
+			// In async function context - must suspend and schedule resumption
+			// Save the execution frame state
+			if frame.promiseObj.Frame == nil {
+				frame.promiseObj.Frame = &SuspendedFrame{
+					pc:        ip,
+					registers: make([]Value, len(registers)),
+					locals:    make([]Value, 0),
+					stackBase: 0,
+					suspendPC: ip - 2,
+					outputReg: resultReg,
+				}
+			} else {
+				frame.promiseObj.Frame.pc = ip
+				frame.promiseObj.Frame.suspendPC = ip - 2
+				frame.promiseObj.Frame.outputReg = resultReg
+			}
+			copy(frame.promiseObj.Frame.registers, registers)
 
-				// Attach promise resolution handlers
-				// When the awaited promise settles, we need to resume the async function
-				asyncPromise := frame.promiseObj
+			asyncPromise := frame.promiseObj
+			rt := vm.GetAsyncRuntime()
 
-				// Schedule fulfillment handler
+			// Check promise state and schedule appropriate resumption
+			switch awaitedPromise.State {
+			case PromiseFulfilled:
+				// Promise already fulfilled - schedule resumption with value as microtask
+				fulfilledValue := awaitedPromise.Result
+				rt.ScheduleMicrotask(func() {
+					result, err := vm.resumeAsyncFunction(asyncPromise, fulfilledValue)
+					if err != nil {
+						vm.rejectPromise(asyncPromise, NewString(err.Error()))
+					} else if asyncPromise.Frame != nil {
+						// Async function hit another await and suspended again
+						// Don't resolve - the new await's handlers will take over
+					} else {
+						// Async function completed - resolve with final value
+						vm.resolvePromise(asyncPromise, result)
+					}
+				})
+				return InterpretOK, Undefined
+
+			case PromiseRejected:
+				// Promise already rejected - schedule resumption with throw as microtask
+				rejectedReason := awaitedPromise.Result
+				rt.ScheduleMicrotask(func() {
+					_, err := vm.resumeAsyncFunctionWithException(asyncPromise, rejectedReason)
+					if err != nil {
+						// Exception wasn't caught - reject the async promise
+						vm.rejectPromise(asyncPromise, rejectedReason)
+					}
+					// Note: if Frame is still set, async function caught the exception
+					// and hit another await - the new await's handlers will take over
+				})
+				return InterpretOK, Undefined
+
+			case PromisePending:
+				// Promise is pending - attach handlers for when it settles
+				// Frame state already saved above
 				awaitedPromise.FulfillReactions = append(awaitedPromise.FulfillReactions, PromiseReaction{
 					Handler: Undefined, // No user handler - internal resumption
 					Resolve: func(value Value) {
@@ -7836,8 +7929,11 @@ startExecution:
 						if err != nil {
 							// Resume failed - reject the async promise
 							vm.rejectPromise(asyncPromise, NewString(err.Error()))
+						} else if asyncPromise.Frame != nil {
+							// Async function hit another await and suspended again
+							// Don't resolve - the new await's handlers will take over
 						} else {
-							// Async function returned - resolve with final value
+							// Async function completed - resolve with final value
 							vm.resolvePromise(asyncPromise, result)
 						}
 					},
@@ -7848,6 +7944,8 @@ startExecution:
 							// Exception wasn't caught - reject the async promise
 							vm.rejectPromise(asyncPromise, reason)
 						}
+						// Note: if Frame is still set, async function caught the exception
+						// and hit another await - the new await's handlers will take over
 					},
 				})
 
@@ -10334,6 +10432,10 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 		return Undefined, fmt.Errorf("Invalid async function type")
 	}
 
+	// Save current VM state so we can restore if function suspends again
+	savedFrameCount := vm.frameCount
+	savedNextRegSlot := vm.nextRegSlot
+
 	// Set up caller context for sentinel frame approach
 	callerRegisters := make([]Value, 1)
 	destReg := byte(0)
@@ -10348,14 +10450,14 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 
 	// Check if we have space for the async function frame
 	if vm.frameCount >= MaxFrames {
-		vm.frameCount-- // Remove sentinel frame
+		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
 
 	// Allocate registers for the async function
 	regSize := funcObj.RegisterSize
 	if vm.nextRegSlot+regSize > len(vm.registerStack) {
-		vm.frameCount-- // Remove sentinel frame
+		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Out of registers")
 	}
 
@@ -10395,6 +10497,20 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 
 	// Execute the VM run loop - it will return when the async function completes or awaits again
 	status, result := vm.run()
+
+	// Clean up frames if function suspended at another await
+	// When the function completes normally via OpReturn, frames are already cleaned up.
+	// But when it suspends at OpAwait, frames are left on the stack.
+	if vm.frameCount > savedFrameCount {
+		// Function suspended at another await - clean up frames
+		vm.frameCount = savedFrameCount
+		vm.nextRegSlot = savedNextRegSlot
+		// promiseObj.Frame remains set for the next resumption
+	} else {
+		// Function completed normally - clear saved frame to signal completion
+		promiseObj.Frame = nil
+	}
+
 	if status == InterpretRuntimeError {
 		if vm.unwinding && vm.currentException != Null {
 			return Undefined, exceptionError{exception: vm.currentException}
@@ -10429,6 +10545,10 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 		return Undefined, fmt.Errorf("Invalid async function type")
 	}
 
+	// Save current VM state so we can restore if function suspends again
+	savedFrameCount := vm.frameCount
+	savedNextRegSlot := vm.nextRegSlot
+
 	// Set up caller context for sentinel frame approach
 	callerRegisters := make([]Value, 1)
 	destReg := byte(0)
@@ -10443,14 +10563,14 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 
 	// Check if we have space for the async function frame
 	if vm.frameCount >= MaxFrames {
-		vm.frameCount-- // Remove sentinel frame
+		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
 
 	// Allocate registers for the async function
 	regSize := funcObj.RegisterSize
 	if vm.nextRegSlot+regSize > len(vm.registerStack) {
-		vm.frameCount-- // Remove sentinel frame
+		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Out of registers")
 	}
 
@@ -10492,6 +10612,17 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 
 	// Execute the VM run loop - it will return when the exception is handled or propagates
 	status, result := vm.run()
+
+	// Clean up frames if function suspended at another await
+	if vm.frameCount > savedFrameCount {
+		// Function suspended at another await - clean up frames
+		vm.frameCount = savedFrameCount
+		vm.nextRegSlot = savedNextRegSlot
+		// promiseObj.Frame remains set for the next resumption
+	} else {
+		// Function completed normally - clear saved frame to signal completion
+		promiseObj.Frame = nil
+	}
 
 	if status == InterpretRuntimeError {
 		if vm.currentException != Null {
