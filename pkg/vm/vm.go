@@ -1007,47 +1007,68 @@ startExecution:
 			// Type checking specific to operation groups
 			switch opcode {
 			case OpAdd:
-				// JS semantics: ToPrimitive on both, if either is String → concatenate ToString(lhs)+ToString(rhs);
-				// else if both BigInt → BigInt add; else Number add; BigInt/Number mixing is an error.
-
-				// Step 1: Convert objects to primitives via ToPrimitive
-				// Save IP before calling helper functions so exception handlers can be found
+				// JS semantics: ToPrimitive on both first (for string check),
+				// then if either is String → concatenate ToString(lhs)+ToString(rhs);
+				// else ToNumeric on both; if both BigInt → BigInt add; else Number add.
+				// ECMAScript addition order: ToPrimitive(lhs), ToPrimitive(rhs), then ToNumeric checks
 				frame.ip = ip
+
+				// ToPrimitive on left operand
 				vm.helperCallDepth++
 				leftPrim := vm.toPrimitive(leftVal, "default")
 				vm.helperCallDepth--
-				// Check if toPrimitive threw an exception
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
-				// Check if exception was caught - need to jump to handler
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
+					ip = frame.ip
 					continue
 				}
 
+				// ToPrimitive on right operand (before checking Symbol on left!)
 				vm.helperCallDepth++
 				rightPrim := vm.toPrimitive(rightVal, "default")
 				vm.helperCallDepth--
-				// Check if toPrimitive threw an exception
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
-				// Check if exception was caught - need to jump to handler
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
+					ip = frame.ip
 					continue
 				}
 
-				// Step 2: If either is a string, do string concatenation
+				// If either is a string, do string concatenation
 				if IsString(leftPrim) || IsString(rightPrim) {
 					// Check for Symbol - cannot convert Symbol to string
-					if leftPrim.IsSymbol() || rightPrim.IsSymbol() {
-						frame.ip = ip
+					if leftPrim.IsSymbol() {
 						vm.ThrowTypeError("Cannot convert a Symbol value to a string")
-						return InterpretRuntimeError, Undefined
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					if rightPrim.IsSymbol() {
+						vm.ThrowTypeError("Cannot convert a Symbol value to a string")
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
 					}
 					registers[destReg] = String(leftPrim.ToString() + rightPrim.ToString())
 				} else if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
@@ -1056,47 +1077,124 @@ startExecution:
 					registers[destReg] = NewBigInt(result)
 				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
 					// One is BigInt, the other is not: error (cannot mix BigInt with non-BigInt)
-					frame.ip = ip
-					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
-					return status, Undefined
+					vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				} else {
-					// Neither is a string, neither is BigInt: convert both to numbers and add
-					// This handles: Number + Number, Boolean + Number, Number + Boolean, Boolean + Boolean, etc.
+					// Neither is a string, neither is BigInt: convert both to numbers
+					// ToNumeric(Symbol) throws TypeError - check left first, then right
+					if leftPrim.IsSymbol() {
+						vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					if rightPrim.IsSymbol() {
+						vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					leftNum := leftPrim.ToFloat()
 					rightNum := rightPrim.ToFloat()
 					registers[destReg] = Number(leftNum + rightNum)
 				}
 			case OpSubtract, OpMultiply, OpDivide:
 				// Apply ToPrimitive and type coercion like JavaScript
-				// First convert objects to primitives
-				// Save IP before calling helper functions so exception handlers can be found
+				// ECMAScript order: ToNumeric(lhs) then ToNumeric(rhs)
+				// ToNumeric calls ToPrimitive internally, and ToNumber(Symbol) throws
 				frame.ip = ip
+
+				// ToPrimitive on left operand
 				vm.helperCallDepth++
-				leftPrim := vm.toPrimitive(leftVal, "default")
+				leftPrim := vm.toPrimitive(leftVal, "number")
 				vm.helperCallDepth--
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
+					ip = frame.ip
 					continue
 				}
 
+				// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
+				// This must happen BEFORE we call ToPrimitive on right operand
+				if leftPrim.IsSymbol() {
+					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+
+				// ToPrimitive on right operand
 				vm.helperCallDepth++
-				rightPrim := vm.toPrimitive(rightVal, "default")
+				rightPrim := vm.toPrimitive(rightVal, "number")
 				vm.helperCallDepth--
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
+					ip = frame.ip
 					continue
 				}
+
+				// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
+				if rightPrim.IsSymbol() {
+					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+
+				// Now check for BigInt AFTER ToPrimitive
+				leftIsBigInt := leftPrim.Type() == TypeBigInt
+				rightIsBigInt := rightPrim.Type() == TypeBigInt
 
 				// Handle numbers and BigInts separately (no mixing allowed)
-				if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
+				if leftIsBigInt && rightIsBigInt {
 					// BigInt arithmetic
 					leftBig := leftPrim.AsBigInt()
 					rightBig := rightPrim.AsBigInt()
@@ -1110,21 +1208,38 @@ startExecution:
 						registers[destReg] = NewBigInt(result)
 					case OpDivide:
 						if rightBig.Sign() == 0 {
-							frame.ip = ip
-							status := vm.runtimeError("Division by zero.")
-							return status, Undefined
+							vm.ThrowRangeError("Division by zero")
+							if vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
 						}
 						result.Div(leftBig, rightBig)
 						registers[destReg] = NewBigInt(result)
 					}
-				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
+				} else if leftIsBigInt || rightIsBigInt {
 					// Cannot mix BigInt and non-BigInt
-					frame.ip = ip
-					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
-					return status, Undefined
+					vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				} else {
 					// Neither is BigInt: convert both to numbers and perform operation
-					// This handles: Number, String, Boolean, null, undefined
 					leftNum := leftPrim.ToFloat()
 					rightNum := rightPrim.ToFloat()
 					switch opcode {
@@ -1139,50 +1254,107 @@ startExecution:
 				}
 			case OpRemainder:
 				// Apply ToPrimitive and type coercion
-				// Save IP before calling helper functions so exception handlers can be found
+				// ECMAScript order: ToNumeric(lhs) then ToNumeric(rhs)
 				frame.ip = ip
+
+				// ToPrimitive on left operand
 				vm.helperCallDepth++
-				leftPrim := vm.toPrimitive(leftVal, "default")
+				leftPrim := vm.toPrimitive(leftVal, "number")
 				vm.helperCallDepth--
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
+					ip = frame.ip
 					continue
 				}
 
+				// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
+				if leftPrim.IsSymbol() {
+					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+
+				// ToPrimitive on right operand
 				vm.helperCallDepth++
-				rightPrim := vm.toPrimitive(rightVal, "default")
+				rightPrim := vm.toPrimitive(rightVal, "number")
 				vm.helperCallDepth--
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
+					ip = frame.ip
 					continue
 				}
+
+				// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
+				if rightPrim.IsSymbol() {
+					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+
+				// Now check for BigInt AFTER ToPrimitive
+				leftIsBigInt := leftPrim.Type() == TypeBigInt
+				rightIsBigInt := rightPrim.Type() == TypeBigInt
 
 				// Handle numbers and BigInts separately (no mixing allowed)
-				if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
+				if leftIsBigInt && rightIsBigInt {
 					// BigInt remainder
 					leftBig := leftPrim.AsBigInt()
 					rightBig := rightPrim.AsBigInt()
 					if rightBig.Sign() == 0 {
-						frame.ip = ip
-						status := vm.runtimeError("Division by zero (in remainder operation).")
-						return status, Undefined
+						vm.ThrowRangeError("Division by zero")
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
 					}
 					result := new(big.Int)
 					result.Rem(leftBig, rightBig)
 					registers[destReg] = NewBigInt(result)
-				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
+				} else if leftIsBigInt || rightIsBigInt {
 					// Cannot mix BigInt and non-BigInt
-					frame.ip = ip
-					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
-					return status, Undefined
+					vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				} else {
 					// Neither is BigInt: convert both to numbers
 					leftNum := leftPrim.ToFloat()
