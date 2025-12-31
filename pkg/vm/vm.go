@@ -1609,10 +1609,31 @@ startExecution:
 
 			// Walk prototype chain of object
 			result := false
-			// Check if objVal has a prototype chain to walk
+			// Check if objVal has a prototype chain to walk (is an object)
+			// Per ECMAScript 7.3.21 OrdinaryHasInstance step 3:
+			// If Type(O) is not Object, return false.
 			if objVal.IsObject() || objVal.Type() == TypeArray || objVal.Type() == TypeRegExp ||
 				objVal.Type() == TypeMap || objVal.Type() == TypeSet || objVal.Type() == TypeArguments ||
 				objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypePromise {
+				// Per ECMAScript 7.3.21 OrdinaryHasInstance step 5:
+				// If Type(P) is not Object, throw a TypeError exception
+				// (This only applies when O is an object)
+				// Note: In ECMAScript, functions are objects, so check both IsObject and IsCallable
+				if !constructorPrototype.IsObject() && !constructorPrototype.IsCallable() {
+					frame.ip = ip
+					vm.ThrowTypeError("Function has non-object prototype in instanceof check")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				var current Value
 
 				// Get the initial prototype based on type
