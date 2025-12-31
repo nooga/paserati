@@ -4213,42 +4213,110 @@ startExecution:
 			leftVal := registers[leftReg]
 			rightVal := registers[rightReg]
 
-			// Check for BigInt operations
-			leftIsBigInt := leftVal.Type() == TypeBigInt
-			rightIsBigInt := rightVal.Type() == TypeBigInt
+			// Per ECMAScript spec, we must call ToPrimitive on BOTH operands first,
+			// then check for BigInt. This ensures proper evaluation order.
+			// Save IP before calling helper functions so exception handlers can be found
+			frame.ip = ip
+
+			// ToPrimitive on left operand
+			vm.helperCallDepth++
+			leftPrim := vm.toPrimitive(leftVal, "number")
+			vm.helperCallDepth--
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				ip = frame.ip
+				continue
+			}
+
+			// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
+			// This must happen BEFORE we call ToPrimitive on right operand
+			if leftPrim.IsSymbol() {
+				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// ToPrimitive on right operand
+			vm.helperCallDepth++
+			rightPrim := vm.toPrimitive(rightVal, "number")
+			vm.helperCallDepth--
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				ip = frame.ip
+				continue
+			}
+
+			// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
+			if rightPrim.IsSymbol() {
+				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// Now check for BigInt AFTER ToPrimitive
+			leftIsBigInt := leftPrim.Type() == TypeBigInt
+			rightIsBigInt := rightPrim.Type() == TypeBigInt
 
 			// BigInt bitwise/shift operations
 			if leftIsBigInt || rightIsBigInt {
 				// Both operands must be BigInt for bitwise operations
 				if (leftIsBigInt && !rightIsBigInt) || (!leftIsBigInt && rightIsBigInt) {
-					// TypeError: Cannot mix BigInt and other types
-					typeErrObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
-					typeErrObj.SetOwn("name", NewString("TypeError"))
-					typeErrObj.SetOwn("message", NewString("Cannot mix BigInt and other types"))
-					vm.throwException(NewValueFromPlainObject(typeErrObj))
-					return InterpretRuntimeError, Undefined
+					vm.ThrowTypeError("Cannot mix BigInt and other types")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 
 				// Unsigned right shift (>>>) with BigInt is not allowed
 				if opcode == OpUnsignedShiftRight {
-					typeErrObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
-					typeErrObj.SetOwn("name", NewString("TypeError"))
-					typeErrObj.SetOwn("message", NewString("BigInt does not support unsigned right shift"))
-					vm.throwException(NewValueFromPlainObject(typeErrObj))
-					return InterpretRuntimeError, Undefined
+					vm.ThrowTypeError("BigInt does not support unsigned right shift")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 
-				// Convert right operand to BigInt for shift count
-				var rightBigInt *big.Int
-				if rightVal.Type() == TypeBigInt {
-					rightBigInt = rightVal.AsBigInt()
-				} else {
-					// Convert number to BigInt
-					intVal := rightVal.ToInteger()
-					rightBigInt = big.NewInt(int64(intVal))
-				}
-
-				leftBigInt := leftVal.AsBigInt()
+				leftBigInt := leftPrim.AsBigInt()
+				rightBigInt := rightPrim.AsBigInt()
 
 				var result *big.Int
 				switch opcode {
@@ -4286,33 +4354,6 @@ startExecution:
 			}
 
 			// Regular number bitwise/shift operations
-			// Apply ToPrimitive for objects (calls valueOf/toString per ECMAScript spec)
-			// Save IP before calling helper functions so exception handlers can be found
-			frame.ip = ip
-			vm.helperCallDepth++
-			leftPrim := vm.toPrimitive(leftVal, "number")
-			vm.helperCallDepth--
-			if vm.unwinding {
-				return InterpretRuntimeError, Undefined
-			}
-			if vm.handlerFound {
-				vm.handlerFound = false
-				ip = frame.ip // Jump to catch handler
-				continue
-			}
-
-			vm.helperCallDepth++
-			rightPrim := vm.toPrimitive(rightVal, "number")
-			vm.helperCallDepth--
-			if vm.unwinding {
-				return InterpretRuntimeError, Undefined
-			}
-			if vm.handlerFound {
-				vm.handlerFound = false
-				ip = frame.ip // Jump to catch handler
-				continue
-			}
-
 			// Use ToInt32 for left operand, ToUint32 for right operand (shift count)
 			leftInt32 := leftPrim.ToInteger()
 			rightInt32 := rightPrim.ToInteger()
