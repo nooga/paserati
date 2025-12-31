@@ -536,6 +536,15 @@ func (l *Lexer) peekChar() byte {
 	}
 }
 
+// peekCharN looks n characters ahead in the input without consuming.
+func (l *Lexer) peekCharN(n int) byte {
+	pos := l.readPosition + n - 1
+	if pos >= len(l.input) {
+		return 0
+	}
+	return l.input[pos]
+}
+
 // skipWhitespace consumes whitespace characters (space, tab, newline, carriage return, and Unicode whitespace).
 // It relies on readChar to update line and column counts.
 func (l *Lexer) skipWhitespace() {
@@ -1322,12 +1331,13 @@ func (l *Lexer) NextToken() Token {
 				l.readChar()                                // Advance past second '?'
 				tok = Token{Type: COALESCE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
-		} else if peek == '.' { // Optional Chaining ?.
+		} else if peek == '.' && !isDigit(l.peekCharN(2)) { // Optional Chaining ?. (not followed by digit)
+			// Per ECMAScript: OptionalChainingPunctuator :: ?. [lookahead ∉ DecimalDigit]
 			l.readChar()                                // Consume '.'
 			literal := l.input[startPos : l.position+1] // Read "?."
 			l.readChar()                                // Advance past '.'
 			tok = Token{Type: OPTIONAL_CHAINING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else { // Original ternary operator ?
+		} else { // Original ternary operator ? (or ?.digit which is ternary + decimal number)
 			literal := string(l.ch)
 			l.readChar()
 			tok = Token{Type: QUESTION, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}

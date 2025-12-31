@@ -4407,8 +4407,10 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 	p.nextToken() // Consume ':'
 
 	// Parse the alternative expression
+	// Use ASSIGNMENT precedence: stops at comma but allows nested ternary (right-associative)
+	// COMMA=2 < ASSIGNMENT=4 < TERNARY=5, so comma stops parsing but ternary continues
 	debugPrint("parseTernaryExpression parsing alternative...")
-	expr.Alternative = p.parseExpression(LOWEST) // Continue with low precedence
+	expr.Alternative = p.parseExpression(ASSIGNMENT) // Stop at comma, allow nested ternary
 	if expr.Alternative == nil {
 		return nil
 	} // <<< NIL CHECK
