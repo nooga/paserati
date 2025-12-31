@@ -1221,7 +1221,9 @@ startExecution:
 							ip = frame.ip
 							continue
 						}
-						result.Div(leftBig, rightBig)
+						// Use Quo for truncated division (towards zero) per ECMAScript spec
+						// Go's Div does floored division (towards negative infinity)
+						result.Quo(leftBig, rightBig)
 						registers[destReg] = NewBigInt(result)
 					}
 				} else if leftIsBigInt || rightIsBigInt {
