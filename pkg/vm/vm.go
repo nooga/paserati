@@ -996,7 +996,7 @@ startExecution:
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
 			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
 			OpGreater, OpLess, OpLessEqual, OpGreaterEqual,
-			OpRemainder, OpExponent:
+			OpRemainder:
 			destReg := code[ip]
 			leftReg := code[ip+1]
 			rightReg := code[ip+2]
@@ -1191,42 +1191,6 @@ startExecution:
 					registers[destReg] = Number(math.Mod(leftNum, rightNum))
 				}
 
-			case OpExponent:
-				// Apply ToPrimitive and type coercion
-				leftPrim := vm.toPrimitive(leftVal, "default")
-				rightPrim := vm.toPrimitive(rightVal, "default")
-
-				// Handle numbers and BigInts separately (no mixing allowed)
-				if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
-					// BigInt exponentiation
-					leftBig := leftPrim.AsBigInt()
-					rightBig := rightPrim.AsBigInt()
-					// BigInt exponentiation requires non-negative exponent
-					if rightBig.Sign() < 0 {
-						frame.ip = ip
-						status := vm.runtimeError("BigInt negative exponent not supported.")
-						return status, Undefined
-					}
-					// Check if exponent is too large to fit in int
-					if !rightBig.IsInt64() {
-						frame.ip = ip
-						status := vm.runtimeError("BigInt exponent too large.")
-						return status, Undefined
-					}
-					result := new(big.Int)
-					result.Exp(leftBig, rightBig, nil) // nil modulus means no modular exponentiation
-					registers[destReg] = NewBigInt(result)
-				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
-					// Cannot mix BigInt and non-BigInt
-					frame.ip = ip
-					status := vm.runtimeError("Cannot mix BigInt and other types, use explicit conversions.")
-					return status, Undefined
-				} else {
-					// Neither is BigInt: convert both to numbers
-					leftNum := leftPrim.ToFloat()
-					rightNum := rightPrim.ToFloat()
-					registers[destReg] = Number(math.Pow(leftNum, rightNum))
-				}
 			case OpEqual, OpNotEqual:
 				// Use Abstract Equality (==) per JS semantics with object-to-primitive conversion
 				isEqual := vm.abstractEqual(leftVal, rightVal)
@@ -4379,6 +4343,147 @@ startExecution:
 					result = leftInt32 >> shiftAmount
 				}
 				registers[destReg] = Number(float64(result))
+			}
+
+		case OpExponent:
+			// Exponentiation with proper ToPrimitive order-of-evaluation
+			destReg := code[ip]
+			leftReg := code[ip+1]
+			rightReg := code[ip+2]
+			ip += 3
+
+			leftVal := registers[leftReg]
+			rightVal := registers[rightReg]
+
+			// Save IP before calling helper functions so exception handlers can be found
+			frame.ip = ip
+
+			// ToPrimitive on left operand
+			vm.helperCallDepth++
+			leftPrim := vm.toPrimitive(leftVal, "number")
+			vm.helperCallDepth--
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				ip = frame.ip
+				continue
+			}
+
+			// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
+			// This must happen BEFORE we call ToPrimitive on right operand
+			if leftPrim.IsSymbol() {
+				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// ToPrimitive on right operand
+			vm.helperCallDepth++
+			rightPrim := vm.toPrimitive(rightVal, "number")
+			vm.helperCallDepth--
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				ip = frame.ip
+				continue
+			}
+
+			// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
+			if rightPrim.IsSymbol() {
+				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// Now check for BigInt AFTER ToPrimitive
+			leftIsBigInt := leftPrim.Type() == TypeBigInt
+			rightIsBigInt := rightPrim.Type() == TypeBigInt
+
+			// BigInt exponentiation
+			if leftIsBigInt && rightIsBigInt {
+				leftBig := leftPrim.AsBigInt()
+				rightBig := rightPrim.AsBigInt()
+				// BigInt exponentiation requires non-negative exponent
+				if rightBig.Sign() < 0 {
+					vm.ThrowRangeError("Exponent must be positive")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				// Check if exponent is too large to fit in int
+				if !rightBig.IsInt64() {
+					vm.ThrowRangeError("BigInt exponent too large")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				result := new(big.Int)
+				result.Exp(leftBig, rightBig, nil) // nil modulus means no modular exponentiation
+				registers[destReg] = NewBigInt(result)
+			} else if leftIsBigInt || rightIsBigInt {
+				// Cannot mix BigInt and non-BigInt
+				vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			} else {
+				// Neither is BigInt: convert both to numbers
+				leftNum := leftPrim.ToFloat()
+				rightNum := rightPrim.ToFloat()
+
+				// ECMAScript special case: if abs(base) = 1 and exponent is ±Infinity, return NaN
+				// Go's math.Pow returns 1 in this case, but ECMAScript spec requires NaN
+				if math.Abs(leftNum) == 1 && math.IsInf(rightNum, 0) {
+					registers[destReg] = Number(math.NaN())
+				} else {
+					registers[destReg] = Number(math.Pow(leftNum, rightNum))
+				}
 			}
 
 		// --- NEW: Object Opcodes ---
