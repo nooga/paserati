@@ -396,20 +396,10 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// This handles test262 cases where Unicode escapes appear in the eval input
 		codeStr = lexer.PreprocessUnicodeEscapesContextAware(codeStr)
 
-		// If the source contains U+180E (Mongolian Vowel Separator), this must be a SyntaxError
-		// per the spec: U+180E is Cf (Format), not WhiteSpace/USP
-		if strings.ContainsRune(codeStr, '\u180E') {
-			if ctor, ok := ctx.VM.GetGlobal("SyntaxError"); ok {
-				msg := vm.NewString("Invalid format control character in source")
-				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{msg})
-				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
-			}
-			// Fallback: throw a generic error object
-			errObj := vm.NewObject(ctx.VM.ErrorPrototype).AsPlainObject()
-			errObj.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))
-			errObj.SetOwnNonEnumerable("message", vm.NewString("Invalid format control character in source"))
-			return vm.Undefined, ctx.VM.NewExceptionError(vm.NewValueFromPlainObject(errObj))
-		}
+		// NOTE: Format control characters like U+180E are allowed inside string literals,
+		// template literals, and regular expression literals per ECMAScript spec section 11.1.
+		// The lexer handles rejection of format control chars in the token stream,
+		// so we don't need to check here.
 
 		// Handle simple expressions that are just numbers or arithmetic
 		// This is a simplified eval for test262 compatibility
