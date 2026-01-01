@@ -2987,6 +2987,9 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
+	// Mark that this function contains direct eval - needs scope descriptor
+	c.hasDirectEval = true
+
 	// Direct eval takes exactly one argument (the code string)
 	// If no arguments, it returns undefined
 	// If more than one argument, extra arguments are ignored

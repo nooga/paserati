@@ -329,6 +329,58 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 	return result, nil
 }
 
+// DirectEvalCode implements vm.EvalDriver interface for direct eval with caller scope access
+// This compiles and executes eval code with access to the caller's local variables and 'this'.
+func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm.ScopeDescriptor, callerRegs []vm.Value, callerThis vm.Value) (vm.Value, []error) {
+	// Parse the source code
+	lx := lexer.NewLexer(code)
+	ps := parser.NewParser(lx)
+	prog, parseErrs := ps.ParseProgram()
+	if len(parseErrs) > 0 {
+		errs := make([]error, len(parseErrs))
+		for i, e := range parseErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	// Compile with inherited strict mode and caller scope info
+	chunk, compileErrs := p.CompileDirectEvalCode(prog, inheritStrict, scopeDesc)
+	if len(compileErrs) > 0 {
+		errs := make([]error, len(compileErrs))
+		for i, e := range compileErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	if chunk == nil {
+		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
+	}
+
+	// Execute the chunk with caller scope access and inherited 'this'
+	result, runtimeErrs := p.vmInstance.InterpretWithCallerScope(chunk, callerRegs, callerThis)
+	if len(runtimeErrs) > 0 {
+		errs := make([]error, len(runtimeErrs))
+		for i, e := range runtimeErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	return result, nil
+}
+
+// CompileDirectEvalCode compiles eval code with access to caller's scope
+func (p *Paserati) CompileDirectEvalCode(program *parser.Program, inheritStrict bool, scopeDesc *vm.ScopeDescriptor) (*vm.Chunk, []errors.PaseratiError) {
+	// Set the caller's scope descriptor on the compiler
+	p.compiler.SetCallerScopeDesc(scopeDesc)
+	defer p.compiler.SetCallerScopeDesc(nil) // Clear after compilation
+
+	// Use the existing strict mode compilation
+	return p.CompileProgramWithStrictMode(program, inheritStrict)
+}
+
 // SyncGlobalNamesFromCompiler syncs the compiler's global name mappings to the VM
 // This should be called after CompileProgram to ensure globalThis property access works
 func (p *Paserati) SyncGlobalNamesFromCompiler() {

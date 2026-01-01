@@ -35,7 +35,15 @@ type ModuleLoader interface {
 type EvalDriver interface {
 	// EvalCode compiles and executes eval code with the given strict mode inheritance
 	// Returns (result, errors) - errors is empty on success
+	// This is used for indirect eval (no caller scope access)
 	EvalCode(code string, inheritStrict bool) (Value, []error)
+
+	// DirectEvalCode compiles and executes direct eval code with access to caller's scope
+	// scopeDesc contains the name→register mapping for the caller's local variables
+	// callerRegs is the caller's register array (allows read/write access to locals)
+	// callerThis is the 'this' value from the caller's execution context
+	// Returns (result, errors) - errors is empty on success
+	DirectEvalCode(code string, inheritStrict bool, scopeDesc *ScopeDescriptor, callerRegs []Value, callerThis Value) (Value, []error)
 }
 
 // logGeneratorStateTransition logs generator state changes for debugging
@@ -246,6 +254,15 @@ type VM struct {
 
 	// Original eval intrinsic - used to check if global "eval" has been reassigned
 	originalEval Value
+
+	// Caller registers for direct eval scope access (Phase 3)
+	// Set during InterpretWithCallerScope, nil otherwise
+	evalCallerRegs []Value
+
+	// Caller's 'this' value for direct eval (Phase 3)
+	// Set during InterpretWithCallerScope, Undefined otherwise
+	evalCallerThis Value
+	hasEvalCallerThis bool // True when evalCallerThis is valid (allows passing Undefined as 'this')
 
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
@@ -616,13 +633,19 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
 	frame.targetRegister = 0 // Result of script isn't stored in caller's reg
-	// Align with JS semantics: top-level this is global object in non-strict script
-	// Use globalThis if available, otherwise undefined
-	globalThisVal, _ := vm.GetGlobal("globalThis")
-	if globalThisVal == Undefined {
-		frame.thisValue = Undefined
+	// Check if we have a caller's 'this' value from direct eval
+	if vm.hasEvalCallerThis {
+		// Direct eval: inherit 'this' from caller
+		frame.thisValue = vm.evalCallerThis
 	} else {
-		frame.thisValue = globalThisVal
+		// Normal script: align with JS semantics: top-level this is global object in non-strict script
+		// Use globalThis if available, otherwise undefined
+		globalThisVal, _ := vm.GetGlobal("globalThis")
+		if globalThisVal == Undefined {
+			frame.thisValue = Undefined
+		} else {
+			frame.thisValue = globalThisVal
+		}
 	}
 	frame.homeObject = Undefined
 	frame.isConstructorCall = false
@@ -674,6 +697,29 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		// Nothing to adjust here, but keep this branch explicit for clarity.
 		return finalValue, vm.errors
 	}
+}
+
+// InterpretWithCallerScope executes a chunk with access to the caller's local variables and 'this'.
+// This is used for direct eval to allow reading/writing caller's registers and inheriting 'this'.
+// callerRegs is the slice of caller's registers that can be accessed by OpGetCallerLocal/OpSetCallerLocal.
+// callerThis is the 'this' value from the caller's execution context.
+func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerThis Value) (Value, []errors.PaseratiError) {
+	// Store the caller registers for access by eval code
+	vm.evalCallerRegs = callerRegs
+
+	// Store the caller's 'this' value so it's inherited by the eval code
+	vm.evalCallerThis = callerThis
+	vm.hasEvalCallerThis = true
+
+	// Execute the chunk normally
+	result, errs := vm.Interpret(chunk)
+
+	// Clear the caller state after execution
+	vm.evalCallerRegs = nil
+	vm.evalCallerThis = Undefined
+	vm.hasEvalCallerThis = false
+
+	return result, errs
 }
 
 // run is the main execution loop.
@@ -8438,8 +8484,28 @@ startExecution:
 			// Save current frame state
 			frame.ip = ip
 
-			// Use the evalDriver to compile and execute
-			result, evalErrs := vm.evalDriver.EvalCode(codeStr, callerIsStrict)
+			// Check if caller has a scope descriptor for local variable access
+			var result Value
+			var evalErrs []error
+
+			if function.Chunk.ScopeDesc != nil {
+				// Determine the 'this' value to pass to eval
+				// In non-strict mode, undefined/null 'this' is coerced to globalThis
+				callerThis := frame.thisValue
+				if !callerIsStrict && (callerThis.Type() == TypeUndefined || callerThis.Type() == TypeNull) {
+					if globalThis, ok := vm.GetGlobal("globalThis"); ok {
+						callerThis = globalThis
+					}
+				}
+
+				// Use DirectEvalCode for direct eval with scope access
+				// Pass the caller's 'this' value so it's inherited by the eval code
+				result, evalErrs = vm.evalDriver.DirectEvalCode(codeStr, callerIsStrict, function.Chunk.ScopeDesc, registers, callerThis)
+			} else {
+				// Use regular EvalCode (no local scope access)
+				result, evalErrs = vm.evalDriver.EvalCode(codeStr, callerIsStrict)
+			}
+
 			if len(evalErrs) > 0 {
 				// Error occurred - it should have been thrown as an exception
 				// Check if we're already unwinding
@@ -8459,6 +8525,44 @@ startExecution:
 			}
 
 			registers[destReg] = result
+
+		case OpGetCallerLocal:
+			// Rx CallerRegIdx: Load value from caller's register into Rx
+			destReg := code[ip]
+			callerRegIdx := int(code[ip+1])
+			ip += 2
+
+			// Access the caller's registers (stored in vm.evalCallerRegs during InterpretWithCallerScope)
+			if vm.evalCallerRegs == nil {
+				frame.ip = ip
+				status := vm.runtimeError("OpGetCallerLocal: no caller scope available")
+				return status, Undefined
+			}
+			if callerRegIdx >= len(vm.evalCallerRegs) {
+				frame.ip = ip
+				status := vm.runtimeError("OpGetCallerLocal: caller register index %d out of range (max %d)", callerRegIdx, len(vm.evalCallerRegs)-1)
+				return status, Undefined
+			}
+			registers[destReg] = vm.evalCallerRegs[callerRegIdx]
+
+		case OpSetCallerLocal:
+			// CallerRegIdx Rx: Store value from Rx into caller's register
+			callerRegIdx := int(code[ip])
+			srcReg := code[ip+1]
+			ip += 2
+
+			// Access the caller's registers
+			if vm.evalCallerRegs == nil {
+				frame.ip = ip
+				status := vm.runtimeError("OpSetCallerLocal: no caller scope available")
+				return status, Undefined
+			}
+			if callerRegIdx >= len(vm.evalCallerRegs) {
+				frame.ip = ip
+				status := vm.runtimeError("OpSetCallerLocal: caller register index %d out of range (max %d)", callerRegIdx, len(vm.evalCallerRegs)-1)
+				return status, Undefined
+			}
+			vm.evalCallerRegs[callerRegIdx] = registers[srcReg]
 
 		default:
 			frame.ip = ip // Save IP before erroring

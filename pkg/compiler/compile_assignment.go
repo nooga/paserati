@@ -45,11 +45,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	)
 	var lhsType lhsInfoType
 	var identInfo struct { // Info needed to store back to identifier
-		targetReg    Register
-		isUpvalue    bool
-		upvalueIndex uint8
-		isGlobal     bool   // Track if this is a global variable
-		globalIdx    uint16 // Direct global index instead of name constant index
+		targetReg      Register
+		isUpvalue      bool
+		upvalueIndex   uint8
+		isGlobal       bool   // Track if this is a global variable
+		globalIdx      uint16 // Direct global index instead of name constant index
+		isCallerLocal  bool   // Track if this is a caller's local (for direct eval)
+		callerRegIdx   int    // Caller's register index (for direct eval)
 	}
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register
@@ -107,16 +109,45 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// Regular identifier - resolve the identifier
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(lhsNode.Value)
 			if !found {
-				// Variable not found in any scope, treat as global assignment
-				identInfo.isGlobal = true
-				identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
-				// For compound assignments, we need the current value
-				if node.Operator != "=" {
-					currentValueReg = c.regAlloc.Alloc()
-					tempRegs = append(tempRegs, currentValueReg)
-					c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
+				// Check caller scope first (for direct eval with scope access)
+				if c.callerScopeDesc != nil {
+					if callerRegIdx := c.resolveCallerLocal(lhsNode.Value); callerRegIdx >= 0 {
+						identInfo.isCallerLocal = true
+						identInfo.callerRegIdx = callerRegIdx
+						// For compound assignments, we need the current value
+						if node.Operator != "=" {
+							currentValueReg = c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, currentValueReg)
+							c.emitOpCode(vm.OpGetCallerLocal, line)
+							c.emitByte(byte(currentValueReg))
+							c.emitByte(byte(callerRegIdx))
+						} else {
+							currentValueReg = nilRegister // Not needed for simple assignment
+						}
+					} else {
+						// Not in caller scope either, treat as global
+						identInfo.isGlobal = true
+						identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
+						if node.Operator != "=" {
+							currentValueReg = c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, currentValueReg)
+							c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
+						} else {
+							currentValueReg = nilRegister
+						}
+					}
 				} else {
-					currentValueReg = nilRegister // Not needed for simple assignment
+					// Variable not found in any scope, treat as global assignment
+					identInfo.isGlobal = true
+					identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
+					// For compound assignments, we need the current value
+					if node.Operator != "=" {
+						currentValueReg = c.regAlloc.Alloc()
+						tempRegs = append(tempRegs, currentValueReg)
+						c.emitGetGlobal(currentValueReg, identInfo.globalIdx, line)
+					} else {
+						currentValueReg = nilRegister // Not needed for simple assignment
+					}
 				}
 			} else {
 				// Determine target register/upvalue index and load current value
@@ -355,6 +386,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		case lhsIsIdentifier:
 			if identInfo.isGlobal {
 				c.emitSetGlobal(identInfo.globalIdx, hint, line)
+			} else if identInfo.isCallerLocal {
+				c.emitOpCode(vm.OpSetCallerLocal, line)
+				c.emitByte(byte(identInfo.callerRegIdx))
+				c.emitByte(byte(hint))
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
 			} else {
@@ -543,6 +578,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			if identInfo.isGlobal {
 				// Global variable assignment
 				c.emitSetGlobal(identInfo.globalIdx, hint, line)
+			} else if identInfo.isCallerLocal {
+				// Caller local assignment (for direct eval)
+				c.emitOpCode(vm.OpSetCallerLocal, line)
+				c.emitByte(byte(identInfo.callerRegIdx))
+				c.emitByte(byte(hint))
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
 			} else {

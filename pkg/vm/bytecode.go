@@ -133,6 +133,11 @@ const (
 	OpDirectEval OpCode = 126 // Rx CodeReg: Execute direct eval with code string in CodeReg, result in Rx (inherits caller's strict mode and scope)
 	// --- END Direct Eval ---
 
+	// --- Caller Scope Access (for direct eval) ---
+	OpGetCallerLocal OpCode = 127 // Rx CallerRegIdx: Load value from caller's register into Rx
+	OpSetCallerLocal OpCode = 128 // CallerRegIdx Rx: Store value from Rx into caller's register
+	// --- END Caller Scope Access ---
+
 	// --- With Statement Support ---
 	OpPushWithObject  OpCode = 118 // ObjReg: Push object onto VM's with-object stack
 	OpPopWithObject   OpCode = 119 // No operands: Pop object from VM's with-object stack
@@ -514,6 +519,12 @@ func (op OpCode) String() string {
 	case OpDirectEval:
 		return "OpDirectEval"
 
+	// Caller scope access (for direct eval)
+	case OpGetCallerLocal:
+		return "OpGetCallerLocal"
+	case OpSetCallerLocal:
+		return "OpSetCallerLocal"
+
 	default:
 		return fmt.Sprintf("UnknownOpcode(%d)", op)
 	}
@@ -530,6 +541,15 @@ type ExceptionHandler struct {
 	FinallyReg int  // Register to store pending action/value (-1 if not needed)
 }
 
+// ScopeDescriptor stores name-to-register mappings for functions that contain direct eval.
+// This allows direct eval to resolve variable names to caller's registers at runtime.
+// Only populated for functions marked as containing direct eval - nil otherwise for efficiency.
+type ScopeDescriptor struct {
+	// LocalNames maps register index to variable name.
+	// LocalNames[i] is the name of the variable in register i, or "" if not a named local.
+	LocalNames []string
+}
+
 // Chunk represents a sequence of bytecode instructions and associated data.
 type Chunk struct {
 	Code           []byte             // The bytecode instructions (OpCodes and operands)
@@ -537,6 +557,7 @@ type Chunk struct {
 	Lines          []int              // Line number corresponding to the start of each instruction
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
 	IsStrict       bool               // Whether this chunk runs in strict mode
+	ScopeDesc      *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
 	// Add MaxRegs later for function definitions
 }
 
@@ -941,6 +962,28 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		destReg := c.Code[offset+1]
 		codeReg := c.Code[offset+2]
 		builder.WriteString(fmt.Sprintf("%-20s R%d R%d\n", "OpDirectEval", destReg, codeReg))
+		return offset + 3
+
+	case OpGetCallerLocal:
+		// Rx CallerRegIdx: Load value from caller's register into Rx
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpGetCallerLocal (missing operands)\n")
+			return offset + 1
+		}
+		destReg := c.Code[offset+1]
+		callerReg := c.Code[offset+2]
+		builder.WriteString(fmt.Sprintf("%-20s R%d CallerR%d\n", "OpGetCallerLocal", destReg, callerReg))
+		return offset + 3
+
+	case OpSetCallerLocal:
+		// CallerRegIdx Rx: Store value from Rx into caller's register
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpSetCallerLocal (missing operands)\n")
+			return offset + 1
+		}
+		callerReg := c.Code[offset+1]
+		srcReg := c.Code[offset+2]
+		builder.WriteString(fmt.Sprintf("%-20s CallerR%d R%d\n", "OpSetCallerLocal", callerReg, srcReg))
 		return offset + 3
 
 	default:

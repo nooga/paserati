@@ -257,6 +257,12 @@ type Compiler struct {
 	// --- Function Context Tracking ---
 	isAsync     bool // True when compiling async function
 	isGenerator bool // True when compiling generator function
+
+	// --- Direct Eval Tracking ---
+	hasDirectEval bool // True when function contains direct eval call (needs scope descriptor)
+
+	// --- Caller Scope for Direct Eval Compilation ---
+	callerScopeDesc *vm.ScopeDescriptor // Scope descriptor from caller (for direct eval compilation)
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -1201,6 +1207,17 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		if !found {
 			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, checking with objects\n", node.Value) // <<< ADDED
 
+			// Check caller scope first (for direct eval with scope access)
+			if c.callerScopeDesc != nil {
+				if callerRegIdx := c.resolveCallerLocal(node.Value); callerRegIdx >= 0 {
+					debugPrintf("// DEBUG Identifier '%s': Found in caller scope at CallerR%d\n", node.Value, callerRegIdx)
+					c.emitOpCode(vm.OpGetCallerLocal, node.Token.Line)
+					c.emitByte(byte(hint))
+					c.emitByte(byte(callerRegIdx))
+					return hint, nil
+				}
+			}
+
 			// Check if it's from a with object (flagged by type checker)
 			if _, isWithProperty := c.shouldUseWithProperty(node); isWithProperty {
 				debugPrintf("// DEBUG Identifier '%s': Found in with object, emitting OpGetWithProperty\n", node.Value)
@@ -1750,6 +1767,68 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // As
 	c.freeSymbols = append(c.freeSymbols, symbol)
 	debugPrintf("// DEBUG addFreeSymbol: Added '%s' at index %d (total free symbols: %d)\n", symbol.Name, len(c.freeSymbols)-1, len(c.freeSymbols)) // <<< ADDED
 	return uint8(len(c.freeSymbols) - 1)
+}
+
+// SetCallerScopeDesc sets the caller's scope descriptor for direct eval compilation.
+// This allows eval code to resolve variable names to caller's registers.
+func (c *Compiler) SetCallerScopeDesc(scopeDesc *vm.ScopeDescriptor) {
+	c.callerScopeDesc = scopeDesc
+}
+
+// GetCallerScopeDesc returns the caller's scope descriptor (if any).
+func (c *Compiler) GetCallerScopeDesc() *vm.ScopeDescriptor {
+	return c.callerScopeDesc
+}
+
+// resolveCallerLocal looks up a variable name in the caller's scope descriptor.
+// Returns the register index if found, or -1 if not found.
+func (c *Compiler) resolveCallerLocal(name string) int {
+	if c.callerScopeDesc == nil {
+		return -1
+	}
+	for i, localName := range c.callerScopeDesc.LocalNames {
+		if localName == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// generateScopeDescriptor creates a ScopeDescriptor from the current symbol table.
+// This is called when a function contains direct eval, to allow eval code to access local variables.
+func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
+	// Get the maximum register used to size the array
+	maxReg := int(c.regAlloc.MaxRegs())
+	if maxReg == 0 {
+		return &vm.ScopeDescriptor{LocalNames: []string{}}
+	}
+
+	// Create array mapping register index to variable name
+	localNames := make([]string, maxReg)
+
+	// Walk through the symbol table and map names to their registers
+	// Only include non-global symbols (locals)
+	c.collectLocalNames(c.currentSymbolTable, localNames)
+
+	return &vm.ScopeDescriptor{LocalNames: localNames}
+}
+
+// collectLocalNames recursively collects local variable names from the symbol table chain
+func (c *Compiler) collectLocalNames(st *SymbolTable, localNames []string) {
+	if st == nil {
+		return
+	}
+
+	// Collect from current scope
+	for name, symbol := range st.store {
+		if !symbol.IsGlobal && int(symbol.Register) < len(localNames) {
+			localNames[symbol.Register] = name
+		}
+	}
+
+	// Note: We don't recurse into outer scopes here because:
+	// 1. For function compilers, currentSymbolTable is the function's own scope
+	// 2. Outer scopes belong to enclosing functions (handled by upvalues, not direct access)
 }
 
 // emitPlaceholderJump emits a jump instruction with a placeholder offset (0xFFFF).

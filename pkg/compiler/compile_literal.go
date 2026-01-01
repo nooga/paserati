@@ -1294,6 +1294,13 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 	regSize := functionCompiler.regAlloc.MaxRegs()
 
+	// Generate scope descriptor if this function contains direct eval
+	if functionCompiler.hasDirectEval {
+		functionChunk.ScopeDesc = functionCompiler.generateScopeDescriptor()
+		debugPrintf("// [Compiler] Function '%s' has direct eval, generated scope descriptor with %d locals\n",
+			determinedFuncName, len(functionChunk.ScopeDesc.LocalNames))
+	}
+
 	// 7. Create the bytecode.Function object
 	// ... (determine funcName as before) ...
 	var funcName string
