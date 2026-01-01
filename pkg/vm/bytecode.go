@@ -548,6 +548,21 @@ type ScopeDescriptor struct {
 	// LocalNames maps register index to variable name.
 	// LocalNames[i] is the name of the variable in register i, or "" if not a named local.
 	LocalNames []string
+
+	// HasArgumentsBinding indicates if the caller's scope has an 'arguments' binding.
+	// This is true for functions (implicit arguments object) or when there's an 'arguments' parameter.
+	// Used for EvalDeclarationInstantiation to reject 'var arguments' that would conflict.
+	HasArgumentsBinding bool
+
+	// InDefaultParameterScope indicates if direct eval is called from a default parameter expression.
+	// In this context, var declarations in eval would hoist to the function's varEnv, which
+	// already contains the function's implicit 'arguments' binding, causing a conflict.
+	InDefaultParameterScope bool
+
+	// LexicalBindings contains names of let/const bindings in the caller's scope chain
+	// between the eval and the variable environment. Used to reject var declarations
+	// that would conflict with these lexical bindings (per 19.2.1.3 step 5.d).
+	LexicalBindings []string
 }
 
 // Chunk represents a sequence of bytecode instructions and associated data.

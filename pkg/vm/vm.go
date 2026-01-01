@@ -8507,21 +8507,37 @@ startExecution:
 			}
 
 			if len(evalErrs) > 0 {
-				// Error occurred - it should have been thrown as an exception
+				// Error occurred - throw as SyntaxError exception
 				// Check if we're already unwinding
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
-				// Throw as SyntaxError if it looks like a syntax error
+				// Create a SyntaxError object and throw it
 				errMsg := evalErrs[0].Error()
+				var errObj Value
 				if ctor, ok := vm.GetGlobal("SyntaxError"); ok {
 					msg := NewString(errMsg)
-					errObj, _ := vm.Call(ctor, Undefined, []Value{msg})
-					vm.throwException(errObj)
-					return InterpretRuntimeError, Undefined
+					errObj, _ = vm.Call(ctor, Undefined, []Value{msg})
+				} else {
+					// Fallback to plain error object
+					plainErr := NewObject(vm.ErrorPrototype).AsPlainObject()
+					plainErr.SetOwn("name", NewString("SyntaxError"))
+					plainErr.SetOwn("message", NewString(errMsg))
+					errObj = NewValueFromPlainObject(plainErr)
 				}
-				status := vm.runtimeError("eval error: %v", evalErrs[0])
-				return status, Undefined
+				vm.throwException(errObj)
+				// After exception unwinding, reload frame state
+				// because frames may have been popped during exception handling
+				if vm.frameCount > 0 {
+					frame = &vm.frames[vm.frameCount-1]
+					registers = frame.registers
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					ip = frame.ip
+				}
+				continue
 			}
 
 			registers[destReg] = result

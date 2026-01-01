@@ -148,6 +148,16 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register) (Register, errors.PaseratiError) {
 	// Process all variable declarations in the statement
 	for _, declarator := range node.Declarations {
+		// EvalDeclarationInstantiation check: In direct eval context, if the caller's scope
+		// has an 'arguments' binding, declaring 'var arguments' is a SyntaxError.
+		// This implements ECMAScript 19.2.1.3 step 5.d.ii.2.a - checking for binding conflicts.
+		if c.callerScopeDesc != nil && declarator.Name != nil && declarator.Name.Value == "arguments" {
+			if c.callerScopeDesc.HasArgumentsBinding {
+				c.addError(declarator.Name, "SyntaxError: 'var arguments' not allowed in direct eval when caller has arguments binding")
+				return BadRegister, nil
+			}
+		}
+
 		// Hoist function declarations in var statements similar to Annex B in sloppy mode.
 		// If the initializer is a FunctionLiteral with an Identifier name, predefine the name in current scope
 		// so that subsequent references within the same block use the local binding rather than a global.

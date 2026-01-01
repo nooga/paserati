@@ -255,8 +255,9 @@ type Compiler struct {
 	inTailPosition bool // True when compiling tail-positioned expression
 
 	// --- Function Context Tracking ---
-	isAsync     bool // True when compiling async function
-	isGenerator bool // True when compiling generator function
+	isAsync         bool // True when compiling async function
+	isGenerator     bool // True when compiling generator function
+	isArrowFunction bool // True when compiling arrow function (no own arguments binding)
 
 	// --- Direct Eval Tracking ---
 	hasDirectEval bool // True when function contains direct eval call (needs scope descriptor)
@@ -1800,7 +1801,10 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 	// Get the maximum register used to size the array
 	maxReg := int(c.regAlloc.MaxRegs())
 	if maxReg == 0 {
-		return &vm.ScopeDescriptor{LocalNames: []string{}}
+		return &vm.ScopeDescriptor{
+			LocalNames:          []string{},
+			HasArgumentsBinding: !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
+		}
 	}
 
 	// Create array mapping register index to variable name
@@ -1810,7 +1814,10 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 	// Only include non-global symbols (locals)
 	c.collectLocalNames(c.currentSymbolTable, localNames)
 
-	return &vm.ScopeDescriptor{LocalNames: localNames}
+	return &vm.ScopeDescriptor{
+		LocalNames:          localNames,
+		HasArgumentsBinding: !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
+	}
 }
 
 // collectLocalNames recursively collects local variable names from the symbol table chain

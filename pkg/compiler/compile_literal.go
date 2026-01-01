@@ -29,6 +29,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	// 1. Create a compiler for the function scope
 	funcCompiler := newFunctionCompiler(c)
 	funcCompiler.compilingFuncName = "<arrow>" // Set name for arrow functions
+	funcCompiler.isArrowFunction = true        // Arrow functions don't have own 'arguments' binding
 
 	// 1.5. Check for 'use strict' directive in arrow function body (if it's a block statement)
 	if blockBody, ok := node.Body.(*parser.BlockStatement); ok {
@@ -262,6 +263,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	// Most of this is copied from compileArrowFunctionLiteral, but with name support
 	funcCompiler := newFunctionCompiler(c)
 	funcCompiler.compilingFuncName = nameHint // Use the provided name instead of "<arrow>"
+	funcCompiler.isArrowFunction = true       // Arrow functions don't have own 'arguments' binding
 
 	// Define parameters
 	for _, p := range node.Parameters {

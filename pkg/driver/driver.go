@@ -316,6 +316,12 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
 	}
 
+	// Only sync global names for non-strict eval
+	// In strict mode, eval creates its own variable environment and declarations stay local
+	if !chunk.IsStrict {
+		p.SyncGlobalNamesFromCompiler()
+	}
+
 	// Execute the chunk
 	result, runtimeErrs := p.vmInstance.Interpret(chunk)
 	if len(runtimeErrs) > 0 {
@@ -356,6 +362,12 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 
 	if chunk == nil {
 		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
+	}
+
+	// Only sync global names for non-strict eval
+	// In strict mode, eval creates its own variable environment and declarations stay local
+	if !chunk.IsStrict {
+		p.SyncGlobalNamesFromCompiler()
 	}
 
 	// Execute the chunk with caller scope access and inherited 'this'
