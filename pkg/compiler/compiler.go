@@ -260,7 +260,9 @@ type Compiler struct {
 	isArrowFunction bool // True when compiling arrow function (no own arguments binding)
 
 	// --- Direct Eval Tracking ---
-	hasDirectEval bool // True when function contains direct eval call (needs scope descriptor)
+	hasDirectEval         bool // True when function contains direct eval call (needs scope descriptor)
+	inDefaultParamScope   bool // True when compiling a default parameter expression
+	hasEvalInDefaultParam bool // True when direct eval was found in a default parameter expression
 
 	// --- Caller Scope for Direct Eval Compilation ---
 	callerScopeDesc *vm.ScopeDescriptor // Scope descriptor from caller (for direct eval compilation)
@@ -1802,8 +1804,9 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 	maxReg := int(c.regAlloc.MaxRegs())
 	if maxReg == 0 {
 		return &vm.ScopeDescriptor{
-			LocalNames:          []string{},
-			HasArgumentsBinding: !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
+			LocalNames:              []string{},
+			HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
+			InDefaultParameterScope: c.hasEvalInDefaultParam,
 		}
 	}
 
@@ -1815,8 +1818,9 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 	c.collectLocalNames(c.currentSymbolTable, localNames)
 
 	return &vm.ScopeDescriptor{
-		LocalNames:          localNames,
-		HasArgumentsBinding: !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
+		LocalNames:              localNames,
+		HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
+		InDefaultParameterScope: c.hasEvalInDefaultParam,
 	}
 }
 

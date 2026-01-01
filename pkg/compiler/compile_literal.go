@@ -96,7 +96,9 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 			// Compile the default value expression
 			defaultValueReg := funcCompiler.regAlloc.Alloc()
+			funcCompiler.inDefaultParamScope = true
 			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
+			funcCompiler.inDefaultParamScope = false
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
@@ -293,7 +295,9 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
 
 			defaultValueReg := funcCompiler.regAlloc.Alloc()
+			funcCompiler.inDefaultParamScope = true
 			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
+			funcCompiler.inDefaultParamScope = false
 			if err != nil {
 				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
 			} else {
@@ -1072,7 +1076,9 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 				beforeMaxReg = functionCompiler.regAlloc.maxReg
 				fmt.Printf("// [PARAM_DEBUG] Before compileNode for param %s: maxReg=%d\\n", param.Name.Value, beforeMaxReg)
 			}
+			functionCompiler.inDefaultParamScope = true
 			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
+			functionCompiler.inDefaultParamScope = false
 			if debugRegAlloc {
 				afterMaxReg := functionCompiler.regAlloc.maxReg
 				fmt.Printf("// [PARAM_DEBUG] After compileNode for param %s: maxReg was %d, now %d\\n", param.Name.Value, beforeMaxReg, afterMaxReg)

@@ -148,13 +148,33 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register) (Register, errors.PaseratiError) {
 	// Process all variable declarations in the statement
 	for _, declarator := range node.Declarations {
-		// EvalDeclarationInstantiation check: In direct eval context, if the caller's scope
-		// has an 'arguments' binding, declaring 'var arguments' is a SyntaxError.
+		// Strict mode check: 'var arguments' and 'var eval' are forbidden in strict mode
+		// This applies to all code, not just direct eval
+		if c.chunk.IsStrict && declarator.Name != nil {
+			if declarator.Name.Value == "arguments" || declarator.Name.Value == "eval" {
+				c.addError(declarator.Name, fmt.Sprintf("SyntaxError: Unexpected eval or arguments in strict mode"))
+				return BadRegister, nil
+			}
+		}
+
+		// EvalDeclarationInstantiation check: In direct eval context, declaring 'var arguments'
+		// may conflict with the caller's arguments binding (in non-strict mode).
 		// This implements ECMAScript 19.2.1.3 step 5.d.ii.2.a - checking for binding conflicts.
 		if c.callerScopeDesc != nil && declarator.Name != nil && declarator.Name.Value == "arguments" {
-			if c.callerScopeDesc.HasArgumentsBinding {
-				c.addError(declarator.Name, "SyntaxError: 'var arguments' not allowed in direct eval when caller has arguments binding")
+			// Case 1: eval in default parameter expression - conflicts with implicit 'arguments' binding
+			// In default parameter scope, the function's implicit 'arguments' object is being initialized,
+			// so 'var arguments' from eval would conflict with it.
+			if c.callerScopeDesc.InDefaultParameterScope && c.callerScopeDesc.HasArgumentsBinding {
+				c.addError(declarator.Name, "SyntaxError: 'var arguments' not allowed in direct eval in default parameter expression")
 				return BadRegister, nil
+			}
+			// Case 2: eval in function body - only conflicts with EXPLICIT 'arguments' parameter/local
+			// The implicit arguments object allows 'var arguments' to shadow it in the function body.
+			for _, localName := range c.callerScopeDesc.LocalNames {
+				if localName == "arguments" {
+					c.addError(declarator.Name, "SyntaxError: 'var arguments' not allowed in direct eval when caller has explicit arguments binding")
+					return BadRegister, nil
+				}
 			}
 		}
 

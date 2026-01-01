@@ -2989,6 +2989,11 @@ func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register,
 
 	// Mark that this function contains direct eval - needs scope descriptor
 	c.hasDirectEval = true
+	// If we're in a default parameter expression, mark it specially
+	// This is needed for proper EvalDeclarationInstantiation checks (var arguments conflicts)
+	if c.inDefaultParamScope {
+		c.hasEvalInDefaultParam = true
+	}
 
 	// Direct eval takes exactly one argument (the code string)
 	// If no arguments, it returns undefined
