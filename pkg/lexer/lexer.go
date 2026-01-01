@@ -2447,7 +2447,7 @@ func canBeRegexStart(prevTokenType TokenType) bool {
 	case LPAREN, LBRACKET, LBRACE, COMMA, SEMICOLON, COLON:
 		return true
 	// After keywords
-	case RETURN, THROW, NEW, DELETE, TYPEOF, VOID, IF, ELSE, WHILE, DO, FOR, WITH:
+	case RETURN, THROW, NEW, DELETE, TYPEOF, VOID, IF, ELSE, WHILE, DO, FOR, WITH, YIELD, AWAIT:
 		return true
 	// After arrows
 	case ARROW:

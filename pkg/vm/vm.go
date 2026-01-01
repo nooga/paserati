@@ -115,6 +115,7 @@ type CallFrame struct {
 	argCount            int     // Actual number of arguments passed to this function (for arguments object)
 	args                []Value // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
 	argumentsObject     Value   // Cached arguments object (created on first access to 'arguments')
+	calleeValue         Value   // The original callee Value (for arguments.callee to reference the same object)
 
 	// For async native functions that can call bytecode
 	isNativeFrame    bool
@@ -3233,7 +3234,7 @@ startExecution:
 			}
 
 			// Accept both objects and functions (functions can have properties like constructors)
-			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction {
+			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction && objVal.Type() != TypeClosure {
 				frame.ip = ip
 				status := vm.runtimeError("OpDefineAccessor: target must be an object or function, got %s", objVal.TypeName())
 				return status, Undefined
@@ -3251,6 +3252,8 @@ startExecution:
 			var obj *PlainObject
 			if objVal.Type() == TypeFunction {
 				obj = objVal.AsFunction().Properties
+			} else if objVal.Type() == TypeClosure {
+				obj = objVal.AsClosure().Fn.Properties
 			} else {
 				obj = objVal.AsPlainObject()
 			}
@@ -4877,6 +4880,15 @@ startExecution:
 					return status, Undefined
 				}
 				obj = fn.Properties
+			} else if objVal.Type() == TypeClosure {
+				// Static private fields on closures are stored on the underlying function's Properties
+				cl := objVal.AsClosure()
+				if cl.Fn.Properties == nil {
+					frame.ip = ip
+					status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
+					return status, Undefined
+				}
+				obj = cl.Fn.Properties
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot read private field '%s' of %s", fieldName, objVal.TypeName())
@@ -5010,6 +5022,14 @@ startExecution:
 					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 				}
 				obj = fn.Properties
+			} else if objVal.Type() == TypeClosure {
+				// Static private fields on closures are stored on the underlying function's Properties
+				cl := objVal.AsClosure()
+				if cl.Fn.Properties == nil {
+					// Create Properties object if it doesn't exist
+					cl.Fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = cl.Fn.Properties
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private field '%s' of %s", fieldName, objVal.TypeName())
@@ -7678,11 +7698,11 @@ startExecution:
 				}
 
 				// Create arguments object with callee reference
-				var calleeValue Value
-				if frame.closure != nil {
-					calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
-				} else {
-					calleeValue = Undefined
+				// Use frame.calleeValue which stores the original callee passed to the function
+				calleeValue := frame.calleeValue
+				if calleeValue.Type() == TypeUndefined && frame.closure != nil {
+					// Fallback: use the closure if calleeValue wasn't set
+					calleeValue = Value{typ: TypeClosure, obj: unsafe.Pointer(frame.closure)}
 				}
 				argsObj := NewArguments(args, calleeValue)
 				frame.argumentsObject = argsObj // Cache it for future accesses
@@ -9864,7 +9884,7 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 	}
 
 	// Call prepareCallWithGeneratorMode to set up frame (true flag means we're in generator execution mode)
-	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, thisValue, args, destReg, callerRegisters, callerIP, true)
+	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, thisValue, args, destReg, callerRegisters, callerIP, true, funcVal)
 
 	// Restore the caller frame's IP (prepareCall may have clobbered it)
 	// Note: frameCount is now incremented by prepareCall, so the original caller is at frameCount-2
@@ -10088,7 +10108,7 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	if thisValue.Type() == 0 {
 		thisValue = Undefined
 	}
-	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, thisValue, args, destReg, callerRegisters, callerIP, true)
+	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, thisValue, args, destReg, callerRegisters, callerIP, true, funcVal)
 	if err != nil {
 		// Remove sentinel frame on error
 		vm.frameCount--

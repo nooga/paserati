@@ -813,6 +813,9 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypeArray:
 		// For arrays, return Array.prototype
 		return vmInstance.ArrayPrototype, nil
+	case vm.TypeArguments:
+		// For arguments objects, return Object.prototype
+		return vmInstance.ObjectPrototype, nil
 	case vm.TypeString:
 		// For strings, return String.prototype if available
 		return vm.Null, nil // TODO: Return proper String.prototype
@@ -940,17 +943,51 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return objectSetPrototypeOfWithVM(vmInstance, []vm.Value{proxy.Target(), proto})
 	}
 
-	// First argument must be an object
-	if obj.Type() != vm.TypeObject {
+	// First argument must be an object (including functions, arrays, etc.)
+	// In JavaScript, functions are objects and their [[Prototype]] can be changed
+	objIsObject := obj.Type() == vm.TypeObject ||
+		obj.IsCallable() ||
+		obj.Type() == vm.TypeArray ||
+		obj.Type() == vm.TypeGenerator ||
+		obj.Type() == vm.TypeAsyncGenerator ||
+		obj.Type() == vm.TypeRegExp ||
+		obj.Type() == vm.TypeMap ||
+		obj.Type() == vm.TypeSet
+	if !objIsObject {
 		return vm.Undefined, vmInstance.NewTypeError("Object.setPrototypeOf called on non-object")
 	}
 
-	// Set the prototype
+	// Set the prototype based on object type
 	success := true
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		success = plainObj.SetPrototype(proto)
-	} else if dictObj := obj.AsDictObject(); dictObj != nil {
-		success = dictObj.SetPrototype(proto)
+	switch obj.Type() {
+	case vm.TypeObject:
+		if plainObj := obj.AsPlainObject(); plainObj != nil {
+			success = plainObj.SetPrototype(proto)
+		} else if dictObj := obj.AsDictObject(); dictObj != nil {
+			success = dictObj.SetPrototype(proto)
+		}
+	case vm.TypeFunction:
+		// For FunctionObject, set the Prototype field
+		fn := obj.AsFunction()
+		fn.Prototype = proto
+	case vm.TypeClosure:
+		// For closures, set the underlying function's Prototype field
+		closure := obj.AsClosure()
+		closure.Fn.Prototype = proto
+	case vm.TypeNativeFunction:
+		// Native functions - success but no actual prototype storage
+		success = true
+	case vm.TypeNativeFunctionWithProps:
+		// NativeFunctionWithProps - success but no actual prototype storage
+		success = true
+	case vm.TypeBoundFunction:
+		// Bound functions don't have their own prototype
+		success = true
+	default:
+		// For other object types (Map, Set, Generator, etc.), try setting via AsPlainObject
+		if plainObj := obj.AsPlainObject(); plainObj != nil {
+			success = plainObj.SetPrototype(proto)
+		}
 	}
 
 	if !success {

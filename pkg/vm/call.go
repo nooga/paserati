@@ -44,10 +44,12 @@ func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destRe
 	if debugPrepareCall {
 		fmt.Printf("[CALL] prepareCall: isGenExec=false, frameCount=%d\n", vm.frameCount)
 	}
-	return vm.prepareCallWithGeneratorMode(calleeVal, thisValue, args, destReg, callerRegisters, callerIP, false)
+	return vm.prepareCallWithGeneratorMode(calleeVal, thisValue, args, destReg, callerRegisters, callerIP, false, calleeVal)
 }
 
-func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int, isGeneratorExecution bool) (bool, error) {
+// prepareCallWithGeneratorMode is the main call preparation function.
+// originalCallee is the original callee Value for arguments.callee (may differ from calleeVal for TypeFunction converted to closure)
+func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int, isGeneratorExecution bool, originalCallee Value) (bool, error) {
 	argCount := len(args)
 	currentFrame := &vm.frames[vm.frameCount-1]
 
@@ -304,6 +306,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.args = make([]Value, argCount)
 		copy(newFrame.args, args)
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
+		newFrame.calleeValue = originalCallee // Store original callee for arguments.callee
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 
@@ -370,7 +373,8 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			Upvalues: []*Upvalue{},
 		}
 		closureVal := Value{typ: TypeClosure, obj: unsafe.Pointer(tempClosure)}
-		return vm.prepareCallWithGeneratorMode(closureVal, thisValue, args, destReg, callerRegisters, callerIP, isGeneratorExecution)
+		// Pass originalCallee to preserve the original TypeFunction value for arguments.callee
+		return vm.prepareCallWithGeneratorMode(closureVal, thisValue, args, destReg, callerRegisters, callerIP, isGeneratorExecution, originalCallee)
 
 	case TypeNativeFunction:
 		nativeFunc := AsNativeFunction(calleeVal)
