@@ -244,6 +244,9 @@ type VM struct {
 	// Eval driver for OpDirectEval - set by the driver during initialization
 	evalDriver EvalDriver
 
+	// Original eval intrinsic - used to check if global "eval" has been reassigned
+	originalEval Value
+
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
 
@@ -385,6 +388,17 @@ func (vm *VM) SetModuleLoader(loader ModuleLoader) {
 // SetEvalDriver sets the eval driver for this VM instance (used by OpDirectEval)
 func (vm *VM) SetEvalDriver(driver EvalDriver) {
 	vm.evalDriver = driver
+}
+
+// SetOriginalEval stores the original eval intrinsic for direct eval detection
+func (vm *VM) SetOriginalEval(eval Value) {
+	vm.originalEval = eval
+}
+
+// IsOriginalEval checks if a value is the original eval intrinsic
+func (vm *VM) IsOriginalEval(v Value) bool {
+	// Compare by identity (pointer equality)
+	return v == vm.originalEval
 }
 
 // SetCurrentModulePath sets the current module path for module-specific features like import.meta
@@ -8384,6 +8398,24 @@ startExecution:
 			ip += 2
 
 			codeVal := registers[codeReg]
+
+			// Runtime check: verify that global "eval" still refers to the original eval intrinsic
+			// If it has been reassigned, fall back to calling the function normally
+			currentEval, evalExists := vm.GetGlobal("eval")
+			if !evalExists || !vm.IsOriginalEval(currentEval) {
+				// "eval" has been reassigned - call it as a regular function
+				frame.ip = ip
+				if !currentEval.IsCallable() {
+					status := vm.runtimeError("eval is not a function")
+					return status, Undefined
+				}
+				result, err := vm.Call(currentEval, Undefined, []Value{codeVal})
+				if err != nil {
+					return InterpretRuntimeError, Undefined
+				}
+				registers[destReg] = result
+				continue
+			}
 
 			// If the argument is not a string, return it as-is (ECMAScript spec)
 			if codeVal.Type() != TypeString {

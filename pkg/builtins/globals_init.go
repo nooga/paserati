@@ -615,6 +615,10 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return err
 	}
 
+	// Store the original eval intrinsic for direct eval detection
+	// This is used by OpDirectEval to check if global "eval" has been reassigned
+	ctx.VM.SetOriginalEval(evalFunc)
+
 	// Add globalThis as a reference to the global object
 	// globalThis refers to the VM's GlobalObject which contains all global properties
 	return ctx.DefineGlobal("globalThis", vm.NewValueFromPlainObject(ctx.VM.GlobalObject))

@@ -1422,8 +1422,19 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 	// Check if this is a direct eval call - needs special opcode for scope access
 	// Note: This only triggers for non-spread direct eval like eval("code")
+	// Also, we need to verify that "eval" refers to the global eval, not a shadowed local variable.
 	if node.IsDirectEval {
-		return c.compileDirectEval(node, hint, &tempRegs)
+		// Check if "eval" is shadowed by a local variable
+		isGlobalEval := true
+		if symbol, _, ok := c.currentSymbolTable.Resolve("eval"); ok && !symbol.IsGlobal {
+			// "eval" is a local variable, not the global eval
+			isGlobalEval = false
+		}
+		if isGlobalEval {
+			// "eval" is the global eval (or not found, which means global)
+			return c.compileDirectEval(node, hint, &tempRegs)
+		}
+		// Fall through to treat as a regular call (indirect eval behavior)
 	}
 
 	// Check if this is a method call (function is a member expression like obj.method() or obj[key]())
