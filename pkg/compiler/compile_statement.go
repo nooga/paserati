@@ -86,7 +86,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Define symbol for the `let x;` case
 			// debug disabled
 			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
-			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			// For indirect eval, let/const should be local even at top level
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
 				// True global scope: use global variable
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -106,7 +107,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Function assignments were handled above by UpdateRegister.
 			// debug disabled
 			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
-			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			// For indirect eval, let/const should be local even at top level
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
 				// True global scope: use global variable
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -125,7 +127,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			}
 		} else {
 			// Function value - check if it should be global
-			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			// For indirect eval, let/const should be local even at top level
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
 				// Top-level function: also set as global
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -376,7 +379,8 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		if !isValueFunc {
 			// For non-functions, Define associates the name with the final value register.
 			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
-			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			// For indirect eval, let/const should be local even at top level
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
 				// True global scope: use global variable
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -393,7 +397,8 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			}
 		} else {
 			// Function value - check if it should be global
-			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+			// For indirect eval, let/const should be local even at top level
+			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
 				// Top-level function: also set as global
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)

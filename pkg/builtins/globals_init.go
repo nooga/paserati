@@ -3,9 +3,7 @@ package builtins
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/errors"
 	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strconv"
@@ -533,79 +531,33 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// For other code, compile and execute it (similar to Function constructor)
+		// For other code, use the driver's IndirectEvalCode for proper indirect eval handling
+		// INDIRECT EVAL: This native function is called for indirect eval patterns like:
+		// (0, eval)(...), globalThis.eval(...), eval?.(...), or aliased eval
+		// The driver's IndirectEvalCode handles proper isolation of let/const/class bindings.
 		if ctx.Driver == nil {
 			return vm.Undefined, fmt.Errorf("eval: driver is nil")
 		}
 
-		// Define interface for accessing compiler with strict mode support
-		type driverInterface interface {
-			CompileProgramWithStrictMode(*parser.Program, bool) (*vm.Chunk, []errors.PaseratiError)
-			SyncGlobalNamesFromCompiler() // Sync compiler's heap names to VM
+		// Define interface for indirect eval
+		type indirectEvalInterface interface {
+			IndirectEvalCode(code string) (vm.Value, []error)
 		}
 
-		driver, ok := ctx.Driver.(driverInterface)
+		driver, ok := ctx.Driver.(indirectEvalInterface)
 		if !ok {
-			return vm.Undefined, fmt.Errorf("eval: driver doesn't implement CompileProgramWithStrictMode")
+			return vm.Undefined, fmt.Errorf("eval: driver doesn't implement IndirectEvalCode")
 		}
 
-		// INDIRECT EVAL: This native function is called for indirect eval patterns like:
-		// (0, eval)(...), globalThis.eval(...), eval?.(...), or aliased eval
-		// Per ECMAScript spec, indirect eval does NOT inherit strict mode from caller.
-		// The code will only be strict if it contains "use strict" directive.
-		// Direct eval (which inherits strict mode) is handled by OpDirectEval opcode.
-		inheritStrict := false
-
-		// Parse the source code
-		lx := lexer.NewLexer(codeStr)
-		p := parser.NewParser(lx)
-		prog, parseErrs := p.ParseProgram()
-		if len(parseErrs) > 0 {
-			// Throw SyntaxError
+		result, evalErrs := driver.IndirectEvalCode(codeStr)
+		if len(evalErrs) > 0 {
+			// Error (parse/compile/runtime) - throw SyntaxError for compile errors
 			if ctor, ok := ctx.VM.GetGlobal("SyntaxError"); ok {
-				msg := vm.NewString(parseErrs[0].Error())
+				msg := vm.NewString(evalErrs[0].Error())
 				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{msg})
 				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
 			}
-			return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
-		}
-
-		// Compile the program (indirect eval does not inherit strict mode)
-		chunk, compileErrs := driver.CompileProgramWithStrictMode(prog, inheritStrict)
-		if len(compileErrs) > 0 {
-			// Throw SyntaxError
-			if ctor, ok := ctx.VM.GetGlobal("SyntaxError"); ok {
-				msg := vm.NewString(compileErrs[0].Error())
-				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{msg})
-				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
-			}
-			return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
-		}
-
-		if chunk == nil {
-			return vm.Undefined, fmt.Errorf("eval: compilation returned nil chunk")
-		}
-
-		// For NON-STRICT indirect eval only:
-		// Sync global names from compiler to VM heap BEFORE execution, so that
-		// var/function declarations are tracked in the VM heap's nameToIndex map.
-		// Then after execution, sync to GlobalObject to make them accessible.
-		// For strict mode eval, declarations stay private to the eval block.
-		if !chunk.IsStrict {
-			driver.SyncGlobalNamesFromCompiler()
-		}
-
-		// Execute the chunk in the current VM and return the completion value
-		result, runtimeErrs := ctx.VM.Interpret(chunk)
-		if len(runtimeErrs) > 0 {
-			// Runtime error - convert to exception
-			return vm.Undefined, fmt.Errorf("%v", runtimeErrs[0])
-		}
-
-		// For non-strict indirect eval, sync heap vars to GlobalObject
-		// This makes var declarations accessible via globalThis (ECMAScript requirement)
-		if !chunk.IsStrict {
-			ctx.VM.SyncHeapToGlobalObject()
+			return vm.Undefined, fmt.Errorf("SyntaxError: %v", evalErrs[0])
 		}
 
 		return result, nil

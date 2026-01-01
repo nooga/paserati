@@ -266,6 +266,9 @@ type Compiler struct {
 
 	// --- Caller Scope for Direct Eval Compilation ---
 	callerScopeDesc *vm.ScopeDescriptor // Scope descriptor from caller (for direct eval compilation)
+
+	// --- Indirect Eval Mode ---
+	isIndirectEval bool // True when compiling indirect eval code (let/const should be local, not global)
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -1781,6 +1784,12 @@ func (c *Compiler) SetCallerScopeDesc(scopeDesc *vm.ScopeDescriptor) {
 // GetCallerScopeDesc returns the caller's scope descriptor (if any).
 func (c *Compiler) GetCallerScopeDesc() *vm.ScopeDescriptor {
 	return c.callerScopeDesc
+}
+
+// SetIndirectEval sets the indirect eval mode.
+// When true, let/const/class declarations are kept local instead of becoming globals.
+func (c *Compiler) SetIndirectEval(indirect bool) {
+	c.isIndirectEval = indirect
 }
 
 // resolveCallerLocal looks up a variable name in the caller's scope descriptor.

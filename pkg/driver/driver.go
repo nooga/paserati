@@ -287,8 +287,9 @@ func (p *Paserati) CompileProgramWithStrictMode(program *parser.Program, strict 
 	return p.compiler.Compile(program)
 }
 
-// EvalCode implements vm.EvalDriver interface for OpDirectEval
+// EvalCode implements vm.EvalDriver interface for direct eval at global scope
 // It compiles and executes eval code with the given strict mode inheritance
+// This is used by OpDirectEval when there's no scope descriptor (global scope).
 func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error) {
 	// Parse the source code
 	lx := lexer.NewLexer(code)
@@ -330,6 +331,65 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 			errs[i] = e
 		}
 		return vm.Undefined, errs
+	}
+
+	return result, nil
+}
+
+// IndirectEvalCode compiles and executes indirect eval code
+// Indirect eval creates a new declarative environment for let/const/class (not visible outside)
+// while var declarations go to the global environment.
+// Per ECMAScript spec, indirect eval does NOT inherit strict mode from caller.
+func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
+	// Parse the source code
+	lx := lexer.NewLexer(code)
+	ps := parser.NewParser(lx)
+	prog, parseErrs := ps.ParseProgram()
+	if len(parseErrs) > 0 {
+		errs := make([]error, len(parseErrs))
+		for i, e := range parseErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	// Set indirect eval mode - let/const stay local, var goes to global
+	p.compiler.SetIndirectEval(true)
+	defer p.compiler.SetIndirectEval(false)
+
+	// Indirect eval does NOT inherit strict mode - only strict if code has "use strict"
+	chunk, compileErrs := p.CompileProgramWithStrictMode(prog, false)
+	if len(compileErrs) > 0 {
+		errs := make([]error, len(compileErrs))
+		for i, e := range compileErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	if chunk == nil {
+		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
+	}
+
+	// Only sync global names for non-strict eval
+	if !chunk.IsStrict {
+		p.SyncGlobalNamesFromCompiler()
+	}
+
+	// Execute the chunk
+	result, runtimeErrs := p.vmInstance.Interpret(chunk)
+	if len(runtimeErrs) > 0 {
+		errs := make([]error, len(runtimeErrs))
+		for i, e := range runtimeErrs {
+			errs[i] = e
+		}
+		return vm.Undefined, errs
+	}
+
+	// For non-strict indirect eval, sync heap vars to GlobalObject
+	// This makes var declarations accessible via globalThis (ECMAScript requirement)
+	if !chunk.IsStrict {
+		p.vmInstance.SyncHeapToGlobalObject()
 	}
 
 	return result, nil
