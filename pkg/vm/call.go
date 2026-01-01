@@ -279,7 +279,14 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		if calleeFunc.IsArrowFunction {
 			newFrame.thisValue = calleeClosure.CapturedThis
 		} else {
-			newFrame.thisValue = thisValue
+			// Per ECMAScript spec:
+			// - In strict mode, 'this' is passed as-is (undefined stays undefined)
+			// - In sloppy mode, undefined/null 'this' is coerced to the global object
+			if !calleeFunc.Chunk.IsStrict && (thisValue.Type() == TypeUndefined || thisValue.Type() == TypeNull) {
+				newFrame.thisValue = NewValueFromPlainObject(vm.GlobalObject)
+			} else {
+				newFrame.thisValue = thisValue
+			}
 		}
 		// Set [[HomeObject]] for super property access
 		// Arrow functions inherit homeObject from their enclosing scope

@@ -9855,8 +9855,22 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 	callerRegisters := make([]Value, 1)
 	callerIP := 0
 
+	// IMPORTANT: Save the actual caller frame's IP before prepareCall clobbers it
+	// prepareCallWithGeneratorMode will set currentFrame.ip = callerIP (which is 0 here)
+	// but we need to preserve the real caller's IP for exception handling
+	var savedCallerIP int
+	if vm.frameCount > 0 {
+		savedCallerIP = vm.frames[vm.frameCount-1].ip
+	}
+
 	// Call prepareCallWithGeneratorMode to set up frame (true flag means we're in generator execution mode)
 	shouldSwitch, err := vm.prepareCallWithGeneratorMode(funcVal, thisValue, args, destReg, callerRegisters, callerIP, true)
+
+	// Restore the caller frame's IP (prepareCall may have clobbered it)
+	// Note: frameCount is now incremented by prepareCall, so the original caller is at frameCount-2
+	if vm.frameCount > 1 {
+		vm.frames[vm.frameCount-2].ip = savedCallerIP
+	}
 	if err != nil {
 		if debugGeneratorStates {
 			fmt.Printf("[GEN STATE] executeGeneratorPrologue: prepareCall failed: %v\n", err)

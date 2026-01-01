@@ -1370,17 +1370,32 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	return constIdx, freeSymbols, nil // <<< MODIFY return statement
 }
 
-// hasStrictDirective checks if a block statement begins with a 'use strict' directive
+// hasStrictDirective checks if a block statement begins with a directive prologue containing 'use strict'.
+// Per ECMAScript spec, a directive prologue is the longest sequence of ExpressionStatements
+// at the start of a function body where each is a string literal. Any "use strict" in this
+// sequence enables strict mode.
 func hasStrictDirective(body *parser.BlockStatement) bool {
 	if body == nil || len(body.Statements) == 0 {
 		return false
 	}
 
-	// Check if first statement is an expression statement containing a string literal 'use strict'
-	if exprStmt, ok := body.Statements[0].(*parser.ExpressionStatement); ok {
-		if strLit, ok := exprStmt.Expression.(*parser.StringLiteral); ok {
-			return strLit.Value == "use strict"
+	// Iterate through the directive prologue (consecutive string literal ExpressionStatements)
+	for _, stmt := range body.Statements {
+		exprStmt, ok := stmt.(*parser.ExpressionStatement)
+		if !ok {
+			// Not an ExpressionStatement - directive prologue ends
+			break
 		}
+		strLit, ok := exprStmt.Expression.(*parser.StringLiteral)
+		if !ok {
+			// ExpressionStatement but not a string literal - directive prologue ends
+			break
+		}
+		// This is a directive - check if it's "use strict"
+		if strLit.Value == "use strict" {
+			return true
+		}
+		// Otherwise it's another directive (like "another directive"), continue checking
 	}
 
 	return false

@@ -502,15 +502,27 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		// JavaScript mode - check for inherited strict mode (from eval context) first
 		if c.inheritedStrictMode {
 			c.chunk.IsStrict = true
-		} else if len(program.Statements) > 0 {
-			// Check for "use strict" directive
-			if exprStmt, ok := program.Statements[0].(*parser.ExpressionStatement); ok {
-				if strLit, ok := exprStmt.Expression.(*parser.StringLiteral); ok {
-					if strLit.Value == "use strict" {
-						c.chunk.IsStrict = true
-						debugPrintf("[Compile] Detected 'use strict' directive - enabling strict mode\n")
-					}
+		} else {
+			// Check for "use strict" directive in the directive prologue
+			// Per ECMAScript spec, iterate through consecutive string literal ExpressionStatements
+			for _, stmt := range program.Statements {
+				exprStmt, ok := stmt.(*parser.ExpressionStatement)
+				if !ok {
+					// Not an ExpressionStatement - directive prologue ends
+					break
 				}
+				strLit, ok := exprStmt.Expression.(*parser.StringLiteral)
+				if !ok {
+					// ExpressionStatement but not a string literal - directive prologue ends
+					break
+				}
+				// This is a directive - check if it's "use strict"
+				if strLit.Value == "use strict" {
+					c.chunk.IsStrict = true
+					debugPrintf("[Compile] Detected 'use strict' directive - enabling strict mode\n")
+					break
+				}
+				// Otherwise it's another directive, continue checking
 			}
 		}
 	}
