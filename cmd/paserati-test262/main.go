@@ -19,28 +19,30 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 func main() {
 	// Parse command line flags
 	var (
-		testPath   = flag.String("path", "", "Path to test262 directory")
-		pattern    = flag.String("pattern", "*.js", "File pattern for test files")
-		subPath    = flag.String("subpath", "", "Subdirectory pattern within test/ (e.g., 'language/**', 'built-ins/Array/**')")
-		verbose    = flag.Bool("verbose", false, "Verbose output")
-		limit      = flag.Int("limit", 0, "Limit number of tests to run (0 = no limit)")
-		timeout    = flag.Duration("timeout", 5*time.Second, "Timeout per test (e.g., 5s, 1m)")
-		memprofile = flag.String("memprofile", "", "Write memory profile to file")
-		cpuprofile = flag.String("cpuprofile", "", "Write CPU profile to file")
-		gcstats    = flag.Bool("gcstats", false, "Print garbage collection statistics")
-		treeMode   = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
-		suiteMode  = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
-		disasm     = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
-		dumpFile   = flag.String("dump", "", "Dump all test results to file (format: +test-path or -test-path)")
-		diffFile   = flag.String("diff", "", "Compare current results against baseline file and show differences")
-		strictOnly = flag.Bool("strict-only", false, "Skip tests with 'noStrict' flag (only run strict mode tests)")
-		jsonFlag   = flag.Bool("json", false, "Output results in JSON format")
+		testPath    = flag.String("path", "", "Path to test262 directory")
+		pattern     = flag.String("pattern", "*.js", "File pattern for test files")
+		subPath     = flag.String("subpath", "", "Subdirectory pattern within test/ (e.g., 'language/**', 'built-ins/Array/**')")
+		skipPattern = flag.String("skip", "", "Skip files matching this pattern (e.g., 'Temporal', '**/Temporal/**')")
+		verbose     = flag.Bool("verbose", false, "Verbose output")
+		limit       = flag.Int("limit", 0, "Limit number of tests to run (0 = no limit)")
+		timeout     = flag.Duration("timeout", 5*time.Second, "Timeout per test (e.g., 5s, 1m)")
+		memprofile  = flag.String("memprofile", "", "Write memory profile to file")
+		cpuprofile  = flag.String("cpuprofile", "", "Write CPU profile to file")
+		gcstats     = flag.Bool("gcstats", false, "Print garbage collection statistics")
+		treeMode    = flag.Bool("tree", false, "Show results as directory tree with aggregated stats")
+		suiteMode   = flag.Bool("suite", false, "Show pass rates for each test suite (annexB, built-ins, intl402, language, staging)")
+		disasm      = flag.Bool("disasm", false, "Print bytecode disassembly on failures")
+		dumpFile    = flag.String("dump", "", "Dump all test results to file (format: +test-path or -test-path)")
+		diffFile    = flag.String("diff", "", "Compare current results against baseline file and show differences")
+		strictOnly  = flag.Bool("strict-only", false, "Skip tests with 'noStrict' flag (only run strict mode tests)")
+		jsonFlag    = flag.Bool("json", false, "Output results in JSON format")
 	)
 
 	flag.Parse()
@@ -85,7 +87,7 @@ func main() {
 		searchDir = strings.TrimSuffix(searchDir, "/**")
 	}
 
-	testFiles, err := findTestFiles(searchDir, *pattern, *subPath, *jsonFlag)
+	testFiles, err := findTestFiles(searchDir, *pattern, *subPath, *skipPattern, *jsonFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error finding test files: %v\n", err)
 		os.Exit(1)
@@ -188,7 +190,7 @@ type TreeNode struct {
 }
 
 // findTestFiles discovers test files matching the pattern
-func findTestFiles(testDir, pattern, subPath string, jsonMode bool) ([]string, error) {
+func findTestFiles(testDir, pattern, subPath, skipPattern string, jsonMode bool) ([]string, error) {
 	var testFiles []string
 
 	err := filepath.Walk(testDir, func(path string, info os.FileInfo, err error) error {
@@ -207,6 +209,21 @@ func findTestFiles(testDir, pattern, subPath string, jsonMode bool) ([]string, e
 
 		// Skip FIXTURE files - they are not tests, just data/helper files
 		if matched && !strings.Contains(filepath.Base(path), "_FIXTURE") {
+			// Check if this file should be skipped based on skip pattern
+			if skipPattern != "" {
+				// Check if the path contains the skip pattern (simple substring match)
+				// or if it matches as a glob pattern
+				if strings.Contains(path, skipPattern) {
+					return nil // Skip this file
+				}
+				// Also try matching the skip pattern as a path component
+				pathParts := strings.Split(path, string(filepath.Separator))
+				for _, part := range pathParts {
+					if part == skipPattern {
+						return nil // Skip this file
+					}
+				}
+			}
 			testFiles = append(testFiles, path)
 		}
 
@@ -218,6 +235,9 @@ func findTestFiles(testDir, pattern, subPath string, jsonMode bool) ([]string, e
 
 	if subPath != "" && !jsonMode {
 		fmt.Printf("Searching in subdirectory: %s\n", subPath)
+	}
+	if skipPattern != "" && !jsonMode {
+		fmt.Printf("Skipping files matching: %s\n", skipPattern)
 	}
 
 	return testFiles, err
@@ -309,6 +329,11 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 			if strings.Contains(err.Error(), "timed out") {
 				stats.Timeouts++
 				result.TimedOut = true
+
+				// Aggressive cleanup after timeout to prevent memory bloat from leaked goroutines
+				vm.ClearShapeCache()
+				runtime.GC()
+
 				if !treeMode && !jsonMode {
 					fmt.Printf("TIMEOUT %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
 				}
@@ -479,6 +504,14 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 	// Create fresh Paserati instance for each test with the test file's directory as base
 	paserati := createTest262PaseratiForTest(testFile)
 
+	// Use sync.Once to ensure cleanup only happens once (either from goroutine or timeout handler)
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			paserati.Cleanup()
+		})
+	}
+
 	// IMPORTANT: This goroutine can leak if paserati.RunString gets stuck in an infinite loop.
 	// Since paserati.RunString doesn't support context cancellation, we cannot interrupt it.
 	// This is a known limitation that needs to be fixed in the VM/parser/checker to support
@@ -490,8 +523,8 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 				debug.PrintStack()
 				resultChan <- testResult{passed: false, err: fmt.Errorf("test panicked: %v", r)}
 			}
-			// Clean up to release memory
-			paserati.Cleanup()
+			// Clean up to release memory (only if not already cleaned up by timeout)
+			cleanup()
 		}()
 
 		// Execute the test with harness includes (if any)
@@ -719,10 +752,19 @@ func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir
 	case <-ctx.Done():
 		// Context timeout - cancel VM execution to stop the goroutine
 		paserati.CancelVM()
-		// Give the goroutine a moment to exit gracefully
-		time.Sleep(10 * time.Millisecond)
-		// Clean up to release memory
-		paserati.Cleanup()
+
+		// Give the goroutine time to respond to cancellation and exit gracefully
+		// Use a select with a short timeout to see if it finishes
+		select {
+		case <-resultChan:
+			// Goroutine finished after cancellation, cleanup already happened in defer
+		case <-time.After(50 * time.Millisecond):
+			// Goroutine didn't finish in time - it's likely stuck
+			// Call cleanup anyway to release what we can
+			// The sync.Once ensures this is safe even if goroutine eventually finishes
+			cleanup()
+		}
+
 		return false, fmt.Errorf("test timed out after %v", timeout)
 	}
 }
