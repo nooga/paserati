@@ -40,7 +40,7 @@ func isConstructor(v vm.Value) bool {
 type ReflectInitializer struct{}
 
 func (r *ReflectInitializer) Name() string  { return "Reflect" }
-func (r *ReflectInitializer) Priority() int { return PriorityObject + 1 }
+func (r *ReflectInitializer) Priority() int { return 104 } // After Console (102), Symbol must be initialized first
 
 func (r *ReflectInitializer) InitTypes(ctx *TypeContext) error {
 	// Property key type: string | symbol
@@ -74,8 +74,20 @@ func (r *ReflectInitializer) InitTypes(ctx *TypeContext) error {
 func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Create Reflect object
-	reflectObj := vm.NewObject(vm.Undefined).AsPlainObject()
+	// Create Reflect object with Object.prototype as its prototype (ECMAScript spec)
+	reflectObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Set @@toStringTag to "Reflect" so Object.prototype.toString.call(Reflect) returns "[object Reflect]"
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		falseVal := false
+		reflectObj.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("Reflect"),
+			&falseVal, // writable: false
+			&falseVal, // enumerable: false
+			&falseVal, // configurable: false (per ECMAScript spec 28.1)
+		)
+	}
 
 	// Reflect.get(target, propertyKey [, receiver])
 	reflectObj.SetOwnNonEnumerable("get", vm.NewNativeFunction(2, false, "get", func(args []vm.Value) (vm.Value, error) {

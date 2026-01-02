@@ -197,40 +197,97 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	objectProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 
-		// Return appropriate string representation based on type
+		// ECMAScript 20.1.3.6 Object.prototype.toString
+		// Step 1-2: Handle null and undefined
 		switch thisValue.Type() {
 		case vm.TypeNull:
 			return vm.NewString("[object Null]"), nil
 		case vm.TypeUndefined:
 			return vm.NewString("[object Undefined]"), nil
+		}
+
+		// Step 3: Let O be ! ToObject(this value)
+		// For objects, we check for @@toStringTag first
+
+		// Determine the built-in tag based on type
+		var builtinTag string
+		switch thisValue.Type() {
 		case vm.TypeBoolean:
-			return vm.NewString("[object Boolean]"), nil
+			builtinTag = "Boolean"
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			return vm.NewString("[object Number]"), nil
+			builtinTag = "Number"
 		case vm.TypeString:
-			return vm.NewString("[object String]"), nil
+			builtinTag = "String"
 		case vm.TypeArray:
-			return vm.NewString("[object Array]"), nil
-		case vm.TypeFunction, vm.TypeNativeFunction, vm.TypeClosure:
-			return vm.NewString("[object Function]"), nil
+			builtinTag = "Array"
+		case vm.TypeFunction, vm.TypeNativeFunction, vm.TypeClosure, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+			builtinTag = "Function"
+		case vm.TypeRegExp:
+			builtinTag = "RegExp"
+		case vm.TypeMap:
+			builtinTag = "Map"
+		case vm.TypeSet:
+			builtinTag = "Set"
+		case vm.TypePromise:
+			builtinTag = "Promise"
+		case vm.TypeSymbol:
+			builtinTag = "Symbol"
+		case vm.TypeGenerator:
+			builtinTag = "Generator"
+		case vm.TypeArguments:
+			builtinTag = "Arguments"
 		case vm.TypeObject:
 			// Check for wrapper objects with [[PrimitiveValue]]
 			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
 				if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
 					switch primitiveVal.Type() {
 					case vm.TypeBoolean:
-						return vm.NewString("[object Boolean]"), nil
+						builtinTag = "Boolean"
 					case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-						return vm.NewString("[object Number]"), nil
+						builtinTag = "Number"
 					case vm.TypeString:
-						return vm.NewString("[object String]"), nil
+						builtinTag = "String"
+					default:
+						builtinTag = "Object"
+					}
+				} else {
+					builtinTag = "Object"
+				}
+			} else {
+				builtinTag = "Object"
+			}
+		default:
+			builtinTag = "Object"
+		}
+
+		// Step 14-16: Check for @@toStringTag property
+		// If the object has @@toStringTag and it's a string, use that instead
+		if thisValue.IsObject() || thisValue.IsCallable() {
+			var plainObj *vm.PlainObject
+			switch thisValue.Type() {
+			case vm.TypeObject:
+				plainObj = thisValue.AsPlainObject()
+			case vm.TypeClosure:
+				if cl := thisValue.AsClosure(); cl != nil && cl.Fn != nil && cl.Fn.Properties != nil {
+					plainObj = cl.Fn.Properties
+				}
+			case vm.TypeFunction:
+				if fn := thisValue.AsFunction(); fn != nil && fn.Properties != nil {
+					plainObj = fn.Properties
+				}
+			}
+
+			if plainObj != nil {
+				// Check for @@toStringTag symbol property
+				if tag, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(vmInstance.SymbolToStringTag)); ok {
+					if tag.Type() == vm.TypeString {
+						return vm.NewString("[object " + tag.ToString() + "]"), nil
 					}
 				}
 			}
-			return vm.NewString("[object Object]"), nil
-		default:
-			return vm.NewString("[object Object]"), nil
 		}
+
+		return vm.NewString("[object " + builtinTag + "]"), nil
 	}))
 	if v, ok := objectProto.GetOwn("toString"); ok {
 		w, e, c := true, false, true

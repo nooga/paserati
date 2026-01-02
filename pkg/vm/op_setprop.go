@@ -474,6 +474,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			}
 		}
 		d.SetOwn(propName, *valueToSet)
+	case TypeRegExp:
+		// RegExp objects can have user-defined properties
+		regex := objVal.AsRegExpObject()
+		if regex != nil {
+			if regex.Properties == nil {
+				regex.Properties = NewObject(Undefined).AsPlainObject()
+			}
+			regex.Properties.SetOwn(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
 	default:
 		po := AsPlainObject(*objVal)
 		// Check if property exists
@@ -606,6 +616,19 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 				return true, InterpretOK, *valueToSet
 			}
 		}
+	}
+
+	// Handle RegExp objects - they can have symbol properties
+	if objVal.Type() == TypeRegExp {
+		regex := objVal.AsRegExpObject()
+		if regex != nil {
+			if regex.Properties == nil {
+				regex.Properties = NewObject(Undefined).AsPlainObject()
+			}
+			key := NewSymbolKey(symKey)
+			regex.Properties.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
+		}
+		return true, InterpretOK, *valueToSet
 	}
 
 	// Only PlainObject supports symbol keys for now

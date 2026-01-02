@@ -208,6 +208,7 @@ type VM struct {
 	SymbolIsConcatSpreadable Value
 	SymbolSpecies            Value
 	SymbolMatch              Value
+	SymbolMatchAll           Value
 	SymbolReplace            Value
 	SymbolSearch             Value
 	SymbolSplit              Value
@@ -3541,7 +3542,7 @@ startExecution:
 					registers[destReg] = resultVal
 				}
 
-			case TypeObject, TypeDictObject: // <<< NEW
+			case TypeObject, TypeDictObject, TypeRegExp: // <<< NEW - added TypeRegExp
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
@@ -4009,7 +4010,7 @@ startExecution:
 					}
 				}
 
-			case TypeObject, TypeDictObject, TypeFunction: // Functions can have properties
+			case TypeObject, TypeDictObject, TypeFunction, TypeRegExp: // Functions and RegExps can have properties
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
@@ -5948,6 +5949,8 @@ startExecution:
 				// Execute builtin constructor
 				// For builtins, we let them handle instance creation
 				// Set constructor call flag so native functions can differentiate
+				// Sync frame.ip so exception handlers can find the correct range
+				frame.ip = callerIP
 				vm.inConstructorCall = true
 				result, err := builtin.Fn(args)
 				vm.inConstructorCall = false
@@ -5970,6 +5973,19 @@ startExecution:
 						errValue = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(errValue)
+					continue // Let exception handling take over
+				}
+
+				// Check if an exception was thrown and a handler was found during the native call
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip
+					continue // Jump to the catch handler
+				}
+
+				// Check if VM started unwinding during the native function call
+				// (e.g., ToPrimitive threw an exception but returned nil error)
+				if vm.unwinding {
 					continue // Let exception handling take over
 				}
 
@@ -6021,6 +6037,8 @@ startExecution:
 				// Execute builtin constructor
 				// For builtins, we let them handle instance creation
 				// Set constructor call flag so native functions can differentiate
+				// Sync frame.ip so exception handlers can find the correct range
+				frame.ip = callerIP
 				vm.inConstructorCall = true
 				result, err := builtinWithProps.Fn(args)
 				vm.inConstructorCall = false
@@ -6043,6 +6061,19 @@ startExecution:
 						errValue = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(errValue)
+					continue // Let exception handling take over
+				}
+
+				// Check if an exception was thrown and a handler was found during the native call
+				if vm.handlerFound {
+					vm.handlerFound = false
+					ip = frame.ip
+					continue // Jump to the catch handler
+				}
+
+				// Check if VM started unwinding during the native function call
+				// (e.g., ToPrimitive threw an exception but returned nil error)
+				if vm.unwinding {
 					continue // Let exception handling take over
 				}
 

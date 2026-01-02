@@ -8131,11 +8131,14 @@ func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt S
 		p.nextToken()
 		p.nextToken()
 		if letStmt, ok := varStmt.(*LetStatement); ok {
-			letStmt.Value = p.parseExpression(LOWEST)
+			// Use COMMA precedence to stop at comma separators for multi-variable declarations
+			letStmt.Value = p.parseExpression(COMMA)
 		} else if constStmt, ok := varStmt.(*ConstStatement); ok {
-			constStmt.Value = p.parseExpression(LOWEST)
+			// Use COMMA precedence to stop at comma separators for multi-variable declarations
+			constStmt.Value = p.parseExpression(COMMA)
 		} else if vs, ok := varStmt.(*VarStatement); ok {
-			vs.Value = p.parseExpression(LOWEST)
+			// Use COMMA precedence to stop at comma separators for multi-variable declarations
+			vs.Value = p.parseExpression(COMMA)
 		}
 		// For expression statements, we'd need to create an assignment expression
 	}
@@ -8146,15 +8149,81 @@ func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt S
 			vs.Declarations[0].Value = vs.Value
 			vs.Declarations[0].TypeAnnotation = vs.TypeAnnotation
 		}
+		// Parse additional comma-separated declarations: for (var x = 1, y = 2; ...)
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			if !p.expectPeekIdentifierOrKeyword() {
+				return nil
+			}
+			declarator := &VarDeclarator{}
+			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			// Optional Type Annotation
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // Consume ':'
+				p.nextToken() // Consume token starting the type expression
+				declarator.TypeAnnotation = p.parseTypeExpression()
+			}
+			// Optional assignment
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // Consume '='
+				p.nextToken() // Consume token starting the expression
+				declarator.Value = p.parseExpression(COMMA)
+			}
+			vs.Declarations = append(vs.Declarations, declarator)
+		}
 	} else if letStmt, ok := varStmt.(*LetStatement); ok {
 		if letStmt.Declarations != nil && len(letStmt.Declarations) > 0 {
 			letStmt.Declarations[0].Value = letStmt.Value
 			letStmt.Declarations[0].TypeAnnotation = letStmt.TypeAnnotation
 		}
+		// Parse additional comma-separated declarations: for (let x = 1, y = 2; ...)
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			if !p.expectPeekIdentifierOrKeyword() {
+				return nil
+			}
+			declarator := &VarDeclarator{}
+			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			// Optional Type Annotation
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // Consume ':'
+				p.nextToken() // Consume token starting the type expression
+				declarator.TypeAnnotation = p.parseTypeExpression()
+			}
+			// Optional assignment
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // Consume '='
+				p.nextToken() // Consume token starting the expression
+				declarator.Value = p.parseExpression(COMMA)
+			}
+			letStmt.Declarations = append(letStmt.Declarations, declarator)
+		}
 	} else if constStmt, ok := varStmt.(*ConstStatement); ok {
 		if constStmt.Declarations != nil && len(constStmt.Declarations) > 0 {
 			constStmt.Declarations[0].Value = constStmt.Value
 			constStmt.Declarations[0].TypeAnnotation = constStmt.TypeAnnotation
+		}
+		// Parse additional comma-separated declarations: for (const x = 1, y = 2; ...)
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			if !p.expectPeekIdentifierOrKeyword() {
+				return nil
+			}
+			declarator := &VarDeclarator{}
+			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			// Optional Type Annotation
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // Consume ':'
+				p.nextToken() // Consume token starting the type expression
+				declarator.TypeAnnotation = p.parseTypeExpression()
+			}
+			// Optional assignment (const requires it, but parser doesn't enforce)
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // Consume '='
+				p.nextToken() // Consume token starting the expression
+				declarator.Value = p.parseExpression(COMMA)
+			}
+			constStmt.Declarations = append(constStmt.Declarations, declarator)
 		}
 	}
 

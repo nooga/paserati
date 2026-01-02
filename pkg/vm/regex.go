@@ -9,15 +9,16 @@ import (
 
 // RegExpObject represents a JavaScript RegExp object backed by Go's regexp package
 type RegExpObject struct {
-	Object                      // Embed the base Object for properties and prototype
+	Object                       // Embed the base Object for properties and prototype
 	compiledRegex *regexp.Regexp // Go's compiled regex engine
-	source        string        // Original pattern string (without slashes)
-	flags         string        // JavaScript flags (g, i, m, s, u, y)
-	global        bool          // Cached global flag for performance
-	ignoreCase    bool          // Cached ignoreCase flag
-	multiline     bool          // Cached multiline flag
-	dotAll        bool          // Cached dotAll flag
-	lastIndex     int           // For global regex stateful matching
+	source        string         // Original pattern string (without slashes)
+	flags         string         // JavaScript flags (g, i, m, s, u, y)
+	global        bool           // Cached global flag for performance
+	ignoreCase    bool           // Cached ignoreCase flag
+	multiline     bool           // Cached multiline flag
+	dotAll        bool           // Cached dotAll flag
+	lastIndex     int            // For global regex stateful matching
+	Properties    *PlainObject   // Storage for user-defined properties
 }
 
 // NewRegExp creates a new RegExp object from pattern and flags

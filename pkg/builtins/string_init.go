@@ -3,6 +3,7 @@ package builtins
 import (
 	"errors"
 	"fmt"
+	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"regexp"
@@ -1248,6 +1249,49 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := requireObjectCoercible(vmInstance, thisVal, "split"); err != nil {
 			return vm.Undefined, err
 		}
+
+		// Get separator and limit arguments
+		var separatorArg vm.Value = vm.Undefined
+		var limitArg vm.Value = vm.Undefined
+		if len(args) > 0 {
+			separatorArg = args[0]
+		}
+		if len(args) > 1 {
+			limitArg = args[1]
+		}
+
+		// ECMAScript step 2: If separator is neither undefined nor null,
+		// check for Symbol.split method and call it if exists
+		if separatorArg.Type() != vm.TypeUndefined && separatorArg.Type() != vm.TypeNull {
+			// Check for Symbol.split method (use GetSymbolPropertyWithGetter to handle accessor properties)
+			vmInstance.EnterHelperCall()
+			splitter, ok, err := vmInstance.GetSymbolPropertyWithGetter(separatorArg, SymbolSplit)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if ok && splitter.Type() != vm.TypeUndefined {
+				// Check if splitter is callable
+				if splitter.IsCallable() {
+					// Call splitter with separator as 'this' and (O, limit) as arguments
+					vmInstance.EnterHelperCall()
+					result, err := vmInstance.Call(splitter, separatorArg, []vm.Value{thisVal, limitArg})
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil
+					}
+					if err != nil {
+						return vm.Undefined, err
+					}
+					return result, nil
+				}
+			}
+		}
+
+		// ECMAScript step 3: Let S be ? ToString(O).
 		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
@@ -1257,24 +1301,75 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)}), nil
 		}
 
-		separatorArg := args[0]
-		limit := -1
-		if len(args) >= 2 {
-			limitVal := args[1].ToFloat()
-			if limitVal > 0 {
-				limit = int(limitVal)
-			} else if limitVal <= 0 {
-				return vm.NewArray(), nil
+		// ECMAScript: Let lim be ? ToUint32(limit).
+		// If limit is undefined, use 2^32-1 (effectively unlimited)
+		var limit uint32 = 0xFFFFFFFF // 2^32 - 1 (unlimited)
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
+			limitArg := args[1]
+			// For objects, call ToPrimitive to invoke valueOf
+			if limitArg.IsObject() {
+				vmInstance.EnterHelperCall()
+				limitArg = vmInstance.ToPrimitive(limitArg, "number")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
+				}
+			}
+			limitVal := limitArg.ToFloat()
+			// ToUint32: NaN, +0, -0, +∞, -∞ all convert to 0
+			if math.IsNaN(limitVal) || math.IsInf(limitVal, 0) || limitVal == 0 {
+				limit = 0
+			} else {
+				// Truncate toward zero and take modulo 2^32
+				truncated := math.Trunc(limitVal)
+				if truncated < 0 {
+					// For negative values, add 2^32 to get the unsigned equivalent
+					limit = uint32(int64(truncated) & 0xFFFFFFFF)
+				} else if truncated > math.MaxUint32 {
+					limit = uint32(int64(truncated) & 0xFFFFFFFF)
+				} else {
+					limit = uint32(truncated)
+				}
 			}
 		}
+		// Check if separator is a RegExp (before any conversion)
+		isRegExp := separatorArg.IsRegExp()
+		separatorIsUndefined := separatorArg.Type() == vm.TypeUndefined
 
-		if separatorArg.IsRegExp() {
+		// ECMAScript step 7: Let R be ? ToString(separator).
+		// For non-RegExp separators, convert to string (must happen before limit=0 check)
+		var separator string
+		if !isRegExp && !separatorIsUndefined {
+			// For objects, call ToPrimitive to invoke custom toString
+			sepVal := separatorArg
+			if sepVal.IsObject() {
+				vmInstance.EnterHelperCall()
+				sepVal = vmInstance.ToPrimitive(sepVal, "string")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
+				}
+			}
+			separator = sepVal.ToString()
+		}
+
+		// ECMAScript step 8: If lim = 0, return empty array
+		if limit == 0 {
+			return vm.NewArray(), nil
+		}
+
+		// ECMAScript step 9: if separator is undefined, return array with whole string
+		if separatorIsUndefined {
+			return vm.NewArrayWithArgs([]vm.Value{vm.NewString(thisStr)}), nil
+		}
+
+		if isRegExp {
 			// RegExp separator
 			regex := separatorArg.AsRegExpObject()
 			compiledRegex := regex.GetCompiledRegex()
 
 			parts := compiledRegex.Split(thisStr, -1)
-			if limit > 0 && len(parts) > limit {
+			if uint32(len(parts)) > limit {
 				parts = parts[:limit]
 			}
 			elements := make([]vm.Value, len(parts))
@@ -1284,16 +1379,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewArrayWithArgs(elements), nil
 		} else {
 			// String separator
-			separator := separatorArg.ToString()
 			if separator == "" {
 				// Split into individual characters
 				runes := []rune(thisStr)
-				count := len(runes)
-				if limit > 0 && limit < count {
+				count := uint32(len(runes))
+				if limit < count {
 					count = limit
 				}
 				elements := make([]vm.Value, count)
-				for i := 0; i < count; i++ {
+				for i := uint32(0); i < count; i++ {
 					elements[i] = vm.NewString(string(runes[i]))
 				}
 				return vm.NewArrayWithArgs(elements), nil
@@ -1301,7 +1395,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			// Normal string split
 			parts := strings.Split(thisStr, separator)
-			if limit > 0 && len(parts) > limit {
+			if uint32(len(parts)) > limit {
 				parts = parts[:limit]
 			}
 			elements := make([]vm.Value, len(parts))
@@ -1536,36 +1630,26 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			primitiveValue = ""
 		} else {
 			arg := args[0]
+			// Symbols cannot be converted to strings implicitly
+			if arg.Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+			}
 			// For objects, use ToPrimitive with hint "string"
 			if arg.IsObject() {
-				// Try calling toString() first, then valueOf()
-				if toStringMethod, err := vmInstance.GetProperty(arg, "toString"); err == nil && toStringMethod.IsCallable() {
-					if result, err := vmInstance.Call(toStringMethod, arg, []vm.Value{}); err == nil {
-						if !result.IsObject() {
-							primitiveValue = result.ToString()
-						} else {
-							// toString() returned an object, try valueOf()
-							if valueOfMethod, err := vmInstance.GetProperty(arg, "valueOf"); err == nil && valueOfMethod.IsCallable() {
-								if result, err := vmInstance.Call(valueOfMethod, arg, []vm.Value{}); err == nil {
-									if !result.IsObject() {
-										primitiveValue = result.ToString()
-									} else {
-										// Both returned objects, fall back to default
-										primitiveValue = arg.ToString()
-									}
-								} else {
-									primitiveValue = arg.ToString()
-								}
-							} else {
-								primitiveValue = arg.ToString()
-							}
-						}
-					} else {
-						primitiveValue = arg.ToString()
-					}
-				} else {
-					primitiveValue = arg.ToString()
+				// Track that we're in a helper call so exception handlers can be found
+				vmInstance.EnterHelperCall()
+				primVal := vmInstance.ToPrimitive(arg, "string")
+				vmInstance.ExitHelperCall()
+				// Check if ToPrimitive threw an exception
+				// Return nil (not ErrVMUnwinding) to let call.go's unwinding check handle it
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
 				}
+				// Check if ToPrimitive returned a Symbol (shouldn't happen, but be safe)
+				if primVal.Type() == vm.TypeSymbol {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+				}
+				primitiveValue = primVal.ToString()
 			} else {
 				primitiveValue = arg.ToString()
 			}

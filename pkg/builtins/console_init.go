@@ -40,8 +40,10 @@ func (c *ConsoleInitializer) InitTypes(ctx *TypeContext) error {
 }
 
 func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
-	// Create console object
-	consoleObj := vm.NewObject(vm.Null).AsPlainObject()
+	vmInstance := ctx.VM
+
+	// Create console object with Object.prototype as its prototype
+	consoleObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
 	// Timer storage for console.time/timeEnd
 	timers := make(map[string]time.Time)

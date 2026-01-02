@@ -287,6 +287,12 @@ func (vm *VM) IsUnwinding() bool {
 	return vm.unwinding
 }
 
+// ThrowExceptionValue throws a JavaScript exception with the given value.
+// This is used by native functions to propagate exceptions from vm.Call.
+func (vm *VM) ThrowExceptionValue(value Value) {
+	vm.throwException(value)
+}
+
 // EnterHelperCall increments the helper call depth counter.
 // This should be called before native functions call helpers like ToPrimitive
 // that might throw exceptions which need to be caught by try/catch blocks.
@@ -342,6 +348,58 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 
 	// For non-objects, just return undefined
 	return Undefined, nil
+}
+
+// GetSymbolPropertyWithGetter gets a symbol property from an object value, handling getters and prototype chain
+// This is safe to call from native functions and will trigger property getters/throw exceptions
+func (vm *VM) GetSymbolPropertyWithGetter(obj Value, symbol Value) (Value, bool, error) {
+	if symbol.Type() != TypeSymbol {
+		return Undefined, false, nil
+	}
+	symKey := NewSymbolKey(symbol)
+
+	if obj.Type() == TypeObject {
+		po := obj.AsPlainObject()
+		if po == nil {
+			return Undefined, false, nil
+		}
+
+		// Check for accessor (getter) first - need to check own property and prototype chain
+		cur := po
+		for cur != nil {
+			// Check if it's an accessor (getter)
+			if getter, _, _, _, ok := cur.GetOwnAccessorByKey(symKey); ok {
+				if getter.Type() != TypeUndefined {
+					// Call the getter with this=obj (original object, not prototype)
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						// If the getter threw an exception, throw it as a VM exception
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						}
+						return Undefined, false, err
+					}
+					return result, true, nil
+				}
+				// Accessor exists but no getter - return undefined
+				return Undefined, true, nil
+			}
+			// Check for regular property
+			if v, ok := cur.GetOwnByKey(symKey); ok {
+				return v, true, nil
+			}
+			// Walk prototype chain
+			protoVal := cur.GetPrototype()
+			if protoVal.Type() != TypeObject {
+				break
+			}
+			cur = protoVal.AsPlainObject()
+		}
+		return Undefined, false, nil
+	}
+
+	// For non-objects, just return undefined
+	return Undefined, false, nil
 }
 
 // GetSymbolProperty gets a symbol property from an object value, properly handling prototype chain

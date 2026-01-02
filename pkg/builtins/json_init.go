@@ -36,8 +36,22 @@ func (j *JSONInitializer) InitTypes(ctx *TypeContext) error {
 }
 
 func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
-	// Create JSON object
-	jsonObj := vm.NewObject(vm.Null).AsPlainObject()
+	vmInstance := ctx.VM
+
+	// Create JSON object with Object.prototype as its prototype (ECMAScript spec)
+	jsonObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Set @@toStringTag to "JSON" so Object.prototype.toString.call(JSON) returns "[object JSON]"
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		falseVal := false
+		jsonObj.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("JSON"),
+			&falseVal, // writable: false
+			&falseVal, // enumerable: false
+			&falseVal, // configurable: false (per ECMAScript spec 25.5)
+		)
+	}
 
 	// Add parse method
 	jsonObj.SetOwnNonEnumerable("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {

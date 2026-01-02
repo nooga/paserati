@@ -401,22 +401,22 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// 	nativeFunc.Name, err != nil, vm.frameCount, vm.unwinding)
 		}
 
+		// Check if an exception was thrown and a handler was found during the native call.
+		// When handleCatchBlock is called: unwinding=false, handlerFound=true (if helperCallDepth > 0).
+		// In this case, don't return the error - let the VM jump to the catch handler.
+		if vm.handlerFound {
+			return false, nil
+		}
+
 		if err != nil {
-			// Always return the error to the caller; VM will handle conversion at the call site
+			// Return the error to the caller; VM will handle conversion at the call site
 			return false, err
 		}
 
 		// Check if VM started unwinding during the native function call (e.g., due to
-		// ToPrimitive calling valueOf/toString which threw an exception).
+		// ToPrimitive calling valueOf/toString which threw an exception) but no handler was found yet.
 		// In this case, don't store the result - let the exception propagate.
 		if vm.unwinding {
-			return false, nil
-		}
-
-		// Check if an exception was thrown and a handler was found during the native call.
-		// When this happens: unwinding=false (cleared by handleCatchBlock), but handlerFound=true.
-		// We need to NOT store the result and let the VM loop jump to the handler.
-		if vm.handlerFound {
 			return false, nil
 		}
 
@@ -445,18 +445,22 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Execute immediately
 		result, err := nativeFuncWithProps.Fn(args)
 		vm.currentThis = oldThis
+
+		// Check if an exception was thrown and a handler was found during the native call.
+		// When handleCatchBlock is called: unwinding=false, handlerFound=true (if helperCallDepth > 0).
+		// In this case, don't return the error - let the VM jump to the catch handler.
+		if vm.handlerFound {
+			return false, nil
+		}
+
 		if err != nil {
 			// Return error to be handled by the VM
 			return false, err
 		}
 
-		// Check if VM started unwinding during the native function call
+		// Check if VM started unwinding during the native function call but no handler was found yet.
+		// In this case, don't store the result - let the exception propagate.
 		if vm.unwinding {
-			return false, nil
-		}
-
-		// Check if an exception was thrown and a handler was found during the native call.
-		if vm.handlerFound {
 			return false, nil
 		}
 

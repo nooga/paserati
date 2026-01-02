@@ -21,6 +21,7 @@ var (
 	SymbolIsConcatSpreadable vm.Value
 	SymbolSpecies            vm.Value
 	SymbolMatch              vm.Value
+	SymbolMatchAll           vm.Value
 	SymbolReplace            vm.Value
 	SymbolSearch             vm.Value
 	SymbolSplit              vm.Value
@@ -51,6 +52,7 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("isConcatSpreadable", types.Symbol).
 		WithProperty("species", types.Symbol).
 		WithProperty("match", types.Symbol).
+		WithProperty("matchAll", types.Symbol).
 		WithProperty("replace", types.Symbol).
 		WithProperty("search", types.Symbol).
 		WithProperty("split", types.Symbol).
@@ -148,6 +150,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		SymbolIsConcatSpreadable = vm.NewSymbol("Symbol.isConcatSpreadable")
 		SymbolSpecies = vm.NewSymbol("Symbol.species")
 		SymbolMatch = vm.NewSymbol("Symbol.match")
+		SymbolMatchAll = vm.NewSymbol("Symbol.matchAll")
 		SymbolReplace = vm.NewSymbol("Symbol.replace")
 		SymbolSearch = vm.NewSymbol("Symbol.search")
 		SymbolSplit = vm.NewSymbol("Symbol.split")
@@ -162,6 +165,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		SymbolIsConcatSpreadable = vmInstance.SymbolIsConcatSpreadable
 		SymbolSpecies = vmInstance.SymbolSpecies
 		SymbolMatch = vmInstance.SymbolMatch
+		SymbolMatchAll = vmInstance.SymbolMatchAll
 		SymbolReplace = vmInstance.SymbolReplace
 		SymbolSearch = vmInstance.SymbolSearch
 		SymbolSplit = vmInstance.SymbolSplit
@@ -222,6 +226,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isConcatSpreadable", SymbolIsConcatSpreadable)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("species", SymbolSpecies)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("match", SymbolMatch)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("matchAll", SymbolMatchAll)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("replace", SymbolReplace)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("search", SymbolSearch)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("split", SymbolSplit)
@@ -238,6 +243,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.SymbolIsConcatSpreadable = SymbolIsConcatSpreadable
 	vmInstance.SymbolSpecies = SymbolSpecies
 	vmInstance.SymbolMatch = SymbolMatch
+	vmInstance.SymbolMatchAll = SymbolMatchAll
 	vmInstance.SymbolReplace = SymbolReplace
 	vmInstance.SymbolSearch = SymbolSearch
 	vmInstance.SymbolSplit = SymbolSplit

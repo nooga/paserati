@@ -71,8 +71,22 @@ func (m *MathInitializer) InitTypes(ctx *TypeContext) error {
 }
 
 func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
-	// Create Math object
-	mathObj := vm.NewObject(vm.Null).AsPlainObject()
+	vmInstance := ctx.VM
+
+	// Create Math object with Object.prototype as its prototype (ECMAScript spec)
+	mathObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Set @@toStringTag to "Math" so Object.prototype.toString.call(Math) returns "[object Math]"
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		falseVal := false
+		mathObj.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("Math"),
+			&falseVal, // writable: false
+			&falseVal, // enumerable: false
+			&falseVal, // configurable: false (per ECMAScript spec 21.3)
+		)
+	}
 
 	// Add constants (non-configurable, non-writable per ECMAScript spec)
 	f := false

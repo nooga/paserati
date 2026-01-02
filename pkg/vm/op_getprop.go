@@ -606,7 +606,39 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 	// 12. RegExp objects (after special properties are handled)
 	if objVal.Type() == TypeRegExp {
-		// RegExp objects don't have additional own properties beyond special ones
+		regex := objVal.AsRegExpObject()
+		if regex != nil && regex.Properties != nil {
+			// Check for user-defined properties on the regexp
+			if v, ok := regex.Properties.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		// Check RegExp.prototype for inherited methods
+		if vm.RegExpPrototype.Type() == TypeObject {
+			proto := vm.RegExpPrototype.AsPlainObject()
+			if v, ok := proto.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk prototype chain to Object.prototype
+			current := proto.GetPrototype()
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if p := current.AsPlainObject(); p != nil {
+						if v, ok := p.GetOwn(propName); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = p.GetPrototype()
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
@@ -1042,6 +1074,48 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 				if current.IsObject() {
 					if proto2 := current.AsPlainObject(); proto2 != nil {
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// RegExp: check own properties first, then RegExp.prototype chain for symbol properties
+	if base.Type() == TypeRegExp {
+		regex := base.AsRegExpObject()
+		key := NewSymbolKey(symKey)
+		// Check own properties first
+		if regex != nil && regex.Properties != nil {
+			if v, ok := regex.Properties.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		// Then check RegExp.prototype chain
+		proto := vm.RegExpPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(key); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
