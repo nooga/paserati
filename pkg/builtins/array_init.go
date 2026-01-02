@@ -378,22 +378,38 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	arrayProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
+		if thisArray == nil {
 			return vm.NumberValue(-1), nil
 		}
-		searchElement := args[0]
+		// If no argument, search for undefined
+		var searchElement vm.Value
+		if len(args) >= 1 {
+			searchElement = args[0]
+		} else {
+			searchElement = vm.Undefined
+		}
+		length := thisArray.Length()
+		if length == 0 {
+			return vm.NumberValue(-1), nil
+		}
 		fromIndex := 0
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			fromIndex = int(args[1].ToFloat())
 			if fromIndex < 0 {
-				fromIndex = thisArray.Length() + fromIndex
+				fromIndex = length + fromIndex
 				if fromIndex < 0 {
 					fromIndex = 0
 				}
 			}
 		}
-		for i := fromIndex; i < thisArray.Length(); i++ {
-			if thisArray.Get(i).Is(searchElement) {
+		// ECMAScript spec: indexOf uses Strict Equality (===), not SameValueZero
+		// This means NaN !== NaN, so indexOf(NaN) should return -1
+		for i := fromIndex; i < length; i++ {
+			// Skip holes in sparse arrays
+			if !thisArray.HasIndex(i) {
+				continue
+			}
+			if thisArray.Get(i).StrictlyEquals(searchElement) {
 				return vm.NumberValue(float64(i)), nil
 			}
 		}
@@ -402,21 +418,37 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	arrayProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
+		if thisArray == nil {
 			return vm.NumberValue(-1), nil
 		}
-		searchElement := args[0]
-		fromIndex := thisArray.Length() - 1
-		if len(args) >= 2 {
+		// If no argument, search for undefined
+		var searchElement vm.Value
+		if len(args) >= 1 {
+			searchElement = args[0]
+		} else {
+			searchElement = vm.Undefined
+		}
+		length := thisArray.Length()
+		if length == 0 {
+			return vm.NumberValue(-1), nil
+		}
+		fromIndex := length - 1
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			fromIndex = int(args[1].ToFloat())
 			if fromIndex < 0 {
-				fromIndex = thisArray.Length() + fromIndex
-			} else if fromIndex >= thisArray.Length() {
-				fromIndex = thisArray.Length() - 1
+				fromIndex = length + fromIndex
+			} else if fromIndex >= length {
+				fromIndex = length - 1
 			}
 		}
+		// ECMAScript spec: lastIndexOf uses Strict Equality (===), not SameValueZero
+		// This means NaN !== NaN, so lastIndexOf(NaN) should return -1
 		for i := fromIndex; i >= 0; i-- {
-			if thisArray.Get(i).Is(searchElement) {
+			// Skip holes in sparse arrays
+			if !thisArray.HasIndex(i) {
+				continue
+			}
+			if thisArray.Get(i).StrictlyEquals(searchElement) {
 				return vm.NumberValue(float64(i)), nil
 			}
 		}
@@ -425,21 +457,33 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	arrayProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil || len(args) < 1 {
+		if thisArray == nil {
 			return vm.BooleanValue(false), nil
 		}
-		searchElement := args[0]
+		// If no argument, search for undefined
+		var searchElement vm.Value
+		if len(args) >= 1 {
+			searchElement = args[0]
+		} else {
+			searchElement = vm.Undefined
+		}
+		length := thisArray.Length()
+		if length == 0 {
+			return vm.BooleanValue(false), nil
+		}
 		fromIndex := 0
-		if len(args) >= 2 {
+		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			fromIndex = int(args[1].ToFloat())
 			if fromIndex < 0 {
-				fromIndex = thisArray.Length() + fromIndex
+				fromIndex = length + fromIndex
 				if fromIndex < 0 {
 					fromIndex = 0
 				}
 			}
 		}
-		for i := fromIndex; i < thisArray.Length(); i++ {
+		// ECMAScript spec: includes uses SameValueZero, so NaN === NaN (Is() is correct)
+		// Note: includes DOES check holes and finds undefined in them (unlike indexOf)
+		for i := fromIndex; i < length; i++ {
 			if thisArray.Get(i).Is(searchElement) {
 				return vm.BooleanValue(true), nil
 			}
