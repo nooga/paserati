@@ -374,8 +374,8 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 			node.Elements[i] = &parser.UndefinedLiteral{Token: parser.GetTokenFromNode(node)}
 		}
 	}
-	if elementCount > 255 { // Check against total element processing
-		return BadRegister, NewCompileError(node, "array literal exceeds maximum size of 255 elements")
+	if elementCount > 65535 { // Check against total element processing (16-bit limit)
+		return BadRegister, NewCompileError(node, "array literal exceeds maximum size of 65535 elements")
 	}
 
 	// Track temporary registers for cleanup
@@ -432,42 +432,33 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 	}
 
 	if !useChunking {
-		// Fast path: materialize into a contiguous block and OpMakeArray
-		elementRegs := make([]Register, elementCount)
-		elementRegsContinuous := true
-		for i, elem := range node.Elements {
-			elemReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, elemReg)
-			if _, err := c.compileNode(elem, elemReg); err != nil {
-				return BadRegister, err
-			}
-			elementRegs[i] = elemReg
-			if i > 0 && elementRegs[i] != elementRegs[i-1]+1 {
-				elementRegsContinuous = false
-			}
-		}
-		var firstTargetReg Register
-		if elementRegsContinuous {
-			firstTargetReg = elementRegs[0]
+		// Fast path: try to allocate contiguous block for OpMakeArray
+		firstTargetReg, ok := c.regAlloc.TryAllocContiguous(elementCount)
+		if !ok {
+			// Fall back to chunking if we can't get a contiguous block
+			useChunking = true
 		} else {
-			firstTargetReg = c.regAlloc.AllocContiguous(elementCount)
-			for i := 0; i < elementCount; i++ {
-				tempRegs = append(tempRegs, firstTargetReg+Register(i))
-			}
-			for i := 0; i < elementCount; i++ {
-				t := firstTargetReg + Register(i)
-				s := elementRegs[i]
-				if t != s {
-					c.emitMove(t, s, line)
+			// Compile elements directly into contiguous positions
+			for i, elem := range node.Elements {
+				targetReg := firstTargetReg + Register(i)
+				if _, err := c.compileNode(elem, targetReg); err != nil {
+					// Free already allocated registers on error
+					for j := 0; j < elementCount; j++ {
+						c.regAlloc.Free(firstTargetReg + Register(j))
+					}
+					return BadRegister, err
 				}
 			}
+			c.emitOpCode(vm.OpMakeArray, line)
+			c.emitByte(byte(hint))
+			c.emitByte(byte(firstTargetReg))
+			c.emitByte(byte(elementCount))
+			// Free the contiguous block
+			for i := 0; i < elementCount; i++ {
+				c.regAlloc.Free(firstTargetReg + Register(i))
+			}
+			return hint, nil
 		}
-		c.emitOpCode(vm.OpMakeArray, line)
-		c.emitByte(byte(hint))
-		c.emitByte(byte(firstTargetReg))
-		c.emitByte(byte(elementCount))
-		// debug: removed noisy print
-		return hint, nil
 	}
 
 	// Large literal path: allocate and copy in chunks to avoid register blowup
@@ -505,8 +496,29 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 			n = 1
 		}
 
-		// Allocate a contiguous block for this chunk
-		startReg := c.regAlloc.AllocContiguous(n)
+		// Try to allocate a contiguous block for this chunk
+		startReg, ok := c.regAlloc.TryAllocContiguous(n)
+		if !ok {
+			// If contiguous allocation fails, fall back to one-by-one insertion
+			for i := 0; i < n; i++ {
+				elemReg := c.regAlloc.Alloc()
+				if _, err := c.compileNode(node.Elements[offset+i], elemReg); err != nil {
+					c.regAlloc.Free(elemReg)
+					return BadRegister, err
+				}
+				// Emit OpSetIndex to set array[offset+i] = element
+				indexReg := c.regAlloc.Alloc()
+				c.emitLoadNewConstant(indexReg, vm.Number(float64(offset+i)), line)
+				c.emitOpCode(vm.OpSetIndex, line)
+				c.emitByte(byte(hint))     // array
+				c.emitByte(byte(indexReg)) // index
+				c.emitByte(byte(elemReg))  // value
+				c.regAlloc.Free(indexReg)
+				c.regAlloc.Free(elemReg)
+			}
+			offset += n
+			continue
+		}
 		// Compile chunk elements into the allocated registers
 		for i := 0; i < n; i++ {
 			if _, err := c.compileNode(node.Elements[offset+i], startReg+Register(i)); err != nil {
