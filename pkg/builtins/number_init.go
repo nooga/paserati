@@ -5,9 +5,81 @@ import (
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+// formatExponent removes leading zeros from exponent part to match JS behavior
+// e.g., "1e+02" -> "1e+2", "1.5e-09" -> "1.5e-9"
+func formatExponent(s string) string {
+	re := regexp.MustCompile(`([eE])([+-]?)0*(\d+)`)
+	return re.ReplaceAllString(s, "${1}${2}${3}")
+}
+
+// formatToPrecision formats a number with the given precision, matching JS behavior
+func formatToPrecision(num float64, precision int) string {
+	if num == 0 {
+		// Special case for zero
+		if precision == 1 {
+			return "0"
+		}
+		return "0." + strings.Repeat("0", precision-1)
+	}
+
+	// Get the exponent
+	absNum := math.Abs(num)
+	var exp int
+	if absNum != 0 {
+		exp = int(math.Floor(math.Log10(absNum)))
+	}
+
+	// Decide between fixed and exponential notation
+	// ECMAScript spec: use exponential if exp < -6 or exp >= precision
+	if exp < -6 || exp >= precision {
+		// Exponential notation
+		result := strconv.FormatFloat(num, 'e', precision-1, 64)
+		return formatExponent(result)
+	}
+
+	// Fixed notation
+	// Number of decimal places needed
+	decimalPlaces := precision - exp - 1
+	if decimalPlaces < 0 {
+		decimalPlaces = 0
+	}
+
+	result := strconv.FormatFloat(num, 'f', decimalPlaces, 64)
+
+	// Ensure we have exactly 'precision' significant digits
+	// Count current significant digits
+	sigDigits := 0
+	foundNonZero := false
+	hasDecimal := strings.Contains(result, ".")
+
+	for _, c := range result {
+		if c == '-' || c == '.' {
+			continue
+		}
+		if c != '0' {
+			foundNonZero = true
+		}
+		if foundNonZero {
+			sigDigits++
+		}
+	}
+
+	// Add trailing zeros if needed
+	if sigDigits < precision {
+		needed := precision - sigDigits
+		if !hasDecimal {
+			result += "."
+		}
+		result += strings.Repeat("0", needed)
+	}
+
+	return result
+}
 
 type NumberInitializer struct{}
 
@@ -64,8 +136,10 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Get Object.prototype for inheritance
 	objectProto := vmInstance.ObjectPrototype
 
-	// Create Number.prototype inheriting from Object.prototype
+	// Create Number.prototype as a Number object with [[PrimitiveValue]] = 0
+	// Per ECMAScript spec, Number.prototype is a Number object whose [[NumberData]] is +0
 	numberProto := vm.NewObject(objectProto).AsPlainObject()
+	numberProto.SetOwn("[[PrimitiveValue]]", vm.NumberValue(0))
 
 	// Add Number prototype methods
 	numberProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -90,24 +164,41 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		var radix int = 10
-		if len(args) > 0 {
-			radix = int(args[0].ToFloat())
-			if radix < 2 || radix > 36 {
-				// In real JS this would throw RangeError, for now use default
-				radix = 10
+		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
+			r := args[0].ToFloat()
+			// ToInteger per spec (truncate to integer)
+			if math.IsNaN(r) {
+				r = 0
 			}
+			radix = int(r)
+			if radix < 2 || radix > 36 {
+				return vm.Undefined, vmInstance.NewRangeError("toString() radix must be between 2 and 36")
+			}
+		}
+
+		numVal := thisNum.ToFloat()
+
+		// Handle special cases - NaN and Infinity always return their string form regardless of radix
+		if math.IsNaN(numVal) {
+			return vm.NewString("NaN"), nil
+		}
+		if math.IsInf(numVal, 1) {
+			return vm.NewString("Infinity"), nil
+		}
+		if math.IsInf(numVal, -1) {
+			return vm.NewString("-Infinity"), nil
 		}
 
 		if radix == 10 {
 			return vm.NewString(thisNum.ToString()), nil
 		}
 
-		// Handle different radix
+		// Handle different radix - only for finite numbers
 		if thisNum.Type() == vm.TypeIntegerNumber {
 			return vm.NewString(strconv.FormatInt(int64(thisNum.AsInteger()), radix)), nil
 		} else {
 			// For float numbers with non-10 radix, convert to int first (JS behavior)
-			intVal := int64(thisNum.ToFloat())
+			intVal := int64(numVal)
 			return vm.NewString(strconv.FormatInt(intVal, radix)), nil
 		}
 	}))
@@ -155,19 +246,42 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.Undefined, fmt.Errorf("Number.prototype.toFixed requires that 'this' be a Number")
+			return vm.Undefined, vmInstance.NewTypeError("Number.prototype.toFixed requires that 'this' be a Number")
 		}
 
+		// ToInteger the fractionDigits (default 0)
 		digits := 0
-		if len(args) > 0 {
-			digits = int(args[0].ToFloat())
-			if digits < 0 || digits > 20 {
-				// In real JS this would throw RangeError
-				digits = 0
+		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
+			fd := args[0].ToFloat()
+			if math.IsNaN(fd) {
+				fd = 0
 			}
+			digits = int(fd)
+		}
+
+		// RangeError if fractionDigits is out of range
+		if digits < 0 || digits > 100 {
+			return vm.Undefined, vmInstance.NewRangeError("toFixed() digits argument must be between 0 and 100")
 		}
 
 		numVal := thisNum.ToFloat()
+
+		// Handle special cases
+		if math.IsNaN(numVal) {
+			return vm.NewString("NaN"), nil
+		}
+		if math.IsInf(numVal, 1) {
+			return vm.NewString("Infinity"), nil
+		}
+		if math.IsInf(numVal, -1) {
+			return vm.NewString("-Infinity"), nil
+		}
+
+		// For very large numbers (>= 10^21), return exponential notation via ToString
+		if math.Abs(numVal) >= 1e21 {
+			return vm.NewString(strconv.FormatFloat(numVal, 'g', -1, 64)), nil
+		}
+
 		return vm.NewString(strconv.FormatFloat(numVal, 'f', digits, 64)), nil
 	}))
 
@@ -182,20 +296,51 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.Undefined, fmt.Errorf("Number.prototype.toExponential requires that 'this' be a Number")
-		}
-
-		digits := -1
-		if len(args) > 0 {
-			digits = int(args[0].ToFloat())
-			if digits < 0 || digits > 20 {
-				// In real JS this would throw RangeError
-				digits = -1
-			}
+			return vm.Undefined, vmInstance.NewTypeError("Number.prototype.toExponential requires that 'this' be a Number")
 		}
 
 		numVal := thisNum.ToFloat()
-		return vm.NewString(strconv.FormatFloat(numVal, 'e', digits, 64)), nil
+
+		// Handle special cases first
+		if math.IsNaN(numVal) {
+			return vm.NewString("NaN"), nil
+		}
+		if math.IsInf(numVal, 1) {
+			return vm.NewString("Infinity"), nil
+		}
+		if math.IsInf(numVal, -1) {
+			return vm.NewString("-Infinity"), nil
+		}
+
+		// Normalize -0 to 0 (per ECMAScript spec, toExponential(-0) returns "0e+0")
+		if numVal == 0 {
+			numVal = math.Abs(numVal) // This converts -0 to +0
+		}
+
+		// Check fractionDigits argument
+		digits := -1 // -1 means "as many as needed"
+		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
+			// ToInteger the fractionDigits
+			fd := args[0].ToFloat()
+			if math.IsNaN(fd) {
+				fd = 0
+			}
+			digits = int(fd)
+			if digits < 0 || digits > 100 {
+				return vm.Undefined, vmInstance.NewRangeError("toExponential() digits argument must be between 0 and 100")
+			}
+		}
+
+		var result string
+		if digits == -1 {
+			// Use minimum digits needed (Go's default precision)
+			result = strconv.FormatFloat(numVal, 'e', -1, 64)
+		} else {
+			result = strconv.FormatFloat(numVal, 'e', digits, 64)
+		}
+
+		// Remove leading zeros from exponent (e.g., "1e+02" -> "1e+2")
+		return vm.NewString(formatExponent(result)), nil
 	}))
 
 	numberProto.SetOwnNonEnumerable("toPrecision", vm.NewNativeFunction(1, false, "toPrecision", func(args []vm.Value) (vm.Value, error) {
@@ -209,21 +354,59 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber {
-			return vm.Undefined, fmt.Errorf("Number.prototype.toPrecision requires that 'this' be a Number")
-		}
-
-		if len(args) == 0 {
-			return vm.NewString(thisNum.ToString()), nil
-		}
-
-		precision := int(args[0].ToFloat())
-		if precision < 1 || precision > 21 {
-			// In real JS this would throw RangeError
-			return vm.NewString(thisNum.ToString()), nil
+			return vm.Undefined, vmInstance.NewTypeError("Number.prototype.toPrecision requires that 'this' be a Number")
 		}
 
 		numVal := thisNum.ToFloat()
-		return vm.NewString(strconv.FormatFloat(numVal, 'g', precision, 64)), nil
+
+		// If precision is undefined, return ToString(this)
+		if len(args) == 0 || args[0].Type() == vm.TypeUndefined {
+			// Handle special cases
+			if math.IsNaN(numVal) {
+				return vm.NewString("NaN"), nil
+			}
+			if math.IsInf(numVal, 1) {
+				return vm.NewString("Infinity"), nil
+			}
+			if math.IsInf(numVal, -1) {
+				return vm.NewString("-Infinity"), nil
+			}
+			return vm.NewString(thisNum.ToString()), nil
+		}
+
+		// ToInteger the precision
+		p := args[0].ToFloat()
+		if math.IsNaN(p) {
+			p = 0
+		}
+		precision := int(p)
+
+		// Per ECMAScript spec: Check NaN/Infinity BEFORE range error
+		// See https://tc39.es/ecma262/#sec-number.prototype.toprecision steps 4-7
+		if math.IsNaN(numVal) {
+			return vm.NewString("NaN"), nil
+		}
+		if math.IsInf(numVal, 1) {
+			return vm.NewString("Infinity"), nil
+		}
+		if math.IsInf(numVal, -1) {
+			return vm.NewString("-Infinity"), nil
+		}
+
+		// Now check range (after NaN/Infinity checks)
+		if precision < 1 || precision > 100 {
+			return vm.Undefined, vmInstance.NewRangeError("toPrecision() argument must be between 1 and 100")
+		}
+
+		// Handle -0 as 0 (per ECMAScript spec)
+		if numVal == 0 {
+			numVal = math.Abs(numVal) // Normalize -0 to +0
+		}
+
+		// Use custom precision formatting to match JS behavior
+		result := formatToPrecision(numVal, precision)
+
+		return vm.NewString(result), nil
 	}))
 
 	// Set Number.prototype
@@ -257,18 +440,43 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 				if str == "" {
 					primitiveValue = 0
-				} else if strings.EqualFold(str, "infinity") || strings.EqualFold(str, "+infinity") {
+				} else if str == "Infinity" || str == "+Infinity" {
+					// ECMAScript only accepts exact case "Infinity"
 					primitiveValue = math.Inf(1)
-				} else if strings.EqualFold(str, "-infinity") {
+				} else if str == "-Infinity" {
 					primitiveValue = math.Inf(-1)
-				} else if strings.HasPrefix(strings.ToLower(str), "0x") {
-					// Parse hex string
+				} else if strings.EqualFold(str, "infinity") || strings.EqualFold(str, "+infinity") || strings.EqualFold(str, "-infinity") ||
+					strings.EqualFold(str, "inf") || strings.EqualFold(str, "+inf") || strings.EqualFold(str, "-inf") {
+					// Reject case-insensitive infinity variants that aren't exactly "Infinity"/"+Infinity"/"-Infinity"
+					primitiveValue = math.NaN()
+				} else if len(str) > 2 && (str[0:2] == "0x" || str[0:2] == "0X") {
+					// Parse hex string (0x or 0X prefix)
 					if val, err := strconv.ParseInt(str[2:], 16, 64); err == nil {
 						primitiveValue = float64(val)
 					} else {
 						primitiveValue = math.NaN()
 					}
+				} else if len(str) > 2 && (str[0:2] == "0b" || str[0:2] == "0B") {
+					// Parse binary string (0b or 0B prefix)
+					if val, err := strconv.ParseInt(str[2:], 2, 64); err == nil {
+						primitiveValue = float64(val)
+					} else {
+						primitiveValue = math.NaN()
+					}
+				} else if len(str) > 2 && (str[0:2] == "0o" || str[0:2] == "0O") {
+					// Parse octal string (0o or 0O prefix)
+					if val, err := strconv.ParseInt(str[2:], 8, 64); err == nil {
+						primitiveValue = float64(val)
+					} else {
+						primitiveValue = math.NaN()
+					}
+				} else if strings.Contains(str, "_") {
+					// Numeric separators are not allowed in string parsing (only in literal syntax)
+					primitiveValue = math.NaN()
 				} else if val, err := strconv.ParseFloat(str, 64); err == nil {
+					primitiveValue = val
+				} else if math.IsInf(val, 0) {
+					// Overflow to infinity should be returned, not treated as error
 					primitiveValue = val
 				} else {
 					primitiveValue = math.NaN()
@@ -279,6 +487,9 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 				} else {
 					primitiveValue = 0
 				}
+			case vm.TypeBigInt:
+				// BigInt to Number conversion
+				primitiveValue = arg.ToFloat()
 			case vm.TypeNull:
 				primitiveValue = 0
 			case vm.TypeUndefined:
