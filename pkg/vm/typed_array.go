@@ -3,6 +3,7 @@ package vm
 import (
 	"encoding/binary"
 	"math"
+	"math/big"
 	"unsafe"
 )
 
@@ -132,8 +133,14 @@ func (ta *TypedArrayObject) GetElement(index int) Value {
 	case TypedArrayFloat64:
 		bits := binary.LittleEndian.Uint64(data)
 		return Number(math.Float64frombits(bits))
+	case TypedArrayBigInt64:
+		i64 := int64(binary.LittleEndian.Uint64(data))
+		return NewBigInt(big.NewInt(i64))
+	case TypedArrayBigUint64:
+		u64 := binary.LittleEndian.Uint64(data)
+		bi := new(big.Int).SetUint64(u64)
+		return NewBigInt(bi)
 	default:
-		// BigInt cases would go here
 		return Undefined
 	}
 }
@@ -183,6 +190,24 @@ func (ta *TypedArrayObject) SetElement(index int, value Value) {
 		binary.LittleEndian.PutUint32(data, math.Float32bits(float32(num)))
 	case TypedArrayFloat64:
 		binary.LittleEndian.PutUint64(data, math.Float64bits(num))
+	case TypedArrayBigInt64:
+		// For BigInt64Array, value should be a BigInt
+		if value.IsBigInt() {
+			bi := value.AsBigInt()
+			binary.LittleEndian.PutUint64(data, uint64(bi.Int64()))
+		} else {
+			// Convert number to int64
+			binary.LittleEndian.PutUint64(data, uint64(int64(num)))
+		}
+	case TypedArrayBigUint64:
+		// For BigUint64Array, value should be a BigInt
+		if value.IsBigInt() {
+			bi := value.AsBigInt()
+			binary.LittleEndian.PutUint64(data, bi.Uint64())
+		} else {
+			// Convert number to uint64
+			binary.LittleEndian.PutUint64(data, uint64(num))
+		}
 	}
 }
 

@@ -331,6 +331,9 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayFloat32, args, 0, 0), nil
 	}))
 
+	// Add common TypedArray prototype methods
+	SetupTypedArrayPrototype(float32ArrayProto, vmInstance)
+
 	// Set constructor property on prototype
 	float32ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 

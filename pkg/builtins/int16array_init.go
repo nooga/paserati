@@ -206,6 +206,10 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
 	})
+	// Add common TypedArray prototype methods
+	SetupTypedArrayPrototype(proto, vmx)
+
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+	vmx.Int16ArrayPrototype = vm.NewValueFromPlainObject(proto)
 	return ctx.DefineGlobal("Int16Array", ctor)
 }

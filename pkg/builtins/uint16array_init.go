@@ -331,8 +331,14 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayUint16, args, 0, 0), nil
 	}))
 
+	// Add common TypedArray prototype methods
+	SetupTypedArrayPrototype(uint16ArrayProto, vmInstance)
+
 	// Set constructor property on prototype
 	uint16ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
+
+	// Set Uint16Array prototype in VM
+	vmInstance.Uint16ArrayPrototype = vm.NewValueFromPlainObject(uint16ArrayProto)
 
 	// Register Uint16Array constructor as global
 	return ctx.DefineGlobal("Uint16Array", ctorWithProps)

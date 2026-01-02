@@ -59,6 +59,8 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &Int32ArrayInitializer{})
 	initializers = append(initializers, &Float32ArrayInitializer{})
 	initializers = append(initializers, &Float64ArrayInitializer{})
+	initializers = append(initializers, &BigInt64ArrayInitializer{})
+	initializers = append(initializers, &BigUint64ArrayInitializer{})
 
 	// Sort by priority (lower numbers first)
 	sort.Slice(initializers, func(i, j int) bool {

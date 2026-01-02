@@ -331,6 +331,9 @@ func (u *Uint8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayUint8, args, 0, 0), nil
 	}))
 
+	// Add common TypedArray prototype methods
+	SetupTypedArrayPrototype(uint8ArrayProto, vmInstance)
+
 	// Set constructor property on prototype
 	uint8ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 

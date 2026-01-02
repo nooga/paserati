@@ -263,7 +263,10 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) { return vm.NewTypedArray(vm.TypedArrayInt8, args, 0, 0), nil }))
 
+	// Add common TypedArray prototype methods
+	SetupTypedArrayPrototype(proto, vmx)
+
 	proto.SetOwnNonEnumerable("constructor", ctor)
-	// store on VM if a slot exists; otherwise rely on handlePrimitiveMethod dispatch by element kind
+	vmx.Int8ArrayPrototype = vm.NewValueFromPlainObject(proto)
 	return ctx.DefineGlobal("Int8Array", ctor)
 }
