@@ -328,7 +328,8 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 	// Simple implementation that doesn't use opGetProp to avoid unwinding issues
 	// Just check for getter and call it, or return the property value
 
-	if obj.Type() == TypeObject {
+	switch obj.Type() {
+	case TypeObject:
 		po := obj.AsPlainObject()
 		// Check if it's an accessor (getter)
 		if g, _, _, _, ok := po.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
@@ -344,10 +345,56 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			return value, nil
 		}
 		return Undefined, nil
-	}
 
-	// For non-objects, just return undefined
-	return Undefined, nil
+	case TypeGenerator:
+		// Generator objects: consult Generator.prototype chain for regular properties
+		proto := vm.GeneratorPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				return v, nil
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwn(propName); ok {
+							return v, nil
+						}
+						current = proto2.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		return Undefined, nil
+
+	case TypeArray:
+		// Arrays: check own properties and prototype chain
+		arr := obj.AsArray()
+		if arr != nil {
+			// Check for 'length' property
+			if propName == "length" {
+				return NumberValue(float64(arr.Length())), nil
+			}
+			// Check array prototype
+			if vm.ArrayPrototype.IsObject() {
+				proto := vm.ArrayPrototype.AsPlainObject()
+				if v, ok := proto.Get(propName); ok {
+					return v, nil
+				}
+			}
+		}
+		return Undefined, nil
+
+	default:
+		// For non-objects, just return undefined
+		return Undefined, nil
+	}
 }
 
 // GetSymbolPropertyWithGetter gets a symbol property from an object value, handling getters and prototype chain

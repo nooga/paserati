@@ -2061,10 +2061,21 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			primitiveValue = ""
 		} else {
 			arg := args[0]
-			// Symbols cannot be converted to strings implicitly
+
+			// ECMAScript 22.1.1.1: String(value)
+			// If NewTarget is undefined (called as function) AND value is a Symbol,
+			// return SymbolDescriptiveString(value)
+			// If NewTarget is defined (called with new) AND value is a Symbol,
+			// throw TypeError (ToString on Symbol throws)
 			if arg.Type() == vm.TypeSymbol {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+				if vmInstance.IsConstructorCall() {
+					// new String(symbol) - throws TypeError
+					return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+				}
+				// String(symbol) - returns descriptive string
+				return vm.NewString(arg.ToString()), nil
 			}
+
 			// For objects, use ToPrimitive with hint "string"
 			if arg.IsObject() {
 				// Track that we're in a helper call so exception handlers can be found
@@ -2076,9 +2087,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 					return vm.Undefined, nil
 				}
-				// Check if ToPrimitive returned a Symbol (shouldn't happen, but be safe)
+				// Check if ToPrimitive returned a Symbol
 				if primVal.Type() == vm.TypeSymbol {
-					return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+					if vmInstance.IsConstructorCall() {
+						return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+					}
+					return vm.NewString(primVal.ToString()), nil
 				}
 				primitiveValue = primVal.ToString()
 			} else {
