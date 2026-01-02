@@ -518,7 +518,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				}
 			}
 		}
-		// Arrays don't have additional own properties beyond special ones
+		// Check for named properties (e.g., "index", "input" on match results)
+		if v, ok := arr.GetOwn(propName); ok {
+			*dest = v
+			return true, InterpretOK, *dest
+		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}

@@ -215,6 +215,47 @@ func toIntegerWithVM(vmInstance *vm.VM, val vm.Value) (int, error) {
 	return int(n), nil
 }
 
+// processStringReplacementPattern processes $ patterns in replacement strings for string search
+// $$ -> $
+// $& -> matched substring
+// $` -> portion before match
+// $' -> portion after match
+// $n and $nn are NOT supported for string search (no capture groups)
+func processStringReplacementPattern(str string, match []int, replacement string) string {
+	var result strings.Builder
+	i := 0
+	for i < len(replacement) {
+		if replacement[i] == '$' && i+1 < len(replacement) {
+			switch replacement[i+1] {
+			case '$':
+				// $$ -> $
+				result.WriteByte('$')
+				i += 2
+			case '&':
+				// $& -> matched substring
+				result.WriteString(str[match[0]:match[1]])
+				i += 2
+			case '`':
+				// $` -> portion before match
+				result.WriteString(str[:match[0]])
+				i += 2
+			case '\'':
+				// $' -> portion after match
+				result.WriteString(str[match[1]:])
+				i += 2
+			default:
+				// For string search, $n patterns are output literally (no capture groups)
+				result.WriteByte('$')
+				i++
+			}
+		} else {
+			result.WriteByte(replacement[i])
+			i++
+		}
+	}
+	return result.String()
+}
+
 type StringInitializer struct{}
 
 func (s *StringInitializer) Name() string {
@@ -512,10 +553,27 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		length := len(thisStr)
-		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
-			return vm.NewString(thisStr), nil
+
+		// Convert start argument via ToInteger (which calls ToPrimitive for objects)
+		// ToInteger(undefined) = 0
+		var start int
+		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
+			startArg := args[0]
+			if startArg.IsObject() {
+				vmInstance.EnterHelperCall()
+				startArg = vmInstance.ToPrimitive(startArg, "number")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
+				}
+			}
+			startFloat := startArg.ToFloat()
+			if math.IsNaN(startFloat) {
+				start = 0
+			} else {
+				start = int(startFloat)
+			}
 		}
-		start := int(args[0].ToFloat())
 		if start < 0 {
 			start = length + start
 			if start < 0 {
@@ -524,9 +582,23 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else if start > length {
 			start = length
 		}
+
 		end := length
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			end = int(args[1].ToFloat())
+			// Convert end argument via ToInteger (which calls ToPrimitive for objects)
+			endArg := args[1]
+			if endArg.IsObject() {
+				vmInstance.EnterHelperCall()
+				endArg = vmInstance.ToPrimitive(endArg, "number")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
+				}
+			}
+			end = int(endArg.ToFloat())
+			if math.IsNaN(endArg.ToFloat()) {
+				end = 0
+			}
 			if end < 0 {
 				end = length + end
 				if end < 0 {
@@ -1412,41 +1484,93 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := requireObjectCoercible(vmInstance, thisVal, "replace"); err != nil {
 			return vm.Undefined, err
 		}
+
+		// Get searchValue and replaceValue from args
+		var searchArg vm.Value
+		var replaceArg vm.Value
+		if len(args) > 0 {
+			searchArg = args[0]
+		} else {
+			searchArg = vm.Undefined
+		}
+		if len(args) > 1 {
+			replaceArg = args[1]
+		} else {
+			replaceArg = vm.Undefined
+		}
+
+		// Step 2: If searchValue is not null/undefined, check for Symbol.replace
+		if searchArg.Type() != vm.TypeUndefined && searchArg.Type() != vm.TypeNull {
+			vmInstance.EnterHelperCall()
+			replacer, ok, err := vmInstance.GetSymbolPropertyWithGetter(searchArg, SymbolReplace)
+			vmInstance.ExitHelperCall()
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+
+			// If replacer exists and is callable, invoke it
+			if ok && replacer.Type() != vm.TypeUndefined && replacer.Type() != vm.TypeNull {
+				if replacer.IsCallable() {
+					vmInstance.EnterHelperCall()
+					result, err := vmInstance.Call(replacer, searchArg, []vm.Value{thisVal, replaceArg})
+					vmInstance.ExitHelperCall()
+					if err != nil {
+						return vm.Undefined, err
+					}
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil
+					}
+					return vm.NewString(result.ToString()), nil
+				}
+			}
+		}
+
+		// Fallback: Convert this to string
 		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 2 {
+
+		// Convert searchArg to string
+		searchValue := searchArg.ToString()
+
+		// Check if replaceArg is callable
+		isCallable := replaceArg.IsCallable()
+
+		// Find first occurrence
+		idx := strings.Index(thisStr, searchValue)
+		if idx == -1 {
 			return vm.NewString(thisStr), nil
 		}
 
-		searchArg := args[0]
-		replaceValue := args[1].ToString()
-
-		if searchArg.IsRegExp() {
-			// RegExp argument
-			regex := searchArg.AsRegExpObject()
-			compiledRegex := regex.GetCompiledRegex()
-
-			if regex.IsGlobal() {
-				// Global replace: replace all matches
-				result := compiledRegex.ReplaceAllString(thisStr, replaceValue)
-				return vm.NewString(result), nil
-			} else {
-				// Non-global: replace first match only
-				if loc := compiledRegex.FindStringIndex(thisStr); loc != nil {
-					// Replace only the first match
-					result := thisStr[:loc[0]] + replaceValue + thisStr[loc[1]:]
-					return vm.NewString(result), nil
-				}
-				return vm.NewString(thisStr), nil
+		var replacement string
+		if isCallable {
+			// Call replacer function with (matched, position, string)
+			vmInstance.EnterHelperCall()
+			res, err := vmInstance.Call(replaceArg, vm.Undefined, []vm.Value{
+				vm.NewString(searchValue),
+				vm.NumberValue(float64(idx)),
+				vm.NewString(thisStr),
+			})
+			vmInstance.ExitHelperCall()
+			if err != nil {
+				return vm.Undefined, err
 			}
+			replacement = res.ToString()
 		} else {
-			// String argument - legacy behavior (replace first occurrence only)
-			searchValue := searchArg.ToString()
-			result := strings.Replace(thisStr, searchValue, replaceValue, 1)
-			return vm.NewString(result), nil
+			// Process $ patterns in replacement string
+			replaceStr := replaceArg.ToString()
+			// For simple string search, we only have the match itself (no groups)
+			// Build a pseudo match slice: [start, end]
+			match := []int{idx, idx + len(searchValue)}
+			replacement = processStringReplacementPattern(thisStr, match, replaceStr)
 		}
+
+		result := thisStr[:idx] + replacement + thisStr[idx+len(searchValue):]
+		return vm.NewString(result), nil
 	}))
 
 	// String.prototype.replaceAll - replaces all occurrences of a search string/pattern
@@ -1456,32 +1580,139 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := requireObjectCoercible(vmInstance, thisVal, "replaceAll"); err != nil {
 			return vm.Undefined, err
 		}
+
+		// Get searchValue and replaceValue from args
+		var searchArg vm.Value
+		var replaceArg vm.Value
+		if len(args) > 0 {
+			searchArg = args[0]
+		} else {
+			searchArg = vm.Undefined
+		}
+		if len(args) > 1 {
+			replaceArg = args[1]
+		} else {
+			replaceArg = vm.Undefined
+		}
+
+		// Step 2: If searchValue is not null/undefined, check for Symbol.replace
+		if searchArg.Type() != vm.TypeUndefined && searchArg.Type() != vm.TypeNull {
+			// If it's a RegExp, check if it's global
+			if searchArg.IsRegExp() {
+				regexObj := searchArg.AsRegExpObject()
+				if !regexObj.IsGlobal() {
+					return vm.Undefined, vmInstance.NewTypeError("String.prototype.replaceAll called with a non-global RegExp argument")
+				}
+			}
+
+			vmInstance.EnterHelperCall()
+			replacer, ok, err := vmInstance.GetSymbolPropertyWithGetter(searchArg, SymbolReplace)
+			vmInstance.ExitHelperCall()
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+
+			// If replacer exists and is callable, invoke it
+			if ok && replacer.Type() != vm.TypeUndefined && replacer.Type() != vm.TypeNull {
+				if replacer.IsCallable() {
+					vmInstance.EnterHelperCall()
+					result, err := vmInstance.Call(replacer, searchArg, []vm.Value{thisVal, replaceArg})
+					vmInstance.ExitHelperCall()
+					if err != nil {
+						return vm.Undefined, err
+					}
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil
+					}
+					return vm.NewString(result.ToString()), nil
+				}
+			}
+		}
+
+		// Fallback: Convert this to string
 		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 2 {
-			return vm.NewString(thisStr), nil
-		}
 
-		searchArg := args[0]
-		replaceValue := args[1].ToString()
+		// Convert searchArg to string
+		searchValue := searchArg.ToString()
 
-		if searchArg.IsRegExp() {
-			// RegExp argument - must be global
-			regexObj := searchArg.AsRegExpObject()
-			if !regexObj.IsGlobal() {
-				return vm.Undefined, vmInstance.NewTypeError("String.prototype.replaceAll called with a non-global RegExp argument")
+		// Check if replaceArg is callable
+		isCallable := replaceArg.IsCallable()
+
+		// Handle empty string search
+		if searchValue == "" {
+			// Empty string matches between every character
+			var result strings.Builder
+			runes := []rune(thisStr)
+			for i := 0; i <= len(runes); i++ {
+				var replacement string
+				if isCallable {
+					vmInstance.EnterHelperCall()
+					res, err := vmInstance.Call(replaceArg, vm.Undefined, []vm.Value{
+						vm.NewString(""),
+						vm.NumberValue(float64(i)),
+						vm.NewString(thisStr),
+					})
+					vmInstance.ExitHelperCall()
+					if err != nil {
+						return vm.Undefined, err
+					}
+					replacement = res.ToString()
+				} else {
+					match := []int{i, i}
+					replacement = processStringReplacementPattern(thisStr, match, replaceArg.ToString())
+				}
+				result.WriteString(replacement)
+				if i < len(runes) {
+					result.WriteRune(runes[i])
+				}
 			}
-			compiledRegex := regexObj.GetCompiledRegex()
-			result := compiledRegex.ReplaceAllString(thisStr, replaceValue)
-			return vm.NewString(result), nil
-		} else {
-			// String argument - replace all occurrences
-			searchValue := searchArg.ToString()
-			result := strings.ReplaceAll(thisStr, searchValue, replaceValue)
-			return vm.NewString(result), nil
+			return vm.NewString(result.String()), nil
 		}
+
+		// Find all occurrences and replace
+		var result strings.Builder
+		lastIndex := 0
+		for {
+			idx := strings.Index(thisStr[lastIndex:], searchValue)
+			if idx == -1 {
+				break
+			}
+			idx += lastIndex // Convert to absolute index
+
+			// Add the part before the match
+			result.WriteString(thisStr[lastIndex:idx])
+
+			var replacement string
+			if isCallable {
+				vmInstance.EnterHelperCall()
+				res, err := vmInstance.Call(replaceArg, vm.Undefined, []vm.Value{
+					vm.NewString(searchValue),
+					vm.NumberValue(float64(idx)),
+					vm.NewString(thisStr),
+				})
+				vmInstance.ExitHelperCall()
+				if err != nil {
+					return vm.Undefined, err
+				}
+				replacement = res.ToString()
+			} else {
+				match := []int{idx, idx + len(searchValue)}
+				replacement = processStringReplacementPattern(thisStr, match, replaceArg.ToString())
+			}
+
+			result.WriteString(replacement)
+			lastIndex = idx + len(searchValue)
+		}
+
+		// Add the rest of the string
+		result.WriteString(thisStr[lastIndex:])
+		return vm.NewString(result.String()), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) (vm.Value, error) {
@@ -1490,53 +1721,101 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := requireObjectCoercible(vmInstance, thisVal, "match"); err != nil {
 			return vm.Undefined, err
 		}
+
+		// Get regexp argument
+		var regexpArg vm.Value = vm.Undefined
+		if len(args) >= 1 {
+			regexpArg = args[0]
+		}
+
+		// ECMAScript step 2: If regexp is neither undefined nor null,
+		// check for Symbol.match method and call it if exists
+		if regexpArg.Type() != vm.TypeUndefined && regexpArg.Type() != vm.TypeNull {
+			// Check for Symbol.match method
+			vmInstance.EnterHelperCall()
+			matcher, ok, err := vmInstance.GetSymbolPropertyWithGetter(regexpArg, SymbolMatch)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if ok && matcher.Type() != vm.TypeUndefined && matcher.Type() != vm.TypeNull {
+				if matcher.IsCallable() {
+					// Call matcher with regexp as 'this' and (O) as argument
+					vmInstance.EnterHelperCall()
+					result, err := vmInstance.Call(matcher, regexpArg, []vm.Value{thisVal})
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil
+					}
+					if err != nil {
+						return vm.Undefined, err
+					}
+					return result, nil
+				}
+			}
+		}
+
+		// ECMAScript step 3: Let string be ? ToString(O).
 		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.Null, nil
-		}
 
-		arg := args[0]
-		if arg.IsRegExp() {
-			// RegExp argument
-			regex := arg.AsRegExpObject()
-			compiledRegex := regex.GetCompiledRegex()
-
-			if regex.IsGlobal() {
-				// Global match: find all matches
-				matches := compiledRegex.FindAllString(thisStr, -1)
-				if len(matches) == 0 {
-					return vm.Null, nil
-				}
-				result := vm.NewArray()
-				arr := result.AsArray()
-				for _, match := range matches {
-					arr.Append(vm.NewString(match))
-				}
-				return result, nil
-			} else {
-				// Non-global: find first match with capture groups
-				matches := compiledRegex.FindStringSubmatch(thisStr)
-				if matches == nil {
-					return vm.Null, nil
-				}
-				result := vm.NewArray()
-				arr := result.AsArray()
-				for _, match := range matches {
-					arr.Append(vm.NewString(match))
-				}
-				return result, nil
+		// ECMAScript step 4: Let rx be ? RegExpCreate(regexp, undefined).
+		// ECMAScript step 5: Return ? Invoke(rx, @@match, « string »).
+		var pattern string
+		if regexpArg.Type() == vm.TypeUndefined {
+			pattern = ""
+		} else if regexpArg.IsRegExp() {
+			// Use existing RegExp's pattern
+			regexObj := regexpArg.AsRegExpObject()
+			pattern = regexObj.GetSource()
+		} else if regexpArg.IsObject() {
+			vmInstance.EnterHelperCall()
+			primVal := vmInstance.ToPrimitive(regexpArg, "string")
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
 			}
+			pattern = primVal.ToString()
 		} else {
-			// String argument - legacy behavior
-			pattern := arg.ToString()
-			if strings.Contains(thisStr, pattern) {
-				return vm.NewArrayWithArgs([]vm.Value{vm.NewString(pattern)}), nil
-			}
-			return vm.Null, nil
+			pattern = regexpArg.ToString()
 		}
+
+		// Create a new RegExp
+		rx, regexpErr := vm.NewRegExp(pattern, "")
+		if regexpErr != nil {
+			return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", regexpErr.Error())
+		}
+
+		// Invoke rx[@@match](string)
+		vmInstance.EnterHelperCall()
+		matchMethod, ok, err := vmInstance.GetSymbolPropertyWithGetter(rx, SymbolMatch)
+		vmInstance.ExitHelperCall()
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, nil
+		}
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if ok && matchMethod.IsCallable() {
+			vmInstance.EnterHelperCall()
+			result, err := vmInstance.Call(matchMethod, rx, []vm.Value{vm.NewString(thisStr)})
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return result, nil
+		}
+
+		// Fallback: no Symbol.match method
+		return vm.Null, nil
 	}))
 
 	// String.prototype.matchAll - returns an iterator of all matches
@@ -1546,39 +1825,114 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := requireObjectCoercible(vmInstance, thisVal, "matchAll"); err != nil {
 			return vm.Undefined, err
 		}
+
+		// Get regexp argument
+		var regexpArg vm.Value = vm.Undefined
+		if len(args) >= 1 {
+			regexpArg = args[0]
+		}
+
+		// ECMAScript step 2: If regexp is neither undefined nor null,
+		// check for Symbol.matchAll method and call it if exists
+		if regexpArg.Type() != vm.TypeUndefined && regexpArg.Type() != vm.TypeNull {
+			// First check: if regexp is a RegExp, check if it's global (required for matchAll)
+			if regexpArg.IsRegExp() {
+				regexObj := regexpArg.AsRegExpObject()
+				if !regexObj.IsGlobal() {
+					return vm.Undefined, vmInstance.NewTypeError("String.prototype.matchAll called with a non-global RegExp argument")
+				}
+			}
+
+			// Check for Symbol.matchAll method
+			vmInstance.EnterHelperCall()
+			matcher, ok, err := vmInstance.GetSymbolPropertyWithGetter(regexpArg, SymbolMatchAll)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if ok && matcher.Type() != vm.TypeUndefined && matcher.Type() != vm.TypeNull {
+				if matcher.IsCallable() {
+					// Call matcher with regexp as 'this' and (O) as argument
+					vmInstance.EnterHelperCall()
+					result, err := vmInstance.Call(matcher, regexpArg, []vm.Value{thisVal})
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil
+					}
+					if err != nil {
+						return vm.Undefined, err
+					}
+					return result, nil
+				}
+			}
+		}
+
+		// ECMAScript step 3: Let string be ? ToString(O).
 		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.Undefined, vmInstance.NewTypeError("String.prototype.matchAll called with undefined or null argument")
-		}
 
-		arg := args[0]
-		var compiledRegex *regexp.Regexp
-
-		if arg.IsRegExp() {
-			// RegExp argument - must be global
-			regexObj := arg.AsRegExpObject()
-			if !regexObj.IsGlobal() {
-				return vm.Undefined, vmInstance.NewTypeError("String.prototype.matchAll called with a non-global RegExp argument")
+		// ECMAScript step 4: Let rx be ? RegExpCreate(regexp, "g").
+		// ECMAScript step 5: Return ? Invoke(rx, @@matchAll, « string »).
+		// Always create a NEW RegExp to avoid inheriting overridden Symbol.matchAll from the instance
+		var pattern string
+		var flags string = "g"
+		if regexpArg.IsRegExp() {
+			// Get pattern and flags from existing RegExp
+			regexObj := regexpArg.AsRegExpObject()
+			pattern = regexObj.GetSource()
+			flags = regexObj.GetFlags()
+			if !strings.Contains(flags, "g") {
+				flags = flags + "g"
 			}
-			compiledRegex = regexObj.GetCompiledRegex()
+		} else if regexpArg.Type() == vm.TypeUndefined {
+			pattern = ""
+		} else if regexpArg.IsObject() {
+			vmInstance.EnterHelperCall()
+			primVal := vmInstance.ToPrimitive(regexpArg, "string")
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			pattern = primVal.ToString()
 		} else {
-			// String argument - create a global RegExp from it
-			pattern := regexp.QuoteMeta(arg.ToString())
-			var err error
-			compiledRegex, err = regexp.Compile(pattern)
-			if err != nil {
-				return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", err.Error())
-			}
+			pattern = regexpArg.ToString()
+		}
+		// Create a new global RegExp (fresh object without overridden properties)
+		rx, regexpErr := vm.NewRegExp(pattern, flags)
+		if regexpErr != nil {
+			return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", regexpErr.Error())
 		}
 
-		// Find all matches with indices
-		allMatches := compiledRegex.FindAllStringSubmatchIndex(thisStr, -1)
+		// Invoke rx[@@matchAll](string)
+		vmInstance.EnterHelperCall()
+		matchAllMethod, ok, err := vmInstance.GetSymbolPropertyWithGetter(rx, SymbolMatchAll)
+		vmInstance.ExitHelperCall()
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, nil
+		}
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if ok && matchAllMethod.IsCallable() {
+			vmInstance.EnterHelperCall()
+			result, err := vmInstance.Call(matchAllMethod, rx, []vm.Value{vm.NewString(thisStr)})
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return result, nil
+		}
 
-		// Create iterator that returns match results
-		return createMatchAllIterator(vmInstance, thisStr, allMatches, compiledRegex), nil
+		// Fallback: no Symbol.matchAll method
+		return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype[@@matchAll] is not a function")
 	}))
 
 	stringProto.SetOwnNonEnumerable("search", vm.NewNativeFunction(1, false, "search", func(args []vm.Value) (vm.Value, error) {
@@ -1587,31 +1941,108 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := requireObjectCoercible(vmInstance, thisVal, "search"); err != nil {
 			return vm.Undefined, err
 		}
+
+		// Get regexp argument
+		var regexpArg vm.Value = vm.Undefined
+		if len(args) >= 1 {
+			regexpArg = args[0]
+		}
+
+		// ECMAScript step 2: If regexp is neither undefined nor null,
+		// check for Symbol.search method and call it if exists
+		if regexpArg.Type() != vm.TypeUndefined && regexpArg.Type() != vm.TypeNull {
+			// Check for Symbol.search method
+			vmInstance.EnterHelperCall()
+			searcher, ok, err := vmInstance.GetSymbolPropertyWithGetter(regexpArg, SymbolSearch)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if ok && searcher.Type() != vm.TypeUndefined && searcher.Type() != vm.TypeNull {
+				// Check if searcher is callable (GetMethod returns undefined if null)
+				if searcher.IsCallable() {
+					// Call searcher with regexp as 'this' and (O) as argument
+					vmInstance.EnterHelperCall()
+					result, err := vmInstance.Call(searcher, regexpArg, []vm.Value{thisVal})
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil
+					}
+					if err != nil {
+						return vm.Undefined, err
+					}
+					return result, nil
+				}
+			}
+		}
+
+		// ECMAScript step 3: Let string be ? ToString(O).
 		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if len(args) < 1 {
-			return vm.NumberValue(-1), nil
-		}
 
-		arg := args[0]
-		if arg.IsRegExp() {
-			// RegExp argument
-			regex := arg.AsRegExpObject()
-			compiledRegex := regex.GetCompiledRegex()
-
-			loc := compiledRegex.FindStringIndex(thisStr)
-			if loc == nil {
-				return vm.NumberValue(-1), nil
-			}
-			return vm.NumberValue(float64(loc[0])), nil
+		// ECMAScript step 4: Let rx be ? RegExpCreate(regexp, undefined).
+		// ECMAScript step 5: Return ? Invoke(rx, @@search, « string »).
+		var rx vm.Value
+		if regexpArg.IsRegExp() {
+			// RegExp argument - use directly
+			rx = regexpArg
 		} else {
-			// String argument - legacy behavior
-			searchValue := arg.ToString()
-			index := strings.Index(thisStr, searchValue)
-			return vm.NumberValue(float64(index)), nil
+			// Convert to pattern string and create a RegExp
+			var pattern string
+			if regexpArg.Type() == vm.TypeUndefined {
+				// When undefined, search for "" (empty regex matches at position 0)
+				pattern = ""
+			} else if regexpArg.IsObject() {
+				// Call ToPrimitive for objects
+				vmInstance.EnterHelperCall()
+				primVal := vmInstance.ToPrimitive(regexpArg, "string")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
+				}
+				pattern = primVal.ToString()
+			} else {
+				pattern = regexpArg.ToString()
+			}
+			// Create RegExp object (this will inherit Symbol.search from RegExp.prototype)
+			var regexpErr error
+			rx, regexpErr = vm.NewRegExp(pattern, "")
+			if regexpErr != nil {
+				// Invalid regex pattern - return SyntaxError
+				return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", regexpErr.Error())
+			}
 		}
+
+		// Invoke rx[@@search](string) - this calls Symbol.search on the regex
+		vmInstance.EnterHelperCall()
+		searchMethod, ok, err := vmInstance.GetSymbolPropertyWithGetter(rx, SymbolSearch)
+		vmInstance.ExitHelperCall()
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, nil
+		}
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if ok && searchMethod.IsCallable() {
+			vmInstance.EnterHelperCall()
+			result, err := vmInstance.Call(searchMethod, rx, []vm.Value{vm.NewString(thisStr)})
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return result, nil
+		}
+
+		// Fallback if no Symbol.search (shouldn't happen for RegExp)
+		return vm.NumberValue(-1), nil
 	}))
 
 	// Create String constructor
@@ -1861,9 +2292,9 @@ func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int, c
 			}
 
 			// Add index property
-			matchResult.AsPlainObject().SetOwn("index", vm.NumberValue(float64(matchIndices[0])))
+			arr.SetOwn("index", vm.NumberValue(float64(matchIndices[0])))
 			// Add input property
-			matchResult.AsPlainObject().SetOwn("input", vm.NewString(str))
+			arr.SetOwn("input", vm.NewString(str))
 
 			result.SetOwn("value", matchResult)
 			result.SetOwn("done", vm.BooleanValue(false))

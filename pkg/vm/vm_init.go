@@ -358,6 +358,78 @@ func (vm *VM) GetSymbolPropertyWithGetter(obj Value, symbol Value) (Value, bool,
 	}
 	symKey := NewSymbolKey(symbol)
 
+	// Handle TypeRegExp - look up in RegExp.prototype
+	if obj.Type() == TypeRegExp {
+		// RegExp values check their Properties first, then RegExp.prototype
+		regexpObj := obj.AsRegExpObject()
+		if regexpObj.Properties != nil {
+			// Check for accessor (getter) first
+			if getter, _, _, _, ok := regexpObj.Properties.GetOwnAccessorByKey(symKey); ok {
+				if getter.Type() != TypeUndefined {
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						}
+						return Undefined, false, err
+					}
+					return result, true, nil
+				}
+				return Undefined, true, nil
+			}
+			// Check for regular property
+			if v, ok := regexpObj.Properties.GetOwnByKey(symKey); ok {
+				return v, true, nil
+			}
+		}
+		// Check RegExp.prototype
+		if vm.RegExpPrototype != Undefined && vm.RegExpPrototype.Type() == TypeObject {
+			proto := vm.RegExpPrototype.AsPlainObject()
+			// Check for accessor (getter) first
+			if getter, _, _, _, ok := proto.GetOwnAccessorByKey(symKey); ok {
+				if getter.Type() != TypeUndefined {
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						}
+						return Undefined, false, err
+					}
+					return result, true, nil
+				}
+				return Undefined, true, nil
+			}
+			// Check for regular property
+			if v, ok := proto.GetOwnByKey(symKey); ok {
+				return v, true, nil
+			}
+			// Also check Object.prototype via the prototype chain
+			protoVal := proto.GetPrototype()
+			if protoVal.Type() == TypeObject {
+				objProto := protoVal.AsPlainObject()
+				// Check for accessor (getter) first
+				if getter, _, _, _, ok := objProto.GetOwnAccessorByKey(symKey); ok {
+					if getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, obj, nil)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							}
+							return Undefined, false, err
+						}
+						return result, true, nil
+					}
+					return Undefined, true, nil
+				}
+				// Check for regular property
+				if v, ok := objProto.GetOwnByKey(symKey); ok {
+					return v, true, nil
+				}
+			}
+		}
+		return Undefined, false, nil
+	}
+
 	if obj.Type() == TypeObject {
 		po := obj.AsPlainObject()
 		if po == nil {

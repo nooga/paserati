@@ -146,8 +146,9 @@ type SymbolObject struct {
 
 type ArrayObject struct {
 	Object
-	length   int
-	elements []Value
+	length     int
+	elements   []Value
+	properties map[string]Value // Named properties (e.g., "index", "input" for match results)
 }
 
 type ArgumentsObject struct {
@@ -1754,6 +1755,23 @@ func (a *ArrayObject) HasIndex(index int) bool {
 	}
 	// Check if it's a hole (using the special Hole marker)
 	return a.elements[index].typ != TypeHole
+}
+
+// GetOwn returns a named property from the array (e.g., "index", "input" for match results)
+func (a *ArrayObject) GetOwn(name string) (Value, bool) {
+	if a.properties == nil {
+		return Undefined, false
+	}
+	v, ok := a.properties[name]
+	return v, ok
+}
+
+// SetOwn sets a named property on the array (e.g., "index", "input" for match results)
+func (a *ArrayObject) SetOwn(name string, value Value) {
+	if a.properties == nil {
+		a.properties = make(map[string]Value)
+	}
+	a.properties[name] = value
 }
 
 // ArgumentsObject methods
