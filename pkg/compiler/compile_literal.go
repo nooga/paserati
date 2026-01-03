@@ -239,18 +239,30 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			panic(fmt.Sprintf("compiler internal error: free variable %s not found in enclosing scope during closure creation", freeSym.Name))
 		}
 
-		if enclosingTable == c.currentSymbolTable {
-			debugPrintf("// [Closure Loop %s] Free '%s' is Local in enclosing. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register)
-			// The free variable is local in the *direct* enclosing scope.
+		// Check if enclosingTable is reachable from c.currentSymbolTable by walking the Outer chain
+		// If it is, the variable is within the same function's scope chain (just in an outer block)
+		// and we should use direct register access. Only if it's outside the enclosing function's
+		// scope chain should we treat it as a free variable of the enclosing function.
+		isWithinEnclosingFunction := false
+		for table := c.currentSymbolTable; table != nil; table = table.Outer {
+			if table == enclosingTable {
+				isWithinEnclosingFunction = true
+				break
+			}
+		}
+
+		if isWithinEnclosingFunction {
+			debugPrintf("// [Closure Loop %s] Free '%s' is in enclosing function's scope chain. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register)
+			// The free variable is within the enclosing function's scope (possibly in an outer block).
 			c.emitByte(1) // isLocal = true
 			// Capture the value from the enclosing scope's actual register
 			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
 		} else {
-			// The free variable is also a free variable in the enclosing scope.
+			// The free variable is outside the enclosing function's scope chain.
+			// It must be a free variable in the enclosing function as well.
 			// We need to capture it from the enclosing scope's upvalues.
-			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list.
 			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
-			debugPrintf("// [Closure Loop %s] Free '%s' is Outer in enclosing. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex)
+			debugPrintf("// [Closure Loop %s] Free '%s' is outside enclosing function. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex)
 			c.emitByte(0)                        // isLocal = false
 			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
 		}
