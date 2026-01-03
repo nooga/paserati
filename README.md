@@ -22,7 +22,7 @@ _Lights a cigarette._
 - **Native TypeScript Execution**: Full type checking and direct bytecode compilation - no transpilation, no tsc dependency.
 - **Safe Embedding**: Pluggable module resolution, execution quotas at VM level, Deno-like permission system for secure script execution in Go applications.
 - **Practical Performance**: Currently prioritizing correctness, but architecture supports type-driven optimizations (specialization, monomorphization, unchecked opcodes).
-- **Future Extensibility**: Once we hit 90% ES2025 compliance, building Deno/Node emulation layers on top - just for giggles.
+- **Future Extensibility**: Once we hit 99% ES2025 compliance, building Deno/Node emulation layers on top - just for giggles.
 
 ## Non-goals
 
