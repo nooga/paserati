@@ -18,7 +18,7 @@ Paserati compiles TypeScript/JavaScript directly to bytecode for a register-base
 
 _Lights a cigarette._
 
-- **ECMAScript 2025 Compliance**: Currently at 83.9% Test262 language suite pass rate (19,643/23,410 tests), targeting 90%+ for production readiness.
+- **ECMAScript 2025 Compliance**: Currently passing Test262 language suite at 92.0% (only 1851 tests left to pass).
 - **Native TypeScript Execution**: Full type checking and direct bytecode compilation - no transpilation, no tsc dependency.
 - **Safe Embedding**: Pluggable module resolution, execution quotas at VM level, Deno-like permission system for secure script execution in Go applications.
 - **Practical Performance**: Currently prioritizing correctness, but architecture supports type-driven optimizations (specialization, monomorphization, unchecked opcodes).
@@ -113,7 +113,7 @@ go test ./tests/...
 
 _Scratches a nasty red spot on the roof._
 
-**Test262 Compliance: 83.9%** (19,643/23,410 language suite tests passing)
+**Test262 Compliance: 92.0%** (21,536/23,410 language suite tests passing)
 
 The engine's running hot and crawling with bugs! Most ES2025 features are implemented and mostly working:
 
@@ -129,7 +129,7 @@ The engine's running hot and crawling with bugs! Most ES2025 features are implem
 - **Destructuring** - Arrays, objects, rest/spread in all contexts
 - **Built-ins** - Proxy, Reflect, Map, Set, TypedArrays, ArrayBuffer, RegExp, Symbol, BigInt
 - **Eval** - Direct and indirect eval with proper scoping (bugged)
-- **Namespaces** - Kinda working. 
+- **Namespaces** - Kinda working.
 
 Last time I checked it could run a pure TS library [date-fns](https://github.com/date-fns/date-fns) from source without any glaring issues. _Cough, not sure if it does so at every commit, but it did at the time of writing._
 
