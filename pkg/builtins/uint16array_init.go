@@ -43,11 +43,8 @@ func (u *Uint16ArrayInitializer) InitTypes(ctx *TypeContext) error {
 func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Get Object.prototype for inheritance
-	objectProto := vmInstance.ObjectPrototype
-
-	// Create Uint16Array.prototype inheriting from Object.prototype
-	uint16ArrayProto := vm.NewObject(objectProto).AsPlainObject()
+	// Create Uint16Array.prototype inheriting from TypedArray.prototype
+	uint16ArrayProto := vm.NewObject(vmInstance.TypedArrayPrototype).AsPlainObject()
 
 	// Add prototype properties
 	uint16ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(2))
@@ -330,9 +327,6 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewTypedArray(vm.TypedArrayUint16, args, 0, 0), nil
 	}))
-
-	// Add common TypedArray prototype methods
-	SetupTypedArrayPrototype(uint16ArrayProto, vmInstance)
 
 	// Set constructor property on prototype
 	uint16ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)

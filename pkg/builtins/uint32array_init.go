@@ -36,7 +36,7 @@ func (u *Uint32ArrayInitializer) InitTypes(ctx *TypeContext) error {
 
 func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmx := ctx.VM
-	proto := vm.NewObject(ctx.ObjectPrototype).AsPlainObject()
+	proto := vm.NewObject(vmx.TypedArrayPrototype).AsPlainObject()
 
 	proto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		ta := vmx.GetThis().AsTypedArray()
@@ -206,9 +206,6 @@ func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayUint32, 0, 0, 0), nil
 	})
-	// Add common TypedArray prototype methods
-	SetupTypedArrayPrototype(proto, vmx)
-
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
 	vmx.Uint32ArrayPrototype = vm.NewValueFromPlainObject(proto)
 	return ctx.DefineGlobal("Uint32Array", ctor)

@@ -43,11 +43,8 @@ func (u *Uint8ClampedArrayInitializer) InitTypes(ctx *TypeContext) error {
 func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Get Object.prototype for inheritance
-	objectProto := vmInstance.ObjectPrototype
-
-	// Create Uint8ClampedArray.prototype inheriting from Object.prototype
-	uint8ClampedArrayProto := vm.NewObject(objectProto).AsPlainObject()
+	// Create Uint8ClampedArray.prototype inheriting from TypedArray.prototype
+	uint8ClampedArrayProto := vm.NewObject(vmInstance.TypedArrayPrototype).AsPlainObject()
 
 	// Add prototype properties
 	uint8ClampedArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
@@ -330,9 +327,6 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewTypedArray(vm.TypedArrayUint8Clamped, args, 0, 0), nil
 	}))
-
-	// Add common TypedArray prototype methods
-	SetupTypedArrayPrototype(uint8ClampedArrayProto, vmInstance)
 
 	// Set constructor property on prototype
 	uint8ClampedArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)

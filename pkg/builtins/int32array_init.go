@@ -43,11 +43,8 @@ func (i *Int32ArrayInitializer) InitTypes(ctx *TypeContext) error {
 func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Get Object.prototype for inheritance
-	objectProto := vmInstance.ObjectPrototype
-
-	// Create Int32Array.prototype inheriting from Object.prototype
-	int32ArrayProto := vm.NewObject(objectProto).AsPlainObject()
+	// Create Int32Array.prototype inheriting from TypedArray.prototype
+	int32ArrayProto := vm.NewObject(vmInstance.TypedArrayPrototype).AsPlainObject()
 
 	// Add prototype properties
 	int32ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(4))
@@ -330,9 +327,6 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewTypedArray(vm.TypedArrayInt32, args, 0, 0), nil
 	}))
-
-	// Add common TypedArray prototype methods
-	SetupTypedArrayPrototype(int32ArrayProto, vmInstance)
 
 	// Set constructor property on prototype
 	int32ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)

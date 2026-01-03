@@ -44,11 +44,8 @@ func (i *BigInt64ArrayInitializer) InitTypes(ctx *TypeContext) error {
 func (i *BigInt64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Get Object.prototype for inheritance
-	objectProto := vmInstance.ObjectPrototype
-
-	// Create BigInt64Array.prototype inheriting from Object.prototype
-	bigInt64ArrayProto := vm.NewObject(objectProto).AsPlainObject()
+	// Create BigInt64Array.prototype inheriting from TypedArray.prototype
+	bigInt64ArrayProto := vm.NewObject(vmInstance.TypedArrayPrototype).AsPlainObject()
 
 	// Add prototype properties
 	bigInt64ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(8))
@@ -349,9 +346,6 @@ func (i *BigInt64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayBigInt64, values, 0, 0), nil
 	}))
-
-	// Add common TypedArray prototype methods
-	SetupTypedArrayPrototype(bigInt64ArrayProto, vmInstance)
 
 	// Set constructor property on prototype
 	bigInt64ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)

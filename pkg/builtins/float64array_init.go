@@ -43,11 +43,8 @@ func (u *Float64ArrayInitializer) InitTypes(ctx *TypeContext) error {
 func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Get Object.prototype for inheritance
-	objectProto := vmInstance.ObjectPrototype
-
-	// Create Float64Array.prototype inheriting from Object.prototype
-	float64ArrayProto := vm.NewObject(objectProto).AsPlainObject()
+	// Create Float64Array.prototype inheriting from TypedArray.prototype
+	float64ArrayProto := vm.NewObject(vmInstance.TypedArrayPrototype).AsPlainObject()
 
 	// Add prototype properties
 	float64ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(8))
@@ -330,9 +327,6 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
 		return vm.NewTypedArray(vm.TypedArrayFloat64, args, 0, 0), nil
 	}))
-
-	// Add common TypedArray prototype methods
-	SetupTypedArrayPrototype(float64ArrayProto, vmInstance)
 
 	// Set constructor property on prototype
 	float64ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)

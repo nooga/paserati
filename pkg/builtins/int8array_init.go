@@ -36,7 +36,7 @@ func (i *Int8ArrayInitializer) InitTypes(ctx *TypeContext) error {
 
 func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmx := ctx.VM
-	proto := vm.NewObject(ctx.ObjectPrototype).AsPlainObject()
+	proto := vm.NewObject(vmx.TypedArrayPrototype).AsPlainObject()
 
 	proto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
 
@@ -262,9 +262,6 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
 	}))
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) { return vm.NewTypedArray(vm.TypedArrayInt8, args, 0, 0), nil }))
-
-	// Add common TypedArray prototype methods
-	SetupTypedArrayPrototype(proto, vmx)
 
 	proto.SetOwnNonEnumerable("constructor", ctor)
 	vmx.Int8ArrayPrototype = vm.NewValueFromPlainObject(proto)

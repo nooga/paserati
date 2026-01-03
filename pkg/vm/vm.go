@@ -223,15 +223,16 @@ type VM struct {
 	escapedDirectCallBoundary bool  // true if unwinding skipped a direct-call frame to reach outer handler
 
 	// TypedArray prototypes
-	Uint8ArrayPrototype    Value
-	Int8ArrayPrototype     Value
-	Int16ArrayPrototype    Value
-	Uint16ArrayPrototype   Value
-	Uint32ArrayPrototype   Value
-	Int32ArrayPrototype    Value
-	Float32ArrayPrototype  Value
-	Float64ArrayPrototype  Value
-	BigInt64ArrayPrototype Value
+	TypedArrayPrototype     Value // Abstract %TypedArray%.prototype - all typed arrays inherit from this
+	Uint8ArrayPrototype     Value
+	Int8ArrayPrototype      Value
+	Int16ArrayPrototype     Value
+	Uint16ArrayPrototype    Value
+	Uint32ArrayPrototype    Value
+	Int32ArrayPrototype     Value
+	Float32ArrayPrototype   Value
+	Float64ArrayPrototype   Value
+	BigInt64ArrayPrototype  Value
 	BigUint64ArrayPrototype Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
