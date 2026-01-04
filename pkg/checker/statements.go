@@ -13,9 +13,14 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 
 	// 1. Check if already defined (belt-and-suspenders check)
 	// Note: We use c.env which IS the globalEnv during Pass 1
-	if _, exists := c.env.ResolveType(node.Name.Value); exists {
-		debugPrintf("// [Checker TypeAlias P1] Alias '%s' already defined? Skipping.\n", node.Name.Value)
-		return // Should not happen if parser prevents duplicates
+	// If the type exists but is a forward reference placeholder from Pass 0, we should continue
+	// to resolve the actual type
+	if existingType, exists := c.env.ResolveType(node.Name.Value); exists {
+		if _, isForwardRef := existingType.(*types.TypeAliasForwardReference); !isForwardRef {
+			debugPrintf("// [Checker TypeAlias P1] Alias '%s' already defined? Skipping.\n", node.Name.Value)
+			return // Should not happen if parser prevents duplicates
+		}
+		debugPrintf("// [Checker TypeAlias P1] Alias '%s' has forward reference, resolving now.\n", node.Name.Value)
 	}
 
 	// 2. Handle generic type aliases

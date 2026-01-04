@@ -9,9 +9,11 @@ import (
 
 // TypeGuard represents a detected type guard pattern
 type TypeGuard struct {
-	VariableName string     // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
-	NarrowedType types.Type // The type it's narrowed to (e.g., types.String)
-	IsNegated    bool       // true for !== checks, false for === checks
+	VariableName       string     // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
+	NarrowedType       types.Type // The type it's narrowed to (e.g., types.String)
+	IsNegated          bool       // true for !== checks, false for === checks
+	DiscriminantProp   string     // For discriminated unions: the property being checked (e.g., "kind")
+	DiscriminantValue  types.Type // For discriminated unions: the value being compared (e.g., literal "num")
 }
 
 // expressionToNarrowingKey converts an expression to a string key for narrowing.
@@ -150,6 +152,47 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 					}
 				}
 			}
+
+			// Pattern 3.5: member.property === literal (discriminated union narrowing)
+			// e.g., expr.kind === "num" narrows expr to the union member where kind is "num"
+			if memberExpr, ok := infix.Left.(*parser.MemberExpression); ok {
+				if propIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
+					if discriminantValue := c.literalToType(infix.Right); discriminantValue != nil {
+						baseKey := expressionToNarrowingKey(memberExpr.Object)
+						if baseKey != "" {
+							debugPrintf("// [detectTypeGuard] Discriminated union pattern: %s.%s === %s\n",
+								baseKey, propIdent.Value, discriminantValue.String())
+							return &TypeGuard{
+								VariableName:      baseKey,
+								NarrowedType:      nil, // Will be computed during narrowing
+								IsNegated:         isNegative,
+								DiscriminantProp:  propIdent.Value,
+								DiscriminantValue: discriminantValue,
+							}
+						}
+					}
+				}
+			}
+
+			// Pattern 3.6: literal === member.property (discriminated union, reversed)
+			if memberExpr, ok := infix.Right.(*parser.MemberExpression); ok {
+				if propIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
+					if discriminantValue := c.literalToType(infix.Left); discriminantValue != nil {
+						baseKey := expressionToNarrowingKey(memberExpr.Object)
+						if baseKey != "" {
+							debugPrintf("// [detectTypeGuard] Discriminated union pattern (reversed): %s === %s.%s\n",
+								discriminantValue.String(), baseKey, propIdent.Value)
+							return &TypeGuard{
+								VariableName:      baseKey,
+								NarrowedType:      nil, // Will be computed during narrowing
+								IsNegated:         isNegative,
+								DiscriminantProp:  propIdent.Value,
+								DiscriminantValue: discriminantValue,
+							}
+						}
+					}
+				}
+			}
 		}
 		
 		// Pattern 4: "property" in identifier (e.g., "foo" in obj)
@@ -285,7 +328,57 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	if isMemberExpression {
 		// For member expressions like "this.value" or "obj.prop", we store the narrowing
 		// in a separate map that will be consulted when checking member expressions
-		debugPrintf("// [TypeNarrowing] Member expression narrowing detected: %s -> %s\n", guard.VariableName, guard.NarrowedType.String())
+
+		var narrowedType types.Type
+
+		// Check if this is a discriminant guard on a member expression
+		if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
+			// For discriminant guards, we need to compute the narrowed type
+			// First, get the original type of the member expression from the narrowings or by resolving
+			var originalType types.Type
+			if existingNarrowing, exists := c.env.narrowings[guard.VariableName]; exists {
+				originalType = existingNarrowing
+			} else {
+				// Try to resolve the root identifier to infer the member's type
+				// For now, we'll return nil - discriminant narrowing on member expressions
+				// requires more complex resolution
+				debugPrintf("// [TypeNarrowing] Discriminant guard on member expression %s.%s, but cannot resolve original type\n",
+					guard.VariableName, guard.DiscriminantProp)
+				return nil
+			}
+
+			// The original type must be a union for discriminated narrowing
+			if unionType, ok := originalType.(*types.UnionType); ok {
+				var matchingMembers []types.Type
+				for _, memberType := range unionType.Types {
+					if c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
+						matchingMembers = append(matchingMembers, memberType)
+						debugPrintf("// [TypeNarrowing] Member expr union member matches discriminant: %s\n", memberType.String())
+					}
+				}
+
+				if len(matchingMembers) > 0 {
+					if len(matchingMembers) == 1 {
+						narrowedType = matchingMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(matchingMembers...)
+					}
+				}
+			}
+
+			if narrowedType == nil {
+				debugPrintf("// [TypeNarrowing] Member expr discriminant narrowing failed for %s\n", guard.VariableName)
+				return nil
+			}
+		} else {
+			narrowedType = guard.NarrowedType
+			if narrowedType == nil {
+				debugPrintf("// [TypeNarrowing] Member expression narrowing has nil type for %s\n", guard.VariableName)
+				return nil
+			}
+		}
+
+		debugPrintf("// [TypeNarrowing] Member expression narrowing detected: %s -> %s\n", guard.VariableName, narrowedType.String())
 
 		// Create a new environment with the narrowing
 		newEnv := NewEnclosedEnvironment(c.env)
@@ -302,7 +395,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 			}
 		}
 		// Add the new narrowing
-		newEnv.narrowings[guard.VariableName] = guard.NarrowedType
+		newEnv.narrowings[guard.VariableName] = narrowedType
 		debugPrintf("// [TypeNarrowing] Stored member narrowing in environment\n")
 		return newEnv
 	}
@@ -311,6 +404,43 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	originalType, isConst, found = c.env.Resolve(guard.VariableName)
 	if !found {
 		debugPrintf("// [TypeNarrowing] Variable '%s' not found for narrowing\n", guard.VariableName)
+		return nil
+	}
+
+	// Handle discriminated union narrowing (e.g., expr.kind === "num")
+	if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
+		debugPrintf("// [TypeNarrowing] Discriminated union narrowing: %s.%s === %s\n",
+			guard.VariableName, guard.DiscriminantProp, guard.DiscriminantValue.String())
+
+		// The original type must be a union for discriminated narrowing
+		if unionType, ok := originalType.(*types.UnionType); ok {
+			var matchingMembers []types.Type
+			for _, memberType := range unionType.Types {
+				// Check if this union member has the discriminant property with a matching value
+				if c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
+					matchingMembers = append(matchingMembers, memberType)
+					debugPrintf("// [TypeNarrowing] Union member matches discriminant: %s\n", memberType.String())
+				}
+			}
+
+			if len(matchingMembers) > 0 {
+				var narrowedType types.Type
+				if len(matchingMembers) == 1 {
+					narrowedType = matchingMembers[0]
+				} else {
+					narrowedType = types.NewUnionType(matchingMembers...)
+				}
+
+				debugPrintf("// [TypeNarrowing] Narrowed '%s' to discriminated type: %s\n",
+					guard.VariableName, narrowedType.String())
+
+				narrowedEnv := NewEnclosedEnvironment(c.env)
+				narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+				return narrowedEnv
+			}
+		}
+
+		debugPrintf("// [TypeNarrowing] Discriminated union narrowing failed for '%s'\n", guard.VariableName)
 		return nil
 	}
 
@@ -484,7 +614,64 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		// For member expressions, we need to apply complement narrowing
 		// We need to get the original type to compute the complement
 		// For typeof checks on union types, the complement is "union minus the narrowed type"
-		// Since we can't easily resolve the member expression's type here, we use a marker
+
+		// Check if this is a discriminant guard on a member expression
+		if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
+			// For discriminant guards on member expressions, we need to compute the complement
+			var originalType types.Type
+			if existingNarrowing, exists := c.env.narrowings[guard.VariableName]; exists {
+				originalType = existingNarrowing
+			} else {
+				debugPrintf("// [InvertedTypeNarrowing] Discriminant guard on member expression %s.%s, but cannot resolve original type\n",
+					guard.VariableName, guard.DiscriminantProp)
+				return nil
+			}
+
+			if unionType, ok := originalType.(*types.UnionType); ok {
+				var nonMatchingMembers []types.Type
+				for _, memberType := range unionType.Types {
+					if !c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
+						nonMatchingMembers = append(nonMatchingMembers, memberType)
+						debugPrintf("// [InvertedTypeNarrowing] Member expr union member does not match: %s\n", memberType.String())
+					}
+				}
+
+				if len(nonMatchingMembers) > 0 {
+					var narrowedType types.Type
+					if len(nonMatchingMembers) == 1 {
+						narrowedType = nonMatchingMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(nonMatchingMembers...)
+					}
+
+					newEnv := NewEnclosedEnvironment(c.env)
+					for k, v := range c.env.narrowings {
+						newEnv.narrowings[k] = v
+					}
+					if c.env.outer != nil && c.env.outer.narrowings != nil {
+						for k, v := range c.env.outer.narrowings {
+							if _, exists := newEnv.narrowings[k]; !exists {
+								newEnv.narrowings[k] = v
+							}
+						}
+					}
+					newEnv.narrowings[guard.VariableName] = narrowedType
+					debugPrintf("// [InvertedTypeNarrowing] Member expr discriminant else narrowing: %s -> %s\n",
+						guard.VariableName, narrowedType.String())
+					return newEnv
+				}
+			}
+
+			debugPrintf("// [InvertedTypeNarrowing] Member expr discriminant else narrowing failed for %s\n", guard.VariableName)
+			return nil
+		}
+
+		// Non-discriminant member expression complement narrowing
+		if guard.NarrowedType == nil {
+			debugPrintf("// [InvertedTypeNarrowing] Member expression complement narrowing has nil type for %s\n", guard.VariableName)
+			return nil
+		}
+
 		debugPrintf("// [InvertedTypeNarrowing] Member expression complement narrowing: %s\n", guard.VariableName)
 
 		// Create a special marker indicating this is a complement narrowing
@@ -518,9 +705,45 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		return nil
 	}
 
+	// Handle discriminated union narrowing in else branch
+	// e.g., after "if (expr.kind === 'num')", the else branch has all members except those with kind='num'
+	if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
+		debugPrintf("// [InvertedTypeNarrowing] Discriminated union else branch: %s.%s !== %s\n",
+			guard.VariableName, guard.DiscriminantProp, guard.DiscriminantValue.String())
+
+		if unionType, ok := originalType.(*types.UnionType); ok {
+			var nonMatchingMembers []types.Type
+			for _, memberType := range unionType.Types {
+				if !c.memberMatchesDiscriminant(memberType, guard.DiscriminantProp, guard.DiscriminantValue) {
+					nonMatchingMembers = append(nonMatchingMembers, memberType)
+					debugPrintf("// [InvertedTypeNarrowing] Union member does not match: %s\n", memberType.String())
+				}
+			}
+
+			if len(nonMatchingMembers) > 0 {
+				var narrowedType types.Type
+				if len(nonMatchingMembers) == 1 {
+					narrowedType = nonMatchingMembers[0]
+				} else {
+					narrowedType = types.NewUnionType(nonMatchingMembers...)
+				}
+
+				debugPrintf("// [InvertedTypeNarrowing] Narrowed '%s' to non-matching types: %s\n",
+					guard.VariableName, narrowedType.String())
+
+				narrowedEnv := NewEnclosedEnvironment(c.env)
+				narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+				return narrowedEnv
+			}
+		}
+
+		debugPrintf("// [InvertedTypeNarrowing] Discriminated union else branch failed for '%s'\n", guard.VariableName)
+		return nil
+	}
+
 	// Handle union types: remove the narrowed type from the union
 	if unionType, ok := originalType.(*types.UnionType); ok {
-		if unionType.ContainsType(guard.NarrowedType) {
+		if guard.NarrowedType != nil && unionType.ContainsType(guard.NarrowedType) {
 			remainingType := unionType.RemoveType(guard.NarrowedType)
 
 			// Create environment with the remaining type(s)
@@ -919,6 +1142,50 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 	}
 	
 	return false
+}
+
+// memberMatchesDiscriminant checks if a union member has a discriminant property
+// with a value that matches the expected literal type.
+// Used for discriminated union narrowing like: if (expr.kind === "num")
+func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName string, expectedValue types.Type) bool {
+	// Get the object type (resolve forward references if needed)
+	var objType *types.ObjectType
+
+	switch t := memberType.(type) {
+	case *types.ObjectType:
+		objType = t
+	case *types.TypeAliasForwardReference:
+		// Resolve forward reference
+		if resolved, found := c.env.ResolveType(t.AliasName); found {
+			if obj, ok := resolved.(*types.ObjectType); ok {
+				objType = obj
+			}
+		}
+	default:
+		return false
+	}
+
+	if objType == nil {
+		return false
+	}
+
+	// Check if the object has the discriminant property
+	propType, exists := objType.Properties[propName]
+	if !exists {
+		return false
+	}
+
+	// Check if the property type matches the expected value
+	// For literal types, we need to compare the literal values using StrictlyEquals
+	if expectedLit, ok := expectedValue.(*types.LiteralType); ok {
+		if propLit, ok := propType.(*types.LiteralType); ok {
+			// Compare literal values using VM's StrictlyEquals
+			return propLit.Value.StrictlyEquals(expectedLit.Value)
+		}
+	}
+
+	// For general type comparison
+	return types.IsAssignable(expectedValue, propType)
 }
 
 // typeHasProperty checks if a type has a specific property

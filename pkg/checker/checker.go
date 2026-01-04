@@ -437,9 +437,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// This allows mutually recursive interfaces like:
 	//   interface A { b: B; }
 	//   interface B { a: A; }
-	// NOTE: Only pre-register NON-GENERIC interfaces. Generic interfaces are handled
-	// differently because they need proper type parameter processing.
-	debugPrintf("\n// --- Checker - Pass 0: Pre-registering Interface Names ---\n")
+	// NOTE: Only pre-register NON-GENERIC interfaces and type aliases. Generic types
+	// are handled differently because they need proper type parameter processing.
+	debugPrintf("\n// --- Checker - Pass 0: Pre-registering Interface and Type Alias Names ---\n")
 	for _, stmt := range program.Statements {
 		if interfaceStmt, ok := stmt.(*parser.InterfaceDeclaration); ok {
 			// Only pre-register non-generic interfaces
@@ -451,6 +451,18 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					}
 					c.env.DefineTypeAlias(interfaceStmt.Name.Value, placeholderType)
 					debugPrintf("// [Checker Pass 0] Pre-registered interface '%s'\n", interfaceStmt.Name.Value)
+				}
+			}
+		} else if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
+			// Only pre-register non-generic type aliases
+			if len(aliasStmt.TypeParameters) == 0 {
+				if _, exists := c.env.ResolveType(aliasStmt.Name.Value); !exists {
+					// Use a forward reference placeholder that will be resolved in Pass 1
+					placeholderType := &types.TypeAliasForwardReference{
+						AliasName: aliasStmt.Name.Value,
+					}
+					c.env.DefineTypeAlias(aliasStmt.Name.Value, placeholderType)
+					debugPrintf("// [Checker Pass 0] Pre-registered type alias '%s'\n", aliasStmt.Name.Value)
 				}
 			}
 		} else if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok {
@@ -465,6 +477,17 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 							}
 							c.env.DefineTypeAlias(interfaceStmt.Name.Value, placeholderType)
 							debugPrintf("// [Checker Pass 0] Pre-registered exported interface '%s'\n", interfaceStmt.Name.Value)
+						}
+					}
+				} else if aliasStmt, ok := exportStmt.Declaration.(*parser.TypeAliasStatement); ok {
+					// Only pre-register non-generic type aliases
+					if len(aliasStmt.TypeParameters) == 0 {
+						if _, exists := c.env.ResolveType(aliasStmt.Name.Value); !exists {
+							placeholderType := &types.TypeAliasForwardReference{
+								AliasName: aliasStmt.Name.Value,
+							}
+							c.env.DefineTypeAlias(aliasStmt.Name.Value, placeholderType)
+							debugPrintf("// [Checker Pass 0] Pre-registered exported type alias '%s'\n", aliasStmt.Name.Value)
 						}
 					}
 				}

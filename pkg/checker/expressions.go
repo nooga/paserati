@@ -1306,6 +1306,25 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				c.addError(node.Object, fmt.Sprintf("could not resolve parameterized forward reference %s", obj.String()))
 				resultType = types.Never
 			}
+		case *types.TypeAliasForwardReference:
+			// Handle property access on type alias forward reference
+			// Resolve the forward reference to the actual type
+			debugPrintf("// [Checker MemberExpr] TypeAliasForwardReference: %s, property: %s\n", obj.AliasName, propertyName)
+			if resolvedAlias, found := c.env.ResolveType(obj.AliasName); found {
+				if _, stillForward := resolvedAlias.(*types.TypeAliasForwardReference); !stillForward {
+					// Type has been resolved - recursively check property access
+					debugPrintf("// [Checker MemberExpr] Resolved type alias '%s' to: %T = %s\n", obj.AliasName, resolvedAlias, resolvedAlias.String())
+					savedObjectType := node.Object.GetComputedType()
+					node.Object.SetComputedType(resolvedAlias)
+					c.checkMemberExpression(node)
+					resultType = node.GetComputedType()
+					node.Object.SetComputedType(savedObjectType)
+					node.SetComputedType(resultType)
+					return // Skip setting the computed type again at the end
+				}
+			}
+			c.addError(node.Object, fmt.Sprintf("could not resolve type alias '%s'", obj.AliasName))
+			resultType = types.Never
 		// Add cases for other struct-based types here if needed
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.

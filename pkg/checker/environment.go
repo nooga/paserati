@@ -216,12 +216,19 @@ func (e *Environment) Update(name string, typ types.Type) bool {
 }
 
 // DefineTypeAlias adds a new *type alias* binding to the current environment scope.
-// Returns false if the alias name conflicts with an existing type alias in this scope.
+// Returns false if the alias name conflicts with an existing type alias in this scope,
+// unless the existing alias is a forward reference (which can be overwritten).
 // Note: TypeScript-style declaration merging allows the same name to exist as both a value and a type.
 func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
 	// Check for conflict with existing type alias in this scope
-	if _, exists := e.typeAliases[name]; exists {
-		return false
+	if existingType, exists := e.typeAliases[name]; exists {
+		// Allow overwriting forward references with the actual type
+		if _, isForwardRef := existingType.(*types.TypeAliasForwardReference); !isForwardRef {
+			// Also allow overwriting empty object placeholders (used for interface forward refs)
+			if objType, isObj := existingType.(*types.ObjectType); !isObj || len(objType.Properties) > 0 || len(objType.CallSignatures) > 0 {
+				return false
+			}
+		}
 	}
 	// Allow coexistence with symbols (values) - this enables declaration merging for classes
 	e.typeAliases[name] = typ
