@@ -110,6 +110,33 @@ func IsAssignable(source, target Type) bool {
 		return IsAssignable(source, concreteTarget)
 	}
 
+	// GenericType handling - for generic methods in interfaces
+	// When target is a GenericType (generic method signature) and source is an ObjectType (method implementation)
+	if targetGeneric, ok := target.(*GenericType); ok {
+		// Check if source is a callable ObjectType
+		if sourceObj, ok := source.(*ObjectType); ok && sourceObj.IsCallable() {
+			// Get the body of the generic type (the function signature)
+			if bodyObj, ok := targetGeneric.Body.(*ObjectType); ok && bodyObj.IsCallable() {
+				// Compare call signatures structurally, ignoring type parameters
+				sourceSigs := sourceObj.GetCallSignatures()
+				bodySigs := bodyObj.GetCallSignatures()
+				if len(sourceSigs) > 0 && len(bodySigs) > 0 {
+					// Check if parameter counts match (simplified check)
+					if len(sourceSigs[0].ParameterTypes) == len(bodySigs[0].ParameterTypes) {
+						return true
+					}
+				}
+			}
+		}
+		// Also handle GenericType to GenericType comparison
+		if sourceGeneric, ok := source.(*GenericType); ok {
+			// Compare type parameter counts and body types
+			if len(sourceGeneric.TypeParameters) == len(targetGeneric.TypeParameters) {
+				return IsAssignable(sourceGeneric.Body, targetGeneric.Body)
+			}
+		}
+	}
+
 	// Union type handling
 	sourceUnion, sourceIsUnion := source.(*UnionType)
 	targetUnion, targetIsUnion := target.(*UnionType)

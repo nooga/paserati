@@ -138,33 +138,45 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// Called during Pass 1 for interface declarations
 
-	// 1. Check if already defined
-	if _, exists := c.env.ResolveType(node.Name.Value); exists {
-		debugPrintf("// [Checker Interface P1] Interface '%s' already defined? Skipping.\n", node.Name.Value)
-		return
-	}
-
-	// 2. Handle generic interfaces
+	// 1. Handle generic interfaces
 	if len(node.TypeParameters) > 0 {
 		c.checkGenericInterfaceDeclaration(node)
 		return
 	}
 
-	// 2. Build the ObjectType from interface properties, including inheritance
-	properties := make(map[string]types.Type)
-	optionalProperties := make(map[string]bool)
-	var indexSignatures []*types.IndexSignature
+	// 2. Check if already defined - but allow updating pre-registered placeholders
+	var interfaceType *types.ObjectType
+	if existingType, exists := c.env.ResolveType(node.Name.Value); exists {
+		// Check if this is a pre-registered placeholder (empty properties)
+		if objType, ok := existingType.(*types.ObjectType); ok && len(objType.Properties) == 0 {
+			// This is a placeholder from Pass 0 - use it and populate it
+			interfaceType = objType
+			debugPrintf("// [Checker Interface P1] Populating pre-registered placeholder for interface '%s'\n", node.Name.Value)
+		} else {
+			// Already fully defined, skip
+			debugPrintf("// [Checker Interface P1] Interface '%s' already defined? Skipping.\n", node.Name.Value)
+			return
+		}
+	} else {
+		// Not pre-registered, create new
+		interfaceType = &types.ObjectType{
+			Properties:         make(map[string]types.Type),
+			OptionalProperties: make(map[string]bool),
+		}
+		if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
+			debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
+		}
+		debugPrintf("// [Checker Interface P1] Pre-registered interface '%s' for self-reference support\n", node.Name.Value)
+	}
 
-	// IMPORTANT: Register the interface type FIRST (as placeholder) to allow self-referencing
-	// The ObjectType is a pointer, so we can fill in properties after registration
-	interfaceType := &types.ObjectType{
-		Properties:         properties,
-		OptionalProperties: optionalProperties,
+	// Use the interface type's properties maps (either from placeholder or new)
+	properties := interfaceType.Properties
+	optionalProperties := interfaceType.OptionalProperties
+	if optionalProperties == nil {
+		optionalProperties = make(map[string]bool)
+		interfaceType.OptionalProperties = optionalProperties
 	}
-	if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
-		debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
-	}
-	debugPrintf("// [Checker Interface P1] Pre-registered interface '%s' for self-reference support\n", node.Name.Value)
+	var indexSignatures []*types.IndexSignature
 
 	// First, inherit properties from extended interfaces
 	for _, extendedInterfaceExpr := range node.Extends {

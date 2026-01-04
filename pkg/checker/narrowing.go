@@ -955,10 +955,43 @@ func (c *Checker) typeHasProperty(t types.Type, propertyName string) bool {
 		default:
 			return false
 		}
-		
+
 		if methodType := c.env.GetPrimitivePrototypeMethodType(primitiveKey, propertyName); methodType != nil {
 			return true
 		}
+		return false
+	}
+}
+
+// blockAlwaysTerminates checks if a block or statement always terminates control flow
+// (via return, throw, break, continue). This is used for control flow narrowing.
+func blockAlwaysTerminates(node parser.Node) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.(type) {
+	case *parser.ReturnStatement:
+		return true
+	case *parser.ThrowStatement:
+		return true
+	case *parser.BreakStatement:
+		return true
+	case *parser.ContinueStatement:
+		return true
+	case *parser.BlockStatement:
+		// A block terminates if its last statement terminates
+		if len(n.Statements) == 0 {
+			return false
+		}
+		return blockAlwaysTerminates(n.Statements[len(n.Statements)-1])
+	case *parser.IfStatement:
+		// If statement terminates only if BOTH branches terminate
+		if n.Alternative == nil {
+			return false
+		}
+		return blockAlwaysTerminates(n.Consequence) && blockAlwaysTerminates(n.Alternative)
+	default:
 		return false
 	}
 }

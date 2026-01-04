@@ -509,6 +509,20 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	}
 
+	// Handle GenericType (for generic methods in interfaces)
+	// When calling a generic method, extract the body (the callable function type)
+	if genericType, ok := funcNodeType.(*types.GenericType); ok {
+		// The body should be the callable function type
+		if bodyObj, ok := genericType.Body.(*types.ObjectType); ok && bodyObj.IsCallable() {
+			debugPrintf("// [Checker CallExpr] Calling generic method, using body type: %s\n", bodyObj.String())
+			funcNodeType = bodyObj
+		} else {
+			c.addError(node, fmt.Sprintf("cannot call generic type '%s' (body is not callable)", funcNodeType.String()))
+			node.SetComputedType(types.Any)
+			return
+		}
+	}
+
 	// Handle callable ObjectType with unified approach
 	objType, ok := funcNodeType.(*types.ObjectType)
 	if !ok {
@@ -1233,7 +1247,7 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 				// Compare the first call signature (most common case)
 				pSig := pType.CallSignatures[0]
 				aSig := aType.CallSignatures[0]
-				
+
 				// Collect constraints from parameter types (contravariant)
 				minParams := len(pSig.ParameterTypes)
 				if len(aSig.ParameterTypes) < minParams {
@@ -1243,11 +1257,22 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 					paramConstraints := c.collectConstraintsFromType(pSig.ParameterTypes[i], aSig.ParameterTypes[i])
 					constraints = append(constraints, paramConstraints...)
 				}
-				
+
 				// Collect constraints from return type (covariant)
 				if pSig.ReturnType != nil && aSig.ReturnType != nil {
 					returnConstraints := c.collectConstraintsFromType(pSig.ReturnType, aSig.ReturnType)
 					constraints = append(constraints, returnConstraints...)
+				}
+			}
+
+			// Also handle regular object types with properties that may contain type parameters
+			// e.g., { value: T } matched against { value: "hello" } should infer T = string
+			if len(pType.Properties) > 0 {
+				for propName, paramPropType := range pType.Properties {
+					if argPropType, exists := aType.Properties[propName]; exists {
+						propConstraints := c.collectConstraintsFromType(paramPropType, argPropType)
+						constraints = append(constraints, propConstraints...)
+					}
 				}
 			}
 		}

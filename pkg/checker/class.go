@@ -1368,8 +1368,8 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 			continue
 		}
 
-		// Check type compatibility
-		if !types.IsAssignable(classProperty, propType) {
+		// Check type compatibility - handle generic methods specially
+		if !c.isCompatibleWithInterfaceProperty(classProperty, propType) {
 			c.addError(nil, fmt.Sprintf("property '%s' in class '%s' is not compatible with interface '%s' (expected %s, got %s)",
 				propName, className, interfaceName, propType.String(), classProperty.String()))
 		}
@@ -1384,6 +1384,60 @@ func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, i
 	}
 
 	debugPrintf("// [Checker Class] Interface implementation validation completed for %s implements %s\n", className, interfaceName)
+}
+
+// isCompatibleWithInterfaceProperty checks if a class property is compatible with an interface property
+// This handles the special case where the interface has a generic method (GenericType)
+// and the class has a concrete method implementation (ObjectType with call signatures)
+func (c *Checker) isCompatibleWithInterfaceProperty(classProperty, interfaceProperty types.Type) bool {
+	// First try the standard assignability check
+	if types.IsAssignable(classProperty, interfaceProperty) {
+		return true
+	}
+
+	// Handle the case where interface has a generic method (GenericType)
+	// and class has a method implementation (ObjectType with call signatures)
+	if genericType, ok := interfaceProperty.(*types.GenericType); ok {
+		// Interface property is a generic method like transform<T, U>(...)
+		debugPrintf("// [Checker Class] Interface property is GenericType: %s\n", genericType.String())
+
+		// Class property should be a callable ObjectType
+		classObjType, ok := classProperty.(*types.ObjectType)
+		if !ok || !classObjType.IsCallable() {
+			return false
+		}
+
+		// Get the underlying function type from the generic type's body
+		bodyObjType, ok := genericType.Body.(*types.ObjectType)
+		if !ok || !bodyObjType.IsCallable() {
+			return false
+		}
+
+		// Compare call signatures structurally (ignoring type parameters)
+		// For now, just check that both have call signatures with matching arity
+		classSigs := classObjType.GetCallSignatures()
+		bodySigs := bodyObjType.GetCallSignatures()
+
+		if len(classSigs) == 0 || len(bodySigs) == 0 {
+			return false
+		}
+
+		// Compare the first signature (simplified check)
+		classSig := classSigs[0]
+		bodySig := bodySigs[0]
+
+		// Check parameter count matches
+		if len(classSig.ParameterTypes) != len(bodySig.ParameterTypes) {
+			debugPrintf("// [Checker Class] Parameter count mismatch: class has %d, interface has %d\n",
+				len(classSig.ParameterTypes), len(bodySig.ParameterTypes))
+			return false
+		}
+
+		debugPrintf("// [Checker Class] Generic method compatibility check passed\n")
+		return true
+	}
+
+	return false
 }
 
 // inferReturnType determines the return type of a function

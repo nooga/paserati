@@ -433,6 +433,45 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	nodesProcessedPass2 := make(map[parser.Node]bool)   // Nodes handled in Pass 2 (Signatures/Vars)
 	functionsToVisitBody := []*parser.FunctionLiteral{} // Function literals needing body check in Pass 3
 
+	// --- Pass 0: Pre-register all interface names as forward references ---
+	// This allows mutually recursive interfaces like:
+	//   interface A { b: B; }
+	//   interface B { a: A; }
+	// NOTE: Only pre-register NON-GENERIC interfaces. Generic interfaces are handled
+	// differently because they need proper type parameter processing.
+	debugPrintf("\n// --- Checker - Pass 0: Pre-registering Interface Names ---\n")
+	for _, stmt := range program.Statements {
+		if interfaceStmt, ok := stmt.(*parser.InterfaceDeclaration); ok {
+			// Only pre-register non-generic interfaces
+			if len(interfaceStmt.TypeParameters) == 0 {
+				if _, exists := c.env.ResolveType(interfaceStmt.Name.Value); !exists {
+					placeholderType := &types.ObjectType{
+						Properties:         make(map[string]types.Type),
+						OptionalProperties: make(map[string]bool),
+					}
+					c.env.DefineTypeAlias(interfaceStmt.Name.Value, placeholderType)
+					debugPrintf("// [Checker Pass 0] Pre-registered interface '%s'\n", interfaceStmt.Name.Value)
+				}
+			}
+		} else if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok {
+			if exportStmt.Declaration != nil {
+				if interfaceStmt, ok := exportStmt.Declaration.(*parser.InterfaceDeclaration); ok {
+					// Only pre-register non-generic interfaces
+					if len(interfaceStmt.TypeParameters) == 0 {
+						if _, exists := c.env.ResolveType(interfaceStmt.Name.Value); !exists {
+							placeholderType := &types.ObjectType{
+								Properties:         make(map[string]types.Type),
+								OptionalProperties: make(map[string]bool),
+							}
+							c.env.DefineTypeAlias(interfaceStmt.Name.Value, placeholderType)
+							debugPrintf("// [Checker Pass 0] Pre-registered exported interface '%s'\n", interfaceStmt.Name.Value)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// --- Pass 1: Define ALL Type Aliases ---
 	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases, Interfaces, Classes, and Processing Imports ---\n")
 	for _, stmt := range program.Statements {
@@ -2545,10 +2584,11 @@ func (c *Checker) visit(node parser.Node) {
 		// Restore original environment before checking alternative
 		c.env = originalEnv
 
+		// Detect type guard for inverted narrowing
+		typeGuard := c.detectTypeGuard(node.Condition)
+
 		// 4. Check Alternative block (if it exists) with inverted narrowing
 		if node.Alternative != nil {
-			// Try to apply inverted narrowing for the else branch
-			typeGuard := c.detectTypeGuard(node.Condition)
 			var invertedEnv *Environment
 			if typeGuard != nil {
 				invertedEnv = c.applyInvertedTypeNarrowing(typeGuard)
@@ -2565,8 +2605,22 @@ func (c *Checker) visit(node parser.Node) {
 			c.env = originalEnv
 		}
 
-		// 5. Restore original environment after if statement
-		c.env = originalEnv
+		// 5. Control flow narrowing: if consequence block always terminates (returns, throws, etc.)
+		// then apply inverted narrowing for the code after the if statement
+		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
+		if consequenceTerminates && node.Alternative == nil {
+			// The if block terminates, so code after only runs when condition was false
+			if typeGuard != nil {
+				invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
+				if invertedEnv != nil {
+					debugPrintf("// [Checker IfStmt] Consequence terminates, applying inverted narrowing after if\n")
+					c.env = invertedEnv
+				}
+			}
+		} else {
+			// Restore original environment after if statement
+			c.env = originalEnv
+		}
 
 		// 6. IfStatement doesn't have a value/type (it's a statement, not expression)
 
