@@ -762,30 +762,46 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 }
 
 // --- NEW: Helper for parsing function types like () => T or (A, B) => T ---
-// parseFunctionTypeExpression should already call parseTypeExpression, which now uses the recursive helper correctly.
+// Also handles parenthesized types like (T) or ((T) => U)[] where the parens group a type.
 func (p *Parser) parseFunctionTypeExpression() Expression {
-	// ... existing implementation looks okay, relies on parseTypeExpression calls ...
-	funcType := &FunctionTypeExpression{Token: p.curToken} // '(' token
+	startToken := p.curToken // '(' token
 
+	// Try to parse as function type parameter list
 	var parseErr error
-	funcType.Parameters, funcType.RestParameter, parseErr = p.parseFunctionTypeParameterList()
+	params, restParam, parseErr := p.parseFunctionTypeParameterList()
 	if parseErr != nil {
 		// Error already added by helper
 		return nil
 	}
 
-	// Expect '=>' after parameter list
-	if !p.expectPeek(lexer.ARROW) {
-		return nil // Expected ' => '
+	// Check if this is a function type (followed by '=>') or a parenthesized type
+	if p.peekTokenIs(lexer.ARROW) {
+		// This is a function type: (params) => returnType
+		funcType := &FunctionTypeExpression{Token: startToken}
+		funcType.Parameters = params
+		funcType.RestParameter = restParam
+
+		p.nextToken() // Consume '=>'
+		p.nextToken() // Move to the return type
+		funcType.ReturnType = p.parseTypeExpression()
+		if funcType.ReturnType == nil {
+			return nil // Error parsing return type
+		}
+
+		return funcType
 	}
 
-	p.nextToken()                                 // Consume ' => ', move to the return type
-	funcType.ReturnType = p.parseTypeExpression() // This call will use the updated recursive function
-	if funcType.ReturnType == nil {
-		return nil // Error parsing return type
+	// Not followed by '=>', so this is a parenthesized type: (T)
+	// The "params" should contain exactly one type expression
+	if len(params) != 1 || restParam != nil {
+		// Invalid: parenthesized type must contain exactly one type
+		p.addError(startToken, "parenthesized type must contain exactly one type, or use '=>' for function type")
+		return nil
 	}
 
-	return funcType
+	// Return the inner type - the caller (parseTypeExpressionRecursive) will handle
+	// any suffix like [] for array types
+	return params[0]
 }
 
 // --- NEW: Helper for parsing function type parameter list: (), (T1), (name: T1, T2) ---
