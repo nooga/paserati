@@ -103,7 +103,22 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 			for _, propType := range typ.Properties {
 				extractFromType(propType)
 			}
-			// Add more type cases as needed
+		case *types.MappedType:
+			// Extract from constraint type (e.g., K in { [P in K]: V })
+			if typ.ConstraintType != nil {
+				extractFromType(typ.ConstraintType)
+			}
+			// Extract from value type (e.g., V in { [P in K]: V })
+			if typ.ValueType != nil {
+				extractFromType(typ.ValueType)
+			}
+		case *types.TupleType:
+			for _, elemType := range typ.ElementTypes {
+				extractFromType(elemType)
+			}
+			if typ.RestElementType != nil {
+				extractFromType(typ.RestElementType)
+			}
 		}
 	}
 
@@ -1720,7 +1735,15 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle ReturnStatement ---
 		var actualReturnType types.Type = types.Undefined // Default if no return value
 		if node.ReturnValue != nil {
-			c.visit(node.ReturnValue)
+			// Use contextual typing if we have an expected return type
+			// This allows array literals to be typed as tuples when expected
+			if c.currentExpectedReturnType != nil {
+				c.visitWithContext(node.ReturnValue, &ContextualType{
+					ExpectedType: c.currentExpectedReturnType,
+				})
+			} else {
+				c.visit(node.ReturnValue)
+			}
 			actualReturnType = node.ReturnValue.GetComputedType() // <<< USE NODE METHOD
 			if actualReturnType == nil {
 				actualReturnType = types.Any
@@ -3329,8 +3352,7 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 	case *parser.ArrayLiteral:
 		c.checkArrayLiteralWithContext(node, context)
 	case *parser.ObjectLiteral:
-		// TODO: Add contextual typing for object literals
-		c.visit(node)
+		c.checkObjectLiteralWithContext(node, context)
 	case *parser.ArrowFunctionLiteral:
 		c.checkArrowFunctionLiteralWithContext(node, context)
 	default:

@@ -942,8 +942,53 @@ func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, ar
 
 // inferGenericFunctionCall attempts to infer type arguments for a generic function call
 func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, genericSig *types.Signature) *types.Signature {
-	debugPrintf("// [Checker Inference] Starting two-phase type inference for generic function call\n")
-	
+	debugPrintf("// [Checker Inference] Starting type inference for generic function call\n")
+
+	// === PHASE 0: Check for explicit type arguments ===
+	if len(callNode.TypeArguments) > 0 {
+		debugPrintf("// [Checker Inference] Found %d explicit type arguments\n", len(callNode.TypeArguments))
+
+		// Extract type parameters from the signature
+		typeParams := c.extractTypeParametersFromSignature(genericSig)
+
+		if len(callNode.TypeArguments) != len(typeParams) {
+			c.addError(callNode, fmt.Sprintf("expected %d type arguments, got %d", len(typeParams), len(callNode.TypeArguments)))
+			return nil
+		}
+
+		// Build solution from explicit type arguments
+		solution := make(map[*types.TypeParameter]types.Type)
+		for i, typeArgExpr := range callNode.TypeArguments {
+			typeArg := c.resolveTypeAnnotation(typeArgExpr)
+			if typeArg == nil {
+				typeArg = types.Any
+			}
+			if i < len(typeParams) {
+				solution[typeParams[i]] = typeArg
+				debugPrintf("// [Checker Inference] Explicit type argument: %s = %s\n", typeParams[i].Name, typeArg.String())
+			}
+		}
+
+		// Substitute type parameters to create concrete signature
+		inferredSig := c.substituteTypeParameters(genericSig, solution)
+		debugPrintf("// [Checker Inference] Created signature from explicit type args: %s\n", inferredSig.String())
+
+		// Now visit arguments with contextual typing from the concrete signature
+		for i, argNode := range callNode.Arguments {
+			if i < len(inferredSig.ParameterTypes) {
+				paramType := inferredSig.ParameterTypes[i]
+				c.visitWithContext(argNode, &ContextualType{
+					ExpectedType: paramType,
+					IsContextual: true,
+				})
+			} else {
+				c.visit(argNode)
+			}
+		}
+
+		return inferredSig
+	}
+
 	// === PHASE 1: Infer type parameters from non-function arguments ===
 	var argTypes []types.Type
 	for i, argNode := range callNode.Arguments {
@@ -1126,20 +1171,20 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 	switch pType := paramType.(type) {
 	case *types.TypeParameterType:
 		// Direct constraint: T should be inferred as argType
-		// For accumulator patterns (methods like aggregate, reduce), widen literal types
-		inferredType := argType
-		if shouldWidenForAccumulator(pType.Parameter.Name, argType) {
-			inferredType = types.DeeplyWidenType(argType)
-			debugPrintf("// [Checker Constraints] Widening accumulator type for %s: %s -> %s\n", 
-				pType.Parameter.Name, argType.String(), inferredType.String())
-		}
-		
+		// TypeScript widens literal types when inferring type arguments by default
+		// e.g., createSignal(0) should infer T = number, not T = 0
+		// Use DeeplyWidenType to also widen object literal properties
+		// e.g., { count: 0 } should infer T = { count: number }, not T = { count: 0 }
+		inferredType := types.DeeplyWidenType(argType)
+		debugPrintf("// [Checker Constraints] Widening type for %s: %s -> %s\n",
+			pType.Parameter.Name, argType.String(), inferredType.String())
+
 		constraints = append(constraints, TypeParameterConstraint{
 			TypeParameter: pType.Parameter,
 			InferredType:  inferredType,
 			Confidence:    100, // High confidence for direct matches
 		})
-		debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, argType.String())
+		debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, inferredType.String())
 		
 	case *types.ArrayType:
 		// Array<T> matched against Array<U> or U[]
@@ -1148,7 +1193,26 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 			elemConstraints := c.collectConstraintsFromType(pType.ElementType, aType.ElementType)
 			constraints = append(constraints, elemConstraints...)
 		}
-		
+
+	case *types.TupleType:
+		// Tuple [A, B, C] matched against tuple [X, Y, Z]
+		if aTuple, isTuple := argType.(*types.TupleType); isTuple {
+			// Match element-by-element
+			minLen := len(pType.ElementTypes)
+			if len(aTuple.ElementTypes) < minLen {
+				minLen = len(aTuple.ElementTypes)
+			}
+			for i := 0; i < minLen; i++ {
+				elemConstraints := c.collectConstraintsFromType(pType.ElementTypes[i], aTuple.ElementTypes[i])
+				constraints = append(constraints, elemConstraints...)
+			}
+			// Handle rest element type if present
+			if pType.RestElementType != nil && aTuple.RestElementType != nil {
+				restConstraints := c.collectConstraintsFromType(pType.RestElementType, aTuple.RestElementType)
+				constraints = append(constraints, restConstraints...)
+			}
+		}
+
 	case *types.ObjectType:
 		// Handle function types: (T) => U matched against (A) => B
 		if aType, isObject := argType.(*types.ObjectType); isObject {
@@ -1175,10 +1239,49 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 				}
 			}
 		}
-		
+
+	case *types.MappedType:
+		// Handle mapped types like { [P in K]: V } (e.g., Record<K, V>)
+		// When matching against an object literal, infer K from keys and V from values
+		if aType, isObject := argType.(*types.ObjectType); isObject {
+			debugPrintf("// [Checker Constraints] Matching MappedType against ObjectType\n")
+			debugPrintf("// [Checker Constraints] MappedType.ConstraintType: %v\n", pType.ConstraintType)
+			debugPrintf("// [Checker Constraints] MappedType.ValueType: %v\n", pType.ValueType)
+
+			// Collect keys from the object literal to infer K
+			if constraintTypeParam, isTypeParam := pType.ConstraintType.(*types.TypeParameterType); isTypeParam {
+				var keyTypes []types.Type
+				for propName := range aType.Properties {
+					keyTypes = append(keyTypes, &types.LiteralType{Value: vm.String(propName)})
+				}
+				if len(keyTypes) > 0 {
+					var inferredKeyType types.Type
+					if len(keyTypes) == 1 {
+						inferredKeyType = keyTypes[0]
+					} else {
+						inferredKeyType = types.NewUnionType(keyTypes...)
+					}
+					constraints = append(constraints, TypeParameterConstraint{
+						TypeParameter: constraintTypeParam.Parameter,
+						InferredType:  inferredKeyType,
+						Confidence:    90, // Slightly lower confidence for mapped type inference
+					})
+					debugPrintf("// [Checker Constraints] Mapped type key constraint: %s = %s\n",
+						constraintTypeParam.Parameter.Name, inferredKeyType.String())
+				}
+			}
+
+			// Collect constraints from values - recursively handle complex value types
+			// This handles cases like { [P in K]: [B, C] } where B and C need to be inferred
+			for _, propType := range aType.Properties {
+				valueConstraints := c.collectConstraintsFromType(pType.ValueType, propType)
+				constraints = append(constraints, valueConstraints...)
+			}
+		}
+
 	// Add more cases for other generic type constructs as needed
 	}
-	
+
 	return constraints
 }
 
@@ -1275,6 +1378,35 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			}
 			
 			return newObj
+		case *types.TupleType:
+			// Substitute type parameters in tuple element types
+			var newElementTypes []types.Type
+			for _, elemType := range typ.ElementTypes {
+				newElementTypes = append(newElementTypes, substitute(elemType))
+			}
+			var newRestType types.Type
+			if typ.RestElementType != nil {
+				newRestType = substitute(typ.RestElementType)
+			}
+			return &types.TupleType{
+				ElementTypes:     newElementTypes,
+				OptionalElements: typ.OptionalElements,
+				RestElementType:  newRestType,
+			}
+		case *types.MappedType:
+			// Substitute type parameters in the constraint and value types
+			substitutedMapped := &types.MappedType{
+				TypeParameter:    typ.TypeParameter,
+				ConstraintType:   substitute(typ.ConstraintType),
+				ValueType:        substitute(typ.ValueType),
+				ReadonlyModifier: typ.ReadonlyModifier,
+				OptionalModifier: typ.OptionalModifier,
+			}
+			// After substitution, expand the mapped type to a concrete ObjectType
+			expanded := c.expandMappedType(substitutedMapped)
+			debugPrintf("// [Checker Substitute] Expanded mapped type: %s -> %s\n",
+				substitutedMapped.String(), expanded.String())
+			return expanded
 		// Add more cases as needed
 		default:
 			return typ

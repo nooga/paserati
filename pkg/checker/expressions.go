@@ -204,6 +204,139 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 	c.checkArrayLiteral(node)
 }
 
+// checkObjectLiteralWithContext handles contextual typing for object literals
+// This allows array literals in property values to be typed as tuples when expected
+func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, context *ContextualType) {
+	expectedType := context.ExpectedType
+	debugPrintf("// [Checker ObjectLitContext] Expected type: %T (%s)\n", expectedType, expectedType.String())
+
+	// Try to get the expected type as an ObjectType
+	var expectedObjType *types.ObjectType
+	switch et := expectedType.(type) {
+	case *types.ObjectType:
+		expectedObjType = et
+	case *types.MappedType:
+		// Expand mapped type to ObjectType if possible
+		expanded := c.expandMappedType(et)
+		if objType, ok := expanded.(*types.ObjectType); ok {
+			expectedObjType = objType
+		}
+	}
+
+	// If we couldn't get an ObjectType, fall back to regular checking
+	if expectedObjType == nil {
+		debugPrintf("// [Checker ObjectLitContext] Expected type is not an object type. Falling back to regular checking.\n")
+		c.checkObjectLiteral(node)
+		return
+	}
+
+	debugPrintf("// [Checker ObjectLitContext] Using object type with %d properties\n", len(expectedObjType.Properties))
+
+	// Process the object literal with contextual typing for property values
+	fields := make(map[string]types.Type)
+	seenKeys := make(map[string]bool)
+	seenProtoColon := false
+
+	for _, prop := range node.Properties {
+		var keyName string
+
+		switch key := prop.Key.(type) {
+		case *parser.Identifier:
+			keyName = key.Value
+		case *parser.StringLiteral:
+			keyName = key.Value
+		case *parser.NumberLiteral:
+			keyName = fmt.Sprintf("%v", key.Value)
+		case *parser.BigIntLiteral:
+			keyName = key.Value
+		case *parser.SpreadElement:
+			// Handle spread - visit and merge properties
+			c.visit(key.Argument)
+			argType := key.Argument.GetComputedType()
+			if argType == nil {
+				argType = types.Any
+			}
+			widenedType := types.GetWidenedType(argType)
+			if spreadObjType, ok := widenedType.(*types.ObjectType); ok {
+				for propName, propType := range spreadObjType.Properties {
+					fields[propName] = propType
+				}
+			}
+			continue
+		case *parser.ComputedPropertyName:
+			c.visit(key.Expr)
+			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
+				keyName = literal.Value
+			} else if literal, ok := key.Expr.(*parser.NumberLiteral); ok {
+				keyName = fmt.Sprintf("%v", literal.Value)
+			} else {
+				keyName = "__COMPUTED_PROPERTY__"
+			}
+		default:
+			keyName = "__UNKNOWN_KEY__"
+		}
+
+		// Check for duplicate keys
+		isShorthand := false
+		if keyIdent, keyOk := prop.Key.(*parser.Identifier); keyOk {
+			if valIdent, valOk := prop.Value.(*parser.Identifier); valOk {
+				isShorthand = (keyIdent == valIdent || keyIdent.Value == valIdent.Value)
+			}
+		}
+
+		if keyName != "__COMPUTED_PROPERTY__" && keyName != "__UNKNOWN_KEY__" {
+			isProtoColon := (keyName == "__proto__" && !isShorthand)
+			if seenKeys[keyName] && keyName != "__proto__" {
+				c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+			}
+			if isProtoColon && seenProtoColon {
+				c.addError(prop.Key, "duplicate __proto__ fields are not allowed")
+			}
+			if isProtoColon {
+				seenProtoColon = true
+			}
+			seenKeys[keyName] = true
+		}
+
+		// Visit the property value with context if we have an expected type for this property
+		expectedPropType := expectedObjType.Properties[keyName]
+		if expectedPropType != nil {
+			debugPrintf("// [Checker ObjectLitContext] Property '%s' has expected type: %s\n", keyName, expectedPropType.String())
+			c.visitWithContext(prop.Value, &ContextualType{
+				ExpectedType: expectedPropType,
+				IsContextual: true,
+			})
+		} else {
+			// No expected type for this property - regular visit
+			c.visit(prop.Value)
+		}
+
+		valueType := prop.Value.GetComputedType()
+		if valueType == nil {
+			valueType = types.Any
+		}
+
+		// Handle __proto__: value specially
+		if keyName == "__proto__" && !isShorthand {
+			widenedProtoType := types.GetWidenedType(valueType)
+			if protoObjType, ok := widenedProtoType.(*types.ObjectType); ok {
+				for propName, propType := range protoObjType.Properties {
+					if _, exists := fields[propName]; !exists {
+						fields[propName] = propType
+					}
+				}
+			}
+		} else {
+			fields[keyName] = valueType
+		}
+	}
+
+	// Create the result type
+	resultType := &types.ObjectType{Properties: fields}
+	node.SetComputedType(resultType)
+	debugPrintf("// [Checker ObjectLitContext] Result type: %s\n", resultType.String())
+}
+
 // checkObjectLiteral checks the type of an object literal expression.
 func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	fields := make(map[string]types.Type)
@@ -1279,7 +1412,39 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				resultType = types.Any
 			}
 
-		case *types.ObjectType: // <<< NEW CASE
+		case *types.TupleType:
+			// Base is TupleType - can index with numeric literal or general number
+			if types.IsAssignable(indexType, types.Number) {
+				// Check if the index is a numeric literal - if so, we can get the exact element type
+				if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.IsNumber() {
+					idx := int(vm.AsNumber(litIndex.Value))
+					if idx >= 0 && idx < len(base.ElementTypes) {
+						// Valid index into fixed elements
+						resultType = base.ElementTypes[idx]
+						debugPrintf("// [Checker IndexExpr] Tuple literal index %d -> %s\n", idx, resultType.String())
+					} else if base.RestElementType != nil && idx >= len(base.ElementTypes) {
+						// Index into rest element
+						resultType = base.RestElementType
+						debugPrintf("// [Checker IndexExpr] Tuple rest index %d -> %s\n", idx, resultType.String())
+					} else {
+						// Index out of bounds - return undefined (TypeScript allows this but warns)
+						resultType = types.Undefined
+						debugPrintf("// [Checker IndexExpr] Tuple index %d out of bounds\n", idx)
+					}
+				} else {
+					// General number index - return union of all possible element types
+					resultType = getTupleElementUnion(base)
+					debugPrintf("// [Checker IndexExpr] Tuple general number index -> %s\n", resultType.String())
+				}
+			} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
+				// String or Symbol index - accessing tuple properties (like length, Symbol.iterator)
+				resultType = types.Any
+			} else {
+				c.addError(node.Index, fmt.Sprintf("tuple index must be of type number, string, or symbol, got %s", indexType.String()))
+				resultType = types.Any
+			}
+
+		case *types.ObjectType:
 			// Base is ObjectType
 			// Index must be string or number (or any)
 			isIndexStringLiteral := false
@@ -2487,4 +2652,32 @@ func (c *Checker) isIterableBySymbolIterator(t types.Type) bool {
 	// The runtime will validate calling it.
 	methodType := c.getPropertyTypeFromType(t, "__COMPUTED_PROPERTY__", false)
 	return methodType != nil && methodType != types.Never
+}
+
+// getTupleElementUnion creates a union type from all element types in a tuple
+// Used when indexing with a general number (not a literal)
+func getTupleElementUnion(tuple *types.TupleType) types.Type {
+	if len(tuple.ElementTypes) == 0 && tuple.RestElementType == nil {
+		return types.Never
+	}
+
+	var allTypes []types.Type
+	for _, elemType := range tuple.ElementTypes {
+		if elemType != nil {
+			allTypes = append(allTypes, elemType)
+		}
+	}
+
+	// Include rest element type if present
+	if tuple.RestElementType != nil {
+		allTypes = append(allTypes, tuple.RestElementType)
+	}
+
+	if len(allTypes) == 0 {
+		return types.Never
+	}
+	if len(allTypes) == 1 {
+		return allTypes[0]
+	}
+	return types.NewUnionType(allTypes...)
 }

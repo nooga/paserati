@@ -227,6 +227,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.PROTECTED, p.parseIdentifier)
 	p.registerPrefix(lexer.PUBLIC, p.parseIdentifier)
 	p.registerPrefix(lexer.OF, p.parseIdentifier)   // OF is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.FROM, p.parseIdentifier) // FROM is a contextual keyword (import/export), can be used as identifier
 	p.registerPrefix(lexer.TYPE, p.parseIdentifier) // TYPE is a contextual keyword (TypeScript), can be used as identifier in JS
 	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
@@ -1189,7 +1190,7 @@ func (p *Parser) parseLetStatement() Statement {
 		// Object destructuring: let {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(letToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF:
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM:
 		// Regular identifier: let x = ... or let x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &LetStatement{Token: letToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1285,7 +1286,7 @@ func (p *Parser) parseConstStatement() Statement {
 		// Object destructuring: const {a, b} = ...
 		return p.parseObjectDestructuringDeclaration(constToken, true, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF:
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM:
 		// Regular identifier: const x = ... or const x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &ConstStatement{Token: constToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1379,7 +1380,7 @@ func (p *Parser) parseVarStatement() Statement {
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF,
-		lexer.UNDEFINED, lexer.NULL:
+		lexer.UNDEFINED, lexer.NULL, lexer.FROM:
 		// Regular identifier case (including contextual keywords, FutureReservedWords in non-strict mode,
 		// and global property names like undefined/null which are not reserved words)
 		stmt := &VarStatement{Token: varToken}
@@ -2820,8 +2821,8 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 			p.addError(p.curToken, "computed property target must be an identifier or nested pattern")
 			return nil
 		}
-	} else if p.curTokenIs(lexer.IDENT) {
-		// Regular identifier key
+	} else if p.curTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
+		// Regular identifier key (includes contextual keywords like FROM, OF, TYPE, etc.)
 		prop.Key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else if p.curTokenIs(lexer.NUMBER) {
 		// Numeric property key (e.g., {0: v, 1: w})
@@ -9001,9 +9002,41 @@ func (p *Parser) parseTypeArguments() ([]Expression, error) {
 // is likely the start of a generic call (identifier<Type>) rather than a comparison (a < b)
 func (p *Parser) looksLikeGenericCall() bool {
 	// We're currently at '<', peek should be the first token after it
-	// This is a VERY conservative heuristic to avoid false positives
 
-	// Only allow identifiers that look like type names
+	// String literals are valid type arguments (literal types like "x" | "y")
+	if p.peekTokenIs(lexer.STRING) {
+		return true
+	}
+
+	// Number literals can also be type arguments (literal types like 1 | 2 | 3)
+	if p.peekTokenIs(lexer.NUMBER) {
+		return true
+	}
+
+	// Parentheses can start a grouped type or tuple type
+	if p.peekTokenIs(lexer.LPAREN) {
+		return true
+	}
+
+	// Square bracket starts array/tuple type
+	if p.peekTokenIs(lexer.LBRACKET) {
+		return true
+	}
+
+	// Curly brace starts object type
+	if p.peekTokenIs(lexer.LBRACE) {
+		return true
+	}
+
+	// Keywords that can start type expressions
+	if p.peekTokenIs(lexer.TYPEOF) || p.peekTokenIs(lexer.KEYOF) ||
+		p.peekTokenIs(lexer.VOID) || p.peekTokenIs(lexer.NULL) ||
+		p.peekTokenIs(lexer.UNDEFINED) || p.peekTokenIs(lexer.INFER) ||
+		p.peekTokenIs(lexer.TRUE) || p.peekTokenIs(lexer.FALSE) {
+		return true
+	}
+
+	// Identifiers that look like type names
 	if p.peekTokenIs(lexer.IDENT) {
 		typeName := p.peekToken.Literal
 
@@ -9011,7 +9044,7 @@ func (p *Parser) looksLikeGenericCall() bool {
 		if typeName == "string" || typeName == "number" || typeName == "boolean" ||
 			typeName == "object" || typeName == "any" || typeName == "unknown" ||
 			typeName == "void" || typeName == "never" || typeName == "undefined" ||
-			typeName == "null" {
+			typeName == "null" || typeName == "bigint" || typeName == "symbol" {
 			return true
 		}
 
@@ -9020,12 +9053,15 @@ func (p *Parser) looksLikeGenericCall() bool {
 			return true
 		}
 
-		// Reject everything else (lowercase identifiers are likely variables in comparisons)
+		// Single-letter type parameters (common: T, U, V, K, V, etc.)
+		if len(typeName) == 1 && typeName[0] >= 'A' && typeName[0] <= 'Z' {
+			return true
+		}
+
+		// Reject lowercase multi-letter identifiers (likely variables in comparisons)
 		return false
 	}
 
-	// Don't treat numbers, strings, booleans, etc. as potential type arguments
-	// These are much more likely to be values in comparison expressions
 	return false
 }
 
