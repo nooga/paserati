@@ -1564,7 +1564,12 @@ func (c *Checker) handlePaseratiReflect(node *parser.CallExpression) {
 	node.ResolvedReflectType = typeArg
 
 	// The return type is the Type interface (an object describing the type)
-	// For now, we set it to Any since the exact shape depends on the type
+	// Create toJSONSchema method type: () => any
+	toJSONSchemaType := types.NewFunctionType(&types.Signature{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.Any,
+	})
+
 	typeDescriptorType := types.NewObjectType().
 		WithProperty("kind", types.String).
 		WithOptionalProperty("name", types.String).
@@ -1572,7 +1577,8 @@ func (c *Checker) handlePaseratiReflect(node *parser.CallExpression) {
 		WithOptionalProperty("elementType", types.Any).
 		WithOptionalProperty("types", types.Any).
 		WithOptionalProperty("parameters", types.Any).
-		WithOptionalProperty("returnType", types.Any)
+		WithOptionalProperty("returnType", types.Any).
+		WithProperty("toJSONSchema", toJSONSchemaType)
 
 	node.SetComputedType(typeDescriptorType)
 }

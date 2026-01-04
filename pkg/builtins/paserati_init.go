@@ -19,15 +19,22 @@ func (p *PaseratiInitializer) Priority() int {
 }
 
 func (p *PaseratiInitializer) InitTypes(ctx *TypeContext) error {
+	// Create toJSONSchema method type: () => object
+	toJSONSchemaType := types.NewFunctionType(&types.Signature{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.Any,
+	})
+
 	// Create Type interface - represents a runtime type descriptor
 	typeInterface := types.NewObjectType().
 		WithProperty("kind", types.String).
 		WithOptionalProperty("name", types.String).
-		WithOptionalProperty("properties", types.Any). // For object types
-		WithOptionalProperty("elementType", types.Any). // For array types
-		WithOptionalProperty("types", types.Any). // For union types
-		WithOptionalProperty("parameters", types.Any). // For function types
-		WithOptionalProperty("returnType", types.Any) // For function types
+		WithOptionalProperty("properties", types.Any).     // For object types
+		WithOptionalProperty("elementType", types.Any).    // For array types
+		WithOptionalProperty("types", types.Any).          // For union types
+		WithOptionalProperty("parameters", types.Any).     // For function types
+		WithOptionalProperty("returnType", types.Any).     // For function types
+		WithProperty("toJSONSchema", toJSONSchemaType) // Method to convert to JSON Schema
 
 	// Define Type interface for users
 	if err := ctx.DefineTypeAlias("Type", typeInterface); err != nil {
@@ -54,6 +61,14 @@ func (p *PaseratiInitializer) InitTypes(ctx *TypeContext) error {
 func (p *PaseratiInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
+	// Create TypeDescriptor prototype with toJSONSchema method
+	typeProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	typeProto.SetOwnNonEnumerable("toJSONSchema", vm.NewNativeFunction(0, false, "toJSONSchema", func(args []vm.Value) (vm.Value, error) {
+		// Get 'this' from the VM (the type descriptor object)
+		thisVal := vmInstance.GetThis()
+		return typeDescriptorToJSONSchema(vmInstance, thisVal)
+	}))
+
 	// Create Paserati object
 	paseratiObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
@@ -64,6 +79,290 @@ func (p *PaseratiInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
+	// Store TypePrototype on Paserati so compiler can access it
+	paseratiObj.SetOwnNonEnumerable("TypePrototype", vm.NewValueFromPlainObject(typeProto))
+
 	// Register Paserati object as global
 	return ctx.DefineGlobal("Paserati", vm.NewValueFromPlainObject(paseratiObj))
+}
+
+// schemaContext tracks state during JSON Schema generation
+type schemaContext struct {
+	vmInstance *vm.VM
+	defs       map[string]vm.Value // Named type definitions
+	isRoot     bool                // Whether this is the root call
+}
+
+// typeDescriptorToJSONSchema converts a Type descriptor object to JSON Schema format
+func typeDescriptorToJSONSchema(vmInstance *vm.VM, typeDesc vm.Value) (vm.Value, error) {
+	ctx := &schemaContext{
+		vmInstance: vmInstance,
+		defs:       make(map[string]vm.Value),
+		isRoot:     true,
+	}
+	return ctx.convert(typeDesc)
+}
+
+// convert performs the actual conversion with context tracking
+func (ctx *schemaContext) convert(typeDesc vm.Value) (vm.Value, error) {
+	if typeDesc.IsUndefined() || typeDesc.Type() == vm.TypeNull {
+		return vm.Undefined, nil
+	}
+
+	obj := typeDesc.AsPlainObject()
+	if obj == nil {
+		return vm.Undefined, nil
+	}
+
+	// Get the "kind" property
+	kindVal, exists := obj.GetOwn("kind")
+	if !exists {
+		return vm.Undefined, nil
+	}
+	kind := vm.AsString(kindVal)
+
+	// Create result schema object
+	schema := vm.NewObject(ctx.vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Add $schema only at root level
+	wasRoot := ctx.isRoot
+	if ctx.isRoot {
+		schema.SetOwn("$schema", vm.NewString("https://json-schema.org/draft/2020-12/schema"))
+		ctx.isRoot = false
+	}
+
+	switch kind {
+	case "primitive":
+		// {kind: "primitive", name: "string"} -> {type: "string"}
+		nameVal, _ := obj.GetOwn("name")
+		name := vm.AsString(nameVal)
+
+		switch name {
+		case "string":
+			schema.SetOwn("type", vm.NewString("string"))
+		case "number":
+			schema.SetOwn("type", vm.NewString("number"))
+		case "boolean":
+			schema.SetOwn("type", vm.NewString("boolean"))
+		case "null":
+			schema.SetOwn("type", vm.NewString("null"))
+		case "undefined":
+			// JSON Schema doesn't have undefined, use null
+			schema.SetOwn("type", vm.NewString("null"))
+		case "any":
+			// Any type - no restrictions
+			// Empty schema {} accepts anything
+		case "unknown":
+			// Unknown type - no restrictions
+		default:
+			schema.SetOwn("type", vm.NewString(name))
+		}
+
+	case "literal":
+		// {kind: "literal", value: "foo", baseType: "string"} -> {const: "foo"}
+		valueVal, _ := obj.GetOwn("value")
+		schema.SetOwn("const", valueVal)
+
+	case "array":
+		// {kind: "array", elementType: T} -> {type: "array", items: toJSONSchema(T)}
+		schema.SetOwn("type", vm.NewString("array"))
+		elemTypeVal, exists := obj.GetOwn("elementType")
+		if exists {
+			itemsSchema, err := ctx.convert(elemTypeVal)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			schema.SetOwn("items", itemsSchema)
+		}
+
+	case "tuple":
+		// {kind: "tuple", elementTypes: [T1, T2]} -> {type: "array", prefixItems: [...], items: false}
+		schema.SetOwn("type", vm.NewString("array"))
+		elemTypesVal, exists := obj.GetOwn("elementTypes")
+		if exists && !elemTypesVal.IsUndefined() && elemTypesVal.IsArray() {
+			arr := elemTypesVal.AsArray()
+			prefixItemsVal := vm.NewArrayWithLength(0)
+			prefixItemsArr := prefixItemsVal.AsArray()
+			for i := 0; i < arr.Length(); i++ {
+				elemType := arr.Get(i)
+				itemSchema, err := ctx.convert(elemType)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				prefixItemsArr.Append(itemSchema)
+			}
+			schema.SetOwn("prefixItems", prefixItemsVal)
+			schema.SetOwn("items", vm.False)
+		}
+
+	case "object":
+		// {kind: "object", properties: {...}} -> {type: "object", properties: {...}, required: [...]}
+		schema.SetOwn("type", vm.NewString("object"))
+
+		propsVal, exists := obj.GetOwn("properties")
+		if exists && !propsVal.IsUndefined() {
+			propsObj := propsVal.AsPlainObject()
+			if propsObj != nil {
+				schemaProps := vm.NewObject(ctx.vmInstance.ObjectPrototype).AsPlainObject()
+				requiredVal := vm.NewArrayWithLength(0)
+				requiredArr := requiredVal.AsArray()
+
+				// Iterate over properties
+				keys := propsObj.OwnKeys()
+				for _, key := range keys {
+					propDescVal, _ := propsObj.GetOwn(key)
+					propDescObj := propDescVal.AsPlainObject()
+					if propDescObj == nil {
+						continue
+					}
+
+					// Get the type descriptor for this property
+					propTypeVal, _ := propDescObj.GetOwn("type")
+					propSchema, err := ctx.convert(propTypeVal)
+					if err != nil {
+						return vm.Undefined, err
+					}
+					schemaProps.SetOwn(key, propSchema)
+
+					// Check if property is optional
+					optionalVal, exists := propDescObj.GetOwn("optional")
+					isOptional := exists && optionalVal.IsTruthy()
+					if !isOptional {
+						requiredArr.Append(vm.NewString(key))
+					}
+				}
+
+				schema.SetOwn("properties", vm.NewValueFromPlainObject(schemaProps))
+				if requiredArr.Length() > 0 {
+					schema.SetOwn("required", requiredVal)
+				}
+			}
+		}
+
+		// Handle index signatures -> additionalProperties
+		indexSigsVal, exists := obj.GetOwn("indexSignatures")
+		if exists && !indexSigsVal.IsUndefined() && indexSigsVal.IsArray() {
+			arr := indexSigsVal.AsArray()
+			if arr.Length() > 0 {
+				// Use the first index signature's value type for additionalProperties
+				firstSig := arr.Get(0)
+				if sigObj := firstSig.AsPlainObject(); sigObj != nil {
+					valueTypeVal, _ := sigObj.GetOwn("valueType")
+					additionalSchema, err := ctx.convert(valueTypeVal)
+					if err != nil {
+						return vm.Undefined, err
+					}
+					schema.SetOwn("additionalProperties", additionalSchema)
+				}
+			}
+		}
+
+	case "union":
+		// Check if this is a union of string literals -> use enum
+		typesVal, exists := obj.GetOwn("types")
+		if exists && !typesVal.IsUndefined() && typesVal.IsArray() {
+			arr := typesVal.AsArray()
+
+			// Check if all members are string or number literals
+			allStringLiterals := true
+			allNumberLiterals := true
+			allLiterals := true
+
+			for i := 0; i < arr.Length(); i++ {
+				memberType := arr.Get(i)
+				memberObj := memberType.AsPlainObject()
+				if memberObj == nil {
+					allLiterals = false
+					allStringLiterals = false
+					allNumberLiterals = false
+					break
+				}
+				memberKind, _ := memberObj.GetOwn("kind")
+				if vm.AsString(memberKind) != "literal" {
+					allLiterals = false
+					allStringLiterals = false
+					allNumberLiterals = false
+					break
+				}
+				baseType, _ := memberObj.GetOwn("baseType")
+				baseTypeStr := vm.AsString(baseType)
+				if baseTypeStr != "string" {
+					allStringLiterals = false
+				}
+				if baseTypeStr != "number" {
+					allNumberLiterals = false
+				}
+			}
+
+			// If all are string literals or all are number literals, use enum
+			if allLiterals && (allStringLiterals || allNumberLiterals) {
+				enumVal := vm.NewArrayWithLength(0)
+				enumArr := enumVal.AsArray()
+				for i := 0; i < arr.Length(); i++ {
+					memberType := arr.Get(i)
+					memberObj := memberType.AsPlainObject()
+					valueVal, _ := memberObj.GetOwn("value")
+					enumArr.Append(valueVal)
+				}
+				if allStringLiterals {
+					schema.SetOwn("type", vm.NewString("string"))
+				} else {
+					schema.SetOwn("type", vm.NewString("number"))
+				}
+				schema.SetOwn("enum", enumVal)
+			} else {
+				// General union -> anyOf
+				anyOfVal := vm.NewArrayWithLength(0)
+				anyOfArr := anyOfVal.AsArray()
+				for i := 0; i < arr.Length(); i++ {
+					memberType := arr.Get(i)
+					memberSchema, err := ctx.convert(memberType)
+					if err != nil {
+						return vm.Undefined, err
+					}
+					anyOfArr.Append(memberSchema)
+				}
+				schema.SetOwn("anyOf", anyOfVal)
+			}
+		}
+
+	case "intersection":
+		// {kind: "intersection", types: [...]} -> {allOf: [...]}
+		typesVal, exists := obj.GetOwn("types")
+		if exists && !typesVal.IsUndefined() && typesVal.IsArray() {
+			arr := typesVal.AsArray()
+			allOfVal := vm.NewArrayWithLength(0)
+			allOfArr := allOfVal.AsArray()
+			for i := 0; i < arr.Length(); i++ {
+				memberType := arr.Get(i)
+				memberSchema, err := ctx.convert(memberType)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				allOfArr.Append(memberSchema)
+			}
+			schema.SetOwn("allOf", allOfVal)
+		}
+
+	case "class":
+		// For class types, convert the instance type
+		instanceTypeVal, exists := obj.GetOwn("instanceType")
+		if exists && !instanceTypeVal.IsUndefined() {
+			return ctx.convert(instanceTypeVal)
+		}
+
+	default:
+		// Unknown kind - return empty schema
+	}
+
+	// Add $defs at root level if we have any
+	if wasRoot && len(ctx.defs) > 0 {
+		defsObj := vm.NewObject(ctx.vmInstance.ObjectPrototype).AsPlainObject()
+		for name, defSchema := range ctx.defs {
+			defsObj.SetOwn(name, defSchema)
+		}
+		schema.SetOwn("$defs", vm.NewValueFromPlainObject(defsObj))
+	}
+
+	return vm.NewValueFromPlainObject(schema), nil
 }

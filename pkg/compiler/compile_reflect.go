@@ -43,6 +43,9 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 	// Create an empty object in hint register
 	c.emitMakeEmptyObject(hint, line)
 
+	// Set prototype to Paserati.TypePrototype so we inherit toJSONSchema
+	c.setTypeDescriptorPrototype(hint, line, &tempRegs)
+
 	switch typ := t.(type) {
 	case *types.Primitive:
 		c.emitSetProperty(hint, "kind", vm.NewString("primitive"), line)
@@ -97,6 +100,35 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 			}
 
 			c.emitSetPropertyFromReg(hint, "properties", propsReg, line)
+		}
+
+		// Add index signatures for additionalProperties support
+		if len(typ.IndexSignatures) > 0 {
+			indexSigsReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, indexSigsReg)
+			c.emitMakeEmptyArray(indexSigsReg, line)
+
+			for _, indexSig := range typ.IndexSignatures {
+				sigReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, sigReg)
+				c.emitMakeEmptyObject(sigReg, line)
+
+				// Add key type
+				keyTypeReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, keyTypeReg)
+				c.emitTypeDescriptor(indexSig.KeyType, keyTypeReg, line)
+				c.emitSetPropertyFromReg(sigReg, "keyType", keyTypeReg, line)
+
+				// Add value type
+				valueTypeReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, valueTypeReg)
+				c.emitTypeDescriptor(indexSig.ValueType, valueTypeReg, line)
+				c.emitSetPropertyFromReg(sigReg, "valueType", valueTypeReg, line)
+
+				c.emitArrayPush(indexSigsReg, sigReg, line)
+			}
+
+			c.emitSetPropertyFromReg(hint, "indexSignatures", indexSigsReg, line)
 		}
 
 		// Add call signatures if callable
@@ -363,8 +395,13 @@ func (c *Compiler) emitMakeEmptyArray(dest Register, line int) {
 // emitArrayPush emits bytecode to push a value onto an array
 func (c *Compiler) emitArrayPush(arrayReg Register, valueReg Register, line int) {
 	// For OpCallMethod, arguments must be in consecutive registers starting at funcReg+1
-	pushMethodReg := c.regAlloc.Alloc()
-	pushArgReg := c.regAlloc.Alloc() // This will be pushMethodReg+1
+	// We need to allocate contiguous registers to ensure proper argument positioning
+	pushMethodReg, ok := c.regAlloc.TryAllocContiguous(2)
+	if !ok {
+		// Fall back to individual allocation (may not work correctly for all cases)
+		pushMethodReg = c.regAlloc.Alloc()
+	}
+	pushArgReg := pushMethodReg + 1
 
 	pushIdx := c.chunk.AddConstant(vm.NewString("push"))
 	c.emitGetProp(pushMethodReg, arrayReg, pushIdx, line)
@@ -380,4 +417,28 @@ func (c *Compiler) emitArrayPush(arrayReg Register, valueReg Register, line int)
 	c.regAlloc.Free(resultReg)
 	c.regAlloc.Free(pushArgReg)
 	c.regAlloc.Free(pushMethodReg)
+}
+
+// setTypeDescriptorPrototype sets the prototype of a type descriptor object to Paserati.TypePrototype
+// This allows the object to inherit the toJSONSchema method
+func (c *Compiler) setTypeDescriptorPrototype(objReg Register, line int, tempRegs *[]Register) {
+	// Get Paserati global
+	paseratiReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, paseratiReg)
+
+	// Look up Paserati in globals
+	paseratiGlobalIdx := c.GetOrAssignGlobalIndex("Paserati")
+	c.emitGetGlobal(paseratiReg, paseratiGlobalIdx, line)
+
+	// Get TypePrototype property
+	typeProtoReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, typeProtoReg)
+
+	typeProtoIdx := c.chunk.AddConstant(vm.NewString("TypePrototype"))
+	c.emitGetProp(typeProtoReg, paseratiReg, typeProtoIdx, line)
+
+	// Set prototype of objReg to typeProtoReg
+	c.emitOpCode(vm.OpSetPrototype, line)
+	c.emitByte(byte(objReg))
+	c.emitByte(byte(typeProtoReg))
 }
