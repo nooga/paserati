@@ -93,16 +93,21 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	c.env.Define(node.Name.Value, forwardRefType, false)
 	debugPrintf("// [Checker Class] Early defined forward reference for non-generic class '%s'\n", node.Name.Value)
 
-	// 2. Handle inheritance relationships and create instance type from methods and properties
-	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
-
-	// 3. Register the class name as a type alias pointing to the instance type EARLY
-	// This allows static methods to use the class name in type annotations
-	if !c.env.DefineTypeAlias(node.Name.Value, instanceType) {
-		c.addError(node.Name, fmt.Sprintf("failed to define class type '%s'", node.Name.Value))
+	// 2. PRE-REGISTER the class type alias BEFORE processing the body
+	// This allows self-referencing return types like `setName(): Person` to resolve
+	// Create empty ObjectType first, then populate it during createInstanceType
+	placeholderType := types.NewClassInstanceType(node.Name.Value)
+	if !c.env.DefineTypeAlias(node.Name.Value, placeholderType) {
+		c.addError(node.Name, fmt.Sprintf("failed to pre-define class type '%s'", node.Name.Value))
 		return
 	}
-	debugPrintf("// [Checker Class] Early defined class type alias '%s': %s\n",
+	debugPrintf("// [Checker Class] Pre-registered class type alias '%s' for self-reference support\n", node.Name.Value)
+
+	// 3. Handle inheritance relationships and create instance type from methods and properties
+	// Note: createInstanceType will populate the same ObjectType reference
+	instanceType := c.createInstanceTypeInPlace(node.Name.Value, node.Body, node.SuperClass, node.Implements, placeholderType)
+
+	debugPrintf("// [Checker Class] Finalized class type alias '%s': %s\n",
 		node.Name.Value, instanceType.String())
 
 	// 4. Create constructor signature from constructor method
@@ -280,7 +285,12 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 func (c *Checker) createInstanceType(className string, body *parser.ClassBody, superClass parser.Expression, implements []*parser.Identifier) *types.ObjectType {
 	// Create class instance type with metadata
 	instanceType := types.NewClassInstanceType(className)
+	return c.createInstanceTypeInPlace(className, body, superClass, implements, instanceType)
+}
 
+// createInstanceTypeInPlace populates an existing ObjectType with class members
+// This allows pre-registering the type for self-referencing return types
+func (c *Checker) createInstanceTypeInPlace(className string, body *parser.ClassBody, superClass parser.Expression, implements []*parser.Identifier, instanceType *types.ObjectType) *types.ObjectType {
 	// Set current instance type for use in method type inference
 	prevInstanceType := c.currentClassInstanceType
 	c.currentClassInstanceType = instanceType

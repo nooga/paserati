@@ -1774,6 +1774,9 @@ func (c *Checker) visit(node parser.Node) {
 					c.addError(node.ReturnValue, msg)
 				}
 			} else if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
+				// Debug: check pointer addresses
+				fmt.Printf("DEBUG Return check: actualType=%T(%p) expectedType=%T(%p)\n",
+					actualReturnType, actualReturnType, c.currentExpectedReturnType, c.currentExpectedReturnType)
 				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
 					actualReturnType, c.currentExpectedReturnType)
 				// Report the error at the return value expression node

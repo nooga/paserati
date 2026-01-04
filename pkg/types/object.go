@@ -3,7 +3,12 @@ package types
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
+
+// stringifyVisited tracks types being stringified to prevent infinite recursion
+// in self-referencing types (e.g., interface Foo { next(): Foo; })
+var stringifyVisited sync.Map
 
 // --- Function/Object Signatures ---
 
@@ -66,6 +71,10 @@ func (sig *Signature) String() string {
 func (sig *Signature) Equals(other *Signature) bool {
 	if sig == nil || other == nil {
 		return sig == other
+	}
+	// Pointer identity check - prevents infinite recursion
+	if sig == other {
+		return true
 	}
 	if len(sig.ParameterTypes) != len(other.ParameterTypes) {
 		return false
@@ -201,6 +210,13 @@ type ObjectType struct {
 }
 
 func (ot *ObjectType) String() string {
+	// Detect cycles: if we're already stringifying this exact ObjectType, return a placeholder
+	ptr := fmt.Sprintf("%p", ot)
+	if _, visited := stringifyVisited.LoadOrStore(ptr, true); visited {
+		return "<self>"
+	}
+	defer stringifyVisited.Delete(ptr)
+
 	// If this is a pure function (callable with no properties), show it as a function signature
 	if ot.IsPureFunction() && len(ot.CallSignatures) == 1 {
 		return ot.CallSignatures[0].String()
@@ -256,6 +272,11 @@ func (ot *ObjectType) Equals(other Type) bool {
 	}
 	if ot == nil || otherOt == nil {
 		return ot == otherOt // Both must be nil or non-nil
+	}
+
+	// Pointer identity check - prevents infinite recursion for self-referencing types
+	if ot == otherOt {
+		return true
 	}
 
 	// Check properties

@@ -6873,15 +6873,31 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		prop.Optional = true
 	}
 
+	// Check if this is a generic method signature: methodName<T, U>(...)
+	var typeParams []*TypeParameter
+	if p.peekTokenIs(lexer.LT) {
+		p.nextToken() // Move to '<'
+		var err error
+		typeParams, err = p.parseTypeParameters()
+		if err != nil {
+			return nil // Error parsing type parameters
+		}
+	}
+
 	// Check if this is a shorthand method signature
 	if p.peekTokenIs(lexer.LPAREN) {
-		// This is a shorthand method signature like methodName(): ReturnType or methodName?(): ReturnType
+		// This is a shorthand method signature like methodName(): ReturnType or methodName<T>(): ReturnType
 		p.nextToken() // Move to '('
 
 		// Parse method type signature (uses ':' syntax, not '=>')
 		funcType := p.parseMethodTypeSignature()
 		if funcType == nil {
 			return nil // Error parsing method type
+		}
+
+		// Add type parameters if this is a generic method
+		if funcTypeExpr, ok := funcType.(*FunctionTypeExpression); ok && len(typeParams) > 0 {
+			funcTypeExpr.TypeParameters = typeParams
 		}
 
 		prop.Type = funcType

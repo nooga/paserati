@@ -52,10 +52,24 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			}
 		}
 
-		// --- NEW: Check if this is a forward reference or constructor defined as a regular value ---
+		// --- PRIORITIZE TYPE ALIASES: Check type alias first before checking value bindings ---
+		// This ensures that when a class has both a value binding (ForwardReferenceType for constructor)
+		// and a type alias (ObjectType for instance type), we use the type alias for type annotations.
+		if resolvedAlias, found := c.env.ResolveType(node.Value); found {
+			debugPrintf("// [Checker resolveTypeAnno Ident] Early resolved '%s' as type alias: %T\n", node.Value, resolvedAlias)
+			// Check if this is a GenericType that needs instantiation with defaults
+			if genericType, ok := resolvedAlias.(*types.GenericType); ok {
+				debugPrintf("// [Checker resolveTypeAnno Ident] Found generic type '%s', instantiating with defaults\n", node.Value)
+				// Instantiate with no explicit type arguments - will use defaults
+				return c.instantiateGenericType(genericType, []types.Type{}, []parser.Expression{})
+			}
+			return resolvedAlias
+		}
+
+		// --- Check if this is a forward reference or constructor defined as a regular value ---
 		if value, _, found := c.env.Resolve(node.Value); found {
 			debugPrintf("// [Checker resolveTypeAnno Ident] Found value for '%s': %T\n", node.Value, value)
-			
+
 			if forwardRef, ok := value.(*types.ForwardReferenceType); ok {
 				debugPrintf("// [Checker resolveTypeAnno Ident] Found forward reference for '%s'\n", node.Value)
 				return forwardRef

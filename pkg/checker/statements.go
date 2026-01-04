@@ -155,6 +155,17 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	optionalProperties := make(map[string]bool)
 	var indexSignatures []*types.IndexSignature
 
+	// IMPORTANT: Register the interface type FIRST (as placeholder) to allow self-referencing
+	// The ObjectType is a pointer, so we can fill in properties after registration
+	interfaceType := &types.ObjectType{
+		Properties:         properties,
+		OptionalProperties: optionalProperties,
+	}
+	if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
+		debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
+	}
+	debugPrintf("// [Checker Interface P1] Pre-registered interface '%s' for self-reference support\n", node.Name.Value)
+
 	// First, inherit properties from extended interfaces
 	for _, extendedInterfaceExpr := range node.Extends {
 		// Resolve the extended interface type expression (supports both simple names and generic applications)
@@ -297,20 +308,12 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		}
 	}
 
-	// 3. Create the ObjectType representing this interface
-	interfaceType := &types.ObjectType{
-		Properties:         properties,
-		OptionalProperties: optionalProperties,
-		IndexSignatures:    indexSignatures,
-	}
+	// 3. Update the pre-registered ObjectType with index signatures
+	// (properties and optionalProperties are already the same maps we passed during pre-registration)
+	interfaceType.IndexSignatures = indexSignatures
 
-	// 4. Define the interface as a type alias in the environment
-	if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
-		debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
-	} else {
-		debugPrintf("// [Checker Interface P1] Defined interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
-			node.Name.Value, interfaceType.String(), c.env, len(node.Extends))
-	}
+	debugPrintf("// [Checker Interface P1] Finalized interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
+		node.Name.Value, interfaceType.String(), c.env, len(node.Extends))
 }
 
 // checkGenericInterfaceDeclaration handles generic interface declarations

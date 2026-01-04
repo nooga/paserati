@@ -841,9 +841,21 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 
 // isGenericSignature checks if a function signature contains unresolved type parameters
 func (c *Checker) isGenericSignature(sig *types.Signature) bool {
+	// Track visited types to prevent infinite recursion in self-referencing types
+	visited := make(map[types.Type]bool)
+
 	// Helper function to check if a type contains type parameters
 	var containsTypeParameters func(t types.Type) bool
 	containsTypeParameters = func(t types.Type) bool {
+		if t == nil {
+			return false
+		}
+		// Check if we've already visited this type (cycle detection)
+		if visited[t] {
+			return false
+		}
+		visited[t] = true
+
 		switch typ := t.(type) {
 		case *types.TypeParameterType:
 			return true
