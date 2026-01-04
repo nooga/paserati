@@ -9253,10 +9253,14 @@ func (p *Parser) parseTypePredicateExpression(left Expression) Expression {
 
 // parseGenericCallOrComparison handles the ambiguity between generic calls (func<T>()) and comparisons (a < b)
 func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
-	// Only try generic call parsing if left is an identifier
-	if ident, ok := left.(*Identifier); ok {
+	// Try generic call parsing if left is an identifier or member expression
+	// This handles both foo<T>() and obj.method<T>() patterns
+	_, isIdent := left.(*Identifier)
+	_, isMember := left.(*MemberExpression)
+
+	if isIdent || isMember {
 		// Check if this looks like a generic call by doing a simple lookahead
-		// We need to look for pattern: identifier < TypeExpr > (
+		// We need to look for pattern: callee < TypeExpr > (
 		if p.looksLikeGenericCall() {
 			// Save current state for potential backtracking (tokens and lexer)
 			savedCur := p.curToken
@@ -9267,11 +9271,11 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 			// Try to parse type arguments (current token is '<')
 			typeArgs, err := p.parseTypeArguments()
 			if err == nil && typeArgs != nil && p.peekTokenIs(lexer.LPAREN) {
-				// Success! This is a generic call: identifier<types>(args)
+				// Success! This is a generic call: callee<types>(args)
 				p.nextToken() // consume '('
 				callExpr := &CallExpression{
 					Token:         p.curToken, // The '(' token
-					Function:      ident,
+					Function:      left,       // Can be Identifier or MemberExpression
 					TypeArguments: typeArgs,
 				}
 				callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)

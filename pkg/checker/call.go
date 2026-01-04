@@ -447,8 +447,13 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// --- UPDATED: Handle CallExpression with Overload Support ---
 	// 1. Check the expression being called
 	debugPrintf("// [Checker CallExpr] Checking call at line %d\n", node.Token.Line)
-	
-	
+
+	// Special handling for Paserati.reflect<T>() intrinsic
+	if c.isPaseratiReflectCall(node) {
+		c.handlePaseratiReflect(node)
+		return
+	}
+
 	// Special handling for super() calls
 	if superExpr, isSuper := node.Function.(*parser.SuperExpression); isSuper {
 		c.checkSuperCallExpression(node, superExpr)
@@ -1484,19 +1489,19 @@ func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*type
 	for _, paramType := range sig.ParameterTypes {
 		newParamTypes = append(newParamTypes, substitute(paramType))
 	}
-	
+
 	// Substitute in return type
 	var newReturnType types.Type
 	if sig.ReturnType != nil {
 		newReturnType = substitute(sig.ReturnType)
 	}
-	
+
 	// Substitute in rest parameter type
 	var newRestParamType types.Type
 	if sig.RestParameterType != nil {
 		newRestParamType = substitute(sig.RestParameterType)
 	}
-	
+
 	return &types.Signature{
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
@@ -1504,4 +1509,70 @@ func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*type
 		IsVariadic:        sig.IsVariadic,
 		RestParameterType: newRestParamType,
 	}
+}
+
+// isPaseratiReflectCall checks if this is a Paserati.reflect<T>() call
+func (c *Checker) isPaseratiReflectCall(node *parser.CallExpression) bool {
+	// Check if the callee is Paserati.reflect
+	memberExpr, ok := node.Function.(*parser.MemberExpression)
+	if !ok {
+		return false
+	}
+
+	// Check if the object is the Paserati identifier
+	objIdent, ok := memberExpr.Object.(*parser.Identifier)
+	if !ok || objIdent.Value != "Paserati" {
+		return false
+	}
+
+	// Check if the property is "reflect"
+	propIdent, ok := memberExpr.Property.(*parser.Identifier)
+	if !ok || propIdent.Value != "reflect" {
+		return false
+	}
+
+	// Must have exactly one type argument
+	if len(node.TypeArguments) != 1 {
+		return false
+	}
+
+	return true
+}
+
+// handlePaseratiReflect processes Paserati.reflect<T>() intrinsic calls
+// It resolves the type argument T and stores it on the AST node for the compiler
+func (c *Checker) handlePaseratiReflect(node *parser.CallExpression) {
+	debugPrintf("// [Checker] Handling Paserati.reflect<T>() intrinsic\n")
+
+	// Resolve the type argument
+	if len(node.TypeArguments) != 1 {
+		c.addError(node, "Paserati.reflect requires exactly one type argument")
+		node.SetComputedType(types.Any)
+		return
+	}
+
+	typeArg := c.resolveTypeAnnotation(node.TypeArguments[0])
+	if typeArg == nil {
+		c.addError(node, "could not resolve type argument for Paserati.reflect")
+		node.SetComputedType(types.Any)
+		return
+	}
+
+	debugPrintf("// [Checker] Paserati.reflect<T>() resolved T to: %s\n", typeArg.String())
+
+	// Store the resolved type on the AST node for the compiler
+	node.ResolvedReflectType = typeArg
+
+	// The return type is the Type interface (an object describing the type)
+	// For now, we set it to Any since the exact shape depends on the type
+	typeDescriptorType := types.NewObjectType().
+		WithProperty("kind", types.String).
+		WithOptionalProperty("name", types.String).
+		WithOptionalProperty("properties", types.Any).
+		WithOptionalProperty("elementType", types.Any).
+		WithOptionalProperty("types", types.Any).
+		WithOptionalProperty("parameters", types.Any).
+		WithOptionalProperty("returnType", types.Any)
+
+	node.SetComputedType(typeDescriptorType)
 }

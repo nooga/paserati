@@ -63,6 +63,9 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &BigInt64ArrayInitializer{})
 	initializers = append(initializers, &BigUint64ArrayInitializer{})
 
+	// Paserati intrinsics (compile-time type reflection)
+	initializers = append(initializers, &PaseratiInitializer{})
+
 	// Sort by priority (lower numbers first)
 	sort.Slice(initializers, func(i, j int) bool {
 		return initializers[i].Priority() < initializers[j].Priority()

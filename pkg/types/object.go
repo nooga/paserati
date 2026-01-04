@@ -207,6 +207,11 @@ type ObjectType struct {
 
 	// Index signatures for dynamic property access
 	IndexSignatures []*IndexSignature // Index signatures like [key: string]: Type
+
+	// IsReflectIntrinsic marks this as a compile-time type reflection intrinsic
+	// When the checker sees a call to a function with this flag, it resolves the type argument
+	// and stores it for the compiler to emit a type descriptor object
+	IsReflectIntrinsic bool
 }
 
 func (ot *ObjectType) String() string {

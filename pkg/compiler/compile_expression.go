@@ -1396,6 +1396,11 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return BadRegister, NewCompileError(node, "compiler internal error: CallExpression.Function is nil")
 	}
 
+	// Check if this is a Paserati.reflect<T>() intrinsic call
+	if node.ResolvedReflectType != nil {
+		return c.compileReflectCall(node, hint)
+	}
+
 	// Check if this is a __setPrivateAccessor__ or __setPrivateMethod__ marker call (synthetic call from class compilation)
 	if memberExpr, ok := node.Function.(*parser.MemberExpression); ok {
 		if propIdent, ok := memberExpr.Property.(*parser.Identifier); ok {

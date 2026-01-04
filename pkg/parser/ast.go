@@ -1354,12 +1354,13 @@ func (ie *InfixExpression) String() string {
 // <Function>(<Arguments>)
 // Function can be an identifier or a function literal.
 type CallExpression struct {
-	BaseExpression              // Embed base for ComputedType (Function's return type)
-	Token          lexer.Token  // The '(' token
-	Function       Expression   // Identifier or FunctionLiteral being called
-	TypeArguments  []Expression // Type arguments (e.g., <string, number>)
-	Arguments      []Expression // List of arguments
-	IsDirectEval   bool         // True if this is a direct eval call: eval(...) where callee is plain Identifier "eval"
+	BaseExpression                 // Embed base for ComputedType (Function's return type)
+	Token              lexer.Token // The '(' token
+	Function           Expression  // Identifier or FunctionLiteral being called
+	TypeArguments      []Expression // Type arguments (e.g., <string, number>)
+	Arguments          []Expression // List of arguments
+	IsDirectEval       bool         // True if this is a direct eval call: eval(...) where callee is plain Identifier "eval"
+	ResolvedReflectType types.Type  // For Paserati.reflect<T>(): the fully resolved type T
 }
 
 func (ce *CallExpression) expressionNode()      {}
