@@ -136,7 +136,7 @@ This project is licensed under the MIT License.
 
 ### AI disclaimer
 
-This is a **one-person** project developed in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI aimed at speedrunning a production-quality open source project.
+This is a **one-person** project developed in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI, aimed at speedrunning a production-quality open source project.
 
 Google Gemini 2.5/3.0 Pro and Claude Sonnet/Opus 4/4.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
 
