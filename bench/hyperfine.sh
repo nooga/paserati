@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 PASERATI="${ROOT_DIR}/paserati"
 GOJAC="${ROOT_DIR}/gojac"
+QJS="${ROOT_DIR}/qjs"
 
 BENCH_NAME="${1:-all}"
 
@@ -18,6 +19,12 @@ fi
 if [[ ! -x "${GOJAC}" ]]; then
   echo "error: missing executable: ${GOJAC}"
   echo "hint: build it (however you normally do) so ./gojac exists"
+  exit 1
+fi
+
+if [[ ! -x "${QJS}" ]]; then
+  echo "error: missing executable: ${QJS}"
+  echo "hint: ensure ./qjs exists (QuickJS runner) and is executable"
   exit 1
 fi
 
@@ -44,16 +51,21 @@ run_one () {
   echo "Benchmark: ${name}"
   echo "  - ${PASERATI} ${script}"
   echo "  - ${GOJAC} ${script}"
+  echo "  - ${QJS} ${script}"
   echo
 
-  hyperfine \
-    --warmup 3 \
-    --min-runs 20 \
-    --style full \
-    --export-markdown "${out_md}" \
-    --export-json "${out_json}" \
-    --command-name "paserati" "${PASERATI} --no-typecheck ${script} > /dev/null 2>&1" \
+  local -a hf_args=(
+    --warmup 3
+    --min-runs 20
+    --style full
+    --export-markdown "${out_md}"
+    --export-json "${out_json}"
+    --command-name "paserati" "${PASERATI} --no-typecheck ${script} > /dev/null 2>&1"
     --command-name "gojac" "${GOJAC} ${script} > /dev/null 2>&1"
+    --command-name "quickjs" "${QJS} ${script} > /dev/null 2>&1"
+  )
+
+  hyperfine "${hf_args[@]}"
 
   echo
   echo "Wrote:"

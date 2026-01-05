@@ -4,6 +4,7 @@ This directory contains a tiny, deterministic micro-benchmark meant to be run by
 
 - `./paserati` (native TS frontend + bytecode VM)
 - `./gojac` (Goja-based runner binary in this repo)
+- `./qjs` (QuickJS runner binary in this repo)
 
 ### Run with hyperfine
 
@@ -19,5 +20,3 @@ Outputs go to:
 
 - `bench/out/*.md`
 - `bench/out/*.json`
-
-

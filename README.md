@@ -30,14 +30,14 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Weird flex but okay benchmarks
 
-Paserati has a long way to go performance-wise, but it’s already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** on a couple of simple microbenches.
+Paserati has a long way to go performance-wise, but it’s already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** and **QuickJS** on a couple of simple microbenches.
 
 Results from `hyperfine` (see `bench/hyperfine.sh`):
 
-| Benchmark          | paserati (Mean) |    gojac (Mean) |                  Relative |
-| :----------------- | --------------: | --------------: | ------------------------: |
-| `bench/bench.js`   | 4.203 ± 0.058 s | 5.273 ± 0.243 s | **paserati 1.25× faster** |
-| `bench/objects.js` | 6.233 ± 0.097 s | 7.021 ± 0.156 s | **paserati 1.13× faster** |
+| Benchmark          | paserati (Mean) |     goja (Mean) |  quickjs (Mean) |                                                            Relative |
+| :----------------- | --------------: | --------------: | --------------: | ------------------------------------------------------------------: |
+| `bench/bench.js`   | 3.924 ± 0.097 s | 5.207 ± 0.093 s | 4.945 ± 0.092 s | **paserati 1.33× faster than gojac**, **1.26× faster than quickjs** |
+| `bench/objects.js` | 6.169 ± 0.092 s | 7.015 ± 0.151 s | 8.135 ± 0.130 s | **paserati 1.14× faster than gojac**, **1.32× faster than quickjs** |
 
 If your favorite pure Go JavaScript engine is reading this: _skill issue_.
 
@@ -83,7 +83,6 @@ From a recent run:
 
 ```
 language (TOTAL)             23410    21533     1852        0       25    92.0%    1m41.734s
-GRAND TOTAL                  23410    21533     1852        0       25    92.0%    1m41.734s
 ```
 
 Weak spots:

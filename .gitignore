@@ -28,6 +28,7 @@ paserati-minimal
 
 *.baseline
 gojac
+qjs
 .DS_Store
 
 # Python virtual environment
