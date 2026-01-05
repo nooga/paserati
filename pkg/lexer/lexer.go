@@ -508,6 +508,64 @@ func (l *Lexer) SplitUnsignedRightShiftToken(ursToken Token) Token {
 	return firstGT
 }
 
+// SplitRightShiftAssignToken converts a >>= token into > and pushes >= back
+// This is used for nested generics followed by assignment like Array<Array<T>> = []
+func (l *Lexer) SplitRightShiftAssignToken(rsaToken Token) Token {
+	// Create the first > token
+	firstGT := Token{
+		Type:     GT,
+		Literal:  ">",
+		Line:     rsaToken.Line,
+		Column:   rsaToken.Column,
+		StartPos: rsaToken.StartPos,
+		EndPos:   rsaToken.StartPos + 1,
+	}
+
+	// Create the remaining >= token and push it back
+	remainingGE := Token{
+		Type:     GE,
+		Literal:  ">=",
+		Line:     rsaToken.Line,
+		Column:   rsaToken.Column + 1,
+		StartPos: rsaToken.StartPos + 1,
+		EndPos:   rsaToken.EndPos,
+	}
+
+	l.pushedToken = &remainingGE
+	debugPrintf("SplitRightShiftAssignToken: split >>= into > and pushed >= back")
+
+	return firstGT
+}
+
+// SplitGreaterEqualToken converts a >= token into > and pushes = back
+// This is used for deeply nested generics followed by assignment like Array<Array<Array<T>>> = []
+func (l *Lexer) SplitGreaterEqualToken(geToken Token) Token {
+	// Create the first > token
+	firstGT := Token{
+		Type:     GT,
+		Literal:  ">",
+		Line:     geToken.Line,
+		Column:   geToken.Column,
+		StartPos: geToken.StartPos,
+		EndPos:   geToken.StartPos + 1,
+	}
+
+	// Create the remaining = token and push it back
+	remainingAssign := Token{
+		Type:     ASSIGN,
+		Literal:  "=",
+		Line:     geToken.Line,
+		Column:   geToken.Column + 1,
+		StartPos: geToken.StartPos + 1,
+		EndPos:   geToken.EndPos,
+	}
+
+	l.pushedToken = &remainingAssign
+	debugPrintf("SplitGreaterEqualToken: split >= into > and pushed = back")
+
+	return firstGT
+}
+
 // readChar gives us the next character and advances our position in the input string.
 // It also updates the line and column count.
 func (l *Lexer) readChar() {
@@ -1258,11 +1316,10 @@ func (l *Lexer) NextToken() Token {
 					l.readChar()                                                   // Advance past third '>'
 					tok = Token{Type: UNSIGNED_RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				}
-			} else if peek2AfterWS == '=' { // Check for >>=
-				l.skipWhitespace()                                             // Actually consume the whitespace
-				l.readChar()                                                   // Consume '='
-				literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>="
-				l.readChar()                                                   // Advance past '='
+			} else if l.peekChar() == '=' { // Check for >>= (no whitespace allowed)
+				l.readChar()                                // Consume '='
+				literal := l.input[startPos : l.position+1] // Read ">>="
+				l.readChar()                                // Advance past '='
 				tok = Token{Type: RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			} else { // Just >>
 				literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>"

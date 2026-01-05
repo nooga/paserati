@@ -364,6 +364,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	outerInGeneratorFunction := c.inGeneratorFunction
 	c.inAsyncFunction = ctx.IsAsync
 	c.inGeneratorFunction = ctx.IsGenerator
+	c.functionNestingDepth++
 
 	// Set up 'this' context - check for explicit 'this' parameter
 	outerThisType := c.currentThisType
@@ -436,7 +437,8 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	c.currentThisType = outerThisType
 	c.inAsyncFunction = outerInAsyncFunction
 	c.inGeneratorFunction = outerInGeneratorFunction
-	
+	c.functionNestingDepth--
+
 	return finalReturnType
 }
 

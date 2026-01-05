@@ -374,8 +374,8 @@ func (p *Parser) nextToken() {
 	debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 }
 
-// expectPeekGT is like expectPeek(GT) but handles >> and >>> in generic contexts
-// If peek is >>, it splits the token and consumes one >
+// expectPeekGT is like expectPeek(GT) but handles >>, >>>, >>=, and >= in generic contexts
+// If peek is >> or >>>, it splits the token and consumes one >
 func (p *Parser) expectPeekGT() bool {
 	if p.peekToken.Type == lexer.GT {
 		p.nextToken()
@@ -393,6 +393,22 @@ func (p *Parser) expectPeekGT() bool {
 		// Update peek to be the first > and advance
 		p.peekToken = splitToken
 		p.nextToken() // This will make current = first >, peek = >>
+		return true
+	} else if p.peekToken.Type == lexer.RIGHT_SHIFT_ASSIGN {
+		// Split >>= into > and >= using lexer's split method
+		// This handles cases like: Array<Array<T>> = []
+		splitToken := p.l.SplitRightShiftAssignToken(p.peekToken)
+		// Update peek to be the first > and advance
+		p.peekToken = splitToken
+		p.nextToken() // This will make current = first >, peek = >=
+		return true
+	} else if p.peekToken.Type == lexer.GE {
+		// Split >= into > and = using lexer's split method
+		// This handles deeply nested generics like: Array<Array<Array<T>>> = []
+		splitToken := p.l.SplitGreaterEqualToken(p.peekToken)
+		// Update peek to be the first > and advance
+		p.peekToken = splitToken
+		p.nextToken() // This will make current = first >, peek = =
 		return true
 	}
 

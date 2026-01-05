@@ -254,8 +254,9 @@ type Checker struct {
 
 	// --- NEW: Current function context ---
 	// Track if we're currently inside an async or generator function
-	inAsyncFunction     bool
-	inGeneratorFunction bool
+	inAsyncFunction      bool
+	inGeneratorFunction  bool
+	functionNestingDepth int // 0 = top level, >0 = inside function(s)
 
 	// --- NEW: Object method context ---
 	// Track if we're currently inside an object method (for super support)
@@ -780,6 +781,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 		c.inAsyncFunction = funcLit.IsAsync
 		c.inGeneratorFunction = funcLit.IsGenerator
+		c.functionNestingDepth++
 
 		if c.currentExpectedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
@@ -1014,6 +1016,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.currentThisType = outerThisType
 		c.inAsyncFunction = outerInAsyncFunction
 		c.inGeneratorFunction = outerInGeneratorFunction
+		c.functionNestingDepth--
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
 
@@ -4328,7 +4331,8 @@ func (c *Checker) isAsyncGeneratorType(t types.Type) bool {
 
 // isInAsyncContext checks if we're currently inside an async function or async generator
 func (c *Checker) isInAsyncContext() bool {
-	return c.inAsyncFunction
+	// Top level is async (TLA support) or we're inside an async function
+	return c.functionNestingDepth == 0 || c.inAsyncFunction
 }
 
 // getNextAnonymousId generates a unique ID for anonymous classes
