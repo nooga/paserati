@@ -196,46 +196,38 @@ func (ctx *schemaContext) convert(typeDesc vm.Value) (vm.Value, error) {
 		}
 
 	case "object":
-		// {kind: "object", properties: {...}} -> {type: "object", properties: {...}, required: [...]}
+		// {kind: "object", properties: {...}, baseTypes: [...]} -> {type: "object", properties: {...}, required: [...]}
 		schema.SetOwn("type", vm.NewString("object"))
 
+		schemaProps := vm.NewObject(ctx.vmInstance.ObjectPrototype).AsPlainObject()
+		requiredVal := vm.NewArrayWithLength(0)
+		requiredArr := requiredVal.AsArray()
+		hasProperties := false
+
+		// First, collect properties from base types (inherited properties)
+		baseTypesVal, hasBaseTypes := obj.GetOwn("baseTypes")
+		if hasBaseTypes && !baseTypesVal.IsUndefined() && baseTypesVal.IsArray() {
+			baseTypesArr := baseTypesVal.AsArray()
+			for i := 0; i < baseTypesArr.Length(); i++ {
+				baseType := baseTypesArr.Get(i)
+				ctx.collectPropertiesFromType(baseType, schemaProps, requiredArr, &hasProperties)
+			}
+		}
+
+		// Then add own properties (may override inherited ones)
 		propsVal, exists := obj.GetOwn("properties")
 		if exists && !propsVal.IsUndefined() {
 			propsObj := propsVal.AsPlainObject()
 			if propsObj != nil {
-				schemaProps := vm.NewObject(ctx.vmInstance.ObjectPrototype).AsPlainObject()
-				requiredVal := vm.NewArrayWithLength(0)
-				requiredArr := requiredVal.AsArray()
+				hasProperties = true
+				ctx.addPropertiesToSchema(propsObj, schemaProps, requiredArr)
+			}
+		}
 
-				// Iterate over properties
-				keys := propsObj.OwnKeys()
-				for _, key := range keys {
-					propDescVal, _ := propsObj.GetOwn(key)
-					propDescObj := propDescVal.AsPlainObject()
-					if propDescObj == nil {
-						continue
-					}
-
-					// Get the type descriptor for this property
-					propTypeVal, _ := propDescObj.GetOwn("type")
-					propSchema, err := ctx.convert(propTypeVal)
-					if err != nil {
-						return vm.Undefined, err
-					}
-					schemaProps.SetOwn(key, propSchema)
-
-					// Check if property is optional
-					optionalVal, exists := propDescObj.GetOwn("optional")
-					isOptional := exists && optionalVal.IsTruthy()
-					if !isOptional {
-						requiredArr.Append(vm.NewString(key))
-					}
-				}
-
-				schema.SetOwn("properties", vm.NewValueFromPlainObject(schemaProps))
-				if requiredArr.Length() > 0 {
-					schema.SetOwn("required", requiredVal)
-				}
+		if hasProperties {
+			schema.SetOwn("properties", vm.NewValueFromPlainObject(schemaProps))
+			if requiredArr.Length() > 0 {
+				schema.SetOwn("required", requiredVal)
 			}
 		}
 
@@ -365,4 +357,95 @@ func (ctx *schemaContext) convert(typeDesc vm.Value) (vm.Value, error) {
 	}
 
 	return vm.NewValueFromPlainObject(schema), nil
+}
+
+// collectPropertiesFromType recursively collects properties from a type descriptor (for inheritance)
+func (ctx *schemaContext) collectPropertiesFromType(typeDesc vm.Value, schemaProps *vm.PlainObject, requiredArr *vm.ArrayObject, hasProperties *bool) {
+	if typeDesc.IsUndefined() || typeDesc.Type() == vm.TypeNull {
+		return
+	}
+
+	obj := typeDesc.AsPlainObject()
+	if obj == nil {
+		return
+	}
+
+	kindVal, exists := obj.GetOwn("kind")
+	if !exists {
+		return
+	}
+	kind := vm.AsString(kindVal)
+
+	if kind != "object" {
+		return
+	}
+
+	// First recursively collect from this type's base types
+	baseTypesVal, hasBaseTypes := obj.GetOwn("baseTypes")
+	if hasBaseTypes && !baseTypesVal.IsUndefined() && baseTypesVal.IsArray() {
+		baseTypesArr := baseTypesVal.AsArray()
+		for i := 0; i < baseTypesArr.Length(); i++ {
+			baseType := baseTypesArr.Get(i)
+			ctx.collectPropertiesFromType(baseType, schemaProps, requiredArr, hasProperties)
+		}
+	}
+
+	// Then collect own properties
+	propsVal, propsExist := obj.GetOwn("properties")
+	if propsExist && !propsVal.IsUndefined() {
+		propsObj := propsVal.AsPlainObject()
+		if propsObj != nil {
+			*hasProperties = true
+			ctx.addPropertiesToSchema(propsObj, schemaProps, requiredArr)
+		}
+	}
+}
+
+// addPropertiesToSchema adds properties from a type descriptor to the schema
+func (ctx *schemaContext) addPropertiesToSchema(propsObj *vm.PlainObject, schemaProps *vm.PlainObject, requiredArr *vm.ArrayObject) {
+	keys := propsObj.OwnKeys()
+	for _, key := range keys {
+		propDescVal, _ := propsObj.GetOwn(key)
+		propDescObj := propDescVal.AsPlainObject()
+		if propDescObj == nil {
+			continue
+		}
+
+		// Get the type descriptor for this property
+		propTypeVal, _ := propDescObj.GetOwn("type")
+		propTypeObj := propTypeVal.AsPlainObject()
+
+		// Skip methods (properties with callSignatures) - they can't be serialized
+		if propTypeObj != nil {
+			callSigsVal, hasCallSigs := propTypeObj.GetOwn("callSignatures")
+			if hasCallSigs && !callSigsVal.IsUndefined() && callSigsVal.IsArray() {
+				if callSigsVal.AsArray().Length() > 0 {
+					continue // Skip this property - it's a method
+				}
+			}
+		}
+
+		propSchema, err := ctx.convert(propTypeVal)
+		if err != nil {
+			continue // Skip properties that fail to convert
+		}
+		schemaProps.SetOwn(key, propSchema)
+
+		// Check if property is optional - but don't add duplicates to required
+		optionalVal, exists := propDescObj.GetOwn("optional")
+		isOptional := exists && optionalVal.IsTruthy()
+		if !isOptional {
+			// Check if already in required array
+			alreadyRequired := false
+			for i := 0; i < requiredArr.Length(); i++ {
+				if vm.AsString(requiredArr.Get(i)) == key {
+					alreadyRequired = true
+					break
+				}
+			}
+			if !alreadyRequired {
+				requiredArr.Append(vm.NewString(key))
+			}
+		}
+	}
 }

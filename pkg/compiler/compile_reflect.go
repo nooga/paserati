@@ -147,6 +147,22 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 			c.emitSetPropertyFromReg(hint, "callSignatures", sigsReg, line)
 		}
 
+		// Add base types for inheritance (extends/implements)
+		if len(typ.BaseTypes) > 0 {
+			baseTypesReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, baseTypesReg)
+			c.emitMakeEmptyArray(baseTypesReg, line)
+
+			for _, baseType := range typ.BaseTypes {
+				baseReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, baseReg)
+				c.emitTypeDescriptor(baseType, baseReg, line)
+				c.emitArrayPush(baseTypesReg, baseReg, line)
+			}
+
+			c.emitSetPropertyFromReg(hint, "baseTypes", baseTypesReg, line)
+		}
+
 	case *types.ArrayType:
 		c.emitSetProperty(hint, "kind", vm.NewString("array"), line)
 		elemReg := c.regAlloc.Alloc()

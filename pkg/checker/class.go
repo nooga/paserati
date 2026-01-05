@@ -507,8 +507,13 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				propName := c.extractPropertyName(prop.Key)
 				instanceType.WithClassMember(propName, propType, accessLevel, false, prop.Readonly)
 
-				debugPrintf("// [Checker Class] Added property '%s' to instance type: %s (%s, readonly: %v)\n",
-					propName, propType.String(), accessLevel.String(), prop.Readonly)
+				// Handle optional properties for class instance type
+				if prop.Optional {
+					instanceType.OptionalProperties[propName] = true
+				}
+
+				debugPrintf("// [Checker Class] Added property '%s' to instance type: %s (%s, readonly: %v, optional: %v)\n",
+					propName, propType.String(), accessLevel.String(), prop.Readonly, prop.Optional)
 			}
 		}
 	}
