@@ -2236,6 +2236,10 @@ func (c *Checker) visit(node parser.Node) {
 		// --- NEW: Handle SatisfiesExpression ---
 		c.checkSatisfiesExpression(node)
 
+	case *parser.NonNullExpression:
+		// Handle non-null assertion expression (x!)
+		c.checkNonNullExpression(node)
+
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
 		c.visit(node.Left)

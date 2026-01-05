@@ -147,3 +147,36 @@ func NewUnionType(ts ...Type) Type {
 
 	return &UnionType{Types: uniqueMembers}
 }
+
+// RemoveNullUndefined removes null and undefined from a type.
+// If the type is a union, it filters out null and undefined members.
+// If the type is exactly null or undefined, returns never.
+// Otherwise returns the original type unchanged.
+func RemoveNullUndefined(t Type) Type {
+	if t == nil {
+		return t
+	}
+
+	// If it's exactly null or undefined, return never (or the original if you prefer)
+	if t.Equals(Null) || t.Equals(Undefined) {
+		return Never
+	}
+
+	// If it's a union, filter out null and undefined
+	if union, ok := t.(*UnionType); ok {
+		var filtered []Type
+		for _, member := range union.Types {
+			if !member.Equals(Null) && !member.Equals(Undefined) {
+				filtered = append(filtered, member)
+			}
+		}
+		// Use NewUnionType to handle simplification
+		if len(filtered) == 0 {
+			return Never
+		}
+		return NewUnionType(filtered...)
+	}
+
+	// Not a union and not null/undefined, return as-is
+	return t
+}

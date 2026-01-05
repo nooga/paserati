@@ -170,8 +170,9 @@ var precedences = map[lexer.TokenType]int{
 	lexer.OPTIONAL_CHAINING: MEMBER, // Same precedence as regular member access
 
 	// Postfix operators need precedence for the parseExpression loop termination condition
-	lexer.INC: POSTFIX,
-	lexer.DEC: POSTFIX,
+	lexer.INC:  POSTFIX,
+	lexer.DEC:  POSTFIX,
+	lexer.BANG: POSTFIX, // Non-null assertion: x!
 }
 
 // --- NEW: Precedences map for TYPE operator tokens ---
@@ -312,6 +313,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	// Postfix Update Operators
 	p.registerInfix(lexer.INC, p.parsePostfixUpdateExpression)
 	p.registerInfix(lexer.DEC, p.parsePostfixUpdateExpression)
+	// Non-null assertion operator (x!)
+	p.registerInfix(lexer.BANG, p.parseNonNullExpression)
 	// Comma operator
 	p.registerInfix(lexer.COMMA, p.parseCommaExpression)
 
@@ -5471,6 +5474,17 @@ func (p *Parser) parsePostfixUpdateExpression(left Expression) Expression {
 		return nil
 	}
 
+	// No need to consume token, parseExpression loop does that.
+	return expr
+}
+
+// parseNonNullExpression parses the non-null assertion operator (x!)
+// This is a TypeScript-only operator that asserts a value is not null/undefined
+func (p *Parser) parseNonNullExpression(left Expression) Expression {
+	expr := &NonNullExpression{
+		Token:      p.curToken, // !
+		Expression: left,
+	}
 	// No need to consume token, parseExpression loop does that.
 	return expr
 }

@@ -1382,6 +1382,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.SatisfiesExpression:
 		return c.compileSatisfiesExpression(node, hint)
 
+	case *parser.NonNullExpression:
+		return c.compileNonNullExpression(node, hint)
+
 	case *parser.InfixExpression:
 		return c.compileInfixExpression(node, hint) // TODO: Fix this
 

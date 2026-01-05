@@ -1324,6 +1324,28 @@ func (se *SatisfiesExpression) String() string {
 	return out.String()
 }
 
+// NonNullExpression represents a non-null assertion expression (value!)
+// This is a TypeScript-only operator that asserts a value is not null/undefined
+type NonNullExpression struct {
+	BaseExpression             // Embed base for ComputedType
+	Token          lexer.Token // The '!' token
+	Expression     Expression  // The expression being asserted as non-null
+}
+
+func (nne *NonNullExpression) expressionNode()      {}
+func (nne *NonNullExpression) TokenLiteral() string { return nne.Token.Literal }
+func (nne *NonNullExpression) String() string {
+	var out bytes.Buffer
+	if nne.Expression != nil {
+		out.WriteString(nne.Expression.String())
+	}
+	out.WriteString("!")
+	if nne.ComputedType != nil {
+		out.WriteString(fmt.Sprintf(" /* type: %s */", nne.ComputedType.String()))
+	}
+	return out.String()
+}
+
 // InfixExpression represents an infix operator expression.
 // <Left> <operator> <Right>
 // e.g., 5 + 5, x == y

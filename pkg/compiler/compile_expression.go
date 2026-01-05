@@ -1287,6 +1287,14 @@ func (c *Compiler) compileSatisfiesExpression(node *parser.SatisfiesExpression, 
 	return c.compileNode(node.Expression, hint)
 }
 
+// compileNonNullExpression compiles non-null assertion expressions (x!)
+// At runtime, non-null assertions are no-ops since they only affect the type checker.
+func (c *Compiler) compileNonNullExpression(node *parser.NonNullExpression, hint Register) (Register, errors.PaseratiError) {
+	// For non-null assertions, we simply compile the underlying expression
+	// The type checking has already removed null/undefined from the type
+	return c.compileNode(node.Expression, hint)
+}
+
 // calculateEffectiveArgCount calculates the effective number of arguments,
 // expanding spread elements based on array literal lengths
 func (c *Compiler) calculateEffectiveArgCount(arguments []parser.Expression) int {

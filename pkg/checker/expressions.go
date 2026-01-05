@@ -2288,6 +2288,21 @@ func (c *Checker) checkSatisfiesExpression(node *parser.SatisfiesExpression) {
 	node.SetComputedType(sourceType)
 }
 
+// checkNonNullExpression handles non-null assertion expressions (x!)
+// This removes null and undefined from the type
+func (c *Checker) checkNonNullExpression(node *parser.NonNullExpression) {
+	// Visit the expression being asserted
+	c.visit(node.Expression)
+	sourceType := node.Expression.GetComputedType()
+	if sourceType == nil {
+		sourceType = types.Any
+	}
+
+	// Remove null and undefined from the type
+	resultType := types.RemoveNullUndefined(sourceType)
+	node.SetComputedType(resultType)
+}
+
 // checkObjectLiteralSatisfies performs strict checking for object literals in satisfies expressions
 func (c *Checker) checkObjectLiteralSatisfies(objectLit *parser.ObjectLiteral, targetType types.Type, satisfiesNode *parser.SatisfiesExpression) {
 	sourceType := objectLit.GetComputedType()
