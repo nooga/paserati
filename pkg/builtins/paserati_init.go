@@ -1,6 +1,8 @@
 package builtins
 
 import (
+	"strings"
+
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 )
@@ -19,10 +21,14 @@ func (p *PaseratiInitializer) Priority() int {
 }
 
 func (p *PaseratiInitializer) InitTypes(ctx *TypeContext) error {
-	// Create toJSONSchema method type: () => object
+	// Create method types
 	toJSONSchemaType := types.NewFunctionType(&types.Signature{
 		ParameterTypes: []types.Type{},
 		ReturnType:     types.Any,
+	})
+	toStringType := types.NewFunctionType(&types.Signature{
+		ParameterTypes: []types.Type{},
+		ReturnType:     types.String,
 	})
 
 	// Create Type interface - represents a runtime type descriptor
@@ -34,7 +40,8 @@ func (p *PaseratiInitializer) InitTypes(ctx *TypeContext) error {
 		WithOptionalProperty("types", types.Any).          // For union types
 		WithOptionalProperty("parameters", types.Any).     // For function types
 		WithOptionalProperty("returnType", types.Any).     // For function types
-		WithProperty("toJSONSchema", toJSONSchemaType) // Method to convert to JSON Schema
+		WithProperty("toJSONSchema", toJSONSchemaType).    // Method to convert to JSON Schema
+		WithProperty("toString", toStringType)             // Method to convert to TypeScript-like string
 
 	// Define Type interface for users
 	if err := ctx.DefineTypeAlias("Type", typeInterface); err != nil {
@@ -61,12 +68,17 @@ func (p *PaseratiInitializer) InitTypes(ctx *TypeContext) error {
 func (p *PaseratiInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Create TypeDescriptor prototype with toJSONSchema method
+	// Create TypeDescriptor prototype with methods
 	typeProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 	typeProto.SetOwnNonEnumerable("toJSONSchema", vm.NewNativeFunction(0, false, "toJSONSchema", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' from the VM (the type descriptor object)
 		thisVal := vmInstance.GetThis()
 		return typeDescriptorToJSONSchema(vmInstance, thisVal)
+	}))
+	typeProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+		// Get 'this' from the VM (the type descriptor object)
+		thisVal := vmInstance.GetThis()
+		return typeDescriptorToString(thisVal), nil
 	}))
 
 	// Create Paserati object
@@ -448,4 +460,213 @@ func (ctx *schemaContext) addPropertiesToSchema(propsObj *vm.PlainObject, schema
 			}
 		}
 	}
+}
+
+// typeDescriptorToString converts a Type descriptor object to a TypeScript-like string
+func typeDescriptorToString(typeDesc vm.Value) vm.Value {
+	result := typeToString(typeDesc)
+	return vm.NewString(result)
+}
+
+// typeToString recursively converts a type descriptor to string
+func typeToString(typeDesc vm.Value) string {
+	if typeDesc.IsUndefined() || typeDesc.Type() == vm.TypeNull {
+		return "unknown"
+	}
+
+	obj := typeDesc.AsPlainObject()
+	if obj == nil {
+		return "unknown"
+	}
+
+	kindVal, exists := obj.GetOwn("kind")
+	if !exists {
+		return "unknown"
+	}
+	kind := vm.AsString(kindVal)
+
+	switch kind {
+	case "primitive":
+		nameVal, _ := obj.GetOwn("name")
+		return vm.AsString(nameVal)
+
+	case "literal":
+		valueVal, _ := obj.GetOwn("value")
+		baseTypeVal, _ := obj.GetOwn("baseType")
+		baseType := vm.AsString(baseTypeVal)
+		if baseType == "string" {
+			return "\"" + vm.AsString(valueVal) + "\""
+		}
+		return valueVal.Inspect()
+
+	case "array":
+		elemTypeVal, exists := obj.GetOwn("elementType")
+		if exists {
+			elemStr := typeToString(elemTypeVal)
+			// Use Array<T> for complex types, T[] for simple
+			if needsParens(elemStr) {
+				return "Array<" + elemStr + ">"
+			}
+			return elemStr + "[]"
+		}
+		return "unknown[]"
+
+	case "tuple":
+		elemTypesVal, exists := obj.GetOwn("elementTypes")
+		if exists && elemTypesVal.IsArray() {
+			arr := elemTypesVal.AsArray()
+			parts := make([]string, arr.Length())
+			for i := 0; i < arr.Length(); i++ {
+				parts[i] = typeToString(arr.Get(i))
+			}
+			return "[" + joinStrings(parts, ", ") + "]"
+		}
+		return "[]"
+
+	case "object":
+		// Check if it has a name (named interface/type)
+		nameVal, hasName := obj.GetOwn("name")
+		if hasName && !nameVal.IsUndefined() {
+			name := vm.AsString(nameVal)
+			if name != "" {
+				return name
+			}
+		}
+
+		// Check for call signatures (function types represented as objects)
+		callSigsVal, hasCallSigs := obj.GetOwn("callSignatures")
+		if hasCallSigs && callSigsVal.IsArray() {
+			arr := callSigsVal.AsArray()
+			if arr.Length() > 0 {
+				// Get the first call signature
+				sigVal := arr.Get(0)
+				sigObj := sigVal.AsPlainObject()
+				if sigObj != nil {
+					paramsVal, _ := sigObj.GetOwn("parameters")
+					returnVal, _ := sigObj.GetOwn("returnType")
+
+					paramStr := "()"
+					if paramsVal.IsArray() {
+						paramsArr := paramsVal.AsArray()
+						parts := make([]string, paramsArr.Length())
+						for i := 0; i < paramsArr.Length(); i++ {
+							paramDescVal := paramsArr.Get(i)
+							paramDescObj := paramDescVal.AsPlainObject()
+							if paramDescObj != nil {
+								paramTypeVal, _ := paramDescObj.GetOwn("type")
+								parts[i] = typeToString(paramTypeVal)
+							} else {
+								parts[i] = "unknown"
+							}
+						}
+						paramStr = "(" + joinStrings(parts, ", ") + ")"
+					}
+
+					returnStr := "void"
+					if !returnVal.IsUndefined() {
+						returnStr = typeToString(returnVal)
+					}
+
+					return paramStr + " => " + returnStr
+				}
+			}
+		}
+
+		// Anonymous object type - show structure
+		propsVal, exists := obj.GetOwn("properties")
+		if !exists || propsVal.IsUndefined() {
+			return "{}"
+		}
+		propsObj := propsVal.AsPlainObject()
+		if propsObj == nil {
+			return "{}"
+		}
+
+		keys := propsObj.OwnKeys()
+		if len(keys) == 0 {
+			return "{}"
+		}
+
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			propDescVal, _ := propsObj.GetOwn(key)
+			propDescObj := propDescVal.AsPlainObject()
+			if propDescObj == nil {
+				continue
+			}
+			propTypeVal, _ := propDescObj.GetOwn("type")
+			optionalVal, hasOptional := propDescObj.GetOwn("optional")
+			isOptional := hasOptional && optionalVal.IsTruthy()
+
+			propStr := key
+			if isOptional {
+				propStr += "?"
+			}
+			propStr += ": " + typeToString(propTypeVal)
+			parts = append(parts, propStr)
+		}
+		return "{ " + joinStrings(parts, "; ") + " }"
+
+	case "union":
+		typesVal, exists := obj.GetOwn("types")
+		if exists && typesVal.IsArray() {
+			arr := typesVal.AsArray()
+			parts := make([]string, arr.Length())
+			for i := 0; i < arr.Length(); i++ {
+				parts[i] = typeToString(arr.Get(i))
+			}
+			return joinStrings(parts, " | ")
+		}
+		return "unknown"
+
+	case "intersection":
+		typesVal, exists := obj.GetOwn("types")
+		if exists && typesVal.IsArray() {
+			arr := typesVal.AsArray()
+			parts := make([]string, arr.Length())
+			for i := 0; i < arr.Length(); i++ {
+				parts[i] = typeToString(arr.Get(i))
+			}
+			return joinStrings(parts, " & ")
+		}
+		return "unknown"
+
+	case "function":
+		paramsVal, _ := obj.GetOwn("parameters")
+		returnVal, _ := obj.GetOwn("returnType")
+
+		paramStr := "()"
+		if paramsVal.IsArray() {
+			arr := paramsVal.AsArray()
+			parts := make([]string, arr.Length())
+			for i := 0; i < arr.Length(); i++ {
+				parts[i] = typeToString(arr.Get(i))
+			}
+			paramStr = "(" + joinStrings(parts, ", ") + ")"
+		}
+
+		returnStr := "void"
+		if !returnVal.IsUndefined() {
+			returnStr = typeToString(returnVal)
+		}
+
+		return paramStr + " => " + returnStr
+
+	case "class":
+		nameVal, _ := obj.GetOwn("name")
+		return vm.AsString(nameVal)
+
+	default:
+		return "unknown"
+	}
+}
+
+// needsParens returns true if the type string needs parentheses when used in array notation
+func needsParens(s string) bool {
+	return strings.Contains(s, "|") || strings.Contains(s, "&") || strings.Contains(s, "=>")
+}
+
+// joinStrings joins strings with a separator
+func joinStrings(parts []string, sep string) string {
+	return strings.Join(parts, sep)
 }
