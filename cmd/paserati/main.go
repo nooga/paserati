@@ -8,6 +8,8 @@ import (
 	"os"
 	"paserati/pkg/driver"
 	"paserati/pkg/parser"
+	"runtime"
+	"runtime/pprof"
 	"strings"
 	// \"paserati/pkg/vm\" // Remove: VM no longer directly used here
 )
@@ -22,8 +24,42 @@ func main() {
 	disasmFilterFlag := flag.String("disasm-filter", "", "Filter disassembly output by function name")
 	astDumpFlag := flag.Bool("ast", false, "Show AST dump before type checking")
 	noTypecheckFlag := flag.Bool("no-typecheck", false, "Ignore TypeScript type errors (like paserati-test262)")
+	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file (pprof)")
+	memProfileFlag := flag.String("memprofile", "", "Write heap profile to file (pprof)")
 
 	flag.Parse() // Parses the command-line flags
+
+	// Optional: CPU profiling for the whole process lifetime.
+	if *cpuProfileFlag != "" {
+		f, err := os.Create(*cpuProfileFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create cpuprofile '%s': %s\n", *cpuProfileFlag, err.Error())
+			os.Exit(70)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			_ = f.Close()
+			fmt.Fprintf(os.Stderr, "Failed to start CPU profile: %s\n", err.Error())
+			os.Exit(70)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			_ = f.Close()
+		}()
+	}
+	defer func() {
+		// Optional: heap profile at exit (after a GC for a cleaner snapshot).
+		if *memProfileFlag == "" {
+			return
+		}
+		runtime.GC()
+		f, err := os.Create(*memProfileFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create memprofile '%s': %s\n", *memProfileFlag, err.Error())
+			return
+		}
+		_ = pprof.WriteHeapProfile(f)
+		_ = f.Close()
+	}()
 
 	// Set global AST dump flag
 	parser.DumpASTEnabled = *astDumpFlag

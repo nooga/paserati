@@ -7,31 +7,9 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 	if frame == nil && vm.frameCount > 0 {
 		frame = &vm.frames[vm.frameCount-1]
 	}
-	// Generate cache key
-	propNameHash := 0
-	for _, b := range []byte(propName) {
-		propNameHash = propNameHash*31 + int(b)
-	}
-	cacheKey := (ip-5)*100000 + (propNameHash & 0xFFFF) // Use ip-5 since ip was advanced by 4
-
-	// Access cache with read lock first
-	vm.propCacheMutex.RLock()
-	cache, exists := vm.propCache[cacheKey]
-	vm.propCacheMutex.RUnlock()
-
-	if !exists {
-		// Need to create cache entry - use write lock
-		vm.propCacheMutex.Lock()
-		// Double-check after acquiring write lock (another goroutine might have created it)
-		cache, exists = vm.propCache[cacheKey]
-		if !exists {
-			cache = &PropInlineCache{
-				state: CacheStateUninitialized,
-			}
-			vm.propCache[cacheKey] = cache
-		}
-		vm.propCacheMutex.Unlock()
-	}
+	// Per-site inline cache stored on the current chunk (avoids global map lookup).
+	siteIP := ip - 5 // OpGetProp is 1 (opcode) + 4 operands, ip is advanced past operands.
+	cache := vm.getOrCreatePropInlineCache(frame, siteIP)
 
 	if debugVM {
 		fmt.Printf("[opGetProp] ip=%d obj=%s(%s) prop=%q\n", ip, objVal.Inspect(), objVal.TypeName(), propName)
@@ -403,6 +381,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		vm.cacheStats.totalMisses++
 
 		// Use enhanced property resolution with prototype caching and metadata
+		// cacheKey uses siteIP to identify the site for prototype cache; 0 disables it when unknown.
+		cacheKey := siteIP
+		if cacheKey < 0 {
+			cacheKey = 0
+		}
 		if holder, offset, isAccessor, found := vm.resolvePropertyMeta(*objVal, propName, cache, cacheKey); found {
 			if isAccessor {
 				if g, _, _, _, ok := holder.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {

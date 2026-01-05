@@ -1,106 +1,74 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/nooga/paserati)
 
-# PASERATI
+## PASERATI
 
 ![Paserati](paserati.png)
 
-## _"Sir, it's no V8 but we're doing what we can"_
+### _"Sir, it's no V8 but we're doing what we can"_
 
-Welcome to **PASERATI** - a to-be-spec-compliant ES2025 runtime with native TypeScript frontend, written entirely in Go. Unlike traditional TypeScript toolchains, Paserati type-checks and compiles TypeScript directly to bytecode without transpiling to JavaScript. And yes, that means it runs JavaScript too - by definition.
+Paserati is an **experimental (mad scientist kind of experimental) TypeScript runtime**: it parses + type-checks TypeScript and compiles it **directly to bytecode** for a register VM. And then it executes the bytecode.
 
-## What's Under The Hood
+TypeScript is a superset of JavaScript, so if you can execute TypeScript, you’re building an **ES2025 runtime** too (by definition, plus a lot of pain).
 
-_Pops the hood, looks around, slams the hood shut._
+### What’s under the hood
 
-Paserati compiles TypeScript/JavaScript directly to bytecode for a register-based virtual machine. The architecture includes inline caching (ICs) for property access, shape-based object optimization, and pluggable async executors with microtask scheduling. Currently prioritizing correctness over performance - the foundation for type-driven optimizations (specialization, monomorphization, unchecked fast paths) is there, just not implemented yet.
+Under the hood: **TS/JS → bytecode → register VM**, with **inline caches**, **shape-based objects** (a.k.a. “hidden classes”-style), and a pluggable async executor with **microtask scheduling**.
 
-## Goals
+Right now it prioritizes **correctness** over raw speed, but the architecture is designed for type-driven optimization later (specialization, monomorphization, unchecked fast paths).
 
-_Lights a cigarette._
+### Wins
 
-- **ECMAScript 2025 Compliance**: Currently passing Test262 language suite at 92.0% (only 1851 tests left to pass).
-- **Native TypeScript Execution**: Full type checking and direct bytecode compilation - no transpilation, no tsc dependency.
-- **Safe Embedding**: Pluggable module resolution, execution quotas at VM level, Deno-like permission system for secure script execution in Go applications.
-- **Practical Performance**: Currently prioritizing correctness, but architecture supports type-driven optimizations (specialization, monomorphization, unchecked opcodes).
-- **Future Extensibility**: Once we hit 99% ES2025 compliance, building Deno/Node emulation layers on top - just for giggles.
+- **Test262 language suite: 92.0%** (see details below)
+- **Native TS execution**: no `tsc`, no TS→JS transpilation
+- **TCO**: tail call optimization (elite feature)
+- **Shapes + ICs**: fast-ish property access without a JIT
+- **Runtime type reflection**: `Paserati.reflect<T>()` (generate a type object / JSON Schema at runtime)
+- **Small-ish footprint**:
+  - **~17MB static binary** (unstripped, includes lexer/parser/checker/compiler/VM/builtins)
+  - **~5MB BSS idle** (approx; depends on build/OS)
+  - **Pure Go**, with **one dependency** (`golang.org/x/text`)
 
-## Non-goals
+### Weird flex but okay benchmarks
 
-_Tosses 2/3 of the cigarette out the window._
+Paserati has a long way to go performance-wise, but it’s already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** on a couple of simple microbenches.
 
-- **Replacing TypeScript Toolchains**: Don't expect this to replace your build pipeline. Go see [microsoft/typescript-go](https://github.com/microsoft/typescript-go) for that.
-- **JIT Performance**: I'm not going to make a JIT in Go, I'll stop just short of that. But we might beat the fastest pure Go JS engine.
-- **Legacy JavaScript Quirks**: Targeting modern ES2025 - we don't care about `with` statements or ancient ES3 edge cases.
+Results from `hyperfine` (see `bench/hyperfine.sh`):
 
-## Example
+| Benchmark          | paserati (Mean) |    gojac (Mean) |                  Relative |
+| :----------------- | --------------: | --------------: | ------------------------: |
+| `bench/bench.js`   | 4.203 ± 0.058 s | 5.273 ± 0.243 s | **paserati 1.25× faster** |
+| `bench/objects.js` | 6.233 ± 0.097 s | 7.021 ± 0.156 s | **paserati 1.13× faster** |
 
-_Lights another cigarette, curses at the cigarette, throws it out the window._
+If your favorite pure Go JavaScript engine is reading this: _skill issue_.
 
-Here's a reactive data store:
+### Examples
 
-```typescript
-// Helper: Type-preserving reactive wrapper
-function reactive<T extends object>(target: T): T {
-  return new Proxy(target, {
-    set(obj, prop, value) {
-      const old = obj[prop as keyof T];
-      obj[prop as keyof T] = value;
-      if (old !== value) console.log(`${String(prop)}: ${old} → ${value}`);
-      return true;
-    },
-  });
-}
-
-// Generic reactive store with constraints and async methods
-class ReactiveStore<T extends { id: string }> {
-  private items: T[] = [];
-
-  add(item: T): T {
-    const reactiveItem = reactive(item);
-    this.items.push(reactiveItem);
-    return reactiveItem;
-  }
-
-  filter(predicate: (item: T) => boolean): T[] {
-    return this.items.filter(predicate);
-  }
-
-  async processAll(fn: (item: T) => Promise<void>): Promise<void> {
-    for (const item of this.items) await fn(item);
-  }
-}
-
-interface User {
-  id: string;
-  name: string;
-  score: number;
-}
-
-const store = new ReactiveStore<User>();
-const alice = store.add({ id: "1", name: "Alice", score: 100 });
-alice.score = 150; // score: 100 → 150
-
-const topUsers = store.filter((u) => u.score > 90);
-console.log(topUsers); // [{ id: "1", name: "Alice", score: 150 }]
-
-await store.processAll(async (user) => {
-  console.log(`Processed ${user.name}`);
-});
-```
-
-See [examples/es2025_showcase.ts](examples/es2025_showcase.ts) for a comprehensive feature demo.
+- **Runtime type reflection / JSON Schema**: `examples/reflect.ts`
+- **Proxy + classes + async**: `examples/reactive.ts`
+- **Async/await + generators**: `examples/async.ts`
+- **Classes (private fields, inheritance, statics)**: `examples/classes.ts`
+- **Typed recursion (Y combinator)**: `examples/ycomb.ts`
+- **“Look ma, generics”**: `examples/generics.ts`
 
 Examples may or may not work at every commit, but they should work at least once in a while.
 
-_Wind blows the cigarette back into the car, it catches fire._
+### What it isn’t (non-goals)
 
-## Usage
+- **A TypeScript build toolchain replacement**: see [microsoft/typescript-go](https://github.com/microsoft/typescript-go)
+- **A JIT in Go**: I’ll stop just short of that (for now)
+- **Perfect “legacy weirdness”**: modern ES is the target; some dusty corners (like `with`) are still incomplete
 
-_Turns the ignition key, there is a click, tires go flat_
+### Usage
 
 ```bash
+# Build
+go build -o paserati ./cmd/paserati/
+
 # Run the REPL
 ./paserati
+
+# Run a snippet
+./paserati -e 'console.log("hello from paserati")'
 
 # Execute a script
 ./paserati path/to/script.ts
@@ -109,62 +77,69 @@ _Turns the ignition key, there is a click, tires go flat_
 go test ./tests/...
 ```
 
-## Current Status
+### Test262 results (language suite)
 
-_Scratches a nasty red spot on the roof._
+From a recent run:
 
-**Test262 Compliance: 92.0%** (21,536/23,410 language suite tests passing)
+```
+language (TOTAL)             23410    21533     1852        0       25    92.0%    1m41.734s
+GRAND TOTAL                  23410    21533     1852        0       25    92.0%    1m41.734s
+```
 
-The engine's running hot and crawling with bugs! Most ES2025 features are implemented and mostly working:
+Weak spots:
 
-**✅ Complete:**
+- `language/import/import-defer`: 14.5% (69)
+- `language/module-code/namespace`: 52.8% (36)
+- `language/statements/with`: 55.8% (181)
+- `language/eval-code/indirect`: 62.3% (61)
+- `language/expressions/yield`: 74.6% (63)
+- `language/expressions/super`: 75.5% (94)
+- `language/statements/for-in`: 78.3% (115)
+- `language/types/reference`: 79.3% (29)
+- `language/expressions/call`: 79.3% (92)
+- `language/eval-code/direct`: 79.7% (286)
 
-- **Async/Await & Promises** - Full microtask scheduling, top-level await, async generators
-- **Modules** - ESM imports/exports, dynamic `import()`, pluggable module resolution
-- **Classes** - Full ES2025 class syntax including private fields (`#private`), static blocks, inheritance
-- **Generators** - `function*`, `yield`, `yield*` delegation
-- **TCO** - Tail call optimization, elite.
-- **Advanced Types** - Generics, conditional types, mapped types, template literals, `infer` keyword
-- **Modern Operators** - Optional chaining (`?.`), nullish coalescing (`??`), logical assignment
-- **Destructuring** - Arrays, objects, rest/spread in all contexts
-- **Built-ins** - Proxy, Reflect, Map, Set, TypedArrays, ArrayBuffer, RegExp, Symbol, BigInt
-- **Eval** - Direct and indirect eval with proper scoping (bugged)
-- **Namespaces** - Kinda working.
+### Current status
+
+The engine runs a lot of modern code today, but it’s still a moving target. It might crash on you sometimes, or refuse to run some valid code. _I'm working on it. Okay?_
+
+Some big-ticket items that work reasonably well:
+
+- **Async/await, TLA, Promises, microtasks** (incl. top-level await, async generators)
+- **ESM modules** (plus dynamic `import()`, pluggable resolution)
+- **Classes** (private fields, statics, inheritance)
+- **(Async) Generators** (`yield`, `yield*`)
+- **Modern operators** (`?.`, `??`, logical assignment)
+- **Destructuring** (arrays/objects/rest/spread)
+- **Built-ins** (Proxy/Reflect/Map/Set/TypedArrays/ArrayBuffer/RegExp/Symbol/BigInt)
+- **Advanced types** (generics, conditional/mapped types, template literal types, `infer`)
 
 Last time I checked it could run a pure TS library [date-fns](https://github.com/date-fns/date-fns) from source without any glaring issues. _Cough, not sure if it does so at every commit, but it did at the time of writing._
 
-**🚧 Known Gaps:**
+Known gaps:
 
-- WeakMap/WeakSet (planned)
+- WeakMap/WeakSet (tbd)
 - Decorators (planned)
-- Some ASI edge cases (eh!)
+- `eval` correctness (still bugged; shows up in `eval-code/*` subsuites)
+- `with` statement semantics (incomplete)
+- Some ASI edge cases (I think, eh)
 - Import attributes (experimental ES feature)
 
 See [docs/bucketlist.md](docs/bucketlist.md) for the exhaustive yet messy feature inventory.
 
-_Slaps the roof, it caves in._
-
-## Performance and Footprint
-
-Currently prioritizing correctness over speed while we push toward 90%+ Test262 compliance. Once the semantics are nailed down, the architecture is ready for type-driven optimizations - specialization to unchecked fast paths, monomorphization, and other tricks enabled by having type information at compile time.
-
-**Footprint:** Static binary is 16MB (not stripped), includes everything - lexer, parser, type checker, compiler, VM, and full built-in library. No external dependencies.
-
-**Architecture:** Register-based VM with inline caching for property access, shape-based object optimization (similar to V8's hidden classes), and pluggable async executor for embedding flexibility.
-
-## Contributing
+### Contributing
 
 Seriously, why would you want to contribute to this? _…But if you do, I'm both terrified and thrilled. PRs and issues are welcome._
 
-## License
+### License
 
 This project is licensed under the MIT License.
 
-## AI Disclaimer
+### AI disclaimer
 
-This is a **one-man** project written in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI aimed at delivering a production-quality open source project.
+This is a **one-person** project developed in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI aimed at speedrunning a production-quality open source project.
 
-Google Gemini 2.5/3.0 Pro and Claude Sonnet 4/4.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
+Google Gemini 2.5/3.0 Pro and Claude Sonnet/Opus 4/4.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
 
 That fun sticker at the top of the README? It's made with GPT-4o's image generation.
 

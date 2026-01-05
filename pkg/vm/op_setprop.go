@@ -170,20 +170,13 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 	}
 
-	// FIX: Use hash-based cache key to avoid collisions
-	// Combine instruction pointer with property name hash
-	propNameHash := 0
-	for _, b := range []byte(propName) {
-		propNameHash = propNameHash*31 + int(b)
+	// Per-site inline cache stored on the current chunk (avoids global map lookup).
+	siteIP := ip - 5 // OpSetProp is 1 (opcode) + 4 operands, ip is advanced past operands.
+	var frame *CallFrame
+	if vm.frameCount > 0 {
+		frame = &vm.frames[vm.frameCount-1]
 	}
-	cacheKey := (ip-5)*100000 + (propNameHash & 0xFFFF) // Use ip-5 since ip was advanced by 4
-	cache, exists := vm.propCache[cacheKey]
-	if !exists {
-		cache = &PropInlineCache{
-			state: CacheStateUninitialized,
-		}
-		vm.propCache[cacheKey] = cache
-	}
+	cache := vm.getOrCreatePropInlineCache(frame, siteIP)
 
 	// Handle property setting on function-like values
 	switch objVal.Type() {

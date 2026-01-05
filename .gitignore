@@ -48,3 +48,4 @@ paserati-analyze
 paserati-test262
 paserati-analyze/
 paserati-test262/
+bench/out/

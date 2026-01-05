@@ -5688,14 +5688,19 @@ startExecution:
 				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.argCount = argCount             // Store actual argument count for arguments object
-				// Copy arguments for arguments object (before registers get mutated by function execution)
-				argStartRegInCaller := constructorReg + 1
-				newFrame.args = make([]Value, argCount)
-				for i := 0; i < argCount; i++ {
-					if int(argStartRegInCaller)+i < len(callerRegisters) {
-						newFrame.args[i] = callerRegisters[argStartRegInCaller+byte(i)]
-					} else {
-						newFrame.args[i] = Undefined
+				// Avoid per-call allocation: store a slice view of the caller args for OpGetArguments.
+				argStartRegInCaller := int(constructorReg) + 1
+				if argStartRegInCaller >= 0 && argStartRegInCaller+argCount <= len(callerRegisters) {
+					newFrame.args = callerRegisters[argStartRegInCaller : argStartRegInCaller+argCount]
+				} else {
+					// Defensive fallback (should be rare)
+					newFrame.args = make([]Value, argCount)
+					for i := 0; i < argCount; i++ {
+						if argStartRegInCaller+i < len(callerRegisters) && argStartRegInCaller+i >= 0 {
+							newFrame.args[i] = callerRegisters[argStartRegInCaller+i]
+						} else {
+							newFrame.args[i] = Undefined
+						}
 					}
 				}
 				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
@@ -5707,8 +5712,8 @@ startExecution:
 				// Copy fixed arguments (up to Arity)
 				for i := 0; i < constructorFunc.Arity; i++ {
 					if i < len(newFrame.registers) {
-						if i < argCount && int(argStartRegInCaller)+i < len(callerRegisters) {
-							newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+						if i < argCount && argStartRegInCaller+i < len(callerRegisters) {
+							newFrame.registers[i] = callerRegisters[argStartRegInCaller+i]
 						} else {
 							newFrame.registers[i] = Undefined
 						}
@@ -5732,8 +5737,8 @@ startExecution:
 						restArrayObj := restArray.AsArray()
 						for i := 0; i < extraArgCount; i++ {
 							argIndex := constructorFunc.Arity + i
-							if argIndex < argCount && int(argStartRegInCaller)+argIndex < len(callerRegisters) {
-								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							if argIndex < argCount && argStartRegInCaller+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+argIndex])
 							}
 						}
 					}
@@ -5846,14 +5851,19 @@ startExecution:
 				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.argCount = argCount             // Store actual argument count for arguments object
-				// Copy arguments for arguments object (before registers get mutated by function execution)
-				argStartRegInCaller := constructorReg + 1
-				newFrame.args = make([]Value, argCount)
-				for i := 0; i < argCount; i++ {
-					if int(argStartRegInCaller)+i < len(callerRegisters) {
-						newFrame.args[i] = callerRegisters[argStartRegInCaller+byte(i)]
-					} else {
-						newFrame.args[i] = Undefined
+				// Avoid per-call allocation: store a slice view of the caller args for OpGetArguments.
+				argStartRegInCaller := int(constructorReg) + 1
+				if argStartRegInCaller >= 0 && argStartRegInCaller+argCount <= len(callerRegisters) {
+					newFrame.args = callerRegisters[argStartRegInCaller : argStartRegInCaller+argCount]
+				} else {
+					// Defensive fallback (should be rare)
+					newFrame.args = make([]Value, argCount)
+					for i := 0; i < argCount; i++ {
+						if argStartRegInCaller+i < len(callerRegisters) && argStartRegInCaller+i >= 0 {
+							newFrame.args[i] = callerRegisters[argStartRegInCaller+i]
+						} else {
+							newFrame.args[i] = Undefined
+						}
 					}
 				}
 				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
@@ -5865,8 +5875,8 @@ startExecution:
 				// Copy fixed arguments (up to Arity)
 				for i := 0; i < constructorFunc.Arity; i++ {
 					if i < len(newFrame.registers) {
-						if i < argCount && int(argStartRegInCaller)+i < len(callerRegisters) {
-							newFrame.registers[i] = callerRegisters[argStartRegInCaller+byte(i)]
+						if i < argCount && argStartRegInCaller+i < len(callerRegisters) {
+							newFrame.registers[i] = callerRegisters[argStartRegInCaller+i]
 						} else {
 							newFrame.registers[i] = Undefined
 						}
@@ -5890,8 +5900,8 @@ startExecution:
 						restArrayObj := restArray.AsArray()
 						for i := 0; i < extraArgCount; i++ {
 							argIndex := constructorFunc.Arity + i
-							if argIndex < argCount && int(argStartRegInCaller)+argIndex < len(callerRegisters) {
-								restArrayObj.Append(callerRegisters[argStartRegInCaller+byte(argIndex)])
+							if argIndex < argCount && argStartRegInCaller+argIndex < len(callerRegisters) {
+								restArrayObj.Append(callerRegisters[argStartRegInCaller+argIndex])
 							}
 						}
 					}
@@ -7728,9 +7738,10 @@ startExecution:
 				// First access to arguments - create and cache it
 				// The args were copied when the frame was created in prepareCall
 				args := frame.args
+				// Avoid allocating an empty slice here; nil is fine.
+				// (Frames should normally have args set by call setup.)
 				if args == nil {
-					// Fallback for frames created without args (shouldn't happen in normal execution)
-					args = make([]Value, 0)
+					args = nil
 				}
 
 				// Create arguments object with callee reference

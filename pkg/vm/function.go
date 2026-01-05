@@ -22,6 +22,11 @@ type FunctionObject struct {
 	Prototype            Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
 	HomeObject           Value        // [[HomeObject]] - object where method is defined (for super property access)
 	NameBindingRegister  int          // For named function expressions: register to initialize with closure (-1 if not used)
+
+	// cachedClosure is used to avoid per-call allocations when invoking TypeFunction values.
+	// Most runtime calls should operate on TypeClosure, but some compilation paths may leave
+	// no-capture functions as TypeFunction. In that case we can reuse this closure wrapper.
+	cachedClosure *ClosureObject
 }
 
 type Upvalue struct {

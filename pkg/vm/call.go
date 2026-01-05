@@ -302,9 +302,16 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
 		newFrame.generatorObj = nil      // Clear generator object when reusing frame
 		newFrame.argCount = argCount     // Store actual argument count for arguments object
-		// Copy arguments for arguments object (before registers get mutated by function execution)
-		newFrame.args = make([]Value, argCount)
-		copy(newFrame.args, args)
+		// Arguments handling:
+		//
+		// Historically we copied args here so OpGetArguments could build the `arguments` object
+		// from a stable snapshot. That caused an allocation on *every* call (hot path).
+		//
+		// Instead, keep a slice view of the caller-provided args. For bytecode-to-bytecode calls,
+		// this slice points into the caller's register window, which remains stable for the
+		// duration of this callee frame. If/when `arguments` is accessed, NewArguments will
+		// allocate as needed.
+		newFrame.args = args
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.calleeValue = originalCallee // Store original callee for arguments.callee
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
@@ -366,13 +373,19 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		return true, nil
 
 	case TypeFunction:
-		// Convert bare function to closure
+		// Convert bare function to closure.
+		//
+		// IMPORTANT: Do not allocate per call. Hot benchmarks (and real code) can hit this path
+		// when a function value is stored/loaded as TypeFunction instead of TypeClosure.
+		// Cache a reusable closure wrapper on the FunctionObject.
 		funcToCall := AsFunction(calleeVal)
-		tempClosure := &ClosureObject{
-			Fn:       funcToCall,
-			Upvalues: []*Upvalue{},
+		if funcToCall.cachedClosure == nil {
+			funcToCall.cachedClosure = &ClosureObject{
+				Fn:       funcToCall,
+				Upvalues: nil, // no captured upvalues for TypeFunction call sites
+			}
 		}
-		closureVal := Value{typ: TypeClosure, obj: unsafe.Pointer(tempClosure)}
+		closureVal := Value{typ: TypeClosure, obj: unsafe.Pointer(funcToCall.cachedClosure)}
 		// Pass originalCallee to preserve the original TypeFunction value for arguments.callee
 		return vm.prepareCallWithGeneratorMode(closureVal, thisValue, args, destReg, callerRegisters, callerIP, isGeneratorExecution, originalCallee)
 

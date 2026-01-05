@@ -573,6 +573,9 @@ type Chunk struct {
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
 	IsStrict       bool               // Whether this chunk runs in strict mode
 	ScopeDesc      *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
+	// Inline caches for property access sites within this chunk, indexed by bytecode offset
+	// (the IP where the opcode starts). This avoids a global map lookup per property access.
+	propInlineCaches []*PropInlineCache
 	// Add MaxRegs later for function definitions
 }
 
