@@ -5,7 +5,6 @@ import (
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -13,8 +12,34 @@ import (
 // formatExponent removes leading zeros from exponent part to match JS behavior
 // e.g., "1e+02" -> "1e+2", "1.5e-09" -> "1.5e-9"
 func formatExponent(s string) string {
-	re := regexp.MustCompile(`([eE])([+-]?)0*(\d+)`)
-	return re.ReplaceAllString(s, "${1}${2}${3}")
+	// Find 'e' or 'E'
+	eIdx := strings.IndexByte(s, 'e')
+	if eIdx < 0 {
+		eIdx = strings.IndexByte(s, 'E')
+	}
+	if eIdx < 0 || eIdx >= len(s)-1 {
+		return s
+	}
+
+	// Get mantissa and exponent parts
+	mantissa := s[:eIdx+1] // includes 'e' or 'E'
+	expPart := s[eIdx+1:]
+
+	// Handle sign
+	sign := ""
+	if len(expPart) > 0 && (expPart[0] == '+' || expPart[0] == '-') {
+		sign = string(expPart[0])
+		expPart = expPart[1:]
+	}
+
+	// Skip leading zeros but keep at least one digit
+	i := 0
+	for i < len(expPart)-1 && expPart[i] == '0' {
+		i++
+	}
+	expPart = expPart[i:]
+
+	return mantissa + sign + expPart
 }
 
 // formatToPrecision formats a number with the given precision, matching JS behavior

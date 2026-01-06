@@ -253,8 +253,25 @@ func (o *PlainObject) IsOwnPropertyNonConfigurable(name string) (exists bool, no
 // SetOwn sets or defines an own property. Creates a new shape on first definition.
 // If the property exists and is non-writable, this is a no-op.
 func (o *PlainObject) SetOwn(name string, v Value) {
-	// Backward-compat name path
-	for _, f := range o.shape.fields {
+	cur := o.shape
+	// Compute hash once - avoid repeated string concatenation
+	hashKey := "s:" + name
+
+	// Fast path: check if we already have a transition for this property
+	// This means the property is NEW (not an update to existing)
+	cur.mu.RLock()
+	next, hasTransition := cur.transitions[hashKey]
+	cur.mu.RUnlock()
+
+	if hasTransition {
+		// Property doesn't exist yet, use the cached transition
+		o.shape = next
+		o.properties = append(o.properties, v)
+		return
+	}
+
+	// Check if property already exists (need linear scan)
+	for _, f := range cur.fields {
 		if f.keyKind == KeyKindString && f.name == name {
 			// existing property: honor writable flag
 			if f.writable {
@@ -263,27 +280,22 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 			return
 		}
 	}
+
 	// new property: regular assignment semantics -> writable: true, enumerable: true, configurable: true
-	cur := o.shape
-	cur.mu.RLock()
-	next, ok := cur.transitions[keyFromString(name).hash()]
-	cur.mu.RUnlock()
-	if !ok {
-		off := len(cur.fields)
-		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: true, configurable: true}
-		newFields := make([]Field, len(cur.fields)+1)
-		copy(newFields, cur.fields)
-		newFields[len(cur.fields)] = fld
-		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
-		cur.mu.Lock()
-		if existing, exists := cur.transitions[keyFromString(name).hash()]; exists {
-			next = existing
-		} else {
-			cur.transitions[keyFromString(name).hash()] = next
-		}
-		cur.mu.Unlock()
+	off := len(cur.fields)
+	fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: true, configurable: true}
+	newFields := make([]Field, len(cur.fields)+1)
+	copy(newFields, cur.fields)
+	newFields[len(cur.fields)] = fld
+	newTrans := make(map[string]*Shape)
+	next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
+	cur.mu.Lock()
+	if existing, exists := cur.transitions[hashKey]; exists {
+		next = existing
+	} else {
+		cur.transitions[hashKey] = next
 	}
+	cur.mu.Unlock()
 	o.shape = next
 	o.properties = append(o.properties, v)
 }
@@ -303,8 +315,9 @@ func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 	}
 	// new property: built-in assignment semantics -> writable: true, enumerable: false, configurable: true
 	cur := o.shape
+	// Compute hash once - avoid repeated string concatenation
+	hashKey := "s:" + name + "_nonenum" // Different hash to avoid collision with enumerable version
 	cur.mu.RLock()
-	hashKey := keyFromString(name).hash() + "_nonenum" // Different hash to avoid collision with enumerable version
 	next, ok := cur.transitions[hashKey]
 	cur.mu.RUnlock()
 	if !ok {
