@@ -47,6 +47,9 @@ func (c *Compiler) emitLoadFalse(dest Register, line int) {
 }
 
 func (c *Compiler) emitMove(dest, src Register, line int) {
+	if dest == src {
+		return // Skip redundant move
+	}
 	c.emitOpCode(vm.OpMove, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(src))

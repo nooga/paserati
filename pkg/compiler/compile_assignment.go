@@ -439,119 +439,144 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			return BadRegister, NewCompileError(node, "error compiling RHS").CausedBy(err)
 		}
 
-		needsStore = true
+		// Check if we can do in-place operation on local variable
+		canDoInPlace := lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg
 
 		switch node.Operator {
 		// --- Compound Arithmetic ---
 		case "+=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitAdd(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false // Already stored in targetReg
 			} else {
 				c.emitAdd(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "-=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitSubtract(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitSubtract(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "*=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitMultiply(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitMultiply(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "/=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitDivide(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitDivide(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "%=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitRemainder(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitRemainder(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "**=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitExponent(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitExponent(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 
 		// --- Compound Bitwise / Shift ---
 		case "&=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitBitwiseAnd(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitBitwiseAnd(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "|=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitBitwiseOr(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitBitwiseOr(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "^=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitBitwiseXor(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitBitwiseXor(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case "<<=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitShiftLeft(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitShiftLeft(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case ">>=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitShiftRight(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitShiftRight(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 		case ">>>=":
-			if lhsType == lhsIsIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal && currentValueReg == identInfo.targetReg {
+			if canDoInPlace {
 				c.emitUnsignedShiftRight(currentValueReg, currentValueReg, rhsValueReg, line) // In-place
 				if currentValueReg != hint {
 					c.emitMove(hint, currentValueReg, line)
 				}
+				needsStore = false
 			} else {
 				c.emitUnsignedShiftRight(hint, currentValueReg, rhsValueReg, line)
+				needsStore = true
 			}
 
 		// --- Simple Assignment ---
@@ -560,6 +585,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			if rhsValueReg != hint {
 				c.emitMove(hint, rhsValueReg, line)
 			}
+			needsStore = true
 
 		default:
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))
