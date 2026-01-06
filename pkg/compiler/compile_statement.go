@@ -423,6 +423,9 @@ func (c *Compiler) isExpressionInTailPosition(expr parser.Expression) bool {
 	switch e := expr.(type) {
 	case *parser.CallExpression:
 		return true
+	case *parser.TaggedTemplateExpression:
+		// Tagged templates are function calls and can be in tail position
+		return true
 	case *parser.TernaryExpression:
 		// Both branches must be in tail position
 		return c.isExpressionInTailPosition(e.Consequence) && c.isExpressionInTailPosition(e.Alternative)

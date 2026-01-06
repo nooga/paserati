@@ -1779,7 +1779,8 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 }
 
 // compileTaggedTemplate compiles tag`...` as a call: tag(cookedStrings, ...substitutions)
-// For now we only pass cooked strings (no raw) and expand substitutions as additional args.
+// The first argument is an array of cooked strings with a .raw property containing raw strings.
+// For member expressions (obj.fn`template`), preserves 'this' context.
 func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 	// temp regs cleanup
@@ -1790,17 +1791,101 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 		}
 	}()
 
-	// Collect cooked strings and substitution expressions
+	// Collect cooked strings, raw strings, and substitution expressions
 	cookedStrings := []vm.Value{}
+	rawStrings := []vm.Value{}
 	substitutions := []parser.Expression{}
 	for i, part := range node.Template.Parts {
 		if i%2 == 0 {
-			cookedStrings = append(cookedStrings, vm.String(part.String()))
+			// Even indices are string parts (TemplateStringPart)
+			if tsp, ok := part.(*parser.TemplateStringPart); ok {
+				// For invalid escape sequences (ES2018+), cooked value is undefined
+				if tsp.CookedIsUndefined {
+					cookedStrings = append(cookedStrings, vm.Undefined)
+				} else {
+					cookedStrings = append(cookedStrings, vm.String(tsp.Value))
+				}
+				rawStrings = append(rawStrings, vm.String(tsp.Raw))
+			} else {
+				// Fallback for other node types
+				cookedStrings = append(cookedStrings, vm.String(part.String()))
+				rawStrings = append(rawStrings, vm.String(part.String()))
+			}
 		} else if expr, ok := part.(parser.Expression); ok {
 			substitutions = append(substitutions, expr)
 		}
 	}
 
+	// Check if this is a method call (obj.fn`template` or obj[key]`template`)
+	// In this case, 'this' must be preserved as the object
+	if memberExpr, isMethodCall := node.Tag.(*parser.MemberExpression); isMethodCall {
+		// Method call: obj.fn`template`
+		// 1. Compile the object part (this value)
+		thisReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, thisReg)
+		if _, err := c.compileNode(memberExpr.Object, thisReg); err != nil {
+			return BadRegister, err
+		}
+
+		// 2. Allocate contiguous block: function + [cookedStrings, ...subs]
+		argCount := 1 + len(substitutions)
+		funcBase := c.regAlloc.AllocContiguous(1 + argCount)
+		for i := 0; i < 1+argCount; i++ {
+			tempRegs = append(tempRegs, funcBase+Register(i))
+		}
+
+		// 3. Get the method property
+		if computedKey, isComputed := memberExpr.Property.(*parser.ComputedPropertyName); isComputed {
+			// Computed property: obj[expr]`template`
+			propertyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, propertyReg)
+			if _, err := c.compileNode(computedKey.Expr, propertyReg); err != nil {
+				return BadRegister, err
+			}
+			c.emitOpCode(vm.OpGetIndex, memberExpr.Token.Line)
+			c.emitByte(byte(funcBase))
+			c.emitByte(byte(thisReg))
+			c.emitByte(byte(propertyReg))
+		} else {
+			// Regular property: obj.fn`template`
+			propertyName := c.extractPropertyName(memberExpr.Property)
+			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+			c.emitGetProp(funcBase, thisReg, nameConstIdx, memberExpr.Token.Line)
+		}
+
+		// 4. Build cooked strings array and load into funcBase+1
+		arrVal := vm.NewArray()
+		arr := arrVal.AsArray()
+		for _, v := range cookedStrings {
+			arr.Append(v)
+		}
+		rawVal := vm.NewArray()
+		rawArr := rawVal.AsArray()
+		for _, v := range rawStrings {
+			rawArr.Append(v)
+		}
+		rawArr.SetExtensible(false)
+		arr.SetOwn("raw", rawVal)
+		arr.SetExtensible(false)
+		c.emitLoadNewConstant(funcBase+1, arrVal, line)
+
+		// 5. Compile substitutions into subsequent registers
+		for i, expr := range substitutions {
+			if _, err := c.compileNode(expr, funcBase+Register(2+i)); err != nil {
+				return BadRegister, err
+			}
+		}
+
+		// 6. Emit method call with 'this' binding (or tail call if in tail position)
+		if enableTCO && c.inTailPosition && c.tryDepth == 0 {
+			c.emitTailCallMethod(hint, funcBase, thisReg, byte(argCount), line)
+		} else {
+			c.emitCallMethod(hint, funcBase, thisReg, byte(argCount), line)
+		}
+		return hint, nil
+	}
+
+	// Non-method call (regular tagged template like tag`template`)
 	// Allocate contiguous block: function + [cookedStrings, ...subs]
 	argCount := 1 + len(substitutions)
 	funcBase := c.regAlloc.AllocContiguous(1 + argCount)
@@ -1814,33 +1899,24 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 	}
 
 	// 2) Build cooked strings array and load into funcBase+1
-	// Create array constant of cooked strings and attach a non-writable, non-configurable `.raw` copy
 	arrVal := vm.NewArray()
 	arr := arrVal.AsArray()
 	for _, v := range cookedStrings {
 		arr.Append(v)
 	}
-	// Build raw array (identical to cooked for now; no escape processing yet)
+	// Build raw array with unprocessed escape sequences (TRV - Template Raw Value)
 	rawVal := vm.NewArray()
 	rawArr := rawVal.AsArray()
-	for _, v := range cookedStrings {
+	for _, v := range rawStrings {
 		rawArr.Append(v)
 	}
-	// Attach `.raw` on the array object before loading as constant. We approximate attributes by not exposing attrs bits here.
-	if po := arrVal.AsArray(); po != nil {
-		// Array is a wrapped object; setOwn will create a data property
-		// In our VM, property attributes are not fully modeled on ArrayObject; acceptable for harness use.
-		arrVal.AsArray() // ensure allocation
-	}
-	// Since ArrayObject doesn't expose SetOwn, create a PlainObject wrapper to carry .raw: use DictObject-like approach
-	// Simpler: after load, immediately set property in bytecode
+	// Freeze both arrays per ECMAScript spec - template objects are frozen
+	rawArr.SetExtensible(false)
+	// Set .raw on cooked array BEFORE freezing cooked array
+	arr.SetOwn("raw", rawVal)
+	arr.SetExtensible(false)
+	// Load the frozen cooked array (which has .raw property set)
 	c.emitLoadNewConstant(funcBase+1, arrVal, line)
-	// Load raw into a temp and set property 'raw' on the cooked array
-	tmpReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, tmpReg)
-	c.emitLoadNewConstant(tmpReg, rawVal, line)
-	nameIdx := c.chunk.AddConstant(vm.String("raw"))
-	c.emitSetProp(funcBase+1, tmpReg, nameIdx, line)
 
 	// 3) Compile substitutions into subsequent registers
 	for i, expr := range substitutions {
@@ -1849,9 +1925,13 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 		}
 	}
 
-	// 4) Emit call: tag(cookedStrings, ...subs)
+	// 4) Emit call: tag(cookedStrings, ...subs) (or tail call if in tail position)
 	// IMPORTANT: Do not reuse funcBase as the destination; use 'hint' only, leaving funcBase intact until after emit
-	c.emitCall(hint, funcBase, byte(argCount), line)
+	if enableTCO && c.inTailPosition && c.tryDepth == 0 {
+		c.emitTailCall(hint, funcBase, byte(argCount), line)
+	} else {
+		c.emitCall(hint, funcBase, byte(argCount), line)
+	}
 	// Ensure funcBase block stays alive through the call; cleanup is handled by tempRegs defer
 	return hint, nil
 }

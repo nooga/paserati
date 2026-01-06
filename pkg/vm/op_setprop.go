@@ -451,6 +451,57 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		fmt.Printf("[DEBUG opSetProp] Entering fallback path, objType=%d\n", objVal.Type())
 	}
 	switch objVal.Type() {
+	case TypeArray:
+		arr := objVal.AsArray()
+		if propName == "length" {
+			// Setting length truncates or expands the array
+			// Frozen arrays can't have length changed
+			if !arr.IsExtensible() {
+				// In strict mode, throw TypeError; in non-strict, silently fail
+				if vm.IsInStrictMode() {
+					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property 'length'"))
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+				}
+				return true, InterpretOK, *valueToSet // Silently fail in non-strict
+			}
+			newLen := int(valueToSet.ToFloat())
+			if newLen < 0 {
+				newLen = 0
+			}
+			arr.SetLength(newLen)
+		} else {
+			// Check if property exists
+			_, exists := arr.GetOwn(propName)
+			// Check if we're trying to add a new property to a non-extensible array
+			if !exists && !arr.IsExtensible() {
+				// In strict mode, throw TypeError; in non-strict, silently fail
+				if vm.IsInStrictMode() {
+					err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+				}
+				return true, InterpretOK, *valueToSet // Silently fail in non-strict
+			}
+			// Frozen arrays also can't have existing properties changed
+			if exists && !arr.IsExtensible() {
+				// In strict mode, throw TypeError; in non-strict, silently fail
+				if vm.IsInStrictMode() {
+					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+				}
+				return true, InterpretOK, *valueToSet // Silently fail in non-strict
+			}
+			arr.SetOwn(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
 	case TypeDictObject:
 		if debugOpSetProp {
 			fmt.Printf("[DEBUG opSetProp] Fallback: TypeDictObject path\n")

@@ -2650,8 +2650,18 @@ startExecution:
 				}
 			}
 			if !found {
+				// First check GlobalObject (for properties directly set on globalThis)
 				if val, ok := vm.GlobalObject.GetOwn(propName); ok {
 					registers[destReg] = val
+				} else if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
+					// Check heap for top-level var/function declarations
+					if val, ok := vm.heap.Get(globalIdx); ok {
+						registers[destReg] = val
+					} else {
+						frame.ip = ip
+						status := vm.runtimeError("%s is not defined", propName)
+						return status, Undefined
+					}
 				} else {
 					frame.ip = ip
 					status := vm.runtimeError("%s is not defined", propName)
@@ -3480,15 +3490,30 @@ startExecution:
 			case TypeArray:
 				arr := AsArray(baseVal)
 				if IsNumber(indexVal) {
-					// Numeric index - access array elements
-					idx := int(AsNumber(indexVal))
-					if idx < 0 || idx >= len(arr.elements) {
+					// Numeric index - check if it's a valid array index (non-negative integer)
+					numVal := AsNumber(indexVal)
+					idx := int(numVal)
+
+					// If the number is not an integer or is negative, treat it as a property key
+					// ECMAScript: array index must be a non-negative integer where ToString(ToUint32(P)) == P
+					if float64(idx) != numVal || idx < 0 {
+						key := indexVal.ToString()
+						if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+							if status != InterpretOK {
+								return status, value
+							}
+							goto reloadFrame
+						}
+						continue
+					}
+
+					if idx >= len(arr.elements) {
 						registers[destReg] = Undefined // Out of bounds -> undefined
 					} else {
 						registers[destReg] = arr.elements[idx]
 					}
 				} else {
-					// String/Symbol index - check if it's a numeric string first
+					// Non-number index - convert to string property key
 					var key string
 					switch indexVal.Type() {
 					case TypeString:
@@ -3512,15 +3537,10 @@ startExecution:
 							}
 							goto reloadFrame
 						}
-						// Trace iterator symbol resolution in for-of
-						// if AsSymbol(indexVal) == SymbolIterator.AsSymbol() {
-						// fmt.Printf("[DBG OpGetIndex:Array] [Symbol.iterator] -> %s (%s)\n", registers[destReg].Inspect(), registers[destReg].TypeName())
-						// }
 						continue
 					default:
-						frame.ip = ip
-						status := vm.runtimeError("Array index must be a number, string, or symbol, got '%v'", indexVal.Type())
-						return status, Undefined
+						// For other types (boolean, null, undefined, etc.), convert to string
+						key = indexVal.ToString()
 					}
 
 					// Use opGetProp to access array properties (handles prototype chain)
@@ -3957,14 +3977,37 @@ startExecution:
 				argObj.length = len(argObj.args)
 
 			case TypeArray:
+				arr := AsArray(baseVal)
+
+				// Handle non-number indices by converting to property key
 				if !IsNumber(indexVal) {
-					frame.ip = ip
-					status := vm.runtimeError("Array index must be a number, got '%v'", indexVal.Type())
-					return status, Undefined
+					// Convert to string property key (e.g., arr[true] -> arr["true"])
+					key := indexVal.ToString()
+					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						if status != InterpretOK {
+							return status, res
+						}
+						goto reloadFrame
+					}
+					continue
 				}
 
-				arr := AsArray(baseVal)
-				idx := int(AsNumber(indexVal))
+				// For numbers, check if it's a valid array index (non-negative integer)
+				numVal := AsNumber(indexVal)
+				idx := int(numVal)
+
+				// If the number is not an integer or is negative, treat it as a property key
+				// ECMAScript: array index must be a non-negative integer where ToString(ToUint32(P)) == P
+				if float64(idx) != numVal || idx < 0 {
+					key := indexVal.ToString()
+					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						if status != InterpretOK {
+							return status, res
+						}
+						goto reloadFrame
+					}
+					continue
+				}
 
 				// Handle Array Expansion (keep existing logic)
 				if idx < 0 {

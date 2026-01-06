@@ -1842,15 +1842,19 @@ func (p *Parser) parseTemplateLiteral() Expression {
 				p.addError(p.curToken, "unexpected string in template literal")
 				return nil
 			}
-			// String part of the template
-			stringPart := &TemplateStringPart{Value: p.curToken.Literal}
+			// String part of the template (include both cooked and raw values)
+			stringPart := &TemplateStringPart{
+				Value:             p.curToken.Literal,
+				Raw:               p.curToken.RawLiteral,
+				CookedIsUndefined: p.curToken.CookedIsUndefined,
+			}
 			lit.Parts = append(lit.Parts, stringPart)
 			expectingString = false
 			p.nextToken()
 		} else if p.curTokenIs(lexer.TEMPLATE_INTERPOLATION) {
 			// If we were expecting a string but got interpolation, add empty string
 			if expectingString {
-				emptyString := &TemplateStringPart{Value: ""}
+				emptyString := &TemplateStringPart{Value: "", Raw: "", CookedIsUndefined: false}
 				lit.Parts = append(lit.Parts, emptyString)
 			}
 
@@ -1885,7 +1889,7 @@ func (p *Parser) parseTemplateLiteral() Expression {
 
 	// If we were expecting a string at the end, add empty string
 	if expectingString {
-		emptyString := &TemplateStringPart{Value: ""}
+		emptyString := &TemplateStringPart{Value: "", Raw: "", CookedIsUndefined: false}
 		lit.Parts = append(lit.Parts, emptyString)
 	}
 
@@ -1972,6 +1976,23 @@ func (p *Parser) parseNewExpression() Expression {
 
 	// Parse the constructor expression (identifier, member expression, etc.)
 	ne.Constructor = p.parseExpression(CALL)
+
+	// Check for tagged template: new tag`template` -> new (tag`template`)
+	// Tagged templates should be part of the constructor, not the arguments
+	for p.peekTokenIs(lexer.TEMPLATE_START) {
+		p.nextToken() // Move to template start (curToken is now TEMPLATE_START)
+		template := p.parseTemplateLiteral()
+		if template == nil {
+			return nil
+		}
+		ne.Constructor = &TaggedTemplateExpression{
+			Token:    p.curToken,
+			Tag:      ne.Constructor,
+			Template: template.(*TemplateLiteral),
+		}
+		// After parseTemplateLiteral, curToken is TEMPLATE_END
+		// Don't advance - the checks below use peekToken
+	}
 
 	// Try to parse type arguments (e.g., new Container<string>)
 	ne.TypeArguments = p.tryParseTypeArguments()
@@ -9203,15 +9224,19 @@ func (p *Parser) parseTemplateLiteralType() Expression {
 				p.addError(p.curToken, "unexpected string in template literal type")
 				return nil
 			}
-			// String part of the template
-			stringPart := &TemplateStringPart{Value: p.curToken.Literal}
+			// String part of the template (include both cooked and raw values)
+			stringPart := &TemplateStringPart{
+				Value:             p.curToken.Literal,
+				Raw:               p.curToken.RawLiteral,
+				CookedIsUndefined: p.curToken.CookedIsUndefined,
+			}
 			tlte.Parts = append(tlte.Parts, stringPart)
 			expectingString = false
 			p.nextToken()
 		} else if p.curTokenIs(lexer.TEMPLATE_INTERPOLATION) {
 			// If we were expecting a string but got interpolation, add empty string
 			if expectingString {
-				emptyString := &TemplateStringPart{Value: ""}
+				emptyString := &TemplateStringPart{Value: "", Raw: "", CookedIsUndefined: false}
 				tlte.Parts = append(tlte.Parts, emptyString)
 			}
 
@@ -9246,7 +9271,7 @@ func (p *Parser) parseTemplateLiteralType() Expression {
 
 	// If we were expecting a string at the end, add empty string
 	if expectingString {
-		emptyString := &TemplateStringPart{Value: ""}
+		emptyString := &TemplateStringPart{Value: "", Raw: "", CookedIsUndefined: false}
 		tlte.Parts = append(tlte.Parts, emptyString)
 	}
 

@@ -472,7 +472,9 @@ func (tl *TemplateLiteral) String() string {
 
 // --- ADDED: Helper struct for template string parts ---
 type TemplateStringPart struct {
-	Value string // The actual string content
+	Value             string // The cooked string content (escape sequences processed)
+	Raw               string // The raw string content (escape sequences preserved for TRV)
+	CookedIsUndefined bool   // True if cooked value should be undefined (invalid escape in tagged template)
 }
 
 func (tsp *TemplateStringPart) TokenLiteral() string { return tsp.Value }

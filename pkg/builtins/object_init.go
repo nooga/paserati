@@ -2054,6 +2054,12 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 		return objectIsExtensibleWithVM(vmInstance, []vm.Value{proxy.Target()})
 	}
 
+	// Handle arrays specially
+	if obj.Type() == vm.TypeArray {
+		arr := obj.AsArray()
+		return vm.BooleanValue(arr.IsExtensible()), nil
+	}
+
 	// Check if object is extensible
 	if obj.IsObject() {
 		if plainObj := obj.AsPlainObject(); plainObj != nil {
@@ -2116,6 +2122,13 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 		return obj, nil
 	}
 
+	// Handle arrays specially
+	if obj.Type() == vm.TypeArray {
+		arr := obj.AsArray()
+		arr.SetExtensible(false)
+		return obj, nil
+	}
+
 	// Mark the object as non-extensible
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		plainObj.SetExtensible(false)
@@ -2135,6 +2148,13 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 
 	// If not an object, return as-is (primitives are already immutable)
 	if !obj.IsObject() {
+		return obj, nil
+	}
+
+	// Handle arrays specially
+	if obj.Type() == vm.TypeArray {
+		arr := obj.AsArray()
+		arr.SetExtensible(false)
 		return obj, nil
 	}
 
@@ -2192,6 +2212,12 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	// Primitives are frozen
 	if !obj.IsObject() {
 		return vm.BooleanValue(true), nil
+	}
+
+	// Handle arrays specially
+	if obj.Type() == vm.TypeArray {
+		arr := obj.AsArray()
+		return vm.BooleanValue(!arr.IsExtensible()), nil
 	}
 
 	// Check if extensible - frozen objects must not be extensible

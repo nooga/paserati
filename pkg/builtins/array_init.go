@@ -180,7 +180,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		length := thisArray.Length()
 		start := 0
-		if len(args) >= 1 {
+		if len(args) >= 1 && !args[0].IsUndefined() {
 			start = int(args[0].ToFloat())
 			if start < 0 {
 				start = length + start
@@ -192,7 +192,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		end := length
-		if len(args) >= 2 {
+		if len(args) >= 2 && !args[1].IsUndefined() {
 			end = int(args[1].ToFloat())
 			if end < 0 {
 				end = length + end

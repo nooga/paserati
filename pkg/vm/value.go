@@ -149,6 +149,7 @@ type ArrayObject struct {
 	length     int
 	elements   []Value
 	properties map[string]Value // Named properties (e.g., "index", "input" for match results)
+	extensible bool             // When false, no new properties can be added (for Object.freeze/seal)
 }
 
 type ArgumentsObject struct {
@@ -343,7 +344,7 @@ func NewSymbol(value string) Value {
 }
 
 func NewArray() Value {
-	return Value{typ: TypeArray, obj: unsafe.Pointer(&ArrayObject{})}
+	return Value{typ: TypeArray, obj: unsafe.Pointer(&ArrayObject{extensible: true})}
 }
 
 func NewArguments(args []Value, callee Value) Value {
@@ -1772,6 +1773,16 @@ func (a *ArrayObject) SetOwn(name string, value Value) {
 		a.properties = make(map[string]Value)
 	}
 	a.properties[name] = value
+}
+
+// IsExtensible returns whether new properties can be added to this array
+func (a *ArrayObject) IsExtensible() bool {
+	return a.extensible
+}
+
+// SetExtensible sets whether new properties can be added to this array
+func (a *ArrayObject) SetExtensible(extensible bool) {
+	a.extensible = extensible
 }
 
 // ArgumentsObject methods

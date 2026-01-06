@@ -49,12 +49,14 @@ type TokenType string
 
 // Token represents a lexical token.
 type Token struct {
-	Type     TokenType
-	Literal  string // The actual text of the token (lexeme)
-	Line     int    // 1-based line number where the token starts
-	Column   int    // 1-based column number (rune index) where the token starts
-	StartPos int    // 0-based byte offset where the token starts
-	EndPos   int    // 0-based byte offset after the token ends
+	Type       TokenType
+	Literal    string // The actual text of the token (lexeme)
+	RawLiteral         string // For template strings: the unprocessed escape sequences (TRV)
+	CookedIsUndefined  bool   // For template strings: true if cooked value should be undefined (invalid escape)
+	Line               int    // 1-based line number where the token starts
+	Column             int    // 1-based column number (rune index) where the token starts
+	StartPos           int    // 0-based byte offset where the token starts
+	EndPos             int    // 0-based byte offset after the token ends
 }
 
 // --- Token Types ---
@@ -2625,8 +2627,12 @@ func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
 
 // readTemplateString reads string content within a template literal
 // Stops at: backtick (`), interpolation start (${), or EOF
+// Returns both cooked (Literal) and raw (RawLiteral) values for tagged templates
+// For invalid escape sequences, sets CookedIsUndefined=true (ES2018+ tagged template behavior)
 func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
-	var builder strings.Builder
+	var cooked strings.Builder // TV (Template Value) - processed escape sequences
+	var raw strings.Builder    // TRV (Template Raw Value) - literal source text
+	hasInvalidEscape := false  // Track if we've seen an invalid escape sequence
 
 	for {
 		// Stop conditions - use isEOF() to distinguish from literal null bytes in source
@@ -2654,65 +2660,78 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 
 		// Handle escape sequences in template strings
 		if l.ch == '\\' {
-			l.readChar() // Consume backslash
+			raw.WriteByte('\\') // Raw always starts with the backslash
+			l.readChar()        // Consume backslash
+			raw.WriteByte(l.ch) // Raw includes the escape character
 			switch l.ch {
 			case 'n':
-				builder.WriteByte('\n')
+				cooked.WriteByte('\n')
 			case 't':
-				builder.WriteByte('\t')
+				cooked.WriteByte('\t')
 			case 'r':
-				builder.WriteByte('\r')
+				cooked.WriteByte('\r')
 			case '\\':
-				builder.WriteByte('\\')
+				cooked.WriteByte('\\')
 			case '`':
-				builder.WriteByte('`') // Escaped backtick
+				cooked.WriteByte('`') // Escaped backtick
 			case '$':
-				builder.WriteByte('$') // Escaped dollar sign
+				cooked.WriteByte('$') // Escaped dollar sign
 			case '0':
-				builder.WriteByte('\000') // Null character (U+0000)
+				// \0 is valid only if NOT followed by a digit (legacy octal)
+				if l.peekChar() >= '0' && l.peekChar() <= '9' {
+					// \0 followed by digit is invalid in template literals
+					hasInvalidEscape = true
+				} else {
+					cooked.WriteByte('\000') // Null character (U+0000)
+				}
+			case '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				// Legacy octal escapes are invalid in template literals
+				hasInvalidEscape = true
 			case 'f':
-				builder.WriteByte('\f') // Form feed (U+000C)
+				cooked.WriteByte('\f') // Form feed (U+000C)
 			case 'v':
-				builder.WriteByte('\v') // Vertical tab (U+000B)
+				cooked.WriteByte('\v') // Vertical tab (U+000B)
 			case 'b':
-				builder.WriteByte('\b') // Backspace (U+0008)
+				cooked.WriteByte('\b') // Backspace (U+0008)
+			case '\'':
+				cooked.WriteByte('\'') // Single quote
+			case '"':
+				cooked.WriteByte('"') // Double quote
 			case 'u':
 				// Unicode escape sequence \uXXXX or \u{XXXX}
-				// For tagged templates (ES2018+), invalid escapes pass through
 				if l.peekChar() == '{' {
-					// \u{XXXX} format - try to parse, fall back to literal on failure
+					// \u{XXXX} format
 					l.readChar() // consume '{'
+					raw.WriteByte('{')
 					hexStr := ""
 					// Peek-before-consume to avoid eating template terminators
-					for l.peekChar() != '}' && l.peekChar() != 0 && l.peekChar() != '`' && l.peekChar() != '$' && len(hexStr) < 6 && isHexDigit(l.peekChar()) {
+					for l.peekChar() != '}' && l.peekChar() != 0 && l.peekChar() != '`' && l.peekChar() != '$' && len(hexStr) < 8 && isHexDigit(l.peekChar()) {
 						l.readChar()
 						hexStr += string(l.ch)
+						raw.WriteByte(l.ch)
 					}
 					if l.peekChar() == '}' && len(hexStr) > 0 {
 						l.readChar() // consume '}'
+						raw.WriteByte('}')
 						if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil && codePoint <= 0x10FFFF {
 							if codePoint >= 0xD800 && codePoint <= 0xDFFF {
 								// WTF-8 encoding for surrogates
 								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
 								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
 								b3 := byte(0x80 | (codePoint & 0x3F))
-								builder.WriteByte(b1)
-								builder.WriteByte(b2)
-								builder.WriteByte(b3)
+								cooked.WriteByte(b1)
+								cooked.WriteByte(b2)
+								cooked.WriteByte(b3)
 							} else {
-								builder.WriteRune(rune(codePoint))
+								cooked.WriteRune(rune(codePoint))
 							}
 						} else {
-							// Invalid code point - write literally
-							builder.WriteString("\\u{")
-							builder.WriteString(hexStr)
-							builder.WriteByte('}')
+							// Invalid code point (out of range) - cooked is undefined
+							hasInvalidEscape = true
 						}
 					} else {
-						// Invalid escape - write what we consumed literally
-						builder.WriteString("\\u{")
-						builder.WriteString(hexStr)
-						// Don't write closing brace - it wasn't there or we stopped early
+						// Invalid escape (no closing brace or empty) - cooked is undefined
+						hasInvalidEscape = true
 					}
 				} else if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
 					// \uXXXX format
@@ -2721,6 +2740,7 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 						if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
 							l.readChar()
 							hexStr += string(l.ch)
+							raw.WriteByte(l.ch)
 						} else {
 							break
 						}
@@ -2732,49 +2752,94 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
 								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
 								b3 := byte(0x80 | (codePoint & 0x3F))
-								builder.WriteByte(b1)
-								builder.WriteByte(b2)
-								builder.WriteByte(b3)
+								cooked.WriteByte(b1)
+								cooked.WriteByte(b2)
+								cooked.WriteByte(b3)
 							} else {
-								builder.WriteRune(rune(codePoint))
+								cooked.WriteRune(rune(codePoint))
 							}
 						}
 					} else {
-						// Incomplete escape - write literally
-						builder.WriteString("\\u")
-						builder.WriteString(hexStr)
+						// Incomplete escape - cooked is undefined
+						hasInvalidEscape = true
 					}
 				} else {
-					// Not followed by hex digit or brace - write literally
-					builder.WriteByte('\\')
-					builder.WriteByte('u')
+					// Not followed by hex digit or brace - cooked is undefined
+					hasInvalidEscape = true
 				}
 			case 'x':
 				// Hex escape sequence \xXX
-				// For tagged templates (ES2018+), invalid escapes pass through
 				if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
 					hexStr := ""
 					for i := 0; i < 2; i++ {
 						if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
 							l.readChar()
 							hexStr += string(l.ch)
+							raw.WriteByte(l.ch)
 						} else {
 							break
 						}
 					}
 					if len(hexStr) == 2 {
 						if val, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
-							builder.WriteByte(byte(val))
+							cooked.WriteByte(byte(val))
 						}
 					} else {
-						// Incomplete escape - write literally
-						builder.WriteString("\\x")
-						builder.WriteString(hexStr)
+						// Incomplete escape - cooked is undefined
+						hasInvalidEscape = true
 					}
 				} else {
-					// Not followed by hex digit - write literally
-					builder.WriteByte('\\')
-					builder.WriteByte('x')
+					// Not followed by hex digit - cooked is undefined
+					hasInvalidEscape = true
+				}
+			case '\n':
+				// Line continuation: backslash + LF
+				// Cooked: empty (continuation)
+				// Raw: backslash already written, but we need to normalize to LF
+				// The raw builder already has '\' and '\n' from the WriteByte calls above
+				// Nothing to write to cooked (line continuation produces empty)
+			case '\r':
+				// Line continuation: backslash + CR or CRLF
+				// Cooked: empty (continuation)
+				// Raw: normalize to LF (spec requires line terminators normalized in TRV)
+				// We already wrote '\' and '\r' above, need to fix raw to use '\n'
+				// Actually, we need to replace the '\r' we wrote with '\n'
+				rawStr := raw.String()
+				raw.Reset()
+				// Replace the last byte (\r) with \n
+				if len(rawStr) > 0 {
+					raw.WriteString(rawStr[:len(rawStr)-1])
+					raw.WriteByte('\n')
+				}
+				// Check for CRLF - skip the LF since we already normalized
+				if l.peekChar() == '\n' {
+					l.readChar()
+				}
+				// Nothing to write to cooked (line continuation produces empty)
+			case 0xE2:
+				// Possible Line Separator (U+2028) or Paragraph Separator (U+2029)
+				// UTF-8: E2 80 A8 (LS) or E2 80 A9 (PS)
+				// We already wrote '\' and 0xE2 to raw above
+				if l.peekChar() == 0x80 {
+					l.readChar() // consume 0x80
+					raw.WriteByte(0x80)
+					next := l.peekChar()
+					if next == 0xA8 || next == 0xA9 {
+						l.readChar() // consume 0xA8 or 0xA9
+						raw.WriteByte(l.ch)
+						// Line continuation with LS or PS
+						// Raw: preserve LS/PS as-is (unlike CR/CRLF which normalize to LF)
+						// Nothing to write to cooked (line continuation produces empty)
+					} else {
+						// Not LS/PS, write the bytes we consumed to cooked
+						cooked.WriteByte('\\')
+						cooked.WriteByte(0xE2)
+						cooked.WriteByte(0x80)
+					}
+				} else {
+					// Not a valid LS/PS sequence, write literally
+					cooked.WriteByte('\\')
+					cooked.WriteByte(l.ch)
 				}
 			case 0: // EOF after backslash
 				return Token{
@@ -2787,25 +2852,37 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 				}
 			default:
 				// For other characters, include the backslash (JS behavior)
-				builder.WriteByte('\\')
-				builder.WriteByte(l.ch)
+				cooked.WriteByte('\\')
+				cooked.WriteByte(l.ch)
+			}
+		} else if l.ch == '\r' {
+			// Carriage return - normalize to LF in both cooked and raw
+			cooked.WriteByte('\n')
+			raw.WriteByte('\n')
+			// Check for CRLF - skip the LF since we already normalized
+			if l.peekChar() == '\n' {
+				l.readChar()
 			}
 		} else {
 			// Regular character (including newlines, which are allowed in templates)
-			builder.WriteByte(l.ch)
+			cooked.WriteByte(l.ch)
+			raw.WriteByte(l.ch)
 		}
 
 		l.readChar()
 	}
 
-	// Return the template string token
+	// Return the template string token with both cooked and raw values
+	// If there was an invalid escape, the cooked value should be undefined (for tagged templates)
 	return Token{
-		Type:     TEMPLATE_STRING,
-		Literal:  builder.String(),
-		Line:     startLine,
-		Column:   startCol,
-		StartPos: startPos,
-		EndPos:   l.position,
+		Type:              TEMPLATE_STRING,
+		Literal:           cooked.String(),
+		RawLiteral:        raw.String(),
+		CookedIsUndefined: hasInvalidEscape,
+		Line:              startLine,
+		Column:            startCol,
+		StartPos:          startPos,
+		EndPos:            l.position,
 	}
 }
 
