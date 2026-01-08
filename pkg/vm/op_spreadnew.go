@@ -7,7 +7,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 	destReg := code[*ip]
 	constructorReg := code[*ip+1]
 	spreadArgReg := code[*ip+2]
-	*ip += 3
+	flags := code[*ip+3]
+	*ip += 4
+	inheritNewTarget := (flags & 0x01) != 0
 
 	callerRegisters := registers
 	callerIP := *ip
@@ -83,10 +85,10 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		}
 
 		// Determine the new.target value for this constructor call
-		// If the caller is already a constructor (super() call), inherit its new.target
+		// If inheritNewTarget flag is set (super() calls), inherit new.target from caller
 		// Otherwise, new.target is the constructor being called
 		var newTargetValue Value
-		if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+		if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
 			// This is a super() call from a derived constructor - inherit new.target
 			newTargetValue = frame.newTargetValue
 		} else {
@@ -99,8 +101,8 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		var instancePrototype Value
 		if newTargetValue.Type() == TypeClosure {
 			newTargetClosure := AsClosure(newTargetValue)
-			newTargetFunc := newTargetClosure.Fn
-			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+			// Use closure's getPrototypeWithVM which checks closure.Properties first
+			instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
 		} else if newTargetValue.Type() == TypeFunction {
 			newTargetFunc := AsFunction(newTargetValue)
 			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
@@ -177,10 +179,10 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		}
 
 		// Determine the new.target value for this constructor call
-		// If the caller is already a constructor (super() call), inherit its new.target
+		// If inheritNewTarget flag is set (super() calls), inherit new.target from caller
 		// Otherwise, new.target is the constructor being called
 		var newTargetValue Value
-		if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+		if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
 			// This is a super() call from a derived constructor - inherit new.target
 			newTargetValue = frame.newTargetValue
 		} else {
@@ -193,8 +195,8 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		var instancePrototype Value
 		if newTargetValue.Type() == TypeClosure {
 			newTargetClosure := AsClosure(newTargetValue)
-			newTargetFunc := newTargetClosure.Fn
-			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+			// Use closure's getPrototypeWithVM which checks closure.Properties first
+			instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
 		} else if newTargetValue.Type() == TypeFunction {
 			newTargetFunc := AsFunction(newTargetValue)
 			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)

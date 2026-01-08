@@ -1749,33 +1749,38 @@ startExecution:
 				case TypeFunction:
 					// Functions are objects and can have properties
 					fn := objVal.AsFunction()
-					if fn.Properties != nil {
-						hasProperty = fn.Properties.Has(propKey)
+					if fn.Properties != nil && fn.Properties.Has(propKey) {
+						hasProperty = true
 					} else {
-						hasProperty = false
+						// Check FunctionPrototype for inherited properties (call, apply, bind)
+						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 					}
 				case TypeNativeFunctionWithProps:
 					// Native functions with properties (like Number, String, etc.)
 					nf := objVal.AsNativeFunctionWithProps()
-					if nf.Properties != nil {
-						hasProperty = nf.Properties.Has(propKey)
+					if nf.Properties != nil && nf.Properties.Has(propKey) {
+						hasProperty = true
 					} else {
-						hasProperty = false
+						// Check FunctionPrototype for inherited properties (call, apply, bind)
+						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 					}
 				case TypeClosure:
-					// Closures are functions and can have properties via their FunctionObject
+					// Closures can have their own properties (in cl.Properties) or inherit from FunctionObject
 					cl := objVal.AsClosure()
-					if cl.Fn != nil && cl.Fn.Properties != nil {
-						hasProperty = cl.Fn.Properties.Has(propKey)
+					if cl.Properties != nil && cl.Properties.Has(propKey) {
+						hasProperty = true
+					} else if cl.Fn != nil && cl.Fn.Properties != nil && cl.Fn.Properties.Has(propKey) {
+						hasProperty = true
 					} else {
-						hasProperty = false
+						// Check FunctionPrototype for inherited properties (call, apply, bind)
+						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 					}
 				case TypeNativeFunction:
-					// Native functions are objects but typically don't have custom properties
-					hasProperty = false
+					// Native functions don't have custom properties but inherit from FunctionPrototype
+					hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 				case TypeBoundFunction:
-					// Bound functions are objects
-					hasProperty = false
+					// Bound functions inherit from FunctionPrototype
+					hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 				default:
 					// Non-object RHS - shouldn't reach here due to check above
 					hasProperty = false
@@ -1865,8 +1870,9 @@ startExecution:
 				fn := AsFunction(constructorVal)
 				constructorPrototype = fn.getOrCreatePrototypeWithVM(vm)
 			} else if constructorVal.Type() == TypeClosure {
-				closure := AsClosure(constructorVal)
-				constructorPrototype = closure.Fn.getOrCreatePrototypeWithVM(vm)
+				// For closures, use getPrototypeWithVM which checks closure.Properties first
+				closureObj := AsClosure(constructorVal)
+				constructorPrototype = closureObj.getPrototypeWithVM(vm)
 			} else if constructorVal.Type() == TypeNativeFunctionWithProps {
 				// Native functions (like Object, Array, etc.) have .prototype property
 				nativeFn := constructorVal.AsNativeFunctionWithProps()
@@ -3269,7 +3275,11 @@ startExecution:
 			if objVal.Type() == TypeFunction {
 				obj = objVal.AsFunction().Properties
 			} else if objVal.Type() == TypeClosure {
-				obj = objVal.AsClosure().Fn.Properties
+				closure := objVal.AsClosure()
+				if closure.Properties == nil {
+					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = closure.Properties
 			} else {
 				obj = objVal.AsPlainObject()
 			}
@@ -3317,8 +3327,8 @@ startExecution:
 			setterVal := registers[setterReg]
 			nameVal := registers[nameReg]
 
-			// Accept both objects and functions (functions can have properties like constructors)
-			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction {
+			// Accept objects, functions, and closures (constructors)
+			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction && objVal.Type() != TypeClosure {
 				frame.ip = ip
 				status := vm.runtimeError("OpDefineAccessorDynamic: target must be an object or function, got %s", objVal.TypeName())
 				return status, Undefined
@@ -3336,6 +3346,12 @@ startExecution:
 				var obj *PlainObject
 				if objVal.Type() == TypeFunction {
 					obj = objVal.AsFunction().Properties
+				} else if objVal.Type() == TypeClosure {
+					closure := objVal.AsClosure()
+					if closure.Properties == nil {
+						closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					}
+					obj = closure.Properties
 				} else {
 					obj = objVal.AsPlainObject()
 				}
@@ -3386,6 +3402,18 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 				obj = objVal.AsFunction().Properties
+			} else if objVal.Type() == TypeClosure {
+				// Per ECMAScript 14.5.14: Static accessor named "prototype" is forbidden
+				if propName == "prototype" {
+					frame.ip = ip
+					vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
+					return InterpretRuntimeError, Undefined
+				}
+				closure := objVal.AsClosure()
+				if closure.Properties == nil {
+					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = closure.Properties
 			} else {
 				obj = objVal.AsPlainObject()
 			}
@@ -3438,6 +3466,30 @@ startExecution:
 				obj.SetPrototype(protoVal)
 			}
 			// If protoVal is not an object or null, we silently ignore it (per spec)
+
+		case OpSetClosureProto:
+			// OpSetClosureProto: ClosureReg ProtoReg
+			// Sets the internal [[Prototype]] of a closure (for class inheritance: C.__proto__ = B)
+			closureReg := code[ip]
+			protoReg := code[ip+1]
+			ip += 2
+
+			closureVal := registers[closureReg]
+			protoVal := registers[protoReg]
+
+			// Only works for closures
+			if closureVal.Type() != TypeClosure {
+				frame.ip = ip
+				status := vm.runtimeError("OpSetClosureProto: target must be a closure, got %s", closureVal.TypeName())
+				return status, Undefined
+			}
+
+			closureObj := closureVal.AsClosure()
+			if closureObj.Fn != nil {
+				// Set the closure's internal prototype to the given value
+				// This is used for class inheritance so static methods can access super
+				closureObj.Fn.Prototype = protoVal
+			}
 
 		case OpArrayCopy:
 			destReg := code[ip]
@@ -4058,7 +4110,7 @@ startExecution:
 					}
 				}
 
-			case TypeObject, TypeDictObject, TypeFunction, TypeRegExp: // Functions and RegExps can have properties
+			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp: // Functions, closures, and RegExps can have properties
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
@@ -4101,6 +4153,28 @@ startExecution:
 					// For functions, set property on the function's Properties object
 					if status, res := vm.setFunctionProperty(baseVal, key, valueVal, ip); status != InterpretOK {
 						return status, res
+					}
+				} else if baseVal.Type() == TypeClosure {
+					// For closures, set property on the closure's own Properties object
+					closure := baseVal.AsClosure()
+					if closure.Properties == nil {
+						closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					}
+					// Check if this is an accessor property with a setter
+					if _, setter, _, _, ok := closure.Properties.GetOwnAccessor(key); ok && setter.Type() != TypeUndefined {
+						// Call the setter with the value
+						_, err := vm.Call(setter, baseVal, []Value{valueVal})
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return InterpretRuntimeError, Undefined
+							}
+							frame.ip = ip
+							status := vm.runtimeError("Error calling setter: %v", err)
+							return status, Undefined
+						}
+					} else {
+						closure.Properties.SetOwn(key, valueVal)
 					}
 				} else {
 					obj := AsPlainObject(baseVal)
@@ -4930,14 +5004,17 @@ startExecution:
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
-				// Static private fields on closures are stored on the underlying function's Properties
+				// Static private fields on closures - check closure's own Properties first
 				cl := objVal.AsClosure()
-				if cl.Fn.Properties == nil {
+				if cl.Properties != nil {
+					obj = cl.Properties
+				} else if cl.Fn.Properties != nil {
+					obj = cl.Fn.Properties
+				} else {
 					frame.ip = ip
 					status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
 					return status, Undefined
 				}
-				obj = cl.Fn.Properties
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot read private field '%s' of %s", fieldName, objVal.TypeName())
@@ -5072,13 +5149,13 @@ startExecution:
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
-				// Static private fields on closures are stored on the underlying function's Properties
+				// Static private fields on closures - use closure's own Properties
 				cl := objVal.AsClosure()
-				if cl.Fn.Properties == nil {
+				if cl.Properties == nil {
 					// Create Properties object if it doesn't exist
-					cl.Fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					cl.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 				}
-				obj = cl.Fn.Properties
+				obj = cl.Properties
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private field '%s' of %s", fieldName, objVal.TypeName())
@@ -5166,6 +5243,13 @@ startExecution:
 					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 				}
 				obj = fn.Properties
+			} else if objVal.Type() == TypeClosure {
+				// Static private methods on closures (class constructors)
+				closure := objVal.AsClosure()
+				if closure.Properties == nil {
+					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = closure.Properties
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private method '%s' of %s", methodName, objVal.TypeName())
@@ -5221,11 +5305,17 @@ startExecution:
 			var obj *PlainObject
 			if objVal.Type() == TypeObject {
 				obj = objVal.AsPlainObject()
-			} else {
+			} else if objVal.Type() == TypeFunction {
 				// Function - check its Properties object for static private fields
 				fn := objVal.AsFunction()
 				if fn.Properties != nil {
 					obj = fn.Properties
+				}
+			} else if objVal.Type() == TypeClosure {
+				// Closure - check its Properties object for static private fields
+				closure := objVal.AsClosure()
+				if closure.Properties != nil {
+					obj = closure.Properties
 				}
 			}
 
@@ -5287,6 +5377,12 @@ startExecution:
 					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 				}
 				obj = fn.Properties
+			} else if objVal.Type() == TypeClosure {
+				closure := objVal.AsClosure()
+				if closure.Properties == nil {
+					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = closure.Properties
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private accessor '%s' on %s", fieldName, objVal.TypeName())
@@ -5547,7 +5643,9 @@ startExecution:
 			destReg := code[ip]          // Where the created instance should go in the caller
 			constructorReg := code[ip+1] // Register holding the constructor function/closure
 			argCount := int(code[ip+2])  // Number of arguments provided to the constructor
-			ip += 3
+			flags := code[ip+3]          // Flags byte: bit0=inherit new.target from caller
+			ip += 4
+			inheritNewTarget := (flags & 0x01) != 0
 
 			// Capture caller context before potential frame switch
 			callerRegisters := registers
@@ -5682,10 +5780,10 @@ startExecution:
 				}
 
 				// Determine the new.target value for this constructor call
-				// If the caller is already a constructor (super() call), inherit its new.target
+				// If inheritNewTarget flag is set (super() calls), inherit new.target from caller
 				// Otherwise, new.target is the constructor being called
 				var newTargetValue Value
-				if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+				if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
 					// This is a super() call from a derived constructor - inherit new.target
 					newTargetValue = frame.newTargetValue
 				} else {
@@ -5698,8 +5796,8 @@ startExecution:
 				var instancePrototype Value
 				if newTargetValue.Type() == TypeClosure {
 					newTargetClosure := AsClosure(newTargetValue)
-					newTargetFunc := newTargetClosure.Fn
-					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+					// Use closure's getPrototypeWithVM which checks closure.Properties first
+					instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
 				} else if newTargetValue.Type() == TypeFunction {
 					newTargetFunc := AsFunction(newTargetValue)
 					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
@@ -5845,10 +5943,10 @@ startExecution:
 				}
 
 				// Determine the new.target value for this constructor call
-				// If the caller is already a constructor (super() call), inherit its new.target
+				// If inheritNewTarget flag is set (super() calls), inherit new.target from caller
 				// Otherwise, new.target is the constructor being called
 				var newTargetValue Value
-				if frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+				if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
 					// This is a super() call from a derived constructor - inherit new.target
 					newTargetValue = frame.newTargetValue
 				} else {
@@ -5861,8 +5959,8 @@ startExecution:
 				var instancePrototype Value
 				if newTargetValue.Type() == TypeClosure {
 					newTargetClosure := AsClosure(newTargetValue)
-					newTargetFunc := newTargetClosure.Fn
-					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+					// Use closure's getPrototypeWithVM which checks closure.Properties first
+					instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
 				} else if newTargetValue.Type() == TypeFunction {
 					newTargetFunc := AsFunction(newTargetValue)
 					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
@@ -6227,6 +6325,14 @@ startExecution:
 			if homeObject.Type() == TypeObject {
 				obj := homeObject.AsPlainObject()
 				superBase = obj.prototype
+			} else if homeObject.Type() == TypeClosure {
+				// For static methods, HomeObject is the class constructor (a closure)
+				closureObj := homeObject.AsClosure()
+				if closureObj.Fn != nil {
+					superBase = closureObj.Fn.Prototype
+				} else {
+					superBase = Null
+				}
 			} else {
 				frame.ip = ip
 				vm.runtimeError("Invalid [[HomeObject]] type: %s", homeObject.TypeName())
@@ -6279,8 +6385,20 @@ startExecution:
 				if debugVM {
 					fmt.Printf("[DEBUG OpGetSuper] Got homeObject's prototype for super search: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
 				}
+			} else if homeObject.Type() == TypeClosure {
+				// For static methods, HomeObject is the class constructor (a closure)
+				// The super base is the closure's internal prototype (the parent class constructor)
+				closureObj := homeObject.AsClosure()
+				if closureObj.Fn != nil {
+					protoValue = closureObj.Fn.Prototype
+					if debugVM {
+						fmt.Printf("[DEBUG OpGetSuper] Got closure's internal prototype for static super: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
+					}
+				} else {
+					protoValue = Null
+				}
 			} else {
-				// homeObject must be an object
+				// homeObject must be an object or closure
 				frame.ip = ip
 				vm.runtimeError("Invalid [[HomeObject]] type: %s", homeObject.TypeName())
 				return InterpretRuntimeError, Undefined
@@ -6371,8 +6489,84 @@ startExecution:
 					}
 					registers[destReg] = Undefined
 				}
+			} else if protoValue.Type() == TypeClosure {
+				// For static methods, the parent class is a closure
+				// Look up the property on the closure (for static methods/getters)
+				closureObj := protoValue.AsClosure()
+				found := false
+
+				// Check closure's own properties first
+				if closureObj.Properties != nil {
+					// Check for accessor property
+					if getter, _, _, _, ok := closureObj.Properties.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, thisValue, nil)
+						if err != nil {
+							frame.ip = ip
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return InterpretRuntimeError, Undefined
+							}
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res
+								}
+							}
+							if excVal.Type() == 0 {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+							vm.throwException(excVal)
+							return InterpretRuntimeError, Undefined
+						}
+						registers[destReg] = result
+						found = true
+					} else if propValue, ok := closureObj.Properties.GetOwn(propertyName); ok {
+						registers[destReg] = propValue
+						found = true
+					}
+				}
+
+				// Check function object's properties if not found
+				if !found && closureObj.Fn != nil && closureObj.Fn.Properties != nil {
+					if getter, _, _, _, ok := closureObj.Fn.Properties.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, thisValue, nil)
+						if err != nil {
+							frame.ip = ip
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+								return InterpretRuntimeError, Undefined
+							}
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res
+								}
+							}
+							if excVal.Type() == 0 {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+							vm.throwException(excVal)
+							return InterpretRuntimeError, Undefined
+						}
+						registers[destReg] = result
+						found = true
+					} else if propValue, ok := closureObj.Fn.Properties.GetOwn(propertyName); ok {
+						registers[destReg] = propValue
+						found = true
+					}
+				}
+
+				if !found {
+					registers[destReg] = Undefined
+				}
 			} else {
-				// Prototype is not an object, return undefined
+				// Prototype is not an object or closure, return undefined
 				registers[destReg] = Undefined
 			}
 
@@ -8363,29 +8557,18 @@ startExecution:
 					}
 					success = fn.Properties.DeleteOwn(propName)
 				}
-			} else if obj.Type() == TypeClosure {
-				// Delete from closure's function properties
-				closureObj := obj.AsClosure()
-				if closureObj.Fn.Properties != nil {
-					// In strict mode, check for non-configurable
-					if function.Chunk.IsStrict {
-						exists, nonConfig := closureObj.Fn.Properties.IsOwnPropertyNonConfigurable(propName)
-						if exists && nonConfig {
-							frame.ip = ip
-							vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
-							if !vm.unwinding {
-								frame = &vm.frames[vm.frameCount-1]
-								closure = frame.closure
-								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
-								registers = frame.registers
-								ip = frame.ip
-								continue
-							}
-							if vm.unwindingCrossedNative || vm.frameCount == 0 {
-								return InterpretRuntimeError, vm.currentException
-							}
+		} else if obj.Type() == TypeClosure {
+			// Delete from closure's properties (check closureObj.Properties first, then Fn.Properties)
+			closureObj := obj.AsClosure()
+			// Check if property exists in closureObj.Properties
+			if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
+				// In strict mode, check for non-configurable
+				if function.Chunk.IsStrict {
+					exists, nonConfig := closureObj.Properties.IsOwnPropertyNonConfigurable(propName)
+					if exists && nonConfig {
+						frame.ip = ip
+						vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
+						if !vm.unwinding {
 							frame = &vm.frames[vm.frameCount-1]
 							closure = frame.closure
 							function = closure.Fn
@@ -8395,9 +8578,55 @@ startExecution:
 							ip = frame.ip
 							continue
 						}
+						if vm.unwindingCrossedNative || vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
 					}
-					success = closureObj.Fn.Properties.DeleteOwn(propName)
 				}
+				success = closureObj.Properties.DeleteOwn(propName)
+			} else if closureObj.Fn.Properties != nil && closureObj.Fn.Properties.HasOwn(propName) {
+				// Check closureObj.Fn.Properties
+				if function.Chunk.IsStrict {
+					exists, nonConfig := closureObj.Fn.Properties.IsOwnPropertyNonConfigurable(propName)
+					if exists && nonConfig {
+						frame.ip = ip
+						vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
+						if !vm.unwinding {
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						if vm.unwindingCrossedNative || vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+				}
+				success = closureObj.Fn.Properties.DeleteOwn(propName)
+			} else {
+				// Property doesn't exist - delete returns true per ECMAScript spec
+				success = true
+			}
 			} else if obj.Type() == TypeNativeFunctionWithProps {
 				// Delete from native function's properties
 				nfp := obj.AsNativeFunctionWithProps()
@@ -8497,6 +8726,36 @@ startExecution:
 					success = false
 				} else {
 					// Other properties don't exist on string primitives
+					success = true
+				}
+			} else if obj.Type() == TypeClosure {
+				// Delete from closure's properties
+				closureObj := obj.AsClosure()
+				propName := key.ToString()
+				if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
+					success = closureObj.Properties.DeleteOwn(propName)
+				} else if closureObj.Fn.Properties != nil && closureObj.Fn.Properties.HasOwn(propName) {
+					success = closureObj.Fn.Properties.DeleteOwn(propName)
+				} else {
+					// Property doesn't exist - delete returns true
+					success = true
+				}
+			} else if obj.Type() == TypeFunction {
+				// Delete from function's properties
+				fn := obj.AsFunction()
+				propName := key.ToString()
+				if fn.Properties != nil && fn.Properties.HasOwn(propName) {
+					success = fn.Properties.DeleteOwn(propName)
+				} else {
+					success = true
+				}
+			} else if obj.Type() == TypeNativeFunctionWithProps {
+				// Delete from native function with props
+				nfp := obj.AsNativeFunctionWithProps()
+				propName := key.ToString()
+				if nfp.Properties != nil && nfp.Properties.HasOwn(propName) {
+					success = nfp.Properties.DeleteOwn(propName)
+				} else {
 					success = true
 				}
 			} else {
@@ -8932,6 +9191,21 @@ func (vm *VM) closeUpvalues(frameRegisters []Value) {
 	if debugVM {
 		fmt.Printf("[DBG closeUpvalues] EXIT: newOpenUpvalues=%d\n", len(vm.openUpvalues))
 	}
+}
+
+// hasFunctionPrototypeProperty checks if FunctionPrototype has a property.
+// FunctionPrototype can be either TypeObject or TypeNativeFunctionWithProps.
+func (vm *VM) hasFunctionPrototypeProperty(propKey string) bool {
+	switch vm.FunctionPrototype.Type() {
+	case TypeObject:
+		return vm.FunctionPrototype.AsPlainObject().Has(propKey)
+	case TypeNativeFunctionWithProps:
+		fp := vm.FunctionPrototype.AsNativeFunctionWithProps()
+		if fp.Properties != nil {
+			return fp.Properties.Has(propKey)
+		}
+	}
+	return false
 }
 
 // runtimeError formats a runtime error message, appends it to the VM's error list,

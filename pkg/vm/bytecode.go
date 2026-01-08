@@ -59,8 +59,8 @@ const (
 	// Function/Call related
 	OpCall           OpCode = 19  // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
 	OpReturn         OpCode = 20  // Rx: Return value from register Rx.
-	OpNew            OpCode = 45  // Rx ConstructorReg ArgCount: Create new instance using ConstructorReg with ArgCount args, result in Rx
-	OpSpreadNew      OpCode = 83  // Rx ConstructorReg SpreadArgReg: Create new instance using ConstructorReg with spread array as args, result in Rx
+	OpNew            OpCode = 45  // Rx ConstructorReg ArgCount Flags: Create new instance, Flags bit0=inherit new.target
+	OpSpreadNew      OpCode = 83  // Rx ConstructorReg SpreadArgReg Flags: Create new instance, Flags bit0=inherit new.target
 	OpTailCall       OpCode = 109 // Rx FuncReg ArgCount: Tail call (frame reuse)
 	OpTailCallMethod OpCode = 110 // Rx FuncReg ThisReg ArgCount: Tail call method (frame reuse with this)
 
@@ -234,7 +234,8 @@ const (
 	OpDefineAccessorDynamic OpCode = 84 // ObjReg GetterReg SetterReg NameReg: Define accessor property with dynamic name
 
 	// --- Prototype Support ---
-	OpSetPrototype OpCode = 85 // ObjReg ProtoReg: Set object's prototype to ProtoReg value (for __proto__ in object literals)
+	OpSetPrototype    OpCode = 85  // ObjReg ProtoReg: Set object's prototype to ProtoReg value (for __proto__ in object literals)
+	OpSetClosureProto OpCode = 129 // ClosureReg ProtoReg: Set closure's internal [[Prototype]] (for class inheritance, C.__proto__ = B)
 )
 
 // String returns a human-readable name for the OpCode.
@@ -508,6 +509,8 @@ func (op OpCode) String() string {
 		return "OpDefineAccessorDynamic"
 	case OpSetPrototype:
 		return "OpSetPrototype"
+	case OpSetClosureProto:
+		return "OpSetClosureProto"
 
 	// Type guards
 	case OpTypeGuardIterable:
@@ -839,7 +842,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:
-		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Same format as OpSpreadCall: Rx FuncReg SpreadArgReg
+		return c.spreadNewInstruction(builder, instruction.String(), offset) // Rx ConstructorReg SpreadArgReg Flags
 	case OpGetOwnKeys:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset)
 	// --- END NEW ---
@@ -958,6 +961,17 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		builder.WriteString(fmt.Sprintf("%-20s R%d R%d\n", "OpSetPrototype", objReg, protoReg))
 		return offset + 3
 
+	case OpSetClosureProto:
+		// ClosureReg, ProtoReg
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpSetClosureProto (missing operands)\n")
+			return offset + 1
+		}
+		closureReg := c.Code[offset+1]
+		protoReg := c.Code[offset+2]
+		builder.WriteString(fmt.Sprintf("%-20s R%d R%d\n", "OpSetClosureProto", closureReg, protoReg))
+		return offset + 3
+
 	case OpArrayCopy:
 		// Rx, DestOffset(16), StartReg, Count
 		if offset+5 >= len(c.Code) {
@@ -1063,7 +1077,7 @@ func (c *Chunk) registerConstantInstruction(builder *strings.Builder, name strin
 		operandSize = 2
 	}
 
-	if offset+1+operandSize > len(c.Code) {
+	if offset+1+operandSize >= len(c.Code) {
 		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
 		if offset+1 < len(c.Code) {
 			return offset + 2
@@ -1496,23 +1510,34 @@ func (c *Chunk) loadThisInstruction(builder *strings.Builder, name string, offse
 	return offset + 2
 }
 
-// newInstruction handles OpNew Rx ConstructorReg ArgCount
+// newInstruction handles OpNew Rx ConstructorReg ArgCount Flags
 func (c *Chunk) newInstruction(builder *strings.Builder, name string, offset int) int {
-	if offset+3 >= len(c.Code) {
+	if offset+4 >= len(c.Code) {
 		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
-		if offset+2 < len(c.Code) {
-			return offset + 3
-		}
-		if offset+1 < len(c.Code) {
-			return offset + 2
-		}
 		return offset + 1
 	}
 	destReg := c.Code[offset+1]
 	constructorReg := c.Code[offset+2]
 	argCount := c.Code[offset+3]
-	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, Args %d\n", name, destReg, constructorReg, argCount))
-	return offset + 4 // Opcode + Rx + ConstructorReg + ArgCount
+	flags := c.Code[offset+4]
+	inheritNewTarget := (flags & 0x01) != 0
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, Args %d, Inherit=%v\n", name, destReg, constructorReg, argCount, inheritNewTarget))
+	return offset + 5 // Opcode + Rx + ConstructorReg + ArgCount + Flags
+}
+
+// spreadNewInstruction handles OpSpreadNew Rx ConstructorReg SpreadArgReg Flags
+func (c *Chunk) spreadNewInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	constructorReg := c.Code[offset+2]
+	spreadArgReg := c.Code[offset+3]
+	flags := c.Code[offset+4]
+	inheritNewTarget := (flags & 0x01) != 0
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d, Inherit=%v\n", name, destReg, constructorReg, spreadArgReg, inheritNewTarget))
+	return offset + 5 // Opcode + Rx + ConstructorReg + SpreadArgReg + Flags
 }
 
 // spreadCallInstruction handles OpSpreadCall Rx, FuncReg, SpreadArgReg

@@ -8,13 +8,13 @@ import (
 // This consolidates the duplicate logic for these callable types
 func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool) {
 	var fn *FunctionObject
-
+	var closure *ClosureObject
 
 	switch objVal.Type() {
 	case TypeFunction:
 		fn = AsFunction(objVal)
 	case TypeClosure:
-		closure := AsClosure(objVal)
+		closure = AsClosure(objVal)
 		fn = closure.Fn
 	case TypeBoundFunction, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction:
 		// Bound/native/async functions inherit from Function.prototype but don't have FunctionObject
@@ -23,8 +23,54 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		return Undefined, false
 	}
 
+	// For closures, check closure's own Properties first (for .prototype and other per-instance props)
+	if closure != nil && closure.Properties != nil {
+		// Check for accessor properties first (getters/setters)
+		if getter, _, _, _, exists := closure.Properties.GetOwnAccessor(propName); exists {
+			if getter.Type() != TypeUndefined {
+				res, err := vm.Call(getter, objVal, nil)
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+					} else {
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+					}
+					return Undefined, false
+				}
+				return res, true
+			}
+			return Undefined, true
+		}
+		// Check for regular data properties
+		if prop, exists := closure.Properties.GetOwn(propName); exists {
+			return prop, true
+		}
+	}
+
 	// Special handling for "prototype" property (not available on bound functions)
 	if fn != nil && propName == "prototype" {
+		if closure != nil {
+			// For closures, use getPrototypeWithVM which checks closure.Properties first
+			result := closure.getPrototypeWithVM(vm)
+			return result, true
+		}
+		// For TypeFunction (not closure), use fn.getOrCreatePrototypeWithVM
 		result := fn.getOrCreatePrototypeWithVM(vm)
 		return result, true
 	}

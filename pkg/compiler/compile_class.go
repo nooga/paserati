@@ -190,6 +190,15 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		return BadRegister, err
 	}
 
+	// 2.5. For derived classes, set the constructor's internal [[Prototype]] to the parent class
+	// This enables static method inheritance: super.staticMethod() in static methods
+	if superConstructorReg != BadRegister {
+		c.emitOpCode(vm.OpSetClosureProto, node.Token.Line)
+		c.emitByte(byte(constructorReg))
+		c.emitByte(byte(superConstructorReg))
+		debugPrintf("// DEBUG compileClassDeclaration: Set constructor's [[Prototype]] to parent class\n")
+	}
+
 	if needToFreeSuperReg {
 		c.regAlloc.Free(superConstructorReg)
 	}

@@ -51,3 +51,4 @@ paserati-analyze/
 paserati-test262/
 bench/out/
 quickjs-bench/
+benchmarks/

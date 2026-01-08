@@ -2058,16 +2058,11 @@ func (c *Compiler) currentPosition() int {
 // emitClosure emits the OpClosure instruction and its operands.
 // It handles resolving free variables from the *enclosing* scope (c)
 // based on the freeSymbols list collected during the function body's compilation.
-// OPTIMIZATION: If there are no upvalues, just load the function constant directly.
+// NOTE: We always emit OpClosure even with 0 upvalues to ensure each call creates
+// a fresh closure with its own Properties (for .prototype etc). Using OpLoadConstant
+// would share the FunctionObject, causing .prototype to be shared across calls.
 func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *parser.FunctionLiteral, freeSymbols []*Symbol) Register {
 	line := node.Token.Line // Use function literal token line
-
-	// OPTIMIZATION: If no upvalues, just load the function constant
-	if len(freeSymbols) == 0 {
-		debugPrintf("// [emitClosure OPTIMIZED] No upvalues, using OpLoadConstant instead of OpClosure\n")
-		c.emitLoadConstant(destReg, funcConstIndex, line)
-		return destReg
-	}
 
 	c.emitOpCode(vm.OpClosure, line)
 	c.emitByte(byte(destReg))

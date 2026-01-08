@@ -262,20 +262,32 @@ func (c *Compiler) emitSpreadCallMethod(dest, funcReg, thisReg, spreadArgReg Reg
 	c.emitByte(byte(spreadArgReg))
 }
 
-// emitNew emits OpNew with constructor register and argument count
-func (c *Compiler) emitNew(dest, constructorReg Register, argCount byte, line int) {
+// emitNew emits OpNew with constructor register, argument count, and flags
+// If inheritNewTarget is true, inherits new.target from the caller (for super() calls)
+func (c *Compiler) emitNew(dest, constructorReg Register, argCount byte, inheritNewTarget bool, line int) {
 	c.emitOpCode(vm.OpNew, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(constructorReg))
 	c.emitByte(argCount)
+	var flags byte
+	if inheritNewTarget {
+		flags |= 0x01 // Bit 0: inherit new.target from caller
+	}
+	c.emitByte(flags)
 }
 
 // emitSpreadNew emits OpSpreadNew for constructor calls with spread arguments
-func (c *Compiler) emitSpreadNew(dest, constructorReg, spreadArgReg Register, line int) {
+// If inheritNewTarget is true, inherits new.target from the caller (for super() calls)
+func (c *Compiler) emitSpreadNew(dest, constructorReg, spreadArgReg Register, inheritNewTarget bool, line int) {
 	c.emitOpCode(vm.OpSpreadNew, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(constructorReg))
 	c.emitByte(byte(spreadArgReg))
+	var flags byte
+	if inheritNewTarget {
+		flags |= 0x01 // Bit 0: inherit new.target from caller
+	}
+	c.emitByte(flags)
 }
 
 // emitLoadThis emits OpLoadThis to load 'this' value from current call context

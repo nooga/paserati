@@ -149,7 +149,8 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 	}
 
 	// 5. Emit OpNew (constructor call) using hint as result register
-	c.emitNew(hint, constructorReg, byte(actualArgCount), node.Token.Line)
+	// Regular new Constructor() calls don't inherit new.target from caller
+	c.emitNew(hint, constructorReg, byte(actualArgCount), false, node.Token.Line)
 
 	return hint, nil
 }
@@ -2526,9 +2527,10 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 
 	// super() creates the instance by calling the parent constructor
 	// Use OpNew to create the instance (not OpCallMethod)
+	// super() calls inherit new.target from the caller (for proper derived class construction)
 	resultReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, resultReg)
-	c.emitNew(resultReg, functionReg, byte(actualArgCount), node.Token.Line)
+	c.emitNew(resultReg, functionReg, byte(actualArgCount), true, node.Token.Line)
 
 	// Update 'this' to be the newly created instance
 	c.emitSetThis(resultReg, node.Token.Line)
@@ -2594,9 +2596,10 @@ func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Regi
 	}
 
 	// Use OpSpreadNew to create the instance with spread arguments
+	// super() calls inherit new.target from the caller (for proper derived class construction)
 	resultReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, resultReg)
-	c.emitSpreadNew(resultReg, superConstructorReg, spreadArgReg, node.Token.Line)
+	c.emitSpreadNew(resultReg, superConstructorReg, spreadArgReg, true, node.Token.Line)
 
 	// Update 'this' to be the newly created instance
 	c.emitSetThis(resultReg, node.Token.Line)
@@ -2652,7 +2655,8 @@ func (c *Compiler) compileSpreadNewExpression(node *parser.NewExpression, hint R
 	}
 
 	// Use OpSpreadNew to create the instance with spread arguments
-	c.emitSpreadNew(hint, constructorReg, spreadArgReg, node.Token.Line)
+	// Regular new Constructor(...spread) calls don't inherit new.target from caller
+	c.emitSpreadNew(hint, constructorReg, spreadArgReg, false, node.Token.Line)
 
 	return hint, nil
 }

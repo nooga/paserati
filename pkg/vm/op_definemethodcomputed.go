@@ -59,17 +59,18 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		funcObj.Properties.DefineOwnPropertyByKey(propKey, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined
 	} else if objVal.Type() == TypeClosure {
-		// Static class methods on closures - add to the underlying function's properties
+		// Static class methods on closures - add to closure's own Properties for per-closure isolation
 		// Per ECMAScript 14.5.14: Static method named "prototype" is forbidden
 		if propKey.kind == KeyKindString && propKey.name == "prototype" {
 			vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
 			return InterpretRuntimeError, Undefined
 		}
 		closure := objVal.AsClosure()
-		if closure.Fn.Properties == nil {
-			closure.Fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+		// Use closure's own Properties for per-closure isolation (consistent with OpSetProp)
+		if closure.Properties == nil {
+			closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 		}
-		closure.Fn.Properties.DefineOwnPropertyByKey(propKey, methodVal, &writable, &enumerable, &configurable)
+		closure.Properties.DefineOwnPropertyByKey(propKey, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined
 	} else {
 		status := vm.runtimeError("Cannot define method on non-object type '%s'", objVal.TypeName())

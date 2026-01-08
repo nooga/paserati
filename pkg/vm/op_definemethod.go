@@ -58,10 +58,11 @@ func (vm *VM) handleOpDefineMethod(code []byte, ip *int, constants []Value, regi
 
 	case TypeClosure:
 		closure := objVal.AsClosure()
-		if closure.Fn.Properties == nil {
-			closure.Fn.Properties = NewObject(Undefined).AsPlainObject()
+		// Use closure's own Properties for per-closure isolation (consistent with OpSetProp)
+		if closure.Properties == nil {
+			closure.Properties = NewObject(Undefined).AsPlainObject()
 		}
-		closure.Fn.Properties.DefineOwnProperty(methodName, methodVal, &writable, &enumerable, &configurable)
+		closure.Properties.DefineOwnProperty(methodName, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined
 
 	case TypeNativeFunctionWithProps:

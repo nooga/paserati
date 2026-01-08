@@ -51,10 +51,12 @@ func (uv *Upvalue) Resolve() *Value {
 
 type ClosureObject struct {
 	Object
-	Fn           *FunctionObject
-	Upvalues     []*Upvalue
-	WithObjects  []Value // Captured with-object stack from enclosing with statements
-	CapturedThis Value   // Captured 'this' for arrow functions (lexical this binding)
+	Fn               *FunctionObject
+	Upvalues         []*Upvalue
+	WithObjects      []Value      // Captured with-object stack from enclosing with statements
+	CapturedThis     Value        // Captured 'this' for arrow functions (lexical this binding)
+	Properties       *PlainObject // Per-closure properties like .prototype (created lazily, shadows Fn.Properties)
+	constructorFixed bool         // True after we've fixed the constructor property to point to this closure
 }
 
 // NativeFunctionObject represents a native Go function callable from Paserati.
@@ -197,6 +199,35 @@ func NewClosure(fn *FunctionObject, upvalues []*Upvalue) Value {
 		Upvalues: upvalues,
 	}
 	return Value{typ: TypeClosure, obj: unsafe.Pointer(closureObj)}
+}
+
+// getPrototypeWithVM returns the prototype to use for instances created with this closure.
+// It first checks the closure's own Properties for a "prototype" property (set via assignment),
+// then falls back to the underlying FunctionObject's prototype.
+// IMPORTANT: When using the function's prototype, we update the constructor property to point
+// to this closure, ensuring `new MyFunc().constructor === MyFunc` works correctly.
+func (c *ClosureObject) getPrototypeWithVM(vm *VM) Value {
+	// First check closure's own properties (set via `Inner.prototype = proto`)
+	if c.Properties != nil {
+		if proto, exists := c.Properties.GetOwn("prototype"); exists {
+			return proto
+		}
+	}
+	// Fall back to the underlying function's prototype
+	proto := c.Fn.getOrCreatePrototypeWithVM(vm)
+
+	// Fix the constructor property ONCE to point to this closure instead of the underlying function
+	// This ensures `new MyFunc().constructor === MyFunc` works correctly
+	if !c.constructorFixed && proto.IsObject() && !c.Fn.IsGenerator {
+		protoObj := proto.AsPlainObject()
+		// Create a closure value for this closure object
+		closureVal := Value{typ: TypeClosure, obj: unsafe.Pointer(c)}
+		w, e, cfg := true, false, true
+		protoObj.DefineOwnProperty("constructor", closureVal, &w, &e, &cfg)
+		c.constructorFixed = true
+	}
+
+	return proto
 }
 
 func NewNativeFunction(arity int, variadic bool, name string, fn func(args []Value) (Value, error)) Value {

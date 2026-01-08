@@ -206,15 +206,45 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
 			return false, InterpretRuntimeError, Undefined
 		}
-		if fn.Properties == nil {
-			fn.Properties = NewObject(Undefined).AsPlainObject()
+		// Use closure's own Properties to avoid sharing with other closures using same FunctionObject
+		if closure.Properties == nil {
+			closure.Properties = NewObject(Undefined).AsPlainObject()
+		}
+		// Check for accessor property with a setter first
+		if _, setter, _, _, ok := closure.Properties.GetOwnAccessor(propName); ok && setter.Type() != TypeUndefined {
+			_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+				var excVal Value
+				if errCtor, ok := vm.GetGlobal("Error"); ok {
+					if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+						excVal = res
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+				} else {
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
+				}
+				vm.throwException(excVal)
+				return false, InterpretRuntimeError, Undefined
+			}
+			return true, InterpretOK, *valueToSet
 		}
 		if propName == "prototype" {
 			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false
 			w, e, c := false, false, false
-			fn.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
+			closure.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
 		} else {
-			fn.Properties.SetOwn(propName, *valueToSet)
+			closure.Properties.SetOwn(propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeNativeFunctionWithProps:

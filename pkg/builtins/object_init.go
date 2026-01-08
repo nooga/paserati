@@ -1263,9 +1263,14 @@ func objectGetOwnPropertyNamesImpl(args []vm.Value) (vm.Value, error) {
 		}
 	case vm.TypeClosure:
 		cl := obj.AsClosure()
-		// Per ECMAScript OrdinaryOwnPropertyKeys - same logic as TypeFunction
+		// Per ECMAScript OrdinaryOwnPropertyKeys - check closure's own Properties first,
+		// then fall back to underlying FunctionObject's Properties
 		var propNames []string
-		if cl.Fn != nil && cl.Fn.Properties != nil {
+		if cl.Properties != nil {
+			// Per-closure properties (prototype, static methods for classes)
+			propNames = cl.Properties.OwnPropertyNames()
+		} else if cl.Fn != nil && cl.Fn.Properties != nil {
+			// Fall back to shared function properties
 			propNames = cl.Fn.Properties.OwnPropertyNames()
 		}
 
