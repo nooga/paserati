@@ -31,6 +31,7 @@ type LexerState struct {
 	TemplateStart int
 	TemplateStack []templateState
 	PushedToken   *Token
+	PrevToken     TokenType // Previous token for regex context determination
 }
 
 // --- Debug Flag ---
@@ -373,6 +374,7 @@ func (l *Lexer) SaveState() LexerState {
 		TemplateStart: l.templateStart,
 		TemplateStack: stackCopy,
 		PushedToken:   l.pushedToken, // Note: shallow copy of token pointer
+		PrevToken:     l.prevToken,   // Save for regex context determination
 	}
 }
 
@@ -388,6 +390,7 @@ func (l *Lexer) RestoreState(state LexerState) {
 	l.templateStart = state.TemplateStart
 	l.templateStack = state.TemplateStack
 	l.pushedToken = state.PushedToken
+	l.prevToken = state.PrevToken // Restore for regex context determination
 }
 
 // SetPosition sets lexer position (legacy method, use SaveState/RestoreState for proper backtracking)
@@ -1161,13 +1164,8 @@ func (l *Lexer) NextToken() Token {
 				return tok // Explicitly return, don't advance char
 			}
 			return l.NextToken() // Get the token after the multiline comment
-		} else if l.peekChar() == '=' { // Added check for /=
-			l.readChar()                                // Consume '='
-			literal := l.input[startPos : l.position+1] // Read the actual '/='
-			l.readChar()                                // Advance past '='
-			tok = Token{Type: SLASH_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else if canBeRegexStart(l.prevToken) {
-			// DEBUG: Add debug output for regex context
+			// Check for regex context BEFORE /= - patterns like /=/ are valid regex
 			debugPrintf("Attempting regex parse: prevToken=%s, position=%d", l.prevToken, l.position)
 			// Try to read as regex literal
 			pattern, flags, success, foundComplete := l.readRegexLiteral()
@@ -1188,6 +1186,11 @@ func (l *Lexer) NextToken() Token {
 				l.readChar()            // Advance past '/'
 				tok = Token{Type: SLASH, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
+		} else if l.peekChar() == '=' { // Check for /= only when NOT in regex context
+			l.readChar()                                // Consume '='
+			literal := l.input[startPos : l.position+1] // Read the actual '/='
+			l.readChar()                                // Advance past '='
+			tok = Token{Type: SLASH_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
 			// Context doesn't allow regex, treat as division operator
 			literal := string(l.ch) // Just '/'
