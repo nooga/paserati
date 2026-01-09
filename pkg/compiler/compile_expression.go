@@ -130,6 +130,11 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 	// Allocate a contiguous block: [constructor, arg1, arg2, ...]
 	totalRegs := 1 + totalArgCount // constructor + arguments
 
+	// Check for register exhaustion before attempting allocation
+	if int(c.regAlloc.nextReg)+totalRegs > 256 {
+		return BadRegister, NewCompileError(node, "register exhaustion: expression too deeply nested")
+	}
+
 	constructorReg := c.regAlloc.AllocContiguous(totalRegs)
 	// Add all registers to tempRegs for cleanup
 	for i := 0; i < totalRegs; i++ {
@@ -2320,10 +2325,13 @@ func (c *Compiler) compileArgumentsWithOptionalHandlingForNew(node *parser.NewEx
 		if firstArgReg == c.regAlloc.nextReg {
 			c.regAlloc.AllocContiguous(finalArgCount)
 		} else {
-			lastArgReg := firstArgReg + Register(finalArgCount) - 1
-			if lastArgReg >= c.regAlloc.nextReg {
-				needed := int(lastArgReg - c.regAlloc.nextReg + 1)
-				c.regAlloc.AllocContiguous(needed)
+			// Use int arithmetic to avoid uint8 overflow issues
+			lastArgRegInt := int(firstArgReg) + finalArgCount - 1
+			if lastArgRegInt >= int(c.regAlloc.nextReg) {
+				needed := lastArgRegInt - int(c.regAlloc.nextReg) + 1
+				if needed > 0 {
+					c.regAlloc.AllocContiguous(needed)
+				}
 			}
 		}
 	}

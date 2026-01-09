@@ -678,6 +678,9 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	}
 	// <<< END ADDED >>>
 
+	// Store the maximum registers needed for this chunk
+	c.chunk.MaxRegs = int(c.regAlloc.MaxRegs())
+
 	// Return the chunk (even if errors occurred, it might be partially useful for debugging?)
 	// and the collected errors.
 	return c.chunk, c.errors
@@ -1729,19 +1732,22 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 		} else {
 			// Arguments start beyond current allocation - need to ensure they're allocated
 			// Calculate how many we need to allocate to reach firstTargetReg + finalArgCount
-			lastArgReg := firstTargetReg + Register(finalArgCount) - 1
-			if lastArgReg >= c.regAlloc.nextReg {
+			// Use int arithmetic to avoid uint8 overflow issues
+			lastArgRegInt := int(firstTargetReg) + finalArgCount - 1
+			if lastArgRegInt >= int(c.regAlloc.nextReg) {
 				// Need to extend allocation to cover these registers
-				needed := int(lastArgReg - c.regAlloc.nextReg + 1)
+				needed := lastArgRegInt - int(c.regAlloc.nextReg) + 1
 				if debugRegAlloc {
-					fmt.Printf("[ARG_ALLOC] Gap case: firstTarget=R%d, nextReg=R%d, lastArg=R%d, allocating %d more\n",
-						firstTargetReg, c.regAlloc.nextReg, lastArgReg, needed)
+					fmt.Printf("[ARG_ALLOC] Gap case: firstTarget=R%d, nextReg=R%d, lastArg=%d, allocating %d more\n",
+						firstTargetReg, c.regAlloc.nextReg, lastArgRegInt, needed)
 				}
-				c.regAlloc.AllocContiguous(needed)
+				if needed > 0 {
+					c.regAlloc.AllocContiguous(needed)
+				}
 			} else {
 				if debugRegAlloc {
-					fmt.Printf("[ARG_ALLOC] Already allocated: firstTarget=R%d, lastArg=R%d, nextReg=R%d\n",
-						firstTargetReg, lastArgReg, c.regAlloc.nextReg)
+					fmt.Printf("[ARG_ALLOC] Already allocated: firstTarget=R%d, lastArg=%d, nextReg=R%d\n",
+						firstTargetReg, lastArgRegInt, c.regAlloc.nextReg)
 				}
 			}
 		}

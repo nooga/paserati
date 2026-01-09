@@ -609,9 +609,14 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	}
 
 	// Wrap the main script chunk in a dummy function and closure
-	// Use a reasonable default register size for the script body.
-	// TODO: Should the compiler determine the required registers for the top level?
-	scriptRegSize := 128 // Large enough for complex expressions but leaves room for function calls
+	// Use the compiler-determined register size, with a minimum of 128 for safety
+	scriptRegSize := chunk.MaxRegs
+	if scriptRegSize < 128 {
+		scriptRegSize = 128 // Minimum for complex expressions
+	}
+	if scriptRegSize > RegFileSize {
+		scriptRegSize = RegFileSize // Cap at maximum
+	}
 	// Wrap the main script chunk in a dummy FunctionObject and ClosureObject
 	mainFuncObj := &FunctionObject{
 		Arity:        0,
@@ -11503,7 +11508,14 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// to avoid nested frame management issues
 
 	// Set up module frame directly
-	scriptRegSize := 128 // Same as Interpret method
+	// Use the compiler-determined register size, with a minimum of 128 for safety
+	scriptRegSize := chunk.MaxRegs
+	if scriptRegSize < 128 {
+		scriptRegSize = 128 // Minimum for complex expressions
+	}
+	if scriptRegSize > RegFileSize {
+		scriptRegSize = RegFileSize // Cap at maximum
+	}
 	mainFuncObj := &FunctionObject{
 		Arity:        0,
 		Variadic:     false,
