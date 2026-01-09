@@ -590,6 +590,9 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			// 5. Emit OpSetGlobal to store the function in the VM's globals array
 			c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
 
+			// 6. Free the temporary register now that the closure is stored in globals
+			c.regAlloc.Free(closureReg)
+
 			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d, stored at global index %d\n", name, len(freeSymbols), closureReg, globalIdx)
 
 		}
@@ -638,7 +641,12 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// (Type errors were caught earlier and returned).
 	if len(c.errors) == 0 {
 		if c.enclosing == nil { // Top-level script
-			c.emitReturn(resultReg, 0)
+			// If resultReg is BadRegister, no statement produced a value, so return undefined
+			if resultReg == BadRegister {
+				c.emitOpCode(vm.OpReturnUndefined, 0)
+			} else {
+				c.emitReturn(resultReg, 0)
+			}
 		} else {
 			// Inside a function, OpReturn or OpReturnUndefined should have been emitted.
 			// Add one just in case of missing return paths (though type checker might catch this).
@@ -698,6 +706,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	switch node := node.(type) {
 	case *parser.Program:
 		debugPrintf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
+		hasResult := false // Track whether any statement produced a value
 		for i, stmt := range node.Statements {
 			debugPrintf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
 			tlReg, err := c.compileNode(stmt, hint)
@@ -714,6 +723,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// Track the most recent statement result to be the script's final result
 				if tlReg != BadRegister {
 					hint = tlReg
+					hasResult = true
 				}
 			} else {
 				// Inside function body - be more aggressive about freeing registers
@@ -723,13 +733,21 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			}
 			// <<< ADDED ^^^
 		}
-		debugPrintf("// DEBUG Program: Finished statement loop. Final result: R%d\n", hint) // <<< ADDED
-		return hint, nil                                                                    // Return the last meaningful result
+		debugPrintf("// DEBUG Program: Finished statement loop. Final result: R%d, hasResult: %v\n", hint, hasResult) // <<< ADDED
+		// If no statement produced a value, the hint register may contain stale data
+		// (e.g., from hoisted functions). Return BadRegister to indicate undefined result.
+		if !hasResult {
+			return BadRegister, nil
+		}
+		return hint, nil // Return the last meaningful result
 
 	// --- NEW: Handle Function Literal as an EXPRESSION first ---
 	// This handles anonymous/named functions used in assignments, arguments, etc.
+	// NOTE: Function declarations (standalone named functions) are handled by the ExpressionStatement
+	// case below, not this case. This case handles function expressions in assignments, arguments, etc.
 	case *parser.FunctionLiteral:
 		debugPrintf("// DEBUG Node-FunctionLiteral: Compiling function literal used as expression '%s'.\n", node.Name) // <<< DEBUG
+
 		// Determine hint: empty for anonymous, Name.Value if named (though named exprs are rare)
 		nameHint := ""
 		if node.Name != nil {
@@ -935,7 +953,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			debugPrintf("// DEBUG ExprStmt: Handling NAMED function declaration '%s' as statement.\n", funcLit.Name.Value)
 
 			// Check if this function was already processed during hoisting
-			if symbolRef, _, found := c.currentSymbolTable.Resolve(funcLit.Name.Value); found && symbolRef.Register != nilRegister {
+			// For global hoisted functions, IsGlobal is true (but Register may be nilRegister since it was freed)
+			// For local hoisted functions, Register != nilRegister
+			if symbolRef, _, found := c.currentSymbolTable.Resolve(funcLit.Name.Value); found && (symbolRef.Register != nilRegister || symbolRef.IsGlobal) {
 				debugPrintf("// DEBUG ExprStmt: Function '%s' already hoisted, skipping duplicate processing.\n", funcLit.Name.Value)
 				// Function was already hoisted and processed, skip it
 				return BadRegister, nil

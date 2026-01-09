@@ -2006,7 +2006,8 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 						return "", false // Invalid or incomplete \xXX
 					}
 				}
-				if codePoint, err := strconv.ParseInt(hexStr, 16, 8); err == nil {
+				// Use ParseUint with 32 bits to handle full byte range (0x00-0xFF)
+				if codePoint, err := strconv.ParseUint(hexStr, 16, 32); err == nil && codePoint <= 255 {
 					builder.WriteByte(byte(codePoint))
 				} else {
 					return "", false // Invalid code point
@@ -2784,7 +2785,7 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 						}
 					}
 					if len(hexStr) == 2 {
-						if val, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
+						if val, err := strconv.ParseUint(hexStr, 16, 32); err == nil && val <= 255 {
 							cooked.WriteByte(byte(val))
 						}
 					} else {
