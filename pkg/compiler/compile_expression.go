@@ -1465,6 +1465,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			// 1. Load 'this' (for the this binding when calling the super method)
 			// 2. Use OpGetSuper/OpGetSuperComputed to get the method from the prototype
 			// 3. Call the method with 'this' as the this value
+			// NOTE: Clear tail position when compiling property expressions and arguments
+			oldTailPos := c.inTailPosition
+			c.inTailPosition = false
 
 			thisReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, thisReg)
@@ -1485,6 +1488,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 				tempRegs = append(tempRegs, propertyReg)
 				_, err := c.compileNode(computedKey.Expr, propertyReg)
 				if err != nil {
+					c.inTailPosition = oldTailPos
 					return BadRegister, err
 				}
 				c.chunk.WriteOpCode(vm.OpGetSuperComputed, memberExpr.Token.Line)
@@ -1501,6 +1505,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 			// Compile arguments
 			_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+			c.inTailPosition = oldTailPos // Restore after property and arguments
 			if err != nil {
 				return BadRegister, err
 			}
@@ -1524,6 +1529,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		if _, isSuperIndex := indexExpr.Left.(*parser.SuperExpression); isSuperIndex {
 			// Super index call: super[expr](args...)
 			// Similar handling to super.method() but with computed property
+			// NOTE: Clear tail position when compiling key expression and arguments
+			oldTailPos := c.inTailPosition
+			c.inTailPosition = false
 
 			thisReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, thisReg)
@@ -1542,6 +1550,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			tempRegs = append(tempRegs, propertyReg)
 			_, err := c.compileNode(indexExpr.Index, propertyReg)
 			if err != nil {
+				c.inTailPosition = oldTailPos
 				return BadRegister, err
 			}
 
@@ -1552,6 +1561,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 			// Compile arguments
 			_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+			c.inTailPosition = oldTailPos // Restore after key and arguments
 			if err != nil {
 				return BadRegister, err
 			}
@@ -1569,12 +1579,17 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Regular method call: obj.method(args...)
+		// NOTE: Clear tail position when compiling object, property, and arguments
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
+
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, thisReg)
 		// fmt.Printf("// [COMPILE DEBUG] Method call: thisReg = R%d\n", thisReg)
 		_, err := c.compileNode(memberExpr.Object, thisReg)
 		if err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, err
 		}
 
@@ -1595,6 +1610,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			tempRegs = append(tempRegs, propertyReg)
 			_, err := c.compileNode(computedKey.Expr, propertyReg)
 			if err != nil {
+				c.inTailPosition = oldTailPos
 				return BadRegister, err
 			}
 			c.emitOpCode(vm.OpGetIndex, memberExpr.Token.Line)
@@ -1619,6 +1635,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 		// 4. Compile arguments directly into their target positions (funcReg+1, funcReg+2, ...)
 		_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+		c.inTailPosition = oldTailPos // Restore after object, property, and arguments
 		if err != nil {
 			return BadRegister, err
 		}
@@ -1638,11 +1655,16 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	// Check if this is an index expression method call (obj[key]())
 	if indexExpr, isIndexCall := node.Function.(*parser.IndexExpression); isIndexCall {
 		// Method call: obj[key](args...)
+		// NOTE: Clear tail position when compiling object, key, and arguments
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
+
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, thisReg)
 		_, err := c.compileNode(indexExpr.Left, thisReg)
 		if err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, err
 		}
 
@@ -1659,6 +1681,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		tempRegs = append(tempRegs, propertyReg)
 		_, err = c.compileNode(indexExpr.Index, propertyReg)
 		if err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, err
 		}
 		c.emitOpCode(vm.OpGetIndex, indexExpr.Token.Line)
@@ -1668,6 +1691,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 		// 4. Compile arguments
 		_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+		c.inTailPosition = oldTailPos // Restore after object, key, and arguments
 		if err != nil {
 			return BadRegister, err
 		}
@@ -1694,18 +1718,20 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	}
 
 	// 2. Compile the expression being called (e.g., function name)
-	// NOTE: Clear tail position when compiling the callee, as the callee itself is NOT in tail position
+	// NOTE: Clear tail position when compiling the callee AND arguments, as they are NOT in tail position
 	// Only the result of THIS call can be in tail position
 	oldTailPos := c.inTailPosition
 	c.inTailPosition = false
 	_, err := c.compileNode(node.Function, funcReg)
-	c.inTailPosition = oldTailPos
 	if err != nil {
+		c.inTailPosition = oldTailPos
 		return BadRegister, err
 	}
 
 	// 3. Compile arguments directly into their target positions (funcReg+1, funcReg+2, ...)
+	// Arguments are also NOT in tail position - only THIS call's result can be
 	_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+	c.inTailPosition = oldTailPos // Restore after both callee and arguments are compiled
 	if err != nil {
 		return BadRegister, err
 	}
@@ -1996,21 +2022,23 @@ func (c *Compiler) compileSingleSpreadCall(node *parser.CallExpression, spreadEl
 		// Regular function call with spread: func(...args)
 
 		// 1. Compile the function
-		// NOTE: Clear tail position when compiling the callee
+		// NOTE: Clear tail position when compiling the callee AND arguments
 		oldTailPos := c.inTailPosition
 		c.inTailPosition = false
 		funcReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, funcReg)
 		_, err := c.compileNode(node.Function, funcReg)
-		c.inTailPosition = oldTailPos
 		if err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, err
 		}
 
 		// 2. Compile the spread argument (array to spread)
+		// Arguments are also NOT in tail position
 		spreadArgReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, spreadArgReg)
 		_, err = c.compileNode(spreadElement.Argument, spreadArgReg)
+		c.inTailPosition = oldTailPos // Restore after function and arguments
 		if err != nil {
 			return BadRegister, err
 		}
@@ -2054,13 +2082,14 @@ func (c *Compiler) compileMultiSpreadCall(node *parser.CallExpression, hint Regi
 		// Regular function call
 		_, err := c.compileNode(node.Function, funcReg)
 		if err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, err
 		}
 	}
-	c.inTailPosition = oldTailPos
 
 	// 2. Build an array containing all arguments (regular and spread)
 	// We'll use array literal syntax with spread elements
+	// Arguments are NOT in tail position - keep inTailPosition = false
 	arrayReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, arrayReg)
 
@@ -2071,6 +2100,7 @@ func (c *Compiler) compileMultiSpreadCall(node *parser.CallExpression, hint Regi
 	}
 
 	_, err := c.compileArrayLiteral(arrayLiteral, arrayReg)
+	c.inTailPosition = oldTailPos // Restore after function and arguments are compiled
 	if err != nil {
 		return BadRegister, err
 	}
@@ -3021,14 +3051,14 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 	}()
 
 	// 1. Compile the function part
-	// NOTE: Clear tail position when compiling the callee
+	// NOTE: Clear tail position when compiling the callee AND arguments
 	oldTailPos := c.inTailPosition
 	c.inTailPosition = false
 	functionReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, functionReg)
 	_, err := c.compileNode(node.Function, functionReg)
-	c.inTailPosition = oldTailPos
 	if err != nil {
+		c.inTailPosition = oldTailPos
 		return BadRegister, NewCompileError(node.Function, "error compiling function part of optional call expression").CausedBy(err)
 	}
 
@@ -3066,13 +3096,16 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 	c.emitMove(funcCallReg, functionReg, node.Token.Line)
 
 	// 6. Compile arguments directly into their target positions
+	// Arguments are NOT in tail position
 	for i, arg := range node.Arguments {
 		argReg := funcCallReg + Register(1+i)
 		_, err := c.compileNode(arg, argReg)
 		if err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, NewCompileError(arg, "error compiling argument in optional call expression").CausedBy(err)
 		}
 	}
+	c.inTailPosition = oldTailPos // Restore after function and all arguments are compiled
 
 	// 7. Emit regular function call
 	c.emitCall(hint, funcCallReg, byte(totalArgCount), node.Token.Line)
