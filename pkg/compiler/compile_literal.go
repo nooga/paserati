@@ -1047,6 +1047,8 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 
 		reg := functionCompiler.regAlloc.Alloc()
 		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
+		// Track parameter names for var hoisting (var x; should not reset parameter x)
+		functionCompiler.parameterNames[param.Name.Value] = true
 		// Pin the register since parameters can be captured by inner functions
 		functionCompiler.regAlloc.Pin(reg)
 		debugPrintf("// [Compiling Function Literal] %s: Parameter %s defined in R%d\n", determinedFuncName, param.Name.Value, reg)
@@ -1172,6 +1174,8 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		if node.RestParameter.Name != nil {
 			// Simple rest parameter like ...args
 			functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+			// Track rest parameter name for var hoisting
+			functionCompiler.parameterNames[node.RestParameter.Name.Value] = true
 			// Pin the register since rest parameters can be captured by inner functions
 			functionCompiler.regAlloc.Pin(restParamReg)
 			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)

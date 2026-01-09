@@ -269,6 +269,9 @@ type Compiler struct {
 
 	// --- Indirect Eval Mode ---
 	isIndirectEval bool // True when compiling indirect eval code (let/const should be local, not global)
+
+	// --- Parameter Names Tracking ---
+	parameterNames map[string]bool // Set of parameter names for current function (for var hoisting)
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -433,6 +436,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		compilingSuperClassName: enclosingCompiler.compilingSuperClassName, // Inherit super class context
 		finallyContextStack:     make([]*FinallyContext, 0),                // Each function has its own finally context stack
 		withBlockDepth:          enclosingCompiler.withBlockDepth,          // Inherit with block depth for nested functions
+		parameterNames:          make(map[string]bool),                     // Track parameter names for var hoisting
 	}
 }
 

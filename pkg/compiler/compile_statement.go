@@ -265,22 +265,31 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 
 		// Handle implicit undefined (`var x;`)
 		if valueReg == nilRegister && !isValueFunc {
-			undefReg := c.regAlloc.Alloc()
-			defer c.regAlloc.Free(undefReg)
-			c.emitLoadUndefined(undefReg, node.Name.Token.Line)
-			valueReg = undefReg
-			// Define symbol for the `var x;` case
-			// debug disabled
-			if c.enclosing == nil {
-				// Top-level: use global variable
-				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+			// ECMAScript: If the variable is already defined as a PARAMETER,
+			// `var x;` should NOT reset it to undefined - it's a no-op for the value.
+			// However, for function name bindings (e.g., `function n() { var n; }`),
+			// `var n;` should create a new binding initialized to undefined.
+			if c.parameterNames != nil && c.parameterNames[node.Name.Value] {
+				// Variable is a function parameter - preserve its value
+				debugPrintf("// [VarStmt] '%s' is a parameter, skipping undefined init\n", node.Name.Value)
 			} else {
-				// Function scope: use local symbol table
-				c.currentSymbolTable.Define(node.Name.Value, valueReg)
-				// Pin the register since local variables can be captured by upvalues
-				c.regAlloc.Pin(valueReg)
+				undefReg := c.regAlloc.Alloc()
+				defer c.regAlloc.Free(undefReg)
+				c.emitLoadUndefined(undefReg, node.Name.Token.Line)
+				valueReg = undefReg
+				// Define symbol for the `var x;` case
+				// debug disabled
+				if c.enclosing == nil {
+					// Top-level: use global variable
+					globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+					c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				} else {
+					// Function scope: use local symbol table
+					c.currentSymbolTable.Define(node.Name.Value, valueReg)
+					// Pin the register since local variables can be captured by upvalues
+					c.regAlloc.Pin(valueReg)
+				}
 			}
 		} else if !isValueFunc {
 			// Define symbol ONLY for non-function values.
