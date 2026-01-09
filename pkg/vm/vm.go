@@ -15,8 +15,10 @@ import (
 	"unsafe"
 )
 
-const RegFileSize = 256 // Max registers per function call frame
-const MaxFrames = 64    // Max call stack depth
+const RegFileSize = 256  // Max registers per function call frame
+const MaxFrames = 1024   // Max call stack depth (was 64, increased for deep recursion)
+// NOTE: Total stack = RegFileSize * MaxFrames = ~6MB. For dynamic expansion in the future,
+// upvalues would need to change from raw pointers to indices. See docs/bucketlist.md.
 
 // Debug flags - set these to control debug output
 const debugVM = false              // VM execution tracing

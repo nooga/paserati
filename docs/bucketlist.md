@@ -1,1107 +1,216 @@
 # Paserati Feature Bucket List
 
-This list tracks the implemented and planned features for the Paserati TypeScript/JavaScript runtime, based on ES2025 and TypeScript specifications.
+This document tracks implemented and planned features for the Paserati TypeScript/JavaScript runtime, based on ES2025 and TypeScript specifications.
 
-**Current Status: 74.2% Test262 Language Suite Compliance** (17,548/23,634 tests passing)
+**Test262 Language Suite: 91.9%** (21,514/23,410 tests passing)
 
-**Recent Major Updates:**
+## Test262 Weak Spots
 
-- **🔥 ES2025 ASYNC/AWAIT** - **COMPLETE!** Full async function support with microtask scheduling
-  - **Async Functions**: `async function` with proper Promise integration and await expressions
-  - **Top-Level Await**: Module-level await support for modern ES2025 applications
-  - **Async Generators**: `async function*` with `yield` and `for await...of` loops
-  - **Microtask Queue**: Proper event loop with microtask scheduling for Promise resolution
-  - **Pluggable Async Runtime**: Embedders can provide custom async executors
-- **📦 DYNAMIC IMPORTS** - **COMPLETE!** Runtime module loading with `import()` expressions
-  - **Dynamic Import Syntax**: `import('./module.js')` returns Promise<Module>
-  - **Pluggable Module Resolution**: Customizable module loaders for different environments
-  - **Full ESM Integration**: Works seamlessly with static imports and exports
-- **🔍 EVAL SUPPORT** - **COMPLETE!** Direct and indirect eval with proper scoping
-  - **Direct Eval**: `eval('code')` with access to local scope
-  - **Indirect Eval**: `(0, eval)('code')` with global scope only
-  - **Security Boundary**: Proper scope isolation for embedded use cases
-- **🎭 PROXY & REFLECT** - **COMPLETE!** Full ES2025 metaprogramming support
-  - **Proxy Constructor**: All 13 handler traps (get, set, has, deleteProperty, apply, construct, etc.)
-  - **Reflect API**: Complete Reflect.* methods for object manipulation
-  - **Proxy.revocable**: Revocable proxies with explicit revocation
-  - **Deep Integration**: Works with all object operations and operators
-- **🗺️ MAP & SET COLLECTIONS** - **COMPLETE!** Modern collection types with full API
-  - **Map**: Key-value storage with any type as key, size tracking, iteration
-  - **Set**: Value storage with uniqueness guarantee, set operations
-  - **Complete Methods**: get, set, has, delete, clear, forEach, entries, keys, values
-  - **Proper Iteration**: Symbol.iterator integration for for...of loops
+Areas with lower pass rates that need attention:
 
-- **🏷️ LABELED STATEMENTS** - **COMPLETE!** Full labeled statement support for enhanced control flow
-  - **Labeled Loops**: All loop types support labels (`while`, `for`, `do-while`, `for-of`, `for-in`)
-  - **Labeled Break**: Break to any labeled statement, including non-loop blocks (`break labelName`)
-  - **Labeled Continue**: Continue to labeled loops with validation (`continue labelName`)
-  - **Nested Labels**: Support for deeply nested labeled statements with proper scope resolution
-  - **Block Labels**: Labels on block statements for breaking out of complex structures
-  - **Compile-Time Validation**: Proper error checking for non-existent labels and invalid continue targets
-  - **TypeScript Integration**: Full type checker support with AST node handling
-  - **Comprehensive Testing**: All combinations tested including edge cases
-- **⚡ PERFORMANCE API** - **COMPLETE!** High-precision timing and performance measurement
-  - **High-Resolution Timing**: `performance.now()` with sub-millisecond precision using Go's time.Since()
-  - **Performance Marks**: `performance.mark()` for creating named timestamps
-  - **Performance Measures**: `performance.measure()` for measuring durations between marks
-  - **Performance Queries**: `getEntriesByType()` and `getEntriesByName()` for retrieving measurements
-  - **Performance Management**: `clearMarks()` and `clearMeasures()` for cleanup
-  - **TypeScript Integration**: Complete type definitions with PerformanceEntry interface
-  - **Global State Management**: Persistent performance data across calls
-- **🚀 OBJECT STATIC METHODS** - **COMPLETE!** Modern Object utility methods implementation  
-  - **Property Enumeration**: `Object.keys()`, `Object.values()`, `Object.entries()` for object inspection
-  - **Object Manipulation**: `Object.assign()` for property copying, `Object.fromEntries()` for object creation
-  - **Modern Property Checking**: `Object.hasOwn()` as modern replacement for `hasOwnProperty()`
-  - **Prototype Management**: Enhanced `Object.getPrototypeOf()` and `Object.setPrototypeOf()`
-  - **Array Integration**: Full support for array properties and indexed access
-  - **Type Safety**: Complete TypeScript integration with proper return types
-- **📅 DATE OBJECT** - **COMPLETE!** Full JavaScript Date implementation with all methods
-  - **All Getter Methods**: Local and UTC variants for year, month, date, hours, minutes, seconds, milliseconds
-  - **All Setter Methods**: Local and UTC variants with multi-parameter support
-  - **Timezone Support**: `getTimezoneOffset()` for timezone-aware operations
-  - **Locale Methods**: `toLocaleString()`, `toLocaleDateString()`, `toLocaleTimeString()`
-  - **JSON Support**: Proper `toJSON()` implementation with invalid date handling
-  - **Static Methods**: `Date.now()`, `Date.parse()`, `Date.UTC()` fully functional
-  - **Invalid Date Handling**: NaN timestamps for invalid dates, proper null return from toJSON()
-- **🚀 ITERATOR PROTOCOL & GENERATORS** - **COMPLETE!** Full ES6 iterator protocol implementation
-  - **Complete Generator System**: `function*`, `yield`, `yield*` delegation with proper typing
-  - **Symbol.iterator Protocol**: Iterator interfaces, Symbol support, for...of loops 
-  - **User-Defined Iterables**: Object literals with `[Symbol.iterator]()` method support
-  - **Runtime Optimization**: Fast path for arrays, iterator protocol for custom iterables
-  - **Type System Integration**: `Iterable<T>`, `Iterator<T>`, computed Symbol property checking
-- **🎉 MODULE SYSTEM IMPLEMENTATION** - **COMPLETE!** Full ES6/TypeScript module support
-  - **All Import/Export Patterns**: Default, named, namespace, and mixed imports/exports
-  - **Runtime Module Execution**: OpEvalModule and OpGetModuleExport bytecode implementation
-  - **Cross-Module Type Checking**: Full TypeScript-compliant module type analysis
-  - **Configurable Module Resolution**: `NewPaseratiWithBaseDir()` eliminates CWD dependency
-  - **Complete Test Infrastructure**: All module tests passing with proper value capture
-- **Complete Destructuring Implementation** - Full support for array/object destructuring with rest elements, defaults, and nested patterns
-- **Built-in System Refactor** - Modernized builtin architecture and cleaned up legacy code
-- **🚀 GENERICS IMPLEMENTATION** - **COMPLETE!** Full generic types, functions, and type inference
-- **✅ Function.prototype.bind()** - Complete implementation with BoundFunction type
-- **🎉 CLASSES IMPLEMENTATION** - **COMPLETE!** Full TypeScript class system with inheritance, access modifiers, abstract classes, and interfaces
-- **🆕 GENERIC CLASSES** - **NEW!** Generic class support with automatic type inference (`new Container(42)` infers `T` as `number`)
-- **🚀 RECURSIVE GENERIC CLASSES** - **BREAKTHROUGH!** Self-referencing generic classes with inheritance (`class Node<T> { next?: Node<T>; }`, `class Stack<T> extends Container<T>`)
-- **🎯 ADVANCED TYPE SYSTEM** - **COMPLETE!** Full implementation of advanced TypeScript type features:
-  - **Index Signatures** - `{ [key: string]: Type }` with comprehensive validation
-  - **Mapped Types** - `{ [P in K]: T }` with expansion and utility type support
-  - **Conditional Types** - `T extends U ? X : Y` with proper substitution
-  - **Utility Types** - `Partial<T>`, `Pick<T,K>`, `Record<K,V>`, etc. working perfectly
-  - **keyof Operator** - Type-level key extraction (`keyof Person` → `"name" | "age"`)
-  - **Indexed Access Types** - `T[K]` syntax for property type access
-  - **Type Predicates** - `is` keyword for user-defined type guards
-  - **Template Literal Types** - `` `Hello ${T}!` `` for compile-time string manipulation
+| Subsuite | Pass Rate | Tests |
+|----------|-----------|-------|
+| `import/import-defer` | 14.5% | 69 |
+| `module-code/namespace` | 52.8% | 36 |
+| `statements/with` | 56.4% | 181 |
+| `eval-code/indirect` | 63.9% | 61 |
+| `statements/for-in` | 72.2% | 115 |
+| `expressions/yield` | 74.6% | 63 |
+| `expressions/super` | 75.5% | 94 |
+| `types/reference` | 79.3% | 29 |
+| `expressions/call` | 79.3% | 92 |
+| `eval-code/direct` | 79.7% | 286 |
 
 ## Core Syntax & Basics
 
-- [x] Variable Declarations (`let`, `const`)
+- [x] Variable declarations (`let`, `const`, `var`)
 - [x] Semicolons (optional)
 - [x] Comments (`//`, `/* */`)
-- [x] Block Scoping (`{}`)
-- [x] Control Flow without braces (single statement bodies)
-- [x] Global Variables (implemented with OpGetGlobal/OpSetGlobal)
-- [x] **Enhanced Parser Robustness** - improved function declaration parsing and error recovery
-- [x] **Module System (`import`/`export`)** - **Complete Implementation!**
-  - [x] **All Import Patterns**: Default, named, namespace, and mixed imports
-  - [x] **All Export Patterns**: Direct exports, re-exports, and default exports
-  - [x] **Runtime Module Execution**: OpEvalModule and OpGetModuleExport bytecode
-  - [x] **Cross-Module Type Checking**: Full TypeScript-compliant module type analysis
-  - [x] **Module Resolution**: Configurable base directory without CWD dependency
-  - [x] **Test Infrastructure**: Complete module test system with all tests passing
-  - [x] **Error Handling**: Proper compile-time and runtime module loading errors
-- [x] **`var` keyword** - **Complete Implementation!**
-  - [x] Variable declarations with block scoping (TypeScript semantics, not legacy JS hoisting)
-  - [x] Type annotations and type inference
-  - [x] Function assignments and closures
-  - [x] Proper redeclaration error handling
-  - [x] Integration with export system and module resolution
-  - [x] **Fixed block statement parsing bug** - Block statements now work correctly in all contexts
+- [x] Block scoping (`{}`)
+- [x] Control flow without braces (single statement bodies)
+- [x] Global variables (OpGetGlobal/OpSetGlobal)
+- [x] Module system (`import`/`export`) - all patterns, runtime execution, cross-module type checking
+- [x] `var` keyword with proper hoisting and function scope
 
 ## Literals
 
-- [x] String Literals (single/double quotes)
-- [x] Number Literals (decimal, hex, binary, octal, separators)
-- [x] Boolean Literals (`true`, `false`)
-- [x] `null` Literal
-- [x] `undefined` Literal (as value and uninitialized state)
-- [x] Array Literals (`[]`)
-- [x] Object Literals (`{}`)
-- [x] Regular Expression Literals (`/abc/`) - **Complete Implementation!**
-  - [x] Lexer support with regex/division disambiguation via backtracking
-  - [x] Parser integration as primary expressions
-  - [x] Type system support with RegExp primitive type
-  - [x] VM runtime with RegExpObject backed by Go's regexp package
-  - [x] RegExp constructor: `new RegExp(pattern, flags)` and `RegExp(pattern, flags)`
-  - [x] RegExp properties: source, flags, global, ignoreCase, multiline, dotAll, lastIndex
-  - [x] RegExp methods: test(), exec(), toString()
-  - [x] Flag support: g, i, m, s (u is default in Go, y handled at JS level)
-  - [x] Comprehensive test suite with 20+ regex test files
-  - [x] String method integration: match(), replace(), search(), split() with RegExp arguments
-- [x] Template Literals (backticks, `${}`)
-- [x] **BigInt Literals (`100n`)** - **Complete Implementation!**
-  - [x] Lexer support for BigInt token type and 'n' suffix parsing
-  - [x] Parser support for BigIntLiteral AST node
-  - [x] Type system integration with BigInt primitive type
-  - [x] VM value representation using math/big.Int
-  - [x] Compiler bytecode generation for BigInt constants
-  - [x] Type checker support for BigInt literal types
-  - [x] `typeof` operator returning "bigint"
-  - [x] Support for hex (0xFFn), binary (0b1111n), and decimal BigInt literals
-  - [x] **BigInt constructor and arithmetic operations** - **Complete!**
-    - [x] `BigInt()` constructor with number, string, and boolean conversion
-    - [x] BigInt arithmetic: addition, subtraction, multiplication, division, remainder, exponentiation
-    - [x] Type-safe arithmetic (BigInt and Number cannot be mixed, JavaScript-compliant)
-    - [x] BigInt prototype methods: `toString()`, `valueOf()`
-    - [x] Comprehensive test suite covering all BigInt operations
+- [x] String literals (single/double quotes)
+- [x] Number literals (decimal, hex, binary, octal, separators)
+- [x] Boolean literals (`true`, `false`)
+- [x] `null` and `undefined` literals
+- [x] Array literals (`[]`)
+- [x] Object literals (`{}`)
+- [x] Regular expression literals (`/abc/`) - full RegExp support with flags
+- [x] Template literals (backticks, `${}`)
+- [x] BigInt literals (`100n`) - with constructor and arithmetic operations
 
 ## Operators
 
 ### Arithmetic
-
-- [x] Addition (`+`) (incl. string concat)
-- [x] Subtraction (`-`)
-- [x] Multiplication (`*`)
-- [x] Division (`/`)
-- [x] Remainder (`%`)
-- [x] Exponentiation (`**`)
-- [x] Increment (`++`) (prefix/postfix)
-- [x] Decrement (`--`) (prefix/postfix)
-- [x] Unary Negation (`-`)
-- [x] Unary Plus (`+`) (type coercion)
+- [x] `+`, `-`, `*`, `/`, `%`, `**`
+- [x] `++`, `--` (prefix/postfix)
+- [x] Unary `-`, `+`
 
 ### Comparison
-
-- [x] Equal (`==`)
-- [x] Not Equal (`!=`)
-- [x] Strict Equal (`===`)
-- [x] Strict Not Equal (`!==`)
-- [x] Greater Than (`>`)
-- [x] Less Than (`<`)
-- [x] Greater Than or Equal (`>=`)
-- [x] Less Than or Equal (`<=`)
+- [x] `==`, `!=`, `===`, `!==`
+- [x] `>`, `<`, `>=`, `<=`
 
 ### Logical
-
-- [x] Logical AND (`&&`)
-- [x] Logical OR (`||`)
-- [x] Logical NOT (`!`)
+- [x] `&&`, `||`, `!`
 
 ### Bitwise
-
-- [x] Bitwise AND (`&`)
-- [x] Bitwise OR (`|`) (Note: Lexer uses `|` for Type Union)
-- [x] Bitwise XOR (`^`)
-- [x] Bitwise NOT (`~`)
-- [x] Left Shift (`<<`)
-- [x] Right Shift (`>>`)
-- [x] Unsigned Right Shift (`>>>`)
+- [x] `&`, `|`, `^`, `~`
+- [x] `<<`, `>>`, `>>>`
 
 ### Assignment
+- [x] `=` and all compound assignments (`+=`, `-=`, etc.)
+- [x] `&&=`, `||=`, `??=`
 
-- [x] Assignment (`=`)
-- [x] Addition assignment (`+=`)
-- [x] Subtraction assignment (`-=`)
-- [x] Multiplication assignment (`*=`)
-- [x] Division assignment (`/=`)
-- [x] Remainder assignment (`%=`)
-- [x] Exponentiation assignment (`**=`)
-- [x] Left shift assignment (`<<=`)
-- [x] Right shift assignment (`>>=`)
-- [x] Unsigned right shift assignment (`>>>=`)
-- [x] Bitwise AND assignment (`&=`)
-- [x] Bitwise XOR assignment (`^=`)
-- [x] Bitwise OR assignment (`|=`)
-- [x] Logical AND assignment (`&&=`)
-- [x] Logical OR assignment (`||=`)
-- [x] Nullish coalescing assignment (`??=`)
-
-### Misc
-
-- [x] Conditional (Ternary) Operator (`? :`)
-- [x] Comma Operator (in specific contexts like `for` loops, array literals)
-- [x] `typeof` Operator
-- [x] `instanceof` Operator - **New!**
-  - [x] Basic instanceof checks (`obj instanceof Constructor`)
-  - [x] Constructor function validation (callable types with construct signatures)
-  - [x] TypeScript-compliant error handling for invalid constructors
-  - [x] Integration with prototypal inheritance system
-- [x] `in` Operator - **New!**
-  - [x] Basic property existence checking (`"prop" in obj`)
-  - [x] Support for string and number keys
-  - [x] Array index checking (`"0" in arr`, `"length" in arr`)
-  - [x] Type checking with compile-time validation
-  - [x] Works with PlainObject, DictObject, and ArrayObject
-  - [x] TypeScript-compliant error messages for invalid operands
-- [x] `delete` Operator - **Complete Implementation!**
-  - [x] Basic syntax, parsing, and type checking
-  - [x] Bytecode compilation and VM execution
-  - [x] Returns boolean success value correctly
-  - [x] PlainObject to DictObject conversion logic implemented
-  - [x] **Ersatz Solution**: Object reference semantics work correctly via dual-update approach
-  - [x] All variable references to the same object see the deletion
-  - [x] Comprehensive test coverage for edge cases
-- [x] `void` Operator
-- [x] Grouping Operator (`()`)
-- [x] Nullish Coalescing Operator (`??`)
-- [x] Optional Chaining (`?.`) - **Complete Implementation!**
-  - [x] Basic property access (`obj?.prop`)
-  - [x] Optional computed property access (`obj?.[expr]`) - **New!**
-  - [x] Optional function calls (`func?.()`) - **New!**
-  - [x] Chaining multiple optional operations (`obj?.prop?.method?.()`)
-  - [x] Null/undefined short-circuiting with proper undefined return
-  - [x] TypeScript-compliant type checking with union types (Result | undefined)
-  - [x] VM optimization with OpIsNullish for efficient null checks
-  - [x] Complete parser, compiler, and runtime support
-- [x] Type Assertions (`as` operator) - **New!**
-  - [x] Basic type assertions (`value as Type`)
-  - [x] Compile-time validation with TypeScript-compliant error checking
-  - [x] Runtime behavior (assertions are no-ops after type checking)
-  - [x] Support for primitive types, interfaces, and complex types
-  - [x] Integration with union types and contextual typing
-- [x] **Satisfies Operator** (`satisfies`) - **New!**
-  - [x] Type validation without type widening (`value satisfies Type`)
-  - [x] Strict object literal checking (rejects excess properties)
-  - [x] Preserves original expression type (key difference from `as`)
-  - [x] TypeScript 4.9+ feature implementation
-  - [x] Full integration with type system and error reporting
-- [x] Spread Syntax (`...`) - **Complete Implementation!**
-  - [x] Spread in function calls (`func(...args)`) with tuple types
-  - [x] Contextual typing for spread array literals (`sum(...[1, 2, 3])`)
-  - [x] TypeScript-compliant error handling for non-tuple spreads
-  - [x] Integration with tuple types and parameter type inference
-  - [x] **Spread in array literals** (`[...arr1, ...arr2]`) - **New!**
-    - [x] Basic array spread with identifiers and expressions
-    - [x] Mixed spread with literals (`[0, ...arr, 5, ...[6,7], 8]`)
-    - [x] Complex nested expressions (`[...obj.arr, ...getArray()]`)
-    - [x] Empty array handling and edge cases
-    - [x] Proper VM implementation with `OpArraySpread` bytecode
-  - [x] **Spread in object literals** (`{...obj1, ...obj2}`) - **New!**
-    - [x] Basic object spread with identifiers and expressions
-    - [x] Mixed spread with properties (`{a: 1, ...obj, b: 2}`)
-    - [x] Complex expressions (`{...getObj(), ...nested.prop}`)
-    - [x] Property override semantics (later properties override earlier ones)
-    - [x] Object literal expressions (`{...{a: 1}, b: 2}`)
-    - [x] Proper VM implementation with `OpObjectSpread` bytecode
-  - [x] **Enhanced parser support** - Fixed to handle arbitrary expressions (not just identifiers)
-  - [x] **Comprehensive type checking** - Validates spread arguments are appropriate types
-  - [x] **Integration with destructuring** - Works seamlessly with rest/spread patterns
-  - [x] **19+ comprehensive tests** covering all scenarios, edge cases, and error handling
-- [x] `yield` (Generators) - **Complete Implementation!**
-  - [x] Generator function syntax (`function*`)
-  - [x] Yield expressions with proper precedence handling
-  - [x] Generator object creation with iterator protocol
-  - [x] `.next()`, `.return()`, `.throw()` methods
-  - [x] Parameter passing via `.next(value)`
-  - [x] Return value support in generators
-  - [x] TypeScript-compatible `Generator<T, TReturn, TNext>` types
-  - [x] Yield type inference from expressions
-  - [x] Two-register OpYield bytecode design
-  - [x] State preservation and resumption
-  - [x] 8/8 generator tests passing
-- [x] `yield*` (Delegating Generators) - **Complete Implementation!**
-  - [x] Generator delegation syntax (`yield* otherGenerator()`)
-  - [x] Iterator protocol integration with proper value forwarding
-  - [x] Type checking for delegated iterables (Generator, Array, String, user-defined)
-  - [x] Bytecode compilation with OpYieldStar instruction
-  - [x] VM execution with proper iterator delegation and truthiness checking
-  - [x] Support for both built-in iterables and user-defined iterators
-- [x] **`await` (Async/Await)** - **Complete Implementation!**
-  - [x] Await expression syntax and parsing
-  - [x] Promise unwrapping with proper microtask scheduling
-  - [x] Integration with async function execution model
-  - [x] Type checking for awaitable expressions (Promise<T> → T)
-  - [x] Error propagation from rejected promises
-  - [x] Bytecode compilation with OpAwait instruction
-  - [x] Top-level await in module context
-- [x] **Symbols** (`Symbol.iterator`, `Symbol.for`, etc.) - **Complete Implementation!**
-  - [x] Symbol primitive type and Symbol.iterator well-known symbol
-  - [x] Symbol.for() and Symbol.keyFor() global registry
-  - [x] Symbol prototype methods (toString, valueOf, description)
-  - [x] Built-in symbol properties (iterator, toStringTag, hasInstance, etc.)
-- [x] **Iterators** (`Symbol.iterator` protocol, `next()` method) - **Complete Implementation!**
-  - [x] Iterator protocol with `next()` method returning `{value, done}`
-  - [x] Symbol.iterator implementations for arrays, strings, and generators
-  - [x] Generic Iterable<T>, Iterator<T>, and IteratorResult<T> interface types
-  - [x] User-defined iterables with `[Symbol.iterator]()` method support
-  - [x] Computed Symbol property type checking for object literals
-  - [x] for...of loop integration with runtime dispatch optimization
-  - [x] Manual iterator usage and automatic iterator protocol handling
-  - [x] **Iterator.return() cleanup on early exit** - **Complete Implementation!**
-    - [x] Automatic iterator.return() calls on break, return, throw in for...of loops
-    - [x] Conditional execution (only calls return() if method exists)
-    - [x] Proper resource cleanup for custom iterables and generators
-    - [x] Edge case handling (missing return method, normal completion)
-    - [x] Integration with existing loop optimization paths
-- [x] Destructuring Assignment - **Complete Implementation!**
-  - [x] **Array Destructuring** - Full support with rest elements
-    - [x] Basic array destructuring (`let [a, b] = [1, 2]`)
-    - [x] Rest elements in arrays (`let [first, ...rest] = array`)
-    - [x] Nested array destructuring (`let [a, [b, c]] = [1, [2, 3]]`)
-    - [x] Default values in array destructuring (`let [a = 10, b = 20] = []`)
-    - [x] Mixed patterns with defaults and rest elements
-  - [x] **Object Destructuring** - Full support with rest elements
-    - [x] Basic object destructuring (`let {name, age} = person`)
-    - [x] Object rest elements (`let {name, ...rest} = person`)
-    - [x] Property exclusion in rest elements (proper key filtering)
-    - [x] Nested object destructuring (`let {person: {name}} = data`)
-    - [x] Default values in object destructuring (`let {name = "Unknown"} = {}`)
-    - [x] Mixed patterns with defaults and rest elements
-  - [x] **Declaration Context Support**
-    - [x] `const` declarations with destructuring
-    - [x] `let` declarations with destructuring
-    - [x] Variable assignment destructuring (non-declaration)
-  - [x] **Advanced Features**
-    - [x] Complex nested patterns (`let {a: [b, {c}]} = complex`)
-    - [x] Function parameter destructuring (both object and array)
-    - [x] Default values in function parameter destructuring
-    - [x] Rest elements in function parameter destructuring
-    - [x] TypeScript-compliant type checking for all destructuring patterns
-    - [x] Comprehensive error handling and validation
-  - [x] **46+ test cases** covering all destructuring scenarios and edge cases
+### Other Operators
+- [x] Ternary (`? :`)
+- [x] Comma (in `for` loops, array literals)
+- [x] `typeof`, `instanceof`, `in`, `delete`, `void`
+- [x] Nullish coalescing (`??`)
+- [x] Optional chaining (`?.`, `?.[]`, `?.()`)
+- [x] Type assertions (`as`)
+- [x] Satisfies operator (`satisfies`)
+- [x] Spread syntax (`...`) - in calls, arrays, objects
+- [x] `yield`, `yield*`
+- [x] `await`
+- [x] Symbols (`Symbol.iterator`, `Symbol.for`, etc.)
+- [x] Destructuring assignment (arrays, objects, nested, defaults, rest)
 
 ## Control Flow
 
-- [x] `if`/`else if`/`else` Statements/Expressions
-- [x] `switch`/`case`/`default` Statements (with fallthrough and break)
-- [x] `while` Loops
-- [x] `do...while` Loops
-- [x] `for` Loops (C-style)
-- [x] `for...in` Loops - **Enhanced!**
-  - [x] Basic for...in iteration over object properties
-  - [x] Support for existing variable assignment (not just declaration)
-  - [x] Proper global variable handling in loop assignment
-- [x] `for...of` Loops - **Complete Iterator Protocol Implementation!**
-  - [x] Iterator protocol support for all iterable types (arrays, strings, generators, user-defined)
-  - [x] Runtime dispatch optimization (fast path for arrays, iterator protocol for others)
-  - [x] Support for existing variable assignment (not just declaration)
-  - [x] Proper global variable handling in loop assignment
-  - [x] Type checking integration with Iterable<T> interface validation
-  - [x] Element type inference from iterator yield types
-- [x] `break` Statement
-- [x] `continue` Statement
-- [x] **Labeled Statements** - **Complete Implementation!**
-  - [x] Labels on all loop types (`while`, `for`, `do-while`, `for-of`, `for-in`)
-  - [x] Labels on block statements for breaking out of complex structures
-  - [x] Labeled break statements (`break labelName`) for jumping to any labeled statement
-  - [x] Labeled continue statements (`continue labelName`) with proper loop validation
-  - [x] Nested label support with scope resolution
-  - [x] Compile-time error checking for non-existent labels and invalid targets
-  - [x] Full type checker integration and comprehensive testing
-- [x] `try`/`catch`/`finally` Blocks - **Complete Implementation!**
-  - [x] Basic try/catch with exception handling
-  - [x] Error object constructor and proper prototype chain
-  - [x] Finally blocks with proper control flow
-  - [x] **Advanced return statements in finally blocks** - OpReturnFinally mechanism
-  - [x] **Error stack traces** - Complete call stack capture with function names and line numbers
-  - [x] **Custom error types** - TypeError, ReferenceError, SyntaxError with proper inheritance
-  - [x] Exception table approach with minimal bytecode changes
-  - [x] Comprehensive test coverage for all exception scenarios
-- [x] `throw` Statement - **Complete!**
+- [x] `if`/`else if`/`else`
+- [x] `switch`/`case`/`default`
+- [x] `while`, `do...while`
+- [x] `for`, `for...in`, `for...of`, `for await...of`
+- [x] `break`, `continue`
+- [x] Labeled statements
+- [x] `try`/`catch`/`finally` with error stack traces
+- [x] `throw`
 
 ## Functions
 
-- [x] Function Declarations (`function name() {}`) **[Enhanced hoisting - fixed parser ambiguity]**
-- [x] Function Expressions (`let x = function() {}`)
-- [x] Arrow Functions (`=>`)
-  - [x] Single/Multi Parameters
-  - [x] Parenthesized/Unparenthesized Single Parameter
-  - [x] Expression Body
-  - [x] Block Body
-- [x] Return Statements (`return`, implicit `undefined`)
-- [x] Parameters (incl. basic type annotations)
-- [x] Higher-order functions (function parameters and returns)
-- [x] Curried functions
-- [x] Function Overloads
-  - [x] Basic overload declarations (`function f(x: string): string; function f(x: number): number;`)
-  - [x] Implementation signature matching
-  - [x] Integration with default/optional parameters
-    - [x] TypeScript compliant type-checking for default/optional parameters
-- [x] Default Parameter Values
-  - [x] Basic default values (`function f(x = 5)`)
-  - [x] Multiple default parameters
-  - [x] Mixed required and default parameters
-  - [x] Parameter references in defaults (`function f(a, b = a + 1)`)
-  - [x] Complex expressions in defaults
-  - [x] Arrow functions with defaults
-  - [x] Shorthand methods with defaults (`{ method(x = 5) {} }`)
-  - [x] Type checking for default value assignability
-  - [x] Forward reference prevention (proper error for `function f(a = b, b)`)
-  - [x] Type inference from default values (`function f(x = 20)` infers `x: number`)
-- [x] Optional Parameters
-  - [x] Basic optional parameters (`function f(a: number, b?: string)`)
-  - [x] Multiple optional parameters
-  - [x] Mixed required and optional parameters
-  - [x] Type checking for optional parameter usage
-  - [x] Proper arity checking (minimum required arguments)
-  - [x] Arrow functions with optional parameters
-  - [x] Shorthand methods with optional parameters (`{ method(x?: string) {} }`)
-- [x] Rest Parameters (`...`) (basic implementation, some edge cases remain)
-- [x] `arguments` Object - **Complete Implementation!**
-  - [x] Performant on-demand creation using OpGetArguments bytecode opcode
-  - [x] Array-like behavior with indexed access and length property
-  - [x] TypeScript IArguments interface type integration
-  - [x] Support for both regular and variadic functions
-  - [x] Special handling for argument extraction from packed arrays
-  - [x] Type checker integration (function scope only)
-  - [x] Comprehensive test coverage for all usage patterns
-- [x] Closures / Lexical Scoping
-- [x] `this` Keyword (comprehensive object method context)
-  - [x] Basic object method context
-  - [x] Explicit `this` parameter syntax (`function(this: SomeType)`) **[Enhanced error handling]**
-  - [x] Context preservation in nested function literals
-  - [x] Constructor function `this` binding with `new` operator
-  - [x] **Robust `this` parameter validation** - proper error messages for missing type annotations
-- [x] `new` Operator / Constructor Functions - **Enhanced!**
-  - [x] OpNew bytecode implementation
-  - [x] Constructor function prototype property creation
-  - [x] Instance prototype chain establishment
-  - [x] TypeScript-compliant constructor type checking
-- [x] Prototypal Inheritance - **New Major Feature!**
-  - [x] Function prototype property support (`.prototype`)
-  - [x] Constructor property relationships
-  - [x] Function.prototype methods
-    - [x] `Function.prototype.call()` for explicit `this` binding **[Fixed infinite recursion]**
-    - [x] `Function.prototype.apply()` for explicit `this` binding with array arguments
-    - [x] `Function.prototype.bind()` for creating bound functions **[Complete with BoundFunction type]**
-  - [x] Object.getPrototypeOf() static method
-  - [x] Prototype chain traversal and method resolution
-  - [x] Runtime prototype object management
-  - [x] TypeScript-compliant prototype type checking
-  - [x] Integration with instanceof operator
-  - [x] **Robust method binding system** - prevents infinite recursion in built-in methods
-- [x] **Generator Functions** (`function*`) - **Complete Implementation!**
-  - [x] Generator function syntax and parsing (`function* gen() {}`)
-  - [x] Generator object creation with proper typing (`Generator<T, TReturn, TNext>`)
-  - [x] Yield expressions with parameter passing (`yield value`, `yield* delegatedGenerator`)
-  - [x] Generator methods (`.next()`, `.return()`, `.throw()`) with state management
-  - [x] Symbol.iterator protocol integration (generators are self-iterable)
-  - [x] Type inference for yield types and return values
-  - [x] for...of loop compatibility and manual iteration support
-  - [x] **Generator Methods in Classes and Objects** - **Complete Implementation!**
-    - [x] Class generator methods (`*methodName() { yield 1; }`)
-    - [x] String literal generator methods (`*"methodName"() { yield 1; }`)
-    - [x] Computed generator methods (`*[Symbol.iterator]() { yield 1; }`)
-    - [x] Object literal generator methods (`{ *gen() { yield 1; } }`)
-    - [x] Proper type checking integration with Generator<T, R, N> return types
-    - [x] for...of loop compatibility for all generator method types
-  - [x] Comprehensive test coverage for all generator scenarios
-- [x] **Async Functions** (`async function`) - **Complete Implementation!**
-  - [x] Async function syntax and parsing (`async function fn() {}`)
-  - [x] Async arrow functions (`async () => {}`)
-  - [x] Await expressions with proper promise resolution
-  - [x] Automatic Promise wrapping of return values
-  - [x] Error handling with try/catch in async functions
-  - [x] Top-level await support in modules
-  - [x] Integration with event loop and microtask queue
-  - [x] **Async Generators** (`async function*`) - **Complete!**
-    - [x] Async generator function syntax
-    - [x] `yield` in async context with promise unwrapping
-    - [x] `for await...of` loops for consuming async iterables
-    - [x] Async iterator protocol integration
-    - [x] Proper state management across await points
+- [x] Function declarations and expressions
+- [x] Arrow functions
+- [x] Default and optional parameters
+- [x] Rest parameters (`...`)
+- [x] `arguments` object
+- [x] Closures / lexical scoping
+- [x] `this` keyword with proper context
+- [x] `new` operator / constructor functions
+- [x] Prototypal inheritance
+- [x] `Function.prototype.call()`, `.apply()`, `.bind()`
+- [x] Generator functions (`function*`)
+- [x] Async functions (`async function`)
+- [x] Async generators (`async function*`)
 
 ## Data Structures & Built-ins
 
-- [x] Arrays
-  - [x] Creation (`[]`)
-  - [x] Index Access (`arr[i]`)
-  - [x] Assignment (`arr[i] = v`)
-  - [x] Compound assignment to indices (`arr[i] += v`, etc.)
-  - [x] `.length` Property (OpGetLength optimization)
-  - [x] Array Prototype Methods
-    - [x] **Core methods** (`.push`, `.pop`, `.concat`, `.join`, `.toString`)
-    - [x] **Search methods** (`.includes`, `.indexOf`, `.lastIndexOf`)
-    - [x] **Functional methods** (`.map`, `.filter`, `.forEach`)
-    - [x] **Test methods** (`.every`, `.some`, `.find`, `.findIndex`)
-    - [x] **Mutation methods** (`.reverse`, `.shift`, `.unshift`)
-    - [x] **Extraction methods** (`.slice`)
-    - [x] **14+ array methods implemented** covering most common JavaScript array operations
-    - [x] Proper type signatures for all methods with TypeScript compatibility
-    - [x] Support for callback functions in functional methods (limited type checking)
-    - [x] Advanced methods (`.reduce`, `.sort`, `.splice`)
-  - [ ] **Sparse Arrays** - **Future Enhancement**
-    - [ ] ECMAScript-compliant sparse array implementation for large indices
-    - [ ] Proper handling of `arr[2^32-1]` as object property (not array element)
-    - [ ] Memory-efficient storage for arrays with gaps (e.g., `arr[0] = 1; arr[1000000] = 2`)
-    - [ ] **Context**: Current implementation prevents memory exhaustion from large indices (test262 edge cases)
-    - [ ] **Current workaround**: Array index limit of 16MB elements to prevent 245GB+ memory allocations
-    - [ ] **Target**: Full JavaScript array semantics with sparse storage backend
-- [x] Objects - **Enhanced with Modern Methods!**
-  - [x] Creation (`{}`)
-  - [x] Property Access (`.`, `[]`)
-  - [x] Property Assignment
-  - [x] String keys and computed property names
-  - [x] Method shorthand syntax (`{ add(a, b) { return a + b; } }`)
-  - [x] Property shorthand syntax (`{ name, age }` for `{ name: name, age: age }`)
-  - [x] Methods with `this` context
-  - [x] Constructor functions and prototype relationships
-  - [x] **Object Static Methods** - **Complete Modern Implementation!**
-    - [x] `Object.create()` - Create objects with specified prototype
-    - [x] `Object.keys()` - Get array of own enumerable property names
-    - [x] `Object.values()` - Get array of own enumerable property values
-    - [x] `Object.entries()` - Get array of [key, value] pairs
-    - [x] `Object.assign()` - Copy properties from source objects to target
-    - [x] `Object.hasOwn()` - Modern replacement for `hasOwnProperty()`
-    - [x] `Object.fromEntries()` - Create object from key-value pairs
-    - [x] `Object.getPrototypeOf()` - Get object's prototype
-    - [x] `Object.setPrototypeOf()` - Set object's prototype
-- [x] Strings
-  - [x] `.length` Property (OpGetLength optimization)
-  - [x] String Prototype Methods
-    - [x] Classic methods (`.charAt`, `.charCodeAt`)
-    - [x] Modern ES5+ methods (`.substring`, `.slice`, `.indexOf`, `.includes`)
-    - [x] ES2015+ methods (`.startsWith`, `.endsWith`)
-    - [x] **Case conversion** (`.toLowerCase`, `.toUpperCase`)
-    - [x] **Whitespace handling** (`.trim`, `.trimStart`, `.trimEnd`)
-    - [x] **String manipulation** (`.repeat`, `.concat`, `.split`, `.lastIndexOf`)
-    - [x] **Basic pattern methods** (`.replace`, `.match`, `.search`) - string-only, no regex support yet
-    - [x] Proper type signatures for all methods with TypeScript compatibility
-    - [x] String constructor with static methods (`.fromCharCode`)
-    - [x] **Comprehensive string processing pipeline support**
-    - [x] **22+ String methods implemented** - covers most common JavaScript string operations
-    - [x] **Advanced regex integration** (`.replace`, `.match`, `.search`, `.split` with RegExp arguments)
-- [x] **Numbers** - **Complete Implementation!**
-  - [x] Number Prototype Methods
-    - [x] **String conversion methods** (`.toString` with optional radix, `.toLocaleString`)
-    - [x] **Value extraction** (`.valueOf` for primitive number value)
-    - [x] **Formatting methods** (`.toFixed`, `.toExponential`, `.toPrecision`)
-    - [x] TypeScript-compliant type checking for all number methods
-    - [x] Proper `this` context handling for primitive number method calls
-  - [x] Number Constructor
-    - [x] Type conversion constructor (`Number(value)` with proper coercion)
-    - [x] Support for all JavaScript types (string, boolean, null, undefined)
-  - [x] Number Static Properties
-    - [x] Mathematical constants (`MAX_VALUE`, `MIN_VALUE`, `EPSILON`)
-    - [x] Special values (`NaN`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`)
-    - [x] Safe integer bounds (`MAX_SAFE_INTEGER`, `MIN_SAFE_INTEGER`)
-  - [x] Number Static Methods
-    - [x] **Type checking methods** (`isNaN`, `isFinite`, `isInteger`, `isSafeInteger`)
-    - [x] **Parsing methods** (`parseFloat`, `parseInt` with radix support)
-    - [x] Proper validation and edge case handling
-  - [x] **Complete Integration**
-    - [x] Type checker support for number method access
-    - [x] VM runtime support for primitive number method calls
-    - [x] Full prototype chain integration
-    - [x] TypeScript-compliant error handling
-- [x] `Math` Object
-  - [x] **All standard Math constants** (`PI`, `E`, `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT1_2`, `SQRT2`)
-  - [x] **Trigonometric functions** (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`)
-  - [x] **Logarithmic functions** (`log`, `log10`, `log2`, `log1p`, `exp`, `expm1`)
-  - [x] **Power and root functions** (`pow`, `sqrt`, `cbrt`)
-  - [x] **Rounding functions** (`round`, `floor`, `ceil`, `trunc`)
-  - [x] **Utility functions** (`abs`, `sign`, `max`, `min`, `random`)
-  - [x] **Advanced functions** (`hypot`, `fround`, `imul`, `clz32`)
-  - [x] **30+ Math methods implemented** - comprehensive mathematical operations support
-- [x] `Date` Object - **Complete Implementation!**
-  - [x] `Date.now()` static method
-  - [x] Date constructor with all overloads (no args, timestamp, string, multi-param)
-  - [x] All local getter methods (`.getTime`, `.getFullYear`, `.getMonth`, etc.)
-  - [x] All UTC getter methods (`.getUTCFullYear`, `.getUTCMonth`, etc.)
-  - [x] All setter methods with multi-parameter support (`.setHours(h,m,s,ms)`, etc.)
-  - [x] All UTC setter methods with multi-parameter support
-  - [x] Timezone methods (`.getTimezoneOffset()`)
-  - [x] Locale methods (`.toLocaleString()`, `.toLocaleDateString()`, `.toLocaleTimeString()`)
-  - [x] JSON serialization (`.toJSON()`)
-  - [x] Invalid date handling (NaN timestamps)
-  - [x] Static methods: `Date.now()`, `Date.parse()`, `Date.UTC()`
-- [x] `JSON` Object
-  - [x] `JSON.parse()` - converts JSON strings to JavaScript objects/arrays/primitives
-  - [x] `JSON.stringify()` - converts JavaScript values to JSON strings
-  - [x] **Complete JSON serialization/deserialization support**
-  - [x] Proper type conversion between VM values and JSON representation
-  - [x] Handles all standard JavaScript types (objects, arrays, primitives)
-- [x] **`Map` / `Set` Collections** - **Complete Implementation!**
-  - [x] Map constructor with iterable support
-  - [x] Map methods: get, set, has, delete, clear, forEach
-  - [x] Map iteration: entries, keys, values, Symbol.iterator
-  - [x] Set constructor with iterable support
-  - [x] Set methods: add, has, delete, clear, forEach
-  - [x] Set iteration: entries, keys, values, Symbol.iterator
-  - [x] Proper size tracking for both Map and Set
-- [ ] **`WeakMap` / `WeakSet` Collections** - Planned
-- [x] **Typed Arrays & ArrayBuffer** - **Complete Implementation!**
-  - [x] **ArrayBuffer**: Raw binary data storage with byteLength property
-  - [x] **All TypedArray Types**: Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, Uint8ClampedArray
-  - [x] **TypedArray Methods**: from, of, slice, subarray, set, copyWithin
-  - [x] **Buffer Views**: Multiple typed array views on same underlying ArrayBuffer
-  - [x] **Proper Semantics**: Bounds checking, numeric conversions, typed access
-  - [x] **Integration**: Works with Array methods and iteration protocols
-- [x] **`Promise`** - **Complete Implementation!**
-  - [x] Promise constructor with executor function
-  - [x] Promise states: pending, fulfilled, rejected
-  - [x] Promise methods: then, catch, finally
-  - [x] Promise static methods: resolve, reject, all, race, allSettled, any
-  - [x] Proper microtask scheduling for promise resolution
-  - [x] Integration with async/await syntax
-- [x] **Event Loop & Microtask Queue** - **Complete Implementation!**
-  - [x] Pluggable async runtime for embedders
-  - [x] Microtask queue for Promise resolution
-  - [x] Proper task scheduling and execution order
-  - [x] Top-level await support with event loop integration
-- [x] **`Proxy` & `Reflect`** - **Complete Implementation!**
-  - [x] **Proxy Constructor**: Create proxy objects with handler traps
-  - [x] **All Handler Traps**: get, set, has, deleteProperty, apply, construct, getPrototypeOf, setPrototypeOf, isExtensible, preventExtensions, getOwnPropertyDescriptor, defineProperty, ownKeys
-  - [x] **Proxy.revocable**: Create revocable proxies that can be disabled
-  - [x] **Reflect API**: Complete set of Reflect methods mirroring proxy traps
-  - [x] **Reflect Methods**: get, set, has, deleteProperty, apply, construct, getPrototypeOf, setPrototypeOf, isExtensible, preventExtensions, getOwnPropertyDescriptor, defineProperty, ownKeys
-  - [x] **Deep Integration**: Proxies work with all operators, property access, function calls, and instantiation
-  - [x] **Type System Integration**: Proper TypeScript types for Proxy and Reflect
-- [x] **`eval()` Function** - **Complete Implementation!**
-  - [x] **Direct Eval**: `eval('code')` with access to local scope
-  - [x] **Indirect Eval**: `(0, eval)('code')` or `window.eval('code')` with global scope only
-  - [x] **Scope Integration**: Proper variable resolution in both direct and indirect contexts
-  - [x] **Security Boundary**: Isolated compilation and execution for embedded scenarios
-  - [x] **Type Checking**: Optional type checking of eval'd code
-  - [x] **Error Handling**: Proper error propagation with stack traces
-- [x] **Dynamic `import()`** - **Complete Implementation!**
-  - [x] **Import Expression**: `import('./module.js')` returns Promise<Module>
-  - [x] **Pluggable Module Resolution**: Customizable module loaders for different environments
-  - [x] **Async Module Loading**: Full integration with async/await and Promise chain
-  - [x] **Module Namespace Objects**: Proper module namespace object creation
-  - [x] **Error Handling**: Module loading failures propagate as rejected promises
-- [x] `console` Object
-  - [x] `console.log()` - variadic logging with inspect formatting
-  - [x] `console.error()`, `console.warn()`, `console.info()`, `console.debug()`
-  - [x] `console.trace()` - with trace prefix
-  - [x] `console.clear()` - ANSI clear screen
-  - [x] `console.count()`, `console.countReset()` - counting operations
-  - [x] `console.time()`, `console.timeEnd()` - timing operations
-  - [x] `console.group()`, `console.groupCollapsed()`, `console.groupEnd()` - grouping
+- [x] **Array** - all common methods (map, filter, reduce, sort, etc.)
+- [x] **Object** - static methods (keys, values, entries, assign, fromEntries, hasOwn)
+- [x] **String** - 22+ methods including regex integration
+- [x] **Number** - prototype and static methods, formatting
+- [x] **Math** - 30+ methods
+- [x] **Date** - full implementation with getters, setters, locale methods
+- [x] **JSON** - parse and stringify
+- [x] **Map / Set** - with iteration
+- [x] **TypedArrays & ArrayBuffer** - all types
+- [x] **Promise** - constructor, static methods, microtask scheduling
+- [x] **Proxy & Reflect** - all 13 handler traps
+- [x] **Symbol** - well-known symbols, registry
+- [x] **BigInt** - arithmetic operations
+- [x] **RegExp** - literals, constructor, methods
+- [x] **console** - log, error, warn, time, group, etc.
+- [x] **performance** - now, mark, measure
+- [x] **eval()** - direct and indirect
+- [x] **Dynamic import()** - with pluggable resolution
+- [ ] **WeakMap / WeakSet** - planned
+- [ ] **Timer functions** (`setTimeout`, `setInterval`) - planned
 
-## Built-in System Architecture
+## TypeScript Types
 
-- [x] **Modern Builtin Architecture** - **Recently Refactored!**
-  - [x] Single source of truth for each primitive (consolidated files: `array.go`, `string.go`, `date.go`)
-  - [x] Eliminated hardcoded method types from type checker
-  - [x] Prototype registry system for runtime implementations and type information
-  - [x] TypeScript-compatible `CallableType` for constructors with static methods
-  - [x] Clean separation between constructor and prototype methods
-  - [x] Type-safe builtin method registration with proper signatures
-  - [x] Support for variadic methods, optional parameters, and complex return types
-  - [x] **Function and Object prototype support** - Function.prototype and Object static methods
-  - [x] **Enhanced object type definitions** - callable types with static properties
-  - [x] **Prototype method binding** - proper `this` context for prototype methods
-  - [x] **Legacy Code Removal** - cleaned up outdated initialization patterns
-  - [x] **Improved Initializer System** - streamlined builtin initialization process
-
-## TypeScript Specific Features
-
-### Types
-
-- [x] Basic Types (`number`, `string`, `boolean`, `null`, `undefined`)
-- [x] `any` Type (Implicitly used in checker)
-- [x] `void` Type (Function return type inference)
-- [x] `unknown` Type (assignment restrictions enforced, **type narrowing implemented** with typeof guards and type predicates)
-- [x] `never` Type
-- [x] Array Types (`T[]`)
-- [x] Tuple Types (`[string, number]`) - **Enhanced!**
-  - [x] Basic tuple types with fixed-length elements
-  - [x] Optional elements (`[string, number?]`)
-  - [x] Rest elements (`[string, ...number[]]`)
-  - [x] **Contextual typing integration** - array literals infer as tuples when expected
-  - [x] **Spread syntax compatibility** - tuples work perfectly with function spread calls
-- [x] Enum Types (`enum Color { Red, Green }`) - **Complete Implementation!**
-  - [x] Basic numeric enums with auto-increment (`enum Direction { Up, Down, Left, Right }`)
-  - [x] Custom numeric values (`enum Status { Active = 1, Inactive = 2 }`)
-  - [x] String enums (`enum Color { Red = "red", Green = "green" }`)
-  - [x] Mixed heterogeneous enums (numeric and string members)
-  - [x] Const enums with compile-time inlining
-  - [x] Forward and reverse mapping for numeric enums
-  - [x] Type checking and assignment validation
-  - [x] Integration with keyof operator and type system
-  - [x] Comprehensive test suite with 17+ enum test files covering all scenarios
-- [x] Literal Types (`'hello'`, `123`, `true`)
-- [x] Union Types (`string | number`)
-- [x] Intersection Types (`A & B`)
-- [x] Function Types (`(a: number) => string`)
-- [x] Object Type Literals (`{ name: string; age: number }`)
-- [x] Callable Types (`{ (param: Type): ReturnType }`)
-  - [x] Single call signature in object types
-  - [x] Multiple call signatures (overloaded callable types)
-  - [x] Type checking for callable object assignments
-  - [x] Call expression type checking with callable types
-  - [x] Constructor functions with static methods (e.g., `String` with `String.fromCharCode`)
-- [x] Interfaces (`interface Point { x: number; y: number; }`)
-  - [x] Interface Inheritance (`interface Point3D extends Point2D { z: number; }`)
-  - [x] Multiple Interface Inheritance (`interface Combined extends A, B {}`)
-- [x] Index Signatures (`{ [key: string]: number }`) - **Complete Implementation!**
-  - [x] Object type index signatures with string keys
-  - [x] Interface index signatures with validation
-  - [x] Index signature constraint validation for object literals
-  - [x] Property compatibility checking with index signatures
-  - [x] Integration with structural typing system
-- [x] Type Aliases (`type Name = string;`)
-- [x] Constructor Types (`new () => T`)
-
-### Type Annotations
-
-- [x] Variable Type Annotations (`let x: number;`)
-- [x] Function Parameter Type Annotations
-- [x] Function Return Type Annotations
-- [x] Object property type annotations
-
-### Type Inference
-
-- [x] Variable Initialization (`let x = 10;` // infers number)
-- [x] Function Return Type Inference
-- [x] Contextual Typing - **Major Enhancement!**
-  - [x] Array literal to tuple type inference (`let t: [number, string] = [1, "a"]`)
-  - [x] Spread argument contextual typing (`sum(...[1, 2, 3])` infers `[1, 2, 3]` as tuple)
-  - [x] Function parameter type propagation to arguments
-  - [x] Assignment context type inference
-  - [x] Integration with tuple types and spread syntax
-
-### Type Checking Features
-
-- [x] Assignability Checks
-- [x] Operator Type Checking
-- [x] Function Call Checks (arity, parameter types)
-- [x] Structural Typing for interfaces and object types
-- [x] Interface compatibility and duck typing
-- [x] Constructor function type checking with `new` expressions
-- [x] Optional Properties and Methods
-  - [x] Optional properties in object type literals (`{ name: string; age?: number }`)
-  - [x] Optional methods in object type literals (`{ getValue(): string; clear?(): void }`)
-  - [x] Optional properties in interfaces (`interface User { name: string; email?: string }`)
-  - [x] Optional methods in interfaces (`interface Service { connect(): void; disconnect?(): void }`)
-  - [x] Proper type checking for optional vs required properties
-  - [x] Structural typing compatibility with optional properties
-- [x] Type Narrowing (Control Flow Analysis)
-  - [x] `typeof` guards for `unknown` types (`if (typeof x === "string")`)
-  - [x] `typeof` guards for union types (`string | number` → `string` in then branch, `number` in else branch)
-  - [x] Literal value narrowing (`x === "foo"` narrows `x` to literal type `"foo"`)
-  - [x] Ternary expression narrowing (type guards work in `condition ? consequent : alternative`)
-  - [x] Support for all literal types (string, number, boolean, null, undefined)
-  - [x] Bidirectional literal comparisons (`x === "foo"` and `"foo" === x`)
-  - [x] Proper scoped type environments (narrowed types only visible in respective branches)
-  - [x] Sequential narrowing support (`if/else if` chains)
-  - [x] Function parameter narrowing
-  - [x] Combined typeof and literal narrowing in nested conditions
-  - [x] Modular architecture (narrowing logic separated into `pkg/checker/narrowing.go`)
-  - [x] **Impossible Comparison Detection** (TypeScript-compliant)
-    - [x] Detects comparisons with no type overlap (`"foo" === "bar"` after narrowing)
-    - [x] Flags mixed type comparisons (`number === string`) with proper error messages
-    - [x] Allows defensive null/undefined checks for practical programming
-    - [x] Works with all comparison operators (`===`, `!==`, `==`, `!=`)
-    - [x] Integrated with union type analysis for precise overlap detection
-- [x] Type Guards (`typeof`, `instanceof`, custom) - **Enhanced!**
-  - [x] `typeof` guards with comprehensive type narrowing
-  - [x] `instanceof` guards for constructor type checking
-  - [x] **Custom type predicates** with `is` keyword (`x is string`)
-  - [x] Integration with control flow analysis
-  - [x] Support for all literal types and union type narrowing
-- [ ] Strict Null Checks (`strictNullChecks` compiler option)
+### Basic Types
+- [x] `number`, `string`, `boolean`, `null`, `undefined`
+- [x] `any`, `void`, `unknown`, `never`
+- [x] Array types (`T[]`), tuple types
+- [x] Enum types (numeric, string, const)
+- [x] Literal types
+- [x] Union and intersection types
+- [x] Function types
+- [x] Object type literals
+- [x] Callable types
+- [x] Interfaces with inheritance
+- [x] Index signatures
+- [x] Type aliases
+- [x] Constructor types
 
 ### Advanced Types
+- [x] Generics - functions, classes, constraints, inference
+- [x] Conditional types (`T extends U ? X : Y`)
+- [x] Mapped types (`{ [P in K]: T }`)
+- [x] Utility types (Partial, Required, Readonly, Pick, Record, Omit, Extract, Exclude, NonNullable, ReturnType, Parameters)
+- [x] `keyof` operator
+- [x] Indexed access types (`T[K]`)
+- [x] Type predicates (`x is T`)
+- [x] Template literal types
+- [x] Type-level `typeof`
+- [x] `infer` keyword
 
-- [x] **Generics** - **Complete Implementation!**
-  - [x] Generic type references (`Array<T>`, `Promise<T>`)
-  - [x] Generic function declarations (`function identity<T>(arg: T): T`)
-  - [x] Generic arrow functions (`<T>(x: T): T => x`)
-  - [x] Type parameter constraints (`T extends string`)
-  - [x] **Constraint validation** - enforces type argument constraints during instantiation
-  - [x] **Type inference** - automatic type argument deduction
-  - [x] Multiple type parameters (`<T, U>`)
-  - [x] Built-in generic types (Array, Promise)
-  - [x] **User-defined generic types** - interfaces and type aliases with generics
-  - [x] **Generic classes** - `class Container<T>` with type parameters and inference
-  - [x] **Recursive generic classes** - `class Node<T> { next?: Node<T>; }` with self-references and inheritance
-  - [x] Complex generic expressions and nested generics
-  - [x] TypeScript-compliant error handling
-  - [x] Complete integration with type system and contextual typing
-  - [x] **Comprehensive test suite** - 19+ generic-related tests covering all scenarios including recursive classes
-  - [x] **Zero runtime overhead** - full type erasure
-- [x] Conditional Types (`T extends U ? X : Y`) - **Complete Implementation!**
-  - [x] Basic conditional type syntax and parsing
-  - [x] Type resolution with proper substitution timing
-  - [x] Advanced conditional types (NonNullable, Extract, Exclude)
-  - [x] Delayed computation until type parameters are resolved
-  - [x] Integration with type system and generic constraints
-- [x] Mapped Types (`{ [P in K]: T }`) - **Complete Implementation!**
-  - [x] Basic mapped type syntax with keyof integration
-  - [x] Optional and readonly modifiers support
-  - [x] **Mapped type expansion** - converts to concrete object types
-  - [x] Type parameter substitution (`T[P]` patterns)
-  - [x] Assignment checking with automatic expansion
-  - [x] Integration with utility types and complex expressions
-- [x] **Utility Types** - **Comprehensive Implementation!**
-  - [x] **Property Manipulation Types**
-    - [x] `Partial<T>` - Makes all properties optional (`{ name?: string; age?: number }`)
-    - [x] `Required<T>` - Makes all properties required (removes optional modifiers)
-    - [x] `Readonly<T>` - Makes all properties readonly (prevents modification)
-  - [x] **Property Selection Types**
-    - [x] `Pick<T, K>` - Selects subset of properties from T (`Pick<User, "name" | "email">`)
-    - [x] `Record<K, V>` - Creates object type with specific keys and value type (`Record<"a" | "b", number>`)
-    - [x] `Omit<T, K>` - Excludes specific properties from T (`Omit<User, "password" | "secret">`)
-  - [x] **Conditional Utility Types**
-    - [x] `Extract<T, U>` - Extracts types from T that are assignable to U
-    - [x] `Exclude<T, U>` - Excludes types from T that are assignable to U  
-    - [x] `NonNullable<T>` - Removes null and undefined from union types
-  - [x] **Function Utility Types** - **Complete Implementation!**
-    - [x] `ReturnType<T>` - Extracts return type from function type (implemented!)
-    - [x] `Parameters<T>` - Extracts parameter types as tuple from function type
-    - [x] `ConstructorParameters<T>` - Extracts constructor parameter types
-    - [ ] `InstanceType<T>` - Extracts instance type from constructor function (partial - needs return type inference fix)
-    - [ ] `ThisParameterType<T>` - Extracts this parameter type from function (advanced feature)
-    - [ ] `OmitThisParameter<T>` - Removes this parameter from function type (advanced feature)
-  - [x] **Working Implementation Features**
-    - [x] Real assignment and type checking validation
-    - [x] Proper mapped type expansion for all implemented utility types
-    - [x] Integration with generic type system and constraints
-    - [x] TypeScript-compliant behavior and error messages
-- [x] **keyof Operator** - **Complete Implementation!**
-  - [x] `keyof` type operator for extracting object keys
-  - [x] Resolution to union of literal types (`keyof Person` → `"name" | "age"`)
-  - [x] Integration with mapped types and indexed access types
-  - [x] Type checking and assignment validation
-  - [x] Support for object types and interfaces
-- [x] **Indexed Access Types** - **Complete Implementation!**
-  - [x] Property access syntax (`T[K]`) in type contexts
-  - [x] Direct property access (`Person["name"]` → `string`)
-  - [x] Union key access (`Person["name" | "age"]` → `string | number`)
-  - [x] Integration with keyof operator (`Person[keyof Person]`)
-  - [x] Type parameter support in mapped type contexts (`T[P]`)
-- [x] **Type Predicates** - **Complete Implementation!**
-  - [x] `is` keyword for user-defined type guards
-  - [x] Function return type predicates (`x is string`)
-  - [x] Integration with type narrowing system
-  - [x] Custom type guard functions
-  - [x] Control flow analysis with type predicates
-- [x] **Template Literal Types** - **Complete Implementation!**
-  - [x] Template literal syntax in type contexts (`` `Hello ${T}!` ``)
-  - [x] String manipulation at compile time
-  - [x] Multiple interpolations and complex patterns
-  - [x] Type computation engine for literal concatenation
-  - [x] Integration with generic type parameters
-- [x] **Type-level `typeof`** - **Complete Implementation!**
-  - [x] Variable type extraction (`type T = typeof myVariable`)
-  - [x] Function type extraction (`type F = typeof myFunction`)
-  - [x] Object type extraction (`type O = typeof myObject`)
-  - [x] Integration with conditional types and generics
-  - [x] Proper scope resolution and symbol lookup
-  - [x] Works with utility types like `ReturnType<typeof func>`
-- [x] **`infer` Keyword** - **Complete Implementation!**
-  - [x] Basic inference (`T extends (infer U)[] ? U : never`)
-  - [x] Function return type inference (`T extends (...args: any[]) => infer R ? R : never`)
-  - [x] Function parameter type inference (`T extends (...args: infer P) => any ? P : never`)
-  - [x] Constructor parameter type inference (`T extends new (...args: infer P) => any ? P : never`)
-  - [x] Lexer and parser support for `infer` keyword
-  - [x] Type checker integration with conditional type resolution
-  - [x] Inference constraint matching and type capture
-  - [x] Built-in utility type implementations (`ReturnType<T>`, `Parameters<T>`, `ConstructorParameters<T>`)
-  - [x] Multiple inference sites with same name (creates union types correctly)
-  - [x] Rest parameter inference for function utility types
-  - [ ] Constructor return type inference for `InstanceType<T>` (needs enhancement)
-  - [ ] Complex inference patterns with nested conditionals (advanced feature)
+### Type Checking
+- [x] Assignability checks
+- [x] Operator type checking
+- [x] Function call checks
+- [x] Structural typing
+- [x] Type narrowing with `typeof`, `instanceof`, literals
+- [x] Control flow analysis
 
-### Classes - **Complete Implementation!**
+## Classes
 
-- [x] **Class Declarations** (`class MyClass {}`) - **Full Support!**
-  - [x] Basic class syntax with methods and properties
-  - [x] Class expressions (`let X = class {}`)
-  - [x] Named and anonymous class expressions
-  - [x] Proper hoisting and scope handling
-- [x] **Constructors** (`constructor() {}`) - **Enhanced!**
-  - [x] Basic constructor syntax with parameters
-  - [x] Constructor overloads (TypeScript-style signatures)
-  - [x] Optional parameters and default values
-  - [x] Type annotations for constructor parameters
-  - [x] Field initializers executed during construction
-- [x] **Properties** - **Comprehensive Support!**
-  - [x] Property declarations with type annotations (`name: string;`)
-  - [x] Property initializers (`score: number = 100;`)
-  - [x] Optional properties (`email?: string;`)
-  - [x] Computed property names and string keys
-  - [x] Property access and assignment with type checking
-- [x] **Methods** - **Full Implementation!**
-  - [x] Instance methods with `this` context
-  - [x] Method overloads (TypeScript-style signatures)
-  - [x] Type annotations for parameters and return types
-  - [x] Optional parameters and default values in methods
-  - [x] Method calls with proper type checking
-- [x] **Inheritance** (`extends`) - **Complete with Dynamic Arity!**
-  - [x] Class inheritance with `extends` keyword
-  - [x] Super constructor calls (`super()`) with dynamic arity detection
-  - [x] Super method calls (`super.methodName()`) with proper `this` binding
-  - [x] Method inheritance through prototype chain
-  - [x] Constructor inheritance and parameter forwarding
-- [x] **Access Modifiers** (`public`, `private`, `protected`) - **Full Enforcement!**
-  - [x] `private` members (class-only access with compile-time enforcement)
-  - [x] `protected` members (class and subclass access)
-  - [x] `public` members (default, accessible everywhere)
-  - [x] TypeScript-compatible error messages for access violations
-  - [x] Zero runtime overhead (compile-time only checking)
-  - [x] Works with both static and instance members
-- [x] **Static Members** (`static`) - **Complete Support!**
-  - [x] Static properties with type annotations
-  - [x] Static methods with proper type checking
-  - [x] Static access modifiers (`private static`, `protected static`)
-  - [x] Static member inheritance
-  - [x] Constructor function static property attachment
-- [x] **Abstract Classes/Methods** (`abstract`) - **Full Implementation!**
-  - [x] Abstract class declarations (`abstract class Shape`)
-  - [x] Abstract method signatures (`abstract area(): number;`)
-  - [x] Instantiation prevention for abstract classes
-  - [x] Abstract method inheritance requirements
-  - [x] Mixed abstract and concrete members
-- [x] **`implements` Clause** (Interfaces) - **Complete with Validation!**
-  - [x] Single interface implementation (`class Bird implements Flyable`)
-  - [x] Multiple interface implementation (`class Duck implements Flyable, Swimmable`)
-  - [x] Interface property and method requirement enforcement
-  - [x] Structural typing validation for implementations
-  - [x] TypeScript-compliant error messages for missing implementations
-- [x] **Generic Classes** - **Complete with Recursive Support!**
-  - [x] Generic class declarations (`class Container<T>`)
-  - [x] Multiple type parameters (`class Pair<T, U>`)
-  - [x] Type parameter constraints (`class NumberContainer<T extends number>`)
-  - [x] **Automatic type inference** (`new Container(42)` infers `T` as `number`)
-  - [x] Explicit type arguments (`new Container<string>("hello")`)
-  - [x] **Recursive generic classes** - `class Node<T> { next?: Node<T>; }` with self-references
-  - [x] **Generic inheritance** - `class Stack<T> extends Container<T>` with proper type resolution
-  - [x] Generic methods and properties work correctly
-  - [x] Getters/setters fully functional in generic classes
-- [x] **Advanced Features**
-  - [x] **Getters and Setters** (`get`/`set` syntax with automatic property interception)
-  - [x] **Override keyword** (`override` with inheritance validation)
-  - [x] **Readonly properties** (`readonly` with assignment enforcement)
-  - [x] **Constructor and method overloads** (TypeScript-style function signatures)
-  - [x] **Property parameter shortcuts** (`constructor(public name: string)`) - **Complete!**
-- [x] **Comprehensive Integration**
-  - [x] **51+ class-related tests** covering all features and edge cases including recursive generics
-  - [x] Full TypeScript compatibility for class features
-  - [x] Integration with interface system and structural typing
-  - [x] Complete type checking and error reporting
-  - [x] Production-ready implementation with proper VM integration
+- [x] Class declarations and expressions
+- [x] Constructors with overloads
+- [x] Properties (with initializers, optional)
+- [x] Methods
+- [x] Inheritance (`extends`) with `super`
+- [x] Access modifiers (`public`, `private`, `protected`)
+- [x] Static members
+- [x] Abstract classes/methods
+- [x] `implements` clause
+- [x] Generic classes (including recursive)
+- [x] Getters/setters
+- [x] `override` keyword
+- [x] `readonly` properties
+- [x] Property parameter shortcuts (`constructor(public name: string)`)
+- [x] Private fields (`#private`)
+- [ ] Decorators - planned
 
-### Decorators
+## Not Implemented
 
 - [ ] Decorators (`@decorator`)
-
-### Namespaces
-
 - [ ] Namespaces (`namespace N {}`)
+- [ ] Declaration files (`.d.ts`)
+- [ ] Triple-slash directives
+- [ ] Path mapping
+- [ ] Project references
+- [ ] WeakMap/WeakSet
+- [ ] Timer functions
+- [ ] Strict null checks option
+- [ ] Sparse arrays (large index optimization)
 
-### Compiler Options
+## VM Optimizations (Future)
 
-- [ ] Various `tsconfig.json` options (`target`, `strict`, etc.)
+- [ ] **Dynamic Stack Expansion** - Currently uses fixed 1024-frame call stack (~6MB). Could use dynamic expansion:
+  - Start with smaller allocation (e.g., 64 frames) to save memory
+  - Grow in chunks when needed
+  - **Challenge**: Upvalues store raw pointers into register stack. Options:
+    1. Change upvalues from pointers to (frame_index, register_index) pairs
+    2. Use chunked allocator that doesn't move memory
+    3. Close all open upvalues before resizing
 
-## Additional Missing Features
+- [ ] **Tail Call Optimization** - Already implemented, could extend to more patterns
 
-### Modern ECMA/TypeScript Features
+- [ ] **Inline Caching Improvements** - Current IC validates property names; could add polymorphic caching
 
-- [x] **Private Class Fields** (`#private`) - **Complete Implementation!**
-  - [x] JavaScript-style private field declarations (`#privateField: string = "value"`)
-  - [x] Private field access within class methods (`this.#privateField`)
-  - [x] Static private fields support (`static #counter: number = 0`)
-  - [x] Lexer support for `#identifier` token type with proper context handling
-  - [x] Parser integration with class body parsing and access expression handling
-  - [x] Type checking integration with existing private field infrastructure
-  - [x] Compiler support mapping #private to IsPrivate: true property system
-  - [x] Runtime privacy enforcement (same as TypeScript `private` keyword)
-  - [x] Works with inheritance, readonly modifiers, and all class features
-  - [x] Comprehensive test suite covering all scenarios and edge cases
-- [x] **Optional Chaining for Calls** (`func?.()`, `obj?.[expr]`) - **Complete Implementation!**
-  - [x] Optional direct function calls (`func?.()`) with null/undefined short-circuiting
-  - [x] Optional computed property access (`obj?.[expr]`) with dynamic key support
-  - [x] Integration with existing optional chaining (`obj?.prop?.method?.()`)
-  - [x] Proper type checking with union types (Result | undefined)
-  - [x] VM optimization with OpIsNullish for efficient null checks
-  - [x] Complete parser, compiler, and runtime support
-- [x] **Dynamic Imports** (`import()`) - **Complete Implementation!**
-  - [x] Import expressions with promise-based API
-  - [x] Pluggable module resolution for different environments
-  - [x] Full integration with async/await
-- [x] **Top-level Await** - **Complete Implementation!**
-  - [x] Await at module scope without async function wrapper
-  - [x] Module execution deferred until awaited promises resolve
-  - [x] Integration with ES modules and dynamic imports
-- [x] **Property Parameter Shortcuts** (`constructor(public name: string)`) - **Complete Implementation!**
-  - [x] Parser support for access modifiers in constructor parameters
-  - [x] Context-sensitive parsing (only allowed in constructors, not regular functions)
-  - [x] Type checker integration with automatic property synthesis
-  - [x] Compiler support for automatic property assignments
-  - [x] Full access control enforcement (public, private, protected, readonly)
-  - [x] Integration with existing class property system
-  - [x] Comprehensive test coverage with access control validation
-- [x] **Satisfies Operator** (`value satisfies Type`) - **Complete Implementation!**
-  - [x] SATISFIES token and keyword support in lexer
-  - [x] SatisfiesExpression AST node and parser integration
-  - [x] Type checking with strict object literal excess property validation
-  - [x] Preserves original expression type (unlike `as` which changes type)
-  - [x] Compiler support with runtime no-op behavior
-  - [x] TypeScript-compliant error messages for type mismatches
-  - [x] Comprehensive test suite covering basic usage, errors, and edge cases
-
-### Runtime Features
-
-- [x] **Event Loop** - **Complete Implementation!**
-  - [x] Pluggable async runtime architecture for embedding flexibility
-  - [x] Default async runtime with goroutine-based scheduling
-  - [x] Task execution and coordination
-  - [x] Integration with microtask queue for Promise resolution
-- [x] **Microtask Queue** - **Complete Implementation!**
-  - [x] Proper microtask scheduling for Promise callbacks
-  - [x] Queue management with FIFO ordering
-  - [x] Integration with async/await execution model
-  - [x] Correct execution order per ECMAScript specification
-- [ ] **Timer Functions** (`setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`) - Planned
-- [x] **Global Object** (`globalThis`) - **Partial Implementation**
-  - [x] globalThis reference to global scope
-  - [ ] Full browser `window` object (not applicable for server runtime)
-  - [ ] Node.js `global` object (planned for Node emulation layer)
-
-### Extended Built-ins
-
-- [ ] **Error Stack Traces Enhancement** - More detailed stack information
-- [x] **Performance API** - **Complete Implementation!**
-  - [x] `performance.now()` - High-resolution timestamp with sub-millisecond precision
-  - [x] `performance.mark()` - Create named performance marks
-  - [x] `performance.measure()` - Measure duration between marks or from origin
-  - [x] `performance.getEntriesByType()` - Get performance entries by type (mark/measure)
-  - [x] `performance.getEntriesByName()` - Get performance entries by name
-  - [x] `performance.clearMarks()` - Clear performance marks
-  - [x] `performance.clearMeasures()` - Clear performance measures
-  - [x] Complete TypeScript integration with proper PerformanceEntry types
-
-### TypeScript Compiler Features
-
-- [ ] **Declaration Files** (`.d.ts`) - Type-only declarations
-- [ ] **Triple-Slash Directives** (`/// <reference path="..." />`)
-- [ ] **Module Resolution Strategies** (Node.js, Classic)
-- [ ] **Path Mapping** (`paths` in tsconfig.json)
-- [ ] **Project References** - Multi-project builds
-
----
-
-## Summary
-
-**Paserati is production-ready for ES2025 TypeScript/JavaScript execution.**
-
-**Test262 Compliance: 74.2%** (17,548 of 23,634 language suite tests passing)
-
-**What's Complete:**
-- ✅ Full async/await with microtask scheduling and top-level await
-- ✅ Complete Promise implementation with all static methods
-- ✅ ES Modules with dynamic import() and pluggable resolution
-- ✅ Eval (direct and indirect) with proper scoping
-- ✅ Proxy and Reflect with all 13 handler traps
-- ✅ Generators and async generators with full iterator protocol
-- ✅ Classes with private fields, static blocks, inheritance, generics
-- ✅ Advanced TypeScript types (generics, conditional, mapped, template literals, infer)
-- ✅ Modern operators (optional chaining, nullish coalescing, spread/rest)
-- ✅ Complete destructuring (arrays, objects, parameters)
-- ✅ Map, Set, TypedArrays, ArrayBuffer, Symbol, BigInt, RegExp
-- ✅ Comprehensive built-ins (Object, Array, String, Number, Date, Math, JSON, console, performance)
-
-**What's Missing:**
-- ⚠️ WeakMap/WeakSet (planned)
-- ⚠️ Decorators (planned)
-- ⚠️ Timer functions - setTimeout/setInterval (planned)
-- ⚠️ Some ASI edge cases (low priority)
-- ⚠️ Import attributes (experimental ES feature, low priority)
-
-**Use Cases:**
-- Embedded scripting in Go applications with execution quotas and permission system
-- TypeScript-to-bytecode AOT compilation for deployment
-- ES2025 runtime with pluggable async executors and module resolution
-- Future: Deno/Node emulation layers for compatibility (90%+ compliance target)
+- [ ] **Register Spilling** - Compiler panics on "ran out of registers" for very large functions (e.g., earley-boyer.js)
