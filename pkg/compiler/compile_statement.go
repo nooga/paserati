@@ -208,10 +208,23 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
 			isValueFunc = true
 			// --- Handle var f = function g() {} or var f = function() {} ---
-			// 1. Define the *variable name (f)* temporarily for potential recursion
-			//    within the function body (e.g., recursive anonymous function).
-			// debug disabled
-			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+
+			// Check if variable was already pre-defined during block var hoisting
+			// (this happens when nested functions capture this variable as an upvalue)
+			var closureReg Register
+			preDefinedReg := nilRegister
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
+				// Variable was pre-defined, reuse its register for the closure
+				preDefinedReg = sym.Register
+				closureReg = preDefinedReg
+				debugPrintf("// [VarStmt] Function '%s' was pre-defined in R%d, reusing register\n", node.Name.Value, preDefinedReg)
+			} else {
+				// 1. Define the *variable name (f)* temporarily for potential recursion
+				//    within the function body (e.g., recursive anonymous function).
+				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+				// Allocate new register for the closure
+				closureReg = c.regAlloc.Alloc()
+			}
 
 			// 2. Compile the function literal body.
 			//    Pass the variable name (f) as the hint for the function object's name
@@ -221,18 +234,19 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				// Error already added to c.errors by compileFunctionLiteral
 				return BadRegister, nil // Return nil error here, main error is tracked
 			}
-			// 3. Create the closure object
-			closureReg := c.regAlloc.Alloc()
-			// debug disabled
+			// 3. Create the closure object in the appropriate register
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-			// debug disabled
-			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+			//    (only needed if we didn't pre-define with a register)
+			if preDefinedReg == nilRegister {
+				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+			}
 
 			// Pin the register if inside a function, since local variables can be captured by upvalues
 			// and the register must remain valid for subsequent uses of this variable
-			if c.enclosing != nil {
+			// (only needed if we allocated a new register)
+			if c.enclosing != nil && preDefinedReg == nilRegister {
 				c.regAlloc.Pin(closureReg)
 			}
 
