@@ -16,6 +16,7 @@ const (
 type PropCacheEntry struct {
 	shape        *Shape // The shape this cache entry is valid for
 	shapeVersion uint32 // Version guard for the shape
+	propName     string // The property name this entry is valid for (for dynamic access validation)
 	// For proto hits
 	isProto       bool
 	holderShape   *Shape
@@ -46,26 +47,29 @@ type ICacheStats struct {
 }
 
 // lookupInCache performs a property lookup using the inline cache
-func (ic *PropInlineCache) lookupInCache(shape *Shape) (int, bool) {
+// propName is used to validate the cache entry matches the requested property
+func (ic *PropInlineCache) lookupInCache(shape *Shape, propName string) (int, bool) {
 	switch ic.state {
 	case CacheStateUninitialized:
 		return -1, false
 	case CacheStateMonomorphic:
-		if ic.entries[0].shape == shape && ic.entries[0].shapeVersion == shape.version {
+		entry := &ic.entries[0]
+		if entry.shape == shape && entry.shapeVersion == shape.version && entry.propName == propName {
 			ic.hitCount++
-			return ic.entries[0].offset, true
+			return entry.offset, true
 		}
 		ic.missCount++
 		return -1, false
 	case CacheStatePolymorphic:
 		for i := 0; i < ic.entryCount; i++ {
-			if ic.entries[i].shape == shape && ic.entries[i].shapeVersion == shape.version {
+			entry := &ic.entries[i]
+			if entry.shape == shape && entry.shapeVersion == shape.version && entry.propName == propName {
 				ic.hitCount++
 				// Move hit entry to front for better cache locality
 				if i > 0 {
-					entry := ic.entries[i]
+					entryCopy := ic.entries[i]
 					copy(ic.entries[1:i+1], ic.entries[0:i])
-					ic.entries[0] = entry
+					ic.entries[0] = entryCopy
 				}
 				return ic.entries[0].offset, true
 			}
@@ -80,26 +84,28 @@ func (ic *PropInlineCache) lookupInCache(shape *Shape) (int, bool) {
 	return -1, false
 }
 
-// lookupEntry returns the full cache entry for the given base shape if valid.
-func (ic *PropInlineCache) lookupEntry(shape *Shape) (*PropCacheEntry, bool) {
+// lookupEntry returns the full cache entry for the given base shape and propName if valid.
+func (ic *PropInlineCache) lookupEntry(shape *Shape, propName string) (*PropCacheEntry, bool) {
 	switch ic.state {
 	case CacheStateUninitialized:
 		return nil, false
 	case CacheStateMonomorphic:
-		if ic.entries[0].shape == shape && ic.entries[0].shapeVersion == shape.version {
+		entry := &ic.entries[0]
+		if entry.shape == shape && entry.shapeVersion == shape.version && entry.propName == propName {
 			ic.hitCount++
-			return &ic.entries[0], true
+			return entry, true
 		}
 		ic.missCount++
 		return nil, false
 	case CacheStatePolymorphic:
 		for i := 0; i < ic.entryCount; i++ {
-			if ic.entries[i].shape == shape && ic.entries[i].shapeVersion == shape.version {
+			entry := &ic.entries[i]
+			if entry.shape == shape && entry.shapeVersion == shape.version && entry.propName == propName {
 				ic.hitCount++
 				if i > 0 {
-					entry := ic.entries[i]
+					entryCopy := ic.entries[i]
 					copy(ic.entries[1:i+1], ic.entries[0:i])
-					ic.entries[0] = entry
+					ic.entries[0] = entryCopy
 				}
 				return &ic.entries[0], true
 			}
@@ -113,31 +119,31 @@ func (ic *PropInlineCache) lookupEntry(shape *Shape) (*PropCacheEntry, bool) {
 	return nil, false
 }
 
-// updateCache updates the inline cache with a new shape+offset entry
-func (ic *PropInlineCache) updateCache(shape *Shape, offset int, isAccessor bool, writable bool) {
+// updateCache updates the inline cache with a new shape+propName+offset entry
+func (ic *PropInlineCache) updateCache(shape *Shape, propName string, offset int, isAccessor bool, writable bool) {
 	switch ic.state {
 	case CacheStateUninitialized:
 		// First entry - transition to monomorphic
 		ic.state = CacheStateMonomorphic
-		ic.entries[0] = PropCacheEntry{shape: shape, shapeVersion: shape.version, offset: offset, isAccessor: isAccessor, writable: writable}
+		ic.entries[0] = PropCacheEntry{shape: shape, shapeVersion: shape.version, propName: propName, offset: offset, isAccessor: isAccessor, writable: writable}
 		ic.entryCount = 1
 	case CacheStateMonomorphic:
-		// Check if it's the same shape (update offset)
-		if ic.entries[0].shape == shape {
+		// Check if it's the same shape AND property name (update offset)
+		if ic.entries[0].shape == shape && ic.entries[0].propName == propName {
 			ic.entries[0].offset = offset
 			ic.entries[0].shapeVersion = shape.version
 			ic.entries[0].isAccessor = isAccessor
 			ic.entries[0].writable = writable
 			return
 		}
-		// Different shape - transition to polymorphic
+		// Different shape or property name - transition to polymorphic
 		ic.state = CacheStatePolymorphic
-		ic.entries[1] = PropCacheEntry{shape: shape, shapeVersion: shape.version, offset: offset, isAccessor: isAccessor, writable: writable}
+		ic.entries[1] = PropCacheEntry{shape: shape, shapeVersion: shape.version, propName: propName, offset: offset, isAccessor: isAccessor, writable: writable}
 		ic.entryCount = 2
 	case CacheStatePolymorphic:
-		// Check if shape already exists
+		// Check if shape+propName already exists
 		for i := 0; i < ic.entryCount; i++ {
-			if ic.entries[i].shape == shape {
+			if ic.entries[i].shape == shape && ic.entries[i].propName == propName {
 				ic.entries[i].offset = offset
 				ic.entries[i].shapeVersion = shape.version
 				ic.entries[i].isAccessor = isAccessor
@@ -145,9 +151,9 @@ func (ic *PropInlineCache) updateCache(shape *Shape, offset int, isAccessor bool
 				return
 			}
 		}
-		// New shape
+		// New shape/propName combination
 		if ic.entryCount < 4 {
-			ic.entries[ic.entryCount] = PropCacheEntry{shape: shape, shapeVersion: shape.version, offset: offset, isAccessor: isAccessor, writable: writable}
+			ic.entries[ic.entryCount] = PropCacheEntry{shape: shape, shapeVersion: shape.version, propName: propName, offset: offset, isAccessor: isAccessor, writable: writable}
 			ic.entryCount++
 		} else {
 			// Too many shapes - transition to megamorphic
@@ -161,29 +167,29 @@ func (ic *PropInlineCache) updateCache(shape *Shape, offset int, isAccessor bool
 }
 
 // updateCacheProto updates with a proto-holder guarded entry
-func (ic *PropInlineCache) updateCacheProto(baseShape *Shape, holderShape *Shape, offset int, depth int8, isAccessor bool) {
+func (ic *PropInlineCache) updateCacheProto(baseShape *Shape, propName string, holderShape *Shape, offset int, depth int8, isAccessor bool) {
 	switch ic.state {
 	case CacheStateUninitialized:
 		ic.state = CacheStateMonomorphic
-		ic.entries[0] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+		ic.entries[0] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
 		ic.entryCount = 1
 	case CacheStateMonomorphic:
-		if ic.entries[0].shape == baseShape {
-			ic.entries[0] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+		if ic.entries[0].shape == baseShape && ic.entries[0].propName == propName {
+			ic.entries[0] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
 			return
 		}
 		ic.state = CacheStatePolymorphic
-		ic.entries[1] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+		ic.entries[1] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
 		ic.entryCount = 2
 	case CacheStatePolymorphic:
 		for i := 0; i < ic.entryCount; i++ {
-			if ic.entries[i].shape == baseShape {
-				ic.entries[i] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+			if ic.entries[i].shape == baseShape && ic.entries[i].propName == propName {
+				ic.entries[i] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
 				return
 			}
 		}
 		if ic.entryCount < 4 {
-			ic.entries[ic.entryCount] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+			ic.entries[ic.entryCount] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
 			ic.entryCount++
 		} else {
 			ic.state = CacheStateMegamorphic

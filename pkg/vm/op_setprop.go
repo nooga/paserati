@@ -290,7 +290,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		po := AsPlainObject(*objVal)
 
 		// Try cache lookup for existing property write (check accessor/writable flags)
-		if entry, hit := cache.lookupEntry(po.shape); hit {
+		if entry, hit := cache.lookupEntry(po.shape, propName); hit {
 			if debugOpSetProp {
 				fmt.Printf("[DEBUG opSetProp] Cache HIT for prop=%q: shape=%p, offset=%d, writable=%v, isAccessor=%v\n",
 					propName, po.shape, entry.offset, entry.writable, entry.isAccessor)
@@ -461,7 +461,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// or if shape changed (new property added)
 		for _, field := range po.shape.fields {
 			if field.name == propName {
-				cache.updateCache(po.shape, field.offset, field.isAccessor, field.writable)
+				cache.updateCache(po.shape, propName, field.offset, field.isAccessor, field.writable)
 				break
 			}
 		}
@@ -728,7 +728,8 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	}
 
 	// Fast path: cache hit
-	if entry, hit := cache.lookupEntry(po.shape); hit {
+	symPropName := symKey.ToString() // Use symbol string representation for cache key
+	if entry, hit := cache.lookupEntry(po.shape, symPropName); hit {
 		vm.cacheStats.totalHits++
 		switch cache.state {
 		case CacheStateMonomorphic:
@@ -828,7 +829,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 				po.properties[f.offset] = *valueToSet
 			}
 			// Update cache with flags
-			cache.updateCache(po.shape, f.offset, f.isAccessor, f.writable)
+			cache.updateCache(po.shape, symPropName, f.offset, f.isAccessor, f.writable)
 			updated = true
 			break
 		}
@@ -847,7 +848,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	// Find new field to cache
 	for _, f := range po.shape.fields {
 		if f.keyKind == KeyKindSymbol && f.symbolVal.obj == symKey.obj {
-			cache.updateCache(po.shape, f.offset, f.isAccessor, f.writable)
+			cache.updateCache(po.shape, symPropName, f.offset, f.isAccessor, f.writable)
 			break
 		}
 	}

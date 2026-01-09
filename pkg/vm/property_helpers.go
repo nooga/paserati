@@ -594,7 +594,7 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 						if entry.offset < len(entry.prototypeObj.shape.fields) {
 							isAcc = entry.prototypeObj.shape.fields[entry.offset].isAccessor
 						}
-						cache.updateCacheProto(po.shape, entry.prototypeObj.shape, entry.offset, int8(entry.prototypeDepth), isAcc)
+						cache.updateCacheProto(po.shape, propName, entry.prototypeObj.shape, entry.offset, int8(entry.prototypeDepth), isAcc)
 					}
 					return entry.prototypeObj.properties[entry.offset], true
 				}
@@ -631,7 +631,7 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 							if offset < len(current.shape.fields) {
 								isAcc = current.shape.fields[offset].isAccessor
 							}
-							cache.updateCacheProto(po.shape, current.shape, offset, int8(depth), isAcc)
+							cache.updateCacheProto(po.shape, propName, current.shape, offset, int8(depth), isAcc)
 						}
 					}
 				}
@@ -684,7 +684,7 @@ func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInli
 					if entry.offset < len(entry.prototypeObj.shape.fields) {
 						isAcc = entry.prototypeObj.shape.fields[entry.offset].isAccessor
 					}
-					cache.updateCacheProto(po.shape, entry.prototypeObj.shape, entry.offset, int8(entry.prototypeDepth), isAcc)
+					cache.updateCacheProto(po.shape, propName, entry.prototypeObj.shape, entry.offset, int8(entry.prototypeDepth), isAcc)
 				}
 				return entry.prototypeObj, entry.offset, entry.prototypeObj.shape.fields[entry.offset].isAccessor, true
 			}
@@ -704,7 +704,7 @@ func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInli
 						protoCache.Update(po.shape, current, depth, f.offset, Undefined, false)
 					}
 					if cache != nil {
-						cache.updateCacheProto(po.shape, current.shape, f.offset, int8(depth), f.isAccessor)
+						cache.updateCacheProto(po.shape, propName, current.shape, f.offset, int8(depth), f.isAccessor)
 					}
 					return current, f.offset, f.isAccessor, true
 				}

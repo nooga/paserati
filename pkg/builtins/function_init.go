@@ -186,9 +186,31 @@ func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			for i := 0; i < arrayObj.Length(); i++ {
 				functionArgs[i] = arrayObj.Get(i)
 			}
-		} else if !argsArray.IsUndefined() {
-			// TODO: Handle array-like objects (with length property)
-			// For now, treat non-array as empty arguments
+		} else if argsArray.Type() == vm.TypeArguments {
+			// Handle arguments object - use Length() and Get() methods
+			argsObj := argsArray.AsArguments()
+			length := argsObj.Length()
+			functionArgs = make([]vm.Value, length)
+			for i := 0; i < length; i++ {
+				functionArgs[i] = argsObj.Get(i)
+			}
+		} else if argsArray.Type() == vm.TypeObject {
+			// Handle array-like objects (with length property)
+			obj := argsArray.AsPlainObject()
+			if lengthVal, hasLength := obj.GetOwn("length"); hasLength {
+				length := int(lengthVal.ToInteger())
+				functionArgs = make([]vm.Value, length)
+				for i := 0; i < length; i++ {
+					key := vm.NewString(fmt.Sprintf("%d", i)).ToString()
+					if val, exists := obj.GetOwn(key); exists {
+						functionArgs[i] = val
+					} else {
+						functionArgs[i] = vm.Undefined
+					}
+				}
+			}
+		} else if !argsArray.IsUndefined() && argsArray.Type() != vm.TypeNull {
+			// Non-object, non-undefined/null - treat as empty
 			functionArgs = []vm.Value{}
 		}
 	}

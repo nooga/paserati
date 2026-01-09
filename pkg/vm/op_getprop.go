@@ -240,7 +240,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		po := AsPlainObject(*objVal)
 
 		// Try cache lookup first (full entry): handle own and proto hits
-		if entry, hit := cache.lookupEntry(po.shape); hit {
+		if entry, hit := cache.lookupEntry(po.shape, propName); hit {
 			if debugVM {
 				fmt.Printf("[opGetProp] IC hit state=%d isProto=%v accessor=%v offset=%d\n", cache.state, entry.isProto, entry.isAccessor, entry.offset)
 			}
@@ -443,7 +443,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			if holder == po {
 				for _, field := range po.shape.fields {
 					if field.name == propName {
-						cache.updateCache(po.shape, field.offset, field.isAccessor, field.writable)
+						cache.updateCache(po.shape, propName, field.offset, field.isAccessor, field.writable)
 						break
 					}
 				}
