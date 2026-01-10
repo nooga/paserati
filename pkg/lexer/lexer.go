@@ -1177,6 +1177,21 @@ func (l *Lexer) NextToken() Token {
 			} else if foundComplete {
 				// Found a complete regex pattern but with invalid flags/format
 				// This is an error, not a division operator
+				// Skip past the invalid regex content to avoid infinite loop
+				l.readChar() // Advance past the opening '/'
+				for l.ch != 0 && l.ch != '/' && l.ch != '\n' && l.ch != '\r' {
+					if l.ch == '\\' {
+						l.readChar() // Skip escaped char
+					}
+					l.readChar()
+				}
+				if l.ch == '/' {
+					l.readChar() // Skip closing '/'
+					// Skip any flags
+					for isLetter(l.ch) {
+						l.readChar()
+					}
+				}
 				literal := "Invalid regex literal"
 				tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			} else {
@@ -2133,6 +2148,21 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 				l.line = savedLine
 				l.column = savedColumn
 				return "", "", false, false // Unicode line terminator in regex
+			}
+		}
+
+		// Check for lone surrogates (U+D800-U+DFFF)
+		// In UTF-8, surrogates are encoded as: ED [A0-BF] [80-BF]
+		// ECMAScript forbids lone surrogates in regex patterns
+		if l.ch == 0xED && l.readPosition+1 < len(l.input) {
+			if l.input[l.readPosition] >= 0xA0 && l.input[l.readPosition] <= 0xBF {
+				// This is a lone surrogate - return error (foundComplete=true means it's a syntax error)
+				l.position = savedPosition
+				l.readPosition = savedReadPosition
+				l.ch = savedCh
+				l.line = savedLine
+				l.column = savedColumn
+				return "", "", false, true // Lone surrogate in regex (syntax error)
 			}
 		}
 

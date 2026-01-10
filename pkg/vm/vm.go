@@ -6257,14 +6257,11 @@ startExecution:
 				result, err := builtinWithProps.Fn(args)
 				vm.inConstructorCall = false
 				if err != nil {
-					fmt.Printf("DEBUG: builtin constructor returned error: %v\n", err)
 					// Check if this is an ExceptionError (already has an exception value)
 					if ee, ok := err.(ExceptionError); ok {
-						fmt.Printf("DEBUG: is ExceptionError\n")
 						vm.throwException(ee.GetExceptionValue())
 						continue
 					}
-					fmt.Printf("DEBUG: not ExceptionError, parsing error type\n")
 
 					// Throw as proper Error instance instead of plain object
 					// Check for specific error types based on message prefix
@@ -6307,9 +6304,11 @@ startExecution:
 						eo.SetOwn("message", NewString(msg))
 						errValue = NewValueFromPlainObject(eo)
 					}
-					fmt.Printf("DEBUG: calling throwException with ctorName=%s\n", ctorName)
 					vm.throwException(errValue)
-					fmt.Printf("DEBUG: after throwException, handlerFound=%v, unwinding=%v\n", vm.handlerFound, vm.unwinding)
+					// If a catch handler was found, frame.ip was updated - reload it
+					if !vm.unwinding {
+						ip = frame.ip
+					}
 					continue // Let exception handling take over
 				}
 
