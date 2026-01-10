@@ -236,6 +236,12 @@ const (
 	// --- Prototype Support ---
 	OpSetPrototype    OpCode = 85  // ObjReg ProtoReg: Set object's prototype to ProtoReg value (for __proto__ in object literals)
 	OpSetClosureProto OpCode = 129 // ClosureReg ProtoReg: Set closure's internal [[Prototype]] (for class inheritance, C.__proto__ = B)
+
+	// --- Register Spilling Support ---
+	// When a function has more local variables than available registers (255 limit),
+	// some variables are "spilled" to a spillSlots array. These opcodes load/store spilled values.
+	OpLoadSpill  OpCode = 130 // Rx SpillIdx: Load from spillSlots[SpillIdx] into register Rx
+	OpStoreSpill OpCode = 131 // SpillIdx Rx: Store register Rx into spillSlots[SpillIdx]
 )
 
 // String returns a human-readable name for the OpCode.
@@ -512,6 +518,12 @@ func (op OpCode) String() string {
 	case OpSetClosureProto:
 		return "OpSetClosureProto"
 
+	// Spill support
+	case OpLoadSpill:
+		return "OpLoadSpill"
+	case OpStoreSpill:
+		return "OpStoreSpill"
+
 	// Type guards
 	case OpTypeGuardIterable:
 		return "OpTypeGuardIterable"
@@ -577,6 +589,7 @@ type Chunk struct {
 	IsStrict       bool               // Whether this chunk runs in strict mode
 	ScopeDesc      *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
 	MaxRegs        int                // Maximum registers needed to execute this chunk
+	NumSpillSlots  int                // Number of spill slots needed (for register overflow)
 	// Inline caches for property access sites within this chunk, indexed by bytecode offset
 	// (the IP where the opcode starts). This avoids a global map lookup per property access.
 	propInlineCaches []*PropInlineCache
@@ -970,6 +983,28 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		closureReg := c.Code[offset+1]
 		protoReg := c.Code[offset+2]
 		builder.WriteString(fmt.Sprintf("%-20s R%d R%d\n", "OpSetClosureProto", closureReg, protoReg))
+		return offset + 3
+
+	case OpLoadSpill:
+		// Rx SpillIdx: Load from spillSlots[SpillIdx] into register Rx
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpLoadSpill (missing operands)\n")
+			return offset + 1
+		}
+		destReg := c.Code[offset+1]
+		spillIdx := c.Code[offset+2]
+		builder.WriteString(fmt.Sprintf("%-16s R%d, Spill[%d]\n", "OpLoadSpill", destReg, spillIdx))
+		return offset + 3
+
+	case OpStoreSpill:
+		// SpillIdx Rx: Store register Rx into spillSlots[SpillIdx]
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpStoreSpill (missing operands)\n")
+			return offset + 1
+		}
+		spillIdx := c.Code[offset+1]
+		srcReg := c.Code[offset+2]
+		builder.WriteString(fmt.Sprintf("%-16s Spill[%d], R%d\n", "OpStoreSpill", spillIdx, srcReg))
 		return offset + 3
 
 	case OpArrayCopy:

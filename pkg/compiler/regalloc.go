@@ -12,6 +12,11 @@ type Register uint8 // Assuming max 256 registers per function for now
 const NoHint Register = 255
 const BadRegister Register = 254
 
+// VariableRegisterThreshold is the register index above which new variables
+// should be spilled to make room for temporaries and function call arguments.
+// Temporaries can still use registers 200-254 for intermediate calculations.
+const VariableRegisterThreshold Register = 200
+
 // RegisterAllocator manages the allocation of registers within a function scope.
 // This initial implementation uses a simple stack-like allocation.
 // Global counter for allocator IDs
@@ -42,8 +47,9 @@ func NewRegisterAllocator() *RegisterAllocator {
 	}
 }
 
-// Alloc allocates the next available register.
-func (ra *RegisterAllocator) Alloc() Register {
+// TryAlloc attempts to allocate a register without panicking.
+// Returns (register, true) on success, or (0, false) if no registers available.
+func (ra *RegisterAllocator) TryAlloc() (Register, bool) {
 	var reg Register
 	// Check free list first
 	if len(ra.freeRegs) > 0 {
@@ -58,30 +64,84 @@ func (ra *RegisterAllocator) Alloc() Register {
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC %s] REUSE R%d (from free list, %d available, maxReg now %d)\n", ra.functionName, reg, len(ra.freeRegs), ra.maxReg)
 		}
-	} else {
-		// Allocate new register if free list is empty
-		reg = ra.nextReg
-		if ra.nextReg < 255 { // Check before incrementing to avoid overflow wrap-around
-			ra.nextReg++
-		} else {
-			// Handle register exhaustion - Panic for now
-			if debugRegAlloc {
-				fmt.Printf("[REGALLOC] EXHAUSTED! Next would be R%d but limit is 255\n", ra.nextReg)
-				fmt.Printf("[REGALLOC] Free list has %d registers: %v\n", len(ra.freeRegs), ra.freeRegs)
-				fmt.Printf("[REGALLOC] MaxReg so far: R%d\n", ra.maxReg)
-			}
-			panic("Compiler Error: Ran out of registers!")
-		}
+		return reg, true
+	}
 
+	// Allocate new register if free list is empty
+	if ra.nextReg < 255 { // Check before incrementing to avoid overflow wrap-around
+		reg = ra.nextReg
+		ra.nextReg++
 		if reg > ra.maxReg {
 			ra.maxReg = reg
 		}
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC %s] NEW R%d (nextReg now %d, maxReg %d, %d free)\n", ra.functionName, reg, ra.nextReg, ra.maxReg, len(ra.freeRegs))
 		}
+		return reg, true
 	}
 
+	// No registers available
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] TryAlloc FAILED! Next would be R%d but limit is 255\n", ra.nextReg)
+		fmt.Printf("[REGALLOC] Free list has %d registers: %v\n", len(ra.freeRegs), ra.freeRegs)
+		fmt.Printf("[REGALLOC] MaxReg so far: R%d\n", ra.maxReg)
+	}
+	return 0, false
+}
+
+// Alloc allocates the next available register.
+// Panics if no registers are available. Use TryAlloc for non-panicking version.
+func (ra *RegisterAllocator) Alloc() Register {
+	reg, ok := ra.TryAlloc()
+	if !ok {
+		panic("Compiler Error: Ran out of registers!")
+	}
 	return reg
+}
+
+// TryAllocForVariable attempts to allocate a register for a variable.
+// Unlike TryAlloc, this fails early (at VariableRegisterThreshold) to reserve
+// registers for temporaries and function call arguments.
+// Use this for let/const/var declarations; use TryAlloc for temporaries.
+func (ra *RegisterAllocator) TryAllocForVariable() (Register, bool) {
+	var reg Register
+	// Check free list first - free registers below threshold are fine to reuse
+	if len(ra.freeRegs) > 0 {
+		// Look for a free register below the threshold
+		for i := len(ra.freeRegs) - 1; i >= 0; i-- {
+			if ra.freeRegs[i] < VariableRegisterThreshold {
+				reg = ra.freeRegs[i]
+				// Remove from free list
+				ra.freeRegs = append(ra.freeRegs[:i], ra.freeRegs[i+1:]...)
+				if reg > ra.maxReg {
+					ra.maxReg = reg
+				}
+				if debugRegAlloc {
+					fmt.Printf("[REGALLOC %s] REUSE FOR VAR R%d (from free list, %d available)\n", ra.functionName, reg, len(ra.freeRegs))
+				}
+				return reg, true
+			}
+		}
+	}
+
+	// Allocate new register only if below threshold
+	if ra.nextReg < VariableRegisterThreshold {
+		reg = ra.nextReg
+		ra.nextReg++
+		if reg > ra.maxReg {
+			ra.maxReg = reg
+		}
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC %s] NEW FOR VAR R%d (nextReg now %d, threshold %d)\n", ra.functionName, reg, ra.nextReg, VariableRegisterThreshold)
+		}
+		return reg, true
+	}
+
+	// No registers available for variables - caller should spill
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] TryAllocForVariable FAILED! nextReg=%d >= threshold=%d\n", ra.nextReg, VariableRegisterThreshold)
+	}
+	return 0, false
 }
 
 // AllocHinted allocates a register, preferring the hinted register if available.

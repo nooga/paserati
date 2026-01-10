@@ -107,6 +107,13 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 		frame.closure = closureVal.AsClosure()
 	}
 
+	// Allocate spill slots if this function needs them (for register overflow)
+	if funcObj.Chunk.NumSpillSlots > 0 {
+		frame.spillSlots = make([]Value, funcObj.Chunk.NumSpillSlots)
+	} else {
+		frame.spillSlots = nil
+	}
+
 	// Set up arguments in registers
 	frame.argCount = len(args)
 	for i, arg := range args {

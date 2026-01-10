@@ -51,11 +51,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// debug disabled
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
-			// Pin the register if inside a function, since local variables can be captured by upvalues
-			// and the register must remain valid for subsequent uses of this variable
-			if c.enclosing != nil {
-				c.regAlloc.Pin(closureReg)
-			}
+			// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 
 			// The variable's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
@@ -64,42 +60,68 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Compile other value types normally
 			// Use existing predefined register if present
 			targetReg := valueReg
+			useSpilling := false
+			var spillIdx uint8
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 				targetReg = sym.Register
 			} else {
-				targetReg = c.regAlloc.Alloc()
-				defer c.regAlloc.Free(targetReg)
+				// Try to allocate for the new variable (using lower threshold)
+				var ok bool
+				targetReg, ok = c.regAlloc.TryAllocForVariable()
+				if !ok {
+					// Variable register threshold reached, use spilling
+					useSpilling = true
+					spillIdx = c.AllocSpillSlot()
+					// Allocate temp register for compilation (will be freed after)
+					targetReg = c.regAlloc.Alloc()
+				}
 			}
 			_, err = c.compileNode(node.Value, targetReg)
 			if err != nil {
 				return BadRegister, err
+			}
+			if useSpilling {
+				// Store value to spill slot and free temp register
+				c.emitStoreSpill(spillIdx, targetReg, node.Name.Token.Line)
+				c.regAlloc.Free(targetReg)
+				// Define the variable as spilled
+				c.currentSymbolTable.DefineSpilled(node.Name.Value, spillIdx)
+				// Skip normal valueReg assignment since we've handled it
+				continue
 			}
 			valueReg = targetReg
 		} // else: node.Value is nil (implicit undefined handled below)
 
 		// Handle implicit undefined (`let x;`)
 		if valueReg == nilRegister && !isValueFunc {
-			undefReg := c.regAlloc.Alloc()
-			defer c.regAlloc.Free(undefReg)
-			c.emitLoadUndefined(undefReg, node.Name.Token.Line)
-			valueReg = undefReg
-			// Define symbol for the `let x;` case
-			// debug disabled
-			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
-			// For indirect eval, let/const should be local even at top level
+			// Check if we're in global scope first
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
-				// True global scope: use global variable
+				// Global scope: allocate temp, load undefined, set global
+				undefReg := c.regAlloc.Alloc()
+				c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+				c.emitSetGlobal(globalIdx, undefReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				c.regAlloc.Free(undefReg)
 			} else {
-				// Local scope (function or enclosed block): use local symbol table
+				// Local scope: try to allocate register, fall back to spilling
 				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
-					c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+					c.emitLoadUndefined(sym.Register, node.Name.Token.Line)
 				} else {
-					c.currentSymbolTable.Define(node.Name.Value, valueReg)
-					c.regAlloc.Pin(valueReg)
+					undefReg, ok := c.regAlloc.TryAllocForVariable()
+					if ok {
+						c.emitLoadUndefined(undefReg, node.Name.Token.Line)
+						c.currentSymbolTable.Define(node.Name.Value, undefReg)
+					} else {
+						// Variable register threshold reached, use spilling
+						spillIdx := c.AllocSpillSlot()
+						tempReg := c.regAlloc.Alloc()
+						c.emitLoadUndefined(tempReg, node.Name.Token.Line)
+						c.emitStoreSpill(spillIdx, tempReg, node.Name.Token.Line)
+						c.regAlloc.Free(tempReg)
+						c.currentSymbolTable.DefineSpilled(node.Name.Value, spillIdx)
+					}
 				}
 			}
 		} else if !isValueFunc {
@@ -122,7 +144,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				} else {
 					debugPrintf("// [LetStatement] '%s' not predefined, defining in R%d (symbolTable=%p)\n", node.Name.Value, valueReg, c.currentSymbolTable)
 					c.currentSymbolTable.Define(node.Name.Value, valueReg)
-					c.regAlloc.Pin(valueReg)
+					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				}
 			}
 		} else {
@@ -138,8 +160,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 					c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
 					// Update the symbol to be global
 					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-					// Pin the register since function closures can be captured by upvalues
-					c.regAlloc.Pin(symbolRef.Register)
+					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				}
 			}
 		}
@@ -243,20 +264,15 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 			}
 
-			// Pin the register if inside a function, since local variables can be captured by upvalues
-			// and the register must remain valid for subsequent uses of this variable
-			// (only needed if we allocated a new register)
-			if c.enclosing != nil && preDefinedReg == nilRegister {
-				c.regAlloc.Pin(closureReg)
-			}
+			// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 
 			// The variable's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
 
 		} else if node.Value != nil {
 			// Compile other value types normally
+			// DON'T defer free - we'll free explicitly below if needed (when it's a temp, not a variable register)
 			valueReg = c.regAlloc.Alloc()
-			defer c.regAlloc.Free(valueReg)
 			_, err = c.compileNode(node.Value, valueReg)
 			if err != nil {
 				return BadRegister, err
@@ -273,8 +289,8 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				// Variable is a function parameter - preserve its value
 				debugPrintf("// [VarStmt] '%s' is a parameter, skipping undefined init\n", node.Name.Value)
 			} else {
+				// DON'T defer free - we'll track if this becomes a variable register below
 				undefReg := c.regAlloc.Alloc()
-				defer c.regAlloc.Free(undefReg)
 				c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 				valueReg = undefReg
 				// Define symbol for the `var x;` case
@@ -284,11 +300,13 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 					globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 					c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+					// valueReg was temp for the global, free it
+					c.regAlloc.Free(valueReg)
 				} else {
-					// Function scope: use local symbol table
+					// Function scope: use local symbol table - valueReg becomes the variable's register
 					c.currentSymbolTable.Define(node.Name.Value, valueReg)
-					// Pin the register since local variables can be captured by upvalues
-					c.regAlloc.Pin(valueReg)
+					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+					// DON'T free valueReg - it's now the variable's permanent register
 				}
 			}
 		} else if !isValueFunc {
@@ -296,22 +314,32 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// Function assignments were handled above by UpdateRegister.
 			// Check if variable was already pre-defined during var hoisting (works for both top-level and function scope)
 			// Exclude global symbols since they use OpSetGlobal, not local registers
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
+				// Variable was pre-defined as SPILLED, store to spill slot
+				debugPrintf("// [VarStmt] Variable '%s' was pre-defined as SPILLED (slot %d), emitting store from R%d\n", node.Name.Value, sym.SpillIndex, valueReg)
+				c.emitStoreSpill(sym.SpillIndex, valueReg, node.Name.Token.Line)
+				// valueReg was temp, free it
+				c.regAlloc.Free(valueReg)
+			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
 				// Variable was pre-defined with a local register, reuse it and emit move
 				debugPrintf("// [VarStmt] Variable '%s' was pre-defined in R%d, emitting move from R%d\n", node.Name.Value, sym.Register, valueReg)
 				c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
+				// valueReg was temp, free it
+				c.regAlloc.Free(valueReg)
 			} else if c.enclosing == nil {
 				// Top-level and not pre-defined: use global variable
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				// valueReg was temp for the global, free it
+				c.regAlloc.Free(valueReg)
 			} else {
-				// Function scope and not pre-defined: use local symbol table
+				// Function scope and not pre-defined: use local symbol table - valueReg becomes the variable's register
 				debugPrintf("// [VarStmt] Defining '%s' in local symbol table with register R%d\n", node.Name.Value, valueReg)
 				c.currentSymbolTable.Define(node.Name.Value, valueReg)
-				// Pin the register since local variables can be captured by upvalues
-				c.regAlloc.Pin(valueReg)
-				debugPrintf("// [VarStmt] Successfully defined '%s', register pinned\n", node.Name.Value)
+				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+				// DON'T free valueReg - it's now the variable's permanent register
+				debugPrintf("// [VarStmt] Successfully defined '%s'\n", node.Name.Value)
 			}
 		} else if c.enclosing == nil {
 			// Top-level function: also set as global
@@ -322,8 +350,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
 				// Update the symbol to be global
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-				// Pin the register since function closures can be captured by upvalues
-				c.regAlloc.Pin(symbolRef.Register)
+				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 			}
 		}
 	}
@@ -371,11 +398,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			// 4. Update the temporary definition for the *const name (f)* with the closure register.
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
-			// Pin the register if inside a function, since local variables can be captured by upvalues
-			// and the register must remain valid for subsequent uses of this variable
-			if c.enclosing != nil {
-				c.regAlloc.Pin(closureReg)
-			}
+			// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 
 			// The constant's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
@@ -387,8 +410,8 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 				targetReg = sym.Register
 			} else {
+				// Allocate for the new variable - DON'T defer free since this may become the variable's permanent register
 				targetReg = c.regAlloc.Alloc()
-				defer c.regAlloc.Free(targetReg)
 			}
 			_, err = c.compileNode(node.Value, targetReg)
 			if err != nil {
@@ -414,8 +437,9 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 					c.emitMove(sym.Register, valueReg, node.Name.Token.Line)
 				} else {
+					// valueReg becomes the variable's permanent register - don't free it
 					c.currentSymbolTable.Define(node.Name.Value, valueReg)
-					c.regAlloc.Pin(valueReg)
+					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				}
 			}
 		} else {
@@ -431,8 +455,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 					c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
 					// Update the symbol to be global
 					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-					// Pin the register since function closures can be captured by upvalues
-					c.regAlloc.Pin(symbolRef.Register)
+					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				}
 			}
 		}
@@ -1472,15 +1495,13 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
 		// Define the loop variable in symbol table
 		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
-		// Pin the register since loop variables can be captured by closures in the loop body
-		c.regAlloc.Pin(symbol.Register)
+		// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
 		// Define the loop variable in symbol table
 		symbol := c.currentSymbolTable.Define(constStmt.Name.Value, c.regAlloc.Alloc())
-		// Pin the register since loop variables can be captured by closures in the loop body
-		c.regAlloc.Pin(symbol.Register)
+		// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
@@ -1503,7 +1524,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 
 			if ident, ok := element.Target.(*parser.Identifier); ok {
 				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
-				c.regAlloc.Pin(symbol.Register)
+				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
 			}
 		}
@@ -1536,7 +1557,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
 				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
-				c.regAlloc.Pin(symbol.Register)
+				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
 			}
 		}
@@ -1568,8 +1589,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 				// Local (function-scoped) var: ensure it has a register then move
 				if symbolRef.Register == nilRegister {
 					reg := c.regAlloc.Alloc()
-					// Pin register since it may be captured by closures
-					c.regAlloc.Pin(reg)
+					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 					c.currentSymbolTable.UpdateRegister(name, reg)
 					symbolRef.Register = reg
 				}
@@ -1597,7 +1617,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 					reg := c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, reg)
 					sym := scope.Define(target.Value, reg)
-					c.regAlloc.Pin(sym.Register)
+					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 					c.emitMove(sym.Register, currentKeyReg, node.Token.Line)
 				}
 			} else {

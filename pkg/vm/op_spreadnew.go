@@ -140,6 +140,13 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 
+		// Allocate spill slots if this function needs them (for register overflow)
+		if constructorFunc.Chunk.NumSpillSlots > 0 {
+			newFrame.spillSlots = make([]Value, constructorFunc.Chunk.NumSpillSlots)
+		} else {
+			newFrame.spillSlots = nil
+		}
+
 		// Copy spread arguments to new frame
 		for i := 0; i < argCount && i < len(newFrame.registers); i++ {
 			newFrame.registers[i] = spreadArgs[i]
@@ -232,6 +239,13 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
+
+		// Allocate spill slots if this function needs them (for register overflow)
+		if constructorFunc.Chunk.NumSpillSlots > 0 {
+			newFrame.spillSlots = make([]Value, constructorFunc.Chunk.NumSpillSlots)
+		} else {
+			newFrame.spillSlots = nil
+		}
 
 		// Copy spread arguments to new frame
 		for i := 0; i < argCount && i < len(newFrame.registers); i++ {

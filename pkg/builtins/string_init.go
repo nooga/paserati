@@ -6,7 +6,6 @@ import (
 	"math"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
-	"regexp"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -1438,9 +1437,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if isRegExp {
 			// RegExp separator
 			regex := separatorArg.AsRegExpObject()
-			compiledRegex := regex.GetCompiledRegex()
+			// Check for deferred compile error
+			if regex.HasCompileError() {
+				return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+			}
 
-			parts := compiledRegex.Split(thisStr, -1)
+			parts := regex.Split(thisStr, -1)
 			if uint32(len(parts)) > limit {
 				parts = parts[:limit]
 			}
@@ -2265,7 +2267,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 }
 
 // createMatchAllIterator creates an iterator for String.prototype.matchAll
-func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int, compiledRegex *regexp.Regexp) vm.Value {
+func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) vm.Value {
 	// Create iterator object inheriting from Object.prototype
 	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 

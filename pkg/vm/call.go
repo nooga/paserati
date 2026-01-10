@@ -317,6 +317,13 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		vm.nextRegSlot += requiredRegs
 
+		// Allocate spill slots if this function needs them (for register overflow)
+		if calleeFunc.Chunk.NumSpillSlots > 0 {
+			newFrame.spillSlots = make([]Value, calleeFunc.Chunk.NumSpillSlots)
+		} else {
+			newFrame.spillSlots = nil
+		}
+
 		// Copy arguments to registers
 		// We need to copy ALL passed arguments (up to argCount), not just up to Arity,
 		// so that the arguments object can access them via OpGetArguments.

@@ -55,6 +55,22 @@ func (c *Compiler) emitMove(dest, src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+// emitLoadSpill loads a value from a spill slot into a register.
+// Used when accessing a spilled variable.
+func (c *Compiler) emitLoadSpill(dest Register, spillIdx uint8, line int) {
+	c.emitOpCode(vm.OpLoadSpill, line)
+	c.emitByte(byte(dest))
+	c.emitByte(spillIdx)
+}
+
+// emitStoreSpill stores a register value into a spill slot.
+// Used when initializing or assigning to a spilled variable.
+func (c *Compiler) emitStoreSpill(spillIdx uint8, src Register, line int) {
+	c.emitOpCode(vm.OpStoreSpill, line)
+	c.emitByte(spillIdx)
+	c.emitByte(byte(src))
+}
+
 func (c *Compiler) emitReturn(src Register, line int) {
 	c.emitOpCode(vm.OpReturn, line)
 	c.emitByte(byte(src))

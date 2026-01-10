@@ -16,7 +16,7 @@ import (
 )
 
 const RegFileSize = 256  // Max registers per function call frame
-const MaxFrames = 1024   // Max call stack depth (was 64, increased for deep recursion)
+const MaxFrames = 1024 // Max call stack depth
 // NOTE: Total stack = RegFileSize * MaxFrames = ~6MB. For dynamic expansion in the future,
 // upvalues would need to change from raw pointers to indices. See docs/bucketlist.md.
 
@@ -106,6 +106,7 @@ type CallFrame struct {
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
 	registers           []Value
+	spillSlots          []Value // Spill slots for register overflow (allocated only if needed)
 	targetRegister      byte    // Which register in the CALLER the result should go into
 	thisValue           Value   // The 'this' value for method calls (undefined for regular function calls)
 	homeObject          Value   // The [[HomeObject]] for super property access (object where method is defined)
@@ -678,6 +679,14 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.nativeCompleteCh = nil
 	frame.generatorObj = nil
 	frame.promiseObj = nil
+
+	// Allocate spill slots if this script needs them (for register overflow)
+	if mainFuncObj.Chunk.NumSpillSlots > 0 {
+		frame.spillSlots = make([]Value, mainFuncObj.Chunk.NumSpillSlots)
+	} else {
+		frame.spillSlots = nil
+	}
+
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
@@ -2076,6 +2085,13 @@ startExecution:
 					frame.argCount = argCount
 					frame.args = args // Already copied above
 
+					// Allocate spill slots if this function needs them (for register overflow)
+					if calleeFunc.Chunk.NumSpillSlots > 0 {
+						frame.spillSlots = make([]Value, calleeFunc.Chunk.NumSpillSlots)
+					} else {
+						frame.spillSlots = nil
+					}
+
 					// 6. Clear registers and copy arguments
 					for i := 0; i < len(registers); i++ {
 						registers[i] = Undefined
@@ -2270,6 +2286,13 @@ startExecution:
 					frame.promiseObj = nil
 					frame.argCount = argCount
 					frame.args = args
+
+					// Allocate spill slots if this function needs them (for register overflow)
+					if calleeFunc.Chunk.NumSpillSlots > 0 {
+						frame.spillSlots = make([]Value, calleeFunc.Chunk.NumSpillSlots)
+					} else {
+						frame.spillSlots = nil
+					}
 
 					// 8. Clear registers and copy arguments
 					for i := 0; i < len(registers); i++ {
@@ -3103,15 +3126,19 @@ startExecution:
 			protoFunc := AsFunction(protoVal)
 
 			// Allocate upvalue pointers slice
+			// Capture types:
+			//   0 = CaptureFromUpvalue: from enclosing closure's upvalues
+			//   1 = CaptureFromRegister: from register in current frame
+			//   2 = CaptureFromSpill: from spill slot in current frame (creates closed upvalue)
 			upvalues := make([]*Upvalue, upvalueCount)
 			for i := 0; i < upvalueCount; i++ {
-				isLocal := code[ip] == 1
+				captureType := code[ip]
 				index := int(code[ip+1])
 				ip += 2
 
-				if isLocal {
+				switch captureType {
+				case 1: // CaptureFromRegister
 					// Capture local variable from the *current* frame's registers.
-					// The location is index bytes *relative to the start of the current frame's registers*.
 					if index >= len(registers) {
 						frame.ip = ip
 						status := vm.runtimeError("Invalid local register index %d for upvalue capture.", index)
@@ -3120,7 +3147,17 @@ startExecution:
 					// Pass pointer to the stack slot (register) itself.
 					location := &registers[index]
 					upvalues[i] = vm.captureUpvalue(location)
-				} else {
+				case 2: // CaptureFromSpill
+					// Capture from spill slot - capture a pointer like we do for registers
+					if index >= len(frame.spillSlots) {
+						frame.ip = ip
+						status := vm.runtimeError("Invalid spill slot index %d for upvalue capture.", index)
+						return status, Undefined
+					}
+					// Pass pointer to the spill slot so changes are visible
+					location := &frame.spillSlots[index]
+					upvalues[i] = vm.captureUpvalue(location)
+				default: // 0 = CaptureFromUpvalue
 					// Capture upvalue from the *enclosing* function (i.e., the current closure).
 					if closure == nil || index >= len(closure.Upvalues) {
 						frame.ip = ip
@@ -5855,6 +5892,13 @@ startExecution:
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
 
+				// Allocate spill slots if this function needs them (for register overflow)
+				if constructorFunc.Chunk.NumSpillSlots > 0 {
+					newFrame.spillSlots = make([]Value, constructorFunc.Chunk.NumSpillSlots)
+				} else {
+					newFrame.spillSlots = nil
+				}
+
 				// Copy fixed arguments and handle rest parameters
 
 				// Copy fixed arguments (up to Arity)
@@ -6017,6 +6061,13 @@ startExecution:
 				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 				vm.nextRegSlot += requiredRegs
+
+				// Allocate spill slots if this function needs them (for register overflow)
+				if constructorFunc.Chunk.NumSpillSlots > 0 {
+					newFrame.spillSlots = make([]Value, constructorFunc.Chunk.NumSpillSlots)
+				} else {
+					newFrame.spillSlots = nil
+				}
 
 				// Copy fixed arguments and handle rest parameters
 
@@ -6206,24 +6257,59 @@ startExecution:
 				result, err := builtinWithProps.Fn(args)
 				vm.inConstructorCall = false
 				if err != nil {
+					fmt.Printf("DEBUG: builtin constructor returned error: %v\n", err)
+					// Check if this is an ExceptionError (already has an exception value)
+					if ee, ok := err.(ExceptionError); ok {
+						fmt.Printf("DEBUG: is ExceptionError\n")
+						vm.throwException(ee.GetExceptionValue())
+						continue
+					}
+					fmt.Printf("DEBUG: not ExceptionError, parsing error type\n")
+
 					// Throw as proper Error instance instead of plain object
+					// Check for specific error types based on message prefix
 					var errValue Value
-					if errCtor, ok := vm.GetGlobal("Error"); ok {
-						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+					errMsg := err.Error()
+					var ctorName string = "Error"
+					var msg string = errMsg
+
+					// Parse error type prefix (e.g., "SyntaxError: message")
+					if strings.HasPrefix(errMsg, "SyntaxError:") {
+						ctorName = "SyntaxError"
+						msg = strings.TrimPrefix(errMsg, "SyntaxError:")
+						msg = strings.TrimSpace(msg)
+					} else if strings.HasPrefix(errMsg, "TypeError:") {
+						ctorName = "TypeError"
+						msg = strings.TrimPrefix(errMsg, "TypeError:")
+						msg = strings.TrimSpace(msg)
+					} else if strings.HasPrefix(errMsg, "ReferenceError:") {
+						ctorName = "ReferenceError"
+						msg = strings.TrimPrefix(errMsg, "ReferenceError:")
+						msg = strings.TrimSpace(msg)
+					} else if strings.HasPrefix(errMsg, "RangeError:") {
+						ctorName = "RangeError"
+						msg = strings.TrimPrefix(errMsg, "RangeError:")
+						msg = strings.TrimSpace(msg)
+					}
+
+					if errCtor, ok := vm.GetGlobal(ctorName); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(msg)}); callErr == nil {
 							errValue = res
 						} else {
 							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
+							eo.SetOwn("name", NewString(ctorName))
+							eo.SetOwn("message", NewString(msg))
 							errValue = NewValueFromPlainObject(eo)
 						}
 					} else {
 						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-						eo.SetOwn("name", NewString("Error"))
-						eo.SetOwn("message", NewString(err.Error()))
+						eo.SetOwn("name", NewString(ctorName))
+						eo.SetOwn("message", NewString(msg))
 						errValue = NewValueFromPlainObject(eo)
 					}
+					fmt.Printf("DEBUG: calling throwException with ctorName=%s\n", ctorName)
 					vm.throwException(errValue)
+					fmt.Printf("DEBUG: after throwException, handlerFound=%v, unwinding=%v\n", vm.handlerFound, vm.unwinding)
 					continue // Let exception handling take over
 				}
 
@@ -7135,6 +7221,37 @@ startExecution:
 			// }
 			if vm.currentModulePath != "" {
 				// fmt.Printf("// [VM] OpSetGlobal: Module context: '%s'\n", vm.currentModulePath)
+			}
+
+		// --- Register Spilling Support ---
+		// These opcodes handle register overflow by storing/loading values from
+		// a per-frame spillSlots array (heap-allocated, not in the register stack)
+		case OpLoadSpill:
+			// Load from spill slot into register: Rx <- spillSlots[spillIdx]
+			destReg := code[ip]
+			spillIdx := code[ip+1]
+			ip += 2
+			if frame.spillSlots != nil && int(spillIdx) < len(frame.spillSlots) {
+				registers[destReg] = frame.spillSlots[spillIdx]
+			} else {
+				// Spill slot not available - this would be a compiler bug
+				frame.ip = ip
+				vm.runtimeError("OpLoadSpill: invalid spill slot index %d", spillIdx)
+				return InterpretRuntimeError, Undefined
+			}
+
+		case OpStoreSpill:
+			// Store register into spill slot: spillSlots[spillIdx] <- Rx
+			spillIdx := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			if frame.spillSlots != nil && int(spillIdx) < len(frame.spillSlots) {
+				frame.spillSlots[spillIdx] = registers[srcReg]
+			} else {
+				// Spill slot not available - this would be a compiler bug
+				frame.ip = ip
+				vm.runtimeError("OpStoreSpill: invalid spill slot index %d", spillIdx)
+				return InterpretRuntimeError, Undefined
 			}
 
 		// --- NEW: Efficient Nullish Checks ---
@@ -10199,13 +10316,23 @@ func (vm *VM) abstractEqual(a, b Value) bool {
 	}
 
 	// Object compared to primitive: convert object to primitive and retry
-	// Per ECMAScript spec 7.2.15 step 10-11
+	// Per ECMAScript spec 7.2.14 step 10-11
+	// IMPORTANT: Only call ToPrimitive when comparing to String, Number, BigInt, or Symbol
+	// Comparing object to null/undefined should return false (already handled above for null==undefined)
 	if a.IsObject() && !b.IsObject() {
+		// Skip ToPrimitive for null/undefined - object compared to null/undefined is always false
+		if b.Type() == TypeNull || b.Type() == TypeUndefined {
+			return false
+		}
 		// Convert object to primitive with "default" hint
 		aPrim := vm.toPrimitive(a, "default")
 		return vm.abstractEqual(aPrim, b)
 	}
 	if b.IsObject() && !a.IsObject() {
+		// Skip ToPrimitive for null/undefined - object compared to null/undefined is always false
+		if a.Type() == TypeNull || a.Type() == TypeUndefined {
+			return false
+		}
 		// Convert object to primitive with "default" hint
 		bPrim := vm.toPrimitive(b, "default")
 		return vm.abstractEqual(a, bPrim)

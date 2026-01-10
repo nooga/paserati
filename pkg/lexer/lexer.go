@@ -2121,6 +2121,21 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 			return "", "", false, false // Unescaped newline in regex
 		}
 
+		// Check for Unicode line terminators U+2028 (LS) and U+2029 (PS)
+		// UTF-8: U+2028 = E2 80 A8, U+2029 = E2 80 A9
+		if l.ch == 0xE2 && l.readPosition+1 < len(l.input) {
+			if l.input[l.readPosition] == 0x80 &&
+				(l.input[l.readPosition+1] == 0xA8 || l.input[l.readPosition+1] == 0xA9) {
+				// Backtrack on Unicode line terminator
+				l.position = savedPosition
+				l.readPosition = savedReadPosition
+				l.ch = savedCh
+				l.line = savedLine
+				l.column = savedColumn
+				return "", "", false, false // Unicode line terminator in regex
+			}
+		}
+
 		if l.ch == '\\' { // Handle escape sequences
 			patternBuilder.WriteByte('\\')
 			l.readChar() // Consume the backslash
@@ -2133,6 +2148,29 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 				l.line = savedLine
 				l.column = savedColumn
 				return "", "", false, false // EOF after backslash
+			}
+
+			// Line terminator after backslash is also invalid
+			if l.ch == '\n' || l.ch == '\r' {
+				l.position = savedPosition
+				l.readPosition = savedReadPosition
+				l.ch = savedCh
+				l.line = savedLine
+				l.column = savedColumn
+				return "", "", false, false // Line terminator after backslash
+			}
+
+			// Check for Unicode line terminators after backslash
+			if l.ch == 0xE2 && l.readPosition+1 < len(l.input) {
+				if l.input[l.readPosition] == 0x80 &&
+					(l.input[l.readPosition+1] == 0xA8 || l.input[l.readPosition+1] == 0xA9) {
+					l.position = savedPosition
+					l.readPosition = savedReadPosition
+					l.ch = savedCh
+					l.line = savedLine
+					l.column = savedColumn
+					return "", "", false, false // Unicode line terminator after backslash
+				}
 			}
 
 			// In regex, we preserve the escape sequence as-is

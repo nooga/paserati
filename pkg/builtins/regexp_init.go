@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"fmt"
 	"paserati/pkg/types"
 	"paserati/pkg/vm"
 	"strconv"
@@ -144,11 +145,15 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		}
 		regex := thisRegex.AsRegExpObject()
+		// Check for deferred compile error
+		if regex.HasCompileError() {
+			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+		}
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
 		}
 		str := args[0].ToString()
-		matched := regex.GetCompiledRegex().MatchString(str)
+		matched := regex.MatchString(str)
 		return vm.BooleanValue(matched), nil
 	}))
 
@@ -158,24 +163,27 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		}
 		regex := thisRegex.AsRegExpObject()
+		// Check for deferred compile error
+		if regex.HasCompileError() {
+			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+		}
 		if len(args) == 0 {
 			return vm.Null, nil
 		}
 		str := args[0].ToString()
-		compiledRegex := regex.GetCompiledRegex()
 
 		var matches []string
 		if regex.IsGlobal() {
 			// Global regex: use lastIndex for stateful matching
 			remainder := str[regex.GetLastIndex():]
-			if loc := compiledRegex.FindStringSubmatchIndex(remainder); loc != nil {
-				matches = compiledRegex.FindStringSubmatch(remainder)
+			if loc := regex.FindStringSubmatchIndex(remainder); loc != nil {
+				matches = regex.FindStringSubmatch(remainder)
 				// Update lastIndex
 				regex.SetLastIndex(regex.GetLastIndex() + loc[1])
 			}
 		} else {
 			// Non-global: find first match
-			matches = compiledRegex.FindStringSubmatch(str)
+			matches = regex.FindStringSubmatch(str)
 		}
 
 		if matches == nil {
@@ -212,6 +220,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype[@@search] requires a RegExp")
 		}
 		regex := thisRegex.AsRegExpObject()
+		// Check for deferred compile error
+		if regex.HasCompileError() {
+			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+		}
 
 		// Get string argument with proper ToString conversion (ECMAScript step 3)
 		var str string
@@ -248,8 +260,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Execute the regex
-		compiledRegex := regex.GetCompiledRegex()
-		loc := compiledRegex.FindStringIndex(str)
+		loc := regex.FindStringIndex(str)
 
 		// Restore lastIndex if it changed
 		currentLastIndex := regex.GetLastIndex()
@@ -274,6 +285,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype[@@matchAll] requires a RegExp")
 		}
 		regex := thisRegex.AsRegExpObject()
+		// Check for deferred compile error
+		if regex.HasCompileError() {
+			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+		}
 
 		// Get string argument with proper ToString conversion
 		var str string
@@ -301,13 +316,11 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		compiledRegex := regex.GetCompiledRegex()
-
 		// Find all matches with indices
-		allMatches := compiledRegex.FindAllStringSubmatchIndex(str, -1)
+		allMatches := regex.FindAllStringSubmatchIndex(str, -1)
 
 		// Create and return a RegExp String Iterator (using the same iterator as String.prototype.matchAll)
-		return createMatchAllIterator(vmInstance, str, allMatches, compiledRegex), nil
+		return createMatchAllIterator(vmInstance, str, allMatches), nil
 	})
 	regexpProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolMatchAll), matchAllFunc, &w, &e, &c)
 
@@ -319,6 +332,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype[@@match] requires a RegExp")
 		}
 		regex := thisRegex.AsRegExpObject()
+		// Check for deferred compile error
+		if regex.HasCompileError() {
+			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+		}
 
 		// Get string argument with proper ToString conversion
 		var str string
@@ -345,14 +362,12 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		compiledRegex := regex.GetCompiledRegex()
-
 		if regex.IsGlobal() {
 			// Global match: find all matches, return array of matched strings
 			// Reset lastIndex to 0
 			regex.SetLastIndex(0)
 
-			matches := compiledRegex.FindAllString(str, -1)
+			matches := regex.FindAllString(str, -1)
 			if len(matches) == 0 {
 				return vm.Null, nil
 			}
@@ -365,12 +380,12 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return result, nil
 		} else {
 			// Non-global: find first match, return array with match, groups, index, input
-			loc := compiledRegex.FindStringSubmatchIndex(str)
+			loc := regex.FindStringSubmatchIndex(str)
 			if loc == nil {
 				return vm.Null, nil
 			}
 
-			matches := compiledRegex.FindStringSubmatch(str)
+			matches := regex.FindStringSubmatch(str)
 
 			// Create result array
 			result := vm.NewArray()
@@ -405,6 +420,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype[@@replace] requires a RegExp")
 		}
 		regex := thisRegex.AsRegExpObject()
+		// Check for deferred compile error
+		if regex.HasCompileError() {
+			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+		}
 
 		// Get string argument with proper ToString conversion
 		var str string
@@ -439,7 +458,6 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			replaceValue = vm.Undefined
 		}
 
-		compiledRegex := regex.GetCompiledRegex()
 		isGlobal := regex.IsGlobal()
 
 		// Check if replaceValue is callable
@@ -455,7 +473,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		lastIndex := 0
 
 		if isGlobal {
-			allMatches := compiledRegex.FindAllStringSubmatchIndex(str, -1)
+			allMatches := regex.FindAllStringSubmatchIndex(str, -1)
 			for _, match := range allMatches {
 				// Add the part before the match
 				result.WriteString(str[lastIndex:match[0]])
@@ -493,7 +511,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				lastIndex = match[1]
 			}
 		} else {
-			match := compiledRegex.FindStringSubmatchIndex(str)
+			match := regex.FindStringSubmatchIndex(str)
 			if match != nil {
 				// Add the part before the match
 				result.WriteString(str[lastIndex:match[0]])
@@ -543,7 +561,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Constructor logic
 		if len(args) == 0 {
 			// new RegExp() - empty pattern
-			result, _ := vm.NewRegExp("(?:)", "")
+			result, err := vm.NewRegExp("(?:)", "")
+			if err != nil {
+				return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+			}
 			return result, nil
 		}
 
@@ -552,12 +573,18 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if arg.IsRegExp() {
 				// Copy constructor: new RegExp(regexObj)
 				existing := arg.AsRegExpObject()
-				result, _ := vm.NewRegExp(existing.GetSource(), existing.GetFlags())
+				result, err := vm.NewRegExp(existing.GetSource(), existing.GetFlags())
+				if err != nil {
+					return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+				}
 				return result, nil
 			} else {
 				// new RegExp(pattern) - convert to string and use empty flags
 				pattern := arg.ToString()
-				result, _ := vm.NewRegExp(pattern, "")
+				result, err := vm.NewRegExp(pattern, "")
+				if err != nil {
+					return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+				}
 				return result, nil
 			}
 		}
@@ -565,7 +592,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// new RegExp(pattern, flags)
 		pattern := args[0].ToString()
 		flags := args[1].ToString()
-		result, _ := vm.NewRegExp(pattern, flags)
+		result, err := vm.NewRegExp(pattern, flags)
+		if err != nil {
+			return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+		}
 		return result, nil
 	})
 

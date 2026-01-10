@@ -208,9 +208,17 @@ Areas with lower pass rates that need attention:
     1. Change upvalues from pointers to (frame_index, register_index) pairs
     2. Use chunked allocator that doesn't move memory
     3. Close all open upvalues before resizing
+  - **Note**: Crypto benchmark hits this limit with deep BigInteger recursion (~2000+ frames)
 
 - [ ] **Tail Call Optimization** - Already implemented, could extend to more patterns
 
 - [ ] **Inline Caching Improvements** - Current IC validates property names; could add polymorphic caching
 
-- [ ] **Register Spilling** - Compiler panics on "ran out of registers" for very large functions (e.g., earley-boyer.js)
+- [x] **Smart Pinning** - Only pin registers when captured by closures, not at declaration time
+  - Implemented in `emitClosure`/`emitClosureGeneric`
+  - Reduces unnecessary register pinning for non-captured variables
+
+- [ ] **Register Spilling** - Compiler panics on "ran out of registers" for very large functions
+  - RegExp benchmark needs ~298 simultaneous registers (exceeds 255 limit)
+  - Smart pinning doesn't help since all variables are live at the same time
+  - Need `OpLoadLocal`/`OpStoreLocal` opcodes for spilling to heap

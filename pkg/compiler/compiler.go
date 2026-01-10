@@ -18,6 +18,23 @@ import (
 // Also used temporarily for recursive function definition
 const nilRegister Register = 255 // Or another value guaranteed not to be used
 
+// UpvalueCaptureType indicates where to capture a variable from when creating a closure.
+type UpvalueCaptureType byte
+
+const (
+	// CaptureFromUpvalue captures from the enclosing closure's upvalues array.
+	// The index is the upvalue index in the parent closure.
+	CaptureFromUpvalue UpvalueCaptureType = 0
+
+	// CaptureFromRegister captures from a register in the current call frame.
+	// The index is the register number.
+	CaptureFromRegister UpvalueCaptureType = 1
+
+	// CaptureFromSpill captures from a spill slot in the current call frame.
+	// The index is the spill slot index. The VM creates a closed upvalue directly.
+	CaptureFromSpill UpvalueCaptureType = 2
+)
+
 // getExportSpecName extracts the name string from an export specifier's Local or Exported field
 // which can be either an Identifier or StringLiteral (ES2022 string export names)
 func getExportSpecName(expr parser.Expression) string {
@@ -272,6 +289,9 @@ type Compiler struct {
 
 	// --- Parameter Names Tracking ---
 	parameterNames map[string]bool // Set of parameter names for current function (for var hoisting)
+
+	// --- Register Spilling Support ---
+	nextSpillSlot uint8 // Next available spill slot index (0-254)
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -310,6 +330,17 @@ func (c *Compiler) SetIgnoreTypeErrors(ignore bool) {
 // SetHeapAlloc sets the heap allocator for coordinating global indices
 func (c *Compiler) SetHeapAlloc(heapAlloc *HeapAlloc) {
 	c.heapAlloc = heapAlloc
+}
+
+// AllocSpillSlot allocates a new spill slot for storing a variable when registers are exhausted.
+// Returns the spill slot index (0-254). Panics if spill slots are exhausted.
+func (c *Compiler) AllocSpillSlot() uint8 {
+	if c.nextSpillSlot == 255 {
+		panic("Compiler Error: Ran out of spill slots!")
+	}
+	slot := c.nextSpillSlot
+	c.nextSpillSlot++
+	return slot
 }
 
 // GetHeapAlloc returns the compiler's heap allocator
@@ -827,6 +858,21 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		}
 
 		// 0) Predefine block-scoped let/const and function-scoped var so inner closures can capture stable locations
+		// Reserve temp registers for spilling operations and general temp use
+		// We reserve a pool to ensure temps are available throughout the hoisting phase
+		const tempPoolSize = 16
+		var tempPool []Register
+		var spillTempReg Register
+		spillTempUsed := false
+
+		if len(node.Statements) > 0 || len(node.HoistedDeclarations) > 0 {
+			tempPool = make([]Register, tempPoolSize)
+			for i := 0; i < tempPoolSize; i++ {
+				tempPool[i] = c.regAlloc.Alloc()
+			}
+			spillTempReg = tempPool[0] // Use first temp for spill operations
+		}
+
 		if len(node.Statements) > 0 {
 			for _, stmt := range node.Statements {
 				switch s := stmt.(type) {
@@ -835,10 +881,17 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						// Check if variable exists in CURRENT scope only (not outer scopes)
 						// to allow shadowing in enclosed block scopes
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg := c.regAlloc.Alloc()
-							c.currentSymbolTable.Define(s.Name.Value, reg)
-							c.regAlloc.Pin(reg)
-							debugPrintf("// [BlockPredefine] Pre-defined let '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
+							} else {
+								// Variable register threshold reached, use spilling
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
+							}
 						}
 					}
 				case *parser.ConstStatement:
@@ -846,10 +899,17 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						// Check if variable exists in CURRENT scope only (not outer scopes)
 						// to allow shadowing in enclosed block scopes
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg := c.regAlloc.Alloc()
-							c.currentSymbolTable.Define(s.Name.Value, reg)
-							c.regAlloc.Pin(reg)
-							debugPrintf("// [BlockPredefine] Pre-defined const '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
+							} else {
+								// Variable register threshold reached, use spilling
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
+							}
 						}
 					}
 				case *parser.VarStatement:
@@ -870,12 +930,23 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 							// Check if var already defined in function scope
 							if sym, _, found := funcTable.Resolve(declarator.Name.Value); !found || sym.Register == nilRegister {
-								reg := c.regAlloc.Alloc()
-								funcTable.Define(declarator.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-								// Initialize to undefined (var hoisting semantics: declaration is hoisted, not initialization)
-								c.emitLoadUndefined(reg, s.Token.Line)
-								debugPrintf("// [BlockPredefine] Pre-defined var '%s' in register R%d in function scope (funcTable=%p, currentTable=%p)\n", declarator.Name.Value, reg, funcTable, c.currentSymbolTable)
+								reg, ok := c.regAlloc.TryAllocForVariable()
+								if ok {
+									funcTable.Define(declarator.Name.Value, reg)
+									// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+									// Initialize to undefined (var hoisting semantics: declaration is hoisted, not initialization)
+									c.emitLoadUndefined(reg, s.Token.Line)
+									debugPrintf("// [BlockPredefine] Pre-defined var '%s' in register R%d in function scope (funcTable=%p, currentTable=%p)\n", declarator.Name.Value, reg, funcTable, c.currentSymbolTable)
+								} else {
+									// Variable register threshold reached, use spilling
+									spillIdx := c.AllocSpillSlot()
+									funcTable.DefineSpilled(declarator.Name.Value, spillIdx)
+									// Initialize to undefined using the pre-reserved spillTempReg
+									spillTempUsed = true
+									c.emitLoadUndefined(spillTempReg, s.Token.Line)
+									c.emitStoreSpill(spillIdx, spillTempReg, s.Token.Line)
+									debugPrintf("// [BlockPredefine] Pre-defined var '%s' in SPILL SLOT %d in function scope (funcTable=%p, currentTable=%p)\n", declarator.Name.Value, spillIdx, funcTable, c.currentSymbolTable)
+								}
 							}
 						}
 					}
@@ -883,31 +954,61 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			}
 		}
 
+		// Free temp pool (except spillTempReg) BEFORE processing hoisted functions
+		// This makes registers available for capturing spilled variables in closures
+		// We keep spillTempReg for emitting spilled hoisted functions
+		for i := 1; i < len(tempPool); i++ {
+			c.regAlloc.Free(tempPool[i])
+		}
+
 		// 1) Hoist function declarations within this block (function-scoped hoisting)
 		if len(node.HoistedDeclarations) > 0 {
 			debugPrintf("// [BlockStatement] Processing %d hoisted declarations\n", len(node.HoistedDeclarations))
-			// Pre-allocate registers for all hoisted function names to enable mutual recursion with stable locations
+			// Pre-allocate registers (or spill slots) for all hoisted function names to enable mutual recursion with stable locations
 			for name := range node.HoistedDeclarations {
 				if sym, _, found := c.currentSymbolTable.Resolve(name); !found || sym.Register == nilRegister {
-					reg := c.regAlloc.Alloc()
-					c.currentSymbolTable.Define(name, reg)
-					c.regAlloc.Pin(reg)
+					reg, ok := c.regAlloc.TryAllocForVariable()
+					if ok {
+						c.currentSymbolTable.Define(name, reg)
+						c.regAlloc.Pin(reg)
+						debugPrintf("// [HoistedFunc] Pre-defined function '%s' in register R%d\n", name, reg)
+					} else {
+						// Variable register threshold reached, use spilling for hoisted function
+						spillIdx := c.AllocSpillSlot()
+						c.currentSymbolTable.DefineSpilled(name, spillIdx)
+						debugPrintf("// [HoistedFunc] Pre-defined function '%s' in SPILL SLOT %d\n", name, spillIdx)
+					}
 				}
 			}
-			// Compile each hoisted function and emit its closure into the preallocated register
+			// Compile each hoisted function and emit its closure into the preallocated register or spill slot
 			for name, decl := range node.HoistedDeclarations {
 				if funcLit, ok := decl.(*parser.FunctionLiteral); ok {
 					funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, name)
 					if err != nil {
 						return BadRegister, err
 					}
-					// Use the preallocated register for this name
+					// Get the preallocated location for this name
 					sym, _, _ := c.currentSymbolTable.Resolve(name)
-					bindingReg := sym.Register
-					c.emitClosure(bindingReg, funcConstIndex, funcLit, freeSymbols)
-					// Already pinned above
+					if sym.IsSpilled {
+						// Emit closure into temp register, then store to spill slot
+						spillTempUsed = true
+						c.emitClosure(spillTempReg, funcConstIndex, funcLit, freeSymbols)
+						c.emitStoreSpill(sym.SpillIndex, spillTempReg, funcLit.Token.Line)
+						debugPrintf("// [HoistedFunc] Emitted closure for '%s' to spill slot %d via temp R%d\n", name, sym.SpillIndex, spillTempReg)
+					} else {
+						bindingReg := sym.Register
+						c.emitClosure(bindingReg, funcConstIndex, funcLit, freeSymbols)
+						debugPrintf("// [HoistedFunc] Emitted closure for '%s' to register R%d\n", name, bindingReg)
+					}
 				}
 			}
+		}
+
+		// Free spillTempReg (the remaining temp pool register)
+		_ = spillTempUsed // Suppress unused warning
+		_ = spillTempReg  // Suppress unused warning (it's tempPool[0])
+		if len(tempPool) > 0 {
+			c.regAlloc.Free(tempPool[0])
 		}
 
 		// 2) Compile statements in order, tracking completion value
@@ -915,9 +1016,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// Compile directly with hint so nested try-finally with break/continue can correctly
 		// propagate completion values
 		hasCompletionValue := false
-		for _, stmt := range node.Statements {
+		for stmtIdx, stmt := range node.Statements {
+			_ = stmtIdx // Suppress unused warning
+			debugPrintf("// [BlockStatement] Compiling statement %d/%d: %T\n", stmtIdx, len(node.Statements), stmt)
 			resultReg, err := c.compileNode(stmt, hint)
 			if err != nil {
+				debugPrintf("// [BlockStatement] ERROR at statement %d: %v\n", stmtIdx, err)
 				return BadRegister, err
 			}
 			// If the statement produced a value, it's already in hint
@@ -1160,10 +1264,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.RegexLiteral: // Added for regex literals
 		// Create a RegExp object from pattern and flags
-		regexValue, err := vm.NewRegExp(node.Pattern, node.Flags)
-		if err != nil {
-			return BadRegister, NewCompileError(node, fmt.Sprintf("Invalid regex: %s", err.Error()))
-		}
+		// Use NewRegExpDeferred so compilation continues even if Go's regexp can't handle it
+		// The error will be thrown at runtime when the regex is actually used
+		regexValue := vm.NewRegExpDeferred(node.Pattern, node.Flags)
 		c.emitLoadNewConstant(hint, regexValue, node.Token.Line)
 		return hint, nil
 
@@ -1360,6 +1463,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				c.emitOpCode(vm.OpLoadFree, node.Token.Line)
 				c.emitByte(byte(hint))
 				c.emitByte(byte(freeVarIndex))
+			} else if symbolRef.IsSpilled {
+				// Variable is spilled (stored in spill slot, not a register)
+				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, SPILLED variable in outer block scope, spillIdx=%d\n", node.Value, symbolRef.SpillIndex)
+				c.emitLoadSpill(hint, symbolRef.SpillIndex, node.Token.Line)
 			} else {
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, but in outer block scope of SAME function, using direct register access R%d\n", node.Value, symbolRef.Register)
 				// Variable is defined in an outer block scope of the same function (or at top level)
@@ -1371,6 +1478,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				}
 				// If srcReg == hint, no move needed
 			}
+		} else if symbolRef.IsSpilled {
+			// LOCAL spilled variable - load from spill slot
+			debugPrintf("// DEBUG Identifier '%s': LOCAL SPILLED variable, spillIdx=%d\n", node.Value, symbolRef.SpillIndex)
+			c.emitLoadSpill(hint, symbolRef.SpillIndex, node.Token.Line)
 		} else {
 			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED
 			// This is a standard local variable (handled by current stack frame)
@@ -1624,6 +1735,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		c.errors = append(c.errors, functionCompiler.errors...)
 	}
 	regSize := functionCompiler.regAlloc.MaxRegs()
+	functionChunk.NumSpillSlots = int(functionCompiler.nextSpillSlot) // Set spill slots needed
 
 	// 9. Create the bytecode.Function object
 	var funcName string
@@ -2094,57 +2206,71 @@ func (c *Compiler) currentPosition() int {
 func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *parser.FunctionLiteral, freeSymbols []*Symbol) Register {
 	line := node.Token.Line // Use function literal token line
 
-	c.emitOpCode(vm.OpClosure, line)
-	c.emitByte(byte(destReg))
-	c.emitUint16(funcConstIndex)       // Operand 1: Constant index of the function blueprint
-	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
-
 	// Determine the name used for potential self-recursion lookup within the function body.
-	// This logic mirrors the one used inside compileFunctionLiteral when setting up the inner scope.
 	var funcNameForLookup string
 	if node.Name != nil {
 		funcNameForLookup = node.Name.Value
-	} // Note: We don't need the nameHint here as freeSymbols already reflects captures based on the inner scope setup.
+	}
 
-	// Emit operands for each upvalue
+	// PHASE 1: Collect upvalue descriptors for all free symbols.
+	type upvalueInfo struct {
+		captureType UpvalueCaptureType
+		index       byte
+	}
+	upvalueDescriptors := make([]upvalueInfo, len(freeSymbols))
+
 	for i, freeSym := range freeSymbols {
-		debugPrintf("// [emitClosure %s] Emitting upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register) // DEBUG
+		debugPrintf("// [emitClosure %s] Processing upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register)
 
-		// --- Check for self-capture only if the free symbol name matches this function's own name ---
+		// Check for self-capture
 		if freeSym.Register == nilRegister && funcNameForLookup != "" && freeSym.Name == funcNameForLookup {
-			debugPrintf("// [emitClosure SelfCapture] Symbol '%s' is self-reference. Emitting isLocal=1, index=destReg=R%d\n", freeSym.Name, destReg) // DEBUG
-			c.emitByte(1)                                                                                                                             // isLocal = true (capture from the stack where the closure *will be* placed)
-			c.emitByte(byte(destReg))                                                                                                                 // Index = the destination register of OpClosure itself
-			continue                                                                                                                                  // Skip the normal lookup below
+			debugPrintf("// [emitClosure SelfCapture] Symbol '%s' is self-reference, will capture from destReg=R%d\n", freeSym.Name, destReg)
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(destReg)}
+			continue
 		}
 
-		// --- END Check ---
-
-		// Resolve the symbol again in the *enclosing* compiler's context (c)
+		// Resolve the symbol in the enclosing compiler's context
 		enclosingSymbol, enclosingTable, found := c.currentSymbolTable.Resolve(freeSym.Name)
 		if !found {
-			// This should theoretically not happen if freeSym was correctly identified.
 			panic(fmt.Sprintf("compiler internal error: free variable '%s' not found in enclosing scope during closure emission", freeSym.Name))
 		}
 
 		// Check if the variable is in the same function (not an outer function)
-		// Variables from outer block scopes in the same function should be treated as local (isLocal=1)
-		// Variables from outer functions should be treated as upvalues (isLocal=0)
-		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !c.isDefinedInEnclosingCompiler(enclosingTable)) {
-			// The free variable is local in the current function (either in direct scope or outer block scope of same function)
-			debugPrintf("// [emitClosure Upvalue] Free '%s' is Local in same function. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register)
-			c.emitByte(1) // isLocal = true
-			// Capture the value from the enclosing scope's actual register
-			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+		isInEnclosing := c.enclosing != nil && c.isDefinedInEnclosingCompiler(enclosingTable)
+		debugPrintf("// [emitClosure] Checking '%s': enclosingTable=%p, currentTable=%p, c.enclosing=%v, isInEnclosing=%v, IsSpilled=%v\n",
+			freeSym.Name, enclosingTable, c.currentSymbolTable, c.enclosing != nil, isInEnclosing, enclosingSymbol.IsSpilled)
+
+		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !isInEnclosing) {
+			// Variable is local in the current function
+			if enclosingSymbol.IsSpilled {
+				// Spilled variable: capture directly from spill slot
+				// The VM will create a closed upvalue with the spilled value
+				debugPrintf("// [emitClosure] Free '%s' is SPILLED (slot %d), will capture from spill slot\n", freeSym.Name, enclosingSymbol.SpillIndex)
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill, index: enclosingSymbol.SpillIndex}
+			} else {
+				debugPrintf("// [emitClosure] Free '%s' is Local in same function, will capture from R%d\n", freeSym.Name, enclosingSymbol.Register)
+				c.regAlloc.Pin(enclosingSymbol.Register)
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(enclosingSymbol.Register)}
+			}
 		} else {
-			// The free variable is from an outer function's scope
-			// It needs to be captured from the enclosing scope's upvalues
-			// We need the index of this symbol within the *enclosing* compiler's freeSymbols list
+			// Variable is from an outer function's scope
 			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
-			debugPrintf("// [emitClosure Upvalue] Free '%s' is from Outer function. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex)
-			c.emitByte(0)                        // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
+			debugPrintf("// [emitClosure] Free '%s' is from Outer function, upvalue index=%d\n", freeSym.Name, enclosingFreeIndex)
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: enclosingFreeIndex}
 		}
+	}
+
+	// PHASE 2: Now emit OpClosure with all upvalue descriptors immediately following
+	c.emitOpCode(vm.OpClosure, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(funcConstIndex)
+	c.emitByte(byte(len(freeSymbols)))
+
+	// Emit all upvalue descriptors
+	for i, desc := range upvalueDescriptors {
+		debugPrintf("// [emitClosure] Emitting upvalue %d: captureType=%d, index=%d\n", i, desc.captureType, desc.index)
+		c.emitByte(byte(desc.captureType))
+		c.emitByte(desc.index)
 	}
 
 	debugPrintf("// [emitClosure %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
@@ -2162,26 +2288,26 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 		return destReg
 	}
 
-	c.emitOpCode(vm.OpClosure, line)
-	c.emitByte(byte(destReg))
-	c.emitUint16(funcConstIndex)       // Operand 1: Constant index of the function blueprint
-	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
-
 	// Determine the name used for potential self-recursion lookup
 	var funcNameForLookup string
 	if nameNode != nil {
 		funcNameForLookup = nameNode.Value
 	}
 
-	// Emit operands for each upvalue (same logic as emitClosure)
-	for i, freeSym := range freeSymbols {
-		debugPrintf("// [emitClosureGeneric %s] Emitting upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register)
+	// PHASE 1: Collect upvalue descriptors for all free symbols.
+	type upvalueInfo struct {
+		captureType UpvalueCaptureType
+		index       byte
+	}
+	upvalueDescriptors := make([]upvalueInfo, len(freeSymbols))
 
-		// Check for self-capture first
+	for i, freeSym := range freeSymbols {
+		debugPrintf("// [emitClosureGeneric %s] Processing upvalue %d: %s (Original Reg: R%d)\n", funcNameForLookup, i, freeSym.Name, freeSym.Register)
+
+		// Check for self-capture
 		if freeSym.Register == nilRegister && funcNameForLookup != "" && freeSym.Name == funcNameForLookup {
-			debugPrintf("// [emitClosureGeneric SelfCapture] Symbol '%s' is self-reference. Emitting isLocal=1, index=destReg=R%d\n", freeSym.Name, destReg)
-			c.emitByte(1)             // isLocal = true
-			c.emitByte(byte(destReg)) // Index = the destination register of OpClosure itself
+			debugPrintf("// [emitClosureGeneric SelfCapture] Symbol '%s' is self-reference, will capture from destReg=R%d\n", freeSym.Name, destReg)
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(destReg)}
 			continue
 		}
 
@@ -2192,22 +2318,39 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 		}
 
 		// Check if the variable is in the same function (not an outer function)
-		// Variables from outer block scopes in the same function should be treated as local (isLocal=1)
-		// Variables from outer functions should be treated as upvalues (isLocal=0)
-		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !c.isDefinedInEnclosingCompiler(enclosingTable)) {
-			// The free variable is local in the current function (either in direct scope or outer block scope of same function)
-			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is Local in same function. Emitting isLocal=1, index=R%d\n", freeSym.Name, enclosingSymbol.Register)
-			c.emitByte(1)                              // isLocal = true
-			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+		isInEnclosing := c.enclosing != nil && c.isDefinedInEnclosingCompiler(enclosingTable)
+
+		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !isInEnclosing) {
+			// Variable is local in the current function
+			if enclosingSymbol.IsSpilled {
+				// Spilled variable: capture directly from spill slot
+				debugPrintf("// [emitClosureGeneric] Free '%s' is SPILLED (slot %d), will capture from spill slot\n", freeSym.Name, enclosingSymbol.SpillIndex)
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill, index: enclosingSymbol.SpillIndex}
+			} else {
+				debugPrintf("// [emitClosureGeneric] Free '%s' is Local in same function, will capture from R%d\n", freeSym.Name, enclosingSymbol.Register)
+				c.regAlloc.Pin(enclosingSymbol.Register)
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(enclosingSymbol.Register)}
+			}
 		} else {
-			// The free variable is from an outer function's scope
-			// Create a dummy node for addFreeSymbol (it only uses the node for error reporting)
+			// Variable is from an outer function's scope
 			dummyNode := &parser.Identifier{Token: lexer.Token{}, Value: freeSym.Name}
 			enclosingFreeIndex := c.addFreeSymbol(dummyNode, &enclosingSymbol)
-			debugPrintf("// [emitClosureGeneric Upvalue] Free '%s' is from Outer function. Emitting isLocal=0, index=%d\n", freeSym.Name, enclosingFreeIndex)
-			c.emitByte(0)                        // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
+			debugPrintf("// [emitClosureGeneric] Free '%s' is from Outer function, upvalue index=%d\n", freeSym.Name, enclosingFreeIndex)
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: enclosingFreeIndex}
 		}
+	}
+
+	// PHASE 2: Now emit OpClosure with all upvalue descriptors immediately following
+	c.emitOpCode(vm.OpClosure, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(funcConstIndex)
+	c.emitByte(byte(len(freeSymbols)))
+
+	// Emit all upvalue descriptors
+	for i, desc := range upvalueDescriptors {
+		debugPrintf("// [emitClosureGeneric] Emitting upvalue %d: captureType=%d, index=%d\n", i, desc.captureType, desc.index)
+		c.emitByte(byte(desc.captureType))
+		c.emitByte(desc.index)
 	}
 
 	debugPrintf("// [emitClosureGeneric %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)

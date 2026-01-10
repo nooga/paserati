@@ -5,24 +5,44 @@ import (
 	"regexp"
 	"strings"
 	"unsafe"
+
+	"github.com/dlclark/regexp2"
 )
 
 // RegExpObject represents a JavaScript RegExp object backed by Go's regexp package
+// Uses Go's standard regexp (RE2) for simple patterns, falls back to regexp2 for
+// advanced features like lookahead and backreferences.
 type RegExpObject struct {
-	Object                       // Embed the base Object for properties and prototype
-	compiledRegex *regexp.Regexp // Go's compiled regex engine
-	source        string         // Original pattern string (without slashes)
-	flags         string         // JavaScript flags (g, i, m, s, u, y)
-	global        bool           // Cached global flag for performance
-	ignoreCase    bool           // Cached ignoreCase flag
-	multiline     bool           // Cached multiline flag
-	dotAll        bool           // Cached dotAll flag
-	lastIndex     int            // For global regex stateful matching
-	Properties    *PlainObject   // Storage for user-defined properties
+	Object                        // Embed the base Object for properties and prototype
+	compiledRegex  *regexp.Regexp // Go's compiled regex engine (fast, RE2)
+	compiledRegex2 *regexp2.Regexp // Fallback regex engine (slower, full ECMAScript support)
+	source         string          // Original pattern string (without slashes)
+	flags          string          // JavaScript flags (g, i, m, s, u, y)
+	global         bool            // Cached global flag for performance
+	ignoreCase     bool            // Cached ignoreCase flag
+	multiline      bool            // Cached multiline flag
+	dotAll         bool            // Cached dotAll flag
+	lastIndex      int             // For global regex stateful matching
+	Properties     *PlainObject    // Storage for user-defined properties
+	compileError   string          // If non-empty, regex couldn't be compiled by either engine
 }
 
 // NewRegExp creates a new RegExp object from pattern and flags
 func NewRegExp(pattern, flags string) (Value, error) {
+	// ECMAScript forbids line terminators (U+2028, U+2029) in regex patterns
+	if strings.ContainsRune(pattern, '\u2028') || strings.ContainsRune(pattern, '\u2029') {
+		return Undefined, fmt.Errorf("Invalid regular expression: line terminator in pattern")
+	}
+
+	// ECMAScript forbids lone surrogates in regex patterns
+	// In UTF-8, surrogates are encoded as: ED [A0-BF] [80-BF]
+	patternBytes := []byte(pattern)
+	for i := 0; i < len(patternBytes)-2; i++ {
+		if patternBytes[i] == 0xED && patternBytes[i+1] >= 0xA0 && patternBytes[i+1] <= 0xBF {
+			return Undefined, fmt.Errorf("Invalid regular expression: lone surrogate in pattern")
+		}
+	}
+
 	// Translate JavaScript flags to Go regex pattern
 	goPattern, err := translateJSFlagsToGo(pattern, flags)
 	if err != nil {
@@ -54,6 +74,282 @@ func NewRegExp(pattern, flags string) (Value, error) {
 	}
 
 	return RegExpValue(regexObj), nil
+}
+
+// NewRegExpDeferred creates a RegExp object, trying Go's fast RE2 engine first,
+// then falling back to regexp2 for advanced features like lookahead/backreferences.
+// Only errors if both engines fail to compile the pattern.
+func NewRegExpDeferred(pattern, flags string) Value {
+	// ECMAScript forbids line terminators (U+2028, U+2029) in regex literals
+	if strings.ContainsRune(pattern, '\u2028') || strings.ContainsRune(pattern, '\u2029') {
+		regexObj := &RegExpObject{
+			Object:       Object{},
+			source:       pattern,
+			flags:        flags,
+			compileError: "Invalid regular expression: line terminator in pattern",
+		}
+		return RegExpValue(regexObj)
+	}
+
+	// ECMAScript forbids lone surrogates (unpaired high/low surrogates) in regex patterns
+	// In UTF-8, surrogates are encoded as: ED [A0-BF] [80-BF]
+	// High surrogates (U+D800-U+DBFF): ED [A0-AF] [80-BF]
+	// Low surrogates (U+DC00-U+DFFF): ED [B0-BF] [80-BF]
+	patternBytes := []byte(pattern)
+	for i := 0; i < len(patternBytes)-2; i++ {
+		if patternBytes[i] == 0xED && patternBytes[i+1] >= 0xA0 && patternBytes[i+1] <= 0xBF {
+			regexObj := &RegExpObject{
+				Object:       Object{},
+				source:       pattern,
+				flags:        flags,
+				compileError: "Invalid regular expression: lone surrogate in pattern",
+			}
+			return RegExpValue(regexObj)
+		}
+	}
+
+	// Parse individual flags
+	global := strings.Contains(flags, "g")
+	ignoreCase := strings.Contains(flags, "i")
+	multiline := strings.Contains(flags, "m")
+	dotAll := strings.Contains(flags, "s")
+
+	var compiledRegex *regexp.Regexp
+	var compiledRegex2 *regexp2.Regexp
+	var compileError string
+
+	// Try Go's standard regexp (RE2) first - it's faster
+	goPattern, err := translateJSFlagsToGo(pattern, flags)
+	if err == nil {
+		compiledRegex, err = regexp.Compile(goPattern)
+	}
+
+	// If RE2 failed, try regexp2 (full ECMAScript support)
+	if compiledRegex == nil {
+		// Build regexp2 options
+		opts := regexp2.RegexOptions(regexp2.ECMAScript)
+		if ignoreCase {
+			opts |= regexp2.RegexOptions(regexp2.IgnoreCase)
+		}
+		if multiline {
+			opts |= regexp2.RegexOptions(regexp2.Multiline)
+		}
+		if dotAll {
+			opts |= regexp2.RegexOptions(regexp2.Singleline) // In regexp2, Singleline makes . match \n
+		}
+
+		compiledRegex2, err = regexp2.Compile(pattern, opts)
+		if err != nil {
+			compileError = err.Error()
+		}
+	}
+
+	regexObj := &RegExpObject{
+		Object:         Object{},
+		compiledRegex:  compiledRegex,  // Fast path (may be nil)
+		compiledRegex2: compiledRegex2, // Fallback (may be nil)
+		source:         pattern,
+		flags:          flags,
+		global:         global,
+		ignoreCase:     ignoreCase,
+		multiline:      multiline,
+		dotAll:         dotAll,
+		lastIndex:      0,
+		compileError:   compileError, // Only set if both engines failed
+	}
+
+	return RegExpValue(regexObj)
+}
+
+// HasCompileError returns true if this regex has a deferred compilation error
+func (r *RegExpObject) HasCompileError() bool {
+	return r.compileError != ""
+}
+
+// GetCompileError returns the compilation error message, or empty string if no error
+func (r *RegExpObject) GetCompileError() string {
+	return r.compileError
+}
+
+// UsesRegexp2 returns true if this regex uses the regexp2 fallback engine
+func (r *RegExpObject) UsesRegexp2() bool {
+	return r.compiledRegex == nil && r.compiledRegex2 != nil
+}
+
+// MatchString returns true if the pattern matches the string
+func (r *RegExpObject) MatchString(s string) bool {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.MatchString(s)
+	}
+	if r.compiledRegex2 != nil {
+		match, _ := r.compiledRegex2.MatchString(s)
+		return match
+	}
+	return false
+}
+
+// FindStringSubmatch returns the leftmost match and any captured submatches
+func (r *RegExpObject) FindStringSubmatch(s string) []string {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.FindStringSubmatch(s)
+	}
+	if r.compiledRegex2 != nil {
+		match, err := r.compiledRegex2.FindStringMatch(s)
+		if err != nil || match == nil {
+			return nil
+		}
+		groups := match.Groups()
+		result := make([]string, len(groups))
+		for i, g := range groups {
+			result[i] = g.String()
+		}
+		return result
+	}
+	return nil
+}
+
+// FindStringSubmatchIndex returns the index pairs for the leftmost match
+func (r *RegExpObject) FindStringSubmatchIndex(s string) []int {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.FindStringSubmatchIndex(s)
+	}
+	if r.compiledRegex2 != nil {
+		match, err := r.compiledRegex2.FindStringMatch(s)
+		if err != nil || match == nil {
+			return nil
+		}
+		groups := match.Groups()
+		result := make([]int, len(groups)*2)
+		for i, g := range groups {
+			if g.Length > 0 {
+				result[i*2] = g.Index
+				result[i*2+1] = g.Index + g.Length
+			} else {
+				result[i*2] = -1
+				result[i*2+1] = -1
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// FindAllStringSubmatchIndex returns all matches with their indices
+func (r *RegExpObject) FindAllStringSubmatchIndex(s string, n int) [][]int {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.FindAllStringSubmatchIndex(s, n)
+	}
+	if r.compiledRegex2 != nil {
+		var results [][]int
+		match, err := r.compiledRegex2.FindStringMatch(s)
+		for err == nil && match != nil && (n < 0 || len(results) < n) {
+			groups := match.Groups()
+			indices := make([]int, len(groups)*2)
+			for i, g := range groups {
+				if g.Length > 0 {
+					indices[i*2] = g.Index
+					indices[i*2+1] = g.Index + g.Length
+				} else {
+					indices[i*2] = -1
+					indices[i*2+1] = -1
+				}
+			}
+			results = append(results, indices)
+			match, err = r.compiledRegex2.FindNextMatch(match)
+		}
+		return results
+	}
+	return nil
+}
+
+// FindAllString returns all successive matches
+func (r *RegExpObject) FindAllString(s string, n int) []string {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.FindAllString(s, n)
+	}
+	if r.compiledRegex2 != nil {
+		var results []string
+		match, err := r.compiledRegex2.FindStringMatch(s)
+		for err == nil && match != nil && (n < 0 || len(results) < n) {
+			results = append(results, match.String())
+			match, err = r.compiledRegex2.FindNextMatch(match)
+		}
+		return results
+	}
+	return nil
+}
+
+// FindStringIndex returns the index of the leftmost match
+func (r *RegExpObject) FindStringIndex(s string) []int {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.FindStringIndex(s)
+	}
+	if r.compiledRegex2 != nil {
+		match, err := r.compiledRegex2.FindStringMatch(s)
+		if err != nil || match == nil {
+			return nil
+		}
+		return []int{match.Index, match.Index + match.Length}
+	}
+	return nil
+}
+
+// ReplaceAllString replaces all matches with the replacement string
+func (r *RegExpObject) ReplaceAllString(src, repl string) string {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.ReplaceAllString(src, repl)
+	}
+	if r.compiledRegex2 != nil {
+		result, _ := r.compiledRegex2.Replace(src, repl, -1, -1)
+		return result
+	}
+	return src
+}
+
+// ReplaceAllStringFunc replaces all matches using a function
+func (r *RegExpObject) ReplaceAllStringFunc(src string, repl func(string) string) string {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.ReplaceAllStringFunc(src, repl)
+	}
+	if r.compiledRegex2 != nil {
+		// regexp2 doesn't have a direct equivalent, so we implement it manually
+		var result strings.Builder
+		lastEnd := 0
+		match, err := r.compiledRegex2.FindStringMatch(src)
+		for err == nil && match != nil {
+			result.WriteString(src[lastEnd:match.Index])
+			result.WriteString(repl(match.String()))
+			lastEnd = match.Index + match.Length
+			match, err = r.compiledRegex2.FindNextMatch(match)
+		}
+		result.WriteString(src[lastEnd:])
+		return result.String()
+	}
+	return src
+}
+
+// Split splits the string by the regex pattern
+func (r *RegExpObject) Split(s string, n int) []string {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.Split(s, n)
+	}
+	if r.compiledRegex2 != nil {
+		// Implement split for regexp2
+		if n == 0 {
+			return nil
+		}
+		var results []string
+		lastEnd := 0
+		match, err := r.compiledRegex2.FindStringMatch(s)
+		for err == nil && match != nil && (n < 0 || len(results) < n-1) {
+			results = append(results, s[lastEnd:match.Index])
+			lastEnd = match.Index + match.Length
+			match, err = r.compiledRegex2.FindNextMatch(match)
+		}
+		results = append(results, s[lastEnd:])
+		return results
+	}
+	return []string{s}
 }
 
 // preprocessUnicodeEscapes converts JavaScript \uXXXX and \xXX escapes to actual Unicode characters

@@ -868,6 +868,9 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	// Generate appropriate store instruction based on symbol type
 	if symbol.IsGlobal {
 		c.emitSetGlobal(symbol.GlobalIndex, valueReg, line)
+	} else if symbol.IsSpilled {
+		// For spilled variables, store to spill slot
+		c.emitStoreSpill(symbol.SpillIndex, valueReg, line)
 	} else {
 		// For local variables, move to the allocated register
 		if valueReg != symbol.Register {

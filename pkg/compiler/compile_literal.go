@@ -204,6 +204,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		}
 	}
 	arrowName := "<arrow>"
+	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot) // Set spill slots needed
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 
@@ -371,6 +372,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	functionChunk := funcCompiler.chunk
 	freeSymbols := funcCompiler.freeSymbols
 	regSize := funcCompiler.regAlloc.MaxRegs()
+	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot) // Set spill slots needed
 
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true)
 	constIdx := c.chunk.AddConstant(funcValue)
@@ -1144,6 +1146,43 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		paramReg := functionCompiler.regAlloc.Alloc()
 		debugPrintf("// [Compiler] Destructuring parameter %d allocated R%d\n", i, paramReg)
 
+		// Handle default value for destructuring parameter
+		// If paramReg is undefined, use the default value instead
+		if param.DefaultValue != nil {
+			// Create a temporary register to hold undefined for comparison
+			undefinedReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
+
+			// Create another temporary register for the comparison result
+			compareReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
+
+			// Jump if the comparison is false (parameter is not undefined, so keep original value)
+			jumpIfDefinedPos := functionCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
+
+			// Free temporary registers
+			functionCompiler.regAlloc.Free(undefinedReg)
+			functionCompiler.regAlloc.Free(compareReg)
+
+			// Compile the default value expression
+			defaultValueReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.inDefaultParamScope = true
+			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
+			functionCompiler.inDefaultParamScope = false
+			if err != nil {
+				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for destructuring parameter: %v", err))
+			} else {
+				// Move the default value to the parameter register
+				if defaultValueReg != paramReg {
+					functionCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
+				}
+			}
+			functionCompiler.regAlloc.Free(defaultValueReg)
+
+			// Patch the jump to come here (end of default value assignment)
+			functionCompiler.patchJump(jumpIfDefinedPos)
+		}
+
 		// Compile the destructuring pattern
 		// The destructuring will extract values from paramReg and bind them to local variables
 		switch pattern := param.Pattern.(type) {
@@ -1329,6 +1368,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 		c.errors = append(c.errors, functionCompiler.errors...)
 	}
 	regSize := functionCompiler.regAlloc.MaxRegs()
+	functionChunk.NumSpillSlots = int(functionCompiler.nextSpillSlot) // Set spill slots needed
 
 	// Generate scope descriptor if this function contains direct eval
 	if functionCompiler.hasDirectEval {
