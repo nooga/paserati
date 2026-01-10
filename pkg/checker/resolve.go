@@ -2,10 +2,11 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // --- Helper Functions ---
@@ -74,11 +75,11 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				debugPrintf("// [Checker resolveTypeAnno Ident] Found forward reference for '%s'\n", node.Value)
 				return forwardRef
 			}
-			
+
 			// Check if this is a constructor type (like Date, Array, String builtins)
 			if objType, ok := value.(*types.ObjectType); ok {
 				debugPrintf("// [Checker resolveTypeAnno Ident] '%s' is ObjectType, IsCallable: %v, IsConstructable: %v\n", node.Value, objType.IsCallable(), objType.IsConstructable())
-				
+
 				// Check for construct signatures first (preferred for type annotations)
 				if objType.IsConstructable() {
 					constructSigs := objType.GetConstructSignatures()
@@ -89,7 +90,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 						return returnType
 					}
 				}
-				
+
 				// Check for call signatures (for builtins that are callable as constructors)
 				if objType.IsCallable() {
 					callSigs := objType.GetCallSignatures()
@@ -110,14 +111,14 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		resolvedAlias, found := c.env.ResolveType(node.Value)
 		if found {
 			debugPrintf("// [Checker resolveTypeAnno Ident] Resolved '%s' as alias: %T\n", node.Value, resolvedAlias) // ADDED DEBUG
-			
+
 			// Check if this is a GenericType that needs instantiation with defaults
 			if genericType, ok := resolvedAlias.(*types.GenericType); ok {
 				debugPrintf("// [Checker resolveTypeAnno Ident] Found generic type '%s', instantiating with defaults\n", node.Value)
 				// Instantiate with no explicit type arguments - will use defaults
 				return c.instantiateGenericType(genericType, []types.Type{}, []parser.Expression{})
 			}
-			
+
 			return resolvedAlias // Successfully resolved as a non-generic alias
 		}
 		debugPrintf("// [Checker resolveTypeAnno Ident] '%s' not found as alias, checking primitives...\n", node.Value) // ADDED DEBUG
@@ -156,7 +157,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				}
 				debugPrintf("// [Checker resolveTypeAnno Ident] '%s' not found as imported type\n", node.Value)
 			}
-			
+
 			// 4. If neither alias, primitive, nor imported type, it's an unknown type name
 			debugPrintf("// [Checker resolveTypeAnno Ident] Primitive check failed for '%s', reporting error.\n", node.Value) // ADDED DEBUG
 			// Use the Identifier node itself for error reporting
@@ -361,7 +362,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 						break // Once we hit a parameter with a default, all following must have defaults
 					}
 				}
-				
+
 				if len(node.TypeArguments) < minRequired || len(node.TypeArguments) > len(genericType.TypeParameters) {
 					if minRequired == len(genericType.TypeParameters) {
 						c.addError(node, fmt.Sprintf("Generic type '%s' expects %d type arguments, got %d",
@@ -390,7 +391,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				// allow it and create a placeholder generic instantiation
 				// This is common for type-only imports where we don't have the full type information
 				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Allowing generic syntax on unresolved type '%s' with %d type args\n", node.Name.Value, len(node.TypeArguments))
-				
+
 				// Resolve type arguments even though we don't know the base type
 				typeArgs := make([]types.Type, len(node.TypeArguments))
 				for i, argExpr := range node.TypeArguments {
@@ -400,7 +401,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 					}
 					typeArgs[i] = argType
 				}
-				
+
 				// Return a generic forward reference that preserves the type arguments
 				// This allows interface inheritance and other generic type usage to work
 				return &types.GenericTypeAliasForwardReference{
@@ -515,7 +516,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 			Name:       paramNode.Name.Value,
 			Constraint: types.Any, // Default constraint
 		}
-		
+
 		// Handle constraint if present
 		if paramNode.Constraint != nil {
 			constraint := c.resolveTypeAnnotation(paramNode.Constraint)
@@ -523,7 +524,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 				typeParam.Constraint = constraint
 			}
 		}
-		
+
 		typeParams[i] = typeParam
 	}
 
@@ -579,7 +580,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
-	
+
 	// Create the function type
 	functionType := types.NewFunctionType(sig)
 
@@ -664,7 +665,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				if prop.Optional {
 					optionalProperties[computedName] = true
 				}
-				debugPrintf("// [Checker ObjectType] Computed property '%s': %s\n", 
+				debugPrintf("// [Checker ObjectType] Computed property '%s': %s\n",
 					computedName, propType.String())
 			} else {
 				// Dynamic computed property - treat as index signature for now
@@ -901,12 +902,12 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	debugPrintf("// [InstantiateGeneric] Body type: %s (Go type: %T)\n", genericType.Body.String(), genericType.Body)
 	// Handle default type parameters when fewer arguments are provided
 	finalTypeArgs := make([]types.Type, len(genericType.TypeParameters))
-	
+
 	// Fill in provided type arguments
 	for i := 0; i < len(typeArgs) && i < len(genericType.TypeParameters); i++ {
 		finalTypeArgs[i] = typeArgs[i]
 	}
-	
+
 	// Fill in defaults for missing type arguments
 	for i := len(typeArgs); i < len(genericType.TypeParameters); i++ {
 		typeParam := genericType.TypeParameters[i]
@@ -1138,10 +1139,10 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Substitute check type and false type
 		newCheckType := c.substituteTypes(typ.CheckType, substitution)
 		newFalseType := c.substituteTypes(typ.FalseType, substitution)
-		
+
 		// For extends type, don't substitute infer types - they should remain as inference placeholders
 		newExtendsType := c.substituteTypesPreservingInfer(typ.ExtendsType, substitution)
-		
+
 		// For true type, don't substitute infer types - they will be replaced by inference results
 		newTrueType := c.substituteTypesPreservingInfer(typ.TrueType, substitution)
 
@@ -1216,7 +1217,7 @@ func (c *Checker) resolveKeyofTypeExpression(node *parser.KeyofTypeExpression) t
 // resolveTypeofTypeExpression resolves a typeof type expression to the type of a variable
 func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression) types.Type {
 	debugPrintf("// [Checker resolveTypeofType] Resolving typeof %s\n", node.Identifier)
-	
+
 	if node.Identifier == "" {
 		c.addError(node, "typeof expression missing identifier")
 		return nil
@@ -1225,7 +1226,7 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 	// Look up the identifier in the type environment
 	varType, _, found := c.env.Resolve(node.Identifier)
 	debugPrintf("// [Checker resolveTypeofType] Looking up '%s' in env: found=%v\n", node.Identifier, found)
-	
+
 	if !found {
 		// Instead of failing immediately, create a forward reference for typeof
 		// This will be resolved later when the variable is defined
@@ -1244,7 +1245,7 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 	if typeofType, ok := t.(*types.TypeofType); ok {
 		debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Resolving forward reference for typeof %s\n", typeofType.Identifier)
-		
+
 		// Look up the identifier in the environment
 		varType, _, found := c.env.Resolve(typeofType.Identifier)
 		if found {
@@ -1514,7 +1515,7 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	// Resolve typeof forward references before processing
 	checkType = c.resolveTypeofTypeIfNeeded(checkType)
 	extendsType = c.resolveTypeofTypeIfNeeded(extendsType)
-	
+
 	debugPrintf("// [ConditionalType] After resolving typeof: CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
 	debugPrintf("// [ConditionalType] After resolving typeof: ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
 
@@ -1522,10 +1523,10 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	inferences := make(map[string]types.Type)
 	if c.tryInferTypes(checkType, extendsType, inferences) {
 		debugPrintf("// [ConditionalType] Inference successful with %d captured types\n", len(inferences))
-		
+
 		// Apply the inferences to the true type
 		substitutedTrueType := c.substituteInferredTypes(trueType, inferences)
-		debugPrintf("// [ConditionalType] YES with inference: %s extends %s -> %s\n", 
+		debugPrintf("// [ConditionalType] YES with inference: %s extends %s -> %s\n",
 			checkType.String(), extendsType.String(), substitutedTrueType.String())
 		return substitutedTrueType
 	}
@@ -1839,7 +1840,7 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 			inferences[et.TypeParameter] = checkType
 		}
 		return true
-		
+
 	case *types.ObjectType:
 		// Handle function type inference like (...args: any[]) => infer R
 		debugPrintf("// [TryInfer] Both are ObjectType\n")
@@ -1861,7 +1862,7 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 		}
 		debugPrintf("// [TryInfer] ObjectType inference failed\n")
 		return false
-		
+
 	case *types.ArrayType:
 		// Handle array type inference like (infer U)[]
 		if ct, ok := checkType.(*types.ArrayType); ok {
@@ -1882,7 +1883,7 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 			return true
 		}
 		return false
-		
+
 	default:
 		// For other types, check if they're structurally compatible
 		return types.IsAssignable(checkType, extendsType)
@@ -1892,13 +1893,13 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 // tryInferFromFunctionTypes handles function type inference
 func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signature, inferences map[string]types.Type) bool {
 	debugPrintf("// [TryInferFunc] === Function inference ===\n")
-	
+
 	// Add nil checks to prevent panic
 	if checkSig == nil || extendsSig == nil {
 		debugPrintf("// [TryInferFunc] One of the signatures is nil\n")
 		return false
 	}
-	
+
 	// Check for nil return types
 	if checkSig.ReturnType == nil {
 		debugPrintf("// [TryInferFunc] Check return type is nil\n")
@@ -1908,7 +1909,7 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 		debugPrintf("// [TryInferFunc] Extends return type is nil\n")
 		return false
 	}
-	
+
 	debugPrintf("// [TryInferFunc] Check return: %s\n", checkSig.ReturnType.String())
 	debugPrintf("// [TryInferFunc] Extends return: %s\n", extendsSig.ReturnType.String())
 	// Try to infer from return type
@@ -1917,14 +1918,14 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 		return false
 	}
 	debugPrintf("// [TryInferFunc] Return type inference succeeded\n")
-	
+
 	// Try to infer from parameter types
 	debugPrintf("// [TryInferFunc] Check params: %d, Extends params: %d\n", len(checkSig.ParameterTypes), len(extendsSig.ParameterTypes))
 	minParams := len(checkSig.ParameterTypes)
 	if len(extendsSig.ParameterTypes) < minParams {
 		minParams = len(extendsSig.ParameterTypes)
 	}
-	
+
 	for i := 0; i < minParams; i++ {
 		// Add nil checks for parameter types
 		if checkSig.ParameterTypes[i] == nil || extendsSig.ParameterTypes[i] == nil {
@@ -1938,22 +1939,22 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 		}
 	}
 	debugPrintf("// [TryInferFunc] All parameters inferred successfully\n")
-	
+
 	// NEW: Handle rest parameter inference
 	// This is crucial for Parameters<T> utility type
 	if extendsSig.RestParameterType != nil {
 		debugPrintf("// [TryInferFunc] Rest parameter inference needed. Extends rest type: %s\n", extendsSig.RestParameterType.String())
 		// For Parameters<T>, we want to infer the parameter types as a tuple
 		// The extends pattern is (...args: infer P) => any where P should be the parameter tuple
-		
+
 		// Create a tuple from ALL function parameters (both regular and rest)
 		var allParamTypes []types.Type
 		var optionalElements []bool
 		var restElementType types.Type
-		
+
 		// Add all regular parameters first
 		allParamTypes = append(allParamTypes, checkSig.ParameterTypes...)
-		
+
 		// Mark optional parameters
 		if checkSig.OptionalParams != nil {
 			// Extend optionalElements to match the length of allParamTypes
@@ -1962,15 +1963,15 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 		} else {
 			optionalElements = make([]bool, len(allParamTypes))
 		}
-		
+
 		// If there's a rest parameter, handle it as a rest element type
 		if checkSig.RestParameterType != nil {
-			// For Parameters<T>, the rest parameter type (e.g., number[]) 
+			// For Parameters<T>, the rest parameter type (e.g., number[])
 			// becomes the rest element type in the tuple
 			// So f(...rest: number[]) -> [...number[]]
 			restElementType = checkSig.RestParameterType
 		}
-		
+
 		// Create tuple type from all parameters
 		tupleType := &types.TupleType{
 			ElementTypes:     allParamTypes,
@@ -1978,13 +1979,13 @@ func (c *Checker) tryInferFromFunctionTypes(checkSig, extendsSig *types.Signatur
 			RestElementType:  restElementType,
 		}
 		debugPrintf("// [TryInferFunc] Created tuple: %s\n", tupleType.String())
-		
+
 		if !c.tryInferTypes(tupleType, extendsSig.RestParameterType, inferences) {
 			debugPrintf("// [TryInferFunc] Rest parameter inference failed\n")
 			return false
 		}
 	}
-	
+
 	return true
 }
 
@@ -1993,7 +1994,7 @@ func (c *Checker) substituteInferredTypes(targetType types.Type, inferences map[
 	if targetType == nil {
 		return nil
 	}
-	
+
 	switch t := targetType.(type) {
 	case *types.InferType:
 		// Replace infer type with inferred type
@@ -2001,12 +2002,12 @@ func (c *Checker) substituteInferredTypes(targetType types.Type, inferences map[
 			return inferredType
 		}
 		return targetType
-		
+
 	case *types.ArrayType:
 		// Recursively substitute in array element type
 		substitutedElement := c.substituteInferredTypes(t.ElementType, inferences)
 		return &types.ArrayType{ElementType: substitutedElement}
-		
+
 	case *types.UnionType:
 		// Recursively substitute in union members
 		var substitutedTypes []types.Type
@@ -2015,7 +2016,7 @@ func (c *Checker) substituteInferredTypes(targetType types.Type, inferences map[
 			substitutedTypes = append(substitutedTypes, substituted)
 		}
 		return types.NewUnionType(substitutedTypes...)
-		
+
 	default:
 		// For other types, return as-is
 		return targetType
@@ -2146,7 +2147,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 	case *types.InferType:
 		// Don't substitute infer types - they should remain as inference placeholders
 		return typ
-		
+
 	case *types.TypeParameterType:
 		// Substitute type parameters as normal
 		if t.Parameter != nil {
@@ -2155,12 +2156,12 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 			}
 		}
 		return typ
-		
+
 	case *types.ArrayType:
 		// Recursively preserve infer in array element type
 		substitutedElement := c.substituteTypesPreservingInfer(t.ElementType, substitution)
 		return &types.ArrayType{ElementType: substitutedElement}
-		
+
 	case *types.UnionType:
 		// Recursively preserve infer in union members
 		var substitutedTypes []types.Type
@@ -2169,7 +2170,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 			substitutedTypes = append(substitutedTypes, substituted)
 		}
 		return types.NewUnionType(substitutedTypes...)
-		
+
 	case *types.ObjectType:
 		// For function types, recursively handle call signatures
 		if len(t.CallSignatures) > 0 {
@@ -2181,7 +2182,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 					newParamTypes[j] = c.substituteTypesPreservingInfer(paramType, substitution)
 				}
 				newReturnType := c.substituteTypesPreservingInfer(sig.ReturnType, substitution)
-				
+
 				newSigs[i] = &types.Signature{
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
@@ -2190,7 +2191,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 					RestParameterType: sig.RestParameterType,
 				}
 			}
-			
+
 			// Create new ObjectType with substituted signatures
 			newObj := types.NewObjectType()
 			for _, sig := range newSigs {
@@ -2199,7 +2200,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 			return newObj
 		}
 		return typ
-		
+
 	default:
 		// For other types, fall back to regular substitution
 		return c.substituteTypes(typ, substitution)
@@ -2241,7 +2242,7 @@ func (c *Checker) computeTemplateLiteralType(tlt *types.TemplateLiteralType) typ
 
 // resolveEnumMemberTypeExpression resolves enum member type access like 'Color.Red' in type context
 func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression) types.Type {
-	debugPrintf("// [Checker resolveEnumMemberType] Resolving %s.%s\n", 
+	debugPrintf("// [Checker resolveEnumMemberType] Resolving %s.%s\n",
 		node.Object.String(), node.Property.String())
 
 	// Object should be an identifier representing the enum name
@@ -2251,7 +2252,7 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 		return nil
 	}
 
-	// Property should be an identifier representing the member name  
+	// Property should be an identifier representing the member name
 	memberIdent, ok := node.Property.(*parser.Identifier)
 	if !ok {
 		c.addError(node.Property, "enum member access requires identifier after '.'")
@@ -2282,7 +2283,7 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 		return nil
 	}
 
-	debugPrintf("// [Checker resolveEnumMemberType] Resolved %s.%s to %s\n", 
+	debugPrintf("// [Checker resolveEnumMemberType] Resolved %s.%s to %s\n",
 		enumName, memberName, memberType.String())
 
 	return memberType

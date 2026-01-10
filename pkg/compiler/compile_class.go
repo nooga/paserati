@@ -3,12 +3,13 @@ package compiler
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strconv"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // cleanExponentialFormat removes leading zeros from exponent to match JS format

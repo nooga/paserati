@@ -1,10 +1,10 @@
 package compiler
 
 import (
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // compileReflectCall compiles a Paserati.reflect<T>() intrinsic call

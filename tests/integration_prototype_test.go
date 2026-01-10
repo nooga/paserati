@@ -2,8 +2,9 @@ package tests
 
 import (
 	"testing"
-	"paserati/pkg/driver"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // TestPrototypeRefactoredIntegration verifies the refactored property access works correctly
@@ -62,12 +63,12 @@ dog.species;`,
 		},
 		// TODO: Enable when Function.prototype.call is implemented
 		// {
-		// 	name: "function_prototype_call", 
+		// 	name: "function_prototype_call",
 		// 	code: `
 		// function multiply(x: number, y: number) {
 		// 	return x * y;
 		// }
-		// 
+		//
 		// multiply.call(null, 6, 7);`,
 		// 	expected: 42.0,
 		// },

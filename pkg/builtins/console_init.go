@@ -2,9 +2,10 @@ package builtins
 
 import (
 	"fmt"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"time"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type ConsoleInitializer struct{}

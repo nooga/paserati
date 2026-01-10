@@ -3,9 +3,10 @@ package builtins
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"time"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type DateInitializer struct{}
@@ -290,13 +291,13 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			month := time.Month(int(args[0].ToFloat()) + 1) // JavaScript months are 0-based
-			
+
 			// Use existing day if second parameter not provided
 			day := t.Day()
 			if len(args) >= 2 {
 				day = int(args[1].ToFloat())
 			}
-			
+
 			newTime := time.Date(t.Year(), month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -313,19 +314,19 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			year := int(args[0].ToFloat())
-			
+
 			// Use existing month if second parameter not provided
 			month := t.Month()
 			if len(args) >= 2 {
 				month = time.Month(int(args[1].ToFloat()) + 1) // JavaScript months are 0-based
 			}
-			
+
 			// Use existing day if third parameter not provided
 			day := t.Day()
 			if len(args) >= 3 {
 				day = int(args[2].ToFloat())
 			}
-			
+
 			newTime := time.Date(year, month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -342,24 +343,24 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			hour := int(args[0].ToFloat())
-			
+
 			// Use existing values if additional parameters not provided
 			minute := t.Minute()
 			if len(args) >= 2 {
 				minute = int(args[1].ToFloat())
 			}
-			
+
 			second := t.Second()
 			if len(args) >= 3 {
 				second = int(args[2].ToFloat())
 			}
-			
+
 			nanosecond := t.Nanosecond()
 			if len(args) >= 4 {
 				millisecond := int(args[3].ToFloat())
 				nanosecond = millisecond * 1000000
 			}
-			
+
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanosecond, t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -376,19 +377,19 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			minute := int(args[0].ToFloat())
-			
+
 			// Use existing values if additional parameters not provided
 			second := t.Second()
 			if len(args) >= 2 {
 				second = int(args[1].ToFloat())
 			}
-			
+
 			nanosecond := t.Nanosecond()
 			if len(args) >= 3 {
 				millisecond := int(args[2].ToFloat())
 				nanosecond = millisecond * 1000000
 			}
-			
+
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, second, nanosecond, t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -405,14 +406,14 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp))
 			second := int(args[0].ToFloat())
-			
+
 			// Use existing value if additional parameter not provided
 			nanosecond := t.Nanosecond()
 			if len(args) >= 2 {
 				millisecond := int(args[1].ToFloat())
 				nanosecond = millisecond * 1000000
 			}
-			
+
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, nanosecond, t.Location())
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -572,7 +573,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		t := time.UnixMilli(int64(currentTimestamp))
-		
+
 		// Year interpretation: 0-99 means 1900-1999
 		year := int(yearArg)
 		if year >= 0 && year <= 99 {
@@ -597,19 +598,19 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
 			year := int(args[0].ToFloat())
-			
+
 			// Use existing month if second parameter not provided
 			month := t.Month()
 			if len(args) >= 2 {
 				month = time.Month(int(args[1].ToFloat()) + 1) // JavaScript months are 0-based
 			}
-			
+
 			// Use existing day if third parameter not provided
 			day := t.Day()
 			if len(args) >= 3 {
 				day = int(args[2].ToFloat())
 			}
-			
+
 			newTime := time.Date(year, month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -626,13 +627,13 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
 			month := time.Month(int(args[0].ToFloat()) + 1) // JavaScript months are 0-based
-			
+
 			// Use existing day if second parameter not provided
 			day := t.Day()
 			if len(args) >= 2 {
 				day = int(args[1].ToFloat())
 			}
-			
+
 			newTime := time.Date(t.Year(), month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -665,24 +666,24 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
 			hour := int(args[0].ToFloat())
-			
+
 			// Use existing values if additional parameters not provided
 			minute := t.Minute()
 			if len(args) >= 2 {
 				minute = int(args[1].ToFloat())
 			}
-			
+
 			second := t.Second()
 			if len(args) >= 3 {
 				second = int(args[2].ToFloat())
 			}
-			
+
 			nanosecond := t.Nanosecond()
 			if len(args) >= 4 {
 				millisecond := int(args[3].ToFloat())
 				nanosecond = millisecond * 1000000
 			}
-			
+
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanosecond, time.UTC)
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -699,19 +700,19 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
 			minute := int(args[0].ToFloat())
-			
+
 			// Use existing values if additional parameters not provided
 			second := t.Second()
 			if len(args) >= 2 {
 				second = int(args[1].ToFloat())
 			}
-			
+
 			nanosecond := t.Nanosecond()
 			if len(args) >= 3 {
 				millisecond := int(args[2].ToFloat())
 				nanosecond = millisecond * 1000000
 			}
-			
+
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, second, nanosecond, time.UTC)
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -728,14 +729,14 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if timestamp, ok := getDateTimestamp(thisDate); ok {
 			t := time.UnixMilli(int64(timestamp)).UTC()
 			second := int(args[0].ToFloat())
-			
+
 			// Use existing value if additional parameter not provided
 			nanosecond := t.Nanosecond()
 			if len(args) >= 2 {
 				millisecond := int(args[1].ToFloat())
 				nanosecond = millisecond * 1000000
 			}
-			
+
 			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, nanosecond, time.UTC)
 			newTimestamp := float64(newTime.UnixMilli())
 			setDateTimestamp(thisDate, newTimestamp)
@@ -842,7 +843,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create Date object with timestamp stored as a property
 		dateObj := vm.NewObject(vm.NewValueFromPlainObject(dateProto))
 		dateObj.AsPlainObject().SetOwnNonEnumerable("__timestamp__", vm.NumberValue(timestamp))
-		
+
 		return dateObj, nil
 	})
 

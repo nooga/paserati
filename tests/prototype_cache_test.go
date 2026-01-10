@@ -1,10 +1,11 @@
 package tests
 
 import (
-	"testing"
-	"paserati/pkg/driver"
-	"paserati/pkg/vm"
 	"os"
+	"testing"
+
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 func TestPrototypeCacheBasic(t *testing.T) {
@@ -47,7 +48,7 @@ arr.length;`,
 		// },
 		// TODO: Fix parser panic in this test
 		// {
-		// 	name: "prototype_chain_lookup", 
+		// 	name: "prototype_chain_lookup",
 		// 	code: `
 		// function Animal() {
 		// 	this.type = "animal";
@@ -55,7 +56,7 @@ arr.length;`,
 		// Animal.prototype.getType = function() {
 		// 	return this.type;
 		// };
-		// 
+		//
 		// let a = new Animal();
 		// a.getType();`,
 		// 	expected: "animal",
@@ -124,7 +125,7 @@ obj.getValue();`
 	os.Setenv("PASERATI_ENABLE_PROTO_CACHE", "false")
 	vm.EnablePrototypeCache = false
 	vm.ResetExtendedStats()
-	
+
 	p1 := driver.NewPaserati()
 	result1, errs1 := p1.RunString(code)
 	if len(errs1) > 0 {
@@ -135,7 +136,7 @@ obj.getValue();`
 	os.Setenv("PASERATI_ENABLE_PROTO_CACHE", "true")
 	vm.EnablePrototypeCache = true
 	vm.ResetExtendedStats()
-	
+
 	p2 := driver.NewPaserati()
 	result2, errs2 := p2.RunString(code)
 	if len(errs2) > 0 {

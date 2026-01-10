@@ -2,8 +2,9 @@ package builtins
 
 import (
 	"fmt"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type AsyncGeneratorInitializer struct{}
@@ -89,7 +90,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Mark as completed since async generators don't resume after exception
 			thisGen.State = vm.GeneratorCompleted
 			thisGen.Done = true
-			thisGen.Frame = nil  // OK for async - won't resume
+			thisGen.Frame = nil // OK for async - won't resume
 
 			// Clear recorded errors since we're handling the exception by returning a rejected promise
 			// This prevents "Uncaught exception" from being printed when the exception is actually caught

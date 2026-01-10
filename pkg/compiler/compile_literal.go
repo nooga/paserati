@@ -2,9 +2,10 @@ package compiler
 
 import (
 	"fmt"
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // isFutureReservedWord checks if an identifier is a FutureReservedWord
@@ -213,7 +214,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		}
 	}
 	arrowName := "<arrow>"
-	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot) // Set spill slots needed
+	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                              // Set spill slots needed
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 

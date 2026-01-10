@@ -2,8 +2,9 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // checkDestructuringTarget handles recursive type checking for destructuring targets
@@ -79,10 +80,10 @@ func (c *Checker) checkIdentifierTarget(target *parser.Identifier, expectedType 
 			}
 		}
 	}
-	
+
 	// Set the computed type for the identifier
 	target.SetComputedType(finalType)
-	
+
 	// Update the environment with the new variable binding
 	c.env.Update(target.Value, finalType)
 }
@@ -92,7 +93,7 @@ func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expec
 	// Validate that expectedType is array-like
 	widenedType := types.GetWidenedType(expectedType)
 	var elementType types.Type
-	
+
 	if arrayType, ok := widenedType.(*types.ArrayType); ok {
 		elementType = arrayType.ElementType
 	} else if tupleType, ok := widenedType.(*types.TupleType); ok {
@@ -119,13 +120,13 @@ func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expec
 				break
 			}
 		}
-		
+
 		if arrayLikeType != nil {
 			// Recursively check with the array-like type from the union
 			c.checkNestedArrayTarget(arrayTarget, arrayLikeType, context)
 			return
 		}
-		
+
 		// If no array-like type found in union, fallback to Any
 		elementType = types.Any
 	} else if widenedType == types.Any {
@@ -134,7 +135,7 @@ func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expec
 		c.addError(arrayTarget, fmt.Sprintf("cannot destructure array pattern from non-array type '%s'", expectedType.String()))
 		elementType = types.Any
 	}
-	
+
 	// For regular array types, check each element with the same element type
 	for i, element := range arrayTarget.Elements {
 		c.checkDestructuringTarget(element, elementType, i)
@@ -176,7 +177,7 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 				return
 			}
 		}
-		
+
 		// Check each property in the nested object pattern
 		for _, prop := range objectTarget.Properties {
 			// Get property name from key (can be identifier or number)
@@ -230,7 +231,7 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 				}
 			}
 		}
-		
+
 		if !c.env.Define(targetNode.Value, finalType, isConst) {
 			c.addError(targetNode, fmt.Sprintf("identifier '%s' already declared", targetNode.Value))
 		}
@@ -268,7 +269,7 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 	// Validate that expectedType is array-like
 	widenedType := types.GetWidenedType(expectedType)
 	var elementType types.Type
-	
+
 	if arrayType, ok := widenedType.(*types.ArrayType); ok {
 		elementType = arrayType.ElementType
 	} else if tupleType, ok := widenedType.(*types.TupleType); ok {
@@ -295,13 +296,13 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 				break
 			}
 		}
-		
+
 		if arrayLikeType != nil {
 			// Recursively check with the array-like type from the union
 			c.checkNestedArrayTargetForDeclaration(arrayTarget, arrayLikeType, isConst)
 			return
 		}
-		
+
 		// If no array-like type found in union, fallback to Any
 		elementType = types.Any
 	} else if widenedType == types.Any {
@@ -310,7 +311,7 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 		c.addError(arrayTarget, fmt.Sprintf("cannot destructure array pattern from non-array type '%s'", expectedType.String()))
 		elementType = types.Any
 	}
-	
+
 	// For regular array types, check each element with the same element type
 	for _, element := range arrayTarget.Elements {
 		c.checkDestructuringTargetForDeclaration(element, elementType, isConst)
@@ -352,7 +353,7 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 				return
 			}
 		}
-		
+
 		// Check each property in the nested object pattern
 		for _, prop := range objectTarget.Properties {
 			// Get property name from key (can be identifier or number)
@@ -488,7 +489,7 @@ func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parse
 	widenedType := types.GetWidenedType(expectedType)
 
 	if widenedType != types.Any {
-		objType, ok := expectedType.(*types.ObjectType);
+		objType, ok := expectedType.(*types.ObjectType)
 		if !ok {
 			// For non-object types, use Any for all properties
 			for _, prop := range pattern.Properties {

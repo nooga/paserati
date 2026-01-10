@@ -2,10 +2,11 @@ package builtins
 
 import (
 	"fmt"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strconv"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // processReplacementPattern processes $ patterns in replacement strings
@@ -116,14 +117,14 @@ func (r *RegExpInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Create RegExp constructor type
 	regexpCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, types.RegExp).                                                     // RegExp() -> RegExp
-		WithSimpleCallSignature([]types.Type{types.String}, types.RegExp).                                        // RegExp(pattern) -> RegExp
-		WithSimpleCallSignature([]types.Type{types.String, types.String}, types.RegExp).                          // RegExp(pattern, flags) -> RegExp
-		WithSimpleCallSignature([]types.Type{types.RegExp}, types.RegExp).                                        // RegExp(regexObj) -> RegExp
-		WithSimpleConstructSignature([]types.Type{}, types.RegExp).                                               // new RegExp() -> RegExp
-		WithSimpleConstructSignature([]types.Type{types.String}, types.RegExp).                                   // new RegExp(pattern) -> RegExp
-		WithSimpleConstructSignature([]types.Type{types.String, types.String}, types.RegExp).                     // new RegExp(pattern, flags) -> RegExp
-		WithSimpleConstructSignature([]types.Type{types.RegExp}, types.RegExp).                                   // new RegExp(regexObj) -> RegExp
+		WithSimpleCallSignature([]types.Type{}, types.RegExp).                                // RegExp() -> RegExp
+		WithSimpleCallSignature([]types.Type{types.String}, types.RegExp).                    // RegExp(pattern) -> RegExp
+		WithSimpleCallSignature([]types.Type{types.String, types.String}, types.RegExp).      // RegExp(pattern, flags) -> RegExp
+		WithSimpleCallSignature([]types.Type{types.RegExp}, types.RegExp).                    // RegExp(regexObj) -> RegExp
+		WithSimpleConstructSignature([]types.Type{}, types.RegExp).                           // new RegExp() -> RegExp
+		WithSimpleConstructSignature([]types.Type{types.String}, types.RegExp).               // new RegExp(pattern) -> RegExp
+		WithSimpleConstructSignature([]types.Type{types.String, types.String}, types.RegExp). // new RegExp(pattern, flags) -> RegExp
+		WithSimpleConstructSignature([]types.Type{types.RegExp}, types.RegExp).               // new RegExp(regexObj) -> RegExp
 		WithProperty("prototype", regexpProtoType)
 
 	return ctx.DefineGlobal("RegExp", regexpCtorType)
@@ -135,7 +136,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Get Object.prototype for inheritance
 	objectProto := vmInstance.ObjectPrototype
 
-	// Create RegExp.prototype inheriting from Object.prototype  
+	// Create RegExp.prototype inheriting from Object.prototype
 	regexpProto := vm.NewObject(objectProto).AsPlainObject()
 
 	// Add RegExp prototype methods

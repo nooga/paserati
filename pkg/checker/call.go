@@ -3,9 +3,10 @@ package checker
 import (
 	"fmt"
 	"strings"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // calculateEffectiveArgCount calculates the effective number of arguments,
@@ -19,7 +20,7 @@ func (c *Checker) calculateEffectiveArgCount(arguments []parser.Expression) int 
 			c.visit(spreadElement.Argument)
 			argType := spreadElement.Argument.GetComputedType()
 			debugPrintf("// [Checker EffectiveArgCount] Spread argument type: %T (%v)\n", argType, argType)
-			
+
 			if argType != nil {
 				// Check for tuple types first (they have known length)
 				if tupleType, isTuple := argType.(*types.TupleType); isTuple {
@@ -72,21 +73,21 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 				for i := 0; i < len(arrayLit.Elements) && currentParamIndex+i < len(expectedParamTypes); i++ {
 					tupleElementTypes = append(tupleElementTypes, expectedParamTypes[currentParamIndex+i])
 				}
-				
+
 				if len(tupleElementTypes) == len(arrayLit.Elements) {
 					// Create tuple type for contextual typing
 					expectedTupleType := &types.TupleType{
 						ElementTypes: tupleElementTypes,
 					}
-					
+
 					debugPrintf("// [Checker SpreadValidation] Using contextual tuple type: %s for array literal\n", expectedTupleType.String())
-					
+
 					// Use contextual typing to check the array literal
 					c.visitWithContext(spreadElement.Argument, &ContextualType{
 						ExpectedType: expectedTupleType,
 						IsContextual: true,
 					})
-					
+
 					argType := spreadElement.Argument.GetComputedType()
 					if argType != nil {
 						if _, isTuple := argType.(*types.TupleType); isTuple {
@@ -97,27 +98,27 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 			}
 		}
 	}
-	
+
 	// Fallback: visit normally and check traditional rules
 	c.visit(spreadElement.Argument)
 	argType := spreadElement.Argument.GetComputedType()
-	
+
 	if argType == nil {
 		return false // Error already reported
 	}
-	
+
 	// Check if it's a tuple type (always valid)
 	if _, isTuple := argType.(*types.TupleType); isTuple {
 		return true
 	}
-	
+
 	// Check if it's a direct array literal (TypeScript treats as tuple)
 	if _, isArray := argType.(*types.ArrayType); isArray {
 		if _, isArrayLit := spreadElement.Argument.(*parser.ArrayLiteral); isArrayLit {
 			return true // Direct array literals are treated as tuples
 		}
 	}
-	
+
 	// If it's a variadic function, arrays are allowed (rest parameters)
 	if isVariadicFunction {
 		if _, isArray := argType.(*types.ArrayType); isArray {
@@ -141,7 +142,7 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, paramTypes []types.Type, isVariadicFunction bool) bool {
 	allOk := true
 	effectiveArgIndex := 0
-	
+
 	for _, argNode := range arguments {
 		if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
 			// Validate the spread argument first
@@ -150,10 +151,10 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 				effectiveArgIndex += 1 // Conservative estimate for error recovery
 				continue
 			}
-			
+
 			// Handle spread element type checking
 			argType := spreadElement.Argument.GetComputedType()
-			
+
 			if tupleType, isTuple := argType.(*types.TupleType); isTuple {
 				// Check each tuple element against the corresponding parameter
 				for j, elemType := range tupleType.ElementTypes {
@@ -175,7 +176,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 							c.visit(element)
 							elemType := element.GetComputedType()
 							paramType := paramTypes[effectiveArgIndex+j]
-							
+
 							if elemType != nil && !types.IsAssignable(elemType, paramType) {
 								c.addError(element, fmt.Sprintf("spread element %d: cannot assign type '%s' to parameter of type '%s'", j+1, elemType.String(), paramType.String()))
 								allOk = false
@@ -207,9 +208,9 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 				// No corresponding parameter type, use regular visit
 				c.visit(argNode)
 			}
-			
+
 			argType := argNode.GetComputedType()
-			
+
 			if effectiveArgIndex < len(paramTypes) {
 				paramType := paramTypes[effectiveArgIndex]
 				if argType != nil && !c.isAssignableWithExpansion(argType, paramType) {
@@ -220,21 +221,21 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 			effectiveArgIndex += 1
 		}
 	}
-	
+
 	return allOk
 }
 
 // checkSuperCallExpression handles super() constructor calls
 func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExpr *parser.SuperExpression) {
 	debugPrintf("// [Checker CallExpr] Handling super() call\n")
-	
+
 	// Super calls are only valid in constructors
 	if c.currentClassContext == nil || c.currentClassContext.ContextType != types.AccessContextConstructor {
 		c.addError(node, "super() calls are only allowed in constructors")
 		node.SetComputedType(types.Any)
 		return
 	}
-	
+
 	// Get the current class instance type from the checker state
 	classInstanceType := c.currentClassInstanceType
 	if classInstanceType == nil || classInstanceType.ClassMeta == nil {
@@ -242,7 +243,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 		node.SetComputedType(types.Any)
 		return
 	}
-	
+
 	// Check if the current class has a superclass
 	superClassName := classInstanceType.ClassMeta.SuperClassName
 	if superClassName == "" {
@@ -250,18 +251,18 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 		node.SetComputedType(types.Any)
 		return
 	}
-	
+
 	// Get the superclass constructor - handle parameterized types properly
 	var superConstructor types.Type
 	var exists bool
-	
+
 	// Check if superclass name contains type parameters (e.g., "Comparable<T[]>")
 	if strings.Contains(superClassName, "<") {
 		debugPrintf("// [Checker CallExpr] Detected parameterized superclass: %s\n", superClassName)
 		// Extract base class name (everything before '<')
 		baseClassName := strings.Split(superClassName, "<")[0]
 		debugPrintf("// [Checker CallExpr] Extracting base class: %s\n", baseClassName)
-		
+
 		// Resolve the base class constructor
 		superConstructor, _, exists = c.env.Resolve(baseClassName)
 		if !exists {
@@ -269,7 +270,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 			node.SetComputedType(types.Any)
 			return
 		}
-		
+
 		// For generic constructors, we need the instantiated constructor from the current class's superclass type
 		// Look it up in the BaseTypes of the current class instance
 		if len(classInstanceType.BaseTypes) > 0 {
@@ -290,10 +291,10 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 			return
 		}
 	}
-	
+
 	// Handle different types of superclass constructors
 	var finalConstructor *types.ObjectType
-	
+
 	if objType, ok := superConstructor.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
 		finalConstructor = objType
 	} else if _, ok := superConstructor.(*types.GenericType); ok {
@@ -306,7 +307,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 				debugPrintf("// [Checker CallExpr] Using pre-instantiated superclass constructor\n")
 			}
 		}
-		
+
 		if finalConstructor == nil {
 			// Fallback: this shouldn't happen if inheritance was set up correctly
 			c.addError(node, fmt.Sprintf("could not instantiate generic superclass constructor '%s'", superClassName))
@@ -318,7 +319,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 		node.SetComputedType(types.Any)
 		return
 	}
-	
+
 	// Type-check and validate arguments against constructor signature
 	if len(finalConstructor.ConstructSignatures) > 0 {
 		constructorSig := finalConstructor.ConstructSignatures[0]
@@ -490,9 +491,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		// Try to resolve the type parameter to its constraint or a concrete type
 		if typeParamType.Parameter != nil && typeParamType.Parameter.Constraint != nil {
 			constraintType := typeParamType.Parameter.Constraint
-			debugPrintf("// [Checker CallExpr] Type parameter '%s' has constraint: %s\n", 
+			debugPrintf("// [Checker CallExpr] Type parameter '%s' has constraint: %s\n",
 				typeParamType.Parameter.Name, constraintType.String())
-			
+
 			// If the constraint is callable, use it for the call
 			if objType, ok := constraintType.(*types.ObjectType); ok && objType.IsCallable() {
 				// Use the constraint type instead of the type parameter
@@ -500,7 +501,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 				debugPrintf("// [Checker CallExpr] Using constraint type for type parameter call: %s\n", constraintType.String())
 			} else {
 				// If constraint is not callable, this is an error
-				c.addError(node, fmt.Sprintf("cannot call value of type '%s' (constraint '%s' is not callable)", 
+				c.addError(node, fmt.Sprintf("cannot call value of type '%s' (constraint '%s' is not callable)",
 					funcNodeType.String(), constraintType.String()))
 				node.SetComputedType(types.Any)
 				return
@@ -535,7 +536,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		node.SetComputedType(types.Any)
 		return
 	}
-	
+
 	if !objType.IsCallable() {
 		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
 		node.SetComputedType(types.Any)
@@ -587,13 +588,13 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		// For simplicity, assume each argument takes one slot for this validation pass
 		currentArgIndex += 1
 	}
-	
+
 	// If there are spread errors, skip detailed arity checking as it's meaningless
 	if hasSpreadErrors {
 		node.SetComputedType(funcSignature.ReturnType)
 		return
 	}
-	
+
 	// Calculate effective argument count, expanding spread elements
 	actualArgCount := c.calculateEffectiveArgCount(node.Arguments)
 	skipArityCheck := actualArgCount == -1 // -1 signals unknown length arrays in spreads
@@ -646,7 +647,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 					// Check remaining arguments against the element type - start after all fixed parameters
 					for i := len(funcSignature.ParameterTypes); i < len(node.Arguments); i++ {
 						argNode := node.Arguments[i]
-						
+
 						// --- Handle spread elements in variadic functions ---
 						if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread {
 							// Validate the spread argument for variadic functions
@@ -654,13 +655,13 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 							if !c.validateSpreadArgument(spreadElement, true, []types.Type{}, 0) {
 								continue // Error already reported
 							}
-							
+
 							c.visit(spreadElement.Argument)
 							argType := spreadElement.Argument.GetComputedType()
 							if argType == nil {
 								continue
 							}
-							
+
 							// For variadic functions, spread arrays should match the rest parameter type
 							if !types.IsAssignable(argType, variadicParamType) {
 								c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), variadicParamType.String()))
@@ -672,12 +673,12 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 								ExpectedType: variadicElementType,
 								IsContextual: true,
 							})
-							
+
 							argType := argNode.GetComputedType()
 							if argType == nil {
 								continue
 							}
-							
+
 							if !types.IsAssignable(argType, variadicElementType) {
 								c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
 							}
@@ -719,19 +720,19 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 	// Set Result Type - check if we need to resolve parameterized forward references
 	resultType := funcSignature.ReturnType
-	
+
 	// If the result type is a ParameterizedForwardReferenceType with concrete type arguments,
 	// we need to instantiate the generic type to get a proper object type
 	if paramRef, ok := resultType.(*types.ParameterizedForwardReferenceType); ok {
 		debugPrintf("// [Checker CallExpr] Result type is parameterized forward reference: %s\n", paramRef.String())
-		
+
 		// Try to resolve the generic class and instantiate it
 		if resolvedType := c.resolveParameterizedForwardReference(paramRef); resolvedType != nil {
 			debugPrintf("// [Checker CallExpr] Resolved parameterized type to: %T (%s)\n", resolvedType, resolvedType.String())
 			resultType = resolvedType
 		}
 	}
-	
+
 	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), resultType, resultType)
 	node.SetComputedType(resultType)
 
@@ -921,24 +922,24 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 			return false
 		}
 	}
-	
+
 	// Check parameter types
 	for _, paramType := range sig.ParameterTypes {
 		if containsTypeParameters(paramType) {
 			return true
 		}
 	}
-	
+
 	// Check return type
 	if sig.ReturnType != nil && containsTypeParameters(sig.ReturnType) {
 		return true
 	}
-	
+
 	// Check rest parameter type
 	if sig.RestParameterType != nil && containsTypeParameters(sig.RestParameterType) {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -955,19 +956,19 @@ func (c *Checker) isLikelyFunctionArgument(argNode parser.Expression) bool {
 // collectTypeParameterConstraintsPhase1 collects constraints only from non-nil argument types
 func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, argTypes []types.Type) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
-	
+
 	// For each parameter, if it contains type parameters, create constraints based on the argument type
 	for i, paramType := range sig.ParameterTypes {
 		if i >= len(argTypes) || argTypes[i] == nil {
 			continue // Skip nil placeholders from phase 1
 		}
 		argType := argTypes[i]
-		
+
 		// Collect constraints from this parameter-argument pair
 		paramConstraints := c.collectConstraintsFromType(paramType, argType)
 		constraints = append(constraints, paramConstraints...)
 	}
-	
+
 	return constraints
 }
 
@@ -1029,7 +1030,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 			debugPrintf("// [Checker Inference] Phase 1: Skipping function argument %d\n", i)
 			continue
 		}
-		
+
 		// Visit non-function arguments without contextual typing to get their natural types
 		c.visit(argNode)
 		argType := argNode.GetComputedType()
@@ -1039,21 +1040,21 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		argTypes = append(argTypes, argType)
 		debugPrintf("// [Checker Inference] Phase 1: Argument %d type: %s\n", i, argType.String())
 	}
-	
+
 	// Collect constraints from non-function arguments only
 	constraints := c.collectTypeParameterConstraintsPhase1(genericSig, argTypes)
 	debugPrintf("// [Checker Inference] Phase 1: Collected %d type parameter constraints\n", len(constraints))
-	
+
 	// Solve constraints from phase 1
 	partialSolution := c.solveTypeParameterConstraints(constraints)
 	debugPrintf("// [Checker Inference] Phase 1: Solved %d type parameter bindings\n", len(partialSolution))
-	
+
 	// === PHASE 2: Re-visit function arguments with inferred types ===
 	if len(partialSolution) > 0 {
 		// Create partially instantiated signature for contextual typing
 		partialSig := c.substituteTypeParameters(genericSig, partialSolution)
 		debugPrintf("// [Checker Inference] Phase 2: Using partially inferred signature: %s\n", partialSig.String())
-		
+
 		// Re-visit function arguments with better contextual typing
 		for i, argNode := range callNode.Arguments {
 			if argTypes[i] == nil { // This was a function argument skipped in phase 1
@@ -1067,7 +1068,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 				} else {
 					c.visit(argNode)
 				}
-				
+
 				argType := argNode.GetComputedType()
 				if argType == nil {
 					argType = types.Any
@@ -1076,22 +1077,22 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 				debugPrintf("// [Checker Inference] Phase 2: Function argument %d type: %s\n", i, argType.String())
 			}
 		}
-		
+
 		// Collect additional constraints from function arguments if needed
 		additionalConstraints := c.collectTypeParameterConstraints(partialSig, argTypes)
 		allConstraints := append(constraints, additionalConstraints...)
-		
+
 		// Solve all constraints together
 		finalSolution := c.solveTypeParameterConstraints(allConstraints)
 		debugPrintf("// [Checker Inference] Phase 2: Final solution with %d type parameter bindings\n", len(finalSolution))
-		
+
 		if len(finalSolution) > 0 {
 			inferredSig := c.substituteTypeParameters(genericSig, finalSolution)
 			debugPrintf("// [Checker Inference] Created final inferred signature: %s\n", inferredSig.String())
 			return inferredSig
 		}
 	}
-	
+
 	// Fallback: If phase 1 didn't infer anything, try the original approach
 	for i, argNode := range callNode.Arguments {
 		if argTypes[i] == nil {
@@ -1104,7 +1105,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 			} else {
 				c.visit(argNode)
 			}
-			
+
 			argType := argNode.GetComputedType()
 			if argType == nil {
 				argType = types.Any
@@ -1112,19 +1113,19 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 			argTypes[i] = argType
 		}
 	}
-	
+
 	// Final attempt with all arguments
 	allConstraints := c.collectTypeParameterConstraints(genericSig, argTypes)
 	solution := c.solveTypeParameterConstraints(allConstraints)
-	
+
 	if len(solution) == 0 {
 		debugPrintf("// [Checker Inference] No type parameters could be inferred\n")
 		return nil // Inference failed
 	}
-	
+
 	inferredSig := c.substituteTypeParameters(genericSig, solution)
 	debugPrintf("// [Checker Inference] Created fallback inferred signature: %s\n", inferredSig.String())
-	
+
 	return inferredSig
 }
 
@@ -1138,19 +1139,19 @@ type TypeParameterConstraint struct {
 // collectTypeParameterConstraints analyzes arguments to build constraints for type parameters
 func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes []types.Type) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
-	
+
 	// For each parameter, if it contains type parameters, create constraints based on the argument type
 	for i, paramType := range sig.ParameterTypes {
 		if i >= len(argTypes) {
 			break // No more arguments
 		}
 		argType := argTypes[i]
-		
+
 		// Collect constraints from this parameter-argument pair
 		paramConstraints := c.collectConstraintsFromType(paramType, argType)
 		constraints = append(constraints, paramConstraints...)
 	}
-	
+
 	return constraints
 }
 
@@ -1169,7 +1170,7 @@ func isNumericValue(value vm.Value) bool {
 func shouldWidenForAccumulator(typeParamName string, argType types.Type) bool {
 	// Common accumulator type parameter names that should be widened
 	accumulatorNames := []string{"TResult", "TAcc", "TAccumulator", "TReduce"}
-	
+
 	for _, name := range accumulatorNames {
 		if typeParamName == name {
 			// Only widen if the argument type has literal types that can be widened
@@ -1198,7 +1199,7 @@ func shouldWidenForAccumulator(typeParamName string, argType types.Type) bool {
 // collectConstraintsFromType recursively collects constraints by matching parameter and argument types
 func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
-	
+
 	switch pType := paramType.(type) {
 	case *types.TypeParameterType:
 		// Direct constraint: T should be inferred as argType
@@ -1216,7 +1217,7 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 			Confidence:    100, // High confidence for direct matches
 		})
 		debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, inferredType.String())
-		
+
 	case *types.ArrayType:
 		// Array<T> matched against Array<U> or U[]
 		if aType, isArray := argType.(*types.ArrayType); isArray {
@@ -1321,7 +1322,7 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 			}
 		}
 
-	// Add more cases for other generic type constructs as needed
+		// Add more cases for other generic type constructs as needed
 	}
 
 	return constraints
@@ -1330,17 +1331,17 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 // solveTypeParameterConstraints attempts to solve the collected constraints
 func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConstraint) map[*types.TypeParameter]types.Type {
 	solution := make(map[*types.TypeParameter]types.Type)
-	
+
 	// Simple solver: for each type parameter, pick the constraint with highest confidence
 	// In the future, this could be much more sophisticated (unification, etc.)
-	
+
 	type bestConstraint struct {
 		constraint TypeParameterConstraint
 		confidence int
 	}
-	
+
 	best := make(map[*types.TypeParameter]bestConstraint)
-	
+
 	for _, constraint := range constraints {
 		existing, exists := best[constraint.TypeParameter]
 		if !exists || constraint.Confidence > existing.confidence {
@@ -1350,14 +1351,14 @@ func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConst
 			}
 		}
 	}
-	
+
 	// Convert best constraints to solution
 	for typeParam, bestConstr := range best {
 		solution[typeParam] = bestConstr.constraint.InferredType
-		debugPrintf("// [Checker Solve] %s = %s (confidence: %d)\n", 
+		debugPrintf("// [Checker Solve] %s = %s (confidence: %d)\n",
 			typeParam.Name, bestConstr.constraint.InferredType.String(), bestConstr.confidence)
 	}
-	
+
 	return solution
 }
 
@@ -1388,37 +1389,37 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			}
 			// Create a new parameterized forward reference with substituted type arguments
 			return &types.ParameterizedForwardReferenceType{
-				ClassName:      typ.ClassName,
-				TypeArguments:  newTypeArgs,
+				ClassName:     typ.ClassName,
+				TypeArguments: newTypeArgs,
 			}
 		case *types.ObjectType:
 			// For ObjectType, we need to substitute in properties and signatures
 			newObj := &types.ObjectType{
-				Properties:     make(map[string]types.Type),
-				OptionalProperties: typ.OptionalProperties, // Copy as-is
-				CallSignatures: nil,
+				Properties:          make(map[string]types.Type),
+				OptionalProperties:  typ.OptionalProperties, // Copy as-is
+				CallSignatures:      nil,
 				ConstructSignatures: nil,
-				BaseTypes: typ.BaseTypes, // Copy as-is for now
-				IndexSignatures: typ.IndexSignatures, // Copy as-is for now
+				BaseTypes:           typ.BaseTypes,       // Copy as-is for now
+				IndexSignatures:     typ.IndexSignatures, // Copy as-is for now
 			}
-			
+
 			// Substitute in properties
 			for name, propType := range typ.Properties {
 				newObj.Properties[name] = substitute(propType)
 			}
-			
+
 			// Substitute in call signatures
 			for _, sig := range typ.CallSignatures {
 				newSig := c.substituteInSignature(sig, solution, substitute)
 				newObj.CallSignatures = append(newObj.CallSignatures, newSig)
 			}
-			
+
 			// Substitute in construct signatures
 			for _, sig := range typ.ConstructSignatures {
 				newSig := c.substituteInSignature(sig, solution, substitute)
 				newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
 			}
-			
+
 			return newObj
 		case *types.TupleType:
 			// Substitute type parameters in tuple element types
@@ -1454,25 +1455,25 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			return typ
 		}
 	}
-	
+
 	// Substitute in parameter types
 	var newParamTypes []types.Type
 	for _, paramType := range sig.ParameterTypes {
 		newParamTypes = append(newParamTypes, substitute(paramType))
 	}
-	
+
 	// Substitute in return type
 	var newReturnType types.Type
 	if sig.ReturnType != nil {
 		newReturnType = substitute(sig.ReturnType)
 	}
-	
+
 	// Substitute in rest parameter type
 	var newRestParamType types.Type
 	if sig.RestParameterType != nil {
 		newRestParamType = substitute(sig.RestParameterType)
 	}
-	
+
 	return &types.Signature{
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,

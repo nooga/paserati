@@ -1,9 +1,10 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"sync"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // Global symbol registry for Symbol.for/Symbol.keyFor

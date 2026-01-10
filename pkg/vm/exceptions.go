@@ -2,7 +2,8 @@ package vm
 
 import (
 	"fmt"
-	"paserati/pkg/errors"
+
+	"github.com/nooga/paserati/pkg/errors"
 )
 
 // --- Exception State ---

@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // TypeErrorInitializer implements the TypeError constructor and TypeError.prototype
@@ -47,10 +47,10 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create TypeError.prototype object that inherits from Error.prototype
 	typeErrorPrototype := vm.NewObject(errorPrototype).AsPlainObject()
-	
+
 	// Override the name property to "TypeError"
 	typeErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("TypeError"))
-	
+
 	// TypeError constructor function
 	typeErrorConstructor := vm.NewNativeFunction(-1, true, "TypeError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
@@ -58,19 +58,19 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
 		}
-		
+
 		// Create new TypeError instance that inherits from TypeError.prototype
 		typeErrorInstance := vm.NewObject(vm.NewValueFromPlainObject(typeErrorPrototype))
 		typeErrorInstancePtr := typeErrorInstance.AsPlainObject()
-		
+
 		// Set properties (override name, set message and stack)
 		typeErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("TypeError"))
 		typeErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
-		
+
 		// Capture stack trace at the time of TypeError creation
 		stackTrace := vmInstance.CaptureStackTrace()
 		typeErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
-		
+
 		return typeErrorInstance, nil
 	})
 

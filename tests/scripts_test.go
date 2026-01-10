@@ -4,18 +4,19 @@ import (
 	"bufio"
 	"fmt"
 	"io/ioutil"
-	"paserati/pkg/builtins"
-	"paserati/pkg/driver"
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const scriptsDebug = false

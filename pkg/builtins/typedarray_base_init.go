@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // TypedArrayInitializer sets up the abstract %TypedArray% intrinsic.

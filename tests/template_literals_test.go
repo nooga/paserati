@@ -1,8 +1,9 @@
 package tests
 
 import (
-	"paserati/pkg/lexer"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/lexer"
 )
 
 const templateDebug = false // Enable for debugging

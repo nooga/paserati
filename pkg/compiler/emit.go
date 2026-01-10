@@ -2,7 +2,8 @@ package compiler
 
 import (
 	"fmt"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // --- Bytecode Emission Helpers ---

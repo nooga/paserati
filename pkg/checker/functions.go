@@ -2,9 +2,10 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // processFunctionSignature handles function overload signatures by collecting them

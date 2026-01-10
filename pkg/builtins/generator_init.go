@@ -2,8 +2,9 @@ package builtins
 
 import (
 	"fmt"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type GeneratorInitializer struct{}
@@ -286,23 +287,23 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
 				}
 				return vm.Undefined, err
-		} else if !returnMethod.IsUndefined() && returnMethod.Type() != vm.TypeNull && returnMethod.IsCallable() {
-			// Call delegatedIter.return() to close it
-			// Per spec: if return() throws, propagate that exception (not the original throw exception)
-			_, returnErr := vmInstance.Call(returnMethod, delegatedIter, []vm.Value{})
-			if returnErr != nil {
-				// return() threw - clear delegation and inject that exception into generator
-				thisGen.DelegatedIterator = vm.Undefined
-				if ee, ok := returnErr.(vm.ExceptionError); ok {
-					return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+			} else if !returnMethod.IsUndefined() && returnMethod.Type() != vm.TypeNull && returnMethod.IsCallable() {
+				// Call delegatedIter.return() to close it
+				// Per spec: if return() throws, propagate that exception (not the original throw exception)
+				_, returnErr := vmInstance.Call(returnMethod, delegatedIter, []vm.Value{})
+				if returnErr != nil {
+					// return() threw - clear delegation and inject that exception into generator
+					thisGen.DelegatedIterator = vm.Undefined
+					if ee, ok := returnErr.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
+					return vm.Undefined, returnErr
 				}
-				return vm.Undefined, returnErr
 			}
-		}
 
-		// Clear delegation and propagate the original exception to this generator
-		thisGen.DelegatedIterator = vm.Undefined
-		// Fall through to throw the exception into this generator
+			// Clear delegation and propagate the original exception to this generator
+			thisGen.DelegatedIterator = vm.Undefined
+			// Fall through to throw the exception into this generator
 		}
 
 		// If generator is completed, throw the exception (as an Error object for clearer runtime message)

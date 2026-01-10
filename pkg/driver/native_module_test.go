@@ -3,9 +3,10 @@ package driver
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/modules"
 	"strings"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/modules"
 )
 
 // TestNativeModuleBasic tests the basic native module declaration and usage

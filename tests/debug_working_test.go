@@ -2,7 +2,8 @@ package tests
 
 import (
 	"testing"
-	"paserati/pkg/driver"
+
+	"github.com/nooga/paserati/pkg/driver"
 )
 
 func TestWorkingPrototype(t *testing.T) {

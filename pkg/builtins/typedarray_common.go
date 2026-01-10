@@ -1,7 +1,7 @@
 package builtins
 
 import (
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // SetupTypedArrayPrototype adds common TypedArray prototype methods to the given prototype object.

@@ -2,9 +2,10 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
@@ -683,9 +684,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	}
 
 	// Third pass: visit function properties with 'this' context set to the complete preliminary type
-	outerThisType := c.currentThisType     // Save outer this context
+	outerThisType := c.currentThisType      // Save outer this context
 	outerInObjectMethod := c.inObjectMethod // Save outer object method context
-	c.currentThisType = preliminaryObjType // Set this context to the object being constructed
+	c.currentThisType = preliminaryObjType  // Set this context to the object being constructed
 	c.inObjectMethod = true                 // Mark that we're in an object method (for super support)
 	debugPrintf("// [Checker ObjectLit] Set this context to: %s\n", preliminaryObjType.String())
 

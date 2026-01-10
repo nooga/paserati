@@ -3,9 +3,10 @@ package builtins
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strconv"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // ObjectInitializer implements the Object builtin

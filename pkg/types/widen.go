@@ -1,6 +1,6 @@
 package types
 
-import "paserati/pkg/vm"
+import "github.com/nooga/paserati/pkg/vm"
 
 // --- Type Widening ---
 
@@ -26,7 +26,7 @@ func GetWidenedType(t Type) Type {
 			return t // Return original if unexpected underlying type
 		}
 	}
-	
+
 	// Handle type parameters with constraints for arithmetic operations
 	if typeParam, ok := t.(*TypeParameterType); ok {
 		if typeParam.Parameter.Constraint != nil {
@@ -35,7 +35,7 @@ func GetWidenedType(t Type) Type {
 			return GetWidenedType(typeParam.Parameter.Constraint)
 		}
 	}
-	
+
 	// TODO: Should unions containing only literals of the same base type also widen?
 	// e.g., should (1 | 2 | 3) widen to number? Probably.
 	// This would require more complex logic here or in NewUnionType.
@@ -66,7 +66,7 @@ func DeeplyWidenType(t Type) Type {
 			CallSignatures:      objType.CallSignatures,
 			ConstructSignatures: objType.ConstructSignatures,
 			BaseTypes:           objType.BaseTypes,
-			ClassMeta:           objType.ClassMeta, // Preserve class metadata
+			ClassMeta:           objType.ClassMeta,       // Preserve class metadata
 			IndexSignatures:     objType.IndexSignatures, // Preserve index signatures
 		}
 	}

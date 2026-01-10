@@ -1,8 +1,9 @@
 package checker
 
 import (
-	"paserati/pkg/types"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/types"
 )
 
 func TestNewGlobalEnvironmentWithInitializers(t *testing.T) {

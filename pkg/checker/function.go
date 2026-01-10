@@ -1,8 +1,8 @@
 package checker
 
 import (
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
@@ -11,20 +11,20 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	if node.Name != nil {
 		funcName = node.Name.Value
 	}
-	
+
 	// Create function check context
 	ctx := &FunctionCheckContext{
-		FunctionName:              funcName,
-		TypeParameters:            node.TypeParameters, // Support for generic functions
-		Parameters:                node.Parameters,
-		RestParameter:             node.RestParameter,
-		ReturnTypeAnnotation:      node.ReturnTypeAnnotation,
-		Body:                      node.Body,
-		IsArrow:                   false,
-		IsGenerator:               node.IsGenerator, // Detect generator functions
-		IsAsync:                   node.IsAsync,     // Detect async functions
-		AllowSelfReference:        node.Name != nil, // Allow recursion for named functions
-		AllowOverloadCompletion:   node.Name != nil, // Check for overloads for named functions
+		FunctionName:            funcName,
+		TypeParameters:          node.TypeParameters, // Support for generic functions
+		Parameters:              node.Parameters,
+		RestParameter:           node.RestParameter,
+		ReturnTypeAnnotation:    node.ReturnTypeAnnotation,
+		Body:                    node.Body,
+		IsArrow:                 false,
+		IsGenerator:             node.IsGenerator, // Detect generator functions
+		IsAsync:                 node.IsAsync,     // Detect async functions
+		AllowSelfReference:      node.Name != nil, // Allow recursion for named functions
+		AllowOverloadCompletion: node.Name != nil, // Check for overloads for named functions
 	}
 
 	// 1. Resolve parameters and signature
@@ -38,7 +38,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	// not the full Generator<T, TReturn, TNext> type
 	expectedReturnTypeForBody := preliminarySignature.ReturnType
 	var innerReturnTypeFromAnnotation types.Type
-	
+
 	if node.IsGenerator {
 		// For generators, we want to check the body against the inner return type
 		if preliminarySignature.ReturnType != nil {
@@ -47,7 +47,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 				if instType.Generic.Name == "Generator" && len(instType.TypeArguments) >= 2 {
 					innerReturnTypeFromAnnotation = instType.TypeArguments[1] // TReturn parameter
 					expectedReturnTypeForBody = innerReturnTypeFromAnnotation
-					debugPrintf("// [Checker FuncLit] Generator function: using TReturn type %s for body checking\n", 
+					debugPrintf("// [Checker FuncLit] Generator function: using TReturn type %s for body checking\n",
 						expectedReturnTypeForBody.String())
 				}
 			}
@@ -57,7 +57,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 			debugPrintf("// [Checker FuncLit] Generator function: no explicit return type, allowing inference\n")
 		}
 	}
-	
+
 	finalReturnType := c.checkFunctionBody(ctx, expectedReturnTypeForBody)
 
 	// 4. Handle async generator functions (both flags) - wrap in AsyncGenerator<T, TReturn, TNext>
@@ -113,11 +113,11 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 // createGeneratorType creates an instantiated Generator<T, TReturn, TNext> type
 // based on the yielded and returned types from the generator function
 func (c *Checker) createGeneratorType(returnType types.Type, yieldTypes []types.Type) types.Type {
-	// Handle nil return type (generators without explicit return default to void)  
+	// Handle nil return type (generators without explicit return default to void)
 	if returnType == nil {
 		returnType = types.Void
 	}
-	
+
 	// Determine the yield type (T) from collected yield expressions
 	var yieldType types.Type
 	if len(yieldTypes) == 0 {
@@ -130,16 +130,16 @@ func (c *Checker) createGeneratorType(returnType types.Type, yieldTypes []types.
 		// Multiple yield types, create a union
 		yieldType = types.NewUnionType(yieldTypes...)
 	}
-	
+
 	// Create an instantiated Generator<T, TReturn, TNext> type
 	if types.GeneratorGeneric != nil {
 		return types.NewInstantiatedType(types.GeneratorGeneric, []types.Type{
-			yieldType,        // T (yield type) - inferred from yield expressions
-			returnType,       // TReturn (return type) 
-			types.Unknown,    // TNext (sent type) - TypeScript uses unknown for this
+			yieldType,     // T (yield type) - inferred from yield expressions
+			returnType,    // TReturn (return type)
+			types.Unknown, // TNext (sent type) - TypeScript uses unknown for this
 		})
 	}
-	
+
 	// Fallback if GeneratorGeneric is not initialized
 	generatorObj := types.NewObjectType()
 	generatorObj.WithProperty("next", types.NewOptionalFunction([]types.Type{types.Unknown}, types.Any, []bool{true}))
@@ -172,9 +172,9 @@ func (c *Checker) createAsyncGeneratorType(returnType types.Type, yieldTypes []t
 	// Create an instantiated AsyncGenerator<T, TReturn, TNext> type
 	if types.AsyncGeneratorGeneric != nil {
 		return types.NewInstantiatedType(types.AsyncGeneratorGeneric, []types.Type{
-			yieldType,        // T (yield type) - inferred from yield expressions
-			returnType,       // TReturn (return type)
-			types.Unknown,    // TNext (sent type) - TypeScript uses unknown for this
+			yieldType,     // T (yield type) - inferred from yield expressions
+			returnType,    // TReturn (return type)
+			types.Unknown, // TNext (sent type) - TypeScript uses unknown for this
 		})
 	}
 
@@ -213,7 +213,7 @@ func (c *Checker) createPromiseType(valueType types.Type) types.Type {
 			types.NewOptionalFunction([]types.Type{valueType}, types.Any, []bool{false}),
 			types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{false}),
 		},
-		promiseObj, // Returns another Promise
+		promiseObj,         // Returns another Promise
 		[]bool{true, true}, // Both parameters optional
 	))
 

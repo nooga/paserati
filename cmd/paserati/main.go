@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"paserati/pkg/driver"
-	"paserati/pkg/parser"
 	"runtime"
 	"runtime/pprof"
 	"strings"
-	// \"paserati/pkg/vm\" // Remove: VM no longer directly used here
+
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/parser"
+	// \"github.com/nooga/paserati/pkg/vm\" // Remove: VM no longer directly used here
 )
 
 func main() {

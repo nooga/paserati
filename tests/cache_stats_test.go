@@ -1,10 +1,11 @@
 package tests
 
 import (
-	"testing"
-	"paserati/pkg/driver"
-	"paserati/pkg/vm"
 	"os"
+	"testing"
+
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // TestCacheStatistics demonstrates cache effectiveness with detailed statistics
@@ -102,16 +103,16 @@ count;`
 			t.Fatalf("Evaluation failed: %v", errs)
 		}
 
-		// Don't worry about exact count, just verify it's reasonable  
+		// Don't worry about exact count, just verify it's reasonable
 		if !result.IsNumber() || vm.AsNumber(result) < 3000 {
 			t.Errorf("Expected count > 3000, got %v", vm.AsNumber(result))
 		}
 
 		t.Logf("WITH CACHE - Total count: %v", vm.AsNumber(result))
-		
+
 		// Get actual cache statistics
 		stats := p.GetCacheStats()
-		
+
 		t.Logf("ACTUAL CACHE STATISTICS:")
 		t.Logf("  Total hits: %d", stats.TotalHits)
 		t.Logf("  Total misses: %d", stats.TotalMisses)
@@ -128,9 +129,9 @@ count;`
 
 		// Verify we have cache activity
 		if stats.TotalHits > 0 {
-			hitRate := float64(stats.TotalHits) / float64(stats.TotalHits + stats.TotalMisses) * 100
+			hitRate := float64(stats.TotalHits) / float64(stats.TotalHits+stats.TotalMisses) * 100
 			t.Logf("Cache hit rate: %.2f%%", hitRate)
-			
+
 			if hitRate > 50 {
 				t.Logf("✅ Cache is working effectively (>50%% hit rate)")
 			} else {
@@ -206,11 +207,11 @@ firstSum + secondSum + thirdSum;`
 	t.Logf("  Total misses: %d", warmupStats.TotalMisses)
 	t.Logf("  Monomorphic hits: %d", warmupStats.MonomorphicHits)
 	t.Logf("  Polymorphic hits: %d", warmupStats.PolymorphicHits)
-	
+
 	if warmupStats.TotalHits+warmupStats.TotalMisses > 0 {
-		hitRate := float64(warmupStats.TotalHits) / float64(warmupStats.TotalHits + warmupStats.TotalMisses) * 100
+		hitRate := float64(warmupStats.TotalHits) / float64(warmupStats.TotalHits+warmupStats.TotalMisses) * 100
 		t.Logf("  Hit rate: %.2f%%", hitRate)
-		
+
 		if hitRate > 70 {
 			t.Logf("✅ Cache warming is highly effective (>70%% hit rate)")
 		} else if hitRate > 40 {
@@ -304,11 +305,11 @@ sum;`
 	t.Logf("  Monomorphic hits: %d", polyStats.MonomorphicHits)
 	t.Logf("  Polymorphic hits: %d", polyStats.PolymorphicHits)
 	t.Logf("  Megamorphic hits: %d", polyStats.MegamorphicHits)
-	
+
 	if polyStats.TotalHits+polyStats.TotalMisses > 0 {
-		hitRate := float64(polyStats.TotalHits) / float64(polyStats.TotalHits + polyStats.TotalMisses) * 100
+		hitRate := float64(polyStats.TotalHits) / float64(polyStats.TotalHits+polyStats.TotalMisses) * 100
 		t.Logf("  Hit rate: %.2f%%", hitRate)
-		
+
 		// Polymorphic workloads typically have lower hit rates
 		if hitRate > 50 {
 			t.Logf("✅ Polymorphic caching is highly effective (>50%% hit rate)")
@@ -317,7 +318,7 @@ sum;`
 		} else {
 			t.Logf("⚠️  Polymorphic cache performance could be improved")
 		}
-		
+
 		if polyStats.PolymorphicHits > 0 {
 			t.Logf("✅ Polymorphic cache entries are being used")
 		}

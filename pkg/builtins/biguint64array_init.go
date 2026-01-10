@@ -2,8 +2,9 @@ package builtins
 
 import (
 	"math/big"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type BigUint64ArrayInitializer struct{}

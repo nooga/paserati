@@ -3,8 +3,9 @@ package builtins
 import (
 	"math"
 	"math/rand"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // toUint32 implements ECMAScript's ToUint32 abstract operation

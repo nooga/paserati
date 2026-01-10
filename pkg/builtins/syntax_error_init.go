@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // SyntaxErrorInitializer implements the SyntaxError constructor and SyntaxError.prototype
@@ -47,10 +47,10 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create SyntaxError.prototype object that inherits from Error.prototype
 	syntaxErrorPrototype := vm.NewObject(errorPrototype).AsPlainObject()
-	
+
 	// Override the name property to "SyntaxError"
 	syntaxErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))
-	
+
 	// SyntaxError constructor function
 	syntaxErrorConstructor := vm.NewNativeFunction(-1, true, "SyntaxError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
@@ -58,19 +58,19 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
 		}
-		
+
 		// Create new SyntaxError instance that inherits from SyntaxError.prototype
 		syntaxErrorInstance := vm.NewObject(vm.NewValueFromPlainObject(syntaxErrorPrototype))
 		syntaxErrorInstancePtr := syntaxErrorInstance.AsPlainObject()
-		
+
 		// Set properties (override name, set message and stack)
 		syntaxErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))
 		syntaxErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
-		
+
 		// Capture stack trace at the time of SyntaxError creation
 		stackTrace := vmInstance.CaptureStackTrace()
 		syntaxErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
-		
+
 		return syntaxErrorInstance, nil
 	})
 

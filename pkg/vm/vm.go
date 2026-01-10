@@ -6,17 +6,18 @@ import (
 	"math"
 	"math/big"
 	"os"
-	"paserati/pkg/errors"
-	"paserati/pkg/runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/runtime"
 )
 
-const RegFileSize = 256  // Max registers per function call frame
-const MaxFrames = 1024 // Max call stack depth
+const RegFileSize = 256 // Max registers per function call frame
+const MaxFrames = 1024  // Max call stack depth
 // NOTE: Total stack = RegFileSize * MaxFrames = ~6MB. For dynamic expansion in the future,
 // upvalues would need to change from raw pointers to indices. See docs/bucketlist.md.
 
@@ -272,7 +273,7 @@ type VM struct {
 
 	// Caller's 'this' value for direct eval (Phase 3)
 	// Set during InterpretWithCallerScope, Undefined otherwise
-	evalCallerThis Value
+	evalCallerThis    Value
 	hasEvalCallerThis bool // True when evalCallerThis is valid (allows passing Undefined as 'this')
 
 	// Globals, open upvalues, etc. would go here later
@@ -8687,18 +8688,30 @@ startExecution:
 					}
 					success = fn.Properties.DeleteOwn(propName)
 				}
-		} else if obj.Type() == TypeClosure {
-			// Delete from closure's properties (check closureObj.Properties first, then Fn.Properties)
-			closureObj := obj.AsClosure()
-			// Check if property exists in closureObj.Properties
-			if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
-				// In strict mode, check for non-configurable
-				if function.Chunk.IsStrict {
-					exists, nonConfig := closureObj.Properties.IsOwnPropertyNonConfigurable(propName)
-					if exists && nonConfig {
-						frame.ip = ip
-						vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
-						if !vm.unwinding {
+			} else if obj.Type() == TypeClosure {
+				// Delete from closure's properties (check closureObj.Properties first, then Fn.Properties)
+				closureObj := obj.AsClosure()
+				// Check if property exists in closureObj.Properties
+				if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
+					// In strict mode, check for non-configurable
+					if function.Chunk.IsStrict {
+						exists, nonConfig := closureObj.Properties.IsOwnPropertyNonConfigurable(propName)
+						if exists && nonConfig {
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							if vm.unwindingCrossedNative || vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
 							frame = &vm.frames[vm.frameCount-1]
 							closure = frame.closure
 							function = closure.Fn
@@ -8708,28 +8721,28 @@ startExecution:
 							ip = frame.ip
 							continue
 						}
-						if vm.unwindingCrossedNative || vm.frameCount == 0 {
-							return InterpretRuntimeError, vm.currentException
-						}
-						frame = &vm.frames[vm.frameCount-1]
-						closure = frame.closure
-						function = closure.Fn
-						code = function.Chunk.Code
-						constants = function.Chunk.Constants
-						registers = frame.registers
-						ip = frame.ip
-						continue
 					}
-				}
-				success = closureObj.Properties.DeleteOwn(propName)
-			} else if closureObj.Fn.Properties != nil && closureObj.Fn.Properties.HasOwn(propName) {
-				// Check closureObj.Fn.Properties
-				if function.Chunk.IsStrict {
-					exists, nonConfig := closureObj.Fn.Properties.IsOwnPropertyNonConfigurable(propName)
-					if exists && nonConfig {
-						frame.ip = ip
-						vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
-						if !vm.unwinding {
+					success = closureObj.Properties.DeleteOwn(propName)
+				} else if closureObj.Fn.Properties != nil && closureObj.Fn.Properties.HasOwn(propName) {
+					// Check closureObj.Fn.Properties
+					if function.Chunk.IsStrict {
+						exists, nonConfig := closureObj.Fn.Properties.IsOwnPropertyNonConfigurable(propName)
+						if exists && nonConfig {
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot delete property '" + propName + "' of function")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							if vm.unwindingCrossedNative || vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
 							frame = &vm.frames[vm.frameCount-1]
 							closure = frame.closure
 							function = closure.Fn
@@ -8739,24 +8752,12 @@ startExecution:
 							ip = frame.ip
 							continue
 						}
-						if vm.unwindingCrossedNative || vm.frameCount == 0 {
-							return InterpretRuntimeError, vm.currentException
-						}
-						frame = &vm.frames[vm.frameCount-1]
-						closure = frame.closure
-						function = closure.Fn
-						code = function.Chunk.Code
-						constants = function.Chunk.Constants
-						registers = frame.registers
-						ip = frame.ip
-						continue
 					}
+					success = closureObj.Fn.Properties.DeleteOwn(propName)
+				} else {
+					// Property doesn't exist - delete returns true per ECMAScript spec
+					success = true
 				}
-				success = closureObj.Fn.Properties.DeleteOwn(propName)
-			} else {
-				// Property doesn't exist - delete returns true per ECMAScript spec
-				success = true
-			}
 			} else if obj.Type() == TypeNativeFunctionWithProps {
 				// Delete from native function's properties
 				nfp := obj.AsNativeFunctionWithProps()

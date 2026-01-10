@@ -2,8 +2,8 @@ package vm
 
 import (
 	"fmt"
-	// "paserati/pkg/value" // No longer needed
-	//"paserati/pkg/value"
+	// "github.com/nooga/paserati/pkg/value" // No longer needed
+	//"github.com/nooga/paserati/pkg/value"
 	"strings"
 )
 
@@ -32,11 +32,11 @@ const (
 	OpStringConcat OpCode = 49 // Rx Ry Rz: Rx = Ry + Rz (optimized string concatenation)
 
 	// Unary
-	OpNegate   OpCode = 10 // Rx Ry: Rx = -Ry
-	OpNot      OpCode = 11 // Rx Ry: Rx = !Ry (logical not)
-	OpTypeof   OpCode = 48 // Rx Ry: Rx = typeof Ry (returns string)
-	OpToNumber      OpCode = 50  // Rx Ry: Rx = Number(Ry) (unary plus conversion)
-	OpToNumeric     OpCode = 123 // Rx Ry: Rx = ToNumeric(Ry) (preserves BigInt, converts others to Number)
+	OpNegate         OpCode = 10  // Rx Ry: Rx = -Ry
+	OpNot            OpCode = 11  // Rx Ry: Rx = !Ry (logical not)
+	OpTypeof         OpCode = 48  // Rx Ry: Rx = typeof Ry (returns string)
+	OpToNumber       OpCode = 50  // Rx Ry: Rx = Number(Ry) (unary plus conversion)
+	OpToNumeric      OpCode = 123 // Rx Ry: Rx = ToNumeric(Ry) (preserves BigInt, converts others to Number)
 	OpLoadNumericOne OpCode = 124 // Rx Ry: If Ry is BigInt, Rx = 1n; else Rx = 1 (for ++/-- operators)
 
 	// Comparison (Result Dest, Left, Right) -> Result is boolean
@@ -117,13 +117,13 @@ const (
 	// --- END Type Guards ---
 
 	// --- NEW: Method Calls and This Context ---
-	OpCallMethod             OpCode = 43  // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
-	OpLoadThis               OpCode = 44  // Rx: Load 'this' value from current call context into register Rx
-	OpLoadSuper              OpCode = 111 // Rx: Load super base (homeObject.prototype) into register Rx (for super property access)
-	OpGetSuper               OpCode = 112 // Rx NameIdx(16bit): Rx = super.propertyName (super property access with static name)
-	OpSetSuper               OpCode = 113 // NameIdx(16bit) ValueReg: super.propertyName = ValueReg (super property assignment with static name)
-	OpGetSuperComputed       OpCode = 114 // Rx KeyReg: Rx = super[KeyReg] (super property access with computed key)
-	OpSetSuperComputed       OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
+	OpCallMethod                     OpCode = 43  // Rx FuncReg ThisReg ArgCount: Call method in FuncReg with ThisReg as 'this', result in Rx
+	OpLoadThis                       OpCode = 44  // Rx: Load 'this' value from current call context into register Rx
+	OpLoadSuper                      OpCode = 111 // Rx: Load super base (homeObject.prototype) into register Rx (for super property access)
+	OpGetSuper                       OpCode = 112 // Rx NameIdx(16bit): Rx = super.propertyName (super property access with static name)
+	OpSetSuper                       OpCode = 113 // NameIdx(16bit) ValueReg: super.propertyName = ValueReg (super property assignment with static name)
+	OpGetSuperComputed               OpCode = 114 // Rx KeyReg: Rx = super[KeyReg] (super property access with computed key)
+	OpSetSuperComputed               OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
 	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)

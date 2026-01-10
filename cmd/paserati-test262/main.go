@@ -7,12 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"paserati/pkg/builtins"
-	"paserati/pkg/driver"
-	errorsPkg "paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -21,6 +15,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/driver"
+	errorsPkg "github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 func main() {

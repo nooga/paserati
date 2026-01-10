@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"paserati/pkg/vm"
 	"strings"
 	"time"
+
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // httpModule defines the paserati/http module with sync fetch functionality
@@ -16,9 +17,9 @@ func httpModule(m *ModuleBuilder) {
 	// Export the main fetch function
 	// The native module system passes variadic arguments as a slice, so we need to handle it differently
 	m.Function("fetch", fetchWrapper)
-	
+
 	// Note: Response objects are created by fetch(), not directly constructible
-	
+
 	// Export Headers class - use map[string]interface{} directly, not variadic
 	m.Class("Headers", (*Headers)(nil), func(init map[string]interface{}) *Headers {
 		h := &Headers{
@@ -81,7 +82,7 @@ func (r *Response) Json() (vm.Value, error) {
 		return vm.Undefined, fmt.Errorf("body already used")
 	}
 	r.bodyUsed = true
-	
+
 	// Parse JSON directly into a vm.Value using the VM's JSON unmarshaler
 	var result vm.Value
 	if err := result.UnmarshalJSON(r.body); err != nil {
@@ -111,7 +112,7 @@ func fetch(url string, init interface{}) (*Response, error) {
 	method := "GET"
 	headers := &Headers{headers: make(http.Header)}
 	var body io.Reader
-	
+
 	// Parse init options if provided
 	if init != nil {
 		if initMap, ok := init.(map[string]interface{}); ok {
@@ -119,7 +120,7 @@ func fetch(url string, init interface{}) (*Response, error) {
 			if m, ok := initMap["method"].(string); ok {
 				method = strings.ToUpper(m)
 			}
-			
+
 			// Headers
 			if h := initMap["headers"]; h != nil {
 				switch v := h.(type) {
@@ -133,7 +134,7 @@ func fetch(url string, init interface{}) (*Response, error) {
 					}
 				}
 			}
-			
+
 			// Body
 			if b := initMap["body"]; b != nil {
 				switch v := b.(type) {
@@ -158,38 +159,37 @@ func fetch(url string, init interface{}) (*Response, error) {
 			}
 		}
 	}
-	
+
 	// Create HTTP client with reasonable timeout
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
-	
+
 	// Create request
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
 	}
-	
-	
+
 	// Set headers
 	req.Header = headers.headers
-	
+
 	// Perform request
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	// Read response body
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Create response headers
 	responseHeaders := &Headers{headers: resp.Header}
-	
+
 	// Create Response object
 	response := &Response{
 		OK:         resp.StatusCode >= 200 && resp.StatusCode < 300,
@@ -200,7 +200,7 @@ func fetch(url string, init interface{}) (*Response, error) {
 		body:       bodyBytes,
 		bodyUsed:   false,
 	}
-	
+
 	return response, nil
 }
 

@@ -2,9 +2,10 @@ package compiler
 
 import (
 	"fmt"
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // --- Exception Handling Compilation ---

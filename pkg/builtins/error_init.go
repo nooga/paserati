@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // ErrorInitializer implements the Error constructor and Error.prototype

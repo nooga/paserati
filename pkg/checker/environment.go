@@ -2,9 +2,10 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/builtins"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
+
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // Global environment for prototype method resolution
@@ -61,8 +62,8 @@ func NewEnvironment() *Environment {
 		typeParameters:      make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
-		primitivePrototypes: nil, // Only initialized for global environment
-		withObjects:         []WithObject{}, // Initialize empty with objects stack
+		primitivePrototypes: nil,                         // Only initialized for global environment
+		withObjects:         []WithObject{},              // Initialize empty with objects stack
 		narrowings:          make(map[string]types.Type), // Initialize narrowings map
 	}
 }
@@ -73,12 +74,12 @@ func NewEnclosedEnvironment(outer *Environment) *Environment {
 		symbols:             make(map[string]SymbolInfo), // Initialize with SymbolInfo
 		typeAliases:         make(map[string]types.Type), // Initialize
 		outer:               outer,
-		isFunctionScope:     false, // Default to block scope
+		isFunctionScope:     false,                                 // Default to block scope
 		typeParameters:      make(map[string]*types.TypeParameter), // Initialize type parameters
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
-		primitivePrototypes: nil, // Nested environments don't need primitive prototypes
-		withObjects:         []WithObject{}, // Initialize empty with objects stack
+		primitivePrototypes: nil,                         // Nested environments don't need primitive prototypes
+		withObjects:         []WithObject{},              // Initialize empty with objects stack
 		narrowings:          make(map[string]types.Type), // Initialize narrowings map
 	}
 }
@@ -115,8 +116,8 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 		pendingOverloads:    make(map[string][]*parser.FunctionSignature),
 		overloadedFunctions: make(map[string]*types.ObjectType),
 		primitivePrototypes: make(map[string]*types.ObjectType), // Initialize for global environment
-		withObjects:         []WithObject{}, // Initialize empty with objects stack
-		narrowings:          make(map[string]types.Type), // Initialize narrowings map
+		withObjects:         []WithObject{},                     // Initialize empty with objects stack
+		narrowings:          make(map[string]types.Type),        // Initialize narrowings map
 	}
 
 	// Create type context for builtin initialization
@@ -258,7 +259,7 @@ func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found 
 	info, ok := e.symbols[name]
 	if ok {
 		debugPrintf("// [Env Resolve] Found '%s' in env %p\n", name, e) // DEBUG
-		
+
 		// If this is a forward reference, continue looking in outer scopes for the real type
 		if _, isForwardRef := info.Type.(*types.ForwardReferenceType); isForwardRef {
 			if e.outer != nil {
@@ -278,8 +279,8 @@ func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found 
 				}
 			}
 		}
-		
-		return info.Type, info.IsConst, true                            // Return type, const status, and found=true
+
+		return info.Type, info.IsConst, true // Return type, const status, and found=true
 	}
 
 	// If not found and there's an outer scope, check there recursively
@@ -331,7 +332,7 @@ func (e *Environment) GetAllTypeAliases() map[string]types.Type {
 	if e.typeAliases == nil {
 		return make(map[string]types.Type)
 	}
-	
+
 	// Create a copy to avoid external modifications
 	result := make(map[string]types.Type)
 	for name, typ := range e.typeAliases {
@@ -345,7 +346,7 @@ func (e *Environment) GetAllVariables() map[string]SymbolInfo {
 	if e.symbols == nil {
 		return make(map[string]SymbolInfo)
 	}
-	
+
 	// Create a copy to avoid external modifications
 	result := make(map[string]SymbolInfo)
 	for name, symbolInfo := range e.symbols {
@@ -552,7 +553,7 @@ func (e *Environment) PopWithObject() {
 // Returns: (type, isFromWith, found)
 func (e *Environment) ResolveWithFallback(name string) (types.Type, bool, bool) {
 	debugPrintf("// [Env ResolveWithFallback] Looking for '%s', withObjects count: %d\n", name, len(e.withObjects))
-	
+
 	// First try normal variable resolution
 	if info, found := e.symbols[name]; found {
 		debugPrintf("// [Env ResolveWithFallback] Found '%s' as regular variable\n", name)

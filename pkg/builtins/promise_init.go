@@ -2,8 +2,9 @@ package builtins
 
 import (
 	"fmt"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type PromiseInitializer struct{}
@@ -255,7 +256,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			// Attach handlers to each promise
 			for i := 0; i < length; i++ {
-				idx := i                        // Capture index for closure
+				idx := i // Capture index for closure
 				promiseOrValue := arrayObj.Get(i)
 
 				// Convert non-promises to resolved promises
@@ -532,7 +533,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			// Attach handlers to each promise
 			for i := 0; i < length; i++ {
-				idx := i                        // Capture index for closure
+				idx := i // Capture index for closure
 				promiseOrValue := arrayObj.Get(i)
 
 				// Convert non-promises to resolved promises

@@ -1,9 +1,10 @@
 package tests
 
 import (
-	"paserati/pkg/driver"
 	"strings"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/driver"
 )
 
 const basicsDebug = true // Enable for debugging

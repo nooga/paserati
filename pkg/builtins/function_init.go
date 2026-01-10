@@ -2,11 +2,12 @@ package builtins
 
 import (
 	"fmt"
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // FunctionInitializer implements the Function builtin

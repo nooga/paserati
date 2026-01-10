@@ -3,8 +3,8 @@ package builtins
 import (
 	"strings"
 
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // Priority for Paserati (after standard globals)
@@ -35,13 +35,13 @@ func (p *PaseratiInitializer) InitTypes(ctx *TypeContext) error {
 	typeInterface := types.NewObjectType().
 		WithProperty("kind", types.String).
 		WithOptionalProperty("name", types.String).
-		WithOptionalProperty("properties", types.Any).     // For object types
-		WithOptionalProperty("elementType", types.Any).    // For array types
-		WithOptionalProperty("types", types.Any).          // For union types
-		WithOptionalProperty("parameters", types.Any).     // For function types
-		WithOptionalProperty("returnType", types.Any).     // For function types
-		WithProperty("toJSONSchema", toJSONSchemaType).    // Method to convert to JSON Schema
-		WithProperty("toString", toStringType)             // Method to convert to TypeScript-like string
+		WithOptionalProperty("properties", types.Any).  // For object types
+		WithOptionalProperty("elementType", types.Any). // For array types
+		WithOptionalProperty("types", types.Any).       // For union types
+		WithOptionalProperty("parameters", types.Any).  // For function types
+		WithOptionalProperty("returnType", types.Any).  // For function types
+		WithProperty("toJSONSchema", toJSONSchemaType). // Method to convert to JSON Schema
+		WithProperty("toString", toStringType)          // Method to convert to TypeScript-like string
 
 	// Define Type interface for users
 	if err := ctx.DefineTypeAlias("Type", typeInterface); err != nil {

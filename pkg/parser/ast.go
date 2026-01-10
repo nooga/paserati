@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"paserati/pkg/lexer"  // Need token types
-	"paserati/pkg/source" // Need source package for SourceFile
-	"paserati/pkg/types"  // Need types package for ComputedType
 	"strings"
+
+	"github.com/nooga/paserati/pkg/lexer"  // Need token types
+	"github.com/nooga/paserati/pkg/source" // Need source package for SourceFile
+	"github.com/nooga/paserati/pkg/types"  // Need types package for ComputedType
 )
 
 // --- Interfaces ---
@@ -1378,13 +1379,13 @@ func (ie *InfixExpression) String() string {
 // <Function>(<Arguments>)
 // Function can be an identifier or a function literal.
 type CallExpression struct {
-	BaseExpression                 // Embed base for ComputedType (Function's return type)
-	Token              lexer.Token // The '(' token
-	Function           Expression  // Identifier or FunctionLiteral being called
-	TypeArguments      []Expression // Type arguments (e.g., <string, number>)
-	Arguments          []Expression // List of arguments
-	IsDirectEval       bool         // True if this is a direct eval call: eval(...) where callee is plain Identifier "eval"
-	ResolvedReflectType types.Type  // For Paserati.reflect<T>(): the fully resolved type T
+	BaseExpression                   // Embed base for ComputedType (Function's return type)
+	Token               lexer.Token  // The '(' token
+	Function            Expression   // Identifier or FunctionLiteral being called
+	TypeArguments       []Expression // Type arguments (e.g., <string, number>)
+	Arguments           []Expression // List of arguments
+	IsDirectEval        bool         // True if this is a direct eval call: eval(...) where callee is plain Identifier "eval"
+	ResolvedReflectType types.Type   // For Paserati.reflect<T>(): the fully resolved type T
 }
 
 func (ce *CallExpression) expressionNode()      {}
@@ -1899,11 +1900,11 @@ func (ss *SwitchStatement) String() string {
 // import defaultImport, { export1, export2 } from "module"
 // import defaultImport, * as name from "module"
 type ImportDeclaration struct {
-	Token      lexer.Token            // The 'import' token
-	Specifiers []ImportSpecifier      // What to import (default, named, namespace)
-	Source     *StringLiteral         // From where ("./module")
-	IsTypeOnly bool                   // true for "import type" statements
-	Attributes map[string]string      // Import attributes (e.g., { type: "json" })
+	Token      lexer.Token       // The 'import' token
+	Specifiers []ImportSpecifier // What to import (default, named, namespace)
+	Source     *StringLiteral    // From where ("./module")
+	IsTypeOnly bool              // true for "import type" statements
+	Attributes map[string]string // Import attributes (e.g., { type: "json" })
 }
 
 func (id *ImportDeclaration) statementNode()       {}

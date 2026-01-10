@@ -1,9 +1,10 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"time"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // PerformanceInitializer implements the Performance builtin
@@ -49,8 +50,8 @@ type PerformanceEntry struct {
 
 // Global performance state
 var (
-	performanceOrigin = time.Now()
-	performanceMarks  = make(map[string]float64)
+	performanceOrigin   = time.Now()
+	performanceMarks    = make(map[string]float64)
 	performanceMeasures = make(map[string]PerformanceEntry)
 )
 
@@ -75,11 +76,11 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.Undefined, nil
 		}
-		
+
 		markName := args[0].ToString()
 		elapsed := time.Since(performanceOrigin)
 		timestamp := float64(elapsed.Nanoseconds()) / 1e6
-		
+
 		performanceMarks[markName] = timestamp
 		return vm.Undefined, nil
 	}))
@@ -89,10 +90,10 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.Undefined, nil
 		}
-		
+
 		measureName := args[0].ToString()
 		var startTime, endTime float64
-		
+
 		if len(args) >= 2 && !args[1].IsUndefined() {
 			// Start mark specified
 			startMarkName := args[1].ToString()
@@ -106,7 +107,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// No start mark, measure from origin
 			startTime = 0
 		}
-		
+
 		if len(args) >= 3 && !args[2].IsUndefined() {
 			// End mark specified
 			endMarkName := args[2].ToString()
@@ -122,7 +123,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 			elapsed := time.Since(performanceOrigin)
 			endTime = float64(elapsed.Nanoseconds()) / 1e6
 		}
-		
+
 		duration := endTime - startTime
 		entry := PerformanceEntry{
 			Name:      measureName,
@@ -130,7 +131,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 			StartTime: startTime,
 			Duration:  duration,
 		}
-		
+
 		performanceMeasures[measureName] = entry
 		return vm.Undefined, nil
 	}))
@@ -139,13 +140,13 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	performanceObj.SetOwnNonEnumerable("getEntriesByType", vm.NewNativeFunction(1, false, "getEntriesByType", func(args []vm.Value) (vm.Value, error) {
 		result := vm.NewArray()
 		resultArray := result.AsArray()
-		
+
 		if len(args) < 1 {
 			return result, nil
 		}
-		
+
 		entryType := args[0].ToString()
-		
+
 		if entryType == "mark" {
 			for name, startTime := range performanceMarks {
 				entry := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -165,7 +166,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 				resultArray.Append(vm.NewValueFromPlainObject(entry))
 			}
 		}
-		
+
 		return result, nil
 	}))
 
@@ -173,19 +174,19 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 	performanceObj.SetOwnNonEnumerable("getEntriesByName", vm.NewNativeFunction(2, false, "getEntriesByName", func(args []vm.Value) (vm.Value, error) {
 		result := vm.NewArray()
 		resultArray := result.AsArray()
-		
+
 		if len(args) < 1 {
 			return result, nil
 		}
-		
+
 		name := args[0].ToString()
 		var entryType string
 		if len(args) >= 2 {
 			entryType = args[1].ToString()
 		}
-		
+
 		// Check marks
-		if (entryType == "" || entryType == "mark") {
+		if entryType == "" || entryType == "mark" {
 			if startTime, exists := performanceMarks[name]; exists {
 				entry := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				entry.SetOwnNonEnumerable("name", vm.NewString(name))
@@ -195,9 +196,9 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 				resultArray.Append(vm.NewValueFromPlainObject(entry))
 			}
 		}
-		
+
 		// Check measures
-		if (entryType == "" || entryType == "measure") {
+		if entryType == "" || entryType == "measure" {
 			if measure, exists := performanceMeasures[name]; exists {
 				entry := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				entry.SetOwnNonEnumerable("name", vm.NewString(measure.Name))
@@ -207,7 +208,7 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 				resultArray.Append(vm.NewValueFromPlainObject(entry))
 			}
 		}
-		
+
 		return result, nil
 	}))
 

@@ -2,7 +2,8 @@ package tests
 
 import (
 	"testing"
-	"paserati/pkg/driver"
+
+	"github.com/nooga/paserati/pkg/driver"
 )
 
 func TestCompilerBytecode(t *testing.T) {
@@ -25,7 +26,7 @@ result;`
 		t.Fatalf("Test failed: %v", errs)
 	}
 	t.Logf("Method call result: %s = %v", result.TypeName(), result.Inspect())
-	
+
 	// Test direct property access
 	code2 := `
 function Test() {

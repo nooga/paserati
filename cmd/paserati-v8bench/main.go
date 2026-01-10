@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"paserati/pkg/builtins"
-	"paserati/pkg/driver"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
-	"paserati/pkg/source"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/source"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // V8BenchInitializer provides `load` and `print` builtins for V8 benchmark compatibility

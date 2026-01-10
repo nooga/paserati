@@ -2,11 +2,12 @@ package parser
 
 import (
 	"fmt"
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/source"
 	"strconv"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/source"
 )
 
 // --- Debug Flag ---
@@ -247,11 +248,11 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
 	p.registerPrefix(lexer.LT, p.parseGenericArrowFunction) // Generic arrow functions: <T>(x: T) => x
 	p.registerPrefix(lexer.IF, p.parseIfExpression)
-	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral) // Value context: Array literal
-	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)  // <<< NEW: Register Object Literal Parsing
-	p.registerPrefix(lexer.SPREAD, p.parseSpreadElement)        // NEW: Spread syntax in calls
-	p.registerPrefix(lexer.SUPER, p.parseSuperExpression)       // NEW: Super expressions
-	p.registerPrefix(lexer.PRIVATE_IDENT, p.parsePrivateIdent)  // Private field presence check: #field in obj
+	p.registerPrefix(lexer.LBRACKET, p.parseArrayLiteral)      // Value context: Array literal
+	p.registerPrefix(lexer.LBRACE, p.parseObjectLiteral)       // <<< NEW: Register Object Literal Parsing
+	p.registerPrefix(lexer.SPREAD, p.parseSpreadElement)       // NEW: Spread syntax in calls
+	p.registerPrefix(lexer.SUPER, p.parseSuperExpression)      // NEW: Super expressions
+	p.registerPrefix(lexer.PRIVATE_IDENT, p.parsePrivateIdent) // Private field presence check: #field in obj
 
 	// --- Register VALUE Infix Functions ---
 	// Arithmetic & Comparison/Logical

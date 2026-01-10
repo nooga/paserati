@@ -2,8 +2,9 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // checkEnumDeclaration handles type checking for enum declarations
@@ -25,9 +26,9 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	}
 
 	// 3. Process enum members
-	nextValue := 0 // For auto-increment
+	nextValue := 0                       // For auto-increment
 	memberNames := make(map[string]bool) // Check for duplicates
-	lastMemberWasNumeric := true // Track if the previous member was numeric
+	lastMemberWasNumeric := true         // Track if the previous member was numeric
 
 	for _, member := range node.Members {
 		memberName := member.Name.Value
@@ -42,7 +43,7 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 		// Determine member value
 		var memberValue interface{}
 		var isThisMemberNumeric bool
-		
+
 		if member.Value != nil {
 			// Member has explicit initializer
 			c.visit(member.Value)
@@ -98,11 +99,11 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 		}
 
 		enumType.Members[memberName] = memberType
-		
+
 		// Note: EnumMember doesn't need computed type as it's not an expression
-		
+
 		debugPrintf("// [Checker Enum] Added member '%s' = %v\n", memberName, memberValue)
-		
+
 		// Update tracking for next iteration
 		lastMemberWasNumeric = isThisMemberNumeric
 	}
@@ -112,22 +113,22 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	for _, member := range enumType.Members {
 		memberTypes = append(memberTypes, member)
 	}
-	
+
 	// 5. Register enum as both type and value (following class pattern)
-	
+
 	// First, define a forward reference to handle self-references
 	forwardRef := &types.ForwardReferenceType{
 		ClassName: node.Name.Value, // Reusing ClassName field for enum name
 	}
 	c.env.Define(node.Name.Value, forwardRef, false)
-	
+
 	// Define the enum name as a type alias to the union of its members
 	unionType := &types.UnionType{Types: memberTypes}
 	if !c.env.DefineTypeAlias(node.Name.Value, unionType) {
 		c.addError(node.Name, fmt.Sprintf("failed to define enum type '%s'", node.Name.Value))
 		return
 	}
-	
+
 	// Update the value binding to be the enum type itself
 	// (This allows both type and value contexts to work)
 	if !c.env.Update(node.Name.Value, enumType) {
@@ -144,6 +145,6 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	// Set the computed type on the enum declaration itself
 	node.SetComputedType(enumType)
 
-	debugPrintf("// [Checker Enum] Successfully defined enum '%s' with %d members\n", 
+	debugPrintf("// [Checker Enum] Successfully defined enum '%s' with %d members\n",
 		node.Name.Value, len(enumType.Members))
 }

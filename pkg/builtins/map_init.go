@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type MapInitializer struct{}
@@ -360,8 +360,8 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 				srcMap.ForEach(func(key vm.Value, val vm.Value) {
 					mapObj.Set(key, val)
 				})
-			// For other types, we'd need full iterator protocol support
-			// For now, silently ignore non-iterable arguments
+				// For other types, we'd need full iterator protocol support
+				// For now, silently ignore non-iterable arguments
 			}
 		}
 

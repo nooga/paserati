@@ -2,10 +2,10 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-)
 
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+)
 
 func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 	// Visit LHS (Identifier, IndexExpr, MemberExpr)
@@ -27,7 +27,6 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 	if rhsType == nil {
 		rhsType = types.Any
 	} // Handle nil from error
-
 
 	// Widen types for operator checks
 	widenedLhsType := types.GetWidenedType(lhsType) // Needed for operator checks AND assignability target
@@ -89,7 +88,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			// Still proceed to check assignability for more errors
 		}
 	}
-	
+
 	// --- Check LHS readonly status ---
 	if memberLHS, ok := node.Left.(*parser.MemberExpression); ok {
 		c.checkReadonlyPropertyAssignment(memberLHS)
@@ -153,26 +152,26 @@ func (c *Checker) checkReadonlyPropertyAssignment(memberExpr *parser.MemberExpre
 	if objectType == nil {
 		return // Can't check readonly if we don't know the object type
 	}
-	
+
 	// Get the property name
 	if memberExpr.Property == nil {
 		return // No property to check
 	}
 	propertyName := c.extractPropertyName(memberExpr.Property)
-	
+
 	// Check if the object type has this property and if it's readonly
 	if objType, ok := objectType.(*types.ObjectType); ok {
 		if propType, exists := objType.Properties[propertyName]; exists {
 			if types.IsReadonlyType(propType) {
 				// In TypeScript, readonly properties can be assigned in constructors
 				// Check if we're in a constructor context and assigning to 'this'
-				if c.currentClassContext != nil && 
-				   c.currentClassContext.ContextType == types.AccessContextConstructor &&
-				   c.isThisExpression(memberExpr.Object) {
+				if c.currentClassContext != nil &&
+					c.currentClassContext.ContextType == types.AccessContextConstructor &&
+					c.isThisExpression(memberExpr.Object) {
 					// Allow readonly assignment in constructor when assigning to 'this'
 					return
 				}
-				
+
 				c.addError(memberExpr, fmt.Sprintf("cannot assign to readonly property '%s'", propertyName))
 			}
 		}
@@ -187,7 +186,7 @@ func (c *Checker) isThisExpression(expr parser.Expression) bool {
 
 // checkArrayDestructuringAssignment handles array destructuring assignments like [a, b, c] = expr
 func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructuringAssignment) {
-	// 1. Check RHS expression 
+	// 1. Check RHS expression
 	c.visit(node.Value)
 	rhsType := node.Value.GetComputedType()
 	if rhsType == nil {
@@ -197,7 +196,7 @@ func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructur
 	// 2. Validate that RHS is array-like type
 	widenedRhsType := types.GetWidenedType(rhsType)
 	var elementType types.Type
-	
+
 	if arrayType, ok := widenedRhsType.(*types.ArrayType); ok {
 		// Standard array type T[]
 		elementType = arrayType.ElementType
@@ -283,14 +282,14 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 			if defaultType == nil {
 				defaultType = types.Any
 			}
-			
+
 			// Check that default value is assignable to expected element type
 			if targetType != types.Undefined && targetType != types.Any {
 				if !types.IsAssignable(defaultType, targetType) {
 					c.addError(element.Default, fmt.Sprintf("default value type '%s' is not assignable to expected element type '%s'", defaultType.String(), targetType.String()))
 				}
 			}
-			
+
 			// Final type is the union of element type and default type (excluding undefined)
 			if targetType == types.Undefined {
 				// Element doesn't exist, so target gets default type
@@ -312,7 +311,7 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 
 // checkObjectDestructuringAssignment handles object destructuring assignments like {a, b} = expr
 func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestructuringAssignment) {
-	// 1. Check RHS expression 
+	// 1. Check RHS expression
 	c.visit(node.Value)
 	rhsType := node.Value.GetComputedType()
 	if rhsType == nil {
@@ -373,14 +372,14 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			if defaultType == nil {
 				defaultType = types.Any
 			}
-			
+
 			// Check that default value is assignable to expected property type
 			if propType != types.Undefined && propType != types.Any {
 				if !types.IsAssignable(defaultType, propType) {
 					c.addError(prop.Default, fmt.Sprintf("default value type '%s' is not assignable to expected property type '%s'", defaultType.String(), propType.String()))
 				}
 			}
-			
+
 			// Final type is the union of property type and default type (excluding undefined)
 			if propType == types.Undefined {
 				// Property doesn't exist, so target gets default type
@@ -400,7 +399,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 	if node.RestProperty != nil {
 		// Rest property gets an object type containing all remaining properties
 		var restType types.Type
-		
+
 		if widenedRhsType == types.Any {
 			// If RHS is Any, rest property is also Any
 			restType = types.Any
@@ -413,7 +412,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 				}
 				// Skip computed properties (can't determine statically)
 			}
-			
+
 			// Build remaining properties map
 			remainingProps := make(map[string]types.Type)
 			for propName, propType := range objType.Properties {
@@ -421,14 +420,14 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 					remainingProps[propName] = propType
 				}
 			}
-			
+
 			// Create object type with remaining properties
 			restType = &types.ObjectType{Properties: remainingProps}
 		} else {
 			// For other types, rest gets an empty object type
 			restType = &types.ObjectType{Properties: make(map[string]types.Type)}
 		}
-		
+
 		// Set type for rest property target
 		if identTarget, ok := node.RestProperty.Target.(*parser.Identifier); ok {
 			identTarget.SetComputedType(restType)

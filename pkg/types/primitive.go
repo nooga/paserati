@@ -1,7 +1,7 @@
 package types
 
 import (
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // --- Primitive Types ---

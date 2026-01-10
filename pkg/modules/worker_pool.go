@@ -3,12 +3,13 @@ package modules
 import (
 	"context"
 	"fmt"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
 )
 
 // workerPool implements ParseWorkerPool interface
@@ -17,23 +18,23 @@ type workerPool struct {
 	numWorkers   int
 	jobBuffer    int
 	resultBuffer int
-	
+
 	// Channels
 	jobQueue   chan *ParseJob
 	resultChan chan *ParseResult
 	errorChan  chan error
-	
+
 	// Control
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	workers    []*parseWorker
-	
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	workers []*parseWorker
+
 	// State
 	started    int32 // atomic
 	stopped    int32 // atomic
 	activeJobs int32 // atomic
-	
+
 	// Statistics
 	stats      WorkerPoolStats
 	statsMutex sync.RWMutex
@@ -46,7 +47,7 @@ type parseWorker struct {
 	jobQueue   <-chan *ParseJob
 	resultChan chan<- *ParseResult
 	errorChan  chan<- error
-	
+
 	// Real lexer and parser instances
 	lexerInstance  *lexer.Lexer
 	parserInstance *parser.Parser
@@ -86,7 +87,7 @@ func NewWorkerPool(config *LoaderConfig) ParseWorkerPool {
 	if numWorkers <= 0 {
 		numWorkers = runtime.NumCPU()
 	}
-	
+
 	return &workerPool{
 		numWorkers:   numWorkers,
 		jobBuffer:    config.JobBufferSize,
@@ -99,24 +100,24 @@ func (wp *workerPool) Start(ctx context.Context, numWorkers int) error {
 	if !atomic.CompareAndSwapInt32(&wp.started, 0, 1) {
 		return fmt.Errorf("worker pool already started")
 	}
-	
+
 	if numWorkers > 0 {
 		wp.numWorkers = numWorkers
 	}
-	
+
 	// Create context with cancellation
 	wp.ctx, wp.cancel = context.WithCancel(ctx)
-	
+
 	// Initialize channels
 	wp.jobQueue = make(chan *ParseJob, wp.jobBuffer)
 	wp.resultChan = make(chan *ParseResult, wp.resultBuffer)
 	wp.errorChan = make(chan error, wp.numWorkers)
-	
+
 	// Initialize statistics
 	wp.stats = WorkerPoolStats{
 		WorkerCount: wp.numWorkers,
 	}
-	
+
 	// Start workers
 	wp.workers = make([]*parseWorker, wp.numWorkers)
 	for i := 0; i < wp.numWorkers; i++ {
@@ -128,12 +129,12 @@ func (wp *workerPool) Start(ctx context.Context, numWorkers int) error {
 			errorChan:  wp.errorChan,
 			// Lexer and parser will be created per job
 		}
-		
+
 		wp.workers[i] = worker
 		wp.wg.Add(1)
 		go worker.run(wp.ctx)
 	}
-	
+
 	return nil
 }
 
@@ -142,21 +143,21 @@ func (wp *workerPool) Submit(job *ParseJob) error {
 	if atomic.LoadInt32(&wp.started) == 0 {
 		return fmt.Errorf("worker pool not started")
 	}
-	
+
 	if atomic.LoadInt32(&wp.stopped) == 1 {
 		return fmt.Errorf("worker pool stopped")
 	}
-	
+
 	select {
 	case wp.jobQueue <- job:
 		atomic.AddInt32(&wp.activeJobs, 1)
-		
+
 		// Update statistics
 		wp.statsMutex.Lock()
 		wp.stats.TotalJobs++
 		wp.stats.ActiveJobs++
 		wp.statsMutex.Unlock()
-		
+
 		return nil
 	case <-wp.ctx.Done():
 		return wp.ctx.Err()
@@ -178,17 +179,17 @@ func (wp *workerPool) Shutdown(ctx context.Context) error {
 	if !atomic.CompareAndSwapInt32(&wp.stopped, 0, 1) {
 		return fmt.Errorf("worker pool already stopped")
 	}
-	
+
 	// Close job queue to signal workers to stop
 	close(wp.jobQueue)
-	
+
 	// Wait for workers to finish or context timeout
 	done := make(chan struct{})
 	go func() {
 		wp.wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		// All workers finished gracefully
@@ -212,7 +213,7 @@ func (wp *workerPool) HasActiveJobs() bool {
 func (wp *workerPool) GetStats() WorkerPoolStats {
 	wp.statsMutex.RLock()
 	defer wp.statsMutex.RUnlock()
-	
+
 	stats := wp.stats
 	stats.ActiveJobs = int(atomic.LoadInt32(&wp.activeJobs))
 	return stats
@@ -222,7 +223,7 @@ func (wp *workerPool) GetStats() WorkerPoolStats {
 func (w *parseWorker) run(ctx context.Context) {
 	defer w.pool.wg.Done()
 	// Worker started
-	
+
 	for {
 		select {
 		case job, ok := <-w.jobQueue:
@@ -232,9 +233,9 @@ func (w *parseWorker) run(ctx context.Context) {
 				return
 			}
 			// Process the job
-			
+
 			result := w.processJob(job)
-			
+
 			// Update statistics
 			w.pool.statsMutex.Lock()
 			if result.Error == nil {
@@ -247,10 +248,10 @@ func (w *parseWorker) run(ctx context.Context) {
 				w.pool.stats.AverageTime = w.pool.stats.TotalTime / time.Duration(w.pool.stats.CompletedJobs+w.pool.stats.FailedJobs)
 			}
 			w.pool.statsMutex.Unlock()
-			
+
 			// Decrement active jobs count
 			atomic.AddInt32(&w.pool.activeJobs, -1)
-			
+
 			// Send result
 			select {
 			case w.resultChan <- result:
@@ -258,7 +259,7 @@ func (w *parseWorker) run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			}
-			
+
 		case <-ctx.Done():
 			return
 		}
@@ -268,17 +269,17 @@ func (w *parseWorker) run(ctx context.Context) {
 // processJob processes a single parse job
 func (w *parseWorker) processJob(job *ParseJob) *ParseResult {
 	startTime := time.Now()
-	
+
 	result := &ParseResult{
 		ModulePath: job.ModulePath,
 		WorkerID:   w.id,
 		Timestamp:  startTime,
 	}
-	
+
 	// Use real lexer and parser
 	w.lexerInstance = lexer.NewLexerWithSource(job.Source)
 	w.parserInstance = parser.NewParser(w.lexerInstance)
-	
+
 	// Parse the module
 	program, parseErrs := w.parserInstance.ParseProgram()
 	if len(parseErrs) > 0 {
@@ -287,14 +288,14 @@ func (w *parseWorker) processJob(job *ParseJob) *ParseResult {
 		result.ParseDuration = time.Since(startTime)
 		return result
 	}
-	
+
 	// Store the AST
 	result.AST = program
-	
+
 	// Extract import/export specifications from real AST
 	result.ImportSpecs = extractImportSpecs(program)
 	result.ExportSpecs = extractExportSpecs(program)
-	
+
 	result.ParseDuration = time.Since(startTime)
 	return result
 }
@@ -303,7 +304,7 @@ func (w *parseWorker) processJob(job *ParseJob) *ParseResult {
 // This includes both import statements and re-export statements with 'from' clauses
 func extractImportSpecs(program *parser.Program) []*ImportSpec {
 	var specs []*ImportSpec
-	
+
 	for _, stmt := range program.Statements {
 		switch node := stmt.(type) {
 		case *parser.ImportDeclaration:
@@ -333,14 +334,14 @@ func extractImportSpecs(program *parser.Program) []*ImportSpec {
 			}
 		}
 	}
-	
+
 	return specs
 }
 
 // extractExportSpecs extracts export specifications from the AST
 func extractExportSpecs(program *parser.Program) []*ExportSpec {
 	var specs []*ExportSpec
-	
+
 	for _, stmt := range program.Statements {
 		switch node := stmt.(type) {
 		case *parser.ExportNamedDeclaration:
@@ -375,7 +376,7 @@ func extractExportSpecs(program *parser.Program) []*ExportSpec {
 			specs = append(specs, spec)
 		}
 	}
-	
+
 	return specs
 }
 
@@ -392,26 +393,26 @@ func (sml *simpleMockLexer) Tokenize() ([]MockToken, error) {
 	// Simple tokenization for testing
 	// Look for import/export keywords
 	tokens := []MockToken{}
-	
+
 	if contains(sml.content, "import") {
 		tokens = append(tokens, MockToken{Type: "IMPORT", Value: "import", Line: 1, Col: 1})
 	}
-	
+
 	if contains(sml.content, "export") {
 		tokens = append(tokens, MockToken{Type: "EXPORT", Value: "export", Line: 1, Col: 1})
 	}
-	
+
 	if contains(sml.content, "function") {
 		tokens = append(tokens, MockToken{Type: "FUNCTION", Value: "function", Line: 1, Col: 1})
 	}
-	
+
 	if contains(sml.content, "const") {
 		tokens = append(tokens, MockToken{Type: "CONST", Value: "const", Line: 1, Col: 1})
 	}
-	
+
 	// Simulate some processing time
 	time.Sleep(1 * time.Millisecond)
-	
+
 	return tokens, nil
 }
 
@@ -431,7 +432,7 @@ func (smp *simpleMockParser) Parse() (*MockAST, error) {
 		Exports:  []*ExportSpec{},
 		Children: []*MockAST{},
 	}
-	
+
 	// Simple parsing logic for testing
 	for _, token := range smp.tokens {
 		switch token.Type {
@@ -440,7 +441,7 @@ func (smp *simpleMockParser) Parse() (*MockAST, error) {
 			// This prevents infinite loops when testing basic functionality
 			// TODO: Replace with real import parsing in the future
 			continue
-			
+
 		case "EXPORT":
 			// Create a mock export
 			exportSpec := &ExportSpec{
@@ -451,20 +452,20 @@ func (smp *simpleMockParser) Parse() (*MockAST, error) {
 			ast.Exports = append(ast.Exports, exportSpec)
 		}
 	}
-	
+
 	// Simulate some processing time
 	time.Sleep(2 * time.Millisecond)
-	
+
 	return ast, nil
 }
 
 // Helper function
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || 
-		(len(s) > len(substr) && 
-			(s[:len(substr)] == substr || 
-			 s[len(s)-len(substr):] == substr ||
-			 containsHelper(s, substr))))
+	return len(s) >= len(substr) && (s == substr ||
+		(len(s) > len(substr) &&
+			(s[:len(substr)] == substr ||
+				s[len(s)-len(substr):] == substr ||
+				containsHelper(s, substr))))
 }
 
 func containsHelper(s, substr string) bool {

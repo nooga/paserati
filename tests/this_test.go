@@ -3,8 +3,8 @@ package tests
 import (
 	"testing"
 
-	"paserati/pkg/driver"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 func TestThisKeyword(t *testing.T) {

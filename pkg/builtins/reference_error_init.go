@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // ReferenceErrorInitializer implements the ReferenceError constructor and ReferenceError.prototype
@@ -47,10 +47,10 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create ReferenceError.prototype object that inherits from Error.prototype
 	referenceErrorPrototype := vm.NewObject(errorPrototype).AsPlainObject()
-	
+
 	// Override the name property to "ReferenceError"
 	referenceErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("ReferenceError"))
-	
+
 	// ReferenceError constructor function
 	referenceErrorConstructor := vm.NewNativeFunction(-1, true, "ReferenceError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
@@ -58,19 +58,19 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
 		}
-		
+
 		// Create new ReferenceError instance that inherits from ReferenceError.prototype
 		referenceErrorInstance := vm.NewObject(vm.NewValueFromPlainObject(referenceErrorPrototype))
 		referenceErrorInstancePtr := referenceErrorInstance.AsPlainObject()
-		
+
 		// Set properties (override name, set message and stack)
 		referenceErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("ReferenceError"))
 		referenceErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
-		
+
 		// Capture stack trace at the time of ReferenceError creation
 		stackTrace := vmInstance.CaptureStackTrace()
 		referenceErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
-		
+
 		return referenceErrorInstance, nil
 	})
 

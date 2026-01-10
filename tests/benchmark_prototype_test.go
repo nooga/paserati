@@ -1,11 +1,12 @@
 package tests
 
 import (
-	"testing"
-	"paserati/pkg/driver"
-	"paserati/pkg/vm"
-	"os"
 	"fmt"
+	"os"
+	"testing"
+
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // BenchmarkPrototypeMethodAccess benchmarks prototype method access performance
@@ -60,11 +61,11 @@ obj.getValue();`,
 				// Set environment variables for this run
 				os.Setenv("PASERATI_ENABLE_PROTO_CACHE", fmt.Sprintf("%v", config.protoCache))
 				os.Setenv("PASERATI_DETAILED_CACHE_STATS", fmt.Sprintf("%v", config.detailStats))
-				
+
 				// Reload cache configuration
 				vm.EnablePrototypeCache = config.protoCache
 				vm.EnableDetailedCacheStats = config.detailStats
-				
+
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					p := driver.NewPaserati()
@@ -89,18 +90,18 @@ a.length;`
 	os.Setenv("PASERATI_DETAILED_CACHE_STATS", "true")
 	vm.EnablePrototypeCache = true
 	vm.EnableDetailedCacheStats = true
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Reset cache stats
 		vm.ResetExtendedStats()
-		
+
 		p := driver.NewPaserati()
 		_, errs := p.RunString(code)
 		if len(errs) > 0 {
 			b.Fatalf("Evaluation failed: %v", errs)
 		}
-		
+
 		// Print cache stats after each run (only on last iteration)
 		if i == b.N-1 {
 			b.Logf("Benchmark completed %d iterations", b.N)

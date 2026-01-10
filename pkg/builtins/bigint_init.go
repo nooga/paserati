@@ -3,9 +3,10 @@ package builtins
 import (
 	"fmt"
 	"math/big"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type BigIntInitializer struct{}

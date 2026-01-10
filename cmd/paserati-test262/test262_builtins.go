@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"paserati/pkg/builtins"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // Minimal Test262 builtins - only the essentials that harness files don't provide

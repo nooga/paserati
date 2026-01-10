@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -113,11 +114,11 @@ func isECMAScriptWhitespace(r rune) bool {
 	// ECMAScript 5.1 - 7.2 White Space + 7.3 Line Terminators
 	switch r {
 	case '\t', // TAB
-		'\n', // LF (Line Feed)
-		'\v', // VT (Vertical Tab)
-		'\f', // FF (Form Feed)
-		'\r', // CR (Carriage Return)
-		' ',  // Space
+		'\n',     // LF (Line Feed)
+		'\v',     // VT (Vertical Tab)
+		'\f',     // FF (Form Feed)
+		'\r',     // CR (Carriage Return)
+		' ',      // Space
 		'\u00A0', // No-Break Space
 		'\u1680', // Ogham Space Mark
 		'\u2000', // En Quad
@@ -206,7 +207,7 @@ func toIntegerWithVM(vmInstance *vm.VM, val vm.Value) (int, error) {
 	if n > 0 && n > float64(1<<31-1) {
 		return 1<<31 - 1, nil
 	}
-	if n < 0 && n < float64(-(1 << 31)) {
+	if n < 0 && n < float64(-(1<<31)) {
 		return -(1 << 31), nil
 	}
 	// Truncate towards zero (ECMAScript ToInteger)

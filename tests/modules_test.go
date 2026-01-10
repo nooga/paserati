@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"paserati/pkg/driver"
-	"paserati/pkg/errors"
-	"paserati/pkg/vm"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const modulesDebug = false
@@ -24,6 +25,7 @@ type ModuleExpectation struct {
 
 // parseModuleExpectation extracts the expectation from the main module's comments.
 // Looks for lines like:
+//
 //	    // expect: value
 //		// expect_runtime_error: message
 //		// expect_compile_error: message
@@ -66,13 +68,13 @@ func parseModuleExpectation(scriptContent string) (*ModuleExpectation, error) {
 
 func TestModules(t *testing.T) {
 	moduleDir := "modules"
-	
+
 	// Check if modules directory exists
 	if _, err := os.Stat(moduleDir); os.IsNotExist(err) {
 		t.Skipf("Module test directory %q does not exist, skipping module tests", moduleDir)
 		return
 	}
-	
+
 	entries, err := ioutil.ReadDir(moduleDir)
 	if err != nil {
 		t.Fatalf("Failed to read module directory %q: %v", moduleDir, err)
@@ -93,7 +95,7 @@ func TestModules(t *testing.T) {
 func runModuleTest(t *testing.T, testCasePath string) {
 	// 1. Find the main module (should be named main.ts or index.ts)
 	mainModulePath := ""
-	
+
 	for _, candidate := range []string{"main.ts", "index.ts"} {
 		candidatePath := filepath.Join(testCasePath, candidate)
 		if _, err := os.Stat(candidatePath); err == nil {
@@ -101,7 +103,7 @@ func runModuleTest(t *testing.T, testCasePath string) {
 			break
 		}
 	}
-	
+
 	if mainModulePath == "" {
 		t.Fatalf("No main module found (expected main.ts or index.ts) in %q", testCasePath)
 	}
@@ -195,24 +197,24 @@ func compileAndRunModules(testCasePath, mainModulePath string) (finalValue vm.Va
 
 	// Get just the filename from the main module path
 	mainFileName := filepath.Base(mainModulePath)
-	
+
 	// Run the main module using module-aware execution with ./ prefix and get the return value
 	moduleSpecifier := "./" + mainFileName
 	finalValue, compileErrs, runtimeErrs = paserati.RunModuleWithValue(moduleSpecifier)
-	
+
 	return finalValue, compileErrs, runtimeErrs
 }
 
 // Helper function to create test modules
 func CreateModuleTest(t *testing.T, testName string, modules map[string]string) string {
 	testDir := filepath.Join("modules", testName)
-	
+
 	// Create test directory
 	err := os.MkdirAll(testDir, 0755)
 	if err != nil {
 		t.Fatalf("Failed to create test directory %q: %v", testDir, err)
 	}
-	
+
 	// Write module files
 	for filename, content := range modules {
 		modulePath := filepath.Join(testDir, filename)
@@ -221,7 +223,7 @@ func CreateModuleTest(t *testing.T, testName string, modules map[string]string) 
 			t.Fatalf("Failed to write module file %q: %v", modulePath, err)
 		}
 	}
-	
+
 	return testDir
 }
 

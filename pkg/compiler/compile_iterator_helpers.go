@@ -1,8 +1,8 @@
 package compiler
 
 import (
-	"paserati/pkg/errors"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // compileIteratorNext calls iterator.next() and extracts the value
@@ -85,7 +85,7 @@ func (c *Compiler) compileIteratorToArray(iteratorReg Register, destReg Register
 	// For OpCallMethod, arguments must be in consecutive registers starting at funcReg+1
 	// Use AllocContiguous to ensure we get consecutive registers
 	pushMethodReg := c.regAlloc.AllocContiguous(3)
-	pushArgReg := pushMethodReg + 1     // Must be pushMethodReg+1 for OpCallMethod
+	pushArgReg := pushMethodReg + 1 // Must be pushMethodReg+1 for OpCallMethod
 	pushResultReg := pushMethodReg + 2
 
 	pushConstIdx := c.chunk.AddConstant(vm.String("push"))

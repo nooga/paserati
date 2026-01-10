@@ -3,10 +3,11 @@ package builtins
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strconv"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // formatExponent removes leading zeros from exponent part to match JS behavior
@@ -230,7 +231,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	numberProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
-		
+
 		// Check if this is a number
 		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber && thisNum.Type() != vm.TypeBigInt {
 			return vm.NewString(thisNum.ToString()), nil
@@ -609,20 +610,20 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.NaN, nil
 		}
-		
+
 		str := args[0].ToString()
 		radix := 10
 		if len(args) > 1 {
 			radix = int(args[1].ToFloat())
 		}
-		
+
 		if radix == 0 {
 			radix = 10 // Default radix
 		}
 		if radix < 2 || radix > 36 {
 			return vm.NaN, nil
 		}
-		
+
 		if val, err := strconv.ParseInt(str, radix, 64); err == nil {
 			return vm.NumberValue(float64(val)), nil
 		}

@@ -2,9 +2,10 @@ package compiler
 
 import (
 	"fmt"
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // compileEnumDeclaration compiles an enum declaration to bytecode
@@ -14,7 +15,7 @@ func (c *Compiler) compileEnumDeclaration(node *parser.EnumDeclaration, hint Reg
 	// Create the enum object with both forward and reverse mappings
 	enumObj := vm.NewDictObject(vm.DefaultObjectPrototype)
 	enumDict := enumObj.AsDictObject()
-	
+
 	// Track next auto-increment value for numeric enums
 	nextValue := 0
 	isNumeric := true
@@ -83,7 +84,7 @@ func (c *Compiler) compileEnumDeclaration(node *parser.EnumDeclaration, hint Reg
 		}
 
 		debugPrintf("// [Compiler Enum] Added member '%s' = %s\n", memberName, memberValue.ToString())
-		
+
 		// Update tracking for next iteration
 		lastMemberWasNumeric = isThisMemberNumeric
 	}
@@ -96,10 +97,10 @@ func (c *Compiler) compileEnumDeclaration(node *parser.EnumDeclaration, hint Reg
 	globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 	c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 	c.emitSetGlobal(globalIdx, hint, node.Token.Line)
-	
+
 	debugPrintf("// [Compiler Enum] Defined global enum '%s' at global index %d\n", node.Name.Value, globalIdx)
 
-	debugPrintf("// [Compiler Enum] Successfully compiled enum '%s' with %d members\n", 
+	debugPrintf("// [Compiler Enum] Successfully compiled enum '%s' with %d members\n",
 		node.Name.Value, len(node.Members))
 
 	return hint, nil

@@ -3,9 +3,10 @@ package compiler
 import (
 	"fmt"
 	"math"
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register) (Register, errors.PaseratiError) {
@@ -1085,8 +1086,8 @@ func (c *Compiler) compileLabeledStatement(node *parser.LabeledStatement, hint R
 		// in case there are break statements that refer to this label
 		labelContext := &LoopContext{
 			Label:                      node.Label.Value,
-			LoopStartPos:               -1,          // Not applicable for non-loops
-			ContinueTargetPos:          -1,          // Not applicable for non-loops
+			LoopStartPos:               -1, // Not applicable for non-loops
+			ContinueTargetPos:          -1, // Not applicable for non-loops
 			BreakPlaceholderPosList:    make([]int, 0),
 			ContinuePlaceholderPosList: make([]int, 0),
 			CompletionReg:              BadRegister, // Non-loops don't track completion values

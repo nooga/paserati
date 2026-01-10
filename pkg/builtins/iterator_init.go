@@ -1,7 +1,7 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 type IteratorInitializer struct{}

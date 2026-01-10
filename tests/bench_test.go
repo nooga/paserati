@@ -2,10 +2,11 @@ package tests
 
 import (
 	"os"
-	"paserati/pkg/driver"
-	"paserati/pkg/vm"
 	"strings"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // compileFile compiles the given source file and handles errors.

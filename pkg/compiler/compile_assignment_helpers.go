@@ -2,7 +2,8 @@ package compiler
 
 import (
 	"fmt"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // emitDestructuringNullCheck emits bytecode to check if valueReg is null or undefined
@@ -23,9 +24,9 @@ func (c *Compiler) emitDestructuringNullCheck(valueReg Register, line int) {
 	nullConstIdx := c.chunk.AddConstant(vm.Null)
 	c.emitLoadConstant(checkReg, nullConstIdx, line)
 	c.emitOpCode(vm.OpEqual, line)
-	c.emitByte(byte(checkReg))   // result register
-	c.emitByte(byte(valueReg))   // left operand
-	c.emitByte(byte(checkReg))   // right operand (null)
+	c.emitByte(byte(checkReg)) // result register
+	c.emitByte(byte(valueReg)) // left operand
+	c.emitByte(byte(checkReg)) // right operand (null)
 
 	// Jump past error if not null
 	notNullJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
@@ -43,7 +44,7 @@ func (c *Compiler) emitDestructuringNullCheck(valueReg Register, line int) {
 
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)
-	c.emitCall(resultReg, errorReg, 1, line)  // Call TypeError constructor with message
+	c.emitCall(resultReg, errorReg, 1, line) // Call TypeError constructor with message
 	c.emitOpCode(vm.OpThrow, line)
 	c.emitByte(byte(resultReg))
 
@@ -54,9 +55,9 @@ func (c *Compiler) emitDestructuringNullCheck(valueReg Register, line int) {
 	undefConstIdx := c.chunk.AddConstant(vm.Undefined)
 	c.emitLoadConstant(checkReg, undefConstIdx, line)
 	c.emitOpCode(vm.OpEqual, line)
-	c.emitByte(byte(checkReg))   // result register
-	c.emitByte(byte(valueReg))   // left operand
-	c.emitByte(byte(checkReg))   // right operand (undefined)
+	c.emitByte(byte(checkReg)) // result register
+	c.emitByte(byte(valueReg)) // left operand
+	c.emitByte(byte(checkReg)) // right operand (undefined)
 
 	// Jump past error if not undefined
 	notUndefJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
@@ -65,7 +66,7 @@ func (c *Compiler) emitDestructuringNullCheck(valueReg Register, line int) {
 	c.emitGetGlobal(errorReg, typeErrorGlobalIdx, line)
 	msgConstIdx = c.chunk.AddConstant(vm.String("Cannot destructure 'undefined'"))
 	c.emitLoadConstant(msgReg, msgConstIdx, line)
-	c.emitCall(resultReg, errorReg, 1, line)  // Call TypeError constructor with message
+	c.emitCall(resultReg, errorReg, 1, line) // Call TypeError constructor with message
 	c.emitOpCode(vm.OpThrow, line)
 	c.emitByte(byte(resultReg))
 

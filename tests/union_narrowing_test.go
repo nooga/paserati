@@ -2,15 +2,16 @@ package tests
 
 import (
 	"fmt"
-	"paserati/pkg/builtins"
-	"paserati/pkg/compiler"
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/compiler"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type unionNarrowingTestCase struct {

@@ -1,7 +1,7 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 type ArgumentsInitializer struct{}
@@ -28,7 +28,7 @@ func (a *ArgumentsInitializer) InitTypes(ctx *TypeContext) error {
 	}
 	iArgumentsType.IndexSignatures = append(iArgumentsType.IndexSignatures, indexSig)
 
-	// Define the IArguments type globally  
+	// Define the IArguments type globally
 	err := ctx.DefineGlobal("IArguments", iArgumentsType)
 	if err != nil {
 		return err

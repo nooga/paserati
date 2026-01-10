@@ -3,10 +3,11 @@ package compiler
 import (
 	"fmt"
 	"math/big"
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // Helper functions for detecting null and undefined literals

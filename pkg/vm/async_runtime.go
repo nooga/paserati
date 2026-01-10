@@ -1,6 +1,6 @@
 package vm
 
-import "paserati/pkg/runtime"
+import "github.com/nooga/paserati/pkg/runtime"
 
 // SetAsyncRuntime sets the async execution runtime
 func (vm *VM) SetAsyncRuntime(rt runtime.AsyncRuntime) {

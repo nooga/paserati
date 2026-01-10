@@ -3,13 +3,14 @@ package driver
 import (
 	"fmt"
 	"io"
-	"paserati/pkg/modules"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"reflect"
 	"strings"
 	"sync"
+
+	"github.com/nooga/paserati/pkg/modules"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const debugNativeModules = false // Enable debug output for native modules
@@ -303,7 +304,7 @@ func (m *ModuleBuilder) bindStructMethods(vmObj *vm.PlainObject, goInstance refl
 
 		// Create a VM function that calls the Go method
 		vmMethod := m.createBoundMethod(methodFunc)
-		
+
 		// Convert method name to camelCase for JavaScript compatibility
 		jsMethodName := strings.ToLower(methodName[:1]) + methodName[1:]
 		vmObj.SetOwn(jsMethodName, vmMethod)
@@ -495,17 +496,17 @@ func goFunctionToVM(fn interface{}) vm.Value {
 			// For variadic functions, we need to handle the last parameter differently
 			normalArgCount := fnType.NumIn() - 1
 			goArgs := make([]reflect.Value, 0, len(args))
-			
+
 			// Convert normal arguments
 			for i := 0; i < normalArgCount && i < len(args); i++ {
 				goArgs = append(goArgs, vmValueToReflectValue(args[i], fnType.In(i)))
 			}
-			
+
 			// Add zero values for missing normal arguments
 			for i := len(args); i < normalArgCount; i++ {
 				goArgs = append(goArgs, reflect.Zero(fnType.In(i)))
 			}
-			
+
 			// Collect remaining args for variadic parameter
 			if len(args) > normalArgCount {
 				// The variadic parameter type is a slice
@@ -514,11 +515,11 @@ func goFunctionToVM(fn interface{}) vm.Value {
 					goArgs = append(goArgs, vmValueToReflectValue(args[i], variadicType))
 				}
 			}
-			
+
 			// Call the function - use Call for variadic functions too
 			// CallSlice requires the variadic args to be passed as a slice value
 			results := fnValue.Call(goArgs)
-			
+
 			// Handle return values
 			if len(results) == 2 {
 				// Check if the second value is an error
@@ -535,10 +536,10 @@ func goFunctionToVM(fn interface{}) vm.Value {
 				// Single return value
 				return reflectValueToVM(results[0]), nil
 			}
-			
+
 			return vm.Undefined, nil
 		}
-		
+
 		// Non-variadic function handling (original code)
 		goArgs := make([]reflect.Value, len(args))
 		for i, arg := range args {
@@ -640,15 +641,18 @@ func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Valu
 			// Create a new map of the target type
 			mapType := targetType
 			newMap := reflect.MakeMap(mapType)
-			
+
 			// Get the object
-			var obj interface{ OwnKeys() []string; GetOwn(string) (vm.Value, bool) }
+			var obj interface {
+				OwnKeys() []string
+				GetOwn(string) (vm.Value, bool)
+			}
 			if vmVal.IsObject() {
 				obj = vmVal.AsPlainObject()
 			} else if vmVal.IsDictObject() {
 				obj = vmVal.AsDictObject()
 			}
-			
+
 			if obj != nil {
 				// Copy all properties
 				for _, key := range obj.OwnKeys() {
@@ -664,7 +668,7 @@ func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Valu
 					}
 				}
 			}
-			
+
 			return newMap
 		}
 		return reflect.Zero(targetType)
@@ -682,14 +686,17 @@ func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Valu
 		case vmVal.IsObject() || vmVal.IsDictObject():
 			// Convert to map[string]interface{}
 			result := make(map[string]interface{})
-			
-			var obj interface{ OwnKeys() []string; GetOwn(string) (vm.Value, bool) }
+
+			var obj interface {
+				OwnKeys() []string
+				GetOwn(string) (vm.Value, bool)
+			}
 			if vmVal.IsObject() {
 				obj = vmVal.AsPlainObject()
 			} else if vmVal.IsDictObject() {
 				obj = vmVal.AsDictObject()
 			}
-			
+
 			if obj != nil {
 				for _, key := range obj.OwnKeys() {
 					if val, ok := obj.GetOwn(key); ok {
@@ -698,7 +705,7 @@ func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Valu
 					}
 				}
 			}
-			
+
 			return reflect.ValueOf(result)
 		default:
 			return reflect.Zero(targetType)
@@ -722,14 +729,17 @@ func vmValueToInterface(vmVal vm.Value) interface{} {
 	case vmVal.IsObject() || vmVal.IsDictObject():
 		// Convert to map[string]interface{}
 		result := make(map[string]interface{})
-		
-		var obj interface{ OwnKeys() []string; GetOwn(string) (vm.Value, bool) }
+
+		var obj interface {
+			OwnKeys() []string
+			GetOwn(string) (vm.Value, bool)
+		}
 		if vmVal.IsObject() {
 			obj = vmVal.AsPlainObject()
 		} else if vmVal.IsDictObject() {
 			obj = vmVal.AsDictObject()
 		}
-		
+
 		if obj != nil {
 			for _, key := range obj.OwnKeys() {
 				if val, ok := obj.GetOwn(key); ok {
@@ -738,7 +748,7 @@ func vmValueToInterface(vmVal vm.Value) interface{} {
 				}
 			}
 		}
-		
+
 		return result
 	default:
 		return nil
@@ -786,17 +796,17 @@ func reflectValueToVM(reflectVal reflect.Value) vm.Value {
 			// Create a VM object to represent the struct instance
 			instance := vm.NewObject(vm.Undefined)
 			instanceObj := instance.AsPlainObject()
-			
+
 			// Get the struct type
 			structType := reflectVal.Elem().Type()
-			
+
 			// Create a temporary ModuleBuilder to use its helper methods
 			// This is a bit hacky but works for now
 			mb := &ModuleBuilder{vm: nil} // vm not needed for field binding
-			
+
 			// Bind all fields and methods from the Go struct to the VM object
 			mb.bindStructMethods(instanceObj, reflectVal, structType)
-			
+
 			return instance
 		}
 		// For other pointer types, try to dereference
@@ -806,7 +816,7 @@ func reflectValueToVM(reflectVal reflect.Value) vm.Value {
 		if reflectVal.Type().Elem().Kind() == reflect.Uint8 {
 			// Convert []byte to Uint8Array using vm.NewArrayBuffer + vm.NewTypedArray
 			goBytes := reflectVal.Bytes()
-			
+
 			// Create ArrayBuffer with the correct size
 			arrayBufferValue := vm.NewArrayBuffer(len(goBytes))
 			if buffer := arrayBufferValue.AsArrayBuffer(); buffer != nil {

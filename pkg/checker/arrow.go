@@ -1,24 +1,24 @@
 package checker
 
 import (
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 func (c *Checker) checkArrowFunctionLiteral(node *parser.ArrowFunctionLiteral) {
 	// Create function check context
 	ctx := &FunctionCheckContext{
-		FunctionName:              "<arrow>", // Arrow functions are anonymous
-		TypeParameters:            node.TypeParameters, // Support for generic arrow functions
-		Parameters:                node.Parameters,
-		RestParameter:             node.RestParameter,
-		ReturnTypeAnnotation:      node.ReturnTypeAnnotation,
-		Body:                      node.Body,
-		IsArrow:                   true,
-		IsGenerator:               false,       // Arrow functions cannot be generators
-		IsAsync:                   node.IsAsync, // Support async arrow functions
-		AllowSelfReference:        false,       // Arrow functions don't have self-reference
-		AllowOverloadCompletion:   false,       // Arrow functions don't support overloads
+		FunctionName:            "<arrow>",           // Arrow functions are anonymous
+		TypeParameters:          node.TypeParameters, // Support for generic arrow functions
+		Parameters:              node.Parameters,
+		RestParameter:           node.RestParameter,
+		ReturnTypeAnnotation:    node.ReturnTypeAnnotation,
+		Body:                    node.Body,
+		IsArrow:                 true,
+		IsGenerator:             false,        // Arrow functions cannot be generators
+		IsAsync:                 node.IsAsync, // Support async arrow functions
+		AllowSelfReference:      false,        // Arrow functions don't have self-reference
+		AllowOverloadCompletion: false,        // Arrow functions don't support overloads
 	}
 
 	// 1. Resolve parameters and signature

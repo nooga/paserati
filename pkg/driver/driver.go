@@ -4,16 +4,17 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"paserati/pkg/builtins"
-	"paserati/pkg/checker"
-	"paserati/pkg/compiler"
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/modules"
-	"paserati/pkg/parser"
-	"paserati/pkg/source"
-	"paserati/pkg/vm"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/checker"
+	"github.com/nooga/paserati/pkg/compiler"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/modules"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/source"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const debugDriver = false
@@ -1377,9 +1378,9 @@ func (p *Paserati) preloadNativeModules(program *parser.Program) errors.Paserati
 // installBuiltinModules installs all built-in Paserati modules
 func installBuiltinModules(p *Paserati) {
 	// HTTP module
-	p.DeclareModule("paserati/http", httpModule)
+	p.DeclareModule("github.com/nooga/paserati/http", httpModule)
 
 	// Add more modules here as we create them
-	// p.DeclareModule("paserati/fs", fsModule)
-	// p.DeclareModule("paserati/crypto", cryptoModule)
+	// p.DeclareModule("github.com/nooga/paserati/fs", fsModule)
+	// p.DeclareModule("github.com/nooga/paserati/crypto", cryptoModule)
 }

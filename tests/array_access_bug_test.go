@@ -3,7 +3,7 @@ package tests
 import (
 	"testing"
 
-	"paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/driver"
 )
 
 // Test for the array access bug where Array(1, 2, 3)[2] returns 2 instead of 3

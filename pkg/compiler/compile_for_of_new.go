@@ -1,9 +1,9 @@
 package compiler
 
 import (
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // compileForOfStatementLabeled compiles for-of loops using iterator protocol uniformly

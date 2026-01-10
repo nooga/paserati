@@ -2,7 +2,8 @@ package tests
 
 import (
 	"testing"
-	"paserati/pkg/driver"
+
+	"github.com/nooga/paserati/pkg/driver"
 )
 
 func TestExactPrototypeMethods(t *testing.T) {
@@ -27,7 +28,7 @@ result;`
 		t.Fatalf("Test failed: %v", errs)
 	}
 	t.Logf("Counter increment result: %s = %v", result.TypeName(), result.Inspect())
-	
+
 	// Test simple function call
 	code2 := `
 function getValue() {

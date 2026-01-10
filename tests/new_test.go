@@ -1,9 +1,10 @@
 package tests
 
 import (
-	"paserati/pkg/driver"
 	"strings"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/driver"
 )
 
 func TestNewKeyword(t *testing.T) {

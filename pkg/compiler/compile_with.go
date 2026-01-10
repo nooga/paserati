@@ -1,9 +1,9 @@
 package compiler
 
 import (
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // compileWithStatement compiles a with statement
@@ -16,14 +16,14 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 
 	// Allocate a register for the with object
 	objectReg := c.regAlloc.Alloc()
-	
+
 	// Compile the with expression to get the object
 	compiledReg, err := c.compileNode(node.Expression, objectReg)
 	if err != nil {
 		c.regAlloc.Free(objectReg)
 		return BadRegister, err
 	}
-	
+
 	// If compilation used a different register, we need to move the value
 	if compiledReg != objectReg {
 		// For now, just use the register that was actually used
@@ -82,11 +82,11 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 // extractPropertiesFromType extracts known property names from a type for compiler use
 func (c *Compiler) extractPropertiesFromType(typ types.Type) map[string]bool {
 	properties := make(map[string]bool)
-	
+
 	if typ == nil {
 		return properties
 	}
-	
+
 	switch t := typ.(type) {
 	case *types.ObjectType:
 		// Mark all properties as known
@@ -99,6 +99,6 @@ func (c *Compiler) extractPropertiesFromType(typ types.Type) map[string]bool {
 	default:
 		// For other types, no known properties
 	}
-	
+
 	return properties
 }

@@ -1,7 +1,7 @@
 package checker
 
 import (
-	"paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // isAssignableToIntersection checks if a source type can be assigned to an intersection type.

@@ -3,10 +3,10 @@ package compiler
 import (
 	"fmt"
 
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const debugAssignment = false // Enable debug output for assignment compilation
@@ -45,13 +45,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	)
 	var lhsType lhsInfoType
 	var identInfo struct { // Info needed to store back to identifier
-		targetReg      Register
-		isUpvalue      bool
-		upvalueIndex   uint8
-		isGlobal       bool   // Track if this is a global variable
-		globalIdx      uint16 // Direct global index instead of name constant index
-		isCallerLocal  bool   // Track if this is a caller's local (for direct eval)
-		callerRegIdx   int    // Caller's register index (for direct eval)
+		targetReg     Register
+		isUpvalue     bool
+		upvalueIndex  uint8
+		isGlobal      bool   // Track if this is a global variable
+		globalIdx     uint16 // Direct global index instead of name constant index
+		isCallerLocal bool   // Track if this is a caller's local (for direct eval)
+		callerRegIdx  int    // Caller's register index (for direct eval)
 	}
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register

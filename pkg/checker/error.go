@@ -1,8 +1,8 @@
 package checker
 
 import (
-	"paserati/pkg/errors"
-	"paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
 )
 
 // Helper to add type errors (consider adding token/node info later)

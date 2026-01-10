@@ -2,18 +2,19 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // TypeGuard represents a detected type guard pattern
 type TypeGuard struct {
-	VariableName       string     // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
-	NarrowedType       types.Type // The type it's narrowed to (e.g., types.String)
-	IsNegated          bool       // true for !== checks, false for === checks
-	DiscriminantProp   string     // For discriminated unions: the property being checked (e.g., "kind")
-	DiscriminantValue  types.Type // For discriminated unions: the value being compared (e.g., literal "num")
+	VariableName      string     // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
+	NarrowedType      types.Type // The type it's narrowed to (e.g., types.String)
+	IsNegated         bool       // true for !== checks, false for === checks
+	DiscriminantProp  string     // For discriminated unions: the property being checked (e.g., "kind")
+	DiscriminantValue types.Type // For discriminated unions: the value being compared (e.g., literal "num")
 }
 
 // expressionToNarrowingKey converts an expression to a string key for narrowing.
@@ -81,7 +82,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 	if infix, ok := condition.(*parser.InfixExpression); ok {
 		isPositive := infix.Operator == "===" || infix.Operator == "=="
 		isNegative := infix.Operator == "!==" || infix.Operator == "!="
-		
+
 		if isPositive || isNegative {
 
 			// Pattern 1: typeof <expression> === "literal"
@@ -194,7 +195,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				}
 			}
 		}
-		
+
 		// Pattern 4: "property" in identifier (e.g., "foo" in obj)
 		if infix.Operator == "in" {
 			if propLit, ok := infix.Left.(*parser.StringLiteral); ok {
@@ -286,7 +287,7 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 	if guard == nil {
 		return nil
 	}
-	
+
 	// If the guard is negated (e.g., !== check), apply inverted narrowing instead
 	if guard.IsNegated {
 		return c.applyInvertedTypeNarrowing(guard)
@@ -304,7 +305,7 @@ func (c *Checker) applyTypeNarrowingWithFallback(condition parser.Expression) *E
 		debugPrintf("// [TypeNarrowing] Used traditional approach\n")
 		return env
 	}
-	
+
 	// If that didn't work, try the compound approach
 	debugPrintf("// [TypeNarrowing] Trying compound approach for condition: %T\n", condition)
 	return c.applyTypeNarrowingFromCondition(condition)
@@ -496,23 +497,23 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					debugPrintf("// [TypeNarrowing] No types with property '%s' found in union\n", propMarker.PropertyName)
 					return nil
 				}
-			// For typeof "function" checks, find callable members in the union
+				// For typeof "function" checks, find callable members in the union
 			} else if objType, ok := guard.NarrowedType.(*types.ObjectType); ok && objType.IsCallable() {
 				var callableMembers []types.Type
 				debugPrintf("// [TypeNarrowing] Checking union members for callable types\n")
 				for _, memberType := range unionType.Types {
 					debugPrintf("// [TypeNarrowing] Checking member: %s (type: %T)\n", memberType.String(), memberType)
-					
+
 					// Resolve type aliases to their underlying types
 					resolvedType := c.resolveTypeAlias(memberType)
 					debugPrintf("// [TypeNarrowing] Resolved member to: %s (type: %T)\n", resolvedType.String(), resolvedType)
-					
+
 					if memberObj, ok := resolvedType.(*types.ObjectType); ok && memberObj.IsCallable() {
 						callableMembers = append(callableMembers, memberType) // Keep original for narrowed type
 						debugPrintf("// [TypeNarrowing] Found callable member: %s\n", memberType.String())
 					}
 				}
-				
+
 				if len(callableMembers) > 0 {
 					canNarrow = true
 					if len(callableMembers) == 1 {
@@ -538,7 +539,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 						compatibleMembers = append(compatibleMembers, memberType)
 					}
 				}
-				
+
 				if len(compatibleMembers) > 0 {
 					canNarrow = true
 					if len(compatibleMembers) == 1 {
@@ -807,21 +808,21 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 	if type1 == types.Any || type2 == types.Any || type1 == types.Unknown || type2 == types.Unknown {
 		return true
 	}
-	
+
 	// Special case for typeof checks: always allow checking against string literals "string", "number", etc.
 	// This is a common pattern in TypeScript: typeof x === "string"
 	if lit1, isLit1 := type1.(*types.LiteralType); isLit1 && lit1.Value.IsString() {
 		strValue := lit1.Value.ToString()
-		if strValue == "string" || strValue == "number" || strValue == "boolean" || 
-		   strValue == "undefined" || strValue == "function" || strValue == "object" {
+		if strValue == "string" || strValue == "number" || strValue == "boolean" ||
+			strValue == "undefined" || strValue == "function" || strValue == "object" {
 			return true // Allow typeof pattern
 		}
 	}
-	
+
 	if lit2, isLit2 := type2.(*types.LiteralType); isLit2 && lit2.Value.IsString() {
 		strValue := lit2.Value.ToString()
-		if strValue == "string" || strValue == "number" || strValue == "boolean" || 
-		   strValue == "undefined" || strValue == "function" || strValue == "object" {
+		if strValue == "string" || strValue == "number" || strValue == "boolean" ||
+			strValue == "undefined" || strValue == "function" || strValue == "object" {
 			return true // Allow typeof pattern
 		}
 	}
@@ -869,7 +870,7 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 			}
 		}
 	}
-	
+
 	if enumMember2, ok := type2.(*types.EnumMemberType); ok {
 		// Check if enum member's value overlaps with type1
 		if enumMember2.Value != nil {
@@ -925,17 +926,17 @@ func (c *Checker) typesHaveOverlap(type1, type2 types.Type) bool {
 	if (isObject1 && type2 == types.String) || (isObject2 && type1 == types.String) {
 		return true // Allow object to be compared with string (for typeof checks)
 	}
-	
+
 	// Special case: Allow number comparison with object for typeof checks (common pattern)
 	if (isObject1 && type2 == types.Number) || (isObject2 && type1 == types.Number) {
 		return true // Allow object to be compared with number (for typeof checks)
 	}
-	
+
 	// Special case: Allow boolean comparison with object for typeof checks (common pattern)
 	if (isObject1 && type2 == types.Boolean) || (isObject2 && type1 == types.Boolean) {
 		return true // Allow object to be compared with boolean (for typeof checks)
 	}
-	
+
 	widenedType1 := types.GetWidenedType(type1)
 	widenedType2 := types.GetWidenedType(type2)
 	return widenedType1 == widenedType2
@@ -972,7 +973,7 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 		debugPrintf("// [TypeNarrowing] Resolved alias %s -> %s\n", t.String(), effective.String())
 		return effective
 	}
-	
+
 	// Handle different type structures
 	switch typ := t.(type) {
 	case *types.InstantiatedType:
@@ -1001,7 +1002,7 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 		// Not a resolvable type, return as-is
 		return t
 	}
-	
+
 	return t
 }
 
@@ -1011,57 +1012,57 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 	// Handle logical AND expressions by composing environments
 	if infixExpr, ok := condition.(*parser.InfixExpression); ok && infixExpr.Operator == "&&" {
 		// For "a && b", first apply narrowing from "a", then apply "b" in that narrowed context
-		
+
 		// Apply narrowing from left side
 		leftEnv := c.applyTypeNarrowingFromCondition(infixExpr.Left)
 		if leftEnv == nil {
 			// If left side doesn't narrow, try just the right side
 			return c.applyTypeNarrowingFromCondition(infixExpr.Right)
 		}
-		
+
 		// Save current environment and switch to the narrowed one
 		originalEnv := c.env
 		c.env = leftEnv
-		
+
 		// Apply narrowing from right side in the already-narrowed environment
 		rightEnv := c.applyTypeNarrowingFromCondition(infixExpr.Right)
-		
+
 		// Restore original environment
 		c.env = originalEnv
-		
+
 		// Return the composed environment (rightEnv already includes leftEnv constraints)
 		if rightEnv != nil {
 			return rightEnv
 		}
 		return leftEnv
 	}
-	
+
 	// Handle logical OR expressions - for "a || b", we can't really narrow much
 	// (would need union of constraints, which is complex)
 	if infixExpr, ok := condition.(*parser.InfixExpression); ok && infixExpr.Operator == "||" {
 		// For now, don't handle OR expressions in type narrowing
 		return nil
 	}
-	
+
 	// Handle truthiness checks (bare identifiers)
 	if ident, ok := condition.(*parser.Identifier); ok {
 		// This is a truthiness check like "if (x)" - eliminates null and undefined
 		return c.applyTruthinessNarrowing(ident.Value)
 	}
-	
+
 	// Handle single type guard expressions
 	guard := c.detectTypeGuard(condition)
 	return c.applyTypeNarrowing(guard)
 }
 
-// applyTruthinessNarrowing handles bare identifier checks like "if (x)" 
+// applyTruthinessNarrowing handles bare identifier checks like "if (x)"
 // This eliminates null and undefined from union types
 func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 	originalType, isConst, found := c.env.Resolve(varName)
 	if !found {
 		return nil
 	}
-	
+
 	// If it's a union type, remove null and undefined
 	if unionType, ok := originalType.(*types.UnionType); ok {
 		var truthyMembers []types.Type
@@ -1070,7 +1071,7 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 				truthyMembers = append(truthyMembers, member)
 			}
 		}
-		
+
 		if len(truthyMembers) < len(unionType.Types) {
 			// We actually narrowed something
 			var narrowedType types.Type
@@ -1081,7 +1082,7 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 			} else {
 				narrowedType = types.NewUnionType(truthyMembers...)
 			}
-			
+
 			// Create narrowed environment
 			narrowedEnv := NewEnclosedEnvironment(c.env)
 			if narrowedEnv.Define(varName, narrowedType, isConst) {
@@ -1091,7 +1092,7 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -1114,18 +1115,18 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 	if memberType.Equals(targetType) {
 		return true
 	}
-	
+
 	// Check if memberType is assignable to targetType or vice versa
 	if types.IsAssignable(memberType, targetType) || types.IsAssignable(targetType, memberType) {
 		return true
 	}
-	
+
 	// Primitives like number, string are not compatible with Date instances
 	switch memberType {
 	case types.Number, types.String, types.Boolean, types.Null, types.Undefined:
 		return false
 	}
-	
+
 	// Function types (with call signatures) are not compatible with Date instances
 	if memberObj, ok := memberType.(*types.ObjectType); ok {
 		if targetObj, ok := targetType.(*types.ObjectType); ok {
@@ -1140,7 +1141,7 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 			}
 		}
 	}
-	
+
 	return false
 }
 

@@ -2,25 +2,26 @@ package checker
 
 import (
 	"fmt"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // FunctionCheckContext holds the common context for function checking
 type FunctionCheckContext struct {
-	FunctionName              string                      // For logging and recursion
-	TypeParameters            []*parser.TypeParameter     // Generic type parameters (if any)
-	Parameters                []*parser.Parameter         // Parameter nodes
-	RestParameter             *parser.RestParameter       // Rest parameter node (if any)
-	ReturnTypeAnnotation      parser.Expression           // Return type annotation (if any)
-	Body                      parser.Node                 // Function body (block or expression)
-	IsArrow                   bool                        // Whether this is an arrow function
-	IsGenerator               bool                        // Whether this is a generator function (function*)
-	IsAsync                   bool                        // Whether this is an async function
-	AllowSelfReference        bool                        // Whether to allow recursive self-reference
-	AllowOverloadCompletion   bool                        // Whether to check for overload completion
-	ContextualParameterTypes  []types.Type               // Contextual parameter types from expected signature
-	ContextualReturnType      types.Type                 // Contextual return type (nil for generic inference)
+	FunctionName             string                  // For logging and recursion
+	TypeParameters           []*parser.TypeParameter // Generic type parameters (if any)
+	Parameters               []*parser.Parameter     // Parameter nodes
+	RestParameter            *parser.RestParameter   // Rest parameter node (if any)
+	ReturnTypeAnnotation     parser.Expression       // Return type annotation (if any)
+	Body                     parser.Node             // Function body (block or expression)
+	IsArrow                  bool                    // Whether this is an arrow function
+	IsGenerator              bool                    // Whether this is a generator function (function*)
+	IsAsync                  bool                    // Whether this is an async function
+	AllowSelfReference       bool                    // Whether to allow recursive self-reference
+	AllowOverloadCompletion  bool                    // Whether to check for overload completion
+	ContextualParameterTypes []types.Type            // Contextual parameter types from expected signature
+	ContextualReturnType     types.Type              // Contextual return type (nil for generic inference)
 }
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
@@ -28,11 +29,11 @@ type FunctionCheckContext struct {
 func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.Signature, []types.Type, []*parser.Identifier, types.Type, *parser.Identifier, *Environment) {
 	// 1. First, create an environment for type parameters if this is a generic function
 	var typeParamEnv *Environment = c.env
-	
+
 	if len(ctx.TypeParameters) > 0 {
 		// Create a new environment that includes type parameters
 		typeParamEnv = NewEnclosedEnvironment(c.env)
-		
+
 		// Define each type parameter in the environment
 		for i, typeParamNode := range ctx.TypeParameters {
 			// Resolve constraint if present
@@ -48,7 +49,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 			} else {
 				constraintType = types.Any // Default constraint
 			}
-			
+
 			// Resolve default type if present
 			var defaultType types.Type
 			if typeParamNode.DefaultType != nil {
@@ -56,7 +57,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 				c.env = typeParamEnv // Use the type param environment for default type resolution
 				defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
 				c.env = originalEnv
-				
+
 				// Validate that default type satisfies constraint if both are present
 				if defaultType != nil && constraintType != types.Any {
 					// Special case: if default type is a type parameter, be permissive
@@ -70,7 +71,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 					}
 				}
 			}
-			
+
 			// Create the type parameter
 			typeParam := &types.TypeParameter{
 				Name:       typeParamNode.Name.Value,
@@ -78,16 +79,16 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 				Default:    defaultType,
 				Index:      i,
 			}
-			
+
 			// Define it in the environment
 			if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
 				c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
 			}
-			
+
 			// Set computed type on the AST node
 			typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
-			
-			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint %s\n", 
+
+			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint %s\n",
 				typeParam.Name, constraintType.String())
 		}
 	}
@@ -96,7 +97,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 	var paramNames []*parser.Identifier
 	var restParameterType types.Type
 	var restParameterName *parser.Identifier
-	
+
 	// 2. Resolve regular parameters using the type parameter environment
 	for _, param := range ctx.Parameters {
 		var paramType types.Type = types.Any
@@ -110,7 +111,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 			}
 		}
 		paramTypes = append(paramTypes, paramType)
-		
+
 		// For 'this' parameters, include in signature but don't add to paramNames (no variable)
 		if param.IsThis {
 			paramNames = append(paramNames, nil) // Placeholder to keep indices aligned
@@ -119,7 +120,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 		}
 		param.ComputedType = paramType
 	}
-	
+
 	// 3. Handle rest parameter if present using the type parameter environment
 	if ctx.RestParameter != nil {
 		var resolvedRestType types.Type
@@ -128,7 +129,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 			c.env = typeParamEnv // Use environment that includes type parameters
 			resolvedRestType = c.resolveTypeAnnotation(ctx.RestParameter.TypeAnnotation)
 			c.env = originalEnv
-			
+
 			// Rest parameter type should be an array type
 			if resolvedRestType != nil {
 				if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
@@ -137,17 +138,17 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 				}
 			}
 		}
-		
+
 		if resolvedRestType == nil {
 			// Default to any[] if no annotation
 			resolvedRestType = &types.ArrayType{ElementType: types.Any}
 		}
-		
+
 		restParameterType = resolvedRestType
 		restParameterName = ctx.RestParameter.Name
 		ctx.RestParameter.ComputedType = restParameterType
 	}
-	
+
 	// 4. Resolve return type annotation using the type parameter environment
 	var expectedReturnType types.Type
 	if ctx.ReturnTypeAnnotation != nil {
@@ -156,13 +157,13 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 		expectedReturnType = c.resolveTypeAnnotation(ctx.ReturnTypeAnnotation)
 		c.env = originalEnv
 	}
-	
+
 	// Create preliminary signature
 	optionalParams := make([]bool, len(ctx.Parameters))
 	for i, param := range ctx.Parameters {
 		optionalParams[i] = param.Optional || (param.DefaultValue != nil)
 	}
-	
+
 	signature := &types.Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        expectedReturnType,
@@ -170,7 +171,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
-	
+
 	return signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
 }
 
@@ -181,14 +182,14 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 	if len(ctx.ContextualParameterTypes) == 0 {
 		return c.resolveFunctionParameters(ctx)
 	}
-	
+
 	// 1. First, create an environment for type parameters if this is a generic function
 	var typeParamEnv *Environment = c.env
-	
+
 	if len(ctx.TypeParameters) > 0 {
 		// Create a new environment that includes type parameters
 		typeParamEnv = NewEnclosedEnvironment(c.env)
-		
+
 		// Define each type parameter in the environment
 		for _, typeParamNode := range ctx.TypeParameters {
 			// Resolve constraint if present
@@ -204,7 +205,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 			} else {
 				constraintType = types.Any // Default constraint
 			}
-			
+
 			// Resolve default type if present
 			var defaultType types.Type
 			if typeParamNode.DefaultType != nil {
@@ -212,35 +213,35 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 				c.env = typeParamEnv // Use the type param environment for default type resolution
 				defaultType = c.resolveTypeAnnotation(typeParamNode.DefaultType)
 				c.env = originalEnv
-				
+
 				// Validate that default type satisfies constraint if both are present
 				if defaultType != nil && constraintType != types.Any && !types.IsAssignable(defaultType, constraintType) {
 					c.addError(typeParamNode.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), constraintType.String()))
 				}
 			}
-			
+
 			// Create the type parameter
 			typeParam := &types.TypeParameter{
 				Name:       typeParamNode.Name.Value,
 				Constraint: constraintType,
 				Default:    defaultType,
 			}
-			
+
 			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint any\n", typeParam.Name)
 			typeParamEnv.DefineTypeAlias(typeParam.Name, &types.TypeParameterType{Parameter: typeParam})
 		}
 	}
-	
+
 	// 2. Resolve parameter types, using contextual types when available
 	var paramTypes []types.Type
 	var paramNames []*parser.Identifier
 	var optionalParams []bool
-	
+
 	for i, param := range ctx.Parameters {
 		paramNames = append(paramNames, param.Name)
-		
+
 		var paramType types.Type
-		
+
 		// Use contextual type if available and no explicit annotation
 		if i < len(ctx.ContextualParameterTypes) && param.TypeAnnotation == nil {
 			paramType = ctx.ContextualParameterTypes[i]
@@ -258,17 +259,17 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 			// No contextual type and no annotation - use any
 			paramType = types.Any
 		}
-		
+
 		paramTypes = append(paramTypes, paramType)
 		optionalParams = append(optionalParams, param.DefaultValue != nil)
 	}
-	
+
 	// 3. Handle rest parameter
 	var restParameterType types.Type
 	var restParameterName *parser.Identifier
 	if ctx.RestParameter != nil {
 		restParameterName = ctx.RestParameter.Name
-		
+
 		if ctx.RestParameter.TypeAnnotation != nil {
 			originalEnv := c.env
 			c.env = typeParamEnv
@@ -280,7 +281,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 			restParameterType = &types.ArrayType{ElementType: types.Any}
 		}
 	}
-	
+
 	// 4. Resolve return type
 	var returnType types.Type
 	if ctx.ReturnTypeAnnotation != nil {
@@ -295,7 +296,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 	if returnType == nil {
 		returnType = types.Any // Will be inferred during body checking
 	}
-	
+
 	// 5. Create preliminary signature
 	signature := &types.Signature{
 		ParameterTypes:    paramTypes,
@@ -304,7 +305,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
-	
+
 	return signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
 }
 
@@ -315,7 +316,7 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 	// Use the type parameter environment as the base for the function body environment
 	funcEnv := NewEnclosedEnvironment(typeParamEnv)
 	c.env = funcEnv
-	
+
 	// Define regular parameters (skip 'this' parameters which have nil nameNode)
 	for i, nameNode := range paramNames {
 		if i < len(paramTypes) && nameNode != nil {
@@ -324,7 +325,7 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 			}
 		}
 	}
-	
+
 	// Define rest parameter if present
 	if restParameterName != nil && restParameterType != nil {
 		if !funcEnv.Define(restParameterName.Value, restParameterType, false) {
@@ -332,7 +333,7 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 		}
 		debugPrintf("// [Checker Function Common] Defined rest parameter '%s' with type: %s\n", restParameterName.Value, restParameterType.String())
 	}
-	
+
 	// Define function itself for recursion if allowed and named
 	if ctx.AllowSelfReference && ctx.FunctionName != "<anonymous>" {
 		tempFuncTypeForRecursion := types.NewFunctionType(preliminarySignature)
@@ -341,7 +342,7 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 			debugPrintf("// [Checker Function Common] WARNING: function name '%s' conflicts with a parameter\n", ctx.FunctionName)
 		}
 	}
-	
+
 	return originalEnv
 }
 
@@ -382,7 +383,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 			break
 		}
 	}
-	
+
 	if !hasExplicitThisParam {
 		// No explicit 'this' parameter - only set to 'any' if not already set by calling context
 		if c.currentThisType == nil {
@@ -392,12 +393,12 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 			debugPrintf("// [Checker Function Body] No explicit this parameter, but context already set this to: %s\n", c.currentThisType.String())
 		}
 	}
-	
+
 	var finalReturnType types.Type
-	
+
 	// Visit body
 	c.visit(ctx.Body)
-	
+
 	// Handle different body types
 	if ctx.IsArrow {
 		// Special handling for arrow function expression bodies
@@ -406,12 +407,12 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 			if bodyType == nil {
 				bodyType = types.Any
 			}
-			
+
 			// For expression bodies, the body type is the return type
 			if c.currentInferredReturnTypes != nil {
 				c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, bodyType)
 			}
-			
+
 			// Check expression body type against annotation
 			if expectedReturnType != nil {
 				if !types.IsAssignable(bodyType, expectedReturnType) {
@@ -429,7 +430,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 		// Regular function - use normal inference
 		finalReturnType = c.inferFinalReturnType(expectedReturnType, ctx.FunctionName)
 	}
-	
+
 	// Restore return context, this context, and async/generator context
 	c.currentExpectedReturnType = outerExpectedReturnType
 	c.currentInferredReturnTypes = outerInferredReturnTypes
@@ -447,12 +448,12 @@ func (c *Checker) inferFinalReturnType(expectedReturnType types.Type, functionNa
 	if expectedReturnType != nil {
 		return expectedReturnType
 	}
-	
+
 	// Infer from collected return types
 	if len(c.currentInferredReturnTypes) == 0 {
 		return types.Void // Functions with no return statements have void return type
 	}
-	
+
 	// Use NewUnionType to combine inferred return types
 	finalType := types.NewUnionType(c.currentInferredReturnTypes...)
 	debugPrintf("// [Checker Function Common] Inferred return type for '%s': %s\n", functionName, finalType.String())
@@ -465,7 +466,7 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 	for i, param := range ctx.Parameters {
 		optionalParams[i] = param.Optional || (param.DefaultValue != nil)
 	}
-	
+
 	// Create final signature
 	sig := &types.Signature{
 		ParameterTypes:    paramTypes,
@@ -474,7 +475,7 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
-	
+
 	// Create unified ObjectType with call signature
 	return types.NewFunctionType(sig)
 }

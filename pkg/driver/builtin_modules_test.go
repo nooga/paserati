@@ -17,20 +17,20 @@ func TestHTTPModuleFetch(t *testing.T) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		
+
 		// Return a simple JSON response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"message": "Hello from test server", "path": "` + r.URL.Path + `"}`))
 	}))
 	defer server.Close()
-	
+
 	// Create Paserati instance
 	p := NewPaserati()
-	
+
 	// Test TypeScript code using fetch
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "paserati/http";
+		import { fetch } from "github.com/nooga/paserati/http";
 		
 		console.log("Testing fetch...");
 		
@@ -50,12 +50,12 @@ func TestHTTPModuleFetch(t *testing.T) {
 		// Return test result
 		data.message === "Hello from test server" ? "fetch_test_passed" : "fetch_test_failed";
 	`, server.URL)
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to run fetch test: %v", errs[0])
 	}
-	
+
 	if result.ToString() != "fetch_test_passed" {
 		t.Errorf("Expected 'fetch_test_passed', got: %v", result.ToString())
 	}
@@ -64,9 +64,9 @@ func TestHTTPModuleFetch(t *testing.T) {
 // TestHTTPModuleHeaders tests the Headers class functionality
 func TestHTTPModuleHeaders(t *testing.T) {
 	p := NewPaserati()
-	
+
 	tsCode := `
-		import { Headers } from "paserati/http";
+		import { Headers } from "github.com/nooga/paserati/http";
 		
 		console.log("Testing Headers class...");
 		
@@ -95,12 +95,12 @@ func TestHTTPModuleHeaders(t *testing.T) {
 		// Return success
 		"headers_test_passed";
 	`
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to run headers test: %v", errs[0])
 	}
-	
+
 	if result.ToString() != "headers_test_passed" {
 		t.Errorf("Expected 'headers_test_passed', got: %v", result.ToString())
 	}
@@ -114,11 +114,11 @@ func TestHTTPModulePOST(t *testing.T) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		
+
 		// Read body
 		body := make([]byte, r.ContentLength)
 		r.Body.Read(body)
-		
+
 		// Echo back request info
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -131,11 +131,11 @@ func TestHTTPModulePOST(t *testing.T) {
 		}`, r.Method, r.Header.Get("Content-Type"), string(bodyBytes))
 	}))
 	defer server.Close()
-	
+
 	p := NewPaserati()
-	
+
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "paserati/http";
+		import { fetch } from "github.com/nooga/paserati/http";
 		
 		console.log("Testing POST request...");
 		
@@ -158,12 +158,12 @@ func TestHTTPModulePOST(t *testing.T) {
 		const echoedBody = JSON.parse(result.body);
 		echoedBody.name === "test" && echoedBody.value === 42 ? "post_test_passed" : "post_test_failed";
 	`, server.URL)
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to run POST test: %v", errs[0])
 	}
-	
+
 	if result.ToString() != "post_test_passed" {
 		t.Errorf("Expected 'post_test_passed', got: %v", result.ToString())
 	}
@@ -177,11 +177,11 @@ func TestHTTPModuleAutoStringify(t *testing.T) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		
+
 		// Read body
 		body := make([]byte, r.ContentLength)
 		r.Body.Read(body)
-		
+
 		// Echo back request info
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -194,11 +194,11 @@ func TestHTTPModuleAutoStringify(t *testing.T) {
 		}`, r.Method, r.Header.Get("Content-Type"), string(bodyBytes))
 	}))
 	defer server.Close()
-	
+
 	p := NewPaserati()
-	
+
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "paserati/http";
+		import { fetch } from "github.com/nooga/paserati/http";
 		
 		console.log("Testing automatic JSON stringification...");
 		
@@ -222,12 +222,12 @@ func TestHTTPModuleAutoStringify(t *testing.T) {
 		const echoedBody = JSON.parse(result.body);
 		echoedBody.name === "test" && echoedBody.value === 42 ? "auto_stringify_test_passed" : "auto_stringify_test_failed";
 	`, server.URL)
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to run auto-stringify test: %v", errs[0])
 	}
-	
+
 	if result.ToString() != "auto_stringify_test_passed" {
 		t.Errorf("Expected 'auto_stringify_test_passed', got: %v", result.ToString())
 	}
@@ -241,18 +241,18 @@ func TestHTTPModuleBlob(t *testing.T) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		
+
 		// Return some binary data
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte{1, 2, 3, 4, 5, 255}) // Binary data including high byte value
 	}))
 	defer server.Close()
-	
+
 	p := NewPaserati()
-	
+
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "paserati/http";
+		import { fetch } from "github.com/nooga/paserati/http";
 		
 		console.log("Testing blob() method...");
 		
@@ -276,12 +276,12 @@ func TestHTTPModuleBlob(t *testing.T) {
 		
 		hasUint8ArrayFeatures ? "blob_test_passed" : "blob_test_failed";
 	`, server.URL)
-	
+
 	result, errs := p.RunStringWithModules(tsCode)
 	if len(errs) > 0 {
 		t.Fatalf("Failed to run blob test: %v", errs[0])
 	}
-	
+
 	if result.ToString() != "blob_test_passed" {
 		t.Errorf("Expected 'blob_test_passed', got: %v", result.ToString())
 	}

@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"sort"
 	"strconv"
 	"unsafe"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type JSONInitializer struct{}

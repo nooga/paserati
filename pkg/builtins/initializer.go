@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // BuiltinInitializer is implemented by each builtin module
@@ -54,19 +54,19 @@ type RuntimeContext struct {
 
 // Priority constants for initialization order
 const (
-	PriorityObject    = 0   // Object must be first (base prototype)
-	PriorityFunction  = 1   // Function second (inherits from Object)
-	PriorityIterator  = 2   // Iterator types (needed for iterables)
-	PriorityArray          = 3  // Array third (inherits from Object, implements Iterable)
-	PriorityArguments      = 4  // Arguments object (array-like)
-	PriorityGenerator      = 5  // Generator objects (inherits from Object, implements Iterable)
-	PriorityAsyncGenerator = 6  // AsyncGenerator objects (like Generator but returns Promises)
-	PriorityString         = 10 // String primitives
-	PriorityNumber    = 11  // Number primitives
-	PriorityBoolean   = 12  // Boolean primitives
-	PriorityRegExp    = 13  // RegExp constructor
-	PriorityMath      = 100 // Math object
-	PriorityJSON      = 101 // JSON object
-	PriorityConsole   = 102 // Console object
-	PriorityDate      = 103 // Date constructor
+	PriorityObject         = 0   // Object must be first (base prototype)
+	PriorityFunction       = 1   // Function second (inherits from Object)
+	PriorityIterator       = 2   // Iterator types (needed for iterables)
+	PriorityArray          = 3   // Array third (inherits from Object, implements Iterable)
+	PriorityArguments      = 4   // Arguments object (array-like)
+	PriorityGenerator      = 5   // Generator objects (inherits from Object, implements Iterable)
+	PriorityAsyncGenerator = 6   // AsyncGenerator objects (like Generator but returns Promises)
+	PriorityString         = 10  // String primitives
+	PriorityNumber         = 11  // Number primitives
+	PriorityBoolean        = 12  // Boolean primitives
+	PriorityRegExp         = 13  // RegExp constructor
+	PriorityMath           = 100 // Math object
+	PriorityJSON           = 101 // JSON object
+	PriorityConsole        = 102 // Console object
+	PriorityDate           = 103 // Date constructor
 )

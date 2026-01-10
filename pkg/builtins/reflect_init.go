@@ -1,9 +1,10 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strconv"
+
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // isConstructor checks if a value can be used as a constructor (called with 'new')

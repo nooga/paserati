@@ -1,7 +1,7 @@
 package checker
 
 import (
-	"paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // Initialize the prototype method resolver
@@ -27,7 +27,6 @@ func (c *Checker) getBuiltinType(name string) types.Type {
 	return nil
 }
 
-
 // getPropertyTypeFromType returns the type of a property access on the given type
 // isOptionalChaining determines whether to be permissive about missing properties
 // This is now a wrapper around the implementation in the types package.
@@ -39,27 +38,27 @@ func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName st
 // This is used when assigning object literals to types with index signatures
 func (c *Checker) validateIndexSignatures(sourceType, targetType types.Type) []IndexSignatureError {
 	var errors []IndexSignatureError
-	
+
 	sourceObj, sourceIsObj := sourceType.(*types.ObjectType)
 	targetObj, targetIsObj := targetType.(*types.ObjectType)
-	
+
 	// Only validate if both are object types and target has index signatures
 	if !sourceIsObj || !targetIsObj || len(targetObj.IndexSignatures) == 0 {
 		return errors
 	}
-	
+
 	// Check each property in source against all index signatures in target
 	for propName, propType := range sourceObj.Properties {
 		errors = append(errors, c.validatePropertyAgainstIndexSignatures(propName, propType, targetObj.IndexSignatures)...)
 	}
-	
+
 	return errors
 }
 
 // validatePropertyAgainstIndexSignatures checks if a single property satisfies index signature constraints
 func (c *Checker) validatePropertyAgainstIndexSignatures(propName string, propType types.Type, indexSignatures []*types.IndexSignature) []IndexSignatureError {
 	var errors []IndexSignatureError
-	
+
 	for _, indexSig := range indexSignatures {
 		if c.propertyMatchesIndexSignature(propName, indexSig) {
 			// Property matches this index signature's key pattern, validate value type
@@ -73,7 +72,7 @@ func (c *Checker) validatePropertyAgainstIndexSignatures(propName string, propTy
 			}
 		}
 	}
-	
+
 	return errors
 }
 

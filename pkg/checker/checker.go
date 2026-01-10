@@ -4,14 +4,15 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"paserati/pkg/builtins"
-	"paserati/pkg/errors"  // Added import
-	"paserati/pkg/modules" // Added for real ModuleLoader integration
-	"paserati/pkg/source"  // Added import for source context
 
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/builtins"
+	"github.com/nooga/paserati/pkg/errors"  // Added import
+	"github.com/nooga/paserati/pkg/modules" // Added for real ModuleLoader integration
+	"github.com/nooga/paserati/pkg/source"  // Added import for source context
+
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const checkerDebug = false

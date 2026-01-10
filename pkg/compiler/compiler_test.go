@@ -6,16 +6,17 @@ import (
 	// "bytes"
 	// "io"
 
-	"paserati/pkg/vm"
 	"reflect"
 	"strings"
 	"testing"
 
-	// "paserati/pkg/driver" // REMOVED - Causes import cycle
+	"github.com/nooga/paserati/pkg/vm"
+
+	// "github.com/nooga/paserati/pkg/driver" // REMOVED - Causes import cycle
 	// Keep
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
 )
 
 // TESTING STRATEGY NOTE:

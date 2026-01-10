@@ -1,8 +1,8 @@
 package builtins
 
 import (
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 type SetInitializer struct{}
@@ -387,8 +387,8 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 					pairArr.Append(val)
 					setObj.Add(pairVal)
 				})
-			// For other types, we'd need full iterator protocol support
-			// For now, silently ignore non-iterable arguments
+				// For other types, we'd need full iterator protocol support
+				// For now, silently ignore non-iterable arguments
 			}
 		}
 

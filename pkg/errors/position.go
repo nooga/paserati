@@ -1,6 +1,6 @@
 package errors
 
-import "paserati/pkg/source"
+import "github.com/nooga/paserati/pkg/source"
 
 // Position represents a specific location in the source code.
 // It includes line and column numbers (1-based) for human-readability,

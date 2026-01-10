@@ -4,14 +4,15 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"paserati/pkg/checker"
-	"paserati/pkg/errors"
-	"paserati/pkg/lexer"
-	"paserati/pkg/modules"
-	"paserati/pkg/parser"
-	"paserati/pkg/types"
-	"paserati/pkg/vm"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/checker"
+	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/modules"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // Define a placeholder register value for 'undefined' case
@@ -455,20 +456,20 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	// Inherit strict mode from enclosing compiler
 	chunk.IsStrict = enclosingCompiler.chunk.IsStrict
 	return &Compiler{
-		chunk:                   chunk,
-		regAlloc:                NewRegisterAllocator(),
-		currentSymbolTable:      NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
-		enclosing:               enclosingCompiler,
-		freeSymbols:             []*Symbol{},
-		errors:                  []errors.PaseratiError{},
-		loopContextStack:        make([]*LoopContext, 0),
-		compilingFuncName:       "",
-		typeChecker:             enclosingCompiler.typeChecker, // Inherit checker from enclosing
-		stats:                   enclosingCompiler.stats,
-		constantCache:           make(map[uint16]Register),                 // Each function has its own constant cache
-		moduleBindings:          enclosingCompiler.moduleBindings,          // Inherit module bindings
-		moduleLoader:            enclosingCompiler.moduleLoader,            // Inherit module loader
-		compilingSuperClassName: enclosingCompiler.compilingSuperClassName, // Inherit super class context
+		chunk:                    chunk,
+		regAlloc:                 NewRegisterAllocator(),
+		currentSymbolTable:       NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
+		enclosing:                enclosingCompiler,
+		freeSymbols:              []*Symbol{},
+		errors:                   []errors.PaseratiError{},
+		loopContextStack:         make([]*LoopContext, 0),
+		compilingFuncName:        "",
+		typeChecker:              enclosingCompiler.typeChecker, // Inherit checker from enclosing
+		stats:                    enclosingCompiler.stats,
+		constantCache:            make(map[uint16]Register),                 // Each function has its own constant cache
+		moduleBindings:           enclosingCompiler.moduleBindings,          // Inherit module bindings
+		moduleLoader:             enclosingCompiler.moduleLoader,            // Inherit module loader
+		compilingSuperClassName:  enclosingCompiler.compilingSuperClassName, // Inherit super class context
 		finallyContextStack:      make([]*FinallyContext, 0),                // Each function has its own finally context stack
 		withBlockDepth:           enclosingCompiler.withBlockDepth,          // Inherit with block depth for nested functions
 		parameterNames:           make(map[string]bool),                     // Track parameter names for var hoisting
@@ -750,7 +751,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	switch node := node.(type) {
 	case *parser.Program:
 		debugPrintf("// DEBUG Program: Starting statement loop.\n") // <<< ADDED
-		hasResult := false // Track whether any statement produced a value
+		hasResult := false                                          // Track whether any statement produced a value
 		for i, stmt := range node.Statements {
 			debugPrintf("// DEBUG Program: Before compiling statement %d (%T).\n", i, stmt) // <<< ADDED
 			tlReg, err := c.compileNode(stmt, hint)

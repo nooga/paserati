@@ -2,11 +2,12 @@ package lexer
 
 import (
 	"fmt"
-	"paserati/pkg/source"
 	"strconv" // Added for ParseInt
 	"strings" // Added for strings.Builder
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nooga/paserati/pkg/source"
 )
 
 // Debug flags
@@ -50,14 +51,14 @@ type TokenType string
 
 // Token represents a lexical token.
 type Token struct {
-	Type       TokenType
-	Literal    string // The actual text of the token (lexeme)
-	RawLiteral         string // For template strings: the unprocessed escape sequences (TRV)
-	CookedIsUndefined  bool   // For template strings: true if cooked value should be undefined (invalid escape)
-	Line               int    // 1-based line number where the token starts
-	Column             int    // 1-based column number (rune index) where the token starts
-	StartPos           int    // 0-based byte offset where the token starts
-	EndPos             int    // 0-based byte offset after the token ends
+	Type              TokenType
+	Literal           string // The actual text of the token (lexeme)
+	RawLiteral        string // For template strings: the unprocessed escape sequences (TRV)
+	CookedIsUndefined bool   // For template strings: true if cooked value should be undefined (invalid escape)
+	Line              int    // 1-based line number where the token starts
+	Column            int    // 1-based column number (rune index) where the token starts
+	StartPos          int    // 0-based byte offset where the token starts
+	EndPos            int    // 0-based byte offset after the token ends
 }
 
 // --- Token Types ---
@@ -1318,34 +1319,34 @@ func (l *Lexer) NextToken() Token {
 			// Check for >> operators (allow whitespace for TypeScript generic syntax)
 			peekAfterWS := l.skipWhitespaceAndPeek()
 			if peekAfterWS == '>' { // Right shift >>, Unsigned right shift >>>, or assignments
-			l.skipWhitespace() // Actually consume the whitespace
-			l.readChar()       // Consume second '>'
-			peek2AfterWS := l.skipWhitespaceAndPeek()
-			if peek2AfterWS == '>' { // Potential >>> or >>>=
 				l.skipWhitespace() // Actually consume the whitespace
-				l.readChar()       // Consume third '>'
-				peek3AfterWS := l.skipWhitespaceAndPeek()
-				if peek3AfterWS == '=' { // Check for >>>=
-					l.skipWhitespace()                                             // Actually consume the whitespace
-					l.readChar()                                                   // Consume '='
-					literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>="
-					l.readChar()                                                   // Advance past '='
-					tok = Token{Type: UNSIGNED_RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-				} else { // Just >>>
-					literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>"
-					l.readChar()                                                   // Advance past third '>'
-					tok = Token{Type: UNSIGNED_RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				l.readChar()       // Consume second '>'
+				peek2AfterWS := l.skipWhitespaceAndPeek()
+				if peek2AfterWS == '>' { // Potential >>> or >>>=
+					l.skipWhitespace() // Actually consume the whitespace
+					l.readChar()       // Consume third '>'
+					peek3AfterWS := l.skipWhitespaceAndPeek()
+					if peek3AfterWS == '=' { // Check for >>>=
+						l.skipWhitespace()                                             // Actually consume the whitespace
+						l.readChar()                                                   // Consume '='
+						literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>="
+						l.readChar()                                                   // Advance past '='
+						tok = Token{Type: UNSIGNED_RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+					} else { // Just >>>
+						literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>"
+						l.readChar()                                                   // Advance past third '>'
+						tok = Token{Type: UNSIGNED_RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+					}
+				} else if l.peekChar() == '=' { // Check for >>= (no whitespace allowed)
+					l.readChar()                                // Consume '='
+					literal := l.input[startPos : l.position+1] // Read ">>="
+					l.readChar()                                // Advance past '='
+					tok = Token{Type: RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				} else { // Just >>
+					literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>"
+					l.readChar()                                                   // Advance past second '>'
+					tok = Token{Type: RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				}
-			} else if l.peekChar() == '=' { // Check for >>= (no whitespace allowed)
-				l.readChar()                                // Consume '='
-				literal := l.input[startPos : l.position+1] // Read ">>="
-				l.readChar()                                // Advance past '='
-				tok = Token{Type: RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			} else { // Just >>
-				literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>"
-				l.readChar()                                                   // Advance past second '>'
-				tok = Token{Type: RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			}
 			} else { // Just Greater than >
 				literal := string(l.ch) // Just '>'
 				l.readChar()            // Advance past '>'
@@ -2495,7 +2496,7 @@ func isUnicodeIDContinue(r rune) bool {
 	// These are specific Unicode code points that can continue (but not start) identifiers
 	switch r {
 	case 0x00B7, // · MIDDLE DOT
-		0x0387, // · GREEK ANO TELEIA
+		0x0387,                                                                 // · GREEK ANO TELEIA
 		0x1369, 0x136A, 0x136B, 0x136C, 0x136D, 0x136E, 0x136F, 0x1370, 0x1371, // Ethiopian digits
 		0x19DA, // ᧚ NEW TAI LUE THAM DIGIT ONE
 		0x200C, // ZWNJ - Zero Width Non-Joiner

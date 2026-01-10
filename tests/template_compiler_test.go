@@ -1,12 +1,13 @@
 package tests
 
 import (
-	"paserati/pkg/compiler"
-	"paserati/pkg/driver"
-	"paserati/pkg/lexer"
-	"paserati/pkg/parser"
-	"paserati/pkg/vm"
 	"testing"
+
+	"github.com/nooga/paserati/pkg/compiler"
+	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const templateCompilerDebug = false // Enable for debugging
