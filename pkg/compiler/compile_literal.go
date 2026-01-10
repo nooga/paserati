@@ -71,7 +71,13 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	}
 
 	// 3. Handle default parameters
-	for _, param := range node.Parameters {
+	// Build parameter list for TDZ checking
+	funcCompiler.parameterList = make([]string, len(node.Parameters))
+	for i, p := range node.Parameters {
+		funcCompiler.parameterList[i] = p.Name.Value
+	}
+
+	for paramIdx, param := range node.Parameters {
 		if param.DefaultValue != nil {
 			// Get the parameter's register
 			symbol, _, exists := funcCompiler.currentSymbolTable.Resolve(param.Name.Value)
@@ -95,10 +101,13 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
 
 			// Compile the default value expression
+			// Set TDZ tracking: parameters at index >= paramIdx are in TDZ
 			defaultValueReg := funcCompiler.regAlloc.Alloc()
+			funcCompiler.currentDefaultParamIndex = paramIdx
 			funcCompiler.inDefaultParamScope = true
 			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			funcCompiler.inDefaultParamScope = false
+			funcCompiler.currentDefaultParamIndex = -1
 			if err != nil {
 				// Continue with compilation even if default value has errors
 				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
@@ -288,7 +297,13 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	}
 
 	// Handle default parameters (same as original)
-	for _, param := range node.Parameters {
+	// Build parameter list for TDZ checking
+	funcCompiler.parameterList = make([]string, len(node.Parameters))
+	for i, p := range node.Parameters {
+		funcCompiler.parameterList[i] = p.Name.Value
+	}
+
+	for paramIdx, param := range node.Parameters {
 		if param.DefaultValue != nil {
 			symbol, _, exists := funcCompiler.currentSymbolTable.Resolve(param.Name.Value)
 			if !exists {
@@ -307,10 +322,13 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 
 			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
 
+			// Set TDZ tracking: parameters at index >= paramIdx are in TDZ
 			defaultValueReg := funcCompiler.regAlloc.Alloc()
+			funcCompiler.currentDefaultParamIndex = paramIdx
 			funcCompiler.inDefaultParamScope = true
 			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			funcCompiler.inDefaultParamScope = false
+			funcCompiler.currentDefaultParamIndex = -1
 			if err != nil {
 				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
 			} else {
@@ -1057,6 +1075,16 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 	}
 
 	// 3. Handle default parameters
+	// Build parameter list for TDZ checking (excluding 'this' and destructuring params)
+	functionCompiler.parameterList = make([]string, 0, len(node.Parameters))
+	for _, param := range node.Parameters {
+		if param.IsThis || param.IsDestructuring || param.Name == nil {
+			continue
+		}
+		functionCompiler.parameterList = append(functionCompiler.parameterList, param.Name.Value)
+	}
+
+	paramIdx := 0
 	for _, param := range node.Parameters {
 		// Skip 'this' parameters - they don't have default values and aren't in the symbol table
 		if param.IsThis {
@@ -1071,6 +1099,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			if param.Name == nil {
 				tempNode := &parser.Identifier{Token: param.Token, Value: "<parameter>"}
 				functionCompiler.addError(tempNode, "non-destructuring parameter has nil Name")
+				paramIdx++
 				continue
 			}
 			// Get the parameter's register
@@ -1078,6 +1107,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			if !exists {
 				// This should not happen if parameter definition worked correctly
 				functionCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
+				paramIdx++
 				continue
 			}
 			paramReg := symbol.Register
@@ -1098,15 +1128,18 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			functionCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
+			// Set TDZ tracking: parameters at index >= paramIdx are in TDZ
 			defaultValueReg := functionCompiler.regAlloc.Alloc()
 			var beforeMaxReg Register
 			if debugRegAlloc {
 				beforeMaxReg = functionCompiler.regAlloc.maxReg
 				fmt.Printf("// [PARAM_DEBUG] Before compileNode for param %s: maxReg=%d\\n", param.Name.Value, beforeMaxReg)
 			}
+			functionCompiler.currentDefaultParamIndex = paramIdx
 			functionCompiler.inDefaultParamScope = true
 			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			functionCompiler.inDefaultParamScope = false
+			functionCompiler.currentDefaultParamIndex = -1
 			if debugRegAlloc {
 				afterMaxReg := functionCompiler.regAlloc.maxReg
 				fmt.Printf("// [PARAM_DEBUG] After compileNode for param %s: maxReg was %d, now %d\\n", param.Name.Value, beforeMaxReg, afterMaxReg)
@@ -1126,6 +1159,7 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			// Patch the jump to come here (end of default value assignment)
 			functionCompiler.patchJump(jumpIfDefinedPos)
 		}
+		paramIdx++ // Increment for all non-skipped parameters
 	}
 
 	// 3.5. Handle destructuring parameters
@@ -1165,10 +1199,20 @@ func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint
 			functionCompiler.regAlloc.Free(compareReg)
 
 			// Compile the default value expression
+			// Calculate TDZ index: count named params before position i
+			tdzIndex := 0
+			for j := 0; j < i; j++ {
+				p := node.Parameters[j]
+				if !p.IsThis && !p.IsDestructuring && p.Name != nil {
+					tdzIndex++
+				}
+			}
 			defaultValueReg := functionCompiler.regAlloc.Alloc()
+			functionCompiler.currentDefaultParamIndex = tdzIndex
 			functionCompiler.inDefaultParamScope = true
 			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
 			functionCompiler.inDefaultParamScope = false
+			functionCompiler.currentDefaultParamIndex = -1
 			if err != nil {
 				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for destructuring parameter: %v", err))
 			} else {

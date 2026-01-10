@@ -281,6 +281,10 @@ type Compiler struct {
 	inDefaultParamScope   bool // True when compiling a default parameter expression
 	hasEvalInDefaultParam bool // True when direct eval was found in a default parameter expression
 
+	// --- Parameter TDZ Tracking ---
+	currentDefaultParamIndex int      // Index of parameter whose default we're compiling (-1 if not in default scope)
+	parameterList            []string // Ordered list of parameter names for TDZ checking
+
 	// --- Caller Scope for Direct Eval Compilation ---
 	callerScopeDesc *vm.ScopeDescriptor // Scope descriptor from caller (for direct eval compilation)
 
@@ -465,9 +469,11 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		moduleBindings:          enclosingCompiler.moduleBindings,          // Inherit module bindings
 		moduleLoader:            enclosingCompiler.moduleLoader,            // Inherit module loader
 		compilingSuperClassName: enclosingCompiler.compilingSuperClassName, // Inherit super class context
-		finallyContextStack:     make([]*FinallyContext, 0),                // Each function has its own finally context stack
-		withBlockDepth:          enclosingCompiler.withBlockDepth,          // Inherit with block depth for nested functions
-		parameterNames:          make(map[string]bool),                     // Track parameter names for var hoisting
+		finallyContextStack:      make([]*FinallyContext, 0),                // Each function has its own finally context stack
+		withBlockDepth:           enclosingCompiler.withBlockDepth,          // Inherit with block depth for nested functions
+		parameterNames:           make(map[string]bool),                     // Track parameter names for var hoisting
+		currentDefaultParamIndex: -1,                                        // Not in default param scope initially
+		parameterList:            nil,                                       // Will be set when compiling function parameters
 	}
 }
 
@@ -1342,6 +1348,19 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				return hint, nil
 			}
 			// If in global scope, treat as regular identifier (will likely be undefined)
+		}
+
+		// Check for TDZ violation in default parameter expressions
+		// When compiling a default value for parameter at index N, parameters at index >= N
+		// are in the Temporal Dead Zone and must throw ReferenceError if accessed
+		if c.inDefaultParamScope && c.currentDefaultParamIndex >= 0 && c.parameterList != nil {
+			for i := c.currentDefaultParamIndex; i < len(c.parameterList); i++ {
+				if c.parameterList[i] == node.Value {
+					// Forward reference to uninitialized parameter - emit ReferenceError
+					c.emitTDZError(hint, node.Value, node.Token.Line)
+					return hint, nil
+				}
+			}
 		}
 
 		// All identifiers (including builtins) now use standard variable lookup

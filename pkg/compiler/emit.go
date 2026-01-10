@@ -696,4 +696,33 @@ func (c *Compiler) emitSetWithProperty(nameIdx int, valueReg Register, line int)
 	c.emitByte(byte(valueReg))
 }
 
+// emitTDZError emits code to throw a ReferenceError for accessing a variable
+// before it is initialized (Temporal Dead Zone violation in default parameters)
+func (c *Compiler) emitTDZError(hint Register, varName string, line int) {
+	// Allocate registers for function and result
+	funcReg := c.regAlloc.Alloc()
+	resultReg := c.regAlloc.Alloc()
+
+	// Load ReferenceError constructor
+	refErrorGlobalIdx := c.GetOrAssignGlobalIndex("ReferenceError")
+	c.emitGetGlobal(funcReg, refErrorGlobalIdx, line)
+
+	// Load error message - OpCall expects args at funcReg+1, so load directly there
+	msg := fmt.Sprintf("Cannot access '%s' before initialization", varName)
+	msgConstIdx := c.chunk.AddConstant(vm.String(msg))
+	argReg := funcReg + 1
+	c.emitLoadConstant(argReg, msgConstIdx, line)
+
+	// Call ReferenceError constructor
+	c.emitCall(resultReg, funcReg, 1, line)
+
+	// Throw the error
+	c.emitOpCode(vm.OpThrow, line)
+	c.emitByte(byte(resultReg))
+
+	// Free temporary registers
+	c.regAlloc.Free(funcReg)
+	c.regAlloc.Free(resultReg)
+}
+
 // --- END NEW ---
