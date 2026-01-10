@@ -47,8 +47,10 @@ mcp-go-debugger.log
 dome.js
 paserati-analyze
 paserati-test262
+paserati-v8bench
 paserati-analyze/
 paserati-test262/
+paserati-v8bench/
 bench/out/
 quickjs-bench/
 benchmarks/
