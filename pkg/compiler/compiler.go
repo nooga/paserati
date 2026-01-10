@@ -1968,6 +1968,30 @@ func (c *Compiler) SetIndirectEval(indirect bool) {
 	c.isIndirectEval = indirect
 }
 
+// findVarInFunctionScope looks for a var in the current function's scope chain.
+// Unlike Resolve(), this stops at function boundaries (doesn't cross into enclosing compilers).
+// This is used to check if a var was pre-defined during block hoisting in the SAME function.
+// Returns the symbol and the function-level table if found, otherwise returns zero Symbol and nil.
+func (c *Compiler) findVarInFunctionScope(name string) (Symbol, *SymbolTable) {
+	// Walk up the scope chain within this compiler's function
+	funcTable := c.currentSymbolTable
+	for funcTable != nil {
+		// Check if the name is defined in this scope
+		if sym, found := funcTable.store[name]; found {
+			return sym, funcTable
+		}
+		// Stop if we've reached the function-level table (outer is from enclosing compiler or nil)
+		if funcTable.Outer == nil {
+			break
+		}
+		if c.enclosing != nil && c.isDefinedInEnclosingCompiler(funcTable.Outer) {
+			break
+		}
+		funcTable = funcTable.Outer
+	}
+	return Symbol{}, nil
+}
+
 // resolveCallerLocal looks up a variable name in the caller's scope descriptor.
 // Returns the register index if found, or -1 if not found.
 func (c *Compiler) resolveCallerLocal(name string) int {

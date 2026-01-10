@@ -288,12 +288,12 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			if c.parameterNames != nil && c.parameterNames[node.Name.Value] {
 				// Variable is a function parameter - preserve its value
 				debugPrintf("// [VarStmt] '%s' is a parameter, skipping undefined init\n", node.Name.Value)
-			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
-				// Variable was already pre-defined during block var hoisting
+			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.Register != nilRegister && !sym.IsGlobal {
+				// Variable was already pre-defined during block var hoisting IN THE CURRENT FUNCTION
 				// The register already has undefined loaded, so nothing to do
 				debugPrintf("// [VarStmt] '%s' was pre-defined in R%d, skipping (already initialized to undefined)\n", node.Name.Value, sym.Register)
-			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
-				// Variable was pre-defined as spilled, already initialized to undefined
+			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.IsSpilled {
+				// Variable was pre-defined as spilled IN THE CURRENT FUNCTION, already initialized to undefined
 				debugPrintf("// [VarStmt] '%s' was pre-defined as SPILLED (slot %d), skipping\n", node.Name.Value, sym.SpillIndex)
 			} else {
 				// DON'T defer free - we'll track if this becomes a variable register below
