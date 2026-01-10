@@ -138,6 +138,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.args = spreadArgs
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 		vm.nextRegSlot += requiredRegs
 
 		// Allocate spill slots if this function needs them (for register overflow)
@@ -238,6 +239,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.args = spreadArgs
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 		vm.nextRegSlot += requiredRegs
 
 		// Allocate spill slots if this function needs them (for register overflow)

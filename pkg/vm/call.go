@@ -315,6 +315,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.calleeValue = originalCallee // Store original callee for arguments.callee
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 		vm.nextRegSlot += requiredRegs
 
 		// Allocate spill slots if this function needs them (for register overflow)

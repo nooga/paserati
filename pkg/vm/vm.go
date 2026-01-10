@@ -107,6 +107,7 @@ type CallFrame struct {
 	// defining the window for this frame.
 	registers           []Value
 	spillSlots          []Value // Spill slots for register overflow (allocated only if needed)
+	allocatedRegSize    int     // Actual allocated register window size (may differ from function.RegisterSize due to TCO expansion)
 	targetRegister      byte    // Which register in the CALLER the result should go into
 	thisValue           Value   // The 'this' value for method calls (undefined for regular function calls)
 	homeObject          Value   // The [[HomeObject]] for super property access (object where method is defined)
@@ -647,7 +648,8 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
-	frame.targetRegister = 0 // Result of script isn't stored in caller's reg
+	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
+	frame.targetRegister = 0               // Result of script isn't stored in caller's reg
 	// Check if we have a caller's 'this' value from direct eval
 	if vm.hasEvalCallerThis {
 		// Direct eval: inherit 'this' from caller
@@ -2062,13 +2064,14 @@ startExecution:
 					vm.closeUpvalues(registers)
 
 					// 5. Expand register window if needed (but never shrink)
-					oldRegSize := len(registers)
+					oldRegSize := frame.allocatedRegSize
 					if calleeFunc.RegisterSize > oldRegSize {
 						// Need more registers - expand the slice into registerStack
 						baseOffset := vm.nextRegSlot - oldRegSize
 						frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
 						registers = frame.registers
 						vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
+						frame.allocatedRegSize = calleeFunc.RegisterSize // Update tracked allocation size
 					}
 					// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
 
@@ -2264,13 +2267,14 @@ startExecution:
 					vm.closeUpvalues(registers)
 
 					// 6. Expand register window if needed (but never shrink)
-					oldRegSize := len(registers)
+					oldRegSize := frame.allocatedRegSize
 					if calleeFunc.RegisterSize > oldRegSize {
 						// Need more registers - expand the slice into registerStack
 						baseOffset := vm.nextRegSlot - oldRegSize
 						frame.registers = vm.registerStack[baseOffset : baseOffset+calleeFunc.RegisterSize]
 						registers = frame.registers
 						vm.nextRegSlot = baseOffset + calleeFunc.RegisterSize
+						frame.allocatedRegSize = calleeFunc.RegisterSize // Update tracked allocation size
 					}
 					// Note: We do NOT shrink! Bytecode may reference registers beyond RegisterSize
 
@@ -2808,7 +2812,8 @@ startExecution:
 
 			// Pop the current frame
 			// Stash required info before modifying frameCount/nextRegSlot
-			returningFrameRegSize := function.RegisterSize
+			// Use allocatedRegSize which tracks actual allocation (may differ from function.RegisterSize due to TCO expansion)
+			returningFrameRegSize := frame.allocatedRegSize
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
@@ -5890,6 +5895,7 @@ startExecution:
 				}
 				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 				vm.nextRegSlot += requiredRegs
 
 				// Allocate spill slots if this function needs them (for register overflow)
@@ -6060,6 +6066,7 @@ startExecution:
 				}
 				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+				newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 				vm.nextRegSlot += requiredRegs
 
 				// Allocate spill slots if this function needs them (for register overflow)
@@ -10752,6 +10759,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
 	frame.ip = genObj.Frame.pc               // Resume from saved PC
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
@@ -10959,6 +10967,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
 	frame.ip = genObj.Frame.pc               // Resume from saved PC
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
@@ -11115,6 +11124,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
 	frame.ip = genObj.Frame.pc               // Resume from saved PC
 	frame.targetRegister = destReg           // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
@@ -11259,6 +11269,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	// Manually set up the async function frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.allocatedRegSize = regSize       // Track actual allocation for proper cleanup
 	frame.ip = promiseObj.Frame.pc         // Resume from saved PC
 	frame.targetRegister = destReg         // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue // Restore original this value
@@ -11372,6 +11383,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	// Manually set up the async function frame for resumption
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
+	frame.allocatedRegSize = regSize       // Track actual allocation for proper cleanup
 	frame.ip = promiseObj.Frame.pc         // Resume from saved PC
 	frame.targetRegister = destReg         // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue // Restore original this value
@@ -11670,6 +11682,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
+	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
 	frame.targetRegister = 0
 	frame.thisValue = Undefined
 	vm.nextRegSlot += scriptRegSize

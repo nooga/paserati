@@ -92,7 +92,8 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	// Set up the async function frame
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.ip = 0 // Start from beginning
+	frame.allocatedRegSize = regSize // Track actual allocation for proper cleanup
+	frame.ip = 0                     // Start from beginning
 	frame.targetRegister = destReg
 	frame.thisValue = thisValue
 	frame.isConstructorCall = false
