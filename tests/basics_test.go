@@ -33,7 +33,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 
 		// Prefix
 		{name: "PrefixMinusNum", input: "-15;", expect: "-15"},
-		{name: "PrefixMinusZero", input: "-0;", expect: "-0"},
+		{name: "PrefixMinusZero", input: "-0;", expect: "0"}, // JS: String(-0) === "0"
 		{name: "PrefixNotTrue", input: "!true;", expect: "false"},
 		{name: "PrefixNotFalse", input: "!false;", expect: "true"},
 		{name: "PrefixNotNull", input: "!null;", expect: "true"},
@@ -49,9 +49,9 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "InfixMulNum", input: "6 * 7;", expect: "42"},
 		{name: "InfixDivNum", input: "10 / 4;", expect: "2.5"},
 		{name: "InfixAddStr", input: `"f" + "oo";`, expect: "foo"},
-		{name: "InfixDivZero", input: "1 / 0;", expect: "Division by zero", isError: true},
+		{name: "InfixDivZero", input: "1 / 0;", expect: "Infinity"}, // JS: 1/0 === Infinity
 		{name: "InfixAddMismatch", input: `1 + "a";`, expect: "1a"},
-		{name: "InfixSubMismatch", input: `"a" - 1;`, expect: "operator '-' cannot be applied to types 'string' and 'number'", isError: true, expectCompileError: true},
+		{name: "InfixSubMismatch", input: `"a" - 1;`, expect: "NaN"}, // JS: "a" - 1 === NaN (type coercion)
 
 		// Infix Comparison
 		{name: "InfixLT_T", input: "5 < 10;", expect: "true"},
@@ -76,7 +76,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "InfixEqBool_F", input: "let x = true; let y = false; x == y;", expect: "false"},
 		{name: "InfixEqNull_T", input: "null == null;", expect: "true"},
 		{name: "InfixEqNull_F", input: "let x = null; let y = false; x == y;", expect: "false"},
-		{name: "InfixEqMixType", input: `let x: any = 10; let y: any = "10"; x == y;`, expect: "false"},
+		{name: "InfixEqMixType", input: `let x: any = 10; let y: any = "10"; x == y;`, expect: "true"}, // JS: 10 == "10" is true (type coercion)
 		{name: "InfixNeqNum_F", input: "10 != 10;", expect: "false"},
 		{name: "InfixNeqNum_T", input: "let x = 10; let y = 5; x != y;", expect: "true"},
 		{name: "InfixNeqStr_F", input: `"a" != "a";`, expect: "false"},
@@ -85,7 +85,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "InfixNeqBool_T", input: "let x = true; let y = false; x != y;", expect: "true"},
 		{name: "InfixNeqNull_F", input: "null != null;", expect: "false"},
 		{name: "InfixNeqNull_T", input: "let x = null; let y = false; x != y;", expect: "true"},
-		{name: "InfixNeqMixType", input: `let x: any = 10; let y: any = "10"; x != y;`, expect: "true"},
+		{name: "InfixNeqMixType", input: `let x: any = 10; let y: any = "10"; x != y;`, expect: "false"}, // JS: 10 != "10" is false (type coercion)
 
 		// Strict Equality (===, !==)
 		{name: "StrictEqNum_T", input: "10 === 10;", expect: "true"},
@@ -321,10 +321,9 @@ func TestOperatorsAndLiterals(t *testing.T) {
 			expect: "-1",
 		},
 		{
-			name:    "Remainder By Zero",
-			input:   "10 % 0;",
-			expect:  "Division by zero (in remainder operation)",
-			isError: true,
+			name:   "Remainder By Zero",
+			input:  "10 % 0;",
+			expect: "NaN", // JS: 10 % 0 returns NaN, not an error
 		},
 		{
 			name:   "Remainder Precedence",

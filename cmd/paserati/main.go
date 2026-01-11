@@ -12,11 +12,18 @@ import (
 
 	"github.com/nooga/paserati/pkg/driver"
 	"github.com/nooga/paserati/pkg/parser"
-	// \"github.com/nooga/paserati/pkg/vm\" // Remove: VM no longer directly used here
+)
+
+// Version information - set via ldflags at build time
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = "unknown"
 )
 
 func main() {
 	// Define flags
+	versionFlag := flag.Bool("version", false, "Print version information and exit")
 	exprFlag := flag.String("e", "", "Run the given expression and exit")
 	emitJSFlag := flag.Bool("js", false, "Emit JavaScript from TypeScript source file")
 	jsOutputFile := flag.String("o", "", "Output file for JavaScript emission (default: input file with .js extension)")
@@ -29,6 +36,19 @@ func main() {
 	memProfileFlag := flag.String("memprofile", "", "Write heap profile to file (pprof)")
 
 	flag.Parse() // Parses the command-line flags
+
+	// Handle version flag
+	if *versionFlag {
+		fmt.Printf("paserati %s\n", version)
+		if commit != "unknown" {
+			fmt.Printf("  commit: %s\n", commit)
+		}
+		if buildDate != "unknown" {
+			fmt.Printf("  built:  %s\n", buildDate)
+		}
+		fmt.Printf("  go:     %s\n", runtime.Version())
+		return
+	}
 
 	// Optional: CPU profiling for the whole process lifetime.
 	if *cpuProfileFlag != "" {

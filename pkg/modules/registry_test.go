@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"runtime"
 	"testing"
 	"time"
 )
@@ -333,8 +334,8 @@ func TestDefaultLoaderConfig(t *testing.T) {
 		t.Error("Expected parallel processing to be enabled by default")
 	}
 	
-	if config.NumWorkers != 0 {
-		t.Error("Expected NumWorkers to be 0 (auto-detect) by default")
+	if config.NumWorkers != runtime.NumCPU() {
+		t.Errorf("Expected NumWorkers to be %d (runtime.NumCPU()) by default, got %d", runtime.NumCPU(), config.NumWorkers)
 	}
 	
 	if !config.CacheEnabled {

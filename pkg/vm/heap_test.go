@@ -141,11 +141,11 @@ func TestHeap_Resize(t *testing.T) {
 		t.Error("Expected existing value to be preserved after resize")
 	}
 	
-	// Verify new slots are initialized to Undefined
+	// Verify new slots are uninitialized (Get returns exists=false for uninitialized slots)
 	for i := 2; i < 10; i++ {
-		value, exists := heap.Get(i)
-		if !exists || value.Type() != TypeUndefined {
-			t.Errorf("Expected index %d to be Undefined after resize, got %v", i, value.Type())
+		_, exists := heap.Get(i)
+		if exists {
+			t.Errorf("Expected index %d to be uninitialized after resize, got exists=true", i)
 		}
 	}
 }

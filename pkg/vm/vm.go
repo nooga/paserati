@@ -1723,7 +1723,7 @@ startExecution:
 							if ee, ok := err.(ExceptionError); ok {
 								vm.throwException(ee.GetExceptionValue())
 							} else {
-								vm.runtimeError(err.Error())
+								vm.runtimeError("%s", err.Error())
 							}
 							return InterpretRuntimeError, Undefined
 						}
@@ -5773,7 +5773,7 @@ startExecution:
 						if ee, ok := err.(ExceptionError); ok {
 							vm.throwException(ee.GetExceptionValue())
 						} else {
-							vm.runtimeError(err.Error())
+							vm.runtimeError("%s", err.Error())
 						}
 						return InterpretRuntimeError, Undefined
 					}
@@ -9092,7 +9092,7 @@ startExecution:
 				if end > len(code) {
 					end = len(code)
 				}
-				fmt.Fprintf(os.Stderr, "[VM Debug] Unknown opcode 255 at ip=%d. Bytes around: ")
+				fmt.Fprintf(os.Stderr, "[VM Debug] Unknown opcode 255 at ip=%d. Bytes around: ", ip)
 				for i := start; i < end; i++ {
 					if i == ip {
 						fmt.Fprintf(os.Stderr, "<%d> ", code[i])

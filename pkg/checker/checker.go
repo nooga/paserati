@@ -2346,7 +2346,7 @@ func (c *Checker) visit(node parser.Node) {
 					// Conservative: assume string since that's most common for objects
 					resultType = types.String
 				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '+' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
 			case "-", "*", "/":

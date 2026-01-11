@@ -1378,9 +1378,9 @@ func (p *Paserati) preloadNativeModules(program *parser.Program) errors.Paserati
 // installBuiltinModules installs all built-in Paserati modules
 func installBuiltinModules(p *Paserati) {
 	// HTTP module
-	p.DeclareModule("github.com/nooga/paserati/http", httpModule)
+	p.DeclareModule("paserati/http", httpModule)
 
 	// Add more modules here as we create them
-	// p.DeclareModule("github.com/nooga/paserati/fs", fsModule)
-	// p.DeclareModule("github.com/nooga/paserati/crypto", cryptoModule)
+	// p.DeclareModule("paserati/fs", fsModule)
+	// p.DeclareModule("paserati/crypto", cryptoModule)
 }

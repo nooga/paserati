@@ -9,13 +9,16 @@ import (
 )
 
 func TestPrototypeCacheBasic(t *testing.T) {
+	// Save original state and restore after test
+	origProtoCache := vm.EnablePrototypeCache
+	t.Cleanup(func() {
+		os.Unsetenv("PASERATI_ENABLE_PROTO_CACHE")
+		vm.EnablePrototypeCache = origProtoCache
+	})
+
 	// Enable prototype caching for this test
 	os.Setenv("PASERATI_ENABLE_PROTO_CACHE", "true")
 	vm.EnablePrototypeCache = true
-	defer func() {
-		os.Unsetenv("PASERATI_ENABLE_PROTO_CACHE")
-		vm.EnablePrototypeCache = false
-	}()
 
 	tests := []struct {
 		name     string
@@ -109,6 +112,13 @@ c.value;`,
 }
 
 func TestPrototypeCachePerformance(t *testing.T) {
+	// Save original state and restore after test
+	origProtoCache := vm.EnablePrototypeCache
+	t.Cleanup(func() {
+		os.Unsetenv("PASERATI_ENABLE_PROTO_CACHE")
+		vm.EnablePrototypeCache = origProtoCache
+	})
+
 	// Compare performance with and without prototype caching
 	code := `
 function Base() {

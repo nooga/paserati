@@ -68,6 +68,14 @@ count;`
 
 	// Test without cache first
 	t.Run("WithoutCache", func(t *testing.T) {
+		// Save original state and restore after test
+		origProtoCache := vm.EnablePrototypeCache
+		origDetailedStats := vm.EnableDetailedCacheStats
+		t.Cleanup(func() {
+			vm.EnablePrototypeCache = origProtoCache
+			vm.EnableDetailedCacheStats = origDetailedStats
+		})
+
 		os.Setenv("PASERATI_ENABLE_PROTO_CACHE", "false")
 		os.Setenv("PASERATI_DETAILED_CACHE_STATS", "false")
 		vm.EnablePrototypeCache = false
@@ -91,6 +99,14 @@ count;`
 
 	// Test with cache enabled
 	t.Run("WithCache", func(t *testing.T) {
+		// Save original state and restore after test
+		origProtoCache := vm.EnablePrototypeCache
+		origDetailedStats := vm.EnableDetailedCacheStats
+		t.Cleanup(func() {
+			vm.EnablePrototypeCache = origProtoCache
+			vm.EnableDetailedCacheStats = origDetailedStats
+		})
+
 		os.Setenv("PASERATI_ENABLE_PROTO_CACHE", "true")
 		os.Setenv("PASERATI_DETAILED_CACHE_STATS", "true")
 		vm.EnablePrototypeCache = true
@@ -145,6 +161,14 @@ count;`
 
 // TestCacheWarmup specifically tests cache warming behavior
 func TestCacheWarmup(t *testing.T) {
+	// Save original state and restore after test
+	origProtoCache := vm.EnablePrototypeCache
+	origDetailedStats := vm.EnableDetailedCacheStats
+	t.Cleanup(func() {
+		vm.EnablePrototypeCache = origProtoCache
+		vm.EnableDetailedCacheStats = origDetailedStats
+	})
+
 	code := `
 // Create objects with identical shapes
 function TestObj(value: number) {
@@ -224,6 +248,14 @@ firstSum + secondSum + thirdSum;`
 
 // TestPolymorphicCaching tests how the cache handles different object types
 func TestPolymorphicCaching(t *testing.T) {
+	// Save original state and restore after test
+	origProtoCache := vm.EnablePrototypeCache
+	origDetailedStats := vm.EnableDetailedCacheStats
+	t.Cleanup(func() {
+		vm.EnablePrototypeCache = origProtoCache
+		vm.EnableDetailedCacheStats = origDetailedStats
+	})
+
 	code := `
 // Create different object types that access same property names
 function TypeA(val: number) {

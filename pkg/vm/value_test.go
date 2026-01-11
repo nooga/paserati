@@ -304,7 +304,8 @@ func TestBigIntValue(t *testing.T) {
 	expectPanic(t, func() { v.AsInteger() }, "not an integer")
 	expectPanic(t, func() { v.AsFloat() }, "not a float")
 
-	expectedStr := "1234567890123456789n"
+	// Note: BigInt.toString() does NOT include the "n" suffix per ECMAScript spec
+	expectedStr := "1234567890123456789"
 	if gotStr := v.ToString(); gotStr != expectedStr {
 		t.Errorf("ToString mismatch. Expected %q, got %q", expectedStr, gotStr)
 	}
@@ -466,7 +467,7 @@ func TestArrayValue(t *testing.T) {
 
 func TestFunctionValue(t *testing.T) {
 	dummyChunk := &Chunk{}
-	v := NewFunction(2, 0, 8, false, "testFn", dummyChunk, false) // Use constructor
+	v := NewFunction(2, 2, 0, 8, false, "testFn", dummyChunk, false, false, false) // Use constructor
 
 	if v.Type() != TypeFunction {
 		t.Errorf("Type mismatch. Expected %v, got %v", TypeFunction, v.Type())
@@ -514,7 +515,7 @@ func TestFunctionValue(t *testing.T) {
 	if gotStr := v.ToString(); gotStr != expectedStr {
 		t.Errorf("ToString mismatch. Expected %q, got %q", expectedStr, gotStr)
 	}
-	vNoName := NewFunction(0, 0, 0, false, "", nil, false)
+	vNoName := NewFunction(0, 0, 0, 0, false, "", nil, false, false, false)
 	expectedNoNameStr := "<function>"
 	if gotNoNameStr := vNoName.ToString(); gotNoNameStr != expectedNoNameStr {
 		t.Errorf("ToString (no name) mismatch. Expected %q, got %q", expectedNoNameStr, gotNoNameStr)
@@ -660,9 +661,9 @@ func TestUpvalue(t *testing.T) {
 		t.Fatalf("Expected open upvalue Location to be non-nil")
 	}
 
-	// Expect Null (zero value) for Closed initially
-	if !upOpen.Closed.Is(Null) {
-		t.Errorf("Expected open upvalue Closed field to be Null (zero value), got %v", upOpen.Closed)
+	// Expect Undefined (zero value of Value type) for Closed initially
+	if !upOpen.Closed.Is(Undefined) {
+		t.Errorf("Expected open upvalue Closed field to be Undefined (zero value), got %v", upOpen.Closed)
 	}
 	resolvedOpen := upOpen.Resolve()
 	if resolvedOpen == nil {
@@ -746,7 +747,7 @@ func TestTypeName(t *testing.T) {
 		{NewSymbol("s"), "symbol"},
 		{NewObject(DefaultObjectPrototype), "object"},
 		{NewArray(), "object"}, // typeof [] is 'object'
-		{NewFunction(0, 0, 0, false, "", nil, false), "function"},
+		{NewFunction(0, 0, 0, 0, false, "", nil, false, false, false), "function"},
 		{closureObj, "function"},
 		{nativeFn, "function"},
 	}
@@ -774,10 +775,10 @@ func TestToStringConversion(t *testing.T) {
 		{"Symbol", NewSymbol("sym"), "Symbol(sym)"},
 		{"Float", NumberValue(123.45), "123.45"},
 		{"Integer", IntegerValue(987), "987"},
-		{"BigInt", NewBigInt(big.NewInt(1000)), "1000n"},
+		{"BigInt", NewBigInt(big.NewInt(1000)), "1000"}, // No "n" suffix per ECMAScript spec
 		{"BooleanTrue", True, "true"},
 		{"BooleanFalse", False, "false"},
-		{"Function", NewFunction(0, 0, 0, false, "myFn", nil, false), "<function myFn>"},
+		{"Function", NewFunction(0, 0, 0, 0, false, "myFn", nil, false, false, false), "<function myFn>"},
 		{"Closure", closureObj, "<closure myFn>"},
 		{"NativeFunction", nativeFn, "<native function myNative>"},
 		{"Object", NewObject(DefaultObjectPrototype), "[object Object]"},
@@ -809,13 +810,13 @@ func TestToFloatConversion(t *testing.T) {
 		{"BooleanTrue", True, 1.0, false},
 		{"BooleanFalse", False, 0.0, false},
 		{"StringNumber", NewString(" -1.5e2 "), -150.0, false},
-		{"StringHex", NewString("0xff"), 0, true}, // ParseFloat doesn't handle 0x -> NaN
+		{"StringHex", NewString("0xff"), 255, false}, // ToNumber handles hex strings
 		{"StringInvalid", NewString("test"), 0, true},
 		{"Symbol", NewSymbol("sym"), 0, true},
-		{"Null", Null, 0, true},
+		{"Null", Null, 0, false}, // ToNumber(null) === 0 per ECMAScript spec
 		{"Undefined", Undefined, 0, true},
 		{"Object", NewObject(DefaultObjectPrototype), 0, true},
-		{"Function", NewFunction(0, 0, 0, false, "", nil, false), 0, true},
+		{"Function", NewFunction(0, 0, 0, 0, false, "", nil, false, false, false), 0, true},
 	}
 
 	for _, tc := range testCases {
@@ -864,7 +865,7 @@ func TestToIntegerConversion(t *testing.T) {
 		{"Null", Null, 0},
 		{"Undefined", Undefined, 0},
 		{"Object", NewObject(DefaultObjectPrototype), 0},
-		{"Function", NewFunction(0, 0, 0, false, "", nil, false), 0},
+		{"Function", NewFunction(0, 0, 0, 0, false, "", nil, false, false, false), 0},
 	}
 
 	for _, tc := range testCases {
@@ -877,7 +878,7 @@ func TestToIntegerConversion(t *testing.T) {
 }
 
 func TestIsFunctions(t *testing.T) {
-	fn := NewFunction(0, 0, 0, false, "", nil, false)
+	fn := NewFunction(0, 0, 0, 0, false, "", nil, false, false, false)
 	cl := NewClosure(createTestFunctionObject("", 0), nil)
 	na := NewNativeFunction(0, false, "", nil)
 	obj := NewObject(DefaultObjectPrototype)
@@ -1055,7 +1056,7 @@ func TestIsFalsey(t *testing.T) {
 		{"Symbol", NewSymbol("s"), false},
 		{"Object", NewObject(DefaultObjectPrototype), false},
 		{"Array", NewArray(), false},
-		{"Function", NewFunction(0, 0, 0, false, "", nil, false), false},
+		{"Function", NewFunction(0, 0, 0, 0, false, "", nil, false, false, false), false},
 		{"Closure", NewClosure(createTestFunctionObject("", 0), nil), false},
 		{"NativeFunction", NewNativeFunction(0, false, "", nil), false},
 	}
@@ -1138,7 +1139,8 @@ func TestStrictlyEquals(t *testing.T) {
 		{"NaN vs NaN", NaN, NumberValue(math.NaN()), false}, // NaN !== NaN
 
 		// Cases where types differ (always false for ===)
-		{"Int vs Float (same value)", IntegerValue(5), NumberValue(5.0), false},
+		// Note: Int and Float with same value are EQUAL in JS (5 === 5.0 is true)
+		{"Int vs Float (same value)", IntegerValue(5), NumberValue(5.0), true},
 		{"Int vs Null", IntegerValue(1), Null, false},
 		{"String vs Int", NewString("1"), IntegerValue(1), false},
 		{"Object vs Null", obj1, Null, false},
@@ -1204,8 +1206,8 @@ func TestEquals(t *testing.T) {
 		{"Int 0 == Str 0", IntegerValue(0), NewString("0"), true},
 		{"Float 0.0 == Str 0", NumberValue(0.0), NewString("0"), true},
 		{"Int 1 == Str 1.0", IntegerValue(1), NewString("1.0"), true},
-		{"Int 1 == Str 0x1", IntegerValue(1), NewString("0x1"), false},       // String "0x1" to number is NaN or error
-		{"Int 255 == Str 0xFF", IntegerValue(255), NewString("0xFF"), false}, // String "0xFF" to number is NaN or error
+		{"Int 1 == Str 0x1", IntegerValue(1), NewString("0x1"), true},       // ToNumber("0x1") === 1
+		{"Int 255 == Str 0xFF", IntegerValue(255), NewString("0xFF"), true}, // ToNumber("0xFF") === 255
 		{"Int 5 == Str abc", IntegerValue(5), NewString("abc"), false},       // "abc" -> NaN
 		{"Str abc == Int 5", NewString("abc"), IntegerValue(5), false},
 		{"NaN == Str NaN", NaN, NewString("NaN"), false}, // NaN == NaN(from string) is false

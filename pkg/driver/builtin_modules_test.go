@@ -30,7 +30,7 @@ func TestHTTPModuleFetch(t *testing.T) {
 
 	// Test TypeScript code using fetch
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "github.com/nooga/paserati/http";
+		import { fetch } from "paserati/http";
 		
 		console.log("Testing fetch...");
 		
@@ -66,7 +66,7 @@ func TestHTTPModuleHeaders(t *testing.T) {
 	p := NewPaserati()
 
 	tsCode := `
-		import { Headers } from "github.com/nooga/paserati/http";
+		import { Headers } from "paserati/http";
 		
 		console.log("Testing Headers class...");
 		
@@ -135,7 +135,7 @@ func TestHTTPModulePOST(t *testing.T) {
 	p := NewPaserati()
 
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "github.com/nooga/paserati/http";
+		import { fetch } from "paserati/http";
 		
 		console.log("Testing POST request...");
 		
@@ -198,7 +198,7 @@ func TestHTTPModuleAutoStringify(t *testing.T) {
 	p := NewPaserati()
 
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "github.com/nooga/paserati/http";
+		import { fetch } from "paserati/http";
 		
 		console.log("Testing automatic JSON stringification...");
 		
@@ -252,7 +252,7 @@ func TestHTTPModuleBlob(t *testing.T) {
 	p := NewPaserati()
 
 	tsCode := fmt.Sprintf(`
-		import { fetch } from "github.com/nooga/paserati/http";
+		import { fetch } from "paserati/http";
 		
 		console.log("Testing blob() method...");
 		

@@ -249,7 +249,7 @@ func TestNativeModuleClass(t *testing.T) {
 		// Verify the internal field is not accessible (should be undefined)
 		console.log("Internal field (should be undefined):", p1.internal);
 		
-		let distance = p1.Distance();
+		let distance = p1.distance();
 		console.log("Distance from origin:", distance);
 		
 		"class_test_passed";

@@ -1309,49 +1309,41 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: LT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '>':
-		// Check for >= without whitespace (ECMAScript requires no whitespace in compound tokens)
-		if l.peekChar() == '=' { // Greater than or equal >=
-			l.readChar()                                // Consume '='
-			literal := l.input[startPos : l.position+1] // Read the actual '>='
-			l.readChar()                                // Advance past '='
+		// Check for multi-character operators starting with >
+		// ECMAScript requires no whitespace between characters of compound tokens
+		if l.peekChar() == '=' { // >=
+			l.readChar()
+			literal := l.input[startPos : l.position+1]
+			l.readChar()
 			tok = Token{Type: GE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-		} else {
-			// Check for >> operators (allow whitespace for TypeScript generic syntax)
-			peekAfterWS := l.skipWhitespaceAndPeek()
-			if peekAfterWS == '>' { // Right shift >>, Unsigned right shift >>>, or assignments
-				l.skipWhitespace() // Actually consume the whitespace
-				l.readChar()       // Consume second '>'
-				peek2AfterWS := l.skipWhitespaceAndPeek()
-				if peek2AfterWS == '>' { // Potential >>> or >>>=
-					l.skipWhitespace() // Actually consume the whitespace
-					l.readChar()       // Consume third '>'
-					peek3AfterWS := l.skipWhitespaceAndPeek()
-					if peek3AfterWS == '=' { // Check for >>>=
-						l.skipWhitespace()                                             // Actually consume the whitespace
-						l.readChar()                                                   // Consume '='
-						literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>="
-						l.readChar()                                                   // Advance past '='
-						tok = Token{Type: UNSIGNED_RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-					} else { // Just >>>
-						literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>>"
-						l.readChar()                                                   // Advance past third '>'
-						tok = Token{Type: UNSIGNED_RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-					}
-				} else if l.peekChar() == '=' { // Check for >>= (no whitespace allowed)
-					l.readChar()                                // Consume '='
-					literal := l.input[startPos : l.position+1] // Read ">>="
-					l.readChar()                                // Advance past '='
-					tok = Token{Type: RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-				} else { // Just >>
-					literal := strings.TrimSpace(l.input[startPos : l.position+1]) // Read ">>"
-					l.readChar()                                                   // Advance past second '>'
-					tok = Token{Type: RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+		} else if l.peekChar() == '>' { // >> or >>> or >>= or >>>=
+			l.readChar() // Consume second '>'
+			if l.peekChar() == '>' { // >>> or >>>=
+				l.readChar() // Consume third '>'
+				if l.peekChar() == '=' { // >>>=
+					l.readChar()
+					literal := l.input[startPos : l.position+1]
+					l.readChar()
+					tok = Token{Type: UNSIGNED_RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				} else { // >>>
+					literal := l.input[startPos : l.position+1]
+					l.readChar()
+					tok = Token{Type: UNSIGNED_RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				}
-			} else { // Just Greater than >
-				literal := string(l.ch) // Just '>'
-				l.readChar()            // Advance past '>'
-				tok = Token{Type: GT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else if l.peekChar() == '=' { // >>=
+				l.readChar()
+				literal := l.input[startPos : l.position+1]
+				l.readChar()
+				tok = Token{Type: RIGHT_SHIFT_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			} else { // >>
+				literal := l.input[startPos : l.position+1]
+				l.readChar()
+				tok = Token{Type: RIGHT_SHIFT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
+		} else { // Just >
+			literal := string(l.ch)
+			l.readChar()
+			tok = Token{Type: GT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case ';':
 		literal := string(l.ch)

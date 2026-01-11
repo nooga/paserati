@@ -3,12 +3,13 @@ package checker
 import (
 	"testing"
 
+	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/types"
 )
 
 func TestNewGlobalEnvironmentWithInitializers(t *testing.T) {
-	// Create global environment using new system
-	env := NewGlobalEnvironment(nil)
+	// Create global environment using new system with standard initializers
+	env := NewGlobalEnvironment(builtins.GetStandardInitializers())
 
 	// Check that Object constructor was defined
 	if objectType, _, found := env.Resolve("Object"); !found {
@@ -58,8 +59,8 @@ func TestNewGlobalEnvironmentWithInitializers(t *testing.T) {
 }
 
 func TestPrototypeMethodResolver(t *testing.T) {
-	// Create global environment to initialize the resolver
-	_ = NewGlobalEnvironment(nil)
+	// Create global environment to initialize the resolver with standard initializers
+	_ = NewGlobalEnvironment(builtins.GetStandardInitializers())
 
 	// Test object property access (we have ObjectInitializer)
 	objectType := types.NewObjectType()

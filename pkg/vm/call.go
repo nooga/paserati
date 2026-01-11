@@ -94,7 +94,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 				if ee, ok := err.(ExceptionError); ok {
 					vm.throwException(ee.GetExceptionValue())
 				} else {
-					vm.runtimeError(err.Error())
+					vm.runtimeError("%s", err.Error())
 				}
 				return false, nil
 			}
