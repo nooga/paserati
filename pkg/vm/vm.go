@@ -5558,6 +5558,7 @@ startExecution:
 
 			// Check if we're in an unwinding state before the call
 			wasUnwinding := vm.unwinding
+			frameCountBeforeCall := vm.frameCount
 
 			shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, args, destReg, callerRegisters, callerIP)
 
@@ -5640,6 +5641,26 @@ startExecution:
 					fmt.Printf("[DEBUG vm.go] OpCallMethod: Handler found during native call, jumping to frame.ip=%d\n", frame.ip)
 				}
 				vm.handlerFound = false
+				ip = frame.ip
+				continue
+			}
+
+			// If frame was popped during the call (exception thrown and handled in outer frame),
+			// we need to reload the frame state and continue at the handler
+			if !wasUnwinding && !vm.unwinding && vm.frameCount < frameCountBeforeCall {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCallMethod: Frame was popped (was %d, now %d), exception handled in outer frame\n",
+						frameCountBeforeCall, vm.frameCount)
+				}
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
 				ip = frame.ip
 				continue
 			}
