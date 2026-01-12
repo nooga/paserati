@@ -390,11 +390,33 @@ func (c *Compiler) emitStrictNotEqual(dest, left, right Register, line int) {
 	c.emitByte(byte(right))
 }
 
-// Added helper for OpSetUpvalue
-func (c *Compiler) emitSetUpvalue(upvalueIndex uint8, srcReg Register, line int) {
-	c.emitOpCode(vm.OpSetUpvalue, line)
-	c.emitByte(byte(upvalueIndex))
-	c.emitByte(byte(srcReg))
+// Added helper for OpSetUpvalue (supports both 8-bit and 16-bit indices)
+func (c *Compiler) emitSetUpvalue(upvalueIndex uint16, srcReg Register, line int) {
+	if upvalueIndex <= 255 {
+		c.emitOpCode(vm.OpSetUpvalue, line)
+		c.emitByte(byte(upvalueIndex))
+		c.emitByte(byte(srcReg))
+	} else {
+		c.emitOpCode(vm.OpSetUpvalue16, line)
+		c.emitByte(byte(upvalueIndex >> 8))
+		c.emitByte(byte(upvalueIndex & 0xFF))
+		c.emitByte(byte(srcReg))
+	}
+}
+
+// emitLoadFree loads a free variable (upvalue) into a register.
+// Uses 8-bit opcode for indices 0-255, 16-bit opcode for larger indices.
+func (c *Compiler) emitLoadFree(dest Register, upvalueIndex uint16, line int) {
+	if upvalueIndex <= 255 {
+		c.emitOpCode(vm.OpLoadFree, line)
+		c.emitByte(byte(dest))
+		c.emitByte(byte(upvalueIndex))
+	} else {
+		c.emitOpCode(vm.OpLoadFree16, line)
+		c.emitByte(byte(dest))
+		c.emitByte(byte(upvalueIndex >> 8))
+		c.emitByte(byte(upvalueIndex & 0xFF))
+	}
 }
 
 // --- NEW: emitGetLength ---

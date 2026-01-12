@@ -437,7 +437,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 	var identInfo struct {
 		targetReg    Register
 		isUpvalue    bool
-		upvalueIndex uint8
+		upvalueIndex uint16 // 16-bit to support large closures (up to 65535 upvalues)
 		isGlobal     bool
 		globalIndex  uint16
 	}
@@ -488,9 +488,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
 			currentValueReg = c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, currentValueReg)
-			c.emitOpCode(vm.OpLoadFree, line)
-			c.emitByte(byte(currentValueReg))
-			c.emitByte(identInfo.upvalueIndex)
+			c.emitLoadFree(currentValueReg, identInfo.upvalueIndex, line)
 		} else {
 			// Variable in outer block scope of same function (or at top level): access directly via register
 			identInfo.targetReg = symbolRef.Register

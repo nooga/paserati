@@ -1233,9 +1233,10 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 
 	// 1. Compile the expression being switched on
 	switchExprReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, switchExprReg)
+	// Note: switchExprReg is freed after all comparisons, not via tempRegs
 	_, err := c.compileNode(node.Expression, switchExprReg)
 	if err != nil {
+		c.regAlloc.Free(switchExprReg)
 		return BadRegister, err
 	}
 
@@ -1278,22 +1279,27 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 
 		// Compile the case condition
 		caseCondReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, caseCondReg)
 		_, err := c.compileNode(caseClause.Condition, caseCondReg)
 		if err != nil {
+			c.regAlloc.Free(caseCondReg)
 			return BadRegister, err
 		}
 
 		// Compare switch expression value with case condition value
 		matchReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, matchReg)
 		c.emitStrictEqual(matchReg, switchExprReg, caseCondReg, caseLine)
+
+		// Free caseCondReg - no longer needed after comparison
+		c.regAlloc.Free(caseCondReg)
 
 		// Pattern: JumpIfFalse to skip the jump-to-body, then unconditional jump to body
 		// JumpIfFalse matchReg, +3 (skip the OpJump instruction which is 3 bytes)
 		c.emitOpCode(vm.OpJumpIfFalse, caseLine)
 		c.emitByte(byte(matchReg))
 		c.emitUint16(3) // Skip the following OpJump (1 byte opcode + 2 bytes offset)
+
+		// Free matchReg - no longer needed after the jump condition
+		c.regAlloc.Free(matchReg)
 
 		// If match, jump to the body (placeholder to be patched)
 		jumpToBodyPlaceholders[i] = c.emitPlaceholderJump(vm.OpJump, 0, caseLine)
@@ -1309,6 +1315,9 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 		// No default, jump to end (will be patched later)
 		jumpToDefaultOrEnd = c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
 	}
+
+	// Free switchExprReg - no longer needed after all comparisons
+	c.regAlloc.Free(switchExprReg)
 
 	// === PHASE 2: Emit all case bodies in order ===
 	// Bodies are emitted in order for natural fall-through.

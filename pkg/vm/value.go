@@ -502,7 +502,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet
 }
 
 func (v Value) IsDictObject() bool {
@@ -559,7 +559,8 @@ func (v Value) TypeName() string {
 		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeBoundFunction:
 		return "function"
-	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray, TypeProxy:
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray, TypeProxy,
+		TypeGenerator, TypeAsyncGenerator, TypePromise, TypeMap, TypeSet, TypeArrayBuffer:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)

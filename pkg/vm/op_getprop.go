@@ -510,16 +510,58 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return true, InterpretOK, *dest
 	}
 
-	// 9. Map objects (after special properties are handled)
+	// 9. Map objects - consult Map.prototype chain for properties like forEach, get, set, etc.
 	if objVal.Type() == TypeMap {
-		// Maps don't have additional own properties beyond special ones
+		proto := vm.MapPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					cpo := current.AsPlainObject()
+					if v, ok := cpo.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					current = cpo.prototype
+				} else {
+					break
+				}
+			}
+		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
 
-	// 10. Set objects (after special properties are handled)
+	// 10. Set objects - consult Set.prototype chain for properties like forEach, add, has, etc.
 	if objVal.Type() == TypeSet {
-		// Sets don't have additional own properties beyond special ones
+		proto := vm.SetPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					cpo := current.AsPlainObject()
+					if v, ok := cpo.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					current = cpo.prototype
+				} else {
+					break
+				}
+			}
+		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}

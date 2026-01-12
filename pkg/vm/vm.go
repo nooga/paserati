@@ -3208,6 +3208,93 @@ startExecution:
 
 			registers[destReg] = closureVal
 
+		case OpClosure16:
+			// Same as OpClosure but with 16-bit upvalue count
+			destReg := code[ip]
+			funcConstIdxHi := code[ip+1]
+			funcConstIdxLo := code[ip+2]
+			funcConstIdx := uint16(funcConstIdxHi)<<8 | uint16(funcConstIdxLo)
+			upvalueCountHi := code[ip+3]
+			upvalueCountLo := code[ip+4]
+			upvalueCount := int(uint16(upvalueCountHi)<<8 | uint16(upvalueCountLo))
+			ip += 5
+
+			if int(funcConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid function constant index %d for closure.", funcConstIdx)
+				return status, Undefined
+			}
+			protoVal := constants[funcConstIdx]
+			if !IsFunction(protoVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Constant %d is not a function, cannot create closure.", funcConstIdx)
+				return status, Undefined
+			}
+			protoFunc := AsFunction(protoVal)
+
+			// Allocate upvalue pointers slice
+			// Capture types: same as OpClosure
+			upvalues := make([]*Upvalue, upvalueCount)
+			for i := 0; i < upvalueCount; i++ {
+				captureType := code[ip]
+				ip++
+
+				var index int
+				if captureType == 3 { // CaptureFromSpill16 uses 16-bit index
+					index = int(code[ip])<<8 | int(code[ip+1])
+					ip += 2
+				} else {
+					index = int(code[ip])
+					ip++
+				}
+
+				switch captureType {
+				case 1: // CaptureFromRegister
+					if index >= len(registers) {
+						frame.ip = ip
+						status := vm.runtimeError("Invalid local register index %d for upvalue capture.", index)
+						return status, Undefined
+					}
+					location := &registers[index]
+					upvalues[i] = vm.captureUpvalue(location)
+				case 2: // CaptureFromSpill (8-bit index)
+					if index >= len(frame.spillSlots) {
+						frame.ip = ip
+						status := vm.runtimeError("Invalid spill slot index %d for upvalue capture.", index)
+						return status, Undefined
+					}
+					location := &frame.spillSlots[index]
+					upvalues[i] = vm.captureUpvalue(location)
+				case 3: // CaptureFromSpill16 (16-bit index)
+					if index >= len(frame.spillSlots) {
+						frame.ip = ip
+						status := vm.runtimeError("Invalid spill slot index %d for upvalue capture.", index)
+						return status, Undefined
+					}
+					location := &frame.spillSlots[index]
+					upvalues[i] = vm.captureUpvalue(location)
+				default: // 0 = CaptureFromUpvalue
+					if closure == nil || index >= len(closure.Upvalues) {
+						frame.ip = ip
+						status := vm.runtimeError("Invalid upvalue index %d for capture.", index)
+						return status, Undefined
+					}
+					upvalues[i] = closure.Upvalues[index]
+				}
+			}
+
+			closureVal := NewClosure(protoFunc, upvalues)
+
+			// Set the function's [[Prototype]] to Function.prototype
+			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
+				cl.Fn.Prototype = vm.FunctionPrototype
+				if cl.Fn.IsArrowFunction {
+					cl.CapturedThis = frame.thisValue
+				}
+			}
+
+			registers[destReg] = closureVal
+
 		case OpLoadFree:
 			destReg := code[ip]
 			upvalueIndex := int(code[ip+1])
@@ -3236,6 +3323,45 @@ startExecution:
 			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
 				frame.ip = ip
 				status := vm.runtimeError("Invalid upvalue index %d for OpSetUpvalue.", upvalueIndex)
+				return status, Undefined
+			}
+			upvalue := closure.Upvalues[upvalueIndex]
+			if upvalue.Location != nil {
+				// Variable is still open (on the stack), update the stack slot
+				*upvalue.Location = valueToStore // Update value via pointer
+			} else {
+				// Variable is closed, update the Closed field
+				upvalue.Closed = valueToStore
+			}
+
+		case OpLoadFree16:
+			destReg := code[ip]
+			upvalueIndex := int(uint16(code[ip+1])<<8 | uint16(code[ip+2]))
+			ip += 3
+
+			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid upvalue index %d for OpLoadFree16.", upvalueIndex)
+				return status, Undefined
+			}
+			upvalue := closure.Upvalues[upvalueIndex]
+			if upvalue.Location != nil {
+				// Variable is still open (on the stack)
+				registers[destReg] = *upvalue.Location // Dereference pointer to get value
+			} else {
+				// Variable is closed
+				registers[destReg] = upvalue.Closed
+			}
+
+		case OpSetUpvalue16:
+			upvalueIndex := int(uint16(code[ip])<<8 | uint16(code[ip+1]))
+			srcReg := code[ip+2]
+			ip += 3
+			valueToStore := registers[srcReg]
+
+			if closure == nil || upvalueIndex >= len(closure.Upvalues) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid upvalue index %d for OpSetUpvalue16.", upvalueIndex)
 				return status, Undefined
 			}
 			upvalue := closure.Upvalues[upvalueIndex]

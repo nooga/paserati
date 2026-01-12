@@ -175,6 +175,39 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("clear", v, &w, &e, &c)
 	}
 
+	// forEach(callback[, thisArg]) - calls callback(value, key, map) for each entry
+	mapProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(2, false, "forEach", func(args []vm.Value) (vm.Value, error) {
+		thisMap := vmInstance.GetThis()
+
+		if thisMap.Type() != vm.TypeMap {
+			vmInstance.ThrowTypeError("Map.prototype.forEach called on non-Map")
+			return vm.Undefined, nil
+		}
+
+		if len(args) < 1 || !args[0].IsCallable() {
+			vmInstance.ThrowTypeError("callback is not a function")
+			return vm.Undefined, nil
+		}
+
+		callback := args[0]
+		thisArg := vm.Undefined
+		if len(args) >= 2 {
+			thisArg = args[1]
+		}
+
+		mapObj := thisMap.AsMap()
+		mapObj.ForEach(func(key vm.Value, value vm.Value) {
+			// Call callback(value, key, map) with thisArg as 'this'
+			vmInstance.Call(callback, thisArg, []vm.Value{value, key, thisMap})
+		})
+
+		return vm.Undefined, nil
+	}))
+	if v, ok := mapProto.GetOwn("forEach"); ok {
+		w, e, c := true, false, true
+		mapProto.DefineOwnProperty("forEach", v, &w, &e, &c)
+	}
+
 	// Add size accessor (getter)
 	sizeGetter := vm.NewNativeFunction(0, false, "get size", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()

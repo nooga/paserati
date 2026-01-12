@@ -246,6 +246,13 @@ const (
 	// 16-bit spill slot opcodes for functions with more than 255 spilled variables
 	OpLoadSpill16  OpCode = 132 // Rx SpillIdxHi SpillIdxLo: Load from spillSlots[SpillIdx] into register Rx (16-bit index)
 	OpStoreSpill16 OpCode = 133 // SpillIdxHi SpillIdxLo Rx: Store register Rx into spillSlots[SpillIdx] (16-bit index)
+
+	// 16-bit upvalue count for closures with more than 255 captured variables
+	OpClosure16 OpCode = 134 // Rx FuncConstIdx UpvalueCountHi UpvalueCountLo [CaptureType Index...]: Like OpClosure but with 16-bit upvalue count
+
+	// 16-bit upvalue index for functions with more than 255 captured variables
+	OpLoadFree16   OpCode = 135 // Rx UpvalueIdxHi UpvalueIdxLo: Load free variable (upvalue) at 16-bit index into register Rx
+	OpSetUpvalue16 OpCode = 136 // UpvalueIdxHi UpvalueIdxLo Ry: Store value from register Ry into upvalue at 16-bit index
 )
 
 // String returns a human-readable name for the OpCode.
@@ -307,10 +314,16 @@ func (op OpCode) String() string {
 		return "OpReturn"
 	case OpClosure:
 		return "OpClosure"
+	case OpClosure16:
+		return "OpClosure16"
 	case OpLoadFree:
 		return "OpLoadFree"
 	case OpSetUpvalue:
 		return "OpSetUpvalue"
+	case OpLoadFree16:
+		return "OpLoadFree16"
+	case OpSetUpvalue16:
+		return "OpSetUpvalue16"
 	case OpReturnUndefined:
 		return "OpReturnUndefined"
 	case OpJumpIfFalse:
@@ -768,7 +781,29 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpSetUpvalue:
 		return c.byteRegisterInstruction(builder, instruction.String(), offset, "UpvalueIdx") // UpvalueIndex, Ry
 	case OpClosure:
-		return c.closureInstruction(builder, instruction.String(), offset)
+		return c.closureInstruction(builder, instruction.String(), offset, false)
+	case OpClosure16:
+		return c.closureInstruction(builder, instruction.String(), offset, true)
+	case OpLoadFree16:
+		// Rx UpvalueIdxHi UpvalueIdxLo: Load free variable (upvalue) at 16-bit index into register Rx
+		if offset+3 >= len(c.Code) {
+			builder.WriteString("OpLoadFree16 (missing operands)\n")
+			return offset + 1
+		}
+		destReg := c.Code[offset+1]
+		upvalueIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+		builder.WriteString(fmt.Sprintf("%-16s R%d, UpvalueIdx %d\n", "OpLoadFree16", destReg, upvalueIdx))
+		return offset + 4
+	case OpSetUpvalue16:
+		// UpvalueIdxHi UpvalueIdxLo Ry: Store value from register Ry into upvalue at 16-bit index
+		if offset+3 >= len(c.Code) {
+			builder.WriteString("OpSetUpvalue16 (missing operands)\n")
+			return offset + 1
+		}
+		upvalueIdx := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+		srcReg := c.Code[offset+3]
+		builder.WriteString(fmt.Sprintf("%-16s UpvalueIdx %d, R%d\n", "OpSetUpvalue16", upvalueIdx, srcReg))
+		return offset + 4
 
 	case OpReturnUndefined:
 		return c.simpleInstruction(builder, instruction.String(), offset)
@@ -1263,10 +1298,17 @@ func (c *Chunk) byteRegisterInstruction(builder *strings.Builder, name string, o
 	return offset + 3
 }
 
-// closureInstruction handles OpClosure Rx FuncConstIdx UpvalueCount [IsLocal Idx ...]
-func (c *Chunk) closureInstruction(builder *strings.Builder, name string, offset int) int {
-	// Opcode + Rx + FuncConstIdx(2 bytes) + UpvalueCount(1 byte) = 5 bytes minimum
-	if offset+4 >= len(c.Code) {
+// closureInstruction handles OpClosure/OpClosure16 Rx FuncConstIdx UpvalueCount [CaptureType Idx ...]
+// is16Bit indicates whether this is OpClosure16 with a 16-bit upvalue count
+func (c *Chunk) closureInstruction(builder *strings.Builder, name string, offset int, is16Bit bool) int {
+	// OpClosure: Opcode + Rx + FuncConstIdx(2 bytes) + UpvalueCount(1 byte) = 5 bytes minimum
+	// OpClosure16: Opcode + Rx + FuncConstIdx(2 bytes) + UpvalueCount(2 bytes) = 6 bytes minimum
+	minBytes := 5
+	if is16Bit {
+		minBytes = 6
+	}
+
+	if offset+minBytes-1 >= len(c.Code) {
 		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
 		// Determine how many bytes we actually read before failing
 		if offset+3 < len(c.Code) {
@@ -1283,7 +1325,16 @@ func (c *Chunk) closureInstruction(builder *strings.Builder, name string, offset
 
 	destReg := c.Code[offset+1]
 	funcConstIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
-	upvalueCount := int(c.Code[offset+4])
+
+	var upvalueCount int
+	var headerSize int // Total bytes for opcode + operands before upvalue data
+	if is16Bit {
+		upvalueCount = int(uint16(c.Code[offset+4])<<8 | uint16(c.Code[offset+5]))
+		headerSize = 6
+	} else {
+		upvalueCount = int(c.Code[offset+4])
+		headerSize = 5
+	}
 
 	// Check if function constant is valid
 	funcProtoStr := "invalid const idx"
@@ -1308,24 +1359,65 @@ func (c *Chunk) closureInstruction(builder *strings.Builder, name string, offset
 	builder.WriteString(fmt.Sprintf("%-16s R%d, FnConst %d (%s), Upvalues %d\n",
 		name, destReg, funcConstIdx, funcProtoStr, upvalueCount))
 
-	// Check if we have enough bytes for all upvalue pairs
-	endOffset := offset + 5 + (upvalueCount * 2)
-	if endOffset > len(c.Code) {
-		builder.WriteString(fmt.Sprintf("  %04d      (missing upvalue data)\n", offset+5))
-		return len(c.Code) // Consume rest of bytecode as invalid
-	}
-
-	// Print upvalue details
-	currentOffset := offset + 5
+	// Print upvalue details - each upvalue is CaptureType + Index
+	// CaptureFromSpill16 (type 3) uses a 2-byte index, others use 1-byte index
+	currentOffset := offset + headerSize
 	for i := 0; i < upvalueCount; i++ {
-		isLocal := c.Code[currentOffset] == 1
-		index := c.Code[currentOffset+1]
-		location := "Upvalue"
-		if isLocal {
-			location = "LocalReg"
+		if currentOffset >= len(c.Code) {
+			builder.WriteString(fmt.Sprintf("  %04d      (missing upvalue data)\n", currentOffset))
+			return len(c.Code) // Consume rest of bytecode as invalid
 		}
+
+		captureType := c.Code[currentOffset]
+		var index uint16
+		var location string
+		var bytesConsumed int
+
+		switch captureType {
+		case 0: // CaptureFromUpvalue
+			location = "Upvalue"
+			if currentOffset+1 >= len(c.Code) {
+				builder.WriteString(fmt.Sprintf("  %04d      (missing upvalue index)\n", currentOffset))
+				return len(c.Code)
+			}
+			index = uint16(c.Code[currentOffset+1])
+			bytesConsumed = 2
+		case 1: // CaptureFromRegister
+			location = "LocalReg"
+			if currentOffset+1 >= len(c.Code) {
+				builder.WriteString(fmt.Sprintf("  %04d      (missing upvalue index)\n", currentOffset))
+				return len(c.Code)
+			}
+			index = uint16(c.Code[currentOffset+1])
+			bytesConsumed = 2
+		case 2: // CaptureFromSpill
+			location = "Spill"
+			if currentOffset+1 >= len(c.Code) {
+				builder.WriteString(fmt.Sprintf("  %04d      (missing upvalue index)\n", currentOffset))
+				return len(c.Code)
+			}
+			index = uint16(c.Code[currentOffset+1])
+			bytesConsumed = 2
+		case 3: // CaptureFromSpill16
+			location = "Spill16"
+			if currentOffset+2 >= len(c.Code) {
+				builder.WriteString(fmt.Sprintf("  %04d      (missing upvalue index)\n", currentOffset))
+				return len(c.Code)
+			}
+			index = uint16(c.Code[currentOffset+1])<<8 | uint16(c.Code[currentOffset+2])
+			bytesConsumed = 3
+		default:
+			location = fmt.Sprintf("Unknown(%d)", captureType)
+			if currentOffset+1 >= len(c.Code) {
+				builder.WriteString(fmt.Sprintf("  %04d      (missing upvalue index)\n", currentOffset))
+				return len(c.Code)
+			}
+			index = uint16(c.Code[currentOffset+1])
+			bytesConsumed = 2
+		}
+
 		builder.WriteString(fmt.Sprintf("  %04d      | %-8s %d\n", currentOffset, location, index))
-		currentOffset += 2
+		currentOffset += bytesConsumed
 	}
 
 	return currentOffset // Return offset of the next instruction

@@ -579,6 +579,7 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 }
 
 // New implementation for arrays with spread elements
+// NOTE: tempRegs parameter is kept for API compatibility but no longer used - registers are freed eagerly
 func (c *Compiler) compileArrayLiteralWithSpread(node *parser.ArrayLiteral, hint Register, tempRegs []Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
@@ -589,14 +590,15 @@ func (c *Compiler) compileArrayLiteralWithSpread(node *parser.ArrayLiteral, hint
 	c.emitByte(0)          // Count: 0 elements
 
 	// Process each element, adding to the result array
+	// Free registers eagerly to avoid exhaustion with large arrays
 	for _, elem := range node.Elements {
 		switch e := elem.(type) {
 		case *parser.SpreadElement:
 			// Compile the spread expression (should be an array)
 			spreadReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, spreadReg)
 			_, err := c.compileNode(e.Argument, spreadReg)
 			if err != nil {
+				c.regAlloc.Free(spreadReg)
 				return BadRegister, err
 			}
 
@@ -605,27 +607,35 @@ func (c *Compiler) compileArrayLiteralWithSpread(node *parser.ArrayLiteral, hint
 			c.emitByte(byte(hint))      // DestReg: result array (modified in place)
 			c.emitByte(byte(spreadReg)) // SrcReg: array to spread
 
+			// Free spreadReg immediately
+			c.regAlloc.Free(spreadReg)
+
 		default:
 			// Regular element: compile and add to array
 			elemReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, elemReg)
 			_, err := c.compileNode(elem, elemReg)
 			if err != nil {
+				c.regAlloc.Free(elemReg)
 				return BadRegister, err
 			}
 
 			// Create a temporary single-element array and spread it
 			singleElemArrayReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, singleElemArrayReg)
 			c.emitOpCode(vm.OpMakeArray, line)
 			c.emitByte(byte(singleElemArrayReg)) // DestReg: temporary array
 			c.emitByte(byte(elemReg))            // StartReg: single element
 			c.emitByte(1)                        // Count: 1 element
 
+			// Free elemReg - no longer needed after MakeArray
+			c.regAlloc.Free(elemReg)
+
 			// Spread the single-element array into the result
 			c.emitOpCode(vm.OpArraySpread, line)
 			c.emitByte(byte(hint))               // DestReg: result array (modified in place)
 			c.emitByte(byte(singleElemArrayReg)) // SrcReg: single-element array
+
+			// Free singleElemArrayReg - no longer needed after spread
+			c.regAlloc.Free(singleElemArrayReg)
 		}
 	}
 
@@ -637,26 +647,20 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 	debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
 	line := parser.GetTokenFromNode(node).Line
 
-	// Track temporary registers for cleanup
-	var tempRegs []Register
-	defer func() {
-		for _, reg := range tempRegs {
-			c.regAlloc.Free(reg)
-		}
-	}()
-
 	// 1. Create an empty object in hint register
 	c.emitMakeEmptyObject(hint, line)
 
 	// 2. Set properties one by one
+	// NOTE: We free registers eagerly after each property to avoid exhausting
+	// registers for objects with many properties (e.g., 1000+ properties in minified code)
 	for _, prop := range node.Properties {
 		// Check if this is a spread element
 		if spreadElement, isSpread := prop.Key.(*parser.SpreadElement); isSpread {
 			// Handle spread syntax: {...obj}
 			spreadReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, spreadReg)
 			_, err := c.compileNode(spreadElement.Argument, spreadReg)
 			if err != nil {
+				c.regAlloc.Free(spreadReg)
 				return BadRegister, err
 			}
 
@@ -665,10 +669,20 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			c.emitByte(byte(hint))      // DestReg: result object (modified in place)
 			c.emitByte(byte(spreadReg)) // SrcReg: object to spread
 
+			// Free spreadReg immediately - we're done with it
+			c.regAlloc.Free(spreadReg)
 			continue
 		}
 
 		// Regular property: compile key and value
+		// Track registers to free at end of this property
+		var regsToFree []Register
+		freePropertyRegs := func() {
+			for _, reg := range regsToFree {
+				c.regAlloc.Free(reg)
+			}
+		}
+
 		var keyConstIdx uint16 = 0xFFFF // Invalid index marker
 		var isComputedKey bool = false
 		var keyReg Register
@@ -692,41 +706,44 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			// BEFORE evaluating the value expression (important for side effects)
 			isComputedKey = true
 			keyExprReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, keyExprReg)
 			_, err := c.compileNode(keyNode.Expr, keyExprReg)
 			if err != nil {
+				c.regAlloc.Free(keyExprReg)
 				return BadRegister, err
 			}
 			// Convert to property key immediately (calls toString() if object)
 			keyReg = c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, keyReg)
+			regsToFree = append(regsToFree, keyReg) // keyReg needed until property is set
 			c.emitOpCode(vm.OpToPropertyKey, line)
 			c.emitByte(byte(keyReg))
 			c.emitByte(byte(keyExprReg))
+			c.regAlloc.Free(keyExprReg) // keyExprReg no longer needed after ToPropertyKey
 		default:
 			// Handle other computed expressions directly (like InfixExpression)
 			isComputedKey = true
 			keyExprReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, keyExprReg)
 			_, err := c.compileNode(keyNode, keyExprReg)
 			if err != nil {
+				c.regAlloc.Free(keyExprReg)
 				return BadRegister, err
 			}
 			// Convert to property key immediately (calls toString() if object)
 			keyReg = c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, keyReg)
+			regsToFree = append(regsToFree, keyReg) // keyReg needed until property is set
 			c.emitOpCode(vm.OpToPropertyKey, line)
 			c.emitByte(byte(keyReg))
 			c.emitByte(byte(keyExprReg))
+			c.regAlloc.Free(keyExprReg) // keyExprReg no longer needed after ToPropertyKey
 		}
 
 		// Handle MethodDefinition (getters/setters) specially
 		if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
 			// Compile the function value
 			valueReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, valueReg)
+			regsToFree = append(regsToFree, valueReg)
 			_, err := c.compileNode(methodDef.Value, valueReg)
 			if err != nil {
+				freePropertyRegs()
 				return BadRegister, err
 			}
 
@@ -738,12 +755,12 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 					if methodDef.Kind == "getter" {
 						getterReg = valueReg
 						setterReg = c.regAlloc.Alloc()
-						tempRegs = append(tempRegs, setterReg)
+						regsToFree = append(regsToFree, setterReg)
 						c.emitLoadUndefined(setterReg, line)
 					} else { // setter
 						setterReg = valueReg
 						getterReg = c.regAlloc.Alloc()
-						tempRegs = append(tempRegs, getterReg)
+						regsToFree = append(regsToFree, getterReg)
 						c.emitLoadUndefined(getterReg, line)
 					}
 					c.emitOpCode(vm.OpDefineAccessorDynamic, line)
@@ -752,6 +769,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 					c.emitByte(byte(setterReg)) // Setter register
 					c.emitByte(byte(keyReg))    // Name register (computed at runtime)
 					debugPrintf("--- OL MethodDefinition: Defined dynamic %s accessor\n", methodDef.Kind)
+					freePropertyRegs()
 					continue
 				}
 			} else if isComputedKey {
@@ -759,6 +777,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				// Use OpDefineMethodComputedEnumerable to set [[HomeObject]] and make enumerable
 				// (object literal methods are enumerable, and need [[HomeObject]] for super)
 				c.emitDefineMethodComputedEnumerable(hint, valueReg, keyReg, line)
+				freePropertyRegs()
 				continue
 			}
 
@@ -774,6 +793,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			case *parser.NumberLiteral:
 				propName = keyNode.TokenLiteral()
 			default:
+				freePropertyRegs()
 				return BadRegister, NewCompileError(prop.Key, "unsupported key type for getter/setter")
 			}
 
@@ -784,12 +804,12 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				if methodDef.Kind == "getter" {
 					getterReg = valueReg
 					setterReg = c.regAlloc.Alloc()
-					tempRegs = append(tempRegs, setterReg)
+					regsToFree = append(regsToFree, setterReg)
 					c.emitLoadUndefined(setterReg, line)
 				} else { // setter
 					setterReg = valueReg
 					getterReg = c.regAlloc.Alloc()
-					tempRegs = append(tempRegs, getterReg)
+					regsToFree = append(regsToFree, getterReg)
 					c.emitLoadUndefined(getterReg, line)
 				}
 				nameIdx := c.chunk.AddConstant(vm.String(propName))
@@ -802,12 +822,14 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				c.emitDefineMethodEnumerable(hint, valueReg, storeNameIdx, line)
 				debugPrintf("--- OL MethodDefinition: Defined enumerable method '%s' with [[HomeObject]]\n", propName)
 			}
+			freePropertyRegs()
 		} else {
 			// Regular property value
 			valueReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, valueReg)
+			regsToFree = append(regsToFree, valueReg)
 			_, err := c.compileNode(prop.Value, valueReg)
 			if err != nil {
+				freePropertyRegs()
 				return BadRegister, err
 			}
 			debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
@@ -833,6 +855,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 						c.emitByte(byte(hint))     // Object register
 						c.emitByte(byte(valueReg)) // Prototype value register
 						debugPrintf("--- OL: Emitted OpSetPrototype for __proto__: value\n")
+						freePropertyRegs()
 						continue
 					}
 				}
@@ -859,6 +882,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				// including accessors (e.g., { get foo() {}, foo: 1 } - foo becomes data property)
 				c.emitDefineDataProperty(hint, valueReg, keyConstIdx, line)
 			}
+			freePropertyRegs()
 		}
 	}
 

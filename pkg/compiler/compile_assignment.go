@@ -47,7 +47,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	var identInfo struct { // Info needed to store back to identifier
 		targetReg     Register
 		isUpvalue     bool
-		upvalueIndex  uint8
+		upvalueIndex  uint16 // 16-bit to support large closures (up to 65535 upvalues)
 		isGlobal      bool   // Track if this is a global variable
 		globalIdx     uint16 // Direct global index instead of name constant index
 		isCallerLocal bool   // Track if this is a caller's local (for direct eval)
@@ -176,9 +176,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
 					currentValueReg = c.regAlloc.Alloc() // Allocate temporary reg for current value
 					tempRegs = append(tempRegs, currentValueReg)
-					c.emitOpCode(vm.OpLoadFree, line)
-					c.emitByte(byte(currentValueReg))  // Destination register
-					c.emitByte(identInfo.upvalueIndex) // Upvalue index
+					c.emitLoadFree(currentValueReg, identInfo.upvalueIndex, line)
 				} else {
 					// Variable in outer block scope of same function (or at top level): access directly via register
 					identInfo.targetReg = symbolRef.Register

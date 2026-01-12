@@ -1451,9 +1451,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// True local recursive call - needs upvalue capture
 				debugPrintf("// DEBUG Identifier '%s': Recursive call to LOCAL, using upvalue\n", node.Value)
 				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-				c.emitOpCode(vm.OpLoadFree, node.Token.Line)
-				c.emitByte(byte(hint))
-				c.emitByte(byte(freeVarIndex))
+				c.emitLoadFree(hint, freeVarIndex, node.Token.Line)
 			}
 		} else if symbolRef.IsGlobal {
 			// This is a global variable, use OpGetGlobal
@@ -1484,9 +1482,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// Variable is defined in an outer function's scope (true closure/upvalue case)
 				// Use OpLoadFree to access it via closure mechanism
 				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
-				c.emitOpCode(vm.OpLoadFree, node.Token.Line)
-				c.emitByte(byte(hint))
-				c.emitByte(byte(freeVarIndex))
+				c.emitLoadFree(hint, freeVarIndex, node.Token.Line)
 			} else if symbolRef.IsSpilled {
 				// Variable is spilled (stored in spill slot, not a register)
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, SPILLED variable in outer block scope, spillIdx=%d\n", node.Value, symbolRef.SpillIndex)
@@ -1934,26 +1930,26 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 
 // addFreeSymbol adds a symbol identified as a free variable to the compiler's list.
 // It ensures the symbol is added only once and returns its index in the freeSymbols slice.
-func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint8 { // Assuming max 256 free vars for now
-	debugPrintf("// DEBUG addFreeSymbol: Adding '%s' as free variable (Register: R%d)\n", symbol.Name, symbol.Register) // <<< ADDED
+// Returns a uint16 to support up to 65535 free variables (for large codebases like TSC).
+func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint16 {
+	debugPrintf("// DEBUG addFreeSymbol: Adding '%s' as free variable (Register: R%d)\n", symbol.Name, symbol.Register)
 	for i, free := range c.freeSymbols {
 		// Compare by name and register instead of pointer comparison
 		// This prevents duplicate upvalues for the same variable
 		if free.Name == symbol.Name && free.Register == symbol.Register {
-			debugPrintf("// DEBUG addFreeSymbol: Symbol '%s' already exists at index %d (REUSING)\n", symbol.Name, i) // <<< UPDATED
-			return uint8(i)
+			debugPrintf("// DEBUG addFreeSymbol: Symbol '%s' already exists at index %d (REUSING)\n", symbol.Name, i)
+			return uint16(i)
 		}
 	}
-	// Check if we exceed limit (important for OpLoadFree operand size)
-	if len(c.freeSymbols) >= 256 {
+	// Check if we exceed limit (16-bit max for upvalue count in OpClosure16)
+	if len(c.freeSymbols) >= 65535 {
 		// Handle error: too many free variables
-		// For now, let's panic or add an error; proper error handling needed
-		c.errors = append(c.errors, NewCompileError(node, "compiler: too many free variables in function"))
-		return 255 // Indicate error state, maybe?
+		c.errors = append(c.errors, NewCompileError(node, "compiler: too many free variables in function (max 65535)"))
+		return 65535 // Indicate error state
 	}
 	c.freeSymbols = append(c.freeSymbols, symbol)
-	debugPrintf("// DEBUG addFreeSymbol: Added '%s' at index %d (total free symbols: %d)\n", symbol.Name, len(c.freeSymbols)-1, len(c.freeSymbols)) // <<< ADDED
-	return uint8(len(c.freeSymbols) - 1)
+	debugPrintf("// DEBUG addFreeSymbol: Added '%s' at index %d (total free symbols: %d)\n", symbol.Name, len(c.freeSymbols)-1, len(c.freeSymbols))
+	return uint16(len(c.freeSymbols) - 1)
 }
 
 // SetCallerScopeDesc sets the caller's scope descriptor for direct eval compilation.
@@ -2145,7 +2141,7 @@ func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInf
 		info := identInfo.(struct {
 			targetReg    Register
 			isUpvalue    bool
-			upvalueIndex uint8
+			upvalueIndex uint16 // 16-bit to support large closures
 			isGlobal     bool
 			globalIndex  uint16
 		})
@@ -2312,11 +2308,22 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 		}
 	}
 
-	// PHASE 2: Now emit OpClosure with all upvalue descriptors immediately following
-	c.emitOpCode(vm.OpClosure, line)
-	c.emitByte(byte(destReg))
-	c.emitUint16(funcConstIndex)
-	c.emitByte(byte(len(freeSymbols)))
+	// PHASE 2: Now emit OpClosure (or OpClosure16 for >255 upvalues) with all upvalue descriptors
+	upvalueCount := len(freeSymbols)
+	if upvalueCount > 255 {
+		// Use OpClosure16 for large closures (16-bit upvalue count)
+		c.emitOpCode(vm.OpClosure16, line)
+		c.emitByte(byte(destReg))
+		c.emitUint16(funcConstIndex)
+		c.emitByte(byte(upvalueCount >> 8))   // High byte of upvalue count
+		c.emitByte(byte(upvalueCount & 0xFF)) // Low byte of upvalue count
+	} else {
+		// Use standard OpClosure (8-bit upvalue count)
+		c.emitOpCode(vm.OpClosure, line)
+		c.emitByte(byte(destReg))
+		c.emitUint16(funcConstIndex)
+		c.emitByte(byte(upvalueCount))
+	}
 
 	// Emit all upvalue descriptors
 	for i, desc := range upvalueDescriptors {
@@ -2403,11 +2410,22 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 		}
 	}
 
-	// PHASE 2: Now emit OpClosure with all upvalue descriptors immediately following
-	c.emitOpCode(vm.OpClosure, line)
-	c.emitByte(byte(destReg))
-	c.emitUint16(funcConstIndex)
-	c.emitByte(byte(len(freeSymbols)))
+	// PHASE 2: Now emit OpClosure (or OpClosure16 for >255 upvalues) with all upvalue descriptors
+	upvalueCount := len(freeSymbols)
+	if upvalueCount > 255 {
+		// Use OpClosure16 for large closures (16-bit upvalue count)
+		c.emitOpCode(vm.OpClosure16, line)
+		c.emitByte(byte(destReg))
+		c.emitUint16(funcConstIndex)
+		c.emitByte(byte(upvalueCount >> 8))   // High byte of upvalue count
+		c.emitByte(byte(upvalueCount & 0xFF)) // Low byte of upvalue count
+	} else {
+		// Use standard OpClosure (8-bit upvalue count)
+		c.emitOpCode(vm.OpClosure, line)
+		c.emitByte(byte(destReg))
+		c.emitUint16(funcConstIndex)
+		c.emitByte(byte(upvalueCount))
+	}
 
 	// Emit all upvalue descriptors
 	for i, desc := range upvalueDescriptors {
