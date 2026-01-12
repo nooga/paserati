@@ -72,11 +72,15 @@ async function runTests() {
             "X-Custom": "value"
         });
 
-        const entries = headers.entries();
-        console.log("Entries:", entries);
-        console.log("Entries length:", entries.length);
+        // entries() returns an iterator, consume with for...of
+        let count = 0;
+        for (const [key, value] of headers.entries()) {
+            console.log("Entry:", key, "=", value);
+            count++;
+        }
+        console.log("Entry count:", count);
 
-        if (entries.length >= 2) {
+        if (count >= 2) {
             console.log("Headers.entries test passed");
             passed++;
         } else {
@@ -96,12 +100,21 @@ async function runTests() {
             "Authorization": "Bearer token"
         });
 
-        const keys = headers.keys();
-        const values = headers.values();
-        console.log("Keys:", keys);
-        console.log("Values:", values);
+        // keys() and values() return iterators, consume with for...of
+        let keyCount = 0;
+        for (const key of headers.keys()) {
+            console.log("Key:", key);
+            keyCount++;
+        }
 
-        if (keys.length >= 2 && values.length >= 2) {
+        let valueCount = 0;
+        for (const value of headers.values()) {
+            console.log("Value:", value);
+            valueCount++;
+        }
+        console.log("Key count:", keyCount, "Value count:", valueCount);
+
+        if (keyCount >= 2 && valueCount >= 2) {
             console.log("Headers.keys/values test passed");
             passed++;
         } else {
