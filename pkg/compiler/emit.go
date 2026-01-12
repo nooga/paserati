@@ -58,18 +58,34 @@ func (c *Compiler) emitMove(dest, src Register, line int) {
 
 // emitLoadSpill loads a value from a spill slot into a register.
 // Used when accessing a spilled variable.
-func (c *Compiler) emitLoadSpill(dest Register, spillIdx uint8, line int) {
-	c.emitOpCode(vm.OpLoadSpill, line)
-	c.emitByte(byte(dest))
-	c.emitByte(spillIdx)
+// Uses 8-bit opcode for indices 0-255, 16-bit opcode for larger indices.
+func (c *Compiler) emitLoadSpill(dest Register, spillIdx uint16, line int) {
+	if spillIdx <= 255 {
+		c.emitOpCode(vm.OpLoadSpill, line)
+		c.emitByte(byte(dest))
+		c.emitByte(byte(spillIdx))
+	} else {
+		c.emitOpCode(vm.OpLoadSpill16, line)
+		c.emitByte(byte(dest))
+		c.emitByte(byte(spillIdx >> 8))   // High byte
+		c.emitByte(byte(spillIdx & 0xFF)) // Low byte
+	}
 }
 
 // emitStoreSpill stores a register value into a spill slot.
 // Used when initializing or assigning to a spilled variable.
-func (c *Compiler) emitStoreSpill(spillIdx uint8, src Register, line int) {
-	c.emitOpCode(vm.OpStoreSpill, line)
-	c.emitByte(spillIdx)
-	c.emitByte(byte(src))
+// Uses 8-bit opcode for indices 0-255, 16-bit opcode for larger indices.
+func (c *Compiler) emitStoreSpill(spillIdx uint16, src Register, line int) {
+	if spillIdx <= 255 {
+		c.emitOpCode(vm.OpStoreSpill, line)
+		c.emitByte(byte(spillIdx))
+		c.emitByte(byte(src))
+	} else {
+		c.emitOpCode(vm.OpStoreSpill16, line)
+		c.emitByte(byte(spillIdx >> 8))   // High byte
+		c.emitByte(byte(spillIdx & 0xFF)) // Low byte
+		c.emitByte(byte(src))
+	}
 }
 
 func (c *Compiler) emitReturn(src Register, line int) {

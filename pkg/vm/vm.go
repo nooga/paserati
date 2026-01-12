@@ -3135,12 +3135,21 @@ startExecution:
 			// Capture types:
 			//   0 = CaptureFromUpvalue: from enclosing closure's upvalues
 			//   1 = CaptureFromRegister: from register in current frame
-			//   2 = CaptureFromSpill: from spill slot in current frame (creates closed upvalue)
+			//   2 = CaptureFromSpill: from spill slot in current frame (8-bit index)
+			//   3 = CaptureFromSpill16: from spill slot with 16-bit index (for indices > 255)
 			upvalues := make([]*Upvalue, upvalueCount)
 			for i := 0; i < upvalueCount; i++ {
 				captureType := code[ip]
-				index := int(code[ip+1])
-				ip += 2
+				ip++
+
+				var index int
+				if captureType == 3 { // CaptureFromSpill16 uses 16-bit index
+					index = int(code[ip])<<8 | int(code[ip+1])
+					ip += 2
+				} else {
+					index = int(code[ip])
+					ip++
+				}
 
 				switch captureType {
 				case 1: // CaptureFromRegister
@@ -3153,7 +3162,7 @@ startExecution:
 					// Pass pointer to the stack slot (register) itself.
 					location := &registers[index]
 					upvalues[i] = vm.captureUpvalue(location)
-				case 2: // CaptureFromSpill
+				case 2: // CaptureFromSpill (8-bit index)
 					// Capture from spill slot - capture a pointer like we do for registers
 					if index >= len(frame.spillSlots) {
 						frame.ip = ip
@@ -3161,6 +3170,15 @@ startExecution:
 						return status, Undefined
 					}
 					// Pass pointer to the spill slot so changes are visible
+					location := &frame.spillSlots[index]
+					upvalues[i] = vm.captureUpvalue(location)
+				case 3: // CaptureFromSpill16 (16-bit index)
+					// Capture from spill slot with 16-bit index
+					if index >= len(frame.spillSlots) {
+						frame.ip = ip
+						status := vm.runtimeError("Invalid spill slot index %d for upvalue capture.", index)
+						return status, Undefined
+					}
 					location := &frame.spillSlots[index]
 					upvalues[i] = vm.captureUpvalue(location)
 				default: // 0 = CaptureFromUpvalue
@@ -7279,6 +7297,32 @@ startExecution:
 				// Spill slot not available - this would be a compiler bug
 				frame.ip = ip
 				vm.runtimeError("OpStoreSpill: invalid spill slot index %d", spillIdx)
+				return InterpretRuntimeError, Undefined
+			}
+
+		case OpLoadSpill16:
+			// Load from spill slot into register with 16-bit index: Rx <- spillSlots[spillIdx]
+			destReg := code[ip]
+			spillIdx := uint16(code[ip+1])<<8 | uint16(code[ip+2])
+			ip += 3
+			if frame.spillSlots != nil && int(spillIdx) < len(frame.spillSlots) {
+				registers[destReg] = frame.spillSlots[spillIdx]
+			} else {
+				frame.ip = ip
+				vm.runtimeError("OpLoadSpill16: invalid spill slot index %d", spillIdx)
+				return InterpretRuntimeError, Undefined
+			}
+
+		case OpStoreSpill16:
+			// Store register into spill slot with 16-bit index: spillSlots[spillIdx] <- Rx
+			spillIdx := uint16(code[ip])<<8 | uint16(code[ip+1])
+			srcReg := code[ip+2]
+			ip += 3
+			if frame.spillSlots != nil && int(spillIdx) < len(frame.spillSlots) {
+				frame.spillSlots[spillIdx] = registers[srcReg]
+			} else {
+				frame.ip = ip
+				vm.runtimeError("OpStoreSpill16: invalid spill slot index %d", spillIdx)
 				return InterpretRuntimeError, Undefined
 			}
 

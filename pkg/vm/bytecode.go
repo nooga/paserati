@@ -240,8 +240,12 @@ const (
 	// --- Register Spilling Support ---
 	// When a function has more local variables than available registers (255 limit),
 	// some variables are "spilled" to a spillSlots array. These opcodes load/store spilled values.
-	OpLoadSpill  OpCode = 130 // Rx SpillIdx: Load from spillSlots[SpillIdx] into register Rx
-	OpStoreSpill OpCode = 131 // SpillIdx Rx: Store register Rx into spillSlots[SpillIdx]
+	OpLoadSpill  OpCode = 130 // Rx SpillIdx: Load from spillSlots[SpillIdx] into register Rx (8-bit index)
+	OpStoreSpill OpCode = 131 // SpillIdx Rx: Store register Rx into spillSlots[SpillIdx] (8-bit index)
+
+	// 16-bit spill slot opcodes for functions with more than 255 spilled variables
+	OpLoadSpill16  OpCode = 132 // Rx SpillIdxHi SpillIdxLo: Load from spillSlots[SpillIdx] into register Rx (16-bit index)
+	OpStoreSpill16 OpCode = 133 // SpillIdxHi SpillIdxLo Rx: Store register Rx into spillSlots[SpillIdx] (16-bit index)
 )
 
 // String returns a human-readable name for the OpCode.
@@ -523,6 +527,10 @@ func (op OpCode) String() string {
 		return "OpLoadSpill"
 	case OpStoreSpill:
 		return "OpStoreSpill"
+	case OpLoadSpill16:
+		return "OpLoadSpill16"
+	case OpStoreSpill16:
+		return "OpStoreSpill16"
 
 	// Type guards
 	case OpTypeGuardIterable:
@@ -1006,6 +1014,28 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		srcReg := c.Code[offset+2]
 		builder.WriteString(fmt.Sprintf("%-16s Spill[%d], R%d\n", "OpStoreSpill", spillIdx, srcReg))
 		return offset + 3
+
+	case OpLoadSpill16:
+		// Rx SpillIdxHi SpillIdxLo: Load from spillSlots[SpillIdx] into register Rx (16-bit index)
+		if offset+3 >= len(c.Code) {
+			builder.WriteString("OpLoadSpill16 (missing operands)\n")
+			return offset + 1
+		}
+		destReg := c.Code[offset+1]
+		spillIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+		builder.WriteString(fmt.Sprintf("%-16s R%d, Spill[%d]\n", "OpLoadSpill16", destReg, spillIdx))
+		return offset + 4
+
+	case OpStoreSpill16:
+		// SpillIdxHi SpillIdxLo Rx: Store register Rx into spillSlots[SpillIdx] (16-bit index)
+		if offset+3 >= len(c.Code) {
+			builder.WriteString("OpStoreSpill16 (missing operands)\n")
+			return offset + 1
+		}
+		spillIdx := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+		srcReg := c.Code[offset+3]
+		builder.WriteString(fmt.Sprintf("%-16s Spill[%d], R%d\n", "OpStoreSpill16", spillIdx, srcReg))
+		return offset + 4
 
 	case OpArrayCopy:
 		// Rx, DestOffset(16), StartReg, Count

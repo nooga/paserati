@@ -62,7 +62,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Use existing predefined register if present
 			targetReg := valueReg
 			useSpilling := false
-			var spillIdx uint8
+			var spillIdx uint16
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 				targetReg = sym.Register
 			} else {

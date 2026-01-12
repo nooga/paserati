@@ -11,8 +11,8 @@ type Symbol struct {
 	IsGlobal    bool     // True if this is a global variable
 	GlobalIndex uint16   // Index in global array (only valid if IsGlobal is true)
 	// Spill support: when register pressure is too high, variables can be spilled to memory
-	IsSpilled  bool  // True if this variable has been spilled to spillSlots
-	SpillIndex uint8 // Index in the function's spillSlots array (only valid if IsSpilled)
+	IsSpilled  bool   // True if this variable has been spilled to spillSlots
+	SpillIndex uint16 // Index in the function's spillSlots array (only valid if IsSpilled)
 }
 
 // WithObjectInfo tracks information about a with object in the compiler
@@ -65,7 +65,7 @@ func (st *SymbolTable) DefineGlobal(name string, globalIndex uint16) Symbol {
 
 // DefineSpilled adds a new spilled symbol to the *current* scope's table.
 // Used when register allocation fails and the variable is stored in a spill slot.
-func (st *SymbolTable) DefineSpilled(name string, spillIndex uint8) Symbol {
+func (st *SymbolTable) DefineSpilled(name string, spillIndex uint16) Symbol {
 	symbol := Symbol{Name: name, IsGlobal: false, IsSpilled: true, SpillIndex: spillIndex}
 	st.store[name] = symbol
 	return symbol
@@ -108,7 +108,7 @@ func (st *SymbolTable) UpdateRegister(name string, newRegister Register) {
 
 // MarkSpilled marks a symbol as spilled to a spill slot.
 // The symbol's original register can be reused after spilling.
-func (st *SymbolTable) MarkSpilled(name string, spillIndex uint8) {
+func (st *SymbolTable) MarkSpilled(name string, spillIndex uint16) {
 	symbol, ok := st.store[name]
 	if !ok {
 		panic(fmt.Sprintf("Symbol '%s' not found in current scope for spill marking", name))

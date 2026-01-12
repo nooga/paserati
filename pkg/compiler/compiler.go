@@ -32,8 +32,12 @@ const (
 	CaptureFromRegister UpvalueCaptureType = 1
 
 	// CaptureFromSpill captures from a spill slot in the current call frame.
-	// The index is the spill slot index. The VM creates a closed upvalue directly.
+	// The index is the spill slot index (8-bit, 0-255). The VM creates a closed upvalue directly.
 	CaptureFromSpill UpvalueCaptureType = 2
+
+	// CaptureFromSpill16 captures from a spill slot with a 16-bit index (256-65535).
+	// Used when spill slot index exceeds 255. Requires 2 bytes for the index.
+	CaptureFromSpill16 UpvalueCaptureType = 3
 )
 
 // getExportSpecName extracts the name string from an export specifier's Local or Exported field
@@ -296,7 +300,7 @@ type Compiler struct {
 	parameterNames map[string]bool // Set of parameter names for current function (for var hoisting)
 
 	// --- Register Spilling Support ---
-	nextSpillSlot uint8 // Next available spill slot index (0-254)
+	nextSpillSlot uint16 // Next available spill slot index (0-65534)
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -338,9 +342,9 @@ func (c *Compiler) SetHeapAlloc(heapAlloc *HeapAlloc) {
 }
 
 // AllocSpillSlot allocates a new spill slot for storing a variable when registers are exhausted.
-// Returns the spill slot index (0-254). Panics if spill slots are exhausted.
-func (c *Compiler) AllocSpillSlot() uint8 {
-	if c.nextSpillSlot == 255 {
+// Returns the spill slot index (0-65534). Panics if spill slots are exhausted.
+func (c *Compiler) AllocSpillSlot() uint16 {
+	if c.nextSpillSlot == 65535 {
 		panic("Compiler Error: Ran out of spill slots!")
 	}
 	slot := c.nextSpillSlot
@@ -2259,7 +2263,7 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 	// PHASE 1: Collect upvalue descriptors for all free symbols.
 	type upvalueInfo struct {
 		captureType UpvalueCaptureType
-		index       byte
+		index       uint16 // Can be register (0-255), upvalue index (0-255), or spill index (0-65535)
 	}
 	upvalueDescriptors := make([]upvalueInfo, len(freeSymbols))
 
@@ -2269,7 +2273,7 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 		// Check for self-capture
 		if freeSym.Register == nilRegister && funcNameForLookup != "" && freeSym.Name == funcNameForLookup {
 			debugPrintf("// [emitClosure SelfCapture] Symbol '%s' is self-reference, will capture from destReg=R%d\n", freeSym.Name, destReg)
-			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(destReg)}
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: uint16(destReg)}
 			continue
 		}
 
@@ -2290,17 +2294,21 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 				// Spilled variable: capture directly from spill slot
 				// The VM will create a closed upvalue with the spilled value
 				debugPrintf("// [emitClosure] Free '%s' is SPILLED (slot %d), will capture from spill slot\n", freeSym.Name, enclosingSymbol.SpillIndex)
-				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill, index: enclosingSymbol.SpillIndex}
+				if enclosingSymbol.SpillIndex <= 255 {
+					upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill, index: enclosingSymbol.SpillIndex}
+				} else {
+					upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill16, index: enclosingSymbol.SpillIndex}
+				}
 			} else {
 				debugPrintf("// [emitClosure] Free '%s' is Local in same function, will capture from R%d\n", freeSym.Name, enclosingSymbol.Register)
 				c.regAlloc.Pin(enclosingSymbol.Register)
-				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(enclosingSymbol.Register)}
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: uint16(enclosingSymbol.Register)}
 			}
 		} else {
 			// Variable is from an outer function's scope
 			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
 			debugPrintf("// [emitClosure] Free '%s' is from Outer function, upvalue index=%d\n", freeSym.Name, enclosingFreeIndex)
-			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: enclosingFreeIndex}
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: uint16(enclosingFreeIndex)}
 		}
 	}
 
@@ -2314,7 +2322,14 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 	for i, desc := range upvalueDescriptors {
 		debugPrintf("// [emitClosure] Emitting upvalue %d: captureType=%d, index=%d\n", i, desc.captureType, desc.index)
 		c.emitByte(byte(desc.captureType))
-		c.emitByte(desc.index)
+		if desc.captureType == CaptureFromSpill16 {
+			// 16-bit spill index: emit high byte then low byte
+			c.emitByte(byte(desc.index >> 8))
+			c.emitByte(byte(desc.index & 0xFF))
+		} else {
+			// 8-bit index for registers, upvalues, and small spill indices
+			c.emitByte(byte(desc.index))
+		}
 	}
 
 	debugPrintf("// [emitClosure %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
@@ -2341,7 +2356,7 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 	// PHASE 1: Collect upvalue descriptors for all free symbols.
 	type upvalueInfo struct {
 		captureType UpvalueCaptureType
-		index       byte
+		index       uint16 // Can be register (0-255), upvalue index (0-255), or spill index (0-65535)
 	}
 	upvalueDescriptors := make([]upvalueInfo, len(freeSymbols))
 
@@ -2351,7 +2366,7 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 		// Check for self-capture
 		if freeSym.Register == nilRegister && funcNameForLookup != "" && freeSym.Name == funcNameForLookup {
 			debugPrintf("// [emitClosureGeneric SelfCapture] Symbol '%s' is self-reference, will capture from destReg=R%d\n", freeSym.Name, destReg)
-			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(destReg)}
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: uint16(destReg)}
 			continue
 		}
 
@@ -2369,18 +2384,22 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 			if enclosingSymbol.IsSpilled {
 				// Spilled variable: capture directly from spill slot
 				debugPrintf("// [emitClosureGeneric] Free '%s' is SPILLED (slot %d), will capture from spill slot\n", freeSym.Name, enclosingSymbol.SpillIndex)
-				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill, index: enclosingSymbol.SpillIndex}
+				if enclosingSymbol.SpillIndex <= 255 {
+					upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill, index: enclosingSymbol.SpillIndex}
+				} else {
+					upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromSpill16, index: enclosingSymbol.SpillIndex}
+				}
 			} else {
 				debugPrintf("// [emitClosureGeneric] Free '%s' is Local in same function, will capture from R%d\n", freeSym.Name, enclosingSymbol.Register)
 				c.regAlloc.Pin(enclosingSymbol.Register)
-				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: byte(enclosingSymbol.Register)}
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: uint16(enclosingSymbol.Register)}
 			}
 		} else {
 			// Variable is from an outer function's scope
 			dummyNode := &parser.Identifier{Token: lexer.Token{}, Value: freeSym.Name}
 			enclosingFreeIndex := c.addFreeSymbol(dummyNode, &enclosingSymbol)
 			debugPrintf("// [emitClosureGeneric] Free '%s' is from Outer function, upvalue index=%d\n", freeSym.Name, enclosingFreeIndex)
-			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: enclosingFreeIndex}
+			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: uint16(enclosingFreeIndex)}
 		}
 	}
 
@@ -2394,7 +2413,14 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 	for i, desc := range upvalueDescriptors {
 		debugPrintf("// [emitClosureGeneric] Emitting upvalue %d: captureType=%d, index=%d\n", i, desc.captureType, desc.index)
 		c.emitByte(byte(desc.captureType))
-		c.emitByte(desc.index)
+		if desc.captureType == CaptureFromSpill16 {
+			// 16-bit spill index: emit high byte then low byte
+			c.emitByte(byte(desc.index >> 8))
+			c.emitByte(byte(desc.index & 0xFF))
+		} else {
+			// 8-bit index for registers, upvalues, and small spill indices
+			c.emitByte(byte(desc.index))
+		}
 	}
 
 	debugPrintf("// [emitClosureGeneric %s] Closure emitted to R%d. Set lastExprReg/Valid.\n", funcNameForLookup, destReg)
