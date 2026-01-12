@@ -357,22 +357,26 @@ func (c *Compiler) GetHeapAlloc() *HeapAlloc {
 	return c.heapAlloc
 }
 
-// isDefinedInEnclosingCompiler checks if a symbol table belongs to the enclosing compiler's scope chain.
+// isDefinedInEnclosingCompiler checks if a symbol table belongs to ANY enclosing compiler's scope chain.
 // This helps distinguish between:
 // - Variables from outer block scopes in the SAME function (return false) -> use direct register
 // - Variables from outer FUNCTION scopes (return true) -> use OpLoadFree (upvalue)
+// Note: This recursively checks ALL enclosing compilers, not just the immediate parent.
+// This is important for deeply nested closures (e.g., IIFE -> function -> arrow).
 func (c *Compiler) isDefinedInEnclosingCompiler(definingTable *SymbolTable) bool {
 	if c.enclosing == nil {
 		return false
 	}
 
-	// Walk the enclosing compiler's symbol table chain
+	// Walk the immediate enclosing compiler's symbol table chain
 	for table := c.enclosing.currentSymbolTable; table != nil; table = table.Outer {
 		if table == definingTable {
 			return true
 		}
 	}
-	return false
+
+	// Recursively check grandparent and beyond
+	return c.enclosing.isDefinedInEnclosingCompiler(definingTable)
 }
 
 // EnableModuleMode enables module-aware compilation with binding resolution
