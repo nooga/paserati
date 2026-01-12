@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+	"weak"
 )
 
 // cleanExponentialFormat removes leading zeros from exponent to match JS format
@@ -72,6 +73,8 @@ const (
 	TypeRegExp
 	TypeMap
 	TypeSet
+	TypeWeakMap
+	TypeWeakSet
 	TypeArrayBuffer
 	TypeTypedArray
 	TypeProxy
@@ -123,6 +126,10 @@ func (vt ValueType) String() string {
 		return "map"
 	case TypeSet:
 		return "set"
+	case TypeWeakMap:
+		return "weakmap"
+	case TypeWeakSet:
+		return "weakset"
 	case TypeArrayBuffer:
 		return "arraybuffer"
 	case TypeTypedArray:
@@ -235,6 +242,31 @@ type SetObject struct {
 	Object
 	size   int
 	values map[string]Value // key -> original value (for value iteration)
+}
+
+// WeakMapEntry holds a weak reference to the key and a strong reference to the value
+type WeakMapEntry struct {
+	keyWeak weak.Pointer[byte] // Weak reference to check if key is still alive
+	value   Value              // Strong reference to the value
+}
+
+// WeakMapObject implements ECMAScript WeakMap using Go's weak package.
+// Keys must be objects (not primitives) and are held weakly, allowing GC.
+type WeakMapObject struct {
+	Object
+	entries map[uintptr]*WeakMapEntry // pointer address -> entry
+}
+
+// WeakSetEntry holds a weak reference to a value
+type WeakSetEntry struct {
+	valueWeak weak.Pointer[byte] // Weak reference to check if value is still alive
+}
+
+// WeakSetObject implements ECMAScript WeakSet using Go's weak package.
+// Values must be objects and are held weakly, allowing GC.
+type WeakSetObject struct {
+	Object
+	entries map[uintptr]*WeakSetEntry // pointer address -> entry
 }
 
 type ProxyObject struct {
@@ -443,6 +475,22 @@ func NewProxy(target Value, handler Value) Value {
 	return Value{typ: TypeProxy, obj: unsafe.Pointer(proxyObj)}
 }
 
+// NewWeakMap creates a new WeakMap object
+func NewWeakMap() Value {
+	wmObj := &WeakMapObject{
+		entries: make(map[uintptr]*WeakMapEntry),
+	}
+	return Value{typ: TypeWeakMap, obj: unsafe.Pointer(wmObj)}
+}
+
+// NewWeakSet creates a new WeakSet object
+func NewWeakSet() Value {
+	wsObj := &WeakSetObject{
+		entries: make(map[uintptr]*WeakSetEntry),
+	}
+	return Value{typ: TypeWeakSet, obj: unsafe.Pointer(wsObj)}
+}
+
 // hashKey creates a unique string key for any JavaScript value
 // Uses SameValueZero equality (NaN === NaN, +0 === -0)
 func hashKey(v Value) string {
@@ -502,7 +550,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeWeakMap || v.typ == TypeWeakSet
 }
 
 func (v Value) IsDictObject() bool {
@@ -560,7 +608,8 @@ func (v Value) TypeName() string {
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeBoundFunction:
 		return "function"
 	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray, TypeProxy,
-		TypeGenerator, TypeAsyncGenerator, TypePromise, TypeMap, TypeSet, TypeArrayBuffer:
+		TypeGenerator, TypeAsyncGenerator, TypePromise, TypeMap, TypeSet, TypeArrayBuffer,
+		TypeWeakMap, TypeWeakSet:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)
@@ -677,6 +726,20 @@ func (v Value) AsProxy() *ProxyObject {
 		panic("value is not a proxy")
 	}
 	return (*ProxyObject)(v.obj)
+}
+
+func (v Value) AsWeakMap() *WeakMapObject {
+	if v.typ != TypeWeakMap {
+		panic("value is not a weakmap")
+	}
+	return (*WeakMapObject)(v.obj)
+}
+
+func (v Value) AsWeakSet() *WeakSetObject {
+	if v.typ != TypeWeakSet {
+		panic("value is not a weakset")
+	}
+	return (*WeakSetObject)(v.obj)
 }
 
 func (v Value) AsFunction() *FunctionObject {
@@ -1903,6 +1966,146 @@ func (s *SetObject) ForEach(fn func(value Value)) {
 	for _, value := range s.values {
 		fn(value)
 	}
+}
+
+// WeakMapObject methods - implements ECMAScript WeakMap using Go's weak package
+// Keys must be objects (not primitives) and are held weakly, allowing GC.
+
+// Set adds or updates a key-value pair in the WeakMap
+// Returns false if the key is not a valid object type
+func (wm *WeakMapObject) Set(key, value Value) bool {
+	// WeakMap keys must be objects
+	if !key.IsObject() {
+		return false
+	}
+
+	ptr := uintptr(key.obj)
+	// Create weak reference - cast to *byte for the weak pointer
+	weakPtr := weak.Make((*byte)(key.obj))
+
+	wm.entries[ptr] = &WeakMapEntry{
+		keyWeak: weakPtr,
+		value:   value,
+	}
+	return true
+}
+
+// Get retrieves a value from the WeakMap by key
+// Returns (Undefined, false) if key not found or key has been GC'd
+func (wm *WeakMapObject) Get(key Value) (Value, bool) {
+	if !key.IsObject() {
+		return Undefined, false
+	}
+
+	ptr := uintptr(key.obj)
+	entry, exists := wm.entries[ptr]
+	if !exists {
+		return Undefined, false
+	}
+
+	// Check if the key is still alive
+	if entry.keyWeak.Value() == nil {
+		// Key has been GC'd, clean up the entry
+		delete(wm.entries, ptr)
+		return Undefined, false
+	}
+
+	return entry.value, true
+}
+
+// Has checks if a key exists in the WeakMap
+func (wm *WeakMapObject) Has(key Value) bool {
+	if !key.IsObject() {
+		return false
+	}
+
+	ptr := uintptr(key.obj)
+	entry, exists := wm.entries[ptr]
+	if !exists {
+		return false
+	}
+
+	// Check if the key is still alive
+	if entry.keyWeak.Value() == nil {
+		// Key has been GC'd, clean up the entry
+		delete(wm.entries, ptr)
+		return false
+	}
+
+	return true
+}
+
+// Delete removes a key-value pair from the WeakMap
+// Returns true if the key was found and deleted
+func (wm *WeakMapObject) Delete(key Value) bool {
+	if !key.IsObject() {
+		return false
+	}
+
+	ptr := uintptr(key.obj)
+	if _, exists := wm.entries[ptr]; exists {
+		delete(wm.entries, ptr)
+		return true
+	}
+	return false
+}
+
+// WeakSetObject methods - implements ECMAScript WeakSet using Go's weak package
+// Values must be objects and are held weakly, allowing GC.
+
+// Add adds a value to the WeakSet
+// Returns false if the value is not a valid object type
+func (ws *WeakSetObject) Add(value Value) bool {
+	// WeakSet values must be objects
+	if !value.IsObject() {
+		return false
+	}
+
+	ptr := uintptr(value.obj)
+	// Create weak reference
+	weakPtr := weak.Make((*byte)(value.obj))
+
+	ws.entries[ptr] = &WeakSetEntry{
+		valueWeak: weakPtr,
+	}
+	return true
+}
+
+// Has checks if a value exists in the WeakSet
+func (ws *WeakSetObject) Has(value Value) bool {
+	if !value.IsObject() {
+		return false
+	}
+
+	ptr := uintptr(value.obj)
+	entry, exists := ws.entries[ptr]
+	if !exists {
+		return false
+	}
+
+	// Check if the value is still alive
+	if entry.valueWeak.Value() == nil {
+		// Value has been GC'd, clean up the entry
+		delete(ws.entries, ptr)
+		return false
+	}
+
+	return true
+}
+
+// Delete removes a value from the WeakSet
+// Returns true if the value was found and deleted
+func (ws *WeakSetObject) Delete(value Value) bool {
+	if !value.IsObject() {
+		return false
+	}
+
+	ptr := uintptr(value.obj)
+	if _, exists := ws.entries[ptr]; exists {
+		delete(ws.entries, ptr)
+		return true
+	}
+	return false
 }
 
 // NewValueFromPlainObject creates a Value from a PlainObject pointer

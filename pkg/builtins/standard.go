@@ -32,6 +32,8 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &BooleanInitializer{})
 	initializers = append(initializers, &MapInitializer{})
 	initializers = append(initializers, &SetInitializer{})
+	initializers = append(initializers, &WeakMapInitializer{})
+	initializers = append(initializers, &WeakSetInitializer{})
 	initializers = append(initializers, &RegExpInitializer{})
 	initializers = append(initializers, &ErrorInitializer{})
 	initializers = append(initializers, &TypeErrorInitializer{})

@@ -193,6 +193,8 @@ type VM struct {
 	RegExpPrototype         Value
 	MapPrototype            Value
 	SetPrototype            Value
+	WeakMapPrototype        Value
+	WeakSetPrototype        Value
 	GeneratorPrototype      Value
 	AsyncGeneratorPrototype Value
 	PromisePrototype        Value

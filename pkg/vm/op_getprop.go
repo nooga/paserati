@@ -566,6 +566,62 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return true, InterpretOK, *dest
 	}
 
+	// 10a. WeakMap objects - consult WeakMap.prototype chain for properties like get, set, has, delete
+	if objVal.Type() == TypeWeakMap {
+		proto := vm.WeakMapPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					cpo := current.AsPlainObject()
+					if v, ok := cpo.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					current = cpo.prototype
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// 10b. WeakSet objects - consult WeakSet.prototype chain for properties like add, has, delete
+	if objVal.Type() == TypeWeakSet {
+		proto := vm.WeakSetPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					cpo := current.AsPlainObject()
+					if v, ok := cpo.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					current = cpo.prototype
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
 	// 11. Generator objects
 	if objVal.Type() == TypeGenerator {
 		// Generator objects: consult Generator.prototype chain for regular properties
@@ -1092,6 +1148,70 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 	// Set: consult Set.prototype for symbol properties
 	if base.Type() == TypeSet {
 		proto := vm.SetPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// WeakMap: consult WeakMap.prototype for symbol properties
+	if base.Type() == TypeWeakMap {
+		proto := vm.WeakMapPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// WeakSet: consult WeakSet.prototype for symbol properties
+	if base.Type() == TypeWeakSet {
+		proto := vm.WeakSetPrototype
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
 			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
