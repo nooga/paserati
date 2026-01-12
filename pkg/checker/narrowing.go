@@ -407,6 +407,10 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		debugPrintf("// [TypeNarrowing] Variable '%s' not found for narrowing\n", guard.VariableName)
 		return nil
 	}
+	if originalType == nil {
+		debugPrintf("// [TypeNarrowing] Variable '%s' found but has nil type\n", guard.VariableName)
+		return nil
+	}
 
 	// Handle discriminated union narrowing (e.g., expr.kind === "num")
 	if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
@@ -449,7 +453,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	var canNarrow bool
 	var narrowedType types.Type
 
-	if originalType == types.Unknown {
+	if originalType == types.Unknown && guard.NarrowedType != nil {
 		// Unknown can be narrowed to any specific type
 		canNarrow = true
 		narrowedType = guard.NarrowedType
@@ -555,7 +559,7 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				}
 			}
 		}
-	} else if types.IsAssignable(guard.NarrowedType, originalType) {
+	} else if guard.NarrowedType != nil && types.IsAssignable(guard.NarrowedType, originalType) {
 		// Allow narrowing if the narrowed type is assignable to the original type
 		// This handles cases like narrowing 'string' to '"foo"' (literal type)
 		canNarrow = true
@@ -563,8 +567,13 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		debugPrintf("// [TypeNarrowing] Narrowing '%s' from '%s' to more specific type '%s'\n",
 			guard.VariableName, originalType.String(), guard.NarrowedType.String())
 	} else {
+		// NarrowedType might be nil for discriminated union guards that couldn't find a match
+		narrowedTypeStr := "<nil>"
+		if guard.NarrowedType != nil {
+			narrowedTypeStr = guard.NarrowedType.String()
+		}
 		debugPrintf("// [TypeNarrowing] Variable '%s' has type '%s', cannot narrow to '%s'\n",
-			guard.VariableName, originalType.String(), guard.NarrowedType.String())
+			guard.VariableName, originalType.String(), narrowedTypeStr)
 		return nil
 	}
 
@@ -694,8 +703,10 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		// Store a complement narrowing marker (we'll handle this specially in checkMemberExpression)
 		// For typeof checks, we can create a complement marker
 		// This is a simplified approach: just mark it as "not the narrowed type"
-		newEnv.narrowings[guard.VariableName+"__complement"] = guard.NarrowedType
-		debugPrintf("// [InvertedTypeNarrowing] Stored complement marker for %s\n", guard.VariableName)
+		if guard.NarrowedType != nil {
+			newEnv.narrowings[guard.VariableName+"__complement"] = guard.NarrowedType
+			debugPrintf("// [InvertedTypeNarrowing] Stored complement marker for %s\n", guard.VariableName)
+		}
 		return newEnv
 	}
 
@@ -759,8 +770,12 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 				guard.VariableName, originalType.String(), remainingType.String())
 			return narrowedEnv
 		} else {
+			narrowedTypeStr := "<nil>"
+			if guard.NarrowedType != nil {
+				narrowedTypeStr = guard.NarrowedType.String()
+			}
 			debugPrintf("// [InvertedTypeNarrowing] Union '%s' does not contain type '%s' - no inverted narrowing\n",
-				originalType.String(), guard.NarrowedType.String())
+				originalType.String(), narrowedTypeStr)
 			return nil
 		}
 	}
@@ -769,12 +784,20 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 	// (if x is string and we check x === "foo", in the else branch x is still string, just not "foo")
 	// But for typeof narrowing on unknown, the else branch is still useful
 	if originalType == types.Unknown {
+		narrowedTypeStr := "<nil>"
+		if guard.NarrowedType != nil {
+			narrowedTypeStr = guard.NarrowedType.String()
+		}
 		debugPrintf("// [InvertedTypeNarrowing] Variable '%s' remains unknown in else branch (but not %s)\n",
-			guard.VariableName, guard.NarrowedType.String())
+			guard.VariableName, narrowedTypeStr)
 		return nil // No environment change needed for unknown
 	}
 
-	debugPrintf("// [InvertedTypeNarrowing] No inverted narrowing applied for type '%s'\n", originalType.String())
+	originalTypeStr := "<nil>"
+	if originalType != nil {
+		originalTypeStr = originalType.String()
+	}
+	debugPrintf("// [InvertedTypeNarrowing] No inverted narrowing applied for type '%s'\n", originalTypeStr)
 	return nil
 }
 
