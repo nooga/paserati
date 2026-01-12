@@ -147,13 +147,24 @@ func (e *CompileError) WithCode(code string) *CompileError {
 // RuntimeError represents an error during program execution in the VM.
 type RuntimeError struct {
 	Position
-	Msg       string
-	ErrorCode string // Error code (e.g., PS4001)
-	Cause     error  // Underlying cause, if any
+	Msg          string
+	ErrorCode    string // Error code (e.g., PS4001)
+	Cause        error  // Underlying cause, if any
+	FunctionName string // Name of the function where the error occurred (empty for script level)
+	FileName     string // Name of the source file (if available)
 }
 
 func (e *RuntimeError) Error() string {
-	return fmt.Sprintf("Runtime Error at %d:%d: %s", e.Line, e.Column, e.Msg)
+	// Format: "Runtime Error at func (file:line:column): message"
+	location := ""
+	if e.FunctionName != "" && e.FunctionName != "<script>" {
+		location = fmt.Sprintf("at %s ", e.FunctionName)
+	}
+	fileName := e.FileName
+	if fileName == "" {
+		fileName = "<script>"
+	}
+	return fmt.Sprintf("Runtime Error %s(%s:%d:%d): %s", location, fileName, e.Line, e.Column, e.Msg)
 }
 func (e *RuntimeError) Pos() Position   { return e.Position }
 func (e *RuntimeError) Kind() string    { return "Runtime" }
@@ -316,8 +327,23 @@ func DisplayErrors(errors []PaseratiError, fallbackSource ...string) {
 		} else if fallbackLines != nil {
 			lines = fallbackLines
 		} else {
-			// No source available at all
-			locationInfo := colorize(ColorGray, fmt.Sprintf("    at line %d, column %d", pos.Line, pos.Column))
+			// No source available at all - format with function/file info if available
+			funcName := ""
+			fileName := "<script>"
+			if runtimeErr, ok := err.(*RuntimeError); ok {
+				if runtimeErr.FunctionName != "" && runtimeErr.FunctionName != "<script>" {
+					funcName = runtimeErr.FunctionName
+				}
+				if runtimeErr.FileName != "" {
+					fileName = runtimeErr.FileName
+				}
+			}
+			var locationInfo string
+			if funcName != "" {
+				locationInfo = colorize(ColorGray, fmt.Sprintf("    at %s (%s:%d:%d)", funcName, fileName, pos.Line, pos.Column))
+			} else {
+				locationInfo = colorize(ColorGray, fmt.Sprintf("    at %s:%d:%d", fileName, pos.Line, pos.Column))
+			}
 			fmt.Fprintf(os.Stderr, "%s\n", locationInfo)
 			fmt.Fprintln(os.Stderr) // Add a blank line
 			continue

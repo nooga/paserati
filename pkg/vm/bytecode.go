@@ -605,12 +605,13 @@ type ScopeDescriptor struct {
 type Chunk struct {
 	Code           []byte             // The bytecode instructions (OpCodes and operands)
 	Constants      []Value            // Constant pool (Now uses Value from vm package)
-	Lines          []int              // Line number corresponding to the start of each instruction
+	Lines          []int              // Line number for each byte in Code (parallel array)
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
 	IsStrict       bool               // Whether this chunk runs in strict mode
 	ScopeDesc      *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
 	MaxRegs        int                // Maximum registers needed to execute this chunk
 	NumSpillSlots  int                // Number of spill slots needed (for register overflow)
+	currentLine    int                // Current line for operand bytes (internal use)
 	// Inline caches for property access sites within this chunk, indexed by bytecode offset
 	// (the IP where the opcode starts). This avoids a global map lookup per property access.
 	propInlineCaches []*PropInlineCache
@@ -639,22 +640,27 @@ func NewChunk() *Chunk {
 }
 
 // WriteOpCode adds an opcode to the chunk.
+// The line number is tracked for error reporting.
 func (c *Chunk) WriteOpCode(op OpCode, line int) {
 	c.Code = append(c.Code, byte(op))
 	c.Lines = append(c.Lines, line)
+	c.currentLine = line // Track for subsequent operand bytes
 }
 
 // WriteByte adds a raw byte (operand) to the chunk.
-// Note: Line number is not tracked per operand, only per opcode.
+// Uses the line number from the most recent WriteOpCode call.
 func (c *Chunk) WriteByte(b byte) {
 	c.Code = append(c.Code, b)
+	c.Lines = append(c.Lines, c.currentLine) // Keep Lines parallel to Code
 }
 
 // WriteUint16 adds a 16-bit unsigned integer operand (e.g., for larger constant indices or jump offsets).
-// Encoded as Big Endian.
+// Encoded as Big Endian. Uses the line number from the most recent WriteOpCode call.
 func (c *Chunk) WriteUint16(val uint16) {
 	c.Code = append(c.Code, byte(val>>8))
+	c.Lines = append(c.Lines, c.currentLine)
 	c.Code = append(c.Code, byte(val&0xff))
+	c.Lines = append(c.Lines, c.currentLine)
 }
 
 // AddConstant adds a value to the chunk's constant pool and returns its index.

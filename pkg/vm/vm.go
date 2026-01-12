@@ -226,8 +226,11 @@ type VM struct {
 	inConstructorCall bool // true when executing a native function via OpNew
 
 	// Exception/call boundary diagnostics
-	lastThrownException       Value // remembers the last thrown exception value
-	escapedDirectCallBoundary bool  // true if unwinding skipped a direct-call frame to reach outer handler
+	lastThrownException       Value  // remembers the last thrown exception value
+	escapedDirectCallBoundary bool   // true if unwinding skipped a direct-call frame to reach outer handler
+	lastThrowLine             int    // line number where exception was thrown
+	lastThrowColumn           int    // column number where exception was thrown
+	lastThrowFuncName         string // function name where exception was thrown
 
 	// TypedArray prototypes
 	TypedArrayPrototype     Value // Abstract %TypedArray%.prototype - all typed arrays inherit from this
@@ -9585,10 +9588,20 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	// ip points to the *next* instruction, error occurred at ip-1
 	instructionPos := frame.ip - 1
 	line := 0
+	funcName := "<script>"
 
 	// Safety check for chunk and bounds before calling GetLine
 	if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.Chunk != nil {
-		chunk := frame.closure.Fn.Chunk
+		fn := frame.closure.Fn
+		chunk := fn.Chunk
+
+		// Get function name
+		if fn.Name != "" {
+			funcName = fn.Name
+		} else {
+			funcName = "<anonymous>"
+		}
+
 		// Ensure instructionPos is valid (non-negative and within bounds)
 		if instructionPos >= 0 && instructionPos < len(chunk.Lines) {
 			line = chunk.GetLine(instructionPos)
@@ -9608,14 +9621,15 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	msg := fmt.Sprintf(format, args...)
 
 	runtimeErr := &errors.RuntimeError{
-		// TODO: Get Column/StartPos/EndPos if possible later
 		Position: errors.Position{
 			Line:     line,
-			Column:   0, // Placeholder
-			StartPos: 0, // Placeholder
-			EndPos:   0, // Placeholder
+			Column:   1, // Default to column 1
+			StartPos: 0,
+			EndPos:   0,
 		},
-		Msg: msg,
+		Msg:          msg,
+		FunctionName: funcName,
+		FileName:     "<script>", // TODO: Add actual filename tracking
 	}
 	vm.errors = append(vm.errors, runtimeErr)
 

@@ -58,11 +58,20 @@ func (vm *VM) throwException(value Value) {
 		return
 	}
 
-	// If we're not already unwinding, this is a fresh throw - reset the flag
+	// If we're not already unwinding, this is a fresh throw - capture the throw location
 	if !vm.unwinding {
 		vm.unwindingCrossedNative = false
+		// Capture throw location from current frame before unwinding starts
+		if vm.frameCount > 0 {
+			vm.lastThrowLine, vm.lastThrowFuncName = vm.getFrameLineInfo(&vm.frames[vm.frameCount-1])
+			vm.lastThrowColumn = 1 // Column tracking not implemented yet
+		} else {
+			vm.lastThrowLine = 1
+			vm.lastThrowColumn = 1
+			vm.lastThrowFuncName = "<script>"
+		}
 	}
-	// If already unwinding, keep the flag (we're re-throwing after native propagation)
+	// If already unwinding, keep the flag and location (we're re-throwing after native propagation)
 
 	vm.currentException = value
 	vm.unwinding = true
@@ -258,9 +267,60 @@ func (vm *VM) handleFinallyBlock(handler *ExceptionHandler) {
 	// check for pending actions and execute them appropriately.
 }
 
+// getFrameLineInfo extracts the line number from a frame at the current instruction position
+// Returns (line, functionName) where line is 1 if no info available
+func (vm *VM) getFrameLineInfo(frame *CallFrame) (int, string) {
+	if frame == nil || frame.closure == nil || frame.closure.Fn == nil {
+		return 1, "<script>"
+	}
+
+	fn := frame.closure.Fn
+	funcName := fn.Name
+	if funcName == "" {
+		funcName = "<anonymous>"
+	}
+
+	if fn.Chunk == nil {
+		return 1, funcName
+	}
+
+	chunk := fn.Chunk
+	// IP points to the NEXT instruction, error occurred at ip-1
+	instructionPos := frame.ip - 1
+
+	if instructionPos >= 0 && instructionPos < len(chunk.Lines) {
+		return chunk.GetLine(instructionPos), funcName
+	}
+	// Fallback to ip itself if ip-1 is invalid
+	if frame.ip >= 0 && frame.ip < len(chunk.Lines) {
+		return chunk.GetLine(frame.ip), funcName
+	}
+	// Last resort: first line in chunk
+	if len(chunk.Lines) > 0 {
+		return chunk.Lines[0], funcName
+	}
+
+	return 1, funcName
+}
+
 // handleUncaughtException handles uncaught exceptions by terminating execution
 func (vm *VM) handleUncaughtException() {
 	// fmt.Printf("[DEBUG] handleUncaughtException called, exception=%s\n", vm.currentException.ToString())
+
+	// Use the stored throw location (captured in throwException before frames were popped)
+	line := vm.lastThrowLine
+	funcName := vm.lastThrowFuncName
+	column := vm.lastThrowColumn
+	if line == 0 {
+		line = 1
+	}
+	if funcName == "" {
+		funcName = "<script>"
+	}
+	if column == 0 {
+		column = 1
+	}
+
 	// For display, use proper string representation
 	var displayStr string
 	var stackTrace string
@@ -308,15 +368,18 @@ func (vm *VM) handleUncaughtException() {
 	}
 
 	// Add the uncaught exception as a runtime error (with stack trace if available)
+	// Format: "Uncaught exception: ErrorType: message" with proper location info
 	errorMsg := fmt.Sprintf("Uncaught exception: %s", displayStr)
 	if stackTrace != "" {
 		errorMsg += "\n" + stackTrace
 	}
 
-	// Create runtime error directly without the extra printing from vm.runtimeError
+	// Create runtime error with actual line and function information
 	runtimeErr := &errors.RuntimeError{
-		Position: errors.Position{Line: 1, Column: 1, StartPos: 0, EndPos: 0},
-		Msg:      errorMsg,
+		Position:     errors.Position{Line: line, Column: column, StartPos: 0, EndPos: 0},
+		Msg:          errorMsg,
+		FunctionName: funcName,
+		FileName:     "<script>", // TODO: Add actual filename tracking
 	}
 	vm.errors = append(vm.errors, runtimeErr)
 
@@ -401,10 +464,17 @@ func (vm *VM) getStackFrames() []StackFrame {
 			}
 
 			// Get current line number from chunk's line info
+			// IP points to the NEXT instruction, so use ip-1 for the current/error instruction
 			line := 1
 			column := 1
-			if fn.Chunk != nil && frame.ip >= 0 && frame.ip < len(fn.Chunk.Lines) {
-				line = fn.Chunk.Lines[frame.ip]
+			if fn.Chunk != nil {
+				instructionPos := frame.ip - 1
+				if instructionPos >= 0 && instructionPos < len(fn.Chunk.Lines) {
+					line = fn.Chunk.GetLine(instructionPos)
+				} else if frame.ip >= 0 && frame.ip < len(fn.Chunk.Lines) {
+					// Fallback to ip if ip-1 is invalid
+					line = fn.Chunk.GetLine(frame.ip)
+				}
 			}
 
 			// For now, use a placeholder filename - could be enhanced with source mapping
