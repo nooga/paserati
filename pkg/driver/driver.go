@@ -1377,8 +1377,8 @@ func (p *Paserati) preloadNativeModules(program *parser.Program) errors.Paserati
 
 // installBuiltinModules installs all built-in Paserati modules
 func installBuiltinModules(p *Paserati) {
-	// HTTP module
-	p.DeclareModule("paserati/http", httpModule)
+	// Note: fetch and Headers are now global builtins (defined in pkg/builtins/fetch_init.go)
+	// The paserati/http module is deprecated - use global fetch instead
 
 	// Add more modules here as we create them
 	// p.DeclareModule("paserati/fs", fsModule)

@@ -8402,6 +8402,14 @@ startExecution:
 					rt := vm.GetAsyncRuntime()
 					for awaitedPromise.State == PromisePending {
 						if !rt.RunUntilIdle() {
+							// No microtasks to run - check for pending external operations
+							hasPending := rt.HasPendingExternalOps()
+							if hasPending {
+								// Wait for an external operation to complete
+								// This will block until EndExternalOp is called
+								rt.WaitForExternalOp()
+								continue
+							}
 							frame.ip = ip
 							status := vm.runtimeError("Top-level await: promise remains pending with no microtasks to process")
 							return status, Undefined
@@ -8463,19 +8471,25 @@ startExecution:
 				// Promise already rejected - schedule resumption with throw as microtask
 				rejectedReason := awaitedPromise.Result
 				rt.ScheduleMicrotask(func() {
-					_, err := vm.resumeAsyncFunctionWithException(asyncPromise, rejectedReason)
+					result, err := vm.resumeAsyncFunctionWithException(asyncPromise, rejectedReason)
 					if err != nil {
 						// Exception wasn't caught - reject the async promise
 						vm.rejectPromise(asyncPromise, rejectedReason)
+					} else if asyncPromise.Frame != nil {
+						// Async function hit another await and suspended again
+						// Don't resolve - the new await's handlers will take over
+					} else {
+						// Async function completed - resolve with final value
+						vm.resolvePromise(asyncPromise, result)
 					}
-					// Note: if Frame is still set, async function caught the exception
-					// and hit another await - the new await's handlers will take over
 				})
 				return InterpretOK, Undefined
 
 			case PromisePending:
 				// Promise is pending - attach handlers for when it settles
 				// Frame state already saved above
+
+				// Register fulfillment handler
 				awaitedPromise.FulfillReactions = append(awaitedPromise.FulfillReactions, PromiseReaction{
 					Handler: Undefined, // No user handler - internal resumption
 					Resolve: func(value Value) {
@@ -8493,14 +8507,31 @@ startExecution:
 						}
 					},
 					Reject: func(reason Value) {
+						// This is called if the Resolve handler throws
+						vm.rejectPromise(asyncPromise, reason)
+					},
+				})
+
+				// Register rejection handler
+				// Note: For no-handler pass-through, triggerPromiseReactions calls Reject, not Resolve
+				awaitedPromise.RejectReactions = append(awaitedPromise.RejectReactions, PromiseReaction{
+					Handler: Undefined, // No user handler - internal resumption
+					Resolve: func(reason Value) {
+						// Not called for rejection pass-through
+					},
+					Reject: func(reason Value) {
 						// Resume async function with rejected value (it will throw)
-						_, err := vm.resumeAsyncFunctionWithException(asyncPromise, reason)
+						result, err := vm.resumeAsyncFunctionWithException(asyncPromise, reason)
 						if err != nil {
 							// Exception wasn't caught - reject the async promise
 							vm.rejectPromise(asyncPromise, reason)
+						} else if asyncPromise.Frame != nil {
+							// Async function hit another await and suspended again
+							// Don't resolve - the new await's handlers will take over
+						} else {
+							// Async function completed - resolve with final value
+							vm.resolvePromise(asyncPromise, result)
 						}
-						// Note: if Frame is still set, async function caught the exception
-						// and hit another await - the new await's handlers will take over
 					},
 				})
 
