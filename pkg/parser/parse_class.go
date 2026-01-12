@@ -29,7 +29,8 @@ func (p *Parser) isValidMethodName() bool {
 		lexer.CONTINUE, lexer.SWITCH, lexer.CASE, lexer.DEFAULT, lexer.NEW, lexer.DELETE,
 		lexer.TYPEOF, lexer.INSTANCEOF, lexer.IN, lexer.OF, lexer.THIS, lexer.SUPER,
 		lexer.AS, lexer.SATISFIES, lexer.GET, lexer.SET, lexer.ENUM, lexer.DO, lexer.VOID,
-		lexer.KEYOF, lexer.INFER, lexer.IS, lexer.FROM, lexer.TRUE, lexer.FALSE:
+		lexer.KEYOF, lexer.INFER, lexer.IS, lexer.FROM, lexer.TRUE, lexer.FALSE,
+		lexer.WITH, lexer.ASYNC, lexer.AWAIT, lexer.NULL, lexer.UNDEFINED:
 		return true
 	default:
 		return false
@@ -264,14 +265,16 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 
 		// Parse constructor, method, getter, setter, generator, or computed member
-		if p.curTokenIs(lexer.GET) {
-			// Parse getter method
+		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) {
+			// Parse getter method: get propertyName() {}
+			// But NOT if followed by '(' - that's a method named "get": get() {}
 			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				methods = append(methods, method)
 			}
-		} else if p.curTokenIs(lexer.SET) {
-			// Parse setter method
+		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) {
+			// Parse setter method: set propertyName(value) {}
+			// But NOT if followed by '(' - that's a method named "set": set() {}
 			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				methods = append(methods, method)

@@ -3013,6 +3013,9 @@ type ObjectDestructuringDeclaration struct {
 func (odd *ObjectDestructuringDeclaration) statementNode()       {}
 func (odd *ObjectDestructuringDeclaration) TokenLiteral() string { return odd.Token.Literal }
 func (odd *ObjectDestructuringDeclaration) String() string {
+	if odd == nil {
+		return "<nil ObjectDestructuringDeclaration>"
+	}
 	var out bytes.Buffer
 	out.WriteString(odd.Token.Literal)
 	out.WriteString(" ")

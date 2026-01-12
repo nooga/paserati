@@ -2065,10 +2065,15 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 	// Consume the opening slash
 	l.readChar()
 
+	// Track whether we're inside a character class [...]
+	// Inside a character class, '/' is a literal character, not the closing delimiter
+	inCharClass := false
+
 	// Read the pattern
 	for {
 		// Check for termination conditions
-		if l.ch == '/' {
+		// Only '/' outside of a character class terminates the regex
+		if l.ch == '/' && !inCharClass {
 			// Found closing slash - now read flags
 			l.readChar() // Consume the closing slash
 
@@ -2198,9 +2203,15 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 
 			// In regex, we preserve the escape sequence as-is
 			// The regex engine will interpret it
+			// Note: escaped characters don't affect inCharClass state
 			patternBuilder.WriteByte(l.ch)
 		} else {
-			// Regular character
+			// Regular character - track character class state
+			if l.ch == '[' && !inCharClass {
+				inCharClass = true
+			} else if l.ch == ']' && inCharClass {
+				inCharClass = false
+			}
 			patternBuilder.WriteByte(l.ch)
 		}
 
