@@ -358,7 +358,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			newTarget = args[2]
 		}
 
-		if !target.IsFunction() {
+		if !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.construct: target is not a constructor")
 		}
 
@@ -384,19 +384,8 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.construct: argumentsList must be an array")
 		}
 
-		// Call constructor with 'new' semantics (simplified)
-		// We don't have a direct Construct method, so just return a simple object for now
-		// A full implementation would invoke the constructor properly
-		instance := vm.NewObject(vm.Undefined)
-		result, err := vmInstance.Call(target, instance, constructArgs)
-		if err != nil {
-			return vm.Undefined, err
-		}
-		// If constructor returned an object, use it; otherwise use instance
-		if result.IsObject() {
-			return result, nil
-		}
-		return instance, nil
+		// Use ConstructWithNewTarget to properly invoke the constructor with custom new.target
+		return vmInstance.ConstructWithNewTarget(target, constructArgs, newTarget)
 	}))
 
 	// Define Reflect globally

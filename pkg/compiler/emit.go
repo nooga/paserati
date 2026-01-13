@@ -341,6 +341,13 @@ func (c *Compiler) emitLoadNewTarget(dest Register, line int) {
 	c.emitByte(byte(dest))
 }
 
+// emitGetSuperConstructor emits OpGetSuperConstructor to dynamically get the super constructor
+// (the [[Prototype]] of the currently executing function) for super() calls
+func (c *Compiler) emitGetSuperConstructor(dest Register, line int) {
+	c.emitOpCode(vm.OpGetSuperConstructor, line)
+	c.emitByte(byte(dest))
+}
+
 // emitLoadImportMeta emits OpLoadImportMeta to load import.meta object from current module context
 func (c *Compiler) emitLoadImportMeta(dest Register, line int) {
 	c.emitOpCode(vm.OpLoadImportMeta, line)

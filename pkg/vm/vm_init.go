@@ -750,6 +750,194 @@ func (vm *VM) Construct(constructor Value, args []Value) (Value, error) {
 	}
 }
 
+// ConstructWithNewTarget calls a constructor function with a custom new.target value
+// This is used by Reflect.construct to support the third argument
+func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget Value) (Value, error) {
+	if !constructor.IsCallable() {
+		return Undefined, fmt.Errorf("%s is not a constructor", constructor.TypeName())
+	}
+
+	switch constructor.Type() {
+	case TypeNativeFunction:
+		nf := constructor.AsNativeFunction()
+		if !nf.IsConstructor {
+			return Undefined, fmt.Errorf("%s is not a constructor", nf.Name)
+		}
+		// For native constructors, call directly - they handle creating the object
+		// Note: native constructors don't fully support custom newTarget
+		prevThis := vm.currentThis
+		vm.currentThis = Undefined
+		defer func() { vm.currentThis = prevThis }()
+		return nf.Fn(args)
+
+	case TypeNativeFunctionWithProps:
+		nfp := constructor.AsNativeFunctionWithProps()
+		if !nfp.IsConstructor {
+			return Undefined, fmt.Errorf("%s is not a constructor", nfp.Name)
+		}
+		prevThis := vm.currentThis
+		vm.currentThis = Undefined
+		defer func() { vm.currentThis = prevThis }()
+		return nfp.Fn(args)
+
+	case TypeClosure, TypeFunction:
+		// For user-defined constructors
+		var fn *FunctionObject
+		if constructor.Type() == TypeClosure {
+			fn = constructor.AsClosure().Fn
+		} else {
+			fn = constructor.AsFunction()
+		}
+
+		// Check if constructable
+		if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
+			return Undefined, fmt.Errorf("function is not a constructor")
+		}
+
+		// Get prototype from newTarget (not constructor)
+		// Per ECMAScript, the prototype is determined by newTarget
+		var newTargetFn *FunctionObject
+		if newTarget.Type() == TypeClosure {
+			newTargetFn = newTarget.AsClosure().Fn
+		} else if newTarget.Type() == TypeFunction {
+			newTargetFn = newTarget.AsFunction()
+		}
+
+		var prototype Value
+		if newTargetFn != nil {
+			prototype = newTargetFn.getOrCreatePrototypeWithVM(vm)
+		} else {
+			// Fallback to constructor's prototype
+			prototype = fn.getOrCreatePrototypeWithVM(vm)
+		}
+
+		// For derived constructors, 'this' is uninitialized until super() is called
+		// We don't create an object beforehand - super() will create it
+		var newObj Value
+		if fn.IsDerivedConstructor {
+			// For derived constructors, pass Undefined as this
+			// super() will create the object with the correct prototype
+			newObj = Undefined
+		} else {
+			// For base constructors, create the object now
+			newObj = NewObject(prototype)
+		}
+
+		// Use executeUserFunctionWithNewTarget for proper new.target handling
+		result, err := vm.executeUserFunctionWithNewTarget(constructor, newObj, args, newTarget, fn.IsDerivedConstructor)
+		if err != nil {
+			return Undefined, err
+		}
+
+		// For derived constructors, result should be the 'this' that was set by super()
+		// (handled by sentinel frame constructor semantics in OpReturn)
+		// For base constructors, result may be the explicit return or we use newObj
+		if result.IsObject() {
+			return result, nil
+		}
+		// For non-object returns (including undefined), use newObj for base constructors
+		// For derived constructors, newObj is Undefined and result should have been
+		// the this value from super() - if we get here with undefined, super wasn't called
+		if !fn.IsDerivedConstructor {
+			return newObj, nil
+		}
+		// For derived constructor returning undefined, this is valid if super() wasn't called
+		// (which would throw ReferenceError), so we shouldn't reach here in normal flow
+		return result, nil
+
+	case TypeBoundFunction:
+		bf := constructor.AsBoundFunction()
+		// Combine partial args with call-time args
+		finalArgs := make([]Value, len(bf.PartialArgs)+len(args))
+		copy(finalArgs, bf.PartialArgs)
+		copy(finalArgs[len(bf.PartialArgs):], args)
+		// Bound functions ignore their boundThis when called as constructors
+		return vm.ConstructWithNewTarget(bf.OriginalFunction, finalArgs, newTarget)
+
+	default:
+		return Undefined, fmt.Errorf("%s is not a constructor", constructor.TypeName())
+	}
+}
+
+// executeUserFunctionWithNewTarget executes a user function with constructor semantics and custom new.target
+func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args []Value, newTarget Value, isDerivedConstructor bool) (Value, error) {
+	// Clear stale unwinding state
+	if vm.unwinding && vm.currentException == Null {
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+	}
+
+	// Set up the caller context
+	callerRegisters := make([]Value, 1)
+	destReg := byte(0)
+	callerIP := 0
+
+	// Add a sentinel frame
+	sentinelFrame := &vm.frames[vm.frameCount]
+	sentinelFrame.isSentinelFrame = true
+	sentinelFrame.closure = nil
+	sentinelFrame.targetRegister = destReg
+	sentinelFrame.registers = callerRegisters
+	vm.frameCount++
+
+	// Set constructor call flag
+	prevInConstructorCall := vm.inConstructorCall
+	vm.inConstructorCall = true
+	defer func() { vm.inConstructorCall = prevInConstructorCall }()
+
+	// Use prepareCall to set up the function call
+	// For derived constructors, this should be undefined initially
+	effectiveThis := thisValue
+	if isDerivedConstructor {
+		effectiveThis = Undefined
+	}
+
+	shouldSwitch, err := vm.prepareCall(fn, effectiveThis, args, destReg, callerRegisters, callerIP)
+	if err != nil {
+		vm.frameCount--
+		return Undefined, err
+	}
+
+	if !shouldSwitch {
+		vm.frameCount--
+		return callerRegisters[destReg], nil
+	}
+
+	// Set constructor-specific frame properties
+	if vm.frameCount > 1 {
+		frame := &vm.frames[vm.frameCount-1]
+		frame.isDirectCall = true
+		frame.isConstructorCall = true
+		frame.newTargetValue = newTarget
+		// For derived constructors, this should be undefined until super() is called
+		if isDerivedConstructor {
+			frame.thisValue = Undefined
+		} else {
+			frame.thisValue = thisValue
+		}
+	}
+
+	// Execute the VM run loop
+	status, result := vm.run()
+
+	if status == InterpretRuntimeError {
+		if vm.unwinding && vm.currentException != Null {
+			ex := vm.currentException
+			vm.currentException = Null
+			return Undefined, exceptionError{exception: ex}
+		}
+		return Undefined, fmt.Errorf("runtime error during constructor execution")
+	}
+
+	if vm.unwinding && vm.currentException != Null {
+		ex := vm.currentException
+		vm.currentException = Null
+		return Undefined, exceptionError{exception: ex}
+	}
+
+	return result, nil
+}
+
 // executeUserFunctionSafe executes a user function from a native function using sentinel frames
 // This allows proper nested calls without infinite recursion
 func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (Value, error) {

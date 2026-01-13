@@ -2855,9 +2855,26 @@ startExecution:
 
 			// Check if we hit a sentinel frame - if so, remove it and return immediately
 			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+				// Handle constructor return semantics for sentinel frame returns
+				var finalResult Value
+				if isConstructor {
+					if result.IsObject() {
+						finalResult = result // Return the explicit object
+					} else {
+						finalResult = constructorThisValue // Return the instance
+					}
+					// DEBUG
+					if debugVM {
+						fmt.Printf("[DBG Sentinel] isConstructor=true, result=%s, constructorThisValue=%s, finalResult=%s\n",
+							result.TypeName(), constructorThisValue.TypeName(), finalResult.TypeName())
+					}
+				} else {
+					finalResult = result
+				}
+
 				// Place the result in the sentinel frame's target register
 				if vm.frames[vm.frameCount-1].registers != nil && int(vm.frames[vm.frameCount-1].targetRegister) < len(vm.frames[vm.frameCount-1].registers) {
-					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = result
+					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = finalResult
 				}
 				// Remove the sentinel frame
 				vm.frameCount--
@@ -2865,8 +2882,8 @@ startExecution:
 				if vm.unwinding {
 					return InterpretRuntimeError, vm.currentException
 				}
-				// Return the result from the function that just returned
-				return InterpretOK, result
+				// Return the result with constructor semantics applied
+				return InterpretOK, finalResult
 			}
 
 			// Check if this was a direct call frame and should return early
@@ -3028,34 +3045,29 @@ startExecution:
 					vm.frameCount, vm.frameCount-1, vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame)
 			}
 			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+				// Handle constructor return semantics for sentinel frame returns
+				var finalResult Value
+				if isConstructor {
+					// Constructor returning undefined: return the instance (this)
+					finalResult = constructorThisValue
+				} else {
+					finalResult = result
+				}
+
 				if debugVM {
 					fmt.Printf("[DBG] Hit sentinel frame, returning\n")
 					sentinelFrame := &vm.frames[vm.frameCount-1]
 					fmt.Printf("[DBG] Sentinel frame: regs=%v, target=R%d, regsLen=%d\n", sentinelFrame.registers != nil, sentinelFrame.targetRegister, len(sentinelFrame.registers))
+					fmt.Printf("[DBG] isConstructor=%t, constructorThisValue=%s, finalResult=%s\n", isConstructor, constructorThisValue.TypeName(), finalResult.TypeName())
 				}
 				// Place the result in the sentinel frame's target register
-				if debugVM {
-					fmt.Printf("[DBG] Checking condition...\n")
-				}
 				if vm.frames[vm.frameCount-1].registers != nil && int(vm.frames[vm.frameCount-1].targetRegister) < len(vm.frames[vm.frameCount-1].registers) {
-					if debugVM {
-						fmt.Printf("[DBG] Setting sentinel target register\n")
-					}
-					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = result
-					if debugVM {
-						fmt.Printf("[DBG] Set complete\n")
-					}
-				}
-				if debugVM {
-					fmt.Printf("[DBG] Removing sentinel frame\n")
+					vm.frames[vm.frameCount-1].registers[vm.frames[vm.frameCount-1].targetRegister] = finalResult
 				}
 				// Remove the sentinel frame
 				vm.frameCount--
-				if debugVM {
-					fmt.Printf("[DBG] Returning from sentinel\n")
-				}
-				// Return the result from the function that just returned (or generator iterator result)
-				return InterpretOK, result
+				// Return the result with constructor semantics applied
+				return InterpretOK, finalResult
 			}
 
 			// Check if this was a direct call frame and should return early
@@ -7749,6 +7761,31 @@ startExecution:
 				frame.ip = ip
 				vm.runtimeError("Cannot assign super property: super base is not an object")
 				return InterpretRuntimeError, Undefined
+			}
+
+		case OpGetSuperConstructor:
+			// Get the [[Prototype]] of the currently executing function (for super() calls)
+			// Per ECMAScript, GetSuperConstructor() should dynamically get the function's
+			// [[Prototype]] at runtime, not use a statically-determined super class.
+			destReg := code[ip]
+			ip++
+
+			// Get the current function (closure)
+			currentClosure := frame.closure
+			if currentClosure == nil {
+				frame.ip = ip
+				vm.runtimeError("Cannot get super constructor outside of a function")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// The super constructor is the [[Prototype]] of the constructor function itself
+			// We need to get it from the function's prototype chain, not the homeObject
+			// For class constructors, FunctionObject.Prototype is set to the parent class constructor
+			// This is what ECMAScript's GetSuperConstructor() returns
+			if currentClosure.Fn != nil {
+				registers[destReg] = currentClosure.Fn.Prototype
+			} else {
+				registers[destReg] = vm.FunctionPrototype
 			}
 
 		case OpLoadImportMeta:

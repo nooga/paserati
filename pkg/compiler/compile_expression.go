@@ -2580,8 +2580,8 @@ func (c *Compiler) compilePrivateMethodSetup(node *parser.CallExpression, objExp
 
 // compileSuperConstructorCall compiles a super() constructor call
 func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// Get the super class name from the compiler context
-	// This was set by compileConstructor when compiling a derived class
+	// super() must be called inside a derived class constructor
+	// We use the presence of compilingSuperClassName to verify this at compile time
 	if c.compilingSuperClassName == "" {
 		return BadRegister, NewCompileError(node, "super() call outside of derived class constructor")
 	}
@@ -2593,34 +2593,12 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 		return c.compileSpreadSuperCall(node, hint, tempRegs)
 	}
 
-	// Load the parent constructor by name
-	// Try to resolve it in the symbol table first (for user-defined classes)
+	// Load the super constructor dynamically using OpGetSuperConstructor
+	// Per ECMAScript spec, GetSuperConstructor() returns the [[Prototype]] of the
+	// currently executing function, which can change at runtime via Object.setPrototypeOf
 	superConstructorReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, superConstructorReg)
-
-	symbol, definingTable, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
-	if exists {
-		// Found in symbol table - user-defined class
-		if symbol.IsGlobal {
-			c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-		} else {
-			// Check if the symbol is in an outer function's scope (closure case)
-			isLocal := definingTable == c.currentSymbolTable
-			if !isLocal && c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
-				// Variable is in an outer function scope - use closure mechanism
-				freeVarIndex := c.addFreeSymbol(nil, &symbol)
-				c.emitLoadFree(superConstructorReg, freeVarIndex, node.Token.Line)
-			} else {
-				// Local variable in same function or outer block scope
-				c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
-			}
-		}
-	} else {
-		// Not in symbol table - might be a built-in class (Object, Array, etc.)
-		// Emit code to look up the global variable at runtime
-		globalIdx := c.GetOrAssignGlobalIndex(c.compilingSuperClassName)
-		c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
-	}
+	c.emitGetSuperConstructor(superConstructorReg, node.Token.Line)
 
 	// Determine total argument count including optional parameters
 	totalArgCount := c.determineTotalArgCount(node)
@@ -2660,32 +2638,12 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 
 // compileSpreadSuperCall compiles super(...args) with spread arguments
 func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
-	// Load the parent constructor by name
+	// Load the super constructor dynamically using OpGetSuperConstructor
+	// Per ECMAScript spec, GetSuperConstructor() returns the [[Prototype]] of the
+	// currently executing function, which can change at runtime via Object.setPrototypeOf
 	superConstructorReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, superConstructorReg)
-
-	symbol, definingTable, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
-	if exists {
-		// Found in symbol table - user-defined class
-		if symbol.IsGlobal {
-			c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-		} else {
-			// Check if the symbol is in an outer function's scope (closure case)
-			isLocal := definingTable == c.currentSymbolTable
-			if !isLocal && c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
-				// Variable is in an outer function scope - use closure mechanism
-				freeVarIndex := c.addFreeSymbol(nil, &symbol)
-				c.emitLoadFree(superConstructorReg, freeVarIndex, node.Token.Line)
-			} else {
-				// Local variable in same function or outer block scope
-				c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
-			}
-		}
-	} else {
-		// Not in symbol table - might be a built-in class (Object, Array, etc.)
-		globalIdx := c.GetOrAssignGlobalIndex(c.compilingSuperClassName)
-		c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
-	}
+	c.emitGetSuperConstructor(superConstructorReg, node.Token.Line)
 
 	// Check if this is the simple case: single spread argument
 	isSingleSpread := len(node.Arguments) == 1

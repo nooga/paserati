@@ -655,16 +655,36 @@ func (o *PlainObject) HasOwnByKey(key PropertyKey) bool {
 // DeleteOwn deletes an own property. Not supported for PlainObject; always returns false.
 // (removed old stub DeleteOwn; implemented above)
 
-// OwnKeys returns the list of own property names in insertion order.
+// OwnKeys returns the list of own enumerable string property names.
+// Per ECMAScript spec, integer indices come first (in ascending numeric order),
+// then string keys in insertion order.
 func (o *PlainObject) OwnKeys() []string {
-	// Return only string-named enumerable keys (symbols excluded) in insertion order
-	keys := make([]string, 0, len(o.shape.fields))
+	// Separate integer indices from string keys
+	var integerIndices []int
+	var stringKeys []string
+
 	for _, f := range o.shape.fields {
 		if f.keyKind == KeyKindString && f.enumerable {
-			keys = append(keys, f.name)
+			// Check if this is an integer index (non-negative integer string)
+			if idx, isInt := tryParseArrayIndex(f.name); isInt {
+				integerIndices = append(integerIndices, idx)
+			} else {
+				stringKeys = append(stringKeys, f.name)
+			}
 		}
 	}
-	return keys
+
+	// Sort integer indices in ascending order
+	sortInts(integerIndices)
+
+	// Build result: integer indices first, then string keys in insertion order
+	result := make([]string, 0, len(integerIndices)+len(stringKeys))
+	for _, idx := range integerIndices {
+		result = append(result, intToString(idx))
+	}
+	result = append(result, stringKeys...)
+
+	return result
 }
 
 // OwnPropertyNames returns the list of all own string property names (including non-enumerable).
@@ -995,15 +1015,36 @@ func (d *DictObject) IsOwnPropertyNonConfigurable(name string) (exists bool, non
 	return exists, false // DictObject properties are always configurable
 }
 
-// OwnKeys returns the sorted list of own property names.
+// OwnKeys returns the list of own property names.
+// Per ECMAScript spec, integer indices come first (in ascending numeric order),
+// then string keys in their lexicographic order (DictObject doesn't preserve insertion order).
 func (d *DictObject) OwnKeys() []string {
-	keys := make([]string, 0, len(d.properties))
+	// Separate integer indices from string keys
+	var integerIndices []int
+	var stringKeys []string
+
 	for k := range d.properties {
-		keys = append(keys, k)
+		// Check if this is an integer index (non-negative integer string)
+		if idx, isInt := tryParseArrayIndex(k); isInt {
+			integerIndices = append(integerIndices, idx)
+		} else {
+			stringKeys = append(stringKeys, k)
+		}
 	}
-	// sort for deterministic order
-	sort.Strings(keys)
-	return keys
+
+	// Sort integer indices in ascending order
+	sortInts(integerIndices)
+	// Sort string keys lexicographically (since DictObject doesn't preserve insertion order)
+	sort.Strings(stringKeys)
+
+	// Build result: integer indices first, then string keys
+	result := make([]string, 0, len(integerIndices)+len(stringKeys))
+	for _, idx := range integerIndices {
+		result = append(result, intToString(idx))
+	}
+	result = append(result, stringKeys...)
+
+	return result
 }
 
 // OwnPropertyNames returns the sorted list of own property names (alias for OwnKeys as DictObject has no non-enumerable props).
