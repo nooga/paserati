@@ -6945,7 +6945,17 @@ startExecution:
 									if isStrict {
 										frame.ip = ip
 										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										return InterpretRuntimeError, Undefined
+										if vm.frameCount == 0 {
+											return InterpretRuntimeError, vm.currentException
+										}
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
 									}
 									// Non-strict: silently fail
 									break
@@ -6960,7 +6970,17 @@ startExecution:
 							if isStrict {
 								frame.ip = ip
 								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								return InterpretRuntimeError, Undefined
+								if vm.frameCount == 0 {
+									return InterpretRuntimeError, vm.currentException
+								}
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
 							}
 							// Non-strict: silently fail (don't set the property)
 						} else {
@@ -7002,10 +7022,8 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Get the property key and convert to string
-			keyValue := registers[keyReg]
-			propertyName := keyValue.ToString()
-
+			// ECMAScript evaluation order: Get super base BEFORE ToPropertyKey
+			// This is important because ToPropertyKey may have side effects (like changing the prototype)
 			// Get the super base: Object.getPrototypeOf([[HomeObject]])
 			var protoValue Value
 			if homeObject.Type() == TypeObject {
@@ -7019,6 +7037,44 @@ startExecution:
 				frame.ip = ip
 				vm.runtimeError("Cannot access super property: home object has no prototype")
 				return InterpretRuntimeError, Undefined
+			}
+
+			// NOW convert the property key using ToPropertyKey (calls toString() for objects)
+			// This happens AFTER GetSuperBase per ECMAScript spec
+			keyValue := registers[keyReg]
+			var propertyName string
+			switch keyValue.Type() {
+			case TypeString:
+				propertyName = AsString(keyValue)
+			case TypeFloatNumber, TypeIntegerNumber:
+				propertyName = keyValue.ToString()
+			case TypeSymbol:
+				// Symbols are valid property keys - use string representation
+				propertyName = keyValue.ToString()
+			default:
+				// For objects and other types, call ToPrimitive with "string" hint
+				if keyValue.IsObject() {
+					frame.ip = ip // Save IP before potential exception
+					primitiveVal := vm.toPrimitive(keyValue, "string")
+					// Check if toPrimitive threw an exception
+					if vm.currentException.Type() != TypeUndefined {
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						// Exception handler will handle it
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					propertyName = primitiveVal.ToString()
+				} else {
+					propertyName = keyValue.ToString()
+				}
 			}
 
 			// Check if prototype is null or undefined (can't access properties)
@@ -7115,10 +7171,8 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Get the property key and convert to string
-			keyValue := registers[keyReg]
-			propertyName := keyValue.ToString()
-
+			// ECMAScript evaluation order: Get super base BEFORE ToPropertyKey
+			// This is important because ToPropertyKey may have side effects (like changing the prototype)
 			// Get the super base: Object.getPrototypeOf([[HomeObject]])
 			var protoValue Value
 			if homeObject.Type() == TypeObject {
@@ -7132,6 +7186,44 @@ startExecution:
 				frame.ip = ip
 				vm.runtimeError("Cannot assign super property: home object has no prototype")
 				return InterpretRuntimeError, Undefined
+			}
+
+			// NOW convert the property key using ToPropertyKey (calls toString() for objects)
+			// This happens AFTER GetSuperBase per ECMAScript spec
+			keyValue := registers[keyReg]
+			var propertyName string
+			switch keyValue.Type() {
+			case TypeString:
+				propertyName = AsString(keyValue)
+			case TypeFloatNumber, TypeIntegerNumber:
+				propertyName = keyValue.ToString()
+			case TypeSymbol:
+				// Symbols are valid property keys - use string representation
+				propertyName = keyValue.ToString()
+			default:
+				// For objects and other types, call ToPrimitive with "string" hint
+				if keyValue.IsObject() {
+					frame.ip = ip // Save IP before potential exception
+					primitiveVal := vm.toPrimitive(keyValue, "string")
+					// Check if toPrimitive threw an exception
+					if vm.currentException.Type() != TypeUndefined {
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						// Exception handler will handle it
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					propertyName = primitiveVal.ToString()
+				} else {
+					propertyName = keyValue.ToString()
+				}
 			}
 
 			// Set the property on the prototype (or call setter if it exists)
@@ -7195,7 +7287,17 @@ startExecution:
 									if isStrict {
 										frame.ip = ip
 										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										return InterpretRuntimeError, Undefined
+										if vm.frameCount == 0 {
+											return InterpretRuntimeError, vm.currentException
+										}
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
 									}
 									// Non-strict: silently fail
 									break
@@ -7210,7 +7312,17 @@ startExecution:
 							if isStrict {
 								frame.ip = ip
 								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								return InterpretRuntimeError, Undefined
+								if vm.frameCount == 0 {
+									return InterpretRuntimeError, vm.currentException
+								}
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
 							}
 							// Non-strict: silently fail (don't set the property)
 						} else {
@@ -7333,7 +7445,17 @@ startExecution:
 									if isStrict {
 										frame.ip = ip
 										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										return InterpretRuntimeError, Undefined
+										if vm.frameCount == 0 {
+											return InterpretRuntimeError, vm.currentException
+										}
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
 									}
 									// Non-strict: silently fail
 									break
@@ -7348,7 +7470,17 @@ startExecution:
 							if isStrict {
 								frame.ip = ip
 								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								return InterpretRuntimeError, Undefined
+								if vm.frameCount == 0 {
+									return InterpretRuntimeError, vm.currentException
+								}
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
 							}
 							// Non-strict: silently fail (don't set the property)
 						} else {

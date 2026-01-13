@@ -182,13 +182,28 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 	switch objVal.Type() {
 	case TypeFunction:
 		fn := AsFunction(*objVal)
+		if fn.Properties == nil {
+			fn.Properties = NewObject(Undefined).AsPlainObject()
+		}
+		// Check for accessor property with a setter first (BEFORE strict mode caller/arguments check)
+		// User-defined static setters named "arguments" or "caller" are allowed
+		if _, setter, _, _, ok := fn.Properties.GetOwnAccessor(propName); ok && setter.Type() != TypeUndefined {
+			_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+				vm.throwException(NewString(err.Error()))
+				return false, InterpretRuntimeError, Undefined
+			}
+			return true, InterpretOK, *valueToSet
+		}
 		// ES5 strict mode restriction: writing to "caller" or "arguments" on strict functions throws TypeError
+		// This check is AFTER the accessor check so user-defined setters take precedence
 		if (propName == "caller" || propName == "arguments") && fn.Chunk != nil && fn.Chunk.IsStrict {
 			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
 			return false, InterpretRuntimeError, Undefined
-		}
-		if fn.Properties == nil {
-			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
 		if propName == "prototype" {
 			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false
@@ -200,17 +215,12 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		return true, InterpretOK, *valueToSet
 	case TypeClosure:
 		closure := AsClosure(*objVal)
-		fn := closure.Fn
-		// ES5 strict mode restriction: writing to "caller" or "arguments" on strict functions throws TypeError
-		if (propName == "caller" || propName == "arguments") && fn.Chunk != nil && fn.Chunk.IsStrict {
-			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-			return false, InterpretRuntimeError, Undefined
-		}
 		// Use closure's own Properties to avoid sharing with other closures using same FunctionObject
 		if closure.Properties == nil {
 			closure.Properties = NewObject(Undefined).AsPlainObject()
 		}
-		// Check for accessor property with a setter first
+		// Check for accessor property with a setter first (BEFORE strict mode caller/arguments check)
+		// User-defined static setters named "arguments" or "caller" are allowed in classes
 		if _, setter, _, _, ok := closure.Properties.GetOwnAccessor(propName); ok && setter.Type() != TypeUndefined {
 			_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
 			if err != nil {
@@ -238,6 +248,12 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				return false, InterpretRuntimeError, Undefined
 			}
 			return true, InterpretOK, *valueToSet
+		}
+		// ES5 strict mode restriction: writing to "caller" or "arguments" on strict functions throws TypeError
+		// This check is AFTER the accessor check so user-defined setters take precedence
+		if (propName == "caller" || propName == "arguments") && closure.Fn.Chunk != nil && closure.Fn.Chunk.IsStrict {
+			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+			return false, InterpretRuntimeError, Undefined
 		}
 		if propName == "prototype" {
 			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false

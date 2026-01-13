@@ -24,20 +24,22 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 - **Shapes + ICs**: fast-ish property access without a JIT
 - **Runtime type reflection**: `Paserati.reflect<T>()` (generate a type object / JSON Schema at runtime)
 - **Small-ish footprint**:
-  - **~17MB static binary** (unstripped, includes lexer/parser/checker/compiler/VM/builtins)
+  - **~16MB static binary** (unstripped, includes lexer/parser/checker/compiler/VM/builtins)
   - **~5MB BSS idle** (approx; depends on build/OS)
-  - **Pure Go**, with **one dependency** (`golang.org/x/text`)
+  - **Pure Go**, no CGO, no WASM blobs, **two simple dependencies** (`golang.org/x/text`, `github.com/dlclark/regexp2`)
 
 ### Weird flex but okay benchmarks
 
-Paserati has a long way to go performance-wise, but it’s already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** and **QuickJS** on a couple of simple microbenches.
+Paserati has a long way to go performance-wise, but it’s already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** and **QJS** on a couple of simple microbenches.
 
 Results from `hyperfine` (see `bench/hyperfine.sh`):
 
-| Benchmark          | paserati (Mean) |     goja (Mean) |  quickjs (Mean) |                                                            Relative |
+| Benchmark          | paserati (Mean) |     goja (Mean) |       QJS(Mean) |                                                            Relative |
 | :----------------- | --------------: | --------------: | --------------: | ------------------------------------------------------------------: |
 | `bench/bench.js`   | 3.924 ± 0.097 s | 5.207 ± 0.093 s | 4.945 ± 0.092 s | **paserati 1.33× faster than gojac**, **1.26× faster than quickjs** |
 | `bench/objects.js` | 6.169 ± 0.092 s | 7.015 ± 0.151 s | 8.135 ± 0.130 s | **paserati 1.14× faster than gojac**, **1.32× faster than quickjs** |
+
+Paserati also [runs V8 benchmarks](<https://ahaoboy.github.io/js-engine-benchmark/?kind=Time(s)&selectEngines=goja,paserati&sort=Time(s)>), beating Goja in several.
 
 If your favorite pure Go JavaScript engine is reading this: _skill issue_.
 
