@@ -10,6 +10,7 @@ import (
 	"runtime/pprof"
 	"strings"
 
+	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/driver"
 	"github.com/nooga/paserati/pkg/parser"
 )
@@ -107,12 +108,11 @@ func main() {
 		return
 	}
 
-	if flag.NArg() > 1 {
-		fmt.Fprintf(os.Stderr, "Usage: paserati [script] or paserati -e \"expression\" or paserati -js <input.ts>\n")
-		os.Exit(64) // Exit code 64: command line usage error
-	} else if flag.NArg() == 1 {
+	if flag.NArg() >= 1 {
 		// Execute the script file provided as an argument
-		runFileWithTypes(flag.Arg(0), *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag, *disasmFilterFlag)
+		// Additional arguments after the script are passed as process.argv
+		scriptArgs := flag.Args() // [script, arg1, arg2, ...]
+		runFileWithTypes(scriptArgs[0], scriptArgs, *cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag, *disasmFilterFlag)
 	} else {
 		// No file provided, start the REPL
 		runReplWithTypes(*cacheStatsFlag, *bytecodeFlag, *noTypecheckFlag, *disasmFilterFlag)
@@ -172,15 +172,23 @@ func runFile(filename string, showCacheStats bool, showBytecode bool) {
 	}
 }
 
-func runFileWithTypes(filename string, showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
+func runFileWithTypes(filename string, scriptArgs []string, showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	sourceBytes, err := os.ReadFile(filename)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to read file '%s': %s\n", filename, err.Error())
 		os.Exit(70)
 	}
 	source := string(sourceBytes)
-	paserati := driver.NewPaserati()
+
+	// Set up process.argv with: ["paserati", script, ...args]
+	argv := append([]string{"paserati"}, scriptArgs...)
+
+	// Create Paserati with standard builtins + process initializer
+	initializers := builtins.GetStandardInitializers()
+	initializers = append(initializers, driver.NewProcessInitializer(argv))
+	paserati := driver.NewPaseratiWithInitializers(initializers)
 	paserati.SetIgnoreTypeErrors(ignoreTypes)
+
 	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, ModuleName: filename, DisasmFilter: disasmFilter}
 	value, errs := paserati.RunCode(source, options)
 	ok := paserati.DisplayResult(source, value, errs)

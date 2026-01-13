@@ -2527,13 +2527,22 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 	superConstructorReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, superConstructorReg)
 
-	symbol, _, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
+	symbol, definingTable, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
 	if exists {
 		// Found in symbol table - user-defined class
 		if symbol.IsGlobal {
 			c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
 		} else {
-			c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
+			// Check if the symbol is in an outer function's scope (closure case)
+			isLocal := definingTable == c.currentSymbolTable
+			if !isLocal && c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+				// Variable is in an outer function scope - use closure mechanism
+				freeVarIndex := c.addFreeSymbol(nil, &symbol)
+				c.emitLoadFree(superConstructorReg, freeVarIndex, node.Token.Line)
+			} else {
+				// Local variable in same function or outer block scope
+				c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
+			}
 		}
 	} else {
 		// Not in symbol table - might be a built-in class (Object, Array, etc.)
@@ -2584,13 +2593,22 @@ func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Regi
 	superConstructorReg := c.regAlloc.Alloc()
 	*tempRegs = append(*tempRegs, superConstructorReg)
 
-	symbol, _, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
+	symbol, definingTable, exists := c.currentSymbolTable.Resolve(c.compilingSuperClassName)
 	if exists {
 		// Found in symbol table - user-defined class
 		if symbol.IsGlobal {
 			c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
 		} else {
-			c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
+			// Check if the symbol is in an outer function's scope (closure case)
+			isLocal := definingTable == c.currentSymbolTable
+			if !isLocal && c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+				// Variable is in an outer function scope - use closure mechanism
+				freeVarIndex := c.addFreeSymbol(nil, &symbol)
+				c.emitLoadFree(superConstructorReg, freeVarIndex, node.Token.Line)
+			} else {
+				// Local variable in same function or outer block scope
+				c.emitMove(superConstructorReg, symbol.Register, node.Token.Line)
+			}
 		}
 	} else {
 		// Not in symbol table - might be a built-in class (Object, Array, etc.)

@@ -1201,7 +1201,7 @@ func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg 
 
 	// Try to resolve the parent class
 	debugPrintf("// DEBUG createInheritedPrototype: Attempting to resolve parent class '%s'\n", superClassName)
-	if symbol, _, exists := c.currentSymbolTable.Resolve(superClassName); exists {
+	if symbol, definingTable, exists := c.currentSymbolTable.Resolve(superClassName); exists {
 		debugPrintf("// DEBUG createInheritedPrototype: Successfully resolved '%s' (IsGlobal=%v)\n", superClassName, symbol.IsGlobal)
 		if symbol.IsGlobal {
 			// Global scope - load from global
@@ -1209,9 +1209,19 @@ func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg 
 			needToFree = true
 			c.emitGetGlobal(parentConstructorReg, symbol.GlobalIndex, 0)
 		} else {
-			// Local scope
-			parentConstructorReg = symbol.Register
-			needToFree = false
+			// Check if the symbol is in an outer function's scope (closure case)
+			isLocal := definingTable == c.currentSymbolTable
+			if !isLocal && c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+				// Variable is in an outer function scope - use closure mechanism
+				parentConstructorReg = c.regAlloc.Alloc()
+				needToFree = true
+				freeVarIndex := c.addFreeSymbol(nil, &symbol)
+				c.emitLoadFree(parentConstructorReg, freeVarIndex, 0)
+			} else {
+				// Local scope - use register directly
+				parentConstructorReg = symbol.Register
+				needToFree = false
+			}
 		}
 	} else {
 		debugPrintf("// DEBUG createInheritedPrototype: Failed to resolve parent class '%s'\n", superClassName)
